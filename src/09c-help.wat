@@ -56,7 +56,8 @@
         (call $wnd_region_reset_slot (local.get $empty))
         (call $paint_flag_reset_slot (local.get $empty))
         (call $ctrl_table_reset_slot (local.get $empty))
-        (call $wnd_owner_reset_slot (local.get $empty))))
+        (call $wnd_owner_reset_slot (local.get $empty))
+        (call $wnd_extra_reset_slot (local.get $empty))))
   )
 
   ;; Look up wndproc for hwnd; returns 0 if not found
@@ -94,6 +95,7 @@
           (call $paint_flag_reset_slot (local.get $i))
           (call $ctrl_table_reset_slot (local.get $i))
           (call $wnd_owner_reset_slot (local.get $i))
+          (call $wnd_extra_reset_slot (local.get $i))
           ;; Clear the whole 24-byte record
           (i32.store         (local.get $ptr) (i32.const 0))
           (i32.store offset=4  (local.get $ptr) (i32.const 0))
@@ -244,6 +246,98 @@
       (then
         (i32.store (i32.add (global.get $OWNER_TABLE) (i32.mul (local.get $idx) (i32.const 4)))
                    (local.get $owner)))))
+
+  ;; ---- cbWndExtra (Set/GetWindowLong POSITIVE indices) ----
+  ;; A window's extra bytes are a distinct storage area from GWL_USERDATA
+  ;; (index -21). Dialogs put DWLP_MSGRESULT/DWLP_DLGPROC/DWLP_USER there, and a
+  ;; dialog class may reserve further app-defined words past DLGWINDOWEXTRA;
+  ;; routing those offsets onto userdata makes each clobber the other. Storage
+  ;; is a lazily-grown heap blob per window slot.
+
+  ;; Free any heap blob for a recycled/destroyed window slot.
+  (func $wnd_extra_reset_slot (param $slot i32)
+    (local $p i32) (local $base i32)
+    (local.set $base (i32.add (global.get $WND_EXTRA_PTRS)
+      (i32.mul (local.get $slot) (i32.const 4))))
+    (local.set $p (i32.load (local.get $base)))
+    (if (local.get $p) (then (call $heap_free (local.get $p))))
+    (i32.store (local.get $base) (i32.const 0))
+    (i32.store (i32.add (global.get $WND_EXTRA_SIZE)
+      (i32.mul (local.get $slot) (i32.const 4))) (i32.const 0)))
+
+  ;; Ensure hwnd has a cbWndExtra blob of at least $need bytes. Returns guest
+  ;; ptr (0 on failure / unknown hwnd). Grows by reallocating when needed.
+  (func $wnd_extra_ensure (param $hwnd i32) (param $need i32) (result i32)
+    (local $slot i32) (local $old i32) (local $old_sz i32) (local $sz i32)
+    (local $neu i32) (local $i i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $slot) (i32.const -1))
+      (then (return (i32.const 0))))
+    ;; Round up to a DWORD; floor at 40 so the common dialog case (DLGWINDOWEXTRA
+    ;; = 30, plus a couple of app words) doesn't realloc on every store.
+    (local.set $sz (local.get $need))
+    (if (i32.lt_u (local.get $sz) (i32.const 40))
+      (then (local.set $sz (i32.const 40))))
+    (local.set $sz (i32.and (i32.add (local.get $sz) (i32.const 3)) (i32.const -4)))
+    (local.set $old (i32.load (i32.add (global.get $WND_EXTRA_PTRS)
+      (i32.mul (local.get $slot) (i32.const 4)))))
+    (local.set $old_sz (i32.load (i32.add (global.get $WND_EXTRA_SIZE)
+      (i32.mul (local.get $slot) (i32.const 4)))))
+    ;; Nested if — never (i32.and ptr cond): aligned heap ptrs are even, so a
+    ;; bitwise-and would silently drop a live pointer.
+    (if (local.get $old)
+      (then
+        (if (i32.ge_u (local.get $old_sz) (local.get $sz))
+          (then (return (local.get $old))))))
+    (local.set $neu (call $heap_alloc (local.get $sz)))
+    (if (i32.eqz (local.get $neu)) (then (return (i32.const 0))))
+    ;; Zero the new blob, then copy any prior bytes.
+    (local.set $i (i32.const 0))
+    (block $zdone (loop $z
+      (br_if $zdone (i32.ge_u (local.get $i) (local.get $sz)))
+      (i32.store8 (i32.add (call $g2w (local.get $neu)) (local.get $i)) (i32.const 0))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $z)))
+    (if (local.get $old)
+      (then
+        (if (local.get $old_sz)
+          (then (call $memcpy (call $g2w (local.get $neu))
+            (call $g2w (local.get $old)) (local.get $old_sz))))
+        (call $heap_free (local.get $old))))
+    (i32.store (i32.add (global.get $WND_EXTRA_PTRS)
+      (i32.mul (local.get $slot) (i32.const 4))) (local.get $neu))
+    (i32.store (i32.add (global.get $WND_EXTRA_SIZE)
+      (i32.mul (local.get $slot) (i32.const 4))) (local.get $sz))
+    (local.get $neu))
+
+  (func $wnd_get_long_extra (param $hwnd i32) (param $index i32) (result i32)
+    (local $slot i32) (local $blob i32) (local $sz i32)
+    (if (i32.lt_s (local.get $index) (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $slot) (i32.const -1))
+      (then (return (i32.const 0))))
+    (local.set $blob (i32.load (i32.add (global.get $WND_EXTRA_PTRS)
+      (i32.mul (local.get $slot) (i32.const 4)))))
+    (local.set $sz (i32.load (i32.add (global.get $WND_EXTRA_SIZE)
+      (i32.mul (local.get $slot) (i32.const 4)))))
+    ;; Unset extra bytes read as 0 (matches a freshly zeroed cbWndExtra area).
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (if (i32.gt_u (i32.add (local.get $index) (i32.const 4)) (local.get $sz))
+      (then (return (i32.const 0))))
+    (i32.load (i32.add (call $g2w (local.get $blob)) (local.get $index))))
+
+  (func $wnd_set_long_extra (param $hwnd i32) (param $index i32) (param $value i32) (result i32)
+    (local $blob i32) (local $old i32) (local $wa i32)
+    (if (i32.lt_s (local.get $index) (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $blob (call $wnd_extra_ensure (local.get $hwnd)
+      (i32.add (local.get $index) (i32.const 4))))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (local.set $wa (i32.add (call $g2w (local.get $blob)) (local.get $index)))
+    (local.set $old (i32.load (local.get $wa)))
+    (i32.store (local.get $wa) (local.get $value))
+    (local.get $old))
 
   ;; Win32 GetParent returns a child parent for WS_CHILD, otherwise the owner
   ;; for owned popups/dialogs.

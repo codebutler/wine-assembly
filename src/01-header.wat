@@ -596,7 +596,13 @@
   ;; 0x00010F00  256B    Free
   ;; 0x00011000  320B    WAT-owned system strings
   ;; 0x00011140  1064B   DX_PRESENT_BMI (BITMAPINFOHEADER + palette/masks)
-  ;; 0x00011568  ~2.6KB  Free (up to GUEST_BASE)
+  ;; 0x00011568  152B    Free
+  ;; 0x00011600  1KB     WND_EXTRA_PTRS (256 × 4 — guest ptr to cbWndExtra blob)
+  ;; 0x00011A00  1KB     WND_EXTRA_SIZE (256 × 4 — allocated byte length)
+  ;;                       Backs Set/GetWindowLong POSITIVE indices (the window's
+  ;;                       cbWndExtra bytes, e.g. the dialog DWLP_* slots). Must
+  ;;                       NOT alias GWL_USERDATA — they are distinct per Win32.
+  ;; 0x00011E00  512B    Free (up to GUEST_BASE)
   ;; --- High WAT-private tables ---
   ;; 0x07F00000  1KB     TV_TABLE (32 entries × 32 bytes)
   ;; 0x07F00400  3KB     PROP_TABLE (256 entries × 12 bytes)
@@ -732,6 +738,15 @@
   ;; top-level/modal windows and GetWindow(GW_OWNER).
   (global $OWNER_TABLE i32 (i32.const 0x00010B00))
   (global $OWNER_TABLE_SIZE i32 (i32.const 0x00000400))
+  ;; WND_EXTRA_PTRS / WND_EXTRA_SIZE — per-slot cbWndExtra storage backing
+  ;; Set/GetWindowLong POSITIVE byte offsets (a window class's cbWndExtra area;
+  ;; for dialogs that is where DWLP_MSGRESULT/DWLP_DLGPROC/DWLP_USER and any
+  ;; app-defined DLGWINDOWEXTRA+N words live). Parallel to WND_RECORDS and kept
+  ;; strictly separate from record+12 GWL_USERDATA, which is a different slot
+  ;; per Win32 — aliasing them lets a dialog's extra-byte write clobber
+  ;; userdata (and vice versa).
+  (global $WND_EXTRA_PTRS i32 (i32.const 0x00011600))
+  (global $WND_EXTRA_SIZE i32 (i32.const 0x00011A00))
   ;; EDIT visual-line scratch table. Each entry is { char_start, char_len }.
   ;; Used by WAT EDIT controls so wrapped text, caret, hit-testing and scroll
   ;; all share one layout model instead of mixing DrawText with manual math.

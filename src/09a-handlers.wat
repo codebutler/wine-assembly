@@ -1805,10 +1805,14 @@
       (then
         (global.set $eax (call $wnd_set_style (local.get $arg0) (local.get $arg2)))
         (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
-    ;; For other indices (exstyle, positive offsets), store in userdata for now
-    (if (i32.ge_s (local.get $arg1) (i32.const 0))  ;; positive offset = dialog extra bytes
+    ;; Positive indices address the window's cbWndExtra bytes (dialog DWLP_*
+    ;; and any app-defined words past DLGWINDOWEXTRA). They are a DIFFERENT
+    ;; storage area from GWL_USERDATA — routing them onto userdata lets a
+    ;; dialog's extra-byte write clobber userdata and vice versa.
+    (if (i32.ge_s (local.get $arg1) (i32.const 0))
       (then
-        (global.set $eax (call $wnd_set_userdata (local.get $arg0) (local.get $arg2)))
+        (global.set $eax (call $wnd_set_long_extra
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)))
         (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
     ;; Default: return 0 for unhandled indices
     (global.set $eax (i32.const 0))
