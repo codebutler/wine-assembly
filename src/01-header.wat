@@ -57,6 +57,10 @@
   ;; move_window(hwnd, x, y, w, h, flags)  flags: SWP_NOSIZE=1, SWP_NOMOVE=2
   (import "host" "get_window_rect" (func $host_get_window_rect (param i32 i32)))
   ;; get_window_rect(hwnd, wasmRectPtr) — writes left,top,right,bottom as i32s
+  (import "host" "is_window_active" (func $host_is_window_active (param i32) (result i32)))
+  ;; is_window_active(hwnd) → 1 when this top-level should paint an active
+  ;; caption (host app focused AND hwnd is the guest's frontmost top-level).
+  ;; Used by $defwndproc_do_ncpaint — replaces the hard-coded active flag.
   (import "host" "destroy_window" (func $host_destroy_window (param i32)))
   ;; destroy_window(hwnd) — remove from renderer's window table
   (import "host" "draw_text" (func $host_draw_text (param i32 i32 i32 i32 i32)))

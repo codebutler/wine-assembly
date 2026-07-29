@@ -394,9 +394,11 @@
     (if (i32.or (i32.le_s (local.get $w) (i32.const 0))
                 (i32.le_s (local.get $h) (i32.const 0)))
       (then (return)))
-    ;; Flags
+    ;; Flags — bit0 = active caption. Ask the host: host-app focused AND
+    ;; this hwnd is the guest's frontmost top-level (sibling windows and
+    ;; other host apps both unhilite correctly).
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
-    (local.set $flags (i32.const 1))                                ;; active (TODO: focus-aware)
+    (local.set $flags (call $host_is_window_active (local.get $hwnd)))
     (if (call $get_flash_state_slot (local.get $hwnd))
       (then (local.set $flags (i32.xor (local.get $flags) (i32.const 1)))))
     (local.set $is_child (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))

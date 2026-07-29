@@ -706,6 +706,27 @@
   (func (export "guest_free") (param $g i32)
     (call $heap_free (local.get $g)))
 
+  ;; ---- Clipboard bridge ----
+  ;; The system EDIT control keeps ONE in-guest plaintext clipboard
+  ;; ($clipboard_ptr / $clipboard_len — a heap_alloc'd guest buffer, newlines
+  ;; stored as LF) shared by Ctrl+C/X/V AND the WM_COPY/WM_CUT/WM_PASTE the Edit
+  ;; menu sends. These accessors let a host mirror it to the host clipboard so
+  ;; copy/paste crosses to the outside. Bytes are Latin-1. There is no host-
+  ;; clipboard bridge otherwise (the Win32 clipboard API stays stubbed), so a
+  ;; host syncs this internal buffer instead.
+  (func (export "get_clipboard_ptr") (result i32) (global.get $clipboard_ptr))
+  (func (export "get_clipboard_len") (result i32) (global.get $clipboard_len))
+  ;; Install a host-provided buffer (guest_alloc'd by the caller) as the
+  ;; clipboard, freeing whatever was there first (matches $edit_copy_range's
+  ;; ownership: it heap_frees before reallocating). cap := len so a later larger
+  ;; in-guest copy reallocs and a smaller one reuses this buffer.
+  (func (export "set_clipboard") (param $ptr i32) (param $len i32)
+    (if (global.get $clipboard_ptr)
+      (then (call $heap_free (global.get $clipboard_ptr))))
+    (global.set $clipboard_ptr (local.get $ptr))
+    (global.set $clipboard_len (local.get $len))
+    (global.set $clipboard_cap (local.get $len)))
+
   ;; Write 16-bit value to guest memory
   (func (export "guest_write16") (param $ga i32) (param $val i32)
     (call $gs16 (local.get $ga) (local.get $val)))
