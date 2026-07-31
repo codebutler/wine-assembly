@@ -10674,3 +10674,74 @@
     (global.set $eax (call $host_get_window_text_length (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; ret + 1 arg
   )
+
+  ;; ============================================================
+  ;; WINSPOOL — no printer devices in the web runtime
+  ;; ============================================================
+  ;; Apps (PuTTY config, WordPad print setup, ...) probe the spooler to
+  ;; populate printer dropdowns. Report an empty local printer set and
+  ;; reject open/print calls with the Win32 errors a printerless machine
+  ;; would return -- same stance as PrintDlgA's PD_RETURNDEFAULT path.
+
+  ;; EnumPrintersA(Flags, Name, Level, pPrinterEnum, cbBuf, pcbNeeded, pcReturned)
+  ;; 7 args stdcall. Empty success: *pcbNeeded=0, *pcReturned=0, return TRUE.
+  (func $handle_EnumPrintersA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $wa_esp i32) (local $pcbNeeded i32) (local $pcReturned i32)
+    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $pcbNeeded (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
+    (local.set $pcReturned (i32.load (i32.add (local.get $wa_esp) (i32.const 28))))
+    (if (local.get $pcbNeeded)
+      (then (call $gs32 (local.get $pcbNeeded) (i32.const 0))))
+    (if (local.get $pcReturned)
+      (then (call $gs32 (local.get $pcReturned) (i32.const 0))))
+    (global.set $last_error (i32.const 0))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))  ;; ret + 7 args
+
+  ;; OpenPrinterA(pPrinterName, phPrinter, pDefault) — 3 args stdcall.
+  ;; No printers exist; refuse with ERROR_INVALID_PRINTER_NAME (1801).
+  (func $handle_OpenPrinterA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg1)
+      (then (call $gs32 (local.get $arg1) (i32.const 0))))
+    (global.set $last_error (i32.const 1801))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  ;; ClosePrinter(hPrinter) — 1 arg stdcall.
+  (func $handle_ClosePrinter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $last_error (i32.const 6))  ;; ERROR_INVALID_HANDLE
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; StartDocPrinterA(hPrinter, Level, pDocInfo) — 3 args stdcall → job id or 0.
+  (func $handle_StartDocPrinterA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $last_error (i32.const 6))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  ;; EndDocPrinter(hPrinter) — 1 arg stdcall.
+  (func $handle_EndDocPrinter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $last_error (i32.const 6))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; StartPagePrinter(hPrinter) — 1 arg stdcall.
+  (func $handle_StartPagePrinter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $last_error (i32.const 6))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; EndPagePrinter(hPrinter) — 1 arg stdcall.
+  (func $handle_EndPagePrinter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $last_error (i32.const 6))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; WritePrinter(hPrinter, pBuf, cbBuf, pcWritten) — 4 args stdcall.
+  (func $handle_WritePrinter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg3)
+      (then (call $gs32 (local.get $arg3) (i32.const 0))))
+    (global.set $last_error (i32.const 6))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+

@@ -15964,5 +15964,173 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 4263157666
+  },
+  {
+    "id": 2042,
+    "name": "EnumPrintersA",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3142208404,
+    "args": [
+      {
+        "name": "flags",
+        "type": "DWORD"
+      },
+      {
+        "name": "name",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "level",
+        "type": "DWORD"
+      },
+      {
+        "name": "buffer",
+        "type": "LPBYTE"
+      },
+      {
+        "name": "cbBuf",
+        "type": "DWORD"
+      },
+      {
+        "name": "pcbNeeded",
+        "type": "LPDWORD",
+        "out": true
+      },
+      {
+        "name": "pcReturned",
+        "type": "LPDWORD",
+        "out": true
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2043,
+    "name": "OpenPrinterA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2610642326,
+    "args": [
+      {
+        "name": "name",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "phPrinter",
+        "type": "LPHANDLE",
+        "out": true
+      },
+      {
+        "name": "defaults",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2044,
+    "name": "ClosePrinter",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3322486421,
+    "args": [
+      {
+        "name": "hPrinter",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2045,
+    "name": "StartDocPrinterA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 846420708,
+    "args": [
+      {
+        "name": "hPrinter",
+        "type": "HANDLE"
+      },
+      {
+        "name": "level",
+        "type": "DWORD"
+      },
+      {
+        "name": "docInfo",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "DWORD"
+  },
+  {
+    "id": 2046,
+    "name": "EndDocPrinter",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4061260256,
+    "args": [
+      {
+        "name": "hPrinter",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2047,
+    "name": "StartPagePrinter",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2363797488,
+    "args": [
+      {
+        "name": "hPrinter",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2048,
+    "name": "EndPagePrinter",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4138052427,
+    "args": [
+      {
+        "name": "hPrinter",
+        "type": "HANDLE"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2049,
+    "name": "WritePrinter",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1150144152,
+    "args": [
+      {
+        "name": "hPrinter",
+        "type": "HANDLE"
+      },
+      {
+        "name": "buf",
+        "type": "LPBYTE"
+      },
+      {
+        "name": "cbBuf",
+        "type": "DWORD"
+      },
+      {
+        "name": "pcWritten",
+        "type": "LPDWORD",
+        "out": true
+      }
+    ],
+    "ret": "BOOL"
   }
 ]
