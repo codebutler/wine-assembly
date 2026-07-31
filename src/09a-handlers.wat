@@ -10676,7 +10676,7 @@
   )
 
   ;; ============================================================
-  ;; WINSPOOL — no printer devices in the web runtime
+  ;; WINSPOOL - no printer devices in the web runtime
   ;; ============================================================
   ;; Apps (PuTTY config, WordPad print setup, ...) probe the spooler to
   ;; populate printer dropdowns. Report an empty local printer set and
