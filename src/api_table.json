@@ -16132,5 +16132,26 @@
       }
     ],
     "ret": "BOOL"
+  },
+  {
+    "id": 2050,
+    "name": "DefFrameProcA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 210521364
+  },
+  {
+    "id": 2051,
+    "name": "DefMDIChildProcA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 954991421
+  },
+  {
+    "id": 2052,
+    "name": "FileTimeToDosDateTime",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1499149534
   }
 ]

@@ -5576,11 +5576,17 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
-  ;; 411: FindNextFileW — STUB: unimplemented
+  ;; 411: FindNextFileW
   (func $handle_FindNextFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $r i32)
     ;; FindNextFileW(hFindFile, lpFindFileData) — 2 args
-    (global.set $eax (call $host_fs_find_next_file
+    (local.set $r (call $host_fs_find_next_file
       (local.get $arg0) (local.get $arg1) (i32.const 1)))
+    ;; Borland RTL (and others) loop on FindNext+GetLastError until
+    ;; ERROR_NO_MORE_FILES (18); without this they spin forever.
+    (if (i32.eqz (local.get $r))
+      (then (global.set $last_error (i32.const 18))))
+    (global.set $eax (local.get $r))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
@@ -5619,6 +5625,18 @@
       (call $g2w (local.get $arg0)) (call $g2w (local.get $arg1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; 2 args
   )
+
+  ;; FileTimeToDosDateTime(lpFileTime, lpFatDate, lpFatTime) — 3-arg stdcall.
+  ;; Converts to MS-DOS date/time packed words. Used by FindFirstFile consumers
+  ;; (Borland RTL / mIRC). Minimal: zero both words and succeed — enough for
+  ;; apps that only need the call not to fail.
+  (func $handle_FileTimeToDosDateTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg1)
+      (then (i32.store16 (call $g2w (local.get $arg1)) (i32.const 0))))
+    (if (local.get $arg2)
+      (then (i32.store16 (call $g2w (local.get $arg2)) (i32.const 0))))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; 415: FileTimeToLocalFileTime(const FILETIME *src, LPFILETIME dst) → BOOL.
   ;; 2-arg stdcall. We don't model timezones — just copy the 8 bytes.
@@ -6470,11 +6488,17 @@
     (global.set $steps (i32.const 0))
   )
 
-  ;; 470: FindNextFileA — STUB: unimplemented
+  ;; 470: FindNextFileA
   (func $handle_FindNextFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $r i32)
     ;; FindNextFileA(hFindFile, lpFindFileData) — 2 args
-    (global.set $eax (call $host_fs_find_next_file
+    (local.set $r (call $host_fs_find_next_file
       (local.get $arg0) (local.get $arg1) (i32.const 0)))
+    ;; Borland RTL (and others) loop on FindNext+GetLastError until
+    ;; ERROR_NO_MORE_FILES (18); without this they spin forever.
+    (if (i32.eqz (local.get $r))
+      (then (global.set $last_error (i32.const 18))))
+    (global.set $eax (local.get $r))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
@@ -8945,10 +8969,21 @@
     (return)
   )
 
-  ;; 648: DefFrameProcW — STUB: unimplemented
+  ;; DefFrameProcA/W(hwnd, hwndMDIClient, msg, wParam, lParam) — 5-arg stdcall.
+  ;; Minimal MDI frame default: ignore the client hwnd and defer to DefWindowProc.
+  ;; Real cascading/tiling/MDI-activate behaviour is a follow-up; this unblocks
+  ;; Borland apps (mIRC) that create an mdiclient during WM_CREATE.
+  (func $handle_DefFrameProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_DefWindowProcA
+      (local.get $arg0) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (i32.const 0) (local.get $name_ptr))
+    ;; DefWindowProc pops ret+4 args (20); DefFrameProc has one extra arg.
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
   (func $handle_DefFrameProcW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
-  )
+    (call $handle_DefFrameProcA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr)))
 
   ;; 649: TranslateMDISysAccel — STUB: unimplemented
   (func $handle_TranslateMDISysAccel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8962,10 +8997,16 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
-  ;; 651: DefMDIChildProcW — STUB: unimplemented
+  ;; DefMDIChildProcA/W(hwnd, msg, wParam, lParam) — same arity as DefWindowProc.
+  (func $handle_DefMDIChildProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_DefWindowProcA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr)))
+
   (func $handle_DefMDIChildProcW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
-  )
+    (call $handle_DefMDIChildProcA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr)))
 
   ;; 652: InvertRect(hdc, lpRect) — 2 args stdcall
   ;; Inverts pixels in the rectangle. Equivalent to BitBlt with DSTINVERT.

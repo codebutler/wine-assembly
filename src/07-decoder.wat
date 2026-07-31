@@ -58,6 +58,9 @@
   (global $mr_disp  (mut i32) (i32.const 0))  ;; displacement
   (global $mr_index (mut i32) (i32.const -1)) ;; SIB index register (-1=none)
   (global $mr_scale (mut i32) (i32.const 0))  ;; SIB scale (0-3)
+  ;; Set by decode_block when a 0x67 address-size override prefix is active.
+  ;; Consumed by $decode_modrm (16-bit EA) and the A0–A3 absolute forms.
+  (global $d_addr16 (mut i32) (i32.const 0))
 
   (func $decode_modrm
     (local $modrm i32) (local $mod i32) (local $rm i32)
@@ -66,6 +69,10 @@
     (global.set $mr_disp (i32.const 0))
     (global.set $mr_index (i32.const -1))
     (global.set $mr_scale (i32.const 0))
+
+    ;; 0x67 address-size override → 16-bit ModRM path
+    (if (global.get $d_addr16)
+      (then (call $decode_modrm16) (return)))
 
     (local.set $modrm (call $d_fetch8))
     (local.set $mod (i32.shr_u (local.get $modrm) (i32.const 6)))
@@ -107,6 +114,35 @@
     ;; Centralized segment-override application for all memory EAs.
     ;; Emitter-side calls remain in place but become idempotent no-ops.
     (call $apply_seg_override))
+
+  ;; 16-bit address-size ModRM (0x67 prefix in 32-bit code).
+  ;; Implements the Borland/Win32-common absolute form — mod=00 r/m=110
+  ;; (disp16 only) — used for `fs:[0]` / `fs:[4]` TEB access at CRT startup.
+  ;; Register-direct (mod=11) is identical to 32-bit. Other 16-bit memory
+  ;; forms still trap: full BX/SI/DI/BP EA tables are a follow-up.
+  (func $decode_modrm16
+    (local $modrm i32) (local $mod i32) (local $rm i32)
+    (local.set $modrm (call $d_fetch8))
+    (local.set $mod (i32.shr_u (local.get $modrm) (i32.const 6)))
+    (global.set $mr_reg (i32.and (i32.shr_u (local.get $modrm) (i32.const 3)) (i32.const 7)))
+    (local.set $rm (i32.and (local.get $modrm) (i32.const 7)))
+    (global.set $mr_mod (local.get $mod))
+
+    ;; mod=11: register direct — same as 32-bit
+    (if (i32.eq (local.get $mod) (i32.const 3))
+      (then (global.set $mr_val (local.get $rm)) (return)))
+
+    ;; Absolute disp16: mod=00, r/m=110
+    (if (i32.and (i32.eq (local.get $mod) (i32.const 0)) (i32.eq (local.get $rm) (i32.const 6)))
+      (then
+        (global.set $mr_disp (call $d_fetch16))
+        (call $apply_seg_override)
+        (return)))
+
+    ;; Unsupported 16-bit EA form
+    (call $host_log_i32 (i32.const 0xCA5E0067))
+    (call $host_log_i32 (local.get $modrm))
+    (unreachable))
 
   ;; Apply segment override to mr_disp. Idempotent — clears $d_seg after
   ;; applying, so redundant calls from emitters are safe. Now invoked
@@ -652,23 +688,15 @@
         (br $pfx_done)
       ))
 
-      ;; Propagate segment prefix to global for ModRM decoder
+      ;; Propagate segment / address-size prefixes for ModRM + A0–A3
       (global.set $d_seg (local.get $prefix_seg))
-
-      ;; 0x67 (address-size override) is parsed but not implemented for ModRM.
-      ;; Decoding 16-bit addressing as 32-bit ModRM/SIB silently corrupts
-      ;; EAs, so trap explicitly until 16-bit addressing exists. The exception
-      ;; is LOOP/LOOPE/LOOPNE (0xE0..0xE2) and JCXZ (0xE3): these have no
-      ;; ModRM, the prefix only swaps the implicit counter ECX→CX, which is
-      ;; handled by passing an addr16 flag through to handlers 46 / 216.
-      (if (local.get $prefix_67)
-        (then
-          (if (i32.and (i32.ge_u (local.get $op) (i32.const 0xE0)) (i32.le_u (local.get $op) (i32.const 0xE3)))
-            (then) ;; allow — handled in the LOOP/JCXZ blocks below
-            (else
-              (call $host_log_i32 (i32.const 0xCA5E0067))
-              (call $host_log_i32 (global.get $d_pc))
-              (unreachable)))))
+      (global.set $d_addr16 (local.get $prefix_67))
+      ;; 0x67 address-size override:
+      ;;   - LOOP/JCXZ (E0–E3): swaps implicit counter ECX→CX (handlers 46/216)
+      ;;   - A0–A3 absolute MOV: fetch disp16 instead of disp32 (below)
+      ;;   - ModRM memory ops: $decode_modrm → $decode_modrm16 (disp16 abs now;
+      ;;     other 16-bit EA forms still trap inside decode_modrm16)
+      ;; Prefix is otherwise ignored on ops that don't use an EA.
 
       ;; ---- NOP (0x90) ----
       (if (i32.eq (local.get $op) (i32.const 0x90)) (then (call $te (i32.const 0) (i32.const 0)) (br $decode)))
@@ -932,18 +960,29 @@
           (br $decode)))
 
       ;; ---- 0xA0-0xA3: MOV AL/EAX, [abs] / MOV [abs], AL/EAX ----
-      ;; Apply FS base if segment override is active
-      (if (i32.eq (local.get $op) (i32.const 0xA0)) (then (call $te (i32.const 24) (i32.const 0)) (call $te_raw (call $seg_adj (call $d_fetch32) (local.get $prefix_seg))) (br $decode)))
-      (if (i32.eq (local.get $op) (i32.const 0xA1)) (then
-        (if (local.get $prefix_66)
-          (then (call $te (i32.const 164) (i32.const 0)) (call $te_raw (call $seg_adj (call $d_fetch32) (local.get $prefix_seg))))  ;; mov ax, [addr]
-          (else (call $te (i32.const 20) (i32.const 0)) (call $te_raw (call $seg_adj (call $d_fetch32) (local.get $prefix_seg)))))   ;; mov eax, [addr]
+      ;; Apply FS base if segment override is active. With 0x67 the absolute
+      ;; address is disp16 (Borland `mov eax, fs:[0]` / `mov fs:[0], eax`).
+      (if (i32.eq (local.get $op) (i32.const 0xA0)) (then
+        (local.set $imm (if (result i32) (local.get $prefix_67) (then (call $d_fetch16)) (else (call $d_fetch32))))
+        (call $te (i32.const 24) (i32.const 0))
+        (call $te_raw (call $seg_adj (local.get $imm) (local.get $prefix_seg)))
         (br $decode)))
-      (if (i32.eq (local.get $op) (i32.const 0xA2)) (then (call $te (i32.const 25) (i32.const 0)) (call $te_raw (call $seg_adj (call $d_fetch32) (local.get $prefix_seg))) (br $decode)))
-      (if (i32.eq (local.get $op) (i32.const 0xA3)) (then
+      (if (i32.eq (local.get $op) (i32.const 0xA1)) (then
+        (local.set $imm (if (result i32) (local.get $prefix_67) (then (call $d_fetch16)) (else (call $d_fetch32))))
         (if (local.get $prefix_66)
-          (then (call $te (i32.const 163) (i32.const 0)) (call $te_raw (call $seg_adj (call $d_fetch32) (local.get $prefix_seg))))  ;; mov [addr], ax
-          (else (call $te (i32.const 21) (i32.const 0)) (call $te_raw (call $seg_adj (call $d_fetch32) (local.get $prefix_seg)))))   ;; mov [addr], eax
+          (then (call $te (i32.const 164) (i32.const 0)) (call $te_raw (call $seg_adj (local.get $imm) (local.get $prefix_seg))))  ;; mov ax, [addr]
+          (else (call $te (i32.const 20) (i32.const 0)) (call $te_raw (call $seg_adj (local.get $imm) (local.get $prefix_seg)))))   ;; mov eax, [addr]
+        (br $decode)))
+      (if (i32.eq (local.get $op) (i32.const 0xA2)) (then
+        (local.set $imm (if (result i32) (local.get $prefix_67) (then (call $d_fetch16)) (else (call $d_fetch32))))
+        (call $te (i32.const 25) (i32.const 0))
+        (call $te_raw (call $seg_adj (local.get $imm) (local.get $prefix_seg)))
+        (br $decode)))
+      (if (i32.eq (local.get $op) (i32.const 0xA3)) (then
+        (local.set $imm (if (result i32) (local.get $prefix_67) (then (call $d_fetch16)) (else (call $d_fetch32))))
+        (if (local.get $prefix_66)
+          (then (call $te (i32.const 163) (i32.const 0)) (call $te_raw (call $seg_adj (local.get $imm) (local.get $prefix_seg))))  ;; mov [addr], ax
+          (else (call $te (i32.const 21) (i32.const 0)) (call $te_raw (call $seg_adj (local.get $imm) (local.get $prefix_seg)))))   ;; mov [addr], eax
         (br $decode)))
 
       ;; ---- 0xC6: MOV r/m8, imm8 ----

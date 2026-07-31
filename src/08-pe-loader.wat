@@ -149,12 +149,19 @@
   (func $process_imports (param $import_rva i32)
     (local $desc_ptr i32) (local $ilt_rva i32) (local $iat_rva i32)
     (local $ilt_ptr i32) (local $iat_ptr i32) (local $entry i32) (local $thunk_addr i32)
-    (local $api_id i32)
+    (local $api_id i32) (local $name_rva i32)
     (local.set $desc_ptr (i32.add (global.get $GUEST_BASE) (local.get $import_rva)))
     (block $id (loop $dl
+      ;; IMAGE_IMPORT_DESCRIPTOR: OFT+0, TimeDate+4, Forward+8, Name+12, FT+16.
+      ;; Terminator is an all-zero descriptor — use Name RVA (not OFT): Borland
+      ;; PE linkers leave OriginalFirstThunk=0 and only fill FirstThunk/IAT.
       (local.set $ilt_rva (i32.load (local.get $desc_ptr)))
+      (local.set $name_rva (i32.load (i32.add (local.get $desc_ptr) (i32.const 12))))
       (local.set $iat_rva (i32.load (i32.add (local.get $desc_ptr) (i32.const 16))))
-      (br_if $id (i32.eqz (local.get $ilt_rva)))
+      (br_if $id (i32.eqz (local.get $name_rva)))
+      ;; No ILT → walk the IAT for unbound hint/name RVAs (Borland / some Watcom).
+      (if (i32.eqz (local.get $ilt_rva))
+        (then (local.set $ilt_rva (local.get $iat_rva))))
       (local.set $ilt_ptr (i32.add (global.get $GUEST_BASE) (local.get $ilt_rva)))
       (local.set $iat_ptr (i32.add (global.get $GUEST_BASE) (local.get $iat_rva)))
       (block $fd (loop $fl
