@@ -48,7 +48,16 @@ const LARGE_OK_PATHS = new Set([
   'binaries/pinball-plus95/PINBALL.DAT',
   'binaries/winamp.exe',
   'binaries/wep32-community/Funpack/FunPack.dll',
+  'build/wine-assembly.wasm',
+  'build/wine-assembly.compat.wasm',
 ]);
+
+// Prebuilt wasm is gitignored under build/, but the browser launch path
+// prefers these over client-side WAT compile for TTFP.
+const PREBUILT_WASM_FILES = [
+  'build/wine-assembly.wasm',
+  'build/wine-assembly.compat.wasm',
+];
 
 const DESKTOP_BINARY_FILES = new Set([
   'binaries/notepad.exe',
@@ -143,6 +152,23 @@ function collectTextFiles() {
     const found = walk(dir, subdir, (name) => TEXT_EXTS.has(path.extname(name)));
     for (const f of found)
       files.push({ name: f.rel, content: fs.readFileSync(f.full, 'utf-8') });
+  }
+  return files;
+}
+
+function collectPrebuiltWasm() {
+  const files = [];
+  for (const rel of PREBUILT_WASM_FILES) {
+    const full = path.join(ROOT, rel);
+    if (!fs.existsSync(full)) {
+      console.warn('  WARN missing prebuilt wasm (run tools/build.sh): ' + rel);
+      continue;
+    }
+    files.push({
+      name: rel,
+      content: fs.readFileSync(full).toString('base64'),
+      encoding: 'base64',
+    });
   }
   return files;
 }
@@ -288,6 +314,8 @@ async function deploy() {
 
     console.log('Collecting binaries...');
     binFiles = collectBinaries();
+    console.log('Collecting prebuilt wasm...');
+    binFiles = binFiles.concat(collectPrebuiltWasm());
     let binBytes = 0;
     for (const f of binFiles) { const sz = f.content.length * 3 / 4; binBytes += sz; console.log('  ' + f.name + ' (' + (sz / 1024).toFixed(1) + 'KB)'); }
     console.log('Total binaries: ' + (binBytes / 1024).toFixed(0) + 'KB, ' + binFiles.length + ' files\n');
