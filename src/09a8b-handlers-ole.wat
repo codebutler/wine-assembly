@@ -50,6 +50,10 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 41) (global.get $DX_VTBL_ISTREAM)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
     (local.set $st (call $heap_alloc (i32.const 16)))
+    ;; On OOM retire the COM object and report failure (0) — never zero_memory
+    ;; through a NULL state pointer or hand back an object with no state.
+    (if (i32.eqz (local.get $st))
+      (then (drop (call $da_release (local.get $obj))) (return (i32.const 0))))
     (call $zero_memory (call $g2w (local.get $st)) (i32.const 16))
     (call $ole_set_state (local.get $obj) (local.get $st))
     (local.get $obj))
@@ -60,6 +64,10 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 40) (global.get $DX_VTBL_ISTORAGE)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
     (local.set $st (call $heap_alloc (global.get $OLE_STG_STATE_SIZE)))
+    ;; On OOM retire the COM object and report failure (0) — never zero_memory
+    ;; through a NULL state pointer or hand back an object with no state.
+    (if (i32.eqz (local.get $st))
+      (then (drop (call $da_release (local.get $obj))) (return (i32.const 0))))
     (call $zero_memory (call $g2w (local.get $st)) (global.get $OLE_STG_STATE_SIZE))
     (call $ole_set_state (local.get $obj) (local.get $st))
     (local.get $obj))
@@ -520,10 +528,13 @@
         (if (i32.gt_u (local.get $size) (i32.const 0))
           (then
             (local.set $buf (call $heap_alloc (local.get $size)))
-            (call $memcpy (call $g2w (local.get $buf)) (call $g2w (i32.load (local.get $srcw))) (local.get $size))
-            (i32.store (local.get $dstw) (local.get $buf))
-            (i32.store offset=4 (local.get $dstw) (local.get $size))
-            (i32.store offset=8 (local.get $dstw) (local.get $size))))
+            ;; On OOM leave the clone empty rather than memcpy through a NULL buffer.
+            (if (local.get $buf)
+              (then
+                (call $memcpy (call $g2w (local.get $buf)) (call $g2w (i32.load (local.get $srcw))) (local.get $size))
+                (i32.store (local.get $dstw) (local.get $buf))
+                (i32.store offset=4 (local.get $dstw) (local.get $size))
+                (i32.store offset=8 (local.get $dstw) (local.get $size))))))
         (i32.store offset=12 (local.get $dstw) (i32.load offset=12 (local.get $srcw))) ;; same pos
         (call $gs32 (local.get $arg1) (local.get $dst))))
     (global.set $eax (i32.const 0))
