@@ -519,7 +519,14 @@
   (func $handle_IStream_Clone (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $src i32) (local $dst i32) (local $srcw i32) (local $dstw i32) (local $size i32) (local $buf i32)
     (local.set $dst (call $ole_stream_new))
-    (if (i32.and (i32.ne (local.get $dst) (i32.const 0)) (i32.ne (local.get $arg1) (i32.const 0)))
+    ;; Mint failed (OOM): null *ppstm and fail, matching CreateStream — never
+    ;; report S_OK with an unset out pointer.
+    (if (i32.eqz (local.get $dst))
+      (then
+        (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
+        (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
+    (if (i32.ne (local.get $arg1) (i32.const 0))
       (then
         (local.set $src (call $ole_state (local.get $arg0)))
         (local.set $srcw (call $g2w (local.get $src)))
