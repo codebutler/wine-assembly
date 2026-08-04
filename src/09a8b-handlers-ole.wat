@@ -18,6 +18,16 @@
   ;;   +4  clsid[16]
   ;;   +20 children[24], each 44 bytes: name[36 ASCII, NUL-term] + type(4) + obj(4)
   ;;       type: 1 = stream, 2 = storage
+  ;;
+  ;; Lifetime: Release rides $da_release, which — like the whole DX COM layer —
+  ;; deliberately does NOT reclaim on final release ($dx_free only marks the
+  ;; entry type 0; the wrapper, refcount field, and misc0 state pointer all
+  ;; persist). That conservatism exists because some COM refs are AddRef'd via
+  ;; paths we don't track, so a "last" release can be wrong and freeing there
+  ;; would be a use-after-free. So neither Release nor DestroyElement frees the
+  ;; per-object state (stream buffer / child table); the storage tree is a
+  ;; bounded temporary docfile reclaimed wholesale when the guest process heap
+  ;; is torn down. DestroyElement removes the directory slot only.
 
   (global $DX_VTBL_ISTORAGE (mut i32) (i32.const 0))
   (global $DX_VTBL_ISTREAM  (mut i32) (i32.const 0))
@@ -164,7 +174,7 @@
     (local $ppstm i32) (local $st i32) (local $name_wa i32) (local $strm i32)
     (local.set $ppstm (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $st (call $ole_state (local.get $arg0)))
-    (local.set $name_wa (global.get $PAINT_SCRATCH))
+    (local.set $name_wa (global.get $OLE_NAME_SCRATCH))
     (call $ole_wstr_ascii (local.get $arg1) (local.get $name_wa))
     (local.set $strm (call $ole_stream_new))
     (if (i32.eqz (local.get $strm))
@@ -172,7 +182,13 @@
         (if (local.get $ppstm) (then (call $gs32 (local.get $ppstm) (i32.const 0))))
         (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
         (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)))
-    (drop (call $ole_dir_put (local.get $st) (local.get $name_wa) (i32.const 1) (local.get $strm)))
+    ;; Register in the directory; a full storage (24 children) fails the create.
+    (if (i32.lt_s (call $ole_dir_put (local.get $st) (local.get $name_wa) (i32.const 1) (local.get $strm)) (i32.const 0))
+      (then
+        (drop (call $da_release (local.get $strm)))
+        (if (local.get $ppstm) (then (call $gs32 (local.get $ppstm) (i32.const 0))))
+        (global.set $eax (i32.const 0x80030008)) ;; STG_E_INSUFFICIENTMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)))
     (if (local.get $ppstm) (then (call $gs32 (local.get $ppstm) (local.get $strm))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
@@ -182,7 +198,7 @@
     (local $ppstm i32) (local $st i32) (local $name_wa i32) (local $idx i32) (local $ce i32) (local $obj i32)
     (local.set $ppstm (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $st (call $ole_state (local.get $arg0)))
-    (local.set $name_wa (global.get $PAINT_SCRATCH))
+    (local.set $name_wa (global.get $OLE_NAME_SCRATCH))
     (call $ole_wstr_ascii (local.get $arg1) (local.get $name_wa))
     (local.set $idx (call $ole_dir_find (local.get $st) (local.get $name_wa)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
@@ -191,6 +207,13 @@
         (global.set $eax (i32.const 0x80030002)) ;; STG_E_FILENOTFOUND
         (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)))
     (local.set $ce (call $ole_child_wa (local.get $st) (local.get $idx)))
+    ;; The element must be a stream (type 1), not a sub-storage — otherwise the
+    ;; caller would receive an IStorage through an IStream ppstm.
+    (if (i32.ne (i32.load (i32.add (local.get $ce) (i32.const 36))) (i32.const 1))
+      (then
+        (if (local.get $ppstm) (then (call $gs32 (local.get $ppstm) (i32.const 0))))
+        (global.set $eax (i32.const 0x80030002)) ;; STG_E_FILENOTFOUND
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)))
     (local.set $obj (i32.load (i32.add (local.get $ce) (i32.const 40))))
     (drop (call $da_addref (local.get $obj)))
     (if (local.get $ppstm) (then (call $gs32 (local.get $ppstm) (local.get $obj))))
@@ -202,7 +225,7 @@
     (local $ppstg i32) (local $st i32) (local $name_wa i32) (local $sub i32)
     (local.set $ppstg (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $st (call $ole_state (local.get $arg0)))
-    (local.set $name_wa (global.get $PAINT_SCRATCH))
+    (local.set $name_wa (global.get $OLE_NAME_SCRATCH))
     (call $ole_wstr_ascii (local.get $arg1) (local.get $name_wa))
     (local.set $sub (call $ole_storage_new))
     (if (i32.eqz (local.get $sub))
@@ -210,7 +233,13 @@
         (if (local.get $ppstg) (then (call $gs32 (local.get $ppstg) (i32.const 0))))
         (global.set $eax (i32.const 0x8007000E))
         (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)))
-    (drop (call $ole_dir_put (local.get $st) (local.get $name_wa) (i32.const 2) (local.get $sub)))
+    ;; Register in the directory; a full storage (24 children) fails the create.
+    (if (i32.lt_s (call $ole_dir_put (local.get $st) (local.get $name_wa) (i32.const 2) (local.get $sub)) (i32.const 0))
+      (then
+        (drop (call $da_release (local.get $sub)))
+        (if (local.get $ppstg) (then (call $gs32 (local.get $ppstg) (i32.const 0))))
+        (global.set $eax (i32.const 0x80030008)) ;; STG_E_INSUFFICIENTMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)))
     (if (local.get $ppstg) (then (call $gs32 (local.get $ppstg) (local.get $sub))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
@@ -220,7 +249,7 @@
     (local $ppstg i32) (local $st i32) (local $name_wa i32) (local $idx i32) (local $ce i32) (local $obj i32)
     (local.set $ppstg (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
     (local.set $st (call $ole_state (local.get $arg0)))
-    (local.set $name_wa (global.get $PAINT_SCRATCH))
+    (local.set $name_wa (global.get $OLE_NAME_SCRATCH))
     (call $ole_wstr_ascii (local.get $arg1) (local.get $name_wa))
     (local.set $idx (call $ole_dir_find (local.get $st) (local.get $name_wa)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
@@ -229,6 +258,13 @@
         (global.set $eax (i32.const 0x80030002))
         (global.set $esp (i32.add (global.get $esp) (i32.const 32))) (return)))
     (local.set $ce (call $ole_child_wa (local.get $st) (local.get $idx)))
+    ;; The element must be a sub-storage (type 2), not a stream — otherwise the
+    ;; caller would receive an IStream through an IStorage ppstg.
+    (if (i32.ne (i32.load (i32.add (local.get $ce) (i32.const 36))) (i32.const 2))
+      (then
+        (if (local.get $ppstg) (then (call $gs32 (local.get $ppstg) (i32.const 0))))
+        (global.set $eax (i32.const 0x80030002)) ;; STG_E_FILENOTFOUND
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32))) (return)))
     (local.set $obj (i32.load (i32.add (local.get $ce) (i32.const 40))))
     (drop (call $da_addref (local.get $obj)))
     (if (local.get $ppstg) (then (call $gs32 (local.get $ppstg) (local.get $obj))))
@@ -263,7 +299,7 @@
   (func $handle_IStorage_DestroyElement (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $st i32) (local $name_wa i32) (local $idx i32) (local $n i32) (local $i i32)
     (local.set $st (call $ole_state (local.get $arg0)))
-    (local.set $name_wa (global.get $PAINT_SCRATCH))
+    (local.set $name_wa (global.get $OLE_NAME_SCRATCH))
     (call $ole_wstr_ascii (local.get $arg1) (local.get $name_wa))
     (local.set $idx (call $ole_dir_find (local.get $st) (local.get $name_wa)))
     (if (i32.ge_s (local.get $idx) (i32.const 0))
@@ -356,7 +392,7 @@
 
   ;; Write(this, pv, cb, pcbWritten) — grow buffer, copy at pos, advance.
   (func $handle_IStream_Write (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $st i32) (local $sw i32) (local $buf i32) (local $cap i32) (local $size i32) (local $pos i32) (local $need i32) (local $newcap i32)
+    (local $st i32) (local $sw i32) (local $buf i32) (local $cap i32) (local $size i32) (local $pos i32) (local $need i32) (local $newcap i32) (local $newbuf i32)
     (local.set $st (call $ole_state (local.get $arg0)))
     (local.set $sw (call $g2w (local.get $st)))
     (local.set $buf (i32.load (local.get $sw)))
@@ -369,7 +405,15 @@
         (local.set $newcap (i32.mul (local.get $cap) (i32.const 2)))
         (if (i32.lt_u (local.get $newcap) (local.get $need)) (then (local.set $newcap (local.get $need))))
         (if (i32.lt_u (local.get $newcap) (i32.const 64)) (then (local.set $newcap (i32.const 64))))
-        (local.set $buf (call $heap_realloc (local.get $buf) (local.get $newcap) (i32.const 0)))
+        (local.set $newbuf (call $heap_realloc (local.get $buf) (local.get $newcap) (i32.const 0)))
+        ;; On OOM heap_realloc leaves the old buffer intact — keep it, write nothing,
+        ;; don't advance the position, and fail the call rather than deref NULL.
+        (if (i32.eqz (local.get $newbuf))
+          (then
+            (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
+            (global.set $eax (i32.const 0x80030070)) ;; STG_E_MEDIUMFULL
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (local.set $buf (local.get $newbuf))
         (i32.store (local.get $sw) (local.get $buf))
         (i32.store offset=4 (local.get $sw) (local.get $newcap))))
     (if (i32.and (i32.gt_u (local.get $arg2) (i32.const 0)) (i32.ne (local.get $arg1) (i32.const 0)))
@@ -416,6 +460,11 @@
     (if (i32.gt_u (local.get $arg1) (local.get $cap))
       (then
         (local.set $buf (call $heap_realloc (i32.load (local.get $sw)) (local.get $arg1) (i32.const 0)))
+        ;; On OOM keep the old buffer/size and fail rather than zero the pointer.
+        (if (i32.eqz (local.get $buf))
+          (then
+            (global.set $eax (i32.const 0x80030070)) ;; STG_E_MEDIUMFULL
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
         (i32.store (local.get $sw) (local.get $buf))
         (i32.store offset=4 (local.get $sw) (local.get $arg1))))
     (i32.store offset=8 (local.get $sw) (local.get $arg1))

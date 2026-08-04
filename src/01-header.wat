@@ -601,7 +601,8 @@
   ;; 0x00010900  256B    CALLSTACK_RING (64 slots × 4 bytes — shadow ret_addr stack for --trace-callstack)
   ;; 0x00010A00  256B    MCI_DEVICE_TABLE (16 × 16 bytes — host-backed MCI devices)
   ;; 0x00010B00  1KB     OWNER_TABLE   (256 entries × 4 bytes, ends 0x10F00)
-  ;; 0x00010F00  256B    Free
+  ;; 0x00010F00  64B     OLE_NAME_SCRATCH (IStorage element-name ASCII scratch)
+  ;; 0x00010F40  192B    Free
   ;; 0x00011000  320B    WAT-owned system strings
   ;; 0x00011140  1064B   DX_PRESENT_BMI (BITMAPINFOHEADER + palette/masks)
   ;; 0x00011568  152B    Free
@@ -817,6 +818,13 @@
   ;; cannot reach it via image-relative pointers. Lives just past TIMER_TABLE.
   (global $PAINT_SCRATCH  i32 (i32.const 0x0000AD40))
   (global $PAINT_SCRATCH_SIZE i32 (i32.const 0x00000010))
+
+  ;; OLE_NAME_SCRATCH — ASCII scratch for IStorage element names. An OLE element
+  ;; name copies to up to 35 chars + NUL (36 bytes); PAINT_SCRATCH is only a
+  ;; 16-byte RECT, so the OLE handlers get their own 64-byte buffer carved from
+  ;; the 0x00010F00 free block (would otherwise overflow into MENU_DATA_TABLE).
+  (global $OLE_NAME_SCRATCH i32 (i32.const 0x00010F00))
+  (global $OLE_NAME_SCRATCH_SIZE i32 (i32.const 0x00000040))
   ;; PROP_TABLE: SetPropA/GetPropA/RemovePropA storage. Linear scan (apps
   ;; that touch Props rarely have more than a handful of live entries).
   ;;   +0  hwnd       (0 = empty slot)
