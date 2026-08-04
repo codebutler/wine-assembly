@@ -205,8 +205,22 @@
         ;; Push CACA0027 return thunk
         (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
         (call $gs32 (global.get $esp) (global.get $child_create_ret_thunk))
-        ;; Jump to the child's (possibly-subclassed) wndproc
+        ;; Jump to the child's (possibly-subclassed) wndproc. Now that the
+        ;; CBT hook fires for native controls too, the proc may still be a
+        ;; WAT marker (hook chose not to subclass) — markers can't be jumped
+        ;; to, so dispatch synchronously and unwind as if the proc returned.
         (global.set $eip (call $wnd_table_get (global.get $child_cbt_saved_hwnd)))
+        (if (i32.ge_u (global.get $eip) (i32.const 0xFFFE0000))
+          (then
+            (drop (call $wat_wndproc_dispatch
+              (global.get $child_cbt_saved_hwnd) (i32.const 0x0001) (i32.const 0)
+              (i32.add (global.get $image_base) (i32.const 0x100))))
+            ;; Pop the 5 dwords just pushed (thunk + 4 wndproc args); the
+            ;; thunk address in EIP re-enters CACA0027 with the saved frame.
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (global.set $eip (global.get $child_create_ret_thunk))
+            (global.set $steps (i32.const 0))
+            (return)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
         (global.set $steps (i32.const 0))
@@ -238,6 +252,17 @@
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
             (call $gs32 (global.get $esp) (global.get $child_create_ret_thunk))
             (global.set $eip (call $wnd_table_get (local.get $arg0)))
+            ;; WAT-marker proc (unsubclassed native control): dispatch the
+            ;; WM_SIZE synchronously and re-enter this thunk with the size
+            ;; slot already zeroed, which falls to the final return path.
+            (if (i32.ge_u (global.get $eip) (i32.const 0xFFFE0000))
+              (then
+                (drop (call $wat_wndproc_dispatch
+                  (local.get $arg0) (i32.const 0x0005) (i32.const 0) (local.get $arg1)))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+                (global.set $eip (global.get $child_create_ret_thunk))
+                (global.set $steps (i32.const 0))
+                (return)))
             (if (i32.eqz (global.get $eip))
               (then (global.set $eip (global.get $wndproc_addr))))
             (global.set $steps (i32.const 0))
@@ -323,6 +348,20 @@
         (call $gs32 (global.get $esp) (global.get $createwnd_ret_thunk))
         ;; Get WndProc from window table (may have been updated by CBT hook)
         (global.set $eip (call $wnd_table_get (global.get $createwnd_saved_hwnd)))
+        ;; Still a WAT-native marker (hook didn't subclass, e.g. a native-class
+        ;; top-level): dispatch WM_CREATE synchronously and unwind by
+        ;; re-entering CACA0001 with the saved frame.
+        (if (i32.ge_u (global.get $eip) (i32.const 0xFFFE0000))
+          (then
+            (drop (call $wat_wndproc_dispatch
+              (global.get $createwnd_saved_hwnd) (i32.const 0x0001) (i32.const 0)
+              (i32.add (global.get $image_base) (i32.const 0x100))))
+            ;; Pop the 5 dwords just pushed (thunk + 4 wndproc args); EIP at
+            ;; the CACA0001 thunk pops saved_ret+saved_hwnd and returns hwnd.
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (global.set $eip (global.get $createwnd_ret_thunk))
+            (global.set $steps (i32.const 0))
+            (return)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
         (global.set $steps (i32.const 0))

@@ -495,8 +495,13 @@
     ;; window) have WAT-native wndprocs, not guest x86 callbacks. Win98 USER
     ;; calls the system class proc directly during CreateWindowEx; do the same
     ;; and return to the API caller instead of jumping through a null/marker
-    ;; callback address.
-    (if (i32.ge_u (local.get $tmp) (i32.const 0xFFFF0000))
+    ;; callback address. With a CBT hook installed, fall through instead:
+    ;; HCBT_CREATEWND fires for EVERY window (a native-class top-level like
+    ;; tooltips_class32 included) and MFC attaches m_hWnd there; CACA0002
+    ;; then dispatches WM_CREATE, handling still-native marker procs.
+    (if (i32.and
+          (i32.ge_u (local.get $tmp) (i32.const 0xFFFF0000))
+          (i32.eqz (global.get $cbt_hook_proc)))
       (then
         (drop (call $wat_wndproc_dispatch
           (local.get $hwnd)
@@ -583,7 +588,12 @@
     ;; the queued child WM_CREATE; otherwise apps can populate the control
     ;; before the message loop and then lose that state when the duplicate
     ;; WM_CREATE is later dispatched (DX Palette's listbox does this).
-    (if (i32.eq (call $wnd_table_get (local.get $hwnd)) (global.get $WNDPROC_CTRL_NATIVE))
+    ;; With a CBT hook installed, skip this pre-dispatch: HCBT_CREATEWND fires
+    ;; below BEFORE WM_CREATE (real USER ordering) and the CACA0026
+    ;; continuation delivers WM_CREATE through the possibly-subclassed proc.
+    (if (i32.and
+          (i32.eq (call $wnd_table_get (local.get $hwnd)) (global.get $WNDPROC_CTRL_NATIVE))
+          (i32.eqz (global.get $cbt_hook_proc)))
       (then
         (global.set $pending_child_create (i32.const 0))
         (drop (call $wat_wndproc_dispatch
@@ -636,9 +646,10 @@
     ;; If a CBT hook is installed, fire HCBT_CREATEWND for this child so MFC
     ;; (and anything else using per-hwnd subclassing) can swap in its real
     ;; wndproc via SetWindowLongA before we start delivering messages.
-    (if (i32.and
-          (global.get $cbt_hook_proc)
-          (i32.ne (call $wnd_table_get (local.get $hwnd)) (global.get $WNDPROC_CTRL_NATIVE)))
+    ;; Native controls included — real USER fires HCBT_CREATEWND for EVERY
+    ;; window, and MFC attaches m_hWnd there (CWnd::CreateEx asserts
+    ;; hWnd == m_hWnd otherwise, e.g. for a CListCtrl's SysListView32).
+    (if (global.get $cbt_hook_proc)
     (then
     ;; Save state for CACA0026 continuation, clean CreateWindowExA frame (52 bytes).
     (global.set $child_cbt_saved_hwnd (local.get $hwnd))

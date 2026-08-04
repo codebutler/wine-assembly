@@ -3435,9 +3435,13 @@
     (call $modal_begin (local.get $dlg) (i32.const 8))
   )
 
-  ;; 249: SetViewportExtEx — STUB: unimplemented
+  ;; 249: SetViewportExtEx(hdc, x, y, lpSize) → BOOL. Extents apply in
+  ;; MM_ISOTROPIC/MM_ANISOTROPIC; prev extent written to lpSize when non-null.
   (func $handle_SetViewportExtEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $host_gdi_set_viewport_ext
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (select (call $g2w (local.get $arg3)) (i32.const 0) (local.get $arg3))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
   ;; 250: lstrcmpiA
@@ -4635,13 +4639,31 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
+  ;; AddFontResourceA(lpszFilename) → int (number of fonts added).
+  ;; The host text stack renders by face name with fallback, so the private
+  ;; font file registers as one available font. Apps (e.g. any that ship a
+  ;; custom .ttf beside the exe) treat 0 as fatal.
+  (func $handle_AddFontResourceA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+  )
+
+  ;; RemoveFontResourceA(lpszFilename) → BOOL
+  (func $handle_RemoveFontResourceA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+  )
+
   ;; 343: IsBadReadPtr(lp, ucb) → BOOL
   ;; Validates read access to memory range. Returns 0 if valid, 1 if bad.
   ;; Check if address falls within our WASM memory range.
+  ;; Valid range covers the whole 128MB guest space — the guest stack sits at
+  ;; ~0x074FFxxx and DX/COM objects at 0x07FF0000, so a 32MB ceiling wrongly
+  ;; flagged stack buffers as bad (MFC's AfxIsValidAddress asserts on that).
   (func $handle_IsBadReadPtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (select (i32.const 1) (i32.const 0)
       (i32.or (i32.eqz (local.get $arg0))
-              (i32.gt_u (i32.add (local.get $arg0) (local.get $arg1)) (i32.const 0x02000000)))))
+              (i32.gt_u (i32.add (local.get $arg0) (local.get $arg1)) (i32.const 0x08000000)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; 344: IsBadWritePtr — return 0 (valid) — STUB: unimplemented
@@ -7407,15 +7429,21 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 548: IsBadStringPtrA — STUB: unimplemented
+  ;; 548: IsBadStringPtrA(lpsz, ucchMax) → BOOL — 0 if readable, 1 if bad.
+  ;; Flat address space: bad only when NULL or outside guest memory range
+  ;; (same posture as IsBadReadPtr; MFC's AfxIsValidString probes with this).
   (func $handle_IsBadStringPtrA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
-  )
+    (global.set $eax (select (i32.const 1) (i32.const 0)
+      (i32.or (i32.eqz (local.get $arg0))
+              (i32.gt_u (local.get $arg0) (i32.const 0x08000000)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; 549: IsBadStringPtrW — STUB: unimplemented
+  ;; 549: IsBadStringPtrW(lpsz, ucchMax) → BOOL — same as the A form.
   (func $handle_IsBadStringPtrW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
-  )
+    (global.set $eax (select (i32.const 1) (i32.const 0)
+      (i32.or (i32.eqz (local.get $arg0))
+              (i32.gt_u (local.get $arg0) (i32.const 0x08000000)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; 550: GlobalDeleteAtom(nAtom) — no-op, return 0 (success)
   (func $handle_GlobalDeleteAtom (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -7453,9 +7481,13 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 554: DPtoLP — STUB: unimplemented
+  ;; 554: DPtoLP(hdc, lpPoints, nCount) → BOOL — inverse of LPtoDP, in place.
   (func $handle_DPtoLP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $host_gdi_map_points
+      (local.get $arg0)
+      (select (call $g2w (local.get $arg1)) (i32.const 0) (local.get $arg1))
+      (local.get $arg2) (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
   ;; 555: CombineRgn — call host to merge region objects
@@ -7474,10 +7506,9 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
-  ;; 557: GetMapMode(hdc) → MM_TEXT. The host renderer uses pixel/text
-  ;; coordinates, so MM_TEXT is the stable default.
+  ;; 557: GetMapMode(hdc) → current per-DC map mode (default MM_TEXT).
   (func $handle_GetMapMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (global.set $eax (call $host_gdi_get_map_mode (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
@@ -7791,9 +7822,12 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
   )
 
-  ;; 593: GetViewportExtEx — STUB: unimplemented
+  ;; 593: GetViewportExtEx(hdc, lpSize) → BOOL — effective device extents.
   (func $handle_GetViewportExtEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $host_gdi_get_viewport_ext
+      (local.get $arg0)
+      (select (call $g2w (local.get $arg1)) (i32.const 0) (local.get $arg1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; 594: GetROP2 — STUB: unimplemented
@@ -7801,9 +7835,12 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 595: GetWindowExtEx — STUB: unimplemented
+  ;; 595: GetWindowExtEx(hdc, lpSize) → BOOL — effective logical extents.
   (func $handle_GetWindowExtEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $host_gdi_get_window_ext
+      (local.get $arg0)
+      (select (call $g2w (local.get $arg1)) (i32.const 0) (local.get $arg1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; GetTextAlign(hdc) — return current alignment flags.
@@ -10314,12 +10351,22 @@
   )
 
   ;; 923: WSAStartup(wVersionRequested, lpWSAData) — 2 args stdcall
-  ;; Fill WSADATA struct with version 2.2, return 0 (success)
+  ;; Negotiate like real winsock: wVersion = min(requested, 2.2). Winsock 1.x
+  ;; apps validate wsaData.wVersion == the version they asked for and bail
+  ;; with "sockets initialization failed" if the DLL pins 2.2 unconditionally.
   (func $handle_WSAStartup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32)
+    (local $req i32)
     (local.set $wa (call $g2w (local.get $arg1)))
+    ;; MAKEWORD(major, minor): major is the LOW byte. Compare as (major<<8)|minor.
+    (local.set $req (i32.and (local.get $arg0) (i32.const 0xFFFF)))
+    (if (i32.gt_u
+          (i32.or (i32.shl (i32.and (local.get $req) (i32.const 0xFF)) (i32.const 8))
+                  (i32.shr_u (local.get $req) (i32.const 8)))
+          (i32.const 0x0202))
+      (then (local.set $req (i32.const 0x0202))))
     ;; WSADATA: wVersion(2), wHighVersion(2), rest is description strings + status
-    (i32.store16 (local.get $wa) (i32.const 0x0202))         ;; wVersion = 2.2
+    (i32.store16 (local.get $wa) (local.get $req))           ;; wVersion = negotiated
     (i32.store16 (i32.add (local.get $wa) (i32.const 2)) (i32.const 0x0202)) ;; wHighVersion = 2.2
     (global.set $eax (i32.const 0))  ;; success
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))

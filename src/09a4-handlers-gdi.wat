@@ -461,21 +461,29 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
   )
 
-  ;; 175: SetMapMode(hdc, fnMapMode) → previous map mode. We render in MM_TEXT
-  ;; coordinates; accept requests and report the previous/default mode.
+  ;; 175: SetMapMode(hdc, fnMapMode) → previous map mode. Per-DC state lives
+  ;; host-side; LPtoDP/DPtoLP and the extent APIs transform through it.
   (func $handle_SetMapMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1)) ;; MM_TEXT
+    (global.set $eax (call $host_gdi_set_map_mode (local.get $arg0) (local.get $arg1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-  ;; 176: SetWindowExtEx — STUB: unimplemented
+  ;; 176: SetWindowExtEx(hdc, x, y, lpSize) → BOOL. Extents apply in
+  ;; MM_ISOTROPIC/MM_ANISOTROPIC; prev extent written to lpSize when non-null.
   (func $handle_SetWindowExtEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $host_gdi_set_window_ext
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (select (call $g2w (local.get $arg3)) (i32.const 0) (local.get $arg3))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; 177: LPtoDP — STUB: unimplemented
+  ;; 177: LPtoDP(hdc, lpPoints, nCount) → BOOL — transform POINTs in place.
   (func $handle_LPtoDP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $host_gdi_map_points
+      (local.get $arg0)
+      (select (call $g2w (local.get $arg1)) (i32.const 0) (local.get $arg1))
+      (local.get $arg2) (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
   ;; 178: StartDocA — STUB: unimplemented

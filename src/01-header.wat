@@ -234,6 +234,14 @@
   (import "host" "gdi_set_window_org" (func $host_gdi_set_window_org (param i32 i32 i32) (result i32)))
   (import "host" "gdi_get_window_org_x" (func $host_gdi_get_window_org_x (param i32) (result i32)))
   (import "host" "gdi_get_window_org_y" (func $host_gdi_get_window_org_y (param i32) (result i32)))
+  (import "host" "gdi_set_map_mode" (func $host_gdi_set_map_mode (param i32 i32) (result i32)))
+  (import "host" "gdi_get_map_mode" (func $host_gdi_get_map_mode (param i32) (result i32)))
+  (import "host" "gdi_set_window_ext" (func $host_gdi_set_window_ext (param i32 i32 i32 i32) (result i32)))
+  (import "host" "gdi_set_viewport_ext" (func $host_gdi_set_viewport_ext (param i32 i32 i32 i32) (result i32)))
+  (import "host" "gdi_get_window_ext" (func $host_gdi_get_window_ext (param i32 i32) (result i32)))
+  (import "host" "gdi_get_viewport_ext" (func $host_gdi_get_viewport_ext (param i32 i32) (result i32)))
+  ;; gdi_map_points(hdc, ptsWasmAddr, count, toDevice) — POINT array in place
+  (import "host" "gdi_map_points" (func $host_gdi_map_points (param i32 i32 i32 i32) (result i32)))
   (import "host" "gdi_text_out" (func $host_gdi_text_out (param i32 i32 i32 i32 i32 i32) (result i32)))
   ;; gdi_text_out(hdc, x, y, textWasmAddr, nCount, isWide) → 1
   ;; When isWide=1 the buffer is UTF-16 LE (nCount = wchar count); otherwise ANSI bytes.

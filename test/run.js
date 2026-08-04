@@ -1478,6 +1478,15 @@ async function main() {
     ];
     dlls = [];
     for (const name of required) {
+      // Win32 load order: an app-local DLL sitting beside the exe always loads
+      // as a real PE (that's how apps ship private DLLs). The allowlist only
+      // gates DLLs pulled from the shared test/binaries/dlls pool, where
+      // system DLLs are emulated by WAT handlers instead.
+      const appLocal = path.join(exeDir, name);
+      if (fs.existsSync(appLocal)) {
+        dlls.push({ name, bytes: fs.readFileSync(appLocal) });
+        continue;
+      }
       if (!LOADABLE_DLLS.has(name.toLowerCase())) continue;
       for (const dir of dllSearchDirs) {
         const p = path.join(dir, name);
