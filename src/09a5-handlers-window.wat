@@ -213,6 +213,17 @@
             (i32.eq (i32.or (i32.load offset=4 (call $g2w (local.get $arg1))) (i32.const 0x20202020))
                     (i32.const 0x73706974)))) ;; "tips"
       (then (local.set $tmp (i32.const 0))))
+    ;; Same for msctls_statusbar32 — prefer the WAT-native status bar.
+    ;; "msct"=0x7463736d, "ls_s"=0x735f736c (distinguishes it from
+    ;; msctls_progress32 / msctls_trackbar32).
+    (if (i32.and
+          (i32.ge_u (local.get $arg1) (i32.const 0x10000))
+          (i32.and
+            (i32.eq (i32.or (i32.load (call $g2w (local.get $arg1))) (i32.const 0x20202020))
+                    (i32.const 0x7463736d)) ;; "msct"
+            (i32.eq (i32.or (i32.load offset=4 (call $g2w (local.get $arg1))) (i32.const 0x20202020))
+                    (i32.const 0x737f736c)))) ;; "ls_s"
+      (then (local.set $tmp (i32.const 0))))
     ;; If lookup failed and this isn't the first window, scan class table for an
     ;; EXE-range wndproc not already used by main_hwnd (handles rotating string
     ;; buffer mismatches where className was overwritten between RegisterClass and CreateWindow)
@@ -305,6 +316,14 @@
                   (i32.eq (i32.or (i32.load offset=4 (local.get $name_w)) (i32.const 0x20202020))
                           (i32.const 0x73706974)))
               (then (local.set $detected_class (i32.const 20))))
+            ;; "msctls_statusbar32" → class 21 (StatusBar)
+            ;; LE dwords: "msct"=0x7463736d, "ls_s"=0x735f736c
+            (if (i32.and
+                  (i32.eq (i32.or (i32.load (local.get $name_w)) (i32.const 0x20202020))
+                          (i32.const 0x7463736d))
+                  (i32.eq (i32.or (i32.load offset=4 (local.get $name_w)) (i32.const 0x20202020))
+                          (i32.const 0x737f736c)))
+              (then (local.set $detected_class (i32.const 21))))
             ;; "listbox\0" — LE dwords: "list"=0x7473696c, "box\0" = u32 0x00786f62.
             (if (i32.and
                   (i32.eq (i32.or (i32.load (local.get $name_w)) (i32.const 0x20202020))

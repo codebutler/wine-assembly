@@ -344,6 +344,9 @@
     ;; Class 20 = Tooltip (tooltips_class32)
     (if (i32.eq (local.get $class) (i32.const 20))
       (then (return (call $tooltip_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
+    ;; Class 21 = StatusBar (msctls_statusbar32)
+    (if (i32.eq (local.get $class) (i32.const 21))
+      (then (return (call $statusbar_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; Other classes: return 0 (DefWindowProc)
     (i32.const 0)
   )
@@ -3128,6 +3131,237 @@
                         (i32.const 0x0A) (i32.const 0x0F)))))))
         (return (i32.const 0))))
     (i32.const 0))
+
+  ;; ---- StatusBar WndProc (msctls_statusbar32, class 21) ----
+  ;;
+  ;; Minimal comctl32 status bar. Real Win98 creates a genuine child HWND and
+  ;; MFC's CStatusBar asserts on SB_GETBORDERS returning FALSE, so a WAT-native
+  ;; control is the generic fix (no app knowledge — any status bar benefits).
+  ;;
+  ;; StatusBarState (272 bytes):
+  ;;   +0  nParts
+  ;;   +4  simple flag
+  ;;   +8  simple text guest ptr (dup'd)
+  ;;   +12 minHeight
+  ;;   +16 parts[32] × {rightEdge:i32, textPtr:i32}  (right edge -1 = extend)
+  (func $statusbar_state_new (result i32)
+    (local $st i32) (local $sw i32)
+    (local.set $st (call $heap_alloc (i32.const 272)))
+    (local.set $sw (call $g2w (local.get $st)))
+    (memory.fill (local.get $sw) (i32.const 0) (i32.const 272))
+    (i32.store        (local.get $sw) (i32.const 1))    ;; nParts = 1
+    (i32.store offset=12 (local.get $sw) (i32.const 20)) ;; minHeight
+    (i32.store offset=16 (local.get $sw) (i32.const -1)) ;; parts[0].rightEdge = extend
+    (local.get $st))
+
+  (func $statusbar_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
+    (local $state i32) (local $sw i32) (local $hdc i32) (local $sz i32)
+    (local $w i32) (local $h i32) (local $n i32) (local $i i32)
+    (local $idx i32) (local $rec i32) (local $tp i32) (local $left i32)
+    (local $right i32) (local $tlen i32) (local $dst i32) (local $simple i32)
+    (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+    ;; WM_CREATE
+    (if (i32.eq (local.get $msg) (i32.const 0x0001))
+      (then
+        (call $wnd_set_state_ptr (local.get $hwnd) (call $statusbar_state_new))
+        (return (i32.const 0))))
+    ;; WM_DESTROY — free part texts + simple text + state
+    (if (i32.eq (local.get $msg) (i32.const 0x0002))
+      (then
+        (if (local.get $state)
+          (then
+            (local.set $sw (call $g2w (local.get $state)))
+            (if (i32.load offset=8 (local.get $sw))
+              (then (call $heap_free (i32.load offset=8 (local.get $sw)))))
+            (local.set $i (i32.const 0))
+            (block $bd (loop $fd
+              (br_if $bd (i32.ge_u (local.get $i) (i32.const 32)))
+              (local.set $tp (i32.load offset=4
+                (i32.add (local.get $sw) (i32.add (i32.const 16)
+                  (i32.mul (local.get $i) (i32.const 8))))))
+              (if (local.get $tp) (then (call $heap_free (local.get $tp))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $fd)))
+            (call $heap_free (local.get $state))
+            (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0))))
+        (return (i32.const 0))))
+    ;; Lazy-init for any message arriving before WM_CREATE state exists.
+    (if (i32.eqz (local.get $state))
+      (then
+        (local.set $state (call $statusbar_state_new))
+        (call $wnd_set_state_ptr (local.get $hwnd) (local.get $state))))
+    (local.set $sw (call $g2w (local.get $state)))
+    ;; SB_GETBORDERS (0x0407): lParam → int[3] {horiz, vert, between}. TRUE.
+    (if (i32.eq (local.get $msg) (i32.const 0x0407))
+      (then
+        (if (local.get $lParam)
+          (then
+            (local.set $dst (call $g2w (local.get $lParam)))
+            (i32.store        (local.get $dst) (i32.const 0))
+            (i32.store offset=4  (local.get $dst) (i32.const 2))
+            (i32.store offset=8  (local.get $dst) (i32.const 2))))
+        (return (i32.const 1))))
+    ;; SB_SETMINHEIGHT (0x0408)
+    (if (i32.eq (local.get $msg) (i32.const 0x0408))
+      (then
+        (i32.store offset=12 (local.get $sw) (local.get $wParam))
+        (return (i32.const 0))))
+    ;; SB_SIMPLE (0x0409)
+    (if (i32.eq (local.get $msg) (i32.const 0x0409))
+      (then
+        (i32.store offset=4 (local.get $sw) (i32.ne (local.get $wParam) (i32.const 0)))
+        (call $invalidate_hwnd (local.get $hwnd))
+        (return (i32.const 1))))
+    ;; SB_SETPARTS (0x0404): wParam=count (<=32), lParam=int[] right edges.
+    (if (i32.eq (local.get $msg) (i32.const 0x0404))
+      (then
+        (local.set $n (local.get $wParam))
+        (if (i32.gt_u (local.get $n) (i32.const 32)) (then (local.set $n (i32.const 32))))
+        (i32.store (local.get $sw) (local.get $n))
+        (if (local.get $lParam)
+          (then
+            (local.set $i (i32.const 0))
+            (block $bp (loop $cp
+              (br_if $bp (i32.ge_u (local.get $i) (local.get $n)))
+              (i32.store offset=16
+                (i32.add (local.get $sw) (i32.mul (local.get $i) (i32.const 8)))
+                (i32.load (i32.add (call $g2w (local.get $lParam))
+                  (i32.mul (local.get $i) (i32.const 4)))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $cp)))))
+        (call $invalidate_hwnd (local.get $hwnd))
+        (return (i32.const 1))))
+    ;; SB_GETPARTS (0x0406): return nParts; fill lParam edges if present.
+    (if (i32.eq (local.get $msg) (i32.const 0x0406))
+      (then
+        (local.set $n (i32.load (local.get $sw)))
+        (if (local.get $lParam)
+          (then
+            (local.set $i (i32.const 0))
+            (block $bg (loop $cg
+              (br_if $bg (i32.ge_u (local.get $i) (local.get $n)))
+              (br_if $bg (i32.ge_u (local.get $i) (local.get $wParam)))
+              (i32.store
+                (i32.add (call $g2w (local.get $lParam)) (i32.mul (local.get $i) (i32.const 4)))
+                (i32.load offset=16
+                  (i32.add (local.get $sw) (i32.mul (local.get $i) (i32.const 8)))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $cg)))))
+        (return (local.get $n))))
+    ;; SB_SETTEXTA (0x0401): wParam low byte = part index; lParam = text.
+    (if (i32.eq (local.get $msg) (i32.const 0x0401))
+      (then
+        (local.set $idx (i32.and (local.get $wParam) (i32.const 0xFF)))
+        ;; SBT_NOBORDERS/OWNERDRAW live in high bits; 0xFF (SB_SIMPLEID) or
+        ;; simple mode routes to the simple slot.
+        (if (i32.or (i32.load offset=4 (local.get $sw)) (i32.eq (local.get $idx) (i32.const 0xFF)))
+          (then
+            (if (i32.load offset=8 (local.get $sw))
+              (then (call $heap_free (i32.load offset=8 (local.get $sw)))))
+            (i32.store offset=8 (local.get $sw) (i32.const 0))
+            (if (local.get $lParam)
+              (then
+                (local.set $tlen (call $strlen (call $g2w (local.get $lParam))))
+                (i32.store offset=8 (local.get $sw)
+                  (call $ctrl_text_dup (local.get $lParam) (local.get $tlen))))))
+          (else
+            (if (i32.lt_u (local.get $idx) (i32.const 32))
+              (then
+                (local.set $rec (i32.add (local.get $sw)
+                  (i32.add (i32.const 16) (i32.mul (local.get $idx) (i32.const 8)))))
+                (if (i32.load offset=4 (local.get $rec))
+                  (then (call $heap_free (i32.load offset=4 (local.get $rec)))))
+                (i32.store offset=4 (local.get $rec) (i32.const 0))
+                (if (local.get $lParam)
+                  (then
+                    (local.set $tlen (call $strlen (call $g2w (local.get $lParam))))
+                    (i32.store offset=4 (local.get $rec)
+                      (call $ctrl_text_dup (local.get $lParam) (local.get $tlen)))))))))
+        (call $invalidate_hwnd (local.get $hwnd))
+        (return (i32.const 1))))
+    ;; WM_SETTEXT (0x000C) — treat as simple-part text.
+    (if (i32.eq (local.get $msg) (i32.const 0x000C))
+      (then
+        (if (i32.load offset=8 (local.get $sw))
+          (then (call $heap_free (i32.load offset=8 (local.get $sw)))))
+        (i32.store offset=8 (local.get $sw) (i32.const 0))
+        (if (local.get $lParam)
+          (then
+            (local.set $tlen (call $strlen (call $g2w (local.get $lParam))))
+            (i32.store offset=8 (local.get $sw)
+              (call $ctrl_text_dup (local.get $lParam) (local.get $tlen)))))
+        (call $invalidate_hwnd (local.get $hwnd))
+        (return (i32.const 1))))
+    ;; WM_SIZE — repaint
+    (if (i32.eq (local.get $msg) (i32.const 0x0005))
+      (then (call $invalidate_hwnd (local.get $hwnd)) (return (i32.const 0))))
+    ;; WM_ERASEBKGND
+    (if (i32.eq (local.get $msg) (i32.const 0x0014))
+      (then (return (call $host_erase_background (local.get $hwnd) (i32.const 16)))))
+    ;; WM_PAINT
+    (if (i32.eq (local.get $msg) (i32.const 0x000F))
+      (then
+        (local.set $hdc (i32.add (local.get $hwnd) (i32.const 0x40000)))
+        (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+        (local.set $w (i32.and (local.get $sz) (i32.const 0xFFFF)))
+        (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
+        (if (i32.or (i32.le_s (local.get $w) (i32.const 0)) (i32.le_s (local.get $h) (i32.const 0)))
+          (then (return (i32.const 0))))
+        ;; Face fill (COLOR_BTNFACE) + top light rule (classic status bar top).
+        (drop (call $host_gdi_fill_rect (local.get $hdc)
+                (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 16)))
+        (local.set $simple (i32.load offset=4 (local.get $sw)))
+        (if (local.get $simple)
+          (then
+            (call $statusbar_paint_part (local.get $hdc)
+              (i32.const 0) (local.get $w) (local.get $h)
+              (i32.load offset=8 (local.get $sw))))
+          (else
+            (local.set $n (i32.load (local.get $sw)))
+            (if (i32.eqz (local.get $n)) (then (local.set $n (i32.const 1))))
+            (local.set $i (i32.const 0))
+            (local.set $left (i32.const 0))
+            (block $bpp (loop $pp
+              (br_if $bpp (i32.ge_u (local.get $i) (local.get $n)))
+              (local.set $right (i32.load offset=16
+                (i32.add (local.get $sw) (i32.mul (local.get $i) (i32.const 8)))))
+              (if (i32.lt_s (local.get $right) (i32.const 0))
+                (then (local.set $right (local.get $w))))
+              (call $statusbar_paint_part (local.get $hdc)
+                (local.get $left) (local.get $right) (local.get $h)
+                (i32.load offset=4
+                  (i32.add (local.get $sw)
+                    (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 8))))))
+              (local.set $left (local.get $right))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $pp)))))
+        (return (i32.const 0))))
+    (i32.const 0))
+
+  ;; Paint one status-bar panel: sunken edge inset + left-aligned text.
+  (func $statusbar_paint_part (param $hdc i32) (param $left i32) (param $right i32)
+    (param $h i32) (param $textPtr i32)
+    (local $l i32) (local $t i32) (local $r i32) (local $b i32)
+    (local.set $l (i32.add (local.get $left) (i32.const 1)))
+    (local.set $t (i32.const 2))
+    (local.set $r (i32.sub (local.get $right) (i32.const 1)))
+    (local.set $b (i32.sub (local.get $h) (i32.const 1)))
+    (if (i32.le_s (local.get $r) (local.get $l)) (then (return)))
+    ;; BDR_SUNKENOUTER (0x02) | BF_RECT (0x0F)
+    (drop (call $host_gdi_draw_edge (local.get $hdc)
+            (local.get $l) (local.get $t) (local.get $r) (local.get $b)
+            (i32.const 0x02) (i32.const 0x0F)))
+    (if (local.get $textPtr)
+      (then
+        (i32.store        (global.get $PAINT_SCRATCH) (i32.add (local.get $l) (i32.const 3)))
+        (i32.store offset=4  (global.get $PAINT_SCRATCH) (local.get $t))
+        (i32.store offset=8  (global.get $PAINT_SCRATCH) (i32.sub (local.get $r) (i32.const 2)))
+        (i32.store offset=12 (global.get $PAINT_SCRATCH) (local.get $b))
+        (drop (call $host_gdi_draw_text (local.get $hdc)
+                (call $g2w (local.get $textPtr)) (i32.const -1)
+                (global.get $PAINT_SCRATCH)
+                (i32.const 0x24)  ;; DT_SINGLELINE | DT_VCENTER
+                (i32.const 0))))))
 
   ;; ---- Tooltip WndProc ----
   ;;

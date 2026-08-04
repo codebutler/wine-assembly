@@ -376,6 +376,8 @@
       (then (return (i32.const 1)))) ;; syst*
     (if (i32.eq (i32.or (i32.load (local.get $name_w)) (i32.const 0x20202020)) (i32.const 0x6c6f6f74))
       (then (return (i32.const 1)))) ;; tool*
+    (if (i32.eq (i32.or (i32.load (local.get $name_w)) (i32.const 0x20202020)) (i32.const 0x7463736d))
+      (then (return (i32.const 1)))) ;; msct* (msctls_statusbar32 / progress / trackbar)
     (i32.const 0))
 
   ;; First child of $parent in slot order (z-order proxy). 0 if none.

@@ -1784,9 +1784,10 @@
     (if (i32.eq (local.get $arg1) (i32.const -4))   ;; GWL_WNDPROC — subclass
       (then
         (global.set $eax (call $wnd_table_get (local.get $arg0)))  ;; return old wndproc
-        ;; If old wndproc is WNDPROC_BUILTIN sentinel, return 0 (no real wndproc to chain)
-        (if (i32.eq (global.get $eax) (global.get $WNDPROC_BUILTIN))
-          (then (global.set $eax (i32.const 0))))
+        ;; A live window's GWL_WNDPROC is never NULL in real USER — the
+        ;; WNDPROC_BUILTIN sentinel IS the default class proc and is returned
+        ;; as-is. MFC's CWnd::SubclassWindow asserts the previous proc is
+        ;; non-null; CallWindowProc handles the sentinel as DefWindowProc.
         ;; If old wndproc is 0 (not in table), fall back to global wndproc for main window
         (if (i32.and (i32.eqz (global.get $eax))
                      (i32.eq (local.get $arg0) (global.get $main_hwnd)))
