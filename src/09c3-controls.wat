@@ -3279,6 +3279,40 @@
                       (call $ctrl_text_dup (local.get $lParam) (local.get $tlen)))))))))
         (call $invalidate_hwnd (local.get $hwnd))
         (return (i32.const 1))))
+    ;; SB_GETTEXTLENGTHA (0x0403) / SB_GETTEXTA (0x0402): read back a pane.
+    ;; Resolve the pane text ptr the same way the setter stored it (simple slot
+    ;; for simple mode or part 0xFF, else parts[idx]). Return value packs
+    ;; LOWORD=length, HIWORD=drawing type (0 = normal).
+    (if (i32.or (i32.eq (local.get $msg) (i32.const 0x0402))
+                (i32.eq (local.get $msg) (i32.const 0x0403)))
+      (then
+        (local.set $idx (i32.and (local.get $wParam) (i32.const 0xFF)))
+        (if (i32.or (i32.load offset=4 (local.get $sw)) (i32.eq (local.get $idx) (i32.const 0xFF)))
+          (then (local.set $tp (i32.load offset=8 (local.get $sw))))
+          (else
+            (if (i32.lt_u (local.get $idx) (i32.const 32))
+              (then (local.set $tp (i32.load offset=4
+                      (i32.add (local.get $sw)
+                        (i32.add (i32.const 16) (i32.mul (local.get $idx) (i32.const 8)))))))
+              (else (local.set $tp (i32.const 0))))))
+        (local.set $tlen (i32.const 0))
+        (if (local.get $tp)
+          (then (local.set $tlen (call $strlen (call $g2w (local.get $tp))))))
+        ;; SB_GETTEXTA: copy text (+NUL) into the caller's buffer at lParam.
+        (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0402)) (local.get $lParam))
+          (then
+            (local.set $dst (call $g2w (local.get $lParam)))
+            (local.set $i (i32.const 0))
+            (if (local.get $tp)
+              (then
+                (block $bcp (loop $cp
+                  (br_if $bcp (i32.ge_u (local.get $i) (local.get $tlen)))
+                  (i32.store8 (i32.add (local.get $dst) (local.get $i))
+                    (i32.load8_u (i32.add (call $g2w (local.get $tp)) (local.get $i))))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $cp)))))
+            (i32.store8 (i32.add (local.get $dst) (local.get $tlen)) (i32.const 0))))
+        (return (i32.and (local.get $tlen) (i32.const 0xFFFF)))))
     ;; WM_SETTEXT (0x000C) — treat as simple-part text.
     (if (i32.eq (local.get $msg) (i32.const 0x000C))
       (then

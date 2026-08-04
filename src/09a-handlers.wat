@@ -7431,20 +7431,44 @@
   )
 
   ;; 548: IsBadStringPtrA(lpsz, ucchMax) → BOOL — 0 if readable, 1 if bad.
-  ;; Flat address space: bad only when NULL or outside guest memory range
-  ;; (same posture as IsBadReadPtr; MFC's AfxIsValidString probes with this).
+  ;; Walk the probe range like real kernel32: bad if NULL, or if any byte in
+  ;; [lpsz, lpsz+ucchMax) up to the NUL lands at/after the 128MB guest ceiling
+  ;; (ge_u — 0x08000000 is the first invalid address). Checking only the start
+  ;; missed a buffer that runs off the end of guest memory. Char size = 1.
   (func $handle_IsBadStringPtrA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (select (i32.const 1) (i32.const 0)
-      (i32.or (i32.eqz (local.get $arg0))
-              (i32.gt_u (local.get $arg0) (i32.const 0x08000000)))))
+    (global.set $eax (call $is_bad_string_ptr (local.get $arg0) (local.get $arg1) (i32.const 1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; 549: IsBadStringPtrW(lpsz, ucchMax) → BOOL — same as the A form.
+  ;; 549: IsBadStringPtrW(lpsz, ucchMax) → BOOL — same, wide chars (2 bytes).
   (func $handle_IsBadStringPtrW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (select (i32.const 1) (i32.const 0)
-      (i32.or (i32.eqz (local.get $arg0))
-              (i32.gt_u (local.get $arg0) (i32.const 0x08000000)))))
+    (global.set $eax (call $is_bad_string_ptr (local.get $arg0) (local.get $arg1) (i32.const 2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+
+  ;; Shared string-probe walker for IsBadStringPtrA/W. Returns 1 (bad) if NULL
+  ;; or the scan reaches the guest ceiling before a NUL terminator within
+  ;; ucchMax chars; 0 (good) otherwise. Scan is bounded by the ceiling (and by
+  ;; ucchMax), so an unbounded ucchMax=-1 on a real NUL-terminated string
+  ;; still exits at the terminator.
+  (func $is_bad_string_ptr (param $p i32) (param $ucchMax i32) (param $charsz i32) (result i32)
+    (local $n i32)
+    (if (i32.eqz (local.get $p)) (then (return (i32.const 1))))
+    (local.set $n (i32.const 0))
+    (block $done (loop $scan
+      ;; scanned ucchMax chars with no fault → readable that far → good
+      (br_if $done (i32.ge_u (local.get $n) (local.get $ucchMax)))
+      ;; this char (or its high byte) is at/past the ceiling → bad
+      (if (i32.ge_u (i32.add (local.get $p)
+                             (i32.sub (i32.mul (i32.add (local.get $n) (i32.const 1)) (local.get $charsz)) (i32.const 1)))
+                    (i32.const 0x08000000))
+        (then (return (i32.const 1))))
+      ;; NUL terminator within range → good
+      (br_if $done
+        (i32.eqz (if (result i32) (i32.eq (local.get $charsz) (i32.const 2))
+          (then (i32.load16_u (call $g2w (i32.add (local.get $p) (i32.mul (local.get $n) (i32.const 2))))))
+          (else (i32.load8_u (call $g2w (i32.add (local.get $p) (local.get $n))))))))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
 
   ;; 550: GlobalDeleteAtom(nAtom) — no-op, return 0 (success)
   (func $handle_GlobalDeleteAtom (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
