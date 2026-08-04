@@ -15917,5 +15917,271 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3342577783
+  },
+  {
+    "id": 2055,
+    "name": "IStorage_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3535787537
+  },
+  {
+    "id": 2056,
+    "name": "IStorage_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 954046898
+  },
+  {
+    "id": 2057,
+    "name": "IStorage_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 224916079
+  },
+  {
+    "id": 2058,
+    "name": "IStorage_CreateStream",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3293432794
+  },
+  {
+    "id": 2059,
+    "name": "IStorage_OpenStream",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 983749750
+  },
+  {
+    "id": 2060,
+    "name": "IStorage_CreateStorage",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 232764871
+  },
+  {
+    "id": 2061,
+    "name": "IStorage_OpenStorage",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 4180494227
+  },
+  {
+    "id": 2062,
+    "name": "IStorage_CopyTo",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2931285078
+  },
+  {
+    "id": 2063,
+    "name": "IStorage_MoveElementTo",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 792798660
+  },
+  {
+    "id": 2064,
+    "name": "IStorage_Commit",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 385390675
+  },
+  {
+    "id": 2065,
+    "name": "IStorage_Revert",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2953234632
+  },
+  {
+    "id": 2066,
+    "name": "IStorage_EnumElements",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3853471902
+  },
+  {
+    "id": 2067,
+    "name": "IStorage_DestroyElement",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2338253472
+  },
+  {
+    "id": 2068,
+    "name": "IStorage_RenameElement",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 916116360
+  },
+  {
+    "id": 2069,
+    "name": "IStorage_SetElementTimes",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1490303668
+  },
+  {
+    "id": 2070,
+    "name": "IStorage_SetClass",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1451896382
+  },
+  {
+    "id": 2071,
+    "name": "IStorage_SetStateBits",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 584609319
+  },
+  {
+    "id": 2072,
+    "name": "IStorage_Stat",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 412025532
+  },
+  {
+    "id": 2073,
+    "name": "IStream_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1722864590
+  },
+  {
+    "id": 2074,
+    "name": "IStream_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1665549629
+  },
+  {
+    "id": 2075,
+    "name": "IStream_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1419775130
+  },
+  {
+    "id": 2076,
+    "name": "IStream_Read",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1556718457
+  },
+  {
+    "id": 2077,
+    "name": "IStream_Write",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3341106528
+  },
+  {
+    "id": 2078,
+    "name": "IStream_Seek",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1474728421
+  },
+  {
+    "id": 2079,
+    "name": "IStream_SetSize",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2693254406
+  },
+  {
+    "id": 2080,
+    "name": "IStream_CopyTo",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1985077417
+  },
+  {
+    "id": 2081,
+    "name": "IStream_Commit",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1499460960
+  },
+  {
+    "id": 2082,
+    "name": "IStream_Revert",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2399729415
+  },
+  {
+    "id": 2083,
+    "name": "IStream_LockRegion",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1303675602
+  },
+  {
+    "id": 2084,
+    "name": "IStream_UnlockRegion",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3673127553
+  },
+  {
+    "id": 2085,
+    "name": "IStream_Stat",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 829110747
+  },
+  {
+    "id": 2086,
+    "name": "IStream_Clone",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 602170990
+  },
+  {
+    "id": 2087,
+    "name": "StgCreateDocfile",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3174144493
+  },
+  {
+    "id": 2088,
+    "name": "StgCreateStorageEx",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2611552921
+  },
+  {
+    "id": 2089,
+    "name": "StgIsStorageFile",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2828024486
+  },
+  {
+    "id": 2090,
+    "name": "StgOpenStorage",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1795388336
+  },
+  {
+    "id": 2091,
+    "name": "ReadClassStg",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2381665109
+  },
+  {
+    "id": 2092,
+    "name": "ReadFmtUserTypeStg",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 867422865
   }
 ]

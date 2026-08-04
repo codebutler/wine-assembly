@@ -2370,11 +2370,30 @@
   )
 
   ;; 133: IsChild
+  ;; IsChild(hWndParent, hWndChild) → BOOL. Walk hWndChild's ancestor chain;
+  ;; TRUE if hWndParent is a parent/grandparent/... (a descendant relationship,
+  ;; not just a direct child). MFC's CFrameWnd asserts frame->IsChild(view),
+  ;; and in an MDI app the view is nested under the MDI client, so a single
+  ;; direct-parent check is not enough — this must recurse.
   (func $handle_IsChild (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (if (result i32) (i32.and
-    (i32.ne (global.get $dlg_hwnd) (i32.const 0))
-    (i32.eq (local.get $arg0) (global.get $dlg_hwnd)))
-    (then (i32.const 1)) (else (i32.const 0))))
+    (local $cur i32) (local $guard i32)
+    (local.set $cur (local.get $arg1))
+    (local.set $guard (i32.const 0))
+    (global.set $eax (i32.const 0))
+    (block $done (loop $walk
+      (br_if $done (i32.ge_u (local.get $guard) (i32.const 64)))
+      (local.set $cur (call $wnd_get_parent (local.get $cur)))
+      (br_if $done (i32.eqz (local.get $cur)))
+      (if (i32.eq (local.get $cur) (local.get $arg0))
+        (then (global.set $eax (i32.const 1)) (br $done)))
+      (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+      (br $walk)))
+    ;; Fallback: honour the legacy dialog-parent shortcut (dlg children whose
+    ;; parent linkage predates wnd_set_parent still report as dialog children).
+    (if (i32.and (i32.eqz (global.get $eax))
+                 (i32.and (i32.ne (global.get $dlg_hwnd) (i32.const 0))
+                          (i32.eq (local.get $arg0) (global.get $dlg_hwnd))))
+      (then (global.set $eax (i32.const 1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
   )
 
@@ -5459,8 +5478,50 @@
   )
 
   ;; 401: UnionRect — STUB: unimplemented
+  ;; UnionRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL. Bounding box of the two
+  ;; source rects. An empty source (right<=left or bottom<=top) contributes
+  ;; nothing; if both are empty, dst is zeroed and the result is FALSE.
   (func $handle_UnionRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $dst i32) (local $s1 i32) (local $s2 i32)
+    (local $e1 i32) (local $e2 i32)
+    (local $l i32) (local $t i32) (local $r i32) (local $b i32)
+    (local.set $dst (call $g2w (local.get $arg0)))
+    (local.set $s1 (call $g2w (local.get $arg1)))
+    (local.set $s2 (call $g2w (local.get $arg2)))
+    ;; emptiness of each source
+    (local.set $e1 (i32.or
+      (i32.le_s (i32.load offset=8 (local.get $s1)) (i32.load (local.get $s1)))
+      (i32.le_s (i32.load offset=12 (local.get $s1)) (i32.load offset=4 (local.get $s1)))))
+    (local.set $e2 (i32.or
+      (i32.le_s (i32.load offset=8 (local.get $s2)) (i32.load (local.get $s2)))
+      (i32.le_s (i32.load offset=12 (local.get $s2)) (i32.load offset=4 (local.get $s2)))))
+    (if (i32.and (local.get $e1) (local.get $e2))
+      (then
+        (i32.store (local.get $dst) (i32.const 0))
+        (i32.store offset=4 (local.get $dst) (i32.const 0))
+        (i32.store offset=8 (local.get $dst) (i32.const 0))
+        (i32.store offset=12 (local.get $dst) (i32.const 0))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (local.get $e1)
+      (then (local.set $s1 (local.get $s2))))   ;; src1 empty → use src2 for both
+    (if (local.get $e2)
+      (then (local.set $s2 (local.get $s1))))   ;; src2 empty → use (possibly reassigned) src1
+    (local.set $l (select (i32.load (local.get $s1)) (i32.load (local.get $s2))
+      (i32.lt_s (i32.load (local.get $s1)) (i32.load (local.get $s2)))))
+    (local.set $t (select (i32.load offset=4 (local.get $s1)) (i32.load offset=4 (local.get $s2))
+      (i32.lt_s (i32.load offset=4 (local.get $s1)) (i32.load offset=4 (local.get $s2)))))
+    (local.set $r (select (i32.load offset=8 (local.get $s1)) (i32.load offset=8 (local.get $s2))
+      (i32.gt_s (i32.load offset=8 (local.get $s1)) (i32.load offset=8 (local.get $s2)))))
+    (local.set $b (select (i32.load offset=12 (local.get $s1)) (i32.load offset=12 (local.get $s2))
+      (i32.gt_s (i32.load offset=12 (local.get $s1)) (i32.load offset=12 (local.get $s2)))))
+    (i32.store (local.get $dst) (local.get $l))
+    (i32.store offset=4 (local.get $dst) (local.get $t))
+    (i32.store offset=8 (local.get $dst) (local.get $r))
+    (i32.store offset=12 (local.get $dst) (local.get $b))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; SubtractRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL. Only well-defined when src2 fully covers
@@ -6283,14 +6344,52 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 462: WriteClassStg — STUB: unimplemented
+  ;; 462: WriteClassStg(pStg, rclsid) — record the storage's class id. This is
+  ;; IStorage::SetClass; our in-memory storage keeps the CLSID at state+4.
   (func $handle_WriteClassStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $st i32)
+    (if (i32.and (i32.ne (local.get $arg0) (i32.const 0)) (i32.ne (local.get $arg1) (i32.const 0)))
+      (then
+        (local.set $st (call $ole_state (local.get $arg0)))
+        (if (local.get $st)
+          (then (call $memcpy (i32.add (call $g2w (local.get $st)) (i32.const 4))
+                  (call $g2w (local.get $arg1)) (i32.const 16))))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-  ;; 463: WriteFmtUserTypeStg — STUB: unimplemented
+  ;; 463: WriteFmtUserTypeStg(pStg, cf, lpszUserType) — writes the "\1CompObj"
+  ;; stream on a real docfile. Our storage tree doesn't need the CompObj blob
+  ;; for in-process embedding; accept and succeed.
   (func $handle_WriteFmtUserTypeStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+  )
+
+  ;; ReadClassStg(pStg, pclsid) — return the storage's stored CLSID.
+  (func $handle_ReadClassStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $st i32)
+    (if (local.get $arg1)
+      (then
+        (if (local.get $arg0)
+          (then
+            (local.set $st (call $ole_state (local.get $arg0)))
+            (if (local.get $st)
+              (then (call $memcpy (call $g2w (local.get $arg1))
+                      (i32.add (call $g2w (local.get $st)) (i32.const 4)) (i32.const 16)))
+              (else (call $zero_memory (call $g2w (local.get $arg1)) (i32.const 16)))))
+          (else (call $zero_memory (call $g2w (local.get $arg1)) (i32.const 16))))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+  )
+
+  ;; ReadFmtUserTypeStg(pStg, pcf, lplpszUserType) — no CompObj stored; report
+  ;; empty (cf=0, userType=NULL) and succeed.
+  (func $handle_ReadFmtUserTypeStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
+    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
   ;; 464: StringFromCLSID(rclsid, lplpsz) — 2 args stdcall
