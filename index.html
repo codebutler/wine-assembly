@@ -1904,6 +1904,9 @@ Resource-aware Win98 emulator
       const sel = document.getElementById('app-select').value;
       const app = apps[sel];
       if (!app) return;
+      const launchTiming = (typeof WineAssembly !== 'undefined' && WineAssembly.beginLaunchTiming)
+        ? WineAssembly.beginLaunchTiming(sel)
+        : null;
       if (app.resetIniOnLaunch && typeof localStorage !== 'undefined') {
         for (const name of app.resetIniOnLaunch) {
           localStorage.removeItem('ini:' + String(name).toLowerCase());
@@ -1928,6 +1931,10 @@ Resource-aware Win98 emulator
           log.textContent += msg + '\n';
           log.scrollTop = log.scrollHeight;
         }
+        if (launchTiming) {
+          launchTiming.setMeta && launchTiming.setMeta('error', msg);
+          launchTiming.complete = true;
+        }
       };
 
       const canvas = document.getElementById('screen');
@@ -1950,6 +1957,7 @@ Resource-aware Win98 emulator
         sharedRenderer = new Win98Renderer(canvas);
         if (!DEBUG_MODE) sharedRenderer.transparentDesktop = true;
       }
+      if (launchTiming) sharedRenderer._launchTiming = launchTiming;
 
       // The CLI harness creates a fresh renderer for every run. The browser
       // intentionally shares one renderer so multiple apps can coexist, but
@@ -2135,6 +2143,7 @@ Resource-aware Win98 emulator
       }
     }
     window.resizeCanvas = resizeCanvas;
+    window.launchApp = launchApp;
     window.addEventListener('resize', resizeCanvas);
     if (window.visualViewport) window.visualViewport.addEventListener('resize', resizeCanvas);
     document.addEventListener('fullscreenchange', resizeCanvas);
@@ -2148,6 +2157,28 @@ Resource-aware Win98 emulator
       document.getElementById('clock').textContent =
         d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }, 1000);
+
+    // Optional: ?app=notepad&autolaunch=1&wasm=compile|prebuilt|auto
+    (function setupAutoLaunch() {
+      try {
+        const params = new URLSearchParams(location.search);
+        const appName = params.get('app');
+        if (!appName || !apps[appName]) return;
+        const sel = document.getElementById('app-select');
+        if (sel) sel.value = appName;
+        if (!params.has('autolaunch')) return;
+        const start = () => {
+          Promise.resolve(launchApp()).catch(e => console.error('[autolaunch]', e));
+        };
+        if (document.readyState === 'loading') {
+          window.addEventListener('DOMContentLoaded', () => setTimeout(start, 0));
+        } else {
+          setTimeout(start, 0);
+        }
+      } catch (e) {
+        console.warn('[autolaunch] setup failed:', e);
+      }
+    })();
   </script>
 </body>
 </html>
