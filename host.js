@@ -2,7 +2,7 @@
 // Win98Renderer is loaded from lib/renderer.js (included via <script> in index.html)
 
 class WineAssembly {
-  static SOURCE_VERSION = '168';
+  static SOURCE_VERSION = '169';
 
   constructor() {
     this.instance = null;
@@ -14,6 +14,83 @@ class WineAssembly {
     this._wasmModule = null;
     this.stepsPerSlice = 100000;
     this.verbose = false;
+  }
+
+  /** Resolve ?wasm= / window.__waWasmMode: auto|prebuilt|compile */
+  static resolveWasmMode() {
+    if (typeof WineAssembly._forceWasmMode === 'string' && WineAssembly._forceWasmMode) {
+      return WineAssembly._forceWasmMode;
+    }
+    if (typeof window !== 'undefined') {
+      if (typeof window.__waWasmMode === 'string' && window.__waWasmMode) {
+        return String(window.__waWasmMode).toLowerCase();
+      }
+      try {
+        const q = new URLSearchParams(window.location.search || '').get('wasm');
+        if (q) return String(q).toLowerCase();
+      } catch (_) {}
+    }
+    return 'auto';
+  }
+
+  static beginLaunchTiming(appName) {
+    const now = (typeof performance !== 'undefined' && performance.now)
+      ? () => performance.now()
+      : () => Date.now();
+    const t0 = now();
+    const timing = {
+      app: appName || '',
+      t0,
+      marks: {},
+      meta: {
+        sourceVersion: WineAssembly.SOURCE_VERSION,
+        wasmMode: WineAssembly.resolveWasmMode(),
+        wasmSource: null,
+        wasmUrl: null,
+      },
+      complete: false,
+      mark(name) {
+        if (timing.marks[name] != null) return timing.marks[name];
+        const ms = +(now() - t0).toFixed(3);
+        timing.marks[name] = ms;
+        if (typeof performance !== 'undefined' && performance.mark) {
+          try { performance.mark('wa_launch_' + name); } catch (_) {}
+        }
+        return ms;
+      },
+      setMeta(key, value) {
+        timing.meta[key] = value;
+      },
+      summary() {
+        return {
+          app: timing.app,
+          complete: timing.complete,
+          meta: { ...timing.meta },
+          marks: { ...timing.marks },
+          firstCompositeMs: timing.marks.first_composite != null ? timing.marks.first_composite : null,
+          wasmReadyMs: timing.marks.wasm_ready != null ? timing.marks.wasm_ready : null,
+        };
+      },
+    };
+    WineAssembly._activeLaunchTiming = timing;
+    if (typeof window !== 'undefined') {
+      window.__waLaunchTiming = timing;
+      window.__waLaunchTimings = window.__waLaunchTimings || [];
+      window.__waLaunchTimings.push(timing);
+    }
+    timing.mark('launch_click');
+    return timing;
+  }
+
+  static getActiveLaunchTiming() {
+    return WineAssembly._activeLaunchTiming ||
+      (typeof window !== 'undefined' ? window.__waLaunchTiming : null) ||
+      null;
+  }
+
+  _markLaunch(name) {
+    const timing = WineAssembly.getActiveLaunchTiming();
+    if (timing && timing.mark) timing.mark(name);
   }
 
   readString(ptr) {
@@ -535,13 +612,20 @@ class WineAssembly {
     const compileEl = typeof document !== 'undefined' && document.getElementById('compile-status');
     let showTimeout = null;
     const cacheWarm = !!WineAssembly._wasmModulePromise;
+    const wasmMode = WineAssembly.resolveWasmMode();
     if (compileEl && !cacheWarm) {
+      compileEl.textContent = (wasmMode === 'compile')
+        ? 'Compiling WAT source...'
+        : 'Loading WebAssembly...';
       showTimeout = setTimeout(() => {
         compileEl.style.display = 'block';
       }, 100);
     }
+    this._markLaunch('init_start');
     await this.ensureUiFontsReady();
+    this._markLaunch('fonts_ready');
     const wasmModule = await WineAssembly.getWasmModule();
+    this._markLaunch('wasm_ready');
     if (showTimeout) clearTimeout(showTimeout);
     if (compileEl) compileEl.style.display = 'none';
     // Load api_table.json so resolve_ordinal can map ordinal imports (e.g.
@@ -556,6 +640,7 @@ class WineAssembly {
         this.apiTable = [];
       }
     }
+    this._markLaunch('api_table_ready');
     const imports = this.getImports();
 
     // Create shared memory externally
@@ -563,12 +648,15 @@ class WineAssembly {
     imports.host.memory = this.memory;
 
     this.instance = await WebAssembly.instantiate(wasmModule, imports);
+    this._markLaunch('instantiated');
     this._wasmModule = wasmModule;
     if (this.renderer) {
       this.renderer.wasm = this.instance;
       this.renderer.wasmMemory = this.memory;
       this.renderer.mainWasm = this.instance;
       this.renderer.mainWasmMemory = this.memory;
+      const timing = WineAssembly.getActiveLaunchTiming();
+      if (timing) this.renderer._launchTiming = timing;
     }
 
     // Create ThreadManager
@@ -644,22 +732,85 @@ class WineAssembly {
 
     if (canvas && !this.renderer) {
       this.renderer = new Win98Renderer(canvas);
+      const timing = WineAssembly.getActiveLaunchTiming();
+      if (timing) this.renderer._launchTiming = timing;
     }
+    this._markLaunch('init_done');
   }
 
   static getWasmModule() {
     if (!WineAssembly._wasmModulePromise) {
       WineAssembly._wasmModulePromise = (async () => {
+        const timing = WineAssembly.getActiveLaunchTiming();
+        const mark = (name) => { if (timing && timing.mark) timing.mark(name); };
+        const setMeta = (k, v) => { if (timing && timing.setMeta) timing.setMeta(k, v); };
+        const mode = WineAssembly.resolveWasmMode();
         const tailCalls = WineAssembly.supportsWasmTailCalls();
         console.log(`[host] wasm tail calls ${tailCalls ? 'enabled' : 'not available; using compatibility dispatch'}`);
-        const bytes = await compileWat(
-          f => fetch(`src/${f}?v=${WineAssembly.SOURCE_VERSION}`).then(r => r.text()),
-          { tailCalls, sourceVersion: WineAssembly.SOURCE_VERSION }
-        );
-        return WebAssembly.compile(bytes);
+        console.log(`[host] wasm load mode=${mode}`);
+        setMeta('wasmMode', mode);
+        setMeta('tailCalls', tailCalls);
+
+        const prebuiltUrl = tailCalls
+          ? `build/wine-assembly.wasm?v=${WineAssembly.SOURCE_VERSION}`
+          : `build/wine-assembly.compat.wasm?v=${WineAssembly.SOURCE_VERSION}`;
+
+        const tryPrebuilt = async () => {
+          mark('wasm_fetch_start');
+          const resp = await fetch(prebuiltUrl, { cache: 'force-cache' });
+          if (!resp.ok) throw new Error(`prebuilt wasm HTTP ${resp.status}`);
+          const bytes = await resp.arrayBuffer();
+          mark('wasm_fetch');
+          setMeta('wasmUrl', prebuiltUrl);
+          setMeta('wasmBytes', bytes.byteLength);
+          const mod = await WebAssembly.compile(bytes);
+          mark('wasm_compile');
+          setMeta('wasmSource', 'prebuilt');
+          WineAssembly._wasmSource = 'prebuilt';
+          console.log(`[host] loaded prebuilt wasm ${prebuiltUrl} (${bytes.byteLength} bytes)`);
+          return mod;
+        };
+
+        const compileFromWat = async () => {
+          mark('wat_compile_start');
+          const bytes = await compileWat(
+            f => fetch(`src/${f}?v=${WineAssembly.SOURCE_VERSION}`).then(r => r.text()),
+            { tailCalls, sourceVersion: WineAssembly.SOURCE_VERSION }
+          );
+          mark('wat_compile');
+          setMeta('wasmBytes', bytes.byteLength || (bytes.length || 0));
+          const mod = await WebAssembly.compile(bytes);
+          mark('wasm_compile');
+          setMeta('wasmSource', 'compileWat');
+          setMeta('wasmUrl', null);
+          WineAssembly._wasmSource = 'compileWat';
+          console.log('[host] compiled wasm from WAT sources');
+          return mod;
+        };
+
+        if (mode === 'compile') {
+          return compileFromWat();
+        }
+        if (mode === 'prebuilt') {
+          return tryPrebuilt();
+        }
+        // auto: prefer prebuilt, fall back to WAT compile
+        try {
+          return await tryPrebuilt();
+        } catch (e) {
+          console.warn('[host] prebuilt wasm unavailable, falling back to WAT compile:', e && e.message ? e.message : e);
+          setMeta('prebuiltError', String(e && e.message ? e.message : e));
+          return compileFromWat();
+        }
       })();
     }
     return WineAssembly._wasmModulePromise;
+  }
+
+  /** Drop cached module so the next init re-fetches/recompiles (tests / A/B). */
+  static resetWasmModuleCache() {
+    WineAssembly._wasmModulePromise = null;
+    WineAssembly._wasmSource = null;
   }
 
   static supportsWasmTailCalls() {
@@ -689,9 +840,11 @@ class WineAssembly {
   async loadExe(url) {
     if (!this.instance) await this.init();
 
+    this._markLaunch('pe_fetch_start');
     const resp = await fetch(url);
     const exeBytes = new Uint8Array(await resp.arrayBuffer());
     this._exeBytes = exeBytes;
+    this._markLaunch('pe_fetched');
 
     // Resource parsing lives in WAT ($find_resource, $dlg_load,
     // $menu_load, $string_load_a, $rsrc_find_data_wa). The JS side no
@@ -705,6 +858,7 @@ class WineAssembly {
     // Load PE
     const entry = this.instance.exports.load_pe(exeBytes.length);
     console.log('PE loaded. Entry: 0x' + (entry >>> 0).toString(16).padStart(8, '0'));
+    this._markLaunch('pe_loaded');
 
     // Initialize DirectX COM vtable thunks (must be after load_pe sets image_base).
     if (this.instance.exports.init_dx_com_thunks) {
@@ -786,6 +940,7 @@ class WineAssembly {
       }
     });
     await Promise.all(workers);
+    this._markLaunch('files_loaded');
     if (failed && options.required) {
       throw new Error(`failed to load ${failed} of ${total} data files`);
     }
@@ -807,6 +962,7 @@ class WineAssembly {
         vfs.files.set('c:\\' + key, { data: bytes, attrs: 0x20 });
       }
     };
+    this._markLaunch('dlls_fetch_start');
     for (const item of dllPaths) {
       if (typeof item === 'string') {
         const resp = await fetch(item);
@@ -822,6 +978,7 @@ class WineAssembly {
         configs.push(item);
       }
     }
+    this._markLaunch('dlls_fetched');
     const exeBytes = this._exeBytes;
     this._inDllInit = true;
     const opts = {};
@@ -835,6 +992,7 @@ class WineAssembly {
     const results = _loadDlls(this.instance.exports, this.memory.buffer, exeBytes, configs, console.log, opts);
     this._inDllInit = false;
     this.running = true;
+    this._markLaunch('dlls_ready');
   }
 
   async handleComDllLoad() {
@@ -1135,6 +1293,7 @@ class WineAssembly {
   run(stepsPerSlice = 100000) {
     this.stepsPerSlice = stepsPerSlice;
     this.running = true;
+    this._markLaunch('run_start');
     const self = this;
     const step = async () => {
       if (!self.running) return;
