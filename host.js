@@ -1297,7 +1297,13 @@ class WineAssembly {
     const self = this;
     const step = async () => {
       if (!self.running) return;
+      // Let an embedding host observe progress between interpreter chunks so a
+      // heavy guest init or WM_PAINT cannot look like a frozen worker.
+      const beat = () => {
+        if (typeof self.onSliceHeartbeat === 'function') self.onSliceHeartbeat();
+      };
       try {
+        beat();
         const activeStepsPerSlice = Math.max(1000, (self.stepsPerSlice | 0) || stepsPerSlice);
         // Check if main thread is waiting
         const mainThreadWaiting = self.threadManager && self.threadManager.checkMainYield();
@@ -1313,15 +1319,34 @@ class WineAssembly {
           const runStart = self.renderer && self.renderer._profileNow ? self.renderer._profileNow() : 0;
           const pageProfile = (typeof window !== 'undefined' && window.__aoeProfile) || null;
           const pageProfileStart = pageProfile && typeof performance !== 'undefined' ? performance.now() : 0;
-          self.instance.exports.run(activeStepsPerSlice);
+          // Wall-clock budget the interpreter: 500-step sub-slices, ≤100ms, then
+          // setTimeout back to the event loop (heartbeats / input / compose).
+          const budgetMs = 100;
+          const chunkSteps = 500;
+          let stepsLeft = activeStepsPerSlice;
+          const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+          while (self.running && stepsLeft > 0) {
+            const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            if (now - t0 >= budgetMs) break;
+            const n = Math.min(chunkSteps, stepsLeft);
+            self.instance.exports.run(n);
+            stepsLeft -= n;
+            beat();
+            if (!self.instance.exports.get_eip()) break;
+            const yr = self.instance.exports.get_yield_reason
+              ? (self.instance.exports.get_yield_reason() >>> 0) : 0;
+            // 1=waiting/sleep, 3=com, 4=help, 5=LoadLibrary, 7=GetMessage empty
+            if (yr === 1 || yr === 3 || yr === 4 || yr === 5 || yr === 7) break;
+          }
+          const stepsRan = activeStepsPerSlice - stepsLeft;
           if (pageProfileStart && pageProfile && pageProfile.add) {
             const dt = performance.now() - pageProfileStart;
-            pageProfile.add('main.runSlice', dt, { steps: activeStepsPerSlice });
-            if (pageProfile.frame) pageProfile.frame('main.runSlice', { dtMs: dt, steps: activeStepsPerSlice });
+            pageProfile.add('main.runSlice', dt, { steps: stepsRan });
+            if (pageProfile.frame) pageProfile.frame('main.runSlice', { dtMs: dt, steps: stepsRan });
           }
           if (runStart && self.renderer && self.renderer._profileMark) {
             self.renderer._profileMark('wasm-run-slice', {
-              steps: activeStepsPerSlice,
+              steps: stepsRan,
               ms: self.renderer._profileNow() - runStart,
             });
           }
@@ -1329,9 +1354,11 @@ class WineAssembly {
           if (self._dxPresentTick === 0 && self.hostCtx && self.hostCtx.sharedGdi && self.hostCtx.sharedGdi.presentBestDxOffscreen) {
             self.hostCtx.sharedGdi.presentBestDxOffscreen();
           }
+          beat();
           if (self.renderer && self.renderer.flushRepaint) {
             self.renderer.flushRepaint(true);
           }
+          beat();
           self._runSliceCount = (self._runSliceCount || 0) + 1;
           self._runHeartbeat = ((self._runHeartbeat || 0) + 1) & 31;
           if (self.instance && self.instance.exports) {

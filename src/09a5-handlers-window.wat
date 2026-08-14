@@ -1207,10 +1207,14 @@
     (if (i32.gt_u (global.get $post_queue_count) (i32.const 0))
     (then (call $memcpy (i32.const 0x400) (i32.const 0x410)
     (i32.mul (global.get $post_queue_count) (i32.const 16)))))
+    ;; Yield after posted msgs (e.g. PuTTY WM_NETEVENT): FD_READ → terminal
+    ;; paint can otherwise burn a whole run() slice past the freeze watchdog.
+    (global.set $yield_flag (i32.const 1))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
     (if (call $shared_post_queue_read (local.get $msg_ptr) (i32.const 1))
     (then
+    (global.set $yield_flag (i32.const 1))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
     ;; Deliver pending WM_SIZE after posted messages are drained
@@ -1305,6 +1309,9 @@
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (i32.const 0x000F)) ;; WM_PAINT
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (i32.const 0))
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (i32.const 0))
+    ;; Yield after each WM_PAINT (same as WM_TIMER): PuTTY's terminal redraw
+    ;; under software GL can exceed the shell's freeze watchdog in one slice.
+    (global.set $yield_flag (i32.const 1))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
     ;; No paint — deliver WM_TIMER if any timer is due (consume=1 for GetMessage)

@@ -79,14 +79,19 @@
   ;; get_mouse_buttons() → MK_* style button bitmask (1=left, 2=right)
   (import "host" "set_window_class" (func $host_set_window_class (param i32 i32)))
   ;; set_window_class(hwnd, class_name_ptr)
+  (import "host" "get_window_class" (func $host_get_window_class (param i32 i32 i32) (result i32)))
+  ;; get_window_class(hwnd, buf_wa, maxLen) → chars copied (excl. NUL), ANSI
   (import "host" "set_parent" (func $host_set_parent (param i32 i32)))
   ;; set_parent(hwnd, newParentHwnd) — update renderer's parentHwnd (reparenting)
   (import "host" "set_menu" (func $host_set_menu (param i32 i32)))
   ;; set_menu(hwnd, menu_resource_id)
   (import "host" "menu_create" (func $host_menu_create (result i32)))
   (import "host" "menu_destroy" (func $host_menu_destroy (param i32) (result i32)))
+  (import "host" "menu_is" (func $host_menu_is (param i32) (result i32)))
   (import "host" "menu_append" (func $host_menu_append (param i32 i32 i32 i32 i32) (result i32)))
   ;; menu_append(hMenu, flags, idOrSubmenu, text_wa, isWide) -> bool
+  (import "host" "menu_get_string" (func $host_menu_get_string (param i32 i32 i32 i32 i32) (result i32)))
+  ;; menu_get_string(hMenu, uIDItem, flags, buf_wa, cchMax) → chars copied (excl. NUL)
   (import "host" "shell_about" (func $host_shell_about (param i32 i32 i32) (result i32)))
   ;; shell_about(dlg_hwnd, owner_hwnd, szApp_ptr) → result
   ;; Bare logging hook only — the actual dialog is built entirely in WAT
@@ -437,6 +442,28 @@
   (import "host" "voice_set_pan" (func $host_voice_set_pan (param i32 i32)))
   (import "host" "voice_set_freq" (func $host_voice_set_freq (param i32 i32)))
 
+  ;; Optional winsock host bridge. Buffer args are $g2w-converted wasm offsets.
+  ;; lib/host-imports.js supplies network-unavailable defaults; an embedding
+  ;; host can replace these imports with its own socket transport.
+  (import "host" "sock_socket" (func $host_sock_socket (param i32 i32 i32) (result i32)))
+  (import "host" "sock_connect" (func $host_sock_connect (param i32 i32 i32) (result i32)))
+  (import "host" "sock_send" (func $host_sock_send (param i32 i32 i32) (result i32)))
+  (import "host" "sock_recv" (func $host_sock_recv (param i32 i32 i32) (result i32)))
+  (import "host" "sock_close" (func $host_sock_close (param i32) (result i32)))
+  (import "host" "sock_gethostbyname" (func $host_sock_gethostbyname (param i32 i32 i32) (result i32)))
+  (import "host" "sock_inet_addr" (func $host_sock_inet_addr (param i32) (result i32)))
+  (import "host" "sock_ioctl" (func $host_sock_ioctl (param i32 i32 i32) (result i32)))
+  (import "host" "sock_select" (func $host_sock_select (param i32 i32 i32 i32) (result i32)))
+  (import "host" "sock_last_error" (func $host_sock_last_error (result i32)))
+  ;; ws2_32 resolver/format surface (inet_ntoa, getaddrinfo, htons,
+  ;; getservbyname, WSA* …). Op-coded: JS switches on the first arg. See
+  ;; $winsock_soft_stub / $winsock_soft_stub2 in 09a6.
+  (import "host" "sock_api" (func $host_sock_api (param i32 i32 i32 i32 i32 i32) (result i32)))
+  ;; WSAAsyncSelect registers FD notifications; the host posts WM_SOCKET
+  ;; messages back via sock_post_event.
+  (import "host" "sock_async_select" (func $host_sock_async_select (param i32 i32 i32 i32) (result i32)))
+  (import "host" "sock_post_event" (func $host_sock_post_event (param i32 i32 i32)))
+
   (import "host" "memory" (memory 8192 8192 shared))
   (export "memory" (memory 0))
 
@@ -539,6 +566,13 @@
   (data (i32.const 0x11066) "..\00")
   (data (i32.const 0x11069) "Upload...\00")
   (data (i32.const 0x11073) "Download\00")
+  ;; System-menu item labels for GetMenuStringA (SC_* → text)
+  (data (i32.const 0x1107C) "&Restore\00")   ;; SC_RESTORE  0xF120
+  (data (i32.const 0x11085) "&Move\00")      ;; SC_MOVE     0xF010
+  (data (i32.const 0x1108B) "&Size\00")      ;; SC_SIZE     0xF000
+  (data (i32.const 0x11091) "Minimi&ze\00")  ;; SC_MINIMIZE 0xF020
+  (data (i32.const 0x1109B) "Maximi&ze\00")  ;; SC_MAXIMIZE 0xF030
+  (data (i32.const 0x110A5) "&Close\00")     ;; SC_CLOSE    0xF060
   (data (i32.const 0x110C6) "Microsoft Windows\0AWindows 98\0ACopyright (C) 1981-1998 Microsoft Corp.\00")
 
   ;; Dialog-template string class names. Win32 templates may use either
@@ -1026,6 +1060,15 @@
   ;; calls.
   (global $virtual_alloc_top (mut i32) (i32.const 0))
 
+  ;; Lazily-allocated static per-thread buffers the winsock
+  ;; resolver/format APIs return pointers into (winsock keeps per-thread static
+  ;; storage; a single reused buffer per kind matches that contract). 0 = unallocated.
+  (global $winsock_hostent (mut i32) (i32.const 0))
+  (global $winsock_ntoa (mut i32) (i32.const 0))
+  (global $winsock_servent (mut i32) (i32.const 0))
+  (global $winsock_protoent (mut i32) (i32.const 0))
+  (global $winsock_addrinfo (mut i32) (i32.const 0))
+
   (global $free_list (mut i32) (i32.const 0))  ;; WASM-space head of free list (0 = empty)
   (global $fake_cmdline_addr (mut i32) (i32.const 0))
   (global $exe_name_wa (mut i32) (i32.const 0x120))   ;; WASM addr of exe name string
@@ -1072,6 +1115,10 @@
   ;; to have populated client-rect globals before they look at them.
   (global $createwnd_implicit_show (mut i32) (i32.const 0))
   (global $focus_hwnd (mut i32) (i32.const 0))
+  ;; Most-recent EDIT control (class 2) to hold keyboard focus. Opening a menu
+  ;; can move $focus_hwnd before the command fires, so standard Edit commands
+  ;; and their enable state retain this target until the control is destroyed.
+  (global $last_focus_edit (mut i32) (i32.const 0))
   (global $clipboard_format_counter (mut i32) (i32.const 0xBFFF))
   (global $guid_counter (mut i32) (i32.const 0))
   ;; waveOut audio state
@@ -1378,6 +1425,12 @@
   (global $hit_count_n (mut i32) (i32.const 0))
 
   (global $clipboard_fmt_counter (mut i32) (i32.const 0))
+
+  ;; Minimal DDE instance / handle allocators (no real conversations).
+  (global $dde_next_inst (mut i32) (i32.const 1))
+  (global $dde_next_hsz (mut i32) (i32.const 0xDD000001))
+  (global $dde_next_hdata (mut i32) (i32.const 0xDE000001))
+  (global $dde_next_hconv (mut i32) (i32.const 0xDC000001))
 
   ;; Console screen buffer state (for Telnet etc.)
   ;; Character data at 0x3000 (80×25×2 = 4000 bytes, UTF-16 LE)

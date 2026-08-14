@@ -2074,13 +2074,25 @@
       (br $scan)))
     (i32.const 0))
 
+  ;; Resolve the EDIT control used by standard menu commands without changing
+  ;; focus. Prefer the current edit, then the last focused live edit, then the
+  ;; legacy visible-control scan.
+  (func $resolve_edit_target (result i32)
+    (if (global.get $focus_hwnd)
+      (then
+        (if (i32.eq (call $ctrl_table_get_class (global.get $focus_hwnd)) (i32.const 2))
+          (then (return (global.get $focus_hwnd))))))
+    (if (global.get $last_focus_edit)
+      (then
+        (if (i32.and
+              (i32.eq (call $ctrl_table_get_class (global.get $last_focus_edit)) (i32.const 2))
+              (call $wnd_is_effectively_visible (global.get $last_focus_edit)))
+          (then (return (global.get $last_focus_edit))))))
+    (call $wnd_first_visible_control_class (i32.const 2)))
+
   (func $edit_command_target (result i32)
     (local $target i32)
-    (if (i32.and
-          (i32.ne (global.get $focus_hwnd) (i32.const 0))
-          (i32.eq (call $ctrl_table_get_class (global.get $focus_hwnd)) (i32.const 2)))
-      (then (return (global.get $focus_hwnd))))
-    (local.set $target (call $wnd_first_visible_control_class (i32.const 2)))
+    (local.set $target (call $resolve_edit_target))
     (if (local.get $target) (then (call $set_focus (local.get $target))))
     (local.get $target))
 

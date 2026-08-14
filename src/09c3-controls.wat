@@ -6036,6 +6036,8 @@
             (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0))))
         (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
           (then (global.set $focus_hwnd (i32.const 0))))
+        (if (i32.eq (global.get $last_focus_edit) (local.get $hwnd))
+          (then (global.set $last_focus_edit (i32.const 0))))
         (return (i32.const 0))))
 
     ;; ---------- WM_SETCURSOR (0x0020) ----------
@@ -6142,6 +6144,7 @@
     (if (i32.eq (local.get $msg) (i32.const 0x0007))
       (then
         (global.set $focus_hwnd (local.get $hwnd))
+        (global.set $last_focus_edit (local.get $hwnd))
         (if (local.get $state)
           (then
             (local.set $state_w (call $g2w (local.get $state)))

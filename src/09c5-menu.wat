@@ -561,6 +561,84 @@
       (br $bar)))
     (local.get $prev))
 
+  ;; Set or clear the grayed flag on matching commands in one menu group,
+  ;; including cascading submenus. Current menu records are 28 bytes and store
+  ;; their nested child-header offset at +24.
+  (func $menu_group_set_gray
+        (param $blob_w i32) (param $hdr i32) (param $id i32) (param $gray i32)
+    (local $cc i32) (local $i i32) (local $it i32) (local $flags i32)
+    (local $child_off i32)
+    (local.set $cc (i32.load (local.get $hdr)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $cc)))
+      (local.set $it (i32.add (local.get $hdr)
+                       (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 28)))))
+      (if (i32.eq (i32.load offset=20 (local.get $it)) (local.get $id))
+        (then
+          (local.set $flags (i32.load offset=16 (local.get $it)))
+          (if (local.get $gray)
+            (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x02))))
+            (else (local.set $flags (i32.and (local.get $flags) (i32.const -3)))))
+          (i32.store offset=16 (local.get $it) (local.get $flags))))
+      (local.set $child_off (i32.load offset=24 (local.get $it)))
+      (if (local.get $child_off)
+        (then
+          (call $menu_group_set_gray
+            (local.get $blob_w)
+            (i32.add (local.get $blob_w) (local.get $child_off))
+            (local.get $id)
+            (local.get $gray))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  (func $menu_blob_set_gray
+        (param $blob_w i32) (param $id i32) (param $gray i32)
+    (local $bar_count i32) (local $i i32) (local $bar_item i32)
+    (local $hdr_off i32)
+    (local.set $bar_count (i32.load (local.get $blob_w)))
+    (block $done (loop $bar
+      (br_if $done (i32.ge_u (local.get $i) (local.get $bar_count)))
+      (local.set $bar_item (i32.add (local.get $blob_w)
+                             (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 16)))))
+      (local.set $hdr_off (i32.load offset=8 (local.get $bar_item)))
+      (if (local.get $hdr_off)
+        (then
+          (call $menu_group_set_gray
+            (local.get $blob_w)
+            (i32.add (local.get $blob_w) (local.get $hdr_off))
+            (local.get $id)
+            (local.get $gray))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $bar))))
+
+  ;; Refresh standard Edit menu commands from the target edit's live selection,
+  ;; text, and clipboard state before the dropdown paints.
+  (func $menu_refresh_edit_enable (param $hwnd i32)
+    (local $blob i32) (local $target i32) (local $state i32) (local $state_w i32)
+    (local $has_sel i32) (local $has_text i32) (local $can_paste i32)
+    (local.set $blob (call $menu_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return)))
+    (local.set $target (call $resolve_edit_target))
+    (if (local.get $target)
+      (then
+        (local.set $state (call $wnd_get_state_ptr (local.get $target)))
+        (if (local.get $state)
+          (then
+            (local.set $state_w (call $g2w (local.get $state)))
+            (local.set $has_sel
+              (i32.ne (call $edit_sel_lo (local.get $state_w))
+                      (call $edit_sel_hi (local.get $state_w))))
+            (local.set $has_text
+              (i32.ne (i32.load offset=4 (local.get $state_w)) (i32.const 0)))))))
+    (local.set $can_paste (i32.ne (global.get $clipboard_len) (i32.const 0)))
+    ;; Cut, Copy, and Delete require a selection.
+    (call $menu_blob_set_gray (local.get $blob) (i32.const 768) (i32.eqz (local.get $has_sel)))
+    (call $menu_blob_set_gray (local.get $blob) (i32.const 769) (i32.eqz (local.get $has_sel)))
+    (call $menu_blob_set_gray (local.get $blob) (i32.const 771) (i32.eqz (local.get $has_sel)))
+    ;; Paste requires clipboard content; Select All requires text.
+    (call $menu_blob_set_gray (local.get $blob) (i32.const 770) (i32.eqz (local.get $can_paste)))
+    (call $menu_blob_set_gray (local.get $blob) (i32.const 7) (i32.eqz (local.get $has_text))))
+
   ;; CheckMenuRadioItem by submenu position. Fake submenu handles encode
   ;; GetSubMenu(hMenu,nPos) as low-word | ((nPos+1)<<16), so $tidx is
   ;; high-word-1. Sets bit2 on the selected child item and clears it on
@@ -1578,6 +1656,7 @@
     (i32.const -1))
 
   (func $menu_open (export "menu_open") (param $hwnd i32) (param $top_idx i32)
+    (call $menu_refresh_edit_enable (local.get $hwnd))
     (global.set $menu_open_hwnd  (local.get $hwnd))
     (global.set $menu_open_top   (local.get $top_idx))
     (global.set $menu_open_hover (i32.const -1))

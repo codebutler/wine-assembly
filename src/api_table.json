@@ -15906,279 +15906,686 @@
   },
   {
     "id": 2053,
+    "name": "QueryDosDeviceA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1618565044,
+    "args": [
+      {
+        "name": "lpDeviceName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpTargetPath",
+        "type": "LPSTR",
+        "out": true
+      },
+      {
+        "name": "ucchMax",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "DWORD"
+  },
+  {
+    "id": 2054,
+    "name": "QueryDosDeviceW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1316567902,
+    "args": [
+      {
+        "name": "lpDeviceName",
+        "type": "LPCWSTR"
+      },
+      {
+        "name": "lpTargetPath",
+        "type": "LPWSTR",
+        "out": true
+      },
+      {
+        "name": "ucchMax",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "DWORD"
+  },
+  {
+    "id": 2055,
+    "name": "LoadLibraryExA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 114361440,
+    "args": [
+      {
+        "name": "lpLibFileName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "hFile",
+        "type": "HANDLE"
+      },
+      {
+        "name": "dwFlags",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "HMODULE"
+  },
+  {
+    "id": 2056,
+    "name": "LoadLibraryExW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 483469058,
+    "args": [
+      {
+        "name": "lpLibFileName",
+        "type": "LPCWSTR"
+      },
+      {
+        "name": "hFile",
+        "type": "HANDLE"
+      },
+      {
+        "name": "dwFlags",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "HMODULE"
+  },
+  {
+    "id": 2057,
+    "name": "ImageList_ReplaceIcon",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 697901008,
+    "args": [
+      {
+        "name": "himl",
+        "type": "HIMAGELIST"
+      },
+      {
+        "name": "i",
+        "type": "int"
+      },
+      {
+        "name": "hicon",
+        "type": "HICON"
+      }
+    ],
+    "ret": "int"
+  },
+  {
+    "id": 2058,
+    "name": "GetClassNameA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2994462153,
+    "args": [
+      {
+        "name": "hwnd",
+        "type": "HWND"
+      },
+      {
+        "name": "lpClassName",
+        "type": "LPSTR",
+        "out": true
+      },
+      {
+        "name": "nMaxCount",
+        "type": "int"
+      }
+    ],
+    "ret": "int"
+  },
+  {
+    "id": 2059,
+    "name": "GetMenuStringA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 821380304,
+    "args": [
+      {
+        "name": "hMenu",
+        "type": "HMENU"
+      },
+      {
+        "name": "uIDItem",
+        "type": "UINT"
+      },
+      {
+        "name": "lpString",
+        "type": "LPSTR",
+        "out": true
+      },
+      {
+        "name": "cchMax",
+        "type": "int"
+      },
+      {
+        "name": "flags",
+        "type": "UINT"
+      }
+    ],
+    "ret": "int"
+  },
+  {
+    "id": 2060,
+    "name": "DdeInitializeA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4224752437,
+    "args": [
+      {
+        "name": "pidInst",
+        "type": "LPDWORD",
+        "out": true
+      },
+      {
+        "name": "pfnCallback",
+        "type": "PFNCALLBACK"
+      },
+      {
+        "name": "afCmd",
+        "type": "DWORD"
+      },
+      {
+        "name": "ulRes",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "UINT"
+  },
+  {
+    "id": 2061,
+    "name": "DdeUninitialize",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 376808777,
+    "args": [
+      {
+        "name": "idInst",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2062,
+    "name": "DdeCreateStringHandleA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 279535974,
+    "args": [
+      {
+        "name": "idInst",
+        "type": "DWORD"
+      },
+      {
+        "name": "psz",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "iCodePage",
+        "type": "int"
+      }
+    ],
+    "ret": "HSZ"
+  },
+  {
+    "id": 2063,
+    "name": "DdeFreeStringHandle",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2784635329,
+    "args": [
+      {
+        "name": "idInst",
+        "type": "DWORD"
+      },
+      {
+        "name": "hsz",
+        "type": "HSZ"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2064,
+    "name": "DdeQueryStringA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3719572156,
+    "args": [
+      {
+        "name": "idInst",
+        "type": "DWORD"
+      },
+      {
+        "name": "hsz",
+        "type": "HSZ"
+      },
+      {
+        "name": "psz",
+        "type": "LPSTR",
+        "out": true
+      },
+      {
+        "name": "cchMax",
+        "type": "DWORD"
+      },
+      {
+        "name": "iCodePage",
+        "type": "int"
+      }
+    ],
+    "ret": "DWORD"
+  },
+  {
+    "id": 2065,
+    "name": "DdeNameService",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2521407766,
+    "args": [
+      {
+        "name": "idInst",
+        "type": "DWORD"
+      },
+      {
+        "name": "hsz1",
+        "type": "HSZ"
+      },
+      {
+        "name": "hsz2",
+        "type": "HSZ"
+      },
+      {
+        "name": "afCmd",
+        "type": "UINT"
+      }
+    ],
+    "ret": "HDDEDATA"
+  },
+  {
+    "id": 2066,
+    "name": "DdeConnect",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2439327302,
+    "args": [
+      {
+        "name": "idInst",
+        "type": "DWORD"
+      },
+      {
+        "name": "hszService",
+        "type": "HSZ"
+      },
+      {
+        "name": "hszTopic",
+        "type": "HSZ"
+      },
+      {
+        "name": "pCC",
+        "type": "PCONVCONTEXT"
+      }
+    ],
+    "ret": "HCONV"
+  },
+  {
+    "id": 2067,
+    "name": "DdeDisconnect",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 46988522,
+    "args": [
+      {
+        "name": "hConv",
+        "type": "HCONV"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2068,
+    "name": "DdeClientTransaction",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 1419899585,
+    "ret": "HDDEDATA"
+  },
+  {
+    "id": 2069,
+    "name": "DdeCreateDataHandle",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 4186648754,
+    "ret": "HDDEDATA"
+  },
+  {
+    "id": 2070,
+    "name": "DdeFreeDataHandle",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 691820936,
+    "args": [
+      {
+        "name": "hData",
+        "type": "HDDEDATA"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2071,
+    "name": "DdeAccessData",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1535752978,
+    "args": [
+      {
+        "name": "hData",
+        "type": "HDDEDATA"
+      },
+      {
+        "name": "pcbDataSize",
+        "type": "LPDWORD",
+        "out": true
+      }
+    ],
+    "ret": "LPBYTE"
+  },
+  {
+    "id": 2072,
+    "name": "DdeUnaccessData",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3042319977,
+    "args": [
+      {
+        "name": "hData",
+        "type": "HDDEDATA"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 2073,
     "name": "AddFontResourceA",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1890756352
   },
   {
-    "id": 2054,
+    "id": 2074,
     "name": "RemoveFontResourceA",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3342577783
   },
   {
-    "id": 2055,
+    "id": 2075,
     "name": "IStorage_QueryInterface",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 3535787537
   },
   {
-    "id": 2056,
+    "id": 2076,
     "name": "IStorage_AddRef",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 954046898
   },
   {
-    "id": 2057,
+    "id": 2077,
     "name": "IStorage_Release",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 224916079
   },
   {
-    "id": 2058,
+    "id": 2078,
     "name": "IStorage_CreateStream",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 3293432794
   },
   {
-    "id": 2059,
+    "id": 2079,
     "name": "IStorage_OpenStream",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 983749750
   },
   {
-    "id": 2060,
+    "id": 2080,
     "name": "IStorage_CreateStorage",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 232764871
   },
   {
-    "id": 2061,
+    "id": 2081,
     "name": "IStorage_OpenStorage",
     "nargs": 7,
     "convention": "stdcall",
     "hash": 4180494227
   },
   {
-    "id": 2062,
+    "id": 2082,
     "name": "IStorage_CopyTo",
     "nargs": 5,
     "convention": "stdcall",
     "hash": 2931285078
   },
   {
-    "id": 2063,
+    "id": 2083,
     "name": "IStorage_MoveElementTo",
     "nargs": 5,
     "convention": "stdcall",
     "hash": 792798660
   },
   {
-    "id": 2064,
+    "id": 2084,
     "name": "IStorage_Commit",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 385390675
   },
   {
-    "id": 2065,
+    "id": 2085,
     "name": "IStorage_Revert",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2953234632
   },
   {
-    "id": 2066,
+    "id": 2086,
     "name": "IStorage_EnumElements",
     "nargs": 5,
     "convention": "stdcall",
     "hash": 3853471902
   },
   {
-    "id": 2067,
+    "id": 2087,
     "name": "IStorage_DestroyElement",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 2338253472
   },
   {
-    "id": 2068,
+    "id": 2088,
     "name": "IStorage_RenameElement",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 916116360
   },
   {
-    "id": 2069,
+    "id": 2089,
     "name": "IStorage_SetElementTimes",
     "nargs": 5,
     "convention": "stdcall",
     "hash": 1490303668
   },
   {
-    "id": 2070,
+    "id": 2090,
     "name": "IStorage_SetClass",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 1451896382
   },
   {
-    "id": 2071,
+    "id": 2091,
     "name": "IStorage_SetStateBits",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 584609319
   },
   {
-    "id": 2072,
+    "id": 2092,
     "name": "IStorage_Stat",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 412025532
   },
   {
-    "id": 2073,
+    "id": 2093,
     "name": "IStream_QueryInterface",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 1722864590
   },
   {
-    "id": 2074,
+    "id": 2094,
     "name": "IStream_AddRef",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1665549629
   },
   {
-    "id": 2075,
+    "id": 2095,
     "name": "IStream_Release",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 1419775130
   },
   {
-    "id": 2076,
+    "id": 2096,
     "name": "IStream_Read",
     "nargs": 4,
     "convention": "stdcall",
     "hash": 1556718457
   },
   {
-    "id": 2077,
+    "id": 2097,
     "name": "IStream_Write",
     "nargs": 4,
     "convention": "stdcall",
     "hash": 3341106528
   },
   {
-    "id": 2078,
+    "id": 2098,
     "name": "IStream_Seek",
     "nargs": 5,
     "convention": "stdcall",
     "hash": 1474728421
   },
   {
-    "id": 2079,
+    "id": 2099,
     "name": "IStream_SetSize",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2693254406
   },
   {
-    "id": 2080,
+    "id": 2100,
     "name": "IStream_CopyTo",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 1985077417
   },
   {
-    "id": 2081,
+    "id": 2101,
     "name": "IStream_Commit",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 1499460960
   },
   {
-    "id": 2082,
+    "id": 2102,
     "name": "IStream_Revert",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2399729415
   },
   {
-    "id": 2083,
+    "id": 2103,
     "name": "IStream_LockRegion",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 1303675602
   },
   {
-    "id": 2084,
+    "id": 2104,
     "name": "IStream_UnlockRegion",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 3673127553
   },
   {
-    "id": 2085,
+    "id": 2105,
     "name": "IStream_Stat",
     "nargs": 3,
     "convention": "stdcall",
     "hash": 829110747
   },
   {
-    "id": 2086,
+    "id": 2106,
     "name": "IStream_Clone",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 602170990
   },
   {
-    "id": 2087,
+    "id": 2107,
     "name": "StgCreateDocfile",
     "nargs": 4,
     "convention": "stdcall",
     "hash": 3174144493
   },
   {
-    "id": 2088,
+    "id": 2108,
     "name": "StgCreateStorageEx",
     "nargs": 8,
     "convention": "stdcall",
     "hash": 2611552921
   },
   {
-    "id": 2089,
+    "id": 2109,
     "name": "StgIsStorageFile",
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2828024486
   },
   {
-    "id": 2090,
+    "id": 2110,
     "name": "StgOpenStorage",
     "nargs": 6,
     "convention": "stdcall",
     "hash": 1795388336
   },
   {
-    "id": 2091,
+    "id": 2111,
     "name": "ReadClassStg",
     "nargs": 2,
     "convention": "stdcall",
     "hash": 2381665109
   },
   {
-    "id": 2092,
+    "id": 2112,
     "name": "ReadFmtUserTypeStg",
     "nargs": 3,
     "convention": "stdcall",

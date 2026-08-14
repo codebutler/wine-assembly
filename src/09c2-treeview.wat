@@ -15,6 +15,10 @@
   (global $tv_next_handle (mut i32) (i32.const 0xCC000001))
   (global $tv_count (mut i32) (i32.const 0))
   (global $tv_selected_handle (mut i32) (i32.const 0))
+  ;; Image lists (singleton TV model matches the rest of this file).
+  ;; TVSIL_NORMAL=0, TVSIL_STATE=2. SET returns the previous handle.
+  (global $tv_himl_normal (mut i32) (i32.const 0))
+  (global $tv_himl_state (mut i32) (i32.const 0))
 
   ;; Find slot index for a handle, return -1 if not found
   (func $tv_find_slot (param $handle i32) (result i32)
@@ -690,9 +694,24 @@
     ;; TVM_GETCOUNT (0x1105)
     (if (i32.eq (local.get $msg) (i32.const 0x1105))
       (then (return (global.get $tv_count))))
-    ;; TVM_SETIMAGELIST (0x1109) — no-op
+    ;; TVM_GETIMAGELIST (0x1108) — wParam = TVSIL_NORMAL(0) / TVSIL_STATE(2)
+    (if (i32.eq (local.get $msg) (i32.const 0x1108))
+      (then
+        (if (i32.eq (local.get $wParam) (i32.const 2))
+          (then (return (global.get $tv_himl_state)))
+          (else (return (global.get $tv_himl_normal))))))
+    ;; TVM_SETIMAGELIST (0x1109) — returns previous HIMAGELIST
     (if (i32.eq (local.get $msg) (i32.const 0x1109))
-      (then (return (i32.const 0))))
+      (then
+        (if (i32.eq (local.get $wParam) (i32.const 2))
+          (then
+            (local.set $ret (global.get $tv_himl_state))
+            (global.set $tv_himl_state (local.get $lParam))
+            (return (local.get $ret)))
+          (else
+            (local.set $ret (global.get $tv_himl_normal))
+            (global.set $tv_himl_normal (local.get $lParam))
+            (return (local.get $ret))))))
     ;; TVM_GETNEXTITEM (0x110a)
     (if (i32.eq (local.get $msg) (i32.const 0x110a))
       (then (return (call $tv_get_next (local.get $wParam) (local.get $lParam)))))

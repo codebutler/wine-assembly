@@ -685,8 +685,9 @@
                   (if (i32.gt_u (local.get $line_len) (i32.const 0))
                     (then
                       (local.set $vis_y (i32.sub (i32.add (i32.const 8) (i32.mul (local.get $y) (i32.const 16))) (global.get $help_scroll_y)))
+                      ;; Keep topic lines above the nav bar (y≈248).
                       (if (i32.and (i32.ge_s (local.get $vis_y) (i32.const -16))
-                                   (i32.lt_s (local.get $vis_y) (i32.const 270)))
+                                   (i32.lt_s (local.get $vis_y) (i32.const 246)))
                         (then
                           ;; On Contents page, draw topic lines in blue
                           (if (i32.and (i32.eqz (global.get $help_cur_topic))
@@ -706,7 +707,7 @@
                   (local.set $line_len (i32.sub (local.get $scan) (local.get $line_start)))
                   (local.set $vis_y (i32.sub (i32.add (i32.const 8) (i32.mul (local.get $y) (i32.const 16))) (global.get $help_scroll_y)))
                   (if (i32.and (i32.ge_s (local.get $vis_y) (i32.const -16))
-                               (i32.lt_s (local.get $vis_y) (i32.const 270)))
+                               (i32.lt_s (local.get $vis_y) (i32.const 246)))
                     (then
                       (if (i32.gt_u (local.get $line_len) (i32.const 0))
                         (then
@@ -730,18 +731,19 @@
               (i32.const 8) (i32.const 8)
               (i32.const 0x108)  ;; "Help"
               (i32.const 4) (i32.const 0)))))
-        ;; Draw nav bar at bottom (y=276)
-        ;; Draw separator line
+        ;; Draw nav bar near the bottom of a typical ~274px client (managed
+        ;; crop of a 400×300 overlapped window). y=278 used to sit under the
+        ;; bottom border and get clipped.
         (drop (call $host_gdi_fill_rect (local.get $hdc)
-          (i32.const 0) (i32.const 272) (i32.const 400) (i32.const 273)
+          (i32.const 0) (i32.const 248) (i32.const 400) (i32.const 249)
           (i32.const 0x30014))) ;; BLACK_BRUSH
-        ;; "[Contents]" at 0x10C (10 chars)
+        ;; "[Contents]" at 0x10D (10 chars) — see data at 0x100 in 01-header.wat
         (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0xFF0000))) ;; blue (BGR)
         (drop (call $host_gdi_text_out (local.get $hdc)
-          (i32.const 8) (i32.const 278) (i32.const 0x10C) (i32.const 10) (i32.const 0)))
-        ;; "[Back]" at 0x117 (6 chars)
+          (i32.const 8) (i32.const 254) (i32.const 0x10D) (i32.const 10) (i32.const 0)))
+        ;; "[Back]" at 0x118 (6 chars)
         (drop (call $host_gdi_text_out (local.get $hdc)
-          (i32.const 100) (i32.const 278) (i32.const 0x117) (i32.const 6) (i32.const 0)))
+          (i32.const 100) (i32.const 254) (i32.const 0x118) (i32.const 6) (i32.const 0)))
         (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0x000000)))
         (return (i32.const 0))))
 
@@ -750,8 +752,8 @@
       (then
         ;; lParam: low word = x, high word = y
         (local.set $click_y (i32.shr_u (local.get $lParam) (i32.const 16)))
-        ;; Nav bar click (y >= 270)
-        (if (i32.ge_u (local.get $click_y) (i32.const 270))
+        ;; Nav bar click (y >= 246)
+        (if (i32.ge_u (local.get $click_y) (i32.const 246))
           (then
             ;; Check x position: [Contents] at 8..90, [Back] at 100..150
             (if (i32.lt_u (i32.and (local.get $lParam) (i32.const 0xFFFF)) (i32.const 90))
@@ -885,18 +887,40 @@
       (i32.const 300)         ;; cy
       (local.get $title_wa)   ;; title (WASM addr)
       (i32.const 0)))         ;; no menu
-    ;; Register in window table as WAT-native (wndproc = 0xFFFF0001)
+    ;; Register in window table as WAT-native (wndproc = 0xFFFF0001).
+    ;; wnd_table_set zeroes style — store the same style we passed the host
+    ;; so paint_select_next_dirty's WS_VISIBLE check doesn't drop WM_PAINT.
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_WAT_NATIVE))
+    (drop (call $wnd_set_style (local.get $hwnd) (i32.const 0x10CF0000)))
     (global.set $help_hwnd (local.get $hwnd))
-    ;; Trigger immediate paint so content shows right away
+    ;; help_create_window goes through host_create_window, not CreateWindowExA,
+    ;; so the usual "first top-level → main_hwnd" assignment never runs.
+    ;; Without main_hwnd, GetMessage's paint_pending path never fires for a
+    ;; standalone help viewer (hlpview.exe / WinHelp with no other window).
+    (if (i32.eqz (global.get $main_hwnd))
+      (then (global.set $main_hwnd (local.get $hwnd))))
+    ;; Match CreateWindowExA's NC/paint seed so GetMessage delivers
+    ;; WM_NCPAINT + WM_PAINT for this bypass path too.
+    (call $nc_flags_set (local.get $hwnd) (i32.const 3)) ;; bits 0+1: NCPAINT + ERASEBKGND
+    (call $defwndproc_do_nccalcsize (local.get $hwnd))
+    ;; Paint into the window back-canvas now (GDI → _backCanvas), then
+    ;; invalidate so a later GetMessage WM_PAINT refreshes after pc's
+    ;; rootless shell transfers the OffscreenCanvas for compositing.
     (drop (call $help_wndproc (local.get $hwnd) (i32.const 0x000F) (i32.const 0) (i32.const 0)))
+    (call $invalidate_hwnd (local.get $hwnd))
   )
 
-  ;; Destroy help window and clean up
+  ;; Destroy help window and clean up.
+  ;; When help was the only top-level window (standalone help viewer / winhlp32
+  ;; style), PostQuitMessage so the caller's GetMessage loop exits. In-app
+  ;; help opened beside an existing main window leaves that window alone.
   (func $help_destroy
-    (if (global.get $help_hwnd)
+    (local $hwnd i32)
+    (local.set $hwnd (global.get $help_hwnd))
+    (if (local.get $hwnd)
       (then
-        (call $wnd_table_remove (global.get $help_hwnd))
+        (call $host_destroy_window (local.get $hwnd))
+        (call $wnd_table_remove (local.get $hwnd))
         (global.set $help_hwnd (i32.const 0))
         (global.set $help_topic_wa (i32.const 0))
         (global.set $help_topic_len (i32.const 0))
@@ -905,5 +929,7 @@
         (global.set $help_topic_count (i32.const 0))
         (global.set $help_cur_topic (i32.const 0))
         (global.set $help_scroll_y (i32.const 0))
-        (global.set $help_back_count (i32.const 0))))
+        (global.set $help_back_count (i32.const 0))
+        (if (i32.eqz (call $wnd_find_first_child (i32.const 0)))
+          (then (global.set $quit_flag (i32.const 1))))))
   )

@@ -27,7 +27,6 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
-
   ;; 720: _mbsrchr(str, ch) — cdecl, find last occurrence of byte in MBCS string
   (func $handle__mbsrchr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32) (local $last i32) (local $ch i32) (local $cur i32)
@@ -455,6 +454,15 @@
 
   ;; fallback: unknown API — crash with full details
   (func $handle_fallback (param $name_ptr i32) (param $api_id i32)
+    ;; Route unimplemented ws2_32 names to the soft stub (host_sock_api) before
+    ;; crashing. The extended surface (stub2) goes FIRST
+    ;; so that where the two overlap (getservbyname) its real implementation wins
+    ;; over the older "return NULL" stub. Both read args off the guest stack and
+    ;; stdcall-clean $esp themselves, so the fallback just returns on a hit.
+    (if (call $winsock_soft_stub2 (call $hash_api_name (local.get $name_ptr)))
+      (then (return)))
+    (if (call $winsock_soft_stub (call $hash_api_name (local.get $name_ptr)))
+      (then (return)))
     (call $host_log_i32 (local.get $api_id))
     (call $host_crash_unimplemented
       (local.get $name_ptr)
@@ -462,4 +470,453 @@
       (global.get $eip)
       (global.get $ebp))
     (unreachable)
+  )
+  ;; True when GetProcAddress may return a soft-stub thunk (api_id=0xFFFF)
+  ;; for this name. `name_wa` is a WASM pointer to a NUL-terminated ASCII name
+  ;; (same form $lookup_api_id / $hash_api_name expect).
+  (func $winsock_gpa_allow (param $name_wa i32) (result i32)
+    (i32.or
+      (call $winsock_hash_is_soft (call $hash_api_name (local.get $name_wa)))
+      (call $winsock_hash_is_soft2 (call $hash_api_name (local.get $name_wa))))
+  )
+
+  (func $winsock_hash_is_soft (param $h i32) (result i32)
+    (i32.or (i32.or (i32.or (i32.or
+      (i32.eq (local.get $h) (i32.const 0xa2fdb778))  ;; htonl
+      (i32.eq (local.get $h) (i32.const 0x9b4be08c))) ;; ntohl
+      (i32.or
+        (i32.eq (local.get $h) (i32.const 0xb24c04c1))  ;; ntohs
+        (i32.eq (local.get $h) (i32.const 0xeeb619ba)))) ;; inet_ntoa
+      (i32.or (i32.or
+        (i32.eq (local.get $h) (i32.const 0xc7535f2e))  ;; bind
+        (i32.eq (local.get $h) (i32.const 0x3b3b76a6))) ;; listen
+        (i32.or
+          (i32.eq (local.get $h) (i32.const 0x08247e29))  ;; accept
+          (i32.eq (local.get $h) (i32.const 0xf8206a4b))))) ;; shutdown
+      (i32.or (i32.or (i32.or
+        (i32.eq (local.get $h) (i32.const 0x76be7fe9))  ;; getservbyname
+        (i32.eq (local.get $h) (i32.const 0xeec8fdb4))) ;; getpeername
+        (i32.or
+          (i32.eq (local.get $h) (i32.const 0x9b8e7ddc))  ;; getsockname
+          (i32.eq (local.get $h) (i32.const 0x1a8be126)))) ;; WSAAsyncSelect
+        (i32.or (i32.or
+          (i32.eq (local.get $h) (i32.const 0xf0ec5e8e))  ;; WSAEventSelect
+          (i32.eq (local.get $h) (i32.const 0x889758b6))) ;; WSAEnumNetworkEvents
+          (i32.eq (local.get $h) (i32.const 0x6ed76a1b))))) ;; WSAIoctl
+  )
+
+  ;; Implement soft-stubbed winsock APIs. Returns 1 if handled.
+  ;; Args still sit on the guest stack at entry; stdcall-clean before return.
+  (func $winsock_soft_stub (param $h i32) (result i32)
+    (local $a0 i32) (local $a1 i32) (local $a2 i32) (local $a3 i32)
+    (local $wa i32) (local $addr i32) (local $i i32) (local $n i32) (local $oct i32)
+    (local.set $a0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+    (local.set $a1 (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+    (local.set $a2 (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
+    (local.set $a3 (call $gl32 (i32.add (global.get $esp) (i32.const 16))))
+    ;; htonl / ntohl — 32-bit byte swap, 1 arg
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0xa2fdb778))
+                 (i32.eq (local.get $h) (i32.const 0x9b4be08c)))
+      (then
+        (global.set $eax (i32.or (i32.or
+          (i32.shl (i32.and (local.get $a0) (i32.const 0xFF)) (i32.const 24))
+          (i32.shl (i32.and (local.get $a0) (i32.const 0xFF00)) (i32.const 8)))
+          (i32.or
+            (i32.shr_u (i32.and (local.get $a0) (i32.const 0xFF0000)) (i32.const 8))
+            (i32.shr_u (i32.and (local.get $a0) (i32.const 0xFF000000)) (i32.const 24)))))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+    ;; ntohs — 16-bit byte swap, 1 arg
+    (if (i32.eq (local.get $h) (i32.const 0xb24c04c1))
+      (then
+        (global.set $eax (i32.or
+          (i32.shl (i32.and (local.get $a0) (i32.const 0xFF)) (i32.const 8))
+          (i32.and (i32.shr_u (local.get $a0) (i32.const 8)) (i32.const 0xFF))))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+    ;; inet_ntoa(in_addr by value as u32) — 1 arg; guest ptr to static "a.b.c.d"
+    (if (i32.eq (local.get $h) (i32.const 0xeeb619ba))
+      (then
+        (if (i32.eqz (global.get $winsock_ntoa))
+          (then (global.set $winsock_ntoa (call $heap_alloc (i32.const 16)))))
+        (local.set $wa (call $g2w (global.get $winsock_ntoa)))
+        (local.set $addr (local.get $a0))
+        (local.set $i (i32.const 0))
+        (local.set $oct (i32.const 0))
+        (loop $octs
+          (local.set $n (i32.and (local.get $addr) (i32.const 0xFF)))
+          (if (i32.ge_u (local.get $n) (i32.const 100))
+            (then
+              (i32.store8 (i32.add (local.get $wa) (local.get $i))
+                (i32.add (i32.const 0x30) (i32.div_u (local.get $n) (i32.const 100))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (local.set $n (i32.rem_u (local.get $n) (i32.const 100)))
+              (i32.store8 (i32.add (local.get $wa) (local.get $i))
+                (i32.add (i32.const 0x30) (i32.div_u (local.get $n) (i32.const 10))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (local.set $n (i32.rem_u (local.get $n) (i32.const 10))))
+            (else (if (i32.ge_u (local.get $n) (i32.const 10))
+              (then
+                (i32.store8 (i32.add (local.get $wa) (local.get $i))
+                  (i32.add (i32.const 0x30) (i32.div_u (local.get $n) (i32.const 10))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (local.set $n (i32.rem_u (local.get $n) (i32.const 10)))))))
+          (i32.store8 (i32.add (local.get $wa) (local.get $i))
+            (i32.add (i32.const 0x30) (local.get $n)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (local.set $oct (i32.add (local.get $oct) (i32.const 1)))
+          (local.set $addr (i32.shr_u (local.get $addr) (i32.const 8)))
+          (if (i32.lt_u (local.get $oct) (i32.const 4))
+            (then
+              (i32.store8 (i32.add (local.get $wa) (local.get $i)) (i32.const 0x2E))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $octs))))
+        (i32.store8 (i32.add (local.get $wa) (local.get $i)) (i32.const 0))
+        (global.set $eax (global.get $winsock_ntoa))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+    ;; bind — success no-op, 3 args
+    (if (i32.eq (local.get $h) (i32.const 0xc7535f2e))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+    ;; listen — 2 args
+    (if (i32.eq (local.get $h) (i32.const 0x3b3b76a6))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+    ;; accept — 3 args → INVALID_SOCKET
+    (if (i32.eq (local.get $h) (i32.const 0x08247e29))
+      (then
+        (global.set $eax (i32.const -1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+    ;; shutdown — 2 args
+    (if (i32.eq (local.get $h) (i32.const 0xf8206a4b))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+    ;; getservbyname — NULL (caller uses literal port)
+    (if (i32.eq (local.get $h) (i32.const 0x76be7fe9))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+    ;; getpeername / getsockname — SOCKET_ERROR, 3 args
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0xeec8fdb4))
+                 (i32.eq (local.get $h) (i32.const 0x9b8e7ddc)))
+      (then
+        (global.set $eax (i32.const -1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+    ;; WSAAsyncSelect(s, hwnd, wMsg, lEvent) — 4 args
+    (if (i32.eq (local.get $h) (i32.const 0x1a8be126))
+      (then
+        (global.set $eax (call $host_sock_async_select
+          (local.get $a0) (local.get $a1) (local.get $a2) (local.get $a3)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return (i32.const 1))))
+    ;; WSAEventSelect — 3 args
+    (if (i32.eq (local.get $h) (i32.const 0xf0ec5e8e))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+    ;; WSAEnumNetworkEvents — 3 args
+    (if (i32.eq (local.get $h) (i32.const 0x889758b6))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+    ;; WSAIoctl — 9 args
+    (if (i32.eq (local.get $h) (i32.const 0x6ed76a1b))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 40)))
+        (return (i32.const 1))))
+    (i32.const 0)
+  )
+
+  ;; ══ Optional Winsock host surface ════════════════════════════════════════
+  ;; The rest of the ws2_32 surface a period program reaches for. Before this,
+  ;; anything outside api_table.json + $winsock_soft_stub above TRAPPED — the
+  ;; runtime printed "UNIMPLEMENTED API: <name>" to a console nobody had open
+  ;; and executed `unreachable`, so the guest just died.
+  ;;
+  ;; These entries do the two things WAT must own — read the stdcall args and
+  ;; clean the guest stack — and hand the work to ONE host import,
+  ;; $host_sock_api(op, …). The host implementation owns the op codes and
+  ;; struct layouts.
+  ;; Pointer args go through $g2w_or0 (NULL-safe guest→wasm).
+
+  (func $winsock_hash_is_soft2 (param $h i32) (result i32)
+    (i32.or (i32.or (i32.or (i32.or
+      (i32.eq (local.get $h) (i32.const 0xb844e89a))  ;; gethostname
+      (i32.eq (local.get $h) (i32.const 0xdd58403c))) ;; getsockopt
+      (i32.or
+        (i32.eq (local.get $h) (i32.const 0xe99a661a))  ;; __WSAFDIsSet
+        (i32.eq (local.get $h) (i32.const 0x218e6768)))) ;; WSASetLastError
+      (i32.or (i32.or
+        (i32.eq (local.get $h) (i32.const 0x76be7fe9))  ;; getservbyname
+        (i32.eq (local.get $h) (i32.const 0xe65aee8d))) ;; getservbyport
+        (i32.or
+          (i32.eq (local.get $h) (i32.const 0xfdb93e0d))  ;; getprotobyname
+          (i32.eq (local.get $h) (i32.const 0xc829cbbb))))) ;; getprotobynumber
+      (i32.or (i32.or (i32.or (i32.or
+        (i32.eq (local.get $h) (i32.const 0xe8e269a3))  ;; gethostbyaddr
+        (i32.eq (local.get $h) (i32.const 0xdfb6021d))) ;; inet_ntop
+        (i32.or
+          (i32.eq (local.get $h) (i32.const 0xc5c336e5))  ;; inet_pton
+          (i32.eq (local.get $h) (i32.const 0x9467f52c)))) ;; getaddrinfo
+        (i32.or (i32.or
+          (i32.eq (local.get $h) (i32.const 0x36bc6608))  ;; freeaddrinfo
+          (i32.eq (local.get $h) (i32.const 0x8489a1ea))) ;; sendto
+          (i32.or
+            (i32.eq (local.get $h) (i32.const 0x885f273d))  ;; recvfrom
+            (i32.eq (local.get $h) (i32.const 0x94a923e6))))) ;; WSASocketA
+        (i32.or (i32.or (i32.or
+          (i32.eq (local.get $h) (i32.const 0xa6a9403c))  ;; WSASocketW
+          (i32.eq (local.get $h) (i32.const 0xc2bda844))) ;; WSAHtons
+          (i32.or
+            (i32.eq (local.get $h) (i32.const 0xc9bdb349))  ;; WSAHtonl
+            (i32.eq (local.get $h) (i32.const 0xe9c4003c)))) ;; WSANtohs
+          (i32.or (i32.or
+            (i32.eq (local.get $h) (i32.const 0xe0c3f211))  ;; WSANtohl
+            (i32.eq (local.get $h) (i32.const 0xbc9b094d))) ;; WSAIsBlocking
+            (i32.or (i32.or
+              (i32.eq (local.get $h) (i32.const 0xf83c3c8e))  ;; WSASetBlockingHook
+              (i32.eq (local.get $h) (i32.const 0x4a2cf502))) ;; WSAUnhookBlockingHook
+              (i32.or
+                (i32.eq (local.get $h) (i32.const 0x624b46f7))  ;; WSACancelBlockingCall
+                (i32.eq (local.get $h) (i32.const 0xf371be25))))))))) ;; WSACancelAsyncRequest
+  )
+
+  ;; Returns 1 if handled (eax set, guest stack cleaned).
+  (func $winsock_soft_stub2 (param $h i32) (result i32)
+    (local $a0 i32) (local $a1 i32) (local $a2 i32) (local $a3 i32)
+    (local $a4 i32) (local $a5 i32) (local $buf i32)
+    (local.set $a0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+    (local.set $a1 (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+    (local.set $a2 (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
+    (local.set $a3 (call $gl32 (i32.add (global.get $esp) (i32.const 16))))
+    (local.set $a4 (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
+    (local.set $a5 (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+
+    ;; gethostname(name, namelen) → 0 | SOCKET_ERROR — 2 args
+    (if (i32.eq (local.get $h) (i32.const 0xb844e89a))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 1)
+          (call $g2w_or0 (local.get $a0)) (local.get $a1)
+          (i32.const 0) (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+
+    ;; getsockopt(s, level, optname, optval, optlen) — 5 args
+    (if (i32.eq (local.get $h) (i32.const 0xdd58403c))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 2)
+          (local.get $a0) (local.get $a1) (local.get $a2)
+          (call $g2w_or0 (local.get $a3)) (call $g2w_or0 (local.get $a4))))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return (i32.const 1))))
+
+    ;; WSASetLastError(err) — 1 arg, no return value
+    (if (i32.eq (local.get $h) (i32.const 0x218e6768))
+      (then
+        (drop (call $host_sock_api (i32.const 3)
+          (local.get $a0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+
+    ;; __WSAFDIsSet(s, set) — 2 args. FD_ISSET expands to this, so EVERY
+    ;; select() caller needs it (it was missing entirely).
+    (if (i32.eq (local.get $h) (i32.const 0xe99a661a))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 4)
+          (local.get $a0) (call $g2w_or0 (local.get $a1))
+          (i32.const 0) (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+
+    ;; getservbyname(name, proto) — 2 args; returns a pointer into the static
+    ;; servent (winsock's per-thread-static contract).
+    (if (i32.eq (local.get $h) (i32.const 0x76be7fe9))
+      (then
+        (if (i32.eqz (global.get $winsock_servent))
+          (then (global.set $winsock_servent (call $heap_alloc (i32.const 128)))))
+        (local.set $buf (global.get $winsock_servent))
+        (global.set $eax (call $host_sock_api (i32.const 5)
+          (call $g2w_or0 (local.get $a0)) (call $g2w_or0 (local.get $a1))
+          (call $g2w (local.get $buf)) (local.get $buf) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+
+    ;; getservbyport(port, proto) — 2 args; port arrives in network order.
+    (if (i32.eq (local.get $h) (i32.const 0xe65aee8d))
+      (then
+        (if (i32.eqz (global.get $winsock_servent))
+          (then (global.set $winsock_servent (call $heap_alloc (i32.const 128)))))
+        (local.set $buf (global.get $winsock_servent))
+        (global.set $eax (call $host_sock_api (i32.const 6)
+          (local.get $a0) (call $g2w_or0 (local.get $a1))
+          (call $g2w (local.get $buf)) (local.get $buf) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return (i32.const 1))))
+
+    ;; getprotobyname(name) — 1 arg
+    (if (i32.eq (local.get $h) (i32.const 0xfdb93e0d))
+      (then
+        (if (i32.eqz (global.get $winsock_protoent))
+          (then (global.set $winsock_protoent (call $heap_alloc (i32.const 128)))))
+        (local.set $buf (global.get $winsock_protoent))
+        (global.set $eax (call $host_sock_api (i32.const 7)
+          (call $g2w_or0 (local.get $a0))
+          (call $g2w (local.get $buf)) (local.get $buf)
+          (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+
+    ;; getprotobynumber(num) — 1 arg
+    (if (i32.eq (local.get $h) (i32.const 0xc829cbbb))
+      (then
+        (if (i32.eqz (global.get $winsock_protoent))
+          (then (global.set $winsock_protoent (call $heap_alloc (i32.const 128)))))
+        (local.set $buf (global.get $winsock_protoent))
+        (global.set $eax (call $host_sock_api (i32.const 8)
+          (local.get $a0)
+          (call $g2w (local.get $buf)) (local.get $buf)
+          (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+
+    ;; gethostbyaddr(addr, len, type) — 3 args. Reuses the SAME static hostent
+    ;; gethostbyname returns into, matching winsock's per-thread-static contract.
+    (if (i32.eq (local.get $h) (i32.const 0xe8e269a3))
+      (then
+        (if (i32.eqz (global.get $winsock_hostent))
+          (then (global.set $winsock_hostent (call $heap_alloc (i32.const 256)))))
+        (local.set $buf (global.get $winsock_hostent))
+        (global.set $eax (call $host_sock_api (i32.const 9)
+          (call $g2w_or0 (local.get $a0)) (local.get $a1) (local.get $a2)
+          (call $g2w (local.get $buf)) (local.get $buf)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+
+    ;; inet_ntop(af, src, dst, size) → dst | NULL — 4 args (caller's buffer).
+    (if (i32.eq (local.get $h) (i32.const 0xdfb6021d))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 10)
+          (local.get $a0) (call $g2w_or0 (local.get $a1))
+          (call $g2w_or0 (local.get $a2)) (local.get $a3) (local.get $a2)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return (i32.const 1))))
+
+    ;; inet_pton(af, src, dst) → 1 | 0 | -1 — 3 args
+    (if (i32.eq (local.get $h) (i32.const 0xc5c336e5))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 11)
+          (local.get $a0) (call $g2w_or0 (local.get $a1))
+          (call $g2w_or0 (local.get $a2)) (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+
+    ;; getaddrinfo(node, service, hints, res) → 0 | error — 4 args. One
+    ;; AF_INET/SOCK_STREAM result in the static buffer; hints are ignored.
+    (if (i32.eq (local.get $h) (i32.const 0x9467f52c))
+      (then
+        (if (i32.eqz (global.get $winsock_addrinfo))
+          (then (global.set $winsock_addrinfo (call $heap_alloc (i32.const 256)))))
+        (local.set $buf (global.get $winsock_addrinfo))
+        (global.set $eax (call $host_sock_api (i32.const 12)
+          (call $g2w_or0 (local.get $a0)) (call $g2w_or0 (local.get $a1))
+          (call $g2w_or0 (local.get $a3))
+          (call $g2w (local.get $buf)) (local.get $buf)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return (i32.const 1))))
+
+    ;; freeaddrinfo(ai) — 1 arg, no return: the storage is static, so nothing
+    ;; to free. Accepting the call is the whole point (it used to trap).
+    (if (i32.eq (local.get $h) (i32.const 0x36bc6608))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+
+    ;; sendto(s, buf, len, flags, to, tolen) — 6 args
+    (if (i32.eq (local.get $h) (i32.const 0x8489a1ea))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 13)
+          (local.get $a0) (call $g2w_or0 (local.get $a1)) (local.get $a2)
+          (call $g2w_or0 (local.get $a4)) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return (i32.const 1))))
+
+    ;; recvfrom(s, buf, len, flags, from, fromlen) — 6 args
+    (if (i32.eq (local.get $h) (i32.const 0x885f273d))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 14)
+          (local.get $a0) (call $g2w_or0 (local.get $a1)) (local.get $a2)
+          (call $g2w_or0 (local.get $a4)) (call $g2w_or0 (local.get $a5))))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return (i32.const 1))))
+
+    ;; WSAHtons/WSANtohs(s, value, lpout) — 3 args, 16-bit swap through lpout.
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0xc2bda844))
+                 (i32.eq (local.get $h) (i32.const 0xe9c4003c)))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 15)
+          (i32.const 2) (local.get $a1) (call $g2w_or0 (local.get $a2))
+          (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+
+    ;; WSAHtonl/WSANtohl(s, value, lpout) — 3 args, 32-bit swap through lpout.
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0xc9bdb349))
+                 (i32.eq (local.get $h) (i32.const 0xe0c3f211)))
+      (then
+        (global.set $eax (call $host_sock_api (i32.const 15)
+          (i32.const 4) (local.get $a1) (call $g2w_or0 (local.get $a2))
+          (i32.const 0) (i32.const 0)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return (i32.const 1))))
+
+    ;; WSASocketA/W(af, type, proto, lpProtocolInfo, g, flags) — 6 args. The
+    ;; winsock2 spelling of socket(); the optional host transport owns it.
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0x94a923e6))
+                 (i32.eq (local.get $h) (i32.const 0xa6a9403c)))
+      (then
+        (global.set $eax (call $host_sock_socket
+          (local.get $a0) (local.get $a1) (local.get $a2)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return (i32.const 1))))
+
+    ;; The Winsock 1.1 blocking-hook family. We never block the guest behind a
+    ;; hook (a blocking recv is owned by the host), so the honest answers
+    ;; are: not blocking, no previous hook, nothing to cancel.
+    ;; WSAIsBlocking() / WSAUnhookBlockingHook() — 0 args
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0xbc9b094d))
+                 (i32.eq (local.get $h) (i32.const 0x4a2cf502)))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return (i32.const 1))))
+    ;; WSACancelBlockingCall() — 0 args
+    (if (i32.eq (local.get $h) (i32.const 0x624b46f7))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return (i32.const 1))))
+    ;; WSASetBlockingHook(lpBlockFunc) / WSACancelAsyncRequest(h) — 1 arg
+    (if (i32.or (i32.eq (local.get $h) (i32.const 0xf83c3c8e))
+                 (i32.eq (local.get $h) (i32.const 0xf371be25)))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return (i32.const 1))))
+
+    (i32.const 0)
   )
