@@ -350,10 +350,10 @@
     (local.set $addr (local.get $disp))
     (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $addr (i32.add (local.get $addr)
-        (call $get_reg (i32.and (local.get $info) (i32.const 0xF)))))))
+        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $info) (i32.const 0xF)) (i32.const 2))))))))
     (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $addr (i32.add (local.get $addr) (i32.shl
-        (call $get_reg (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)))
+        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))
         (i32.and (i32.shr_u (local.get $info) (i32.const 8)) (i32.const 3)))))))
     (local.get $addr))
 
@@ -366,7 +366,7 @@
     (local.set $v (call $gl8 (call $sib_ea (local.get $info) (call $read_thread_word))))
     (if (i32.ge_u (local.get $v) (i32.const 0x80))
       (then (local.set $v (i32.or (local.get $v) (i32.const 0xFFFFFF00)))))
-    (call $set_reg (local.get $op) (local.get $v))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $op) (i32.const 2))) (local.get $v))
     (return_call $next))
 
   ;; 401: MOV byte [base+index*scale+disp], r8
@@ -411,7 +411,7 @@
     (local.set $abs (call $read_thread_word))
     (local.set $old (call $gl32 (local.get $abs)))
     (local.set $ptr (i32.add (local.get $old) (i32.const 1)))
-    (call $set_reg (i32.and (local.get $op) (i32.const 0xF)) (local.get $ptr))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))) (local.get $ptr))
     (call $gs32 (local.get $abs) (local.get $ptr))
     (call $set_flags_inc (local.get $old) (local.get $ptr))
     (if (i32.and (local.get $op) (i32.const 0x100))
@@ -446,8 +446,8 @@
         (local.set $sign (i32.and (i32.shr_u (local.get $r) (i32.const 7)) (i32.const 1))))
       (else
         (local.set $r (i32.and
-          (call $get_reg (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
-          (call $get_reg (i32.and (local.get $op) (i32.const 0xF)))))
+          (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))
+          (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))))))
         (call $set_flags_logic (local.get $r))
         (local.set $sign (i32.shr_u (local.get $r) (i32.const 31)))))
     (local.set $fall (call $read_thread_word))
@@ -491,10 +491,10 @@
       (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
       (local.set $addr (call $read_thread_word))
       (call $gs32 (local.get $addr)
-        (call $get_reg (i32.and
+        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and
           (i32.shr_u (local.get $op)
             (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2))))
-          (i32.const 0xF))))
+          (i32.const 0xF)) (i32.const 2)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (return_call $next))
@@ -505,12 +505,10 @@
     (block $done (loop $l
       (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
       (local.set $addr (call $read_thread_word))
-      (call $set_reg
-        (i32.and
+      (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and
           (i32.shr_u (local.get $op)
             (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2))))
-          (i32.const 0xF))
-        (call $gl32 (local.get $addr)))
+          (i32.const 0xF)) (i32.const 2))) (call $gl32 (local.get $addr)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (return_call $next))
@@ -562,15 +560,13 @@
     (local $n i32) (local $i i32) (local $base i32)
     (local.set $n (i32.and (local.get $op) (i32.const 0xF)))
     (local.set $base
-      (call $get_reg (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF))))
+      (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)) (i32.const 2)))))
     (block $done (loop $l
       (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
-      (call $set_reg
-        (i32.and
+      (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and
           (i32.shr_u (local.get $op)
             (i32.add (i32.const 8) (i32.shl (local.get $i) (i32.const 2))))
-          (i32.const 0xF))
-        (call $gl32 (i32.add (local.get $base) (call $read_thread_word))))
+          (i32.const 0xF)) (i32.const 2))) (call $gl32 (i32.add (local.get $base) (call $read_thread_word))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (return_call $next))
@@ -596,7 +592,7 @@
     (local $addr i32) (local $uop i32) (local $alu i32)
     (local $old i32) (local $r i32) (local $imm i32)
     (local.set $addr (i32.add
-      (call $get_reg (i32.and (local.get $op) (i32.const 0xF)))
+      (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))))
       (call $read_thread_word)))
     (local.set $imm (call $read_thread_word))
     (local.set $uop (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
