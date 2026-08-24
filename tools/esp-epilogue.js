@@ -132,7 +132,10 @@ function scan() {
         // the function itself. They are structural, not part of the epilogue —
         // requiring the line to end right after it silently skipped 350
         // handlers, which a deliberately corrupted epilogue proved.
-        const m = code.match(/^\(global\.set \$esp \(i32\.add \(global\.get \$esp\) \(i32\.const (\d+)\)\)\)\)*$/);
+        // Two spellings: the historical wasm-global esp, and the per-thread
+        // register-file form where esp is slot +16 of $reg_base.
+        const m = code.match(/^\(global\.set \$esp \(i32\.add \(global\.get \$esp\) \(i32\.const (\d+)\)\)\)\)*$/)
+          || code.match(/^\(i32\.store offset=16 \(global\.get \$reg_base\) \(i32\.add \(i32\.load offset=16 \(global\.get \$reg_base\)\) \(i32\.const (\d+)\)\)\)\)*$/);
         if (!m) continue;
         rows.push({ file, name: h.name, line: k, found: parseInt(m[1], 10), expected });
       }

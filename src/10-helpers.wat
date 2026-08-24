@@ -257,41 +257,41 @@
     (local.set $mode (call $sbh_match_mode (local.get $wa)))
     (if (i32.eq (local.get $mode) (i32.const 1))
       (then
-        (local.set $scan (global.get $esi))
-        (local.set $page (global.get $edi))))
+        (local.set $scan (i32.load offset=24 (global.get $reg_base)))
+        (local.set $page (i32.load offset=28 (global.get $reg_base)))))
     (if (i32.eq (local.get $mode) (i32.const 2))
       (then
-        (local.set $scan (global.get $edi))
-        (local.set $page (global.get $esi))))
+        (local.set $scan (i32.load offset=28 (global.get $reg_base)))
+        (local.set $page (i32.load offset=24 (global.get $reg_base)))))
 
     (if (i32.eqz (local.get $mode)) (then (return (i32.const 0))))
 
     (block $done (loop $scan_loop
-      (if (i32.ge_u (local.get $scan) (global.get $ebp))
+      (if (i32.ge_u (local.get $scan) (i32.load offset=20 (global.get $reg_base)))
         (then
           (if (i32.eq (local.get $mode) (i32.const 1))
             (then
-              (global.set $esi (local.get $scan))
-              (global.set $edi (local.get $page)))
+              (i32.store offset=24 (global.get $reg_base) (local.get $scan))
+              (i32.store offset=28 (global.get $reg_base) (local.get $page)))
             (else
-              (global.set $edi (local.get $scan))
-              (global.set $esi (local.get $page))))
+              (i32.store offset=28 (global.get $reg_base) (local.get $scan))
+              (i32.store offset=24 (global.get $reg_base) (local.get $page))))
           (global.set $eip (i32.add (global.get $eip) (i32.const 0x2E)))
           (return (i32.const 1))))
 
       (local.set $first (i32.load (call $g2w (local.get $scan))))
       (if (i32.and
-            (i32.ge_s (local.get $first) (global.get $ebx))
-            (i32.gt_u (i32.load offset=4 (call $g2w (local.get $scan))) (global.get $ebx)))
+            (i32.ge_s (local.get $first) (i32.load offset=12 (global.get $reg_base)))
+            (i32.gt_u (i32.load offset=4 (call $g2w (local.get $scan))) (i32.load offset=12 (global.get $reg_base))))
         (then
-          (global.set $eax (local.get $first))
+          (i32.store offset=0 (global.get $reg_base) (local.get $first))
           (if (i32.eq (local.get $mode) (i32.const 1))
             (then
-              (global.set $esi (local.get $scan))
-              (global.set $edi (local.get $page)))
+              (i32.store offset=24 (global.get $reg_base) (local.get $scan))
+              (i32.store offset=28 (global.get $reg_base) (local.get $page)))
             (else
-              (global.set $edi (local.get $scan))
-              (global.set $esi (local.get $page))))
+              (i32.store offset=28 (global.get $reg_base) (local.get $scan))
+              (i32.store offset=24 (global.get $reg_base) (local.get $page))))
           (global.set $eip (i32.add (global.get $eip) (i32.const 0x0B)))
           (return (i32.const 1))))
 
@@ -1185,7 +1185,7 @@
     (local.get $i))
 
   (func $crash_unimplemented (param $name_ptr i32)
-    (call $host_crash_unimplemented (local.get $name_ptr) (global.get $esp) (global.get $eip) (global.get $ebp))
+    (call $host_crash_unimplemented (local.get $name_ptr) (i32.load offset=16 (global.get $reg_base)) (global.get $eip) (i32.load offset=20 (global.get $reg_base)))
     (unreachable))
 
   ;; Find DLL by name (WASM ptr to ASCII name), return guest load_addr or 0

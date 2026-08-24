@@ -64,11 +64,11 @@
     ;; Base
     (if (i32.and (i32.eq (local.get $base) (i32.const 5)) (i32.eq (local.get $mod) (i32.const 0)))
       (then (local.set $addr (call $d_fetch32))) ;; disp32, no base
-      (else (local.set $addr (call $get_reg (local.get $base)))))
+      (else (local.set $addr (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $base) (i32.const 2)))))))
     ;; Index (4 = no index)
     (if (i32.ne (local.get $index) (i32.const 4))
       (then (local.set $addr (i32.add (local.get $addr)
-        (i32.shl (call $get_reg (local.get $index)) (local.get $scale))))))
+        (i32.shl (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $index) (i32.const 2)))) (local.get $scale))))))
     (local.get $addr))
 
   ;; Decode ModR/M — returns addressing mode info for RUNTIME resolution.
@@ -2978,7 +2978,7 @@
               (call $decode_modrm)
               (if (i32.eq (local.get $op) (i32.const 0xA4))
                 (then (local.set $imm (call $d_fetch8)))
-                (else (local.set $imm (i32.and (global.get $ecx) (i32.const 31)))))
+                (else (local.set $imm (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 31)))))
               (if (local.get $prefix_66)
                 (then ;; 16-bit SHLD
                   (if (i32.eq (global.get $mr_mod) (i32.const 3))
@@ -3004,7 +3004,7 @@
               (call $decode_modrm)
               (if (i32.eq (local.get $op) (i32.const 0xAC))
                 (then (local.set $imm (call $d_fetch8)))
-                (else (local.set $imm (i32.and (global.get $ecx) (i32.const 31)))))
+                (else (local.set $imm (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 31)))))
               (if (local.get $prefix_66)
                 (then ;; 16-bit SHRD
                   (if (i32.eq (global.get $mr_mod) (i32.const 3))

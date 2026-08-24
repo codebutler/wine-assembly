@@ -667,7 +667,7 @@
   ;; host re-enters this same handler with the same arguments once the wire
   ;; has moved.
   (func $vsock_block (param $unpop i32)
-    (global.set $esp (i32.sub (global.get $esp) (local.get $unpop)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $unpop)))
     (global.set $yield_reason (i32.const 8))
     (global.set $yield_flag (i32.const 1))
     (global.set $steps (i32.const 0)))
@@ -678,57 +678,57 @@
   (func $handle_socket (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                        (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (if (i32.ne (local.get $arg0) (i32.const 2))          ;; AF_INET only
       (then
         (call $vsock_set_error (i32.const 10047))          ;; WSAEAFNOSUPPORT
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.ne (local.get $arg1) (i32.const 1))          ;; SOCK_STREAM only
       (then
         (call $vsock_set_error (i32.const 10044))          ;; WSAESOCKTNOSUPPORT
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.and (i32.ne (local.get $arg2) (i32.const 0))
                  (i32.ne (local.get $arg2) (i32.const 6))) ;; IPPROTO_TCP
       (then
         (call $vsock_set_error (i32.const 10043))          ;; WSAEPROTONOSUPPORT
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $idx (call $vsock_alloc))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10024))          ;; WSAEMFILE
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (i32.store (local.get $rec) (i32.const 1))
     (i32.store (i32.add (local.get $rec) (i32.const 4)) (local.get $arg0))
     (i32.store (i32.add (local.get $rec) (i32.const 8)) (local.get $arg1))
     (i32.store (i32.add (local.get $rec) (i32.const 12)) (local.get $arg2))
-    (global.set $eax (call $vsock_handle (local.get $idx))))
+    (i32.store offset=0 (global.get $reg_base) (call $vsock_handle (local.get $idx))))
 
   ;; bind(s, name, namelen)
   (func $handle_bind (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $ip i32) (local $port i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))          ;; WSAENOTSOCK
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 1))
       (then
         (call $vsock_set_error (i32.const 10022))          ;; WSAEINVAL
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.eqz (call $vsock_read_sockaddr (local.get $arg1) (local.get $arg2)))
       (then
         (call $vsock_set_error (i32.const 10047))          ;; WSAEAFNOSUPPORT
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $ip (global.get $vsock_sa_ip))
     (local.set $port (global.get $vsock_sa_port))
@@ -737,7 +737,7 @@
                  (i32.eqz (call $vsock_addr_in_room (local.get $ip))))
       (then
         (call $vsock_set_error (i32.const 10049))          ;; WSAEADDRNOTAVAIL
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     ;; Resolve INADDR_ANY now, not at send time. A process owns exactly one
     ;; room address, so "any" is that address — and every later step compares
@@ -753,49 +753,49 @@
         (if (call $vsock_port_taken (local.get $ip) (local.get $port))
           (then
             (call $vsock_set_error (i32.const 10048))      ;; WSAEADDRINUSE
-            (global.set $eax (i32.const -1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
             (return)))))
     (i32.store (i32.add (local.get $rec) (i32.const 16)) (local.get $ip))
     (i32.store (i32.add (local.get $rec) (i32.const 20)) (local.get $port))
     (i32.store (local.get $rec) (i32.const 2))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; listen(s, backlog)
   (func $handle_listen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                        (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $bl i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     ;; A listener must already own an address.
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 2))
       (then
         (call $vsock_set_error (i32.const 10022))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $bl (local.get $arg1))
     (if (i32.lt_s (local.get $bl) (i32.const 1)) (then (local.set $bl (i32.const 1))))
     (if (i32.gt_s (local.get $bl) (i32.const 15)) (then (local.set $bl (i32.const 15))))
     (i32.store (i32.add (local.get $rec) (i32.const 60)) (local.get $bl))
     (i32.store (local.get $rec) (i32.const 3))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; connect(s, name, namelen)
   (func $handle_connect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                         (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $ip i32) (local $port i32)
     (local $lis i32) (local $lrec i32) (local $child i32) (local $crec i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (call $vsock_pump)
@@ -808,7 +808,7 @@
           (then
             (i32.store (i32.add (local.get $rec) (i32.const 56))
               (i32.and (i32.load (i32.add (local.get $rec) (i32.const 56))) (i32.const -9)))
-            (global.set $eax (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (return)))
         (if (i32.and (i32.load (i32.add (local.get $rec) (i32.const 56))) (i32.const 4))
           (then
@@ -820,29 +820,29 @@
             (i32.store (i32.add (local.get $rec) (i32.const 28)) (i32.const 0))
             (i32.store (local.get $rec) (i32.const 2))
             (call $vsock_set_error (i32.const 10061))      ;; WSAECONNREFUSED
-            (global.set $eax (i32.const -1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
             (return)))
         (if (i32.load (i32.add (local.get $rec) (i32.const 36)))
           (then
             (call $vsock_set_error (i32.const 10037))      ;; WSAEALREADY
-            (global.set $eax (i32.const -1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
             (return)))
         (call $vsock_block (i32.const 16))
         (return)))
     (if (i32.eq (i32.load (local.get $rec)) (i32.const 4))
       (then
         (call $vsock_set_error (i32.const 10056))          ;; WSAEISCONN
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.gt_u (i32.load (local.get $rec)) (i32.const 2))
       (then
         (call $vsock_set_error (i32.const 10022))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.eqz (call $vsock_read_sockaddr (local.get $arg1) (local.get $arg2)))
       (then
         (call $vsock_set_error (i32.const 10047))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $ip (global.get $vsock_sa_ip))
     (local.set $port (global.get $vsock_sa_port))
@@ -850,7 +850,7 @@
     (if (i32.eqz (call $vsock_addr_in_room (local.get $ip)))
       (then
         (call $vsock_set_error (i32.const 10051))          ;; WSAENETUNREACH
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     ;; An unbound connector picks up an ephemeral room address before the
     ;; route is chosen, because either path needs a source endpoint.
@@ -870,7 +870,7 @@
             (i32.store (i32.add (local.get $rec) (i32.const 28)) (i32.const 0))
             (i32.store (i32.add (local.get $rec) (i32.const 32)) (i32.const -1))
             (call $vsock_set_error (i32.const 10055))      ;; WSAENOBUFS
-            (global.set $eax (i32.const -1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
             (return)))
         (if (i32.eqz (call $vsock_emit_from (local.get $idx) (i32.const 1)
                        (i32.const 0) (i32.const 0)))
@@ -883,7 +883,7 @@
             (if (i32.load (i32.add (local.get $rec) (i32.const 36)))
               (then
                 (call $vsock_set_error (i32.const 10035))  ;; WSAEWOULDBLOCK
-                (global.set $eax (i32.const -1))
+                (i32.store offset=0 (global.get $reg_base) (i32.const -1))
                 (return)))
             (call $vsock_block (i32.const 16))
             (return)))
@@ -893,7 +893,7 @@
         (if (i32.load (i32.add (local.get $rec) (i32.const 36)))
           (then
             (call $vsock_set_error (i32.const 10035))      ;; WSAEWOULDBLOCK
-            (global.set $eax (i32.const -1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
             (return)))
         (call $vsock_block (i32.const 16))
         (return)))
@@ -901,20 +901,20 @@
     (if (i32.lt_s (local.get $lis) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10061))          ;; WSAECONNREFUSED
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $lrec (call $vsock_rec (local.get $lis)))
     (if (i32.ge_u (i32.load (i32.add (local.get $lrec) (i32.const 64)))
                   (i32.load (i32.add (local.get $lrec) (i32.const 60))))
       (then
         (call $vsock_set_error (i32.const 10061))          ;; backlog full
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $child (call $vsock_alloc))
     (if (i32.lt_s (local.get $child) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10024))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $crec (call $vsock_rec (local.get $child)))
     ;; Server half: inherits the listener's address, points back at the
@@ -941,7 +941,7 @@
         (i32.store (i32.add (local.get $rec) (i32.const 32)) (i32.const -1))
         (i32.store (local.get $rec) (i32.const 2))
         (call $vsock_set_error (i32.const 10055))          ;; WSAENOBUFS
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     ;; OPEN_OK: the connection is in the backlog, not yet accepted.
     (i32.store (i32.add (local.get $lrec)
@@ -950,7 +950,7 @@
       (local.get $child))
     (i32.store (i32.add (local.get $lrec) (i32.const 64))
       (i32.add (i32.load (i32.add (local.get $lrec) (i32.const 64))) (i32.const 1)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; accept(s, addr, addrlen)
   (func $handle_accept (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
@@ -958,18 +958,18 @@
     (local $idx i32) (local $rec i32) (local $child i32) (local $crec i32)
     (local $arec i32) (local $carec i32)
     (local $i i32) (local $n i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 3))
       (then
         (call $vsock_set_error (i32.const 10022))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (call $vsock_pump)
     (local.set $n (i32.load (i32.add (local.get $rec) (i32.const 64))))
@@ -979,7 +979,7 @@
         (if (i32.eqz (i32.load (i32.add (local.get $rec) (i32.const 36))))
           (then (call $vsock_block (i32.const 16)) (return)))
         (call $vsock_set_error (i32.const 10035))          ;; WSAEWOULDBLOCK
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $child (i32.load (i32.add (local.get $rec) (i32.const 68))))
     ;; Shift the remaining backlog down one slot.
@@ -1016,7 +1016,7 @@
     ;; edge now, or that first packet waits for a second one to announce it.
     (if (call $vsock_read_ready (local.get $child))
       (then (call $vsock_async_post (local.get $child) (i32.const 0x01) (i32.const 0))))
-    (global.set $eax (call $vsock_handle (local.get $child))))
+    (i32.store offset=0 (global.get $reg_base) (call $vsock_handle (local.get $child))))
 
   ;; getpeername(s, name, namelen) — the address of the far end.
   ;;
@@ -1027,12 +1027,12 @@
   (func $handle_getpeername (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                             (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))          ;; WSAENOTSOCK
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     ;; Only an established connection has a peer. A listener or a half-open
@@ -1040,35 +1040,35 @@
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 4))
       (then
         (call $vsock_set_error (i32.const 10057))          ;; WSAENOTCONN
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (call $vsock_write_sockaddr (local.get $arg1) (local.get $arg2)
       (i32.load (i32.add (local.get $rec) (i32.const 24)))
       (i32.load (i32.add (local.get $rec) (i32.const 28))))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; send(s, buf, len, flags) — a partial count is a legal TCP result.
   (func $handle_send (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $peer i32) (local $space i32) (local $n i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (call $vsock_pump)
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 4))
       (then
         (call $vsock_set_error (i32.const 10057))          ;; WSAENOTCONN
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.and (i32.load (i32.add (local.get $rec) (i32.const 56))) (i32.const 2))
       (then
         (call $vsock_set_error (i32.const 10058))          ;; WSAESHUTDOWN
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $peer (i32.load (i32.add (local.get $rec) (i32.const 32))))
     ;; A peer in another process takes bytes as wire frames. One send
@@ -1077,7 +1077,7 @@
     (if (i32.eq (local.get $peer) (i32.const -2))
       (then
         (if (i32.eqz (local.get $arg2))
-          (then (global.set $eax (i32.const 0)) (return)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
         (local.set $n (local.get $arg2))
         (if (i32.gt_u (local.get $n) (global.get $VLN_MAX_PAYLOAD))
           (then (local.set $n (global.get $VLN_MAX_PAYLOAD))))
@@ -1087,18 +1087,18 @@
             (if (i32.eqz (i32.load (i32.add (local.get $rec) (i32.const 36))))
               (then (call $vsock_block (i32.const 20)) (return)))
             (call $vsock_set_error (i32.const 10035))
-            (global.set $eax (i32.const -1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
             (return)))
-        (global.set $eax (local.get $n))
+        (i32.store offset=0 (global.get $reg_base) (local.get $n))
         (return)))
     (if (i32.lt_s (local.get $peer) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10054))          ;; WSAECONNRESET
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $space (call $vsock_rx_space (local.get $peer)))
     (if (i32.eqz (local.get $space))
@@ -1107,68 +1107,68 @@
         (if (i32.eqz (i32.load (i32.add (local.get $rec) (i32.const 36))))
           (then (call $vsock_block (i32.const 20)) (return)))
         (call $vsock_set_error (i32.const 10035))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $n (local.get $arg2))
     (if (i32.gt_u (local.get $n) (local.get $space)) (then (local.set $n (local.get $space))))
     (call $vsock_ring_write (local.get $peer) (local.get $arg1) (local.get $n))
-    (global.set $eax (local.get $n)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $n)))
 
   ;; recv(s, buf, len, flags) — returns any available prefix, 0 at EOF.
   (func $handle_recv (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $flags i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (call $vsock_pump)
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 4))
       (then
         (call $vsock_set_error (i32.const 10057))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.gt_u (i32.load (i32.add (local.get $rec) (i32.const 52))) (i32.const 0))
       (then
-        (global.set $eax (call $vsock_ring_read (local.get $idx) (local.get $arg1) (local.get $arg2)))
+        (i32.store offset=0 (global.get $reg_base) (call $vsock_ring_read (local.get $idx) (local.get $arg1) (local.get $arg2)))
         (return)))
     (local.set $flags (i32.load (i32.add (local.get $rec) (i32.const 56))))
     ;; A reset outranks an orderly EOF once the buffer has drained.
     (if (i32.and (local.get $flags) (i32.const 4))
       (then
         (call $vsock_set_error (i32.const 10054))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.and (local.get $flags) (i32.const 1))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     ;; Nothing buffered and neither half closed: a blocking recv waits.
     (if (i32.eqz (i32.load (i32.add (local.get $rec) (i32.const 36))))
       (then (call $vsock_block (i32.const 20)) (return)))
     (call $vsock_set_error (i32.const 10035))
-    (global.set $eax (i32.const -1)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const -1)))
 
   ;; shutdown(s, how) — 0 SD_RECEIVE, 1 SD_SEND, 2 SD_BOTH
   (func $handle_shutdown (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                          (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $peer i32) (local $prec i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (if (i32.ne (i32.load (local.get $rec)) (i32.const 4))
       (then
         (call $vsock_set_error (i32.const 10057))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (if (i32.ne (local.get $arg1) (i32.const 0))
       (then
@@ -1188,18 +1188,18 @@
       (then
         (i32.store (i32.add (local.get $rec) (i32.const 56))
           (i32.or (i32.load (i32.add (local.get $rec) (i32.const 56))) (i32.const 1)))))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; closesocket(s)
   (func $handle_closesocket (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                             (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $graceful i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     ;; Closing after shutdown(SD_SEND) is orderly; closing with the write
@@ -1208,7 +1208,7 @@
       (i32.ne (i32.and (i32.load (i32.add (local.get $rec) (i32.const 56))) (i32.const 2))
               (i32.const 0)))
     (call $vsock_destroy (local.get $idx) (local.get $graceful))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; select(nfds, readfds, writefds, exceptfds, timeout)
   ;;
@@ -1272,7 +1272,7 @@
   (func $handle_select (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                        (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $total i32) (local $ms i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (call $vsock_pump)
     (local.set $total (call $vsock_filter_set (local.get $arg1) (i32.const 0) (i32.const 0)))
     (local.set $total (i32.add (local.get $total)
@@ -1302,14 +1302,14 @@
     (drop (call $vsock_filter_set (local.get $arg1) (i32.const 0) (i32.const 1)))
     (drop (call $vsock_filter_set (local.get $arg2) (i32.const 1) (i32.const 1)))
     (drop (call $vsock_filter_set (local.get $arg3) (i32.const 2) (i32.const 1)))
-    (global.set $eax (local.get $total)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $total)))
 
   ;; __WSAFDIsSet(s, set)
   (func $handle___WSAFDIsSet (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                              (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32) (local $count i32) (local $i i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.eqz (local.get $arg1)) (then (return)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (local.set $count (i32.load (local.get $wa)))
@@ -1321,7 +1321,7 @@
             (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 4)))))
           (local.get $arg0))
         (then
-          (global.set $eax (i32.const 1))
+          (i32.store offset=0 (global.get $reg_base) (i32.const 1))
           (return)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
@@ -1330,39 +1330,39 @@
   (func $handle_ioctlsocket (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                             (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_rec (local.get $idx)))
     (if (i32.eq (local.get $arg1) (i32.const 0x8004667E))  ;; FIONBIO
       (then
         (i32.store (i32.add (local.get $rec) (i32.const 36))
           (i32.ne (i32.load (call $g2w (local.get $arg2))) (i32.const 0)))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (if (i32.eq (local.get $arg1) (i32.const 0x4004667F))  ;; FIONREAD
       (then
         (i32.store (call $g2w (local.get $arg2))
           (i32.load (i32.add (local.get $rec) (i32.const 52))))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (call $vsock_set_error (i32.const 10022))
-    (global.set $eax (i32.const -1)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const -1)))
 
   ;; setsockopt(s, level, optname, optval, optlen)
   (func $handle_setsockopt (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                            (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     ;; SOL_SOCKET options the switch can honor by construction: the room
     ;; switch has no TIME_WAIT and no kernel buffers to resize.
@@ -1374,33 +1374,33 @@
               (i32.or (i32.eq (local.get $arg2) (i32.const 0x1002))   ;; SO_RCVBUF
                       (i32.eq (local.get $arg2) (i32.const 0x0080)))) ;; SO_LINGER
           (then
-            (global.set $eax (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (return)))))
     (if (i32.eq (local.get $arg1) (i32.const 6))           ;; IPPROTO_TCP
       (then
         (if (i32.eq (local.get $arg2) (i32.const 1))       ;; TCP_NODELAY
           (then
             ;; The switch never coalesces, so Nagle is already off.
-            (global.set $eax (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (return)))))
     (call $vsock_set_error (i32.const 10042))              ;; WSAENOPROTOOPT
-    (global.set $eax (i32.const -1)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const -1)))
 
   ;; htons / ntohs — identical 16-bit swap on a little-endian guest.
   (func $handle_htons (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $bswap16 (i32.and (local.get $arg0) (i32.const 0xFFFF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $bswap16 (i32.and (local.get $arg0) (i32.const 0xFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_ntohs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $bswap16 (i32.and (local.get $arg0) (i32.const 0xFFFF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $bswap16 (i32.and (local.get $arg0) (i32.const 0xFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_ntohl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $bswap32 (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $bswap32 (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ---- WsControl: the Win95/98 TDI query interface -------------------------
   ;; winipcfg reads the whole adapter configuration through WSOCK32 ordinal
@@ -1448,8 +1448,8 @@
     (local $entity i32) (local $class i32) (local $id i32) (local $descr i32)
     ;; arg0=protocol arg1=action arg2=pRequestInfo arg3=pcbRequestInfoLen
     ;; arg4=pResponseInfo, and the sixth argument is still on the guest stack.
-    (local.set $resp_len_ga (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $eax (i32.const 50))  ;; ERROR_NOT_SUPPORTED
+    (local.set $resp_len_ga (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 50))  ;; ERROR_NOT_SUPPORTED
     (block $done
       ;; Only WSCNTL_TCPIP_QUERY_INFORMATION is answered.
       (br_if $done (i32.ne (local.get $arg1) (i32.const 0)))
@@ -1465,9 +1465,9 @@
                    (i32.eqz (local.get $id)))
         (then
           (local.set $need (i32.const 16))
-          (global.set $eax (call $wsctl_need
+          (i32.store offset=0 (global.get $reg_base) (call $wsctl_need
             (local.get $resp_len_ga) (local.get $cap) (local.get $need)))
-          (if (i32.eqz (global.get $eax))
+          (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
             (then
               ;; IF_ENTITY instance 0, then CL_NL_ENTITY instance 0.
               (i32.store (call $g2w (local.get $arg4)) (i32.const 0x200))
@@ -1480,9 +1480,9 @@
       (if (i32.and (i32.eq (local.get $class) (i32.const 0x100))
                    (i32.eq (local.get $id) (i32.const 1)))
         (then
-          (global.set $eax (call $wsctl_need
+          (i32.store offset=0 (global.get $reg_base) (call $wsctl_need
             (local.get $resp_len_ga) (local.get $cap) (i32.const 4)))
-          (if (i32.eqz (global.get $eax))
+          (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
             (then
               (local.set $need (i32.const 0))
               (if (i32.eq (local.get $entity) (i32.const 0x200))
@@ -1499,9 +1499,9 @@
       (if (i32.and (i32.eq (local.get $entity) (i32.const 0x301))
                    (i32.eq (local.get $id) (i32.const 1)))
         (then
-          (global.set $eax (call $wsctl_need
+          (i32.store offset=0 (global.get $reg_base) (call $wsctl_need
             (local.get $resp_len_ga) (local.get $cap) (i32.const 92)))
-          (if (i32.eqz (global.get $eax))
+          (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
             (then
               (call $wsctl_zero (local.get $arg4) (i32.const 92))
               (i32.store (call $g2w (local.get $arg4)) (i32.const 2))          ;; not forwarding
@@ -1515,9 +1515,9 @@
       (if (i32.and (i32.eq (local.get $entity) (i32.const 0x301))
                    (i32.eq (local.get $id) (i32.const 0x102)))
         (then
-          (global.set $eax (call $wsctl_need
+          (i32.store offset=0 (global.get $reg_base) (call $wsctl_need
             (local.get $resp_len_ga) (local.get $cap) (i32.const 24)))
-          (if (i32.eqz (global.get $eax))
+          (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
             (then
               (call $wsctl_zero (local.get $arg4) (i32.const 24))
               (i32.store (call $g2w (local.get $arg4))
@@ -1537,9 +1537,9 @@
       (if (i32.and (i32.eq (local.get $entity) (i32.const 0x301))
                    (i32.eq (local.get $id) (i32.const 0x101)))
         (then
-          (global.set $eax (call $wsctl_need
+          (i32.store offset=0 (global.get $reg_base) (call $wsctl_need
             (local.get $resp_len_ga) (local.get $cap) (i32.const 48)))
-          (if (i32.eqz (global.get $eax))
+          (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
             (then
               (call $wsctl_zero (local.get $arg4) (i32.const 48))
               (i32.store (call $g2w (i32.add (local.get $arg4) (i32.const 4))) (i32.const 1))  ;; index
@@ -1556,9 +1556,9 @@
         (then
           (local.set $descr (call $strlen (i32.const 0x11D90)))
           (local.set $need (i32.add (i32.const 92) (i32.add (local.get $descr) (i32.const 1))))
-          (global.set $eax (call $wsctl_need
+          (i32.store offset=0 (global.get $reg_base) (call $wsctl_need
             (local.get $resp_len_ga) (local.get $cap) (local.get $need)))
-          (if (i32.eqz (global.get $eax))
+          (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
             (then
               (call $wsctl_zero (local.get $arg4) (local.get $need))
               (i32.store (call $g2w (local.get $arg4)) (i32.const 1))            ;; if_index
@@ -1581,7 +1581,7 @@
                 (i32.add (local.get $arg4) (i32.const 92)) (i32.const 0x11D90))))
           (br $done)))
     )
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; Parse a dotted quad at a guest pointer. Returns host byte order, or -1
   ;; when the text is not four decimal octets.
@@ -1622,13 +1622,13 @@
   (func $handle_inet_addr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                           (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ip i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (local.set $ip (call $vsock_parse_ipv4 (local.get $arg0)))
     (if (i32.lt_s (local.get $ip) (i32.const 0))
       (then
-        (global.set $eax (i32.const -1))                   ;; INADDR_NONE
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))                   ;; INADDR_NONE
         (return)))
-    (global.set $eax (call $bswap32 (local.get $ip))))
+    (i32.store offset=0 (global.get $reg_base) (call $bswap32 (local.get $ip))))
 
   ;; Write "a.b.c.d" (host byte order input) at a guest pointer; returns the
   ;; byte count written, excluding the terminator.
@@ -1668,16 +1668,16 @@
   ;; pointer to a per-process static buffer, as WinSock does.
   (func $handle_inet_ntoa (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                           (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (if (i32.eqz (global.get $vsock_ntoa_buf))
       (then (global.set $vsock_ntoa_buf (call $heap_alloc (i32.const 32)))))
     (if (i32.eqz (global.get $vsock_ntoa_buf))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (drop (call $vsock_format_ipv4 (global.get $vsock_ntoa_buf)
       (call $bswap32 (local.get $arg0))))
-    (global.set $eax (global.get $vsock_ntoa_buf)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $vsock_ntoa_buf)))
 
   ;; Is this the name of the machine we are running on? Compared without
   ;; regard to case, as the resolver on a real box does. The name itself is
@@ -1700,16 +1700,16 @@
   ;; to resolve too, or the app falls back to printing 0.0.0.0.
   (func $handle_gethostname (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                             (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.lt_s (local.get $arg1) (i32.const 3)))
       (then
         (call $vsock_set_error (i32.const 10014))          ;; WSAEFAULT
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (i32.store8 offset=0 (call $g2w (local.get $arg0)) (i32.const 0x50))  ;; 'P'
     (i32.store8 offset=1 (call $g2w (local.get $arg0)) (i32.const 0x43))  ;; 'C'
     (i32.store8 offset=2 (call $g2w (local.get $arg0)) (i32.const 0))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; gethostbyname(name) — version 1 resolves numeric room addresses only.
   ;; Layout: hostent at +0 (16 bytes), addr-list pointer array at +16,
@@ -1717,7 +1717,7 @@
   (func $handle_gethostbyname (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                               (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ip i32) (local $base i32) (local $i i32) (local $ch i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (local.set $ip (call $vsock_parse_ipv4 (local.get $arg0)))
     ;; Our own name resolves to our room address. Without this the
     ;; gethostname/gethostbyname pair an app uses to find its own address
@@ -1729,7 +1729,7 @@
     (if (i32.lt_s (local.get $ip) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 11001))          ;; WSAHOST_NOT_FOUND
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (if (i32.eqz (global.get $vsock_hostent))
       (then (global.set $vsock_hostent (call $heap_alloc (i32.const 128)))))
@@ -1737,7 +1737,7 @@
     (if (i32.eqz (local.get $base))
       (then
         (call $vsock_set_error (i32.const 11001))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     ;; Copy the queried name so h_name stays valid after the call.
     (local.set $i (i32.const 0))
@@ -1761,7 +1761,7 @@
     (i32.store16 (call $g2w (i32.add (local.get $base) (i32.const 10))) (i32.const 4))
     (i32.store (call $g2w (i32.add (local.get $base) (i32.const 12)))
       (i32.add (local.get $base) (i32.const 16)))          ;; h_addr_list
-    (global.set $eax (local.get $base)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $base)))
 
   ;; Copy a NUL-terminated guest string into a guest buffer, bounded.
   (func $vsock_copy_cstr (param $dst i32) (param $src i32) (param $max i32)
@@ -1810,17 +1810,17 @@
   (func $handle_getservbyname (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                               (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $port i32) (local $base i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (if (i32.eqz (local.get $arg0))
       (then
         (call $vsock_set_error (i32.const 11004))          ;; WSANO_DATA
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $port (call $vsock_service_port (local.get $arg0)))
     (if (i32.eqz (local.get $port))
       (then
         (call $vsock_set_error (i32.const 11004))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (if (i32.eqz (global.get $vsock_servent))
       (then (global.set $vsock_servent (call $heap_alloc (i32.const 96)))))
@@ -1828,7 +1828,7 @@
     (if (i32.eqz (local.get $base))
       (then
         (call $vsock_set_error (i32.const 11004))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     ;; Keep our own copies: the caller's buffers may be stack temporaries.
     (call $vsock_copy_cstr (i32.add (local.get $base) (i32.const 16))
@@ -1849,7 +1849,7 @@
               (i32.shr_u (local.get $port) (i32.const 8))))
     (i32.store (call $g2w (i32.add (local.get $base) (i32.const 12)))
       (i32.add (local.get $base) (i32.const 48)))          ;; s_proto
-    (global.set $eax (local.get $base)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $base)))
 
   ;; ---- WSAAsyncSelect: sockets that report themselves as window messages --
   ;;
@@ -1904,18 +1904,18 @@
   (func $handle_WSAAsyncSelect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $idx i32) (local $rec i32) (local $w i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (local.set $idx (call $vsock_index (local.get $arg0)))
     (if (i32.lt_s (local.get $idx) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 10038))          ;; WSAENOTSOCK
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $rec (call $vsock_async_rec (local.get $idx)))
     (if (i32.eqz (local.get $rec))
       (then
         (call $vsock_set_error (i32.const 10055))          ;; WSAENOBUFS
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (local.set $w (call $g2w (local.get $rec)))
     (i32.store        (local.get $w) (local.get $arg1))    ;; hWnd
@@ -1924,7 +1924,7 @@
     ;; Documented side effect: the socket becomes non-blocking, and stays that
     ;; way even if the registration is later cancelled with lEvent = 0.
     (i32.store (i32.add (call $vsock_rec (local.get $idx)) (i32.const 36)) (i32.const 1))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; getprotobyname(name) → struct protoent* (NULL when unknown)
   ;;
@@ -1934,11 +1934,11 @@
   (func $handle_getprotobyname (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $d0 i32) (local $proto i32) (local $base i32) (local $n i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (if (i32.eqz (local.get $arg0))
       (then
         (call $vsock_set_error (i32.const 11004))          ;; WSANO_DATA
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $n (call $g2w (local.get $arg0)))
     (local.set $d0 (i32.or (i32.load (local.get $n)) (i32.const 0x20202020)))
@@ -1957,7 +1957,7 @@
     (if (i32.lt_s (local.get $proto) (i32.const 0))
       (then
         (call $vsock_set_error (i32.const 11004))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (if (i32.eqz (global.get $vsock_protoent))
       (then (global.set $vsock_protoent (call $heap_alloc (i32.const 64)))))
@@ -1965,7 +1965,7 @@
     (if (i32.eqz (local.get $base))
       (then
         (call $vsock_set_error (i32.const 11004))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (call $vsock_copy_cstr (i32.add (local.get $base) (i32.const 16))
       (local.get $arg0) (i32.const 31))
@@ -1976,30 +1976,30 @@
       (i32.add (local.get $base) (i32.const 56)))          ;; p_aliases → {NULL}
     ;; p_proto is a plain int, in host order — unlike servent's s_port.
     (i32.store (call $g2w (i32.add (local.get $base) (i32.const 8))) (local.get $proto))
-    (global.set $eax (local.get $base)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $base)))
 
   ;; WSAStartup(wVersionRequested, lpWSAData)
   (func $handle_WSAStartup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                            (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (local.set $wa (call $g2w (local.get $arg1)))
     ;; wVersion is the negotiated request; wHighVersion is the provider
     ;; ceiling. WinSock 1.1 clients reject a success that reports 2.2 here.
     (i32.store16 (local.get $wa) (i32.and (local.get $arg0) (i32.const 0xFFFF)))
     (i32.store16 (i32.add (local.get $wa) (i32.const 2)) (i32.const 0x0202))
     (global.set $wsa_started (i32.add (global.get $wsa_started) (i32.const 1)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; WSACleanup() — the last matching call tears the room switch down.
   (func $handle_WSACleanup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                            (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $i i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (if (i32.eqz (global.get $wsa_started))
       (then
         (call $vsock_set_error (i32.const 10093))          ;; WSANOTINITIALISED
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (return)))
     (global.set $wsa_started (i32.sub (global.get $wsa_started) (i32.const 1)))
     (if (i32.eqz (global.get $wsa_started))
@@ -2010,14 +2010,14 @@
           (call $vsock_destroy (local.get $i) (i32.const 0))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $scan)))))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $handle_WSAGetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                 (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
-    (global.set $eax (global.get $wsa_last_error)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $wsa_last_error)))
 
   (func $handle_WSASetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                 (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (global.set $wsa_last_error (local.get $arg0)))

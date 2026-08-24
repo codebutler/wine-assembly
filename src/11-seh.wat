@@ -63,12 +63,12 @@
           (global.set $delphi_seh_head_before
             (call $gl32 (global.get $fs_base)))
           ;; Call handler(ExceptionRecord, EstablisherFrame, ContextRecord, DispatcherContext).
-          (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-          (call $gs32 (global.get $esp) (global.get $delphi_seh_thunk))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (global.get $delphi_exception_record))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (global.get $delphi_seh_rec))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (i32.const 0))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (i32.const 0))
+          (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+          (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $delphi_seh_thunk))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (global.get $delphi_exception_record))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (global.get $delphi_seh_rec))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.const 0))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (i32.const 0))
           (global.set $eip (local.get $handler))
           (global.set $steps (i32.const 0))
           (return)))
@@ -170,8 +170,8 @@
                       ;; Unwind: FS:[0] = seh_rec->next
                       (call $gs32 (global.get $fs_base) (call $gl32 (local.get $seh_rec)))
                       ;; Restore frame and jump to catch handler
-                      (global.set $ebp (local.get $frame_ebp))
-                      (global.set $esp (local.get $seh_rec))
+                      (i32.store offset=20 (global.get $reg_base) (local.get $frame_ebp))
+                      (i32.store offset=16 (global.get $reg_base) (local.get $seh_rec))
                       ;; Set trylevel to catchHigh
                       (call $gs32 (i32.sub (local.get $frame_ebp) (i32.const 4))
                         (call $gl32 (i32.add (i32.add (local.get $filter) (i32.mul (local.get $entry) (i32.const 20))) (i32.const 8))))
@@ -225,8 +225,8 @@
                 ;; Unwind: set FS:[0] = seh_rec->next
                 (call $gs32 (global.get $fs_base) (call $gl32 (local.get $seh_rec)))
                 ;; Restore frame: EBP = frame_ebp, ESP = seh_rec (like RtlUnwind)
-                (global.set $ebp (local.get $frame_ebp))
-                (global.set $esp (local.get $seh_rec))
+                (i32.store offset=20 (global.get $reg_base) (local.get $frame_ebp))
+                (i32.store offset=16 (global.get $reg_base) (local.get $seh_rec))
                 ;; Update trylevel to enclosingLevel for this scope
                 (call $gs32 (i32.sub (local.get $frame_ebp) (i32.const 4))
                   (call $gl32 (local.get $entry))) ;; entry[+0] = enclosingLevel
@@ -239,8 +239,8 @@
             ;; For now, assume non-trivial filters return EXCEPTION_EXECUTE_HANDLER.
             ;; This is a simplification — covers 95% of real-world __except blocks.
             (call $gs32 (global.get $fs_base) (call $gl32 (local.get $seh_rec)))
-            (global.set $ebp (local.get $frame_ebp))
-            (global.set $esp (local.get $seh_rec))
+            (i32.store offset=20 (global.get $reg_base) (local.get $frame_ebp))
+            (i32.store offset=16 (global.get $reg_base) (local.get $seh_rec))
             (call $gs32 (i32.sub (local.get $frame_ebp) (i32.const 4))
               (call $gl32 (local.get $entry)))
             (global.set $eip (local.get $except_body))

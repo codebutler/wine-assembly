@@ -1,45 +1,24 @@
   ;; ============================================================
   ;; REGISTER ACCESS
   ;; ============================================================
-  ;; br_table, not a chain of seven compares. These two are called several times
-  ;; per memory-form instruction — a single `cmp [ebp+8], esi` used to walk this
-  ;; chain three times — so the average three data-dependent branches per call
-  ;; were a real share of the interpreter's work. A br_table is one indexed
-  ;; jump. The default arm covers r=7 and anything out of range, exactly as the
-  ;; fall-through did.
+  ;; The eight GPRs are slots of a per-thread register file in linear memory
+  ;; (see $REGFILE_BASE / $reg_base in 01-header.wat), so an indexed access is
+  ;; a single load or store. Every former `call $get_reg` / `call $set_reg`
+  ;; site has been inlined to exactly the expressions below; these two
+  ;; functions are kept only as the readable definition of the encoding.
   (func $get_reg (param $r i32) (result i32)
-    (block $edi (block $esi (block $ebp (block $esp
-      (block $ebx (block $edx (block $ecx (block $eax
-        (br_table $eax $ecx $edx $ebx $esp $ebp $esi $edi (local.get $r)))
-        (return (global.get $eax)))
-        (return (global.get $ecx)))
-        (return (global.get $edx)))
-        (return (global.get $ebx)))
-        (return (global.get $esp)))
-        (return (global.get $ebp)))
-        (return (global.get $esi)))
-    (global.get $edi)
+    (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))))
   )
 
   (func $set_reg (param $r i32) (param $v i32)
-    (block $edi (block $esi (block $ebp (block $esp
-      (block $ebx (block $edx (block $ecx (block $eax
-        (br_table $eax $ecx $edx $ebx $esp $ebp $esi $edi (local.get $r)))
-        (global.set $eax (local.get $v)) (return))
-        (global.set $ecx (local.get $v)) (return))
-        (global.set $edx (local.get $v)) (return))
-        (global.set $ebx (local.get $v)) (return))
-        (global.set $esp (local.get $v)) (return))
-        (global.set $ebp (local.get $v)) (return))
-        (global.set $esi (local.get $v)) (return))
-    (global.set $edi (local.get $v))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))) (local.get $v))
   )
 
   ;; Get byte register value (0-3=al/cl/dl/bl, 4-7=ah/ch/dh/bh)
   (func $get_reg8 (param $r i32) (result i32)
     (if (result i32) (i32.lt_u (local.get $r) (i32.const 4))
-      (then (i32.and (call $get_reg (local.get $r)) (i32.const 0xFF)))
-      (else (i32.and (i32.shr_u (call $get_reg (i32.sub (local.get $r) (i32.const 4))) (i32.const 8)) (i32.const 0xFF))))
+      (then (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))) (i32.const 0xFF)))
+      (else (i32.and (i32.shr_u (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.sub (local.get $r) (i32.const 4)) (i32.const 2)))) (i32.const 8)) (i32.const 0xFF))))
   )
 
   ;; Set byte register (preserves other bits)
@@ -47,22 +26,20 @@
     (local $old i32)
     (if (i32.lt_u (local.get $r) (i32.const 4))
       (then
-        (local.set $old (call $get_reg (local.get $r)))
-        (call $set_reg (local.get $r) (i32.or (i32.and (local.get $old) (i32.const 0xFFFFFF00)) (i32.and (local.get $v) (i32.const 0xFF)))))
+        (local.set $old (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))) (i32.or (i32.and (local.get $old) (i32.const 0xFFFFFF00)) (i32.and (local.get $v) (i32.const 0xFF)))))
       (else
-        (local.set $old (call $get_reg (i32.sub (local.get $r) (i32.const 4))))
-        (call $set_reg (i32.sub (local.get $r) (i32.const 4))
-          (i32.or (i32.and (local.get $old) (i32.const 0xFFFF00FF))
+        (local.set $old (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.sub (local.get $r) (i32.const 4)) (i32.const 2)))))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.sub (local.get $r) (i32.const 4)) (i32.const 2))) (i32.or (i32.and (local.get $old) (i32.const 0xFFFF00FF))
             (i32.shl (i32.and (local.get $v) (i32.const 0xFF)) (i32.const 8))))))
   )
 
   ;; Get/set 16-bit register
   (func $get_reg16 (param $r i32) (result i32)
-    (i32.and (call $get_reg (local.get $r)) (i32.const 0xFFFF))
+    (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))) (i32.const 0xFFFF))
   )
   (func $set_reg16 (param $r i32) (param $v i32)
-    (call $set_reg (local.get $r)
-      (i32.or (i32.and (call $get_reg (local.get $r)) (i32.const 0xFFFF0000))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))) (i32.or (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))) (i32.const 0xFFFF0000))
               (i32.and (local.get $v) (i32.const 0xFFFF))))
   )
 
@@ -390,26 +367,26 @@
 
   ;; Save caller-saved registers + lazy flags onto guest stack (9 dwords = 36 bytes)
   (func $save_caller_regs
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 36)))
-    (call $gs32 (global.get $esp)                         (global.get $eip))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4))  (global.get $eax))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 8))  (global.get $ecx))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (global.get $edx))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (global.get $flag_op))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 20)) (global.get $flag_res))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (global.get $flag_a))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (global.get $flag_b))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (global.get $flag_sign_shift)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base))                         (global.get $eip))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))  (i32.load offset=0 (global.get $reg_base)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))  (i32.load offset=4 (global.get $reg_base)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.load offset=8 (global.get $reg_base)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (global.get $flag_op))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)) (global.get $flag_res))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (global.get $flag_a))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (global.get $flag_b))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)) (global.get $flag_sign_shift)))
 
   ;; Restore caller-saved registers + lazy flags from guest stack
   (func $restore_caller_regs
-    (global.set $eip             (call $gl32 (global.get $esp)))
-    (global.set $eax             (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-    (global.set $ecx             (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
-    (global.set $edx             (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
-    (global.set $flag_op         (call $gl32 (i32.add (global.get $esp) (i32.const 16))))
-    (global.set $flag_res        (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
-    (global.set $flag_a          (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $flag_b          (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
-    (global.set $flag_sign_shift (call $gl32 (i32.add (global.get $esp) (i32.const 32))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+    (global.set $eip             (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+    (i32.store offset=4 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+    (i32.store offset=8 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (global.set $flag_op         (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+    (global.set $flag_res        (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+    (global.set $flag_a          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (global.set $flag_b          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+    (global.set $flag_sign_shift (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))

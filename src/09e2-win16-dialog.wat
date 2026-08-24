@@ -235,13 +235,13 @@
   ;; is the four-word record pushed above.
   (func $win16_dlg_cwp_resume
     (local $proc i32) (local $init i32)
-    (global.set $esp (i32.add (global.get $esp) (global.get $WIN16_CWP_SCRATCH)))
-    (local.set $proc (i32.or (call $gl16 (global.get $esp))
-      (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2))) (i32.const 16))))
-    (local.set $init (i32.or (call $gl16 (i32.add (global.get $esp) (i32.const 4)))
-      (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 6))) (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-    (call $win16_dlg_init (local.get $proc) (call $gl16 (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (global.get $WIN16_CWP_SCRATCH)))
+    (local.set $proc (i32.or (call $gl16 (i32.load offset=16 (global.get $reg_base)))
+      (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))) (i32.const 16))))
+    (local.set $init (i32.or (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+      (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 6))) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (call $win16_dlg_init (local.get $proc) (call $gl16 (i32.load offset=16 (global.get $reg_base)))
       (local.get $init)))
 
   ;; USER.87 DialogBox(hInstance, lpTemplateName, hWndParent, lpDialogFunc) and
@@ -273,7 +273,7 @@
       (else (local.set $res (call $win16_find_resource (i32.const 5) (local.get $id)))))
     (if (i32.eqz (local.get $res))
       (then
-        (global.set $eax (i32.const -1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
         (call $win16_api_return (select (i32.const 16) (i32.const 12)
           (local.get $with_param)))
         (return)))
@@ -298,7 +298,7 @@
   (func $win16_EndDialog
     (global.set $win16_dlg_result (call $win16_arg16 (i32.const 0)))
     (global.set $win16_dlg_ended (i32.const 1))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; ---- The pump ----
@@ -402,7 +402,7 @@
     (local $dlg i32) (local $proc i32) (local $scratch i32) (local $packed i32)
     (local $hwnd i32) (local $msg i32) (local $prev_focus i32) (local $owner i32)
     (local $dlg_x i32) (local $dlg_y i32) (local $dlg_w i32) (local $dlg_h i32)
-    (local.set $dlg (call $win16_h32 (call $gl16 (global.get $esp))))
+    (local.set $dlg (call $win16_h32 (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
     (local.set $proc (call $dialog_proc_get (local.get $dlg)))
 
     ;; CreateDialogParam shares all creation and WM_INITDIALOG behavior with
@@ -411,13 +411,13 @@
     (if (i32.eq (local.get $dlg) (global.get $win16_dlg_modeless_pending))
       (then
         (global.set $win16_dlg_modeless_pending (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 2)))
-        (local.set $packed (i32.or (call $gl16 (global.get $esp))
-          (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+        (local.set $packed (i32.or (call $gl16 (i32.load offset=16 (global.get $reg_base)))
+          (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
                    (i32.const 16))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
-        (global.set $eax (call $win16_h16 (local.get $dlg)))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $dlg)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (global.set $yield_reason (i32.const 0))
         (call $win16_set_sreg (i32.const 1)
           (i32.shr_u (local.get $packed) (i32.const 16)))
@@ -466,13 +466,13 @@
           (then
             (call $invalidate_hwnd (local.get $owner))
             (drop (call $paint_seed_child_paints (local.get $owner)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 2)))
-        (local.set $packed (i32.or (call $gl16 (global.get $esp))
-          (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+        (local.set $packed (i32.or (call $gl16 (i32.load offset=16 (global.get $reg_base)))
+          (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
                    (i32.const 16))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
-        (global.set $eax (i32.and (global.get $win16_dlg_result) (i32.const 0xFFFF)))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (global.get $win16_dlg_result) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (global.set $yield_reason (i32.const 0))
         (call $win16_set_sreg (i32.const 1) (i32.shr_u (local.get $packed) (i32.const 16)))
         (global.set $eip (i32.add (global.get $seg_base_cs)
@@ -548,7 +548,7 @@
     (call $handle_GetDlgItem (local.get $dlg) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.96 CheckRadioButton(hDlg, nIDFirst, nIDLast, nIDCheck).
@@ -563,7 +563,7 @@
       (local.get $first) (local.get $last) (local.get $check)
       (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.97 CheckDlgButton(hDlg, nIDButton, uCheck).
@@ -577,7 +577,7 @@
       (local.get $id) (local.get $check)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.98 IsDlgButtonChecked(hDlg, nIDButton).
@@ -589,7 +589,7 @@
     (call $handle_IsDlgButtonChecked (local.get $dlg) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; One selector keeps DlgDirList strings stable until the task consumes the
@@ -923,7 +923,7 @@
               (br $files)))
             (drop (call $host_fs_find_close (local.get $find)))))
         (call $heap_free (local.get $fd_g))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.93 GetDlgItemText(hDlg, nIDDlgItem, lpString, nMaxCount) -> length.
@@ -938,7 +938,7 @@
     (call $handle_GetDlgItemTextA (local.get $dlg) (local.get $id)
       (local.get $buf) (local.get $max) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.92 SetDlgItemText(hDlg, nIDDlgItem, lpString).
@@ -952,7 +952,7 @@
     (call $handle_SetDlgItemTextA (local.get $dlg) (local.get $id)
       (local.get $str) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.94 SetDlgItemInt(hDlg, nIDDlgItem, wValue, bSigned) — how a dialog
@@ -972,7 +972,7 @@
     (call $handle_SetDlgItemInt (local.get $dlg) (local.get $id)
       (local.get $value) (local.get $signed) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.95 GetDlgItemInt(hDlg, nIDDlgItem, lpTranslated, bSigned) -> UINT.
@@ -994,7 +994,7 @@
     (call $win16_call32_end)
     (if (local.get $ok_sel)
       (then (call $gs16 (local.get $ok) (call $gl32 (local.get $tmp)))))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.101 SendDlgItemMessage(hDlg, nIDDlgItem, wMsg, wParam, lParam) -> LONG.
@@ -1018,6 +1018,6 @@
       (local.get $id) (local.get $msg) (local.get $wp) (local.get $lp)
       (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))

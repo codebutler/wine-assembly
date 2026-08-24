@@ -22,8 +22,8 @@
     ;; dwMaximumWindowSize
     (i32.store16 (i32.add (local.get $p) (i32.const 18)) (global.get $console_width))
     (i32.store16 (i32.add (local.get $p) (i32.const 20)) (global.get $console_height))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; --- Console API handlers ---
 
@@ -39,26 +39,26 @@
       (then
         (global.set $console_width (i32.const 80))
         (global.set $console_height (i32.const 25))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleActiveScreenBuffer(hConsole) → BOOL
   (func $handle_SetConsoleActiveScreenBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $console_handle (local.get $arg0))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_refresh)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SetConsoleCursorPosition(hConsole, dwCursorPosition) → BOOL
   ;; dwCursorPosition is COORD packed: loword=X, hiword=Y
   (func $handle_SetConsoleCursorPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $console_cursor_x (i32.and (local.get $arg1) (i32.const 0xFFFF)))
     (global.set $console_cursor_y (i32.shr_u (local.get $arg1) (i32.const 16)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleCursorInfo(hConsole, lpConsoleCursorInfo) → BOOL
   (func $handle_SetConsoleCursorInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -66,8 +66,8 @@
     (local.set $p (call $g2w (local.get $arg1)))
     (global.set $console_cursor_size (i32.load (local.get $p)))
     (global.set $console_cursor_visible (i32.load (i32.add (local.get $p) (i32.const 4))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetConsoleCursorInfo(hConsole, lpConsoleCursorInfo) → BOOL
   (func $handle_GetConsoleCursorInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -75,28 +75,28 @@
     (local.set $p (call $g2w (local.get $arg1)))
     (i32.store (local.get $p) (global.get $console_cursor_size))
     (i32.store (i32.add (local.get $p) (i32.const 4)) (global.get $console_cursor_visible))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleTitleW(lpConsoleTitle) → BOOL
   (func $handle_SetConsoleTitleW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SetConsoleWindowInfo(hConsole, bAbsolute, lpConsoleWindow) → BOOL
   (func $handle_SetConsoleWindowInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetLargestConsoleWindowSize(hConsole) → COORD (packed in eax)
   (func $handle_GetLargestConsoleWindowSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.or (global.get $console_width) (i32.shl (global.get $console_height) (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.or (global.get $console_width) (i32.shl (global.get $console_height) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetConsoleCP() → UINT
   (func $handle_GetConsoleCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $console_cp))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $console_cp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; FillConsoleOutputCharacterW(hConsole, cCharacter, nLength, dwWriteCoord, lpNumberOfCharsWritten) → BOOL
   ;; Fills console buffer with a character starting at coord
@@ -119,9 +119,9 @@
     ;; Write count to lpNumberOfCharsWritten
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_refresh)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; FillConsoleOutputAttribute(hConsole, wAttribute, nLength, dwWriteCoord, lpNumberOfAttrsWritten) → BOOL
   (func $handle_FillConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -142,8 +142,8 @@
       (br $fill)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; The character-writing half of WriteConsole, shared by both spellings: the
   ;; cursor, wrap and control-character rules are identical, only the width of
@@ -419,8 +419,8 @@
     (call $console_write (local.get $arg1) (local.get $arg2) (i32.const 1))
     (if (local.get $arg3)
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleOutputW(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpWriteRegion) → BOOL
   ;; Writes CHAR_INFO array (4 bytes each: wchar + attributes) to a rectangular region
@@ -465,9 +465,9 @@
         (br $cols)))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
       (br $rows)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_refresh)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleOutputCharacterA(hConsole, lpCharacter, nLength, dwWriteCoord, lpNumberOfCharsWritten) → BOOL
   (func $handle_WriteConsoleOutputCharacterA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -490,9 +490,9 @@
       (br $fill)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_refresh)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleOutputAttribute(hConsole, lpAttribute, nLength, dwWriteCoord, lpNumberOfAttrsWritten) → BOOL
   (func $handle_WriteConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -515,9 +515,9 @@
       (br $fill)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_refresh)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleW(hConsole, lpBuffer, nNumberOfCharsToRead, lpNumberOfCharsRead, pInputControl) → BOOL
   ;; Blocks until the console input queue can satisfy the read. Returning
@@ -526,8 +526,8 @@
   (func $handle_ReadConsoleW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (call $console_read (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1))
       (then (return)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsRead) → BOOL
   (func $handle_ReadConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -541,8 +541,8 @@
     (call $console_input_drop (local.get $n))
     (if (local.get $arg3)
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $n))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; ReadConsoleOutputW(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpReadRegion) → BOOL
   ;; Read CHAR_INFO from console buffer
@@ -583,8 +583,8 @@
         (br $cols)))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
       (br $rows)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleOutputAttribute(hConsole, lpAttribute, nLength, dwReadCoord, lpNumberOfAttrsRead) → BOOL
   (func $handle_ReadConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -607,22 +607,22 @@
       (br $read)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ScrollConsoleScreenBufferW(hConsole, lpScrollRectangle, lpClipRectangle, dwDestinationOrigin, lpFill) → BOOL
   ;; Simplified: just return success (full scroll would need temp buffer)
   (func $handle_ScrollConsoleScreenBufferW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_refresh)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsWritten) → BOOL
   (func $handle_WriteConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3)
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; ============================================================
   ;; CONSOLE WINDOW

@@ -97,7 +97,7 @@
         ;; far return reading something that is not a return address, and the
         ;; block address alone cannot tell that from a bad far call.
         (call $host_log_i32 (local.get $id))
-        (call $host_log_i32 (global.get $esp))
+        (call $host_log_i32 (i32.load offset=16 (global.get $reg_base)))
         (call $host_log_i32 (global.get $dbg_prev2_eip))
         (unreachable)))
     (if (i32.eq (local.get $id) (i32.const 0))
@@ -108,7 +108,7 @@
       (then
         (global.set $sreg_ss (local.get $sel))
         (global.set $seg_base_ss (local.get $base))
-        (global.set $esp (i32.add (local.get $base) (i32.and (global.get $esp) (i32.const 0xFFFF))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $base) (i32.and (i32.load offset=16 (global.get $reg_base)) (i32.const 0xFFFF))))
         (return)))
     (if (i32.eq (local.get $id) (i32.const 3))
       (then (global.set $sreg_ds (local.get $sel)) (global.set $seg_base_ds (local.get $base)) (return)))
@@ -125,10 +125,10 @@
   (func $ea16_compute (param $info i32) (param $disp i32) (result i32)
     (local $off i32)
     (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
-      (then (local.set $off (call $get_reg (i32.and (local.get $info) (i32.const 0xF))))))
+      (then (local.set $off (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $info) (i32.const 0xF)) (i32.const 2)))))))
     (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $off (i32.add (local.get $off)
-        (call $get_reg (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)))))))
+        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
     (i32.add
       (call $seg16_base (i32.and (i32.shr_u (local.get $info) (i32.const 8)) (i32.const 7)))
       (i32.and (i32.add (local.get $off) (local.get $disp)) (i32.const 0xFFFF))))
@@ -147,10 +147,10 @@
     (local $info i32) (local $off i32)
     (local.set $info (call $read_thread_word))
     (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
-      (then (local.set $off (call $get_reg (i32.and (local.get $info) (i32.const 0xF))))))
+      (then (local.set $off (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $info) (i32.const 0xF)) (i32.const 2)))))))
     (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $off (i32.add (local.get $off)
-        (call $get_reg (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)))))))
+        (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
     (call $set_reg16 (local.get $op)
       (i32.and (i32.add (local.get $off) (call $read_thread_word)) (i32.const 0xFFFF)))
     (return_call $next))
@@ -160,13 +160,13 @@
   ;; The pushed word is IP, so the linear address comes back from the current
   ;; CS base. A near RET cannot change segment.
   (func $th_ret16 (param $op i32)
-    (global.set $eip (i32.add (global.get $seg_base_cs) (call $gl16 (global.get $esp))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 2)))
+    (global.set $eip (i32.add (global.get $seg_base_cs) (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $cs_pop))
 
   (func $th_ret16_imm (param $op i32)
-    (global.set $eip (i32.add (global.get $seg_base_cs) (call $gl16 (global.get $esp))))
-    (global.set $esp (i32.add (global.get $esp) (i32.add (i32.const 2) (local.get $op))))
+    (global.set $eip (i32.add (global.get $seg_base_cs) (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 2) (local.get $op))))
     (call $cs_pop))
 
   ;; ---- Far transfers ----
@@ -194,10 +194,10 @@
   ;; Push CS:IP for a far call. Done before the transfer so a dispatched API
   ;; sees the same stack a real one would.
   (func $win16_push_far_ret (param $ret_lin i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (global.get $sreg_cs))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (i32.and (local.get $ret_lin) (i32.const 0xFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (global.get $sreg_cs))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $ret_lin) (i32.const 0xFFFF))))
 
   ;; 367: CALL FAR ptr16:16 — op = linear return address, then offset, selector
   ;; Every 16-bit transfer has to land inside the selector arena. Asserting it
@@ -217,7 +217,7 @@
         (call $host_log_i32 (i32.const 0xCA165E22))
         (call $host_log_i32 (local.get $site))
         (call $host_log_i32 (global.get $eip))
-        (call $host_log_i32 (global.get $esp))
+        (call $host_log_i32 (i32.load offset=16 (global.get $reg_base)))
         (unreachable))))
 
   (func $th_call_far_imm (param $op i32)
@@ -255,9 +255,9 @@
   ;; 371: RETF — pop IP then CS
   (func $th_retf16 (param $op i32)
     (local $ip i32) (local $sel i32)
-    (local.set $ip (call $gl16 (global.get $esp)))
-    (local.set $sel (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.add (i32.const 4) (local.get $op))))
+    (local.set $ip (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $sel (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 4) (local.get $op))))
     ;; Returning *into* the thunk segment is how an API that handed control to
     ;; guest code gets it back — see $win16_enter_wndproc's continuation. A far
     ;; call there is an API call; a far return there is an API resuming.
@@ -272,7 +272,7 @@
   ;; 372: MOV Sreg, r16 — op = sreg<<4 | reg
   (func $th_mov_sreg_r16 (param $op i32)
     (call $win16_set_sreg (i32.shr_u (local.get $op) (i32.const 4))
-      (call $get_reg (i32.and (local.get $op) (i32.const 0xF))))
+      (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))))
     (return_call $next))
 
   ;; 373: MOV Sreg, m16 — op = sreg id, address in next word
@@ -282,15 +282,15 @@
 
   ;; 374: PUSH Sreg (16-bit stack) — op = sreg id
   (func $th_push_sreg16 (param $op i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (call $seg16_value (local.get $op)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (call $seg16_value (local.get $op)))
     (return_call $next))
 
   ;; 375: POP Sreg (16-bit stack) — op = sreg id
   (func $th_pop_sreg16 (param $op i32)
     (local $sel i32)
-    (local.set $sel (call $gl16 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 2)))
+    (local.set $sel (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $win16_set_sreg (local.get $op) (local.get $sel))
     (return_call $next))
 
@@ -322,9 +322,9 @@
   ;; 379: CALL r/m16 (register form) — op = linear return address, reg next
   (func $th_call_near16_r (param $op i32)
     (local $target i32)
-    (local.set $target (i32.and (call $get_reg (call $read_thread_word)) (i32.const 0xFFFF)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (i32.and (local.get $op) (i32.const 0xFFFF)))
+    (local.set $target (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (call $read_thread_word) (i32.const 2)))) (i32.const 0xFFFF)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
     (call $cs_push (local.get $op))
     (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $target))))
 
@@ -332,15 +332,15 @@
   (func $th_call_near16_m (param $op i32)
     (local $target i32)
     (local.set $target (call $gl16 (call $read_addr)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (i32.and (local.get $op) (i32.const 0xFFFF)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
     (call $cs_push (local.get $op))
     (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $target))))
 
   ;; 381: JMP r/m16 (register form) — op = reg
   (func $th_jmp_near16_r (param $op i32)
     (global.set $eip (i32.add (global.get $seg_base_cs)
-      (i32.and (call $get_reg (local.get $op)) (i32.const 0xFFFF)))))
+      (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $op) (i32.const 2)))) (i32.const 0xFFFF)))))
 
   ;; 382: JMP r/m16 (memory form) — address in next word
   (func $th_jmp_near16_m (param $op i32)
@@ -361,19 +361,19 @@
   ;; 383: ENTER imm16, 0 — push BP, BP = SP, SP -= imm16. The nesting level is
   ;; checked at decode time, so this only ever sees level 0.
   (func $th_enter16 (param $op i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (i32.and (global.get $ebp) (i32.const 0xFFFF)))
-    (call $set_reg16 (i32.const 5) (i32.and (global.get $esp) (i32.const 0xFFFF)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.and (local.get $op) (i32.const 0xFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (i32.load offset=20 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (call $set_reg16 (i32.const 5) (i32.and (i32.load offset=16 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF))))
     (return_call $next))
 
   ;; 384: LEAVE — SP = BP, then pop BP. SP comes back through the SS base
   ;; because BP holds an offset, not a linear address.
   (func $th_leave16 (param $op i32)
-    (global.set $esp (i32.add (global.get $seg_base_ss)
-                              (i32.and (global.get $ebp) (i32.const 0xFFFF))))
-    (call $set_reg16 (i32.const 5) (call $gl16 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (global.get $seg_base_ss)
+                              (i32.and (i32.load offset=20 (global.get $reg_base)) (i32.const 0xFFFF))))
+    (call $set_reg16 (i32.const 5) (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (return_call $next))
 
   ;; 385: PUSH imm16 — the operand is the immediate, already fetched.
@@ -386,8 +386,8 @@
   ;; id should be. Native 16-bit code reaches here through $code16; 32-bit code
   ;; reaches it through a real 0x66 prefix, where the same narrowing is right.
   (func $th_push_imm16 (param $op i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (i32.and (local.get $op) (i32.const 0xFFFF)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
     (return_call $next))
 
   ;; 386: 16-bit string operation.
@@ -443,12 +443,12 @@
     (local.set $dst_base (global.get $seg_base_es))
     (local.set $step (select (i32.sub (i32.const 0) (local.get $size)) (local.get $size)
                              (global.get $df)))
-    (local.set $si (i32.and (global.get $esi) (i32.const 0xFFFF)))
-    (local.set $di (i32.and (global.get $edi) (i32.const 0xFFFF)))
+    (local.set $si (i32.and (i32.load offset=24 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (local.set $di (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF)))
 
     (block $done (loop $step_one
       (if (local.get $rep)
-        (then (br_if $done (i32.eqz (i32.and (global.get $ecx) (i32.const 0xFFFF))))))
+        (then (br_if $done (i32.eqz (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF))))))
 
       ;; The element itself. $a is what was read from the source side, $b what
       ;; the destination side holds, so CMPS and SCAS share one comparison.
@@ -462,7 +462,7 @@
         (then
           (call $str16_store (i32.add (local.get $dst_base) (local.get $di))
             (local.get $size)
-            (i32.and (global.get $eax) (call $str16_mask (local.get $size))))))
+            (i32.and (i32.load offset=0 (global.get $reg_base)) (call $str16_mask (local.get $size))))))
       (if (i32.eq (local.get $kind) (i32.const 2))            ;; LODS
         (then
           (local.set $a (call $str16_load
@@ -472,13 +472,13 @@
           (if (i32.eq (local.get $size) (i32.const 2))
             (then (call $set_reg16 (i32.const 0) (local.get $a))))
           (if (i32.eq (local.get $size) (i32.const 4))
-            (then (global.set $eax (local.get $a))))))
+            (then (i32.store offset=0 (global.get $reg_base) (local.get $a))))))
       (if (i32.ge_u (local.get $kind) (i32.const 3))          ;; CMPS, SCAS
         (then
           (if (i32.eq (local.get $kind) (i32.const 3))
             (then (local.set $a (call $str16_load
                     (i32.add (local.get $src_base) (local.get $si)) (local.get $size))))
-            (else (local.set $a (i32.and (global.get $eax)
+            (else (local.set $a (i32.and (i32.load offset=0 (global.get $reg_base))
                     (call $str16_mask (local.get $size))))))
           (local.set $b (call $str16_load
             (i32.add (local.get $dst_base) (local.get $di)) (local.get $size)))
@@ -503,7 +503,7 @@
 
       (br_if $done (i32.eqz (local.get $rep)))
       (call $set_reg16 (i32.const 1)
-        (i32.sub (i32.and (global.get $ecx) (i32.const 0xFFFF)) (i32.const 1)))
+        (i32.sub (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF)) (i32.const 1)))
       ;; A repeated compare also stops on the flag the prefix names: REPE runs
       ;; while equal, REPNE while not.
       (if (i32.ge_u (local.get $kind) (i32.const 3))
@@ -523,8 +523,8 @@
   (func $th_xlat16 (param $op i32)
     (call $set_reg8 (i32.const 0)
       (call $gl8 (i32.add (call $seg16_base (local.get $op))
-        (i32.and (i32.add (i32.and (global.get $ebx) (i32.const 0xFFFF))
-                          (i32.and (global.get $eax) (i32.const 0xFF)))
+        (i32.and (i32.add (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF))
+                          (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))
                  (i32.const 0xFFFF)))))
     (return_call $next))
 

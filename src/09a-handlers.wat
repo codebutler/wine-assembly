@@ -234,7 +234,7 @@
 
   ;; 0: ExitProcess
   (func $handle_ExitProcess (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (call $host_exit (local.get $arg0)) (global.set $eip (i32.const 0)) (global.set $steps (i32.const 0)) (return)
   )
 
@@ -279,21 +279,21 @@
             (if (call $guest_name_is_ole32 (local.get $arg0))
               (then (local.set $result (global.get $image_base)))
               (else (local.set $result (i32.const 0))))))))
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 2: GetCommandLineA
   (func $handle_GetCommandLineA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $store_fake_cmdline) (global.set $eax (global.get $fake_cmdline_addr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (call $store_fake_cmdline) (i32.store offset=0 (global.get $reg_base) (global.get $fake_cmdline_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 3: GetStartupInfoA
   (func $handle_GetStartupInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 68))
     (call $gs32 (local.get $arg0) (i32.const 68))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 4: GetProcAddress
@@ -303,7 +303,7 @@
     (local $api_id i32) (local $thunk_wa i32)
     (block $gpa
     ;; Default return value: NULL (function not found)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     ;; Check if hModule matches a loaded DLL — if so, resolve from its export table.
     ;; lpProcName may be a MAKEINTRESOURCE ordinal (< 0x10000) rather than a
     ;; string pointer; a real DLL's export table can answer either form, so the
@@ -339,30 +339,30 @@
                   (i32.store (local.get $thunk_wa)
                     (i32.or (i32.const 0x80000000) (local.get $arg1)))
                   (i32.store offset=4 (local.get $thunk_wa) (local.get $api_id))
-                  (global.set $eax (i32.add
+                  (i32.store offset=0 (global.get $reg_base) (i32.add
                     (i32.sub (local.get $thunk_wa) (global.get $GUEST_BASE))
                     (global.get $image_base)))
                   (global.set $num_thunks
                     (i32.add (global.get $num_thunks) (i32.const 1)))
                   (call $update_thunk_end)
-                  (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+                  (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
                   (return)))
-              (global.set $eax (call $resolve_ordinal (local.get $i) (local.get $arg1)))
-              (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+              (i32.store offset=0 (global.get $reg_base) (call $resolve_ordinal (local.get $i) (local.get $arg1)))
+              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
               (return)))
           ;; Flat scrollbar APIs are optional. Let VCL/common-control callers
           ;; use their USER32 fallback wrappers instead of entering the loaded
           ;; comctl32 FlatSB code path, which depends on native subclass state.
           (if (call $guest_name_contains_flatsb (local.get $arg1))
             (then
-              (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
               (return)))
           ;; Found matching DLL — resolve export by name
           (local.set $resolved (call $resolve_name_export (local.get $i) (call $g2w (local.get $arg1))))
           (if (local.get $resolved)
             (then
-              (global.set $eax (local.get $resolved))
-              (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+              (i32.store offset=0 (global.get $reg_base) (local.get $resolved))
+              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
               (return)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan_dll)))
@@ -388,19 +388,19 @@
     (i32.store (i32.add (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8))) (i32.const 4))
     (local.get $i))
     ;; Compute guest address of this thunk
-    (global.set $eax (i32.add
+    (i32.store offset=0 (global.get $reg_base) (i32.add
     (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
     (global.get $GUEST_BASE))
     (global.get $image_base)))
     (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
     (call $update_thunk_end))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 5: GetLastError — return thread-global Win32 last-error value.
   (func $handle_GetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $last_error))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (global.get $last_error))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 6: GetLocalTime(lpSystemTime) — fills SYSTEMTIME with simulated time
@@ -420,13 +420,13 @@
       (i32.rem_u (local.get $secs) (i32.const 60)))
     (i32.store16 (i32.add (local.get $wa) (i32.const 14))
       (i32.rem_u (call $host_get_ticks) (i32.const 1000)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 7: GetTimeFormatA(Locale, dwFlags, lpTime, lpFormat, lpTimeStr, cchTime) — 6 args stdcall
   (func $handle_GetTimeFormatA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $buf i32) (local $cch i32)
-    (local.set $cch (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $cch (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $buf (call $g2w (local.get $arg4)))
     (if (i32.and (i32.ne (local.get $arg4) (i32.const 0)) (i32.ge_u (local.get $cch) (i32.const 12)))
       (then
@@ -434,19 +434,19 @@
         (i32.store (local.get $buf) (i32.const 0x303a3231))
         (i32.store (i32.add (local.get $buf) (i32.const 4)) (i32.const 0x30303a30))
         (i32.store (i32.add (local.get $buf) (i32.const 8)) (i32.const 0x004d4120))
-        (global.set $eax (i32.const 12))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 12))
       )
       (else
-        (global.set $eax (i32.const 12))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 12))
       ))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args + ret
   )
 
   ;; 8: GetDateFormatA(Locale, dwFlags, lpDate, lpFormat, lpDateStr, cchDateStr) — 6 args stdcall
   (func $handle_GetDateFormatA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $buf i32) (local $cch i32) (local $long i32)
     ;; Read cchDateStr from stack (6th arg at esp+24)
-    (local.set $cch (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $cch (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $long (i32.and (local.get $arg1) (i32.const 2))) ;; DATE_LONGDATE
     ;; EnumDateFormats callers pass the format explicitly. The stable long
     ;; pattern starts with 'd'; the stable short pattern starts with 'M'.
@@ -465,7 +465,7 @@
         (i32.store (i32.add (local.get $buf) (i32.const 12)) (i32.const 0x20797261))
         (i32.store (i32.add (local.get $buf) (i32.const 16)) (i32.const 0x32202c31))
         (i32.store (i32.add (local.get $buf) (i32.const 20)) (i32.const 0x00313030))
-        (global.set $eax (i32.const 24))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 24))
       )
       (else
         (if (i32.and (i32.ne (local.get $arg4) (i32.const 0)) (i32.ge_u (local.get $cch) (i32.const 7)))
@@ -475,12 +475,12 @@
             (i32.store16 (i32.add (local.get $buf) (i32.const 4)) (i32.const 0x3130))
             (i32.store8 (i32.add (local.get $buf) (i32.const 6)) (i32.const 0)))
           (else
-            (global.set $eax (select (i32.const 24) (i32.const 7) (local.get $long)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+            (i32.store offset=0 (global.get $reg_base) (select (i32.const 24) (i32.const 7) (local.get $long)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
             (return)))
-        (global.set $eax (i32.const 7))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 7))
       ))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args + ret
   )
 
   ;; EnumDateFormatsA / EnumTimeFormatsA invoke one stable US-English format
@@ -492,7 +492,7 @@
     (local $text i32) (local $wa i32)
     (if (i32.eqz (local.get $callback))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $eip (local.get $ret_addr))
         (return)))
     (local.set $text (call $heap_alloc (i32.const 32)))
@@ -520,25 +520,25 @@
     ;; Preserve the API caller return address above the callback's stdcall
     ;; frame. CACA0011 is a generic one-callback continuation: it restores this
     ;; address after the callback has popped its LPSTR argument.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $text))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $text))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
     (global.set $eip (local.get $callback))
     (global.set $steps (i32.const 0)))
 
   (func $handle_EnumDateFormatsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (call $locale_format_enum_a (local.get $arg0) (local.get $arg2) (local.get $ret) (i32.const 0)))
 
   (func $handle_EnumTimeFormatsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (call $locale_format_enum_a (local.get $arg0) (local.get $arg2) (local.get $ret) (i32.const 1)))
 
   ;; EnumResourceLanguagesW(hModule, type, name, callback, lParam). PE resource
@@ -546,28 +546,28 @@
   ;; US-English LANGID expected by Win98 common controls and MFC property sheets.
   (func $handle_EnumResourceLanguagesW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.eqz (local.get $arg3))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $eip (local.get $ret))
         (return)))
     ;; Preserve API return and push ENUMRESLANGPROCW args right-to-left.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg4))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0x0409))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg2))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg1))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg0))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg4))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0409))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg2))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
     (global.set $eip (local.get $arg3))
     (global.set $steps (i32.const 0)))
 
@@ -576,9 +576,9 @@
     ;; GetProfileStringA(appName, keyName, default, retBuf, nSize) — 5 args stdcall
     ;; Same as GetPrivateProfileStringA with fileName="win.ini"
     (local $wa_esp i32) (local $nSize i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $nSize (i32.load (i32.add (local.get $wa_esp) (i32.const 20))))
-    (global.set $eax (call $host_ini_get_string
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_string
       (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
@@ -586,7 +586,7 @@
       (local.get $nSize)
       (global.get $win_ini_name_ptr)  ;; WASM ptr to "win.ini\0"
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; GetProfileSectionA(appName, retBuf, nSize) → chars copied
@@ -610,19 +610,19 @@
         (i32.store8 (local.get $buf) (i32.const 0))
         (if (i32.gt_u (local.get $arg2) (i32.const 1))
           (then (i32.store8 (i32.add (local.get $buf) (i32.const 1)) (i32.const 0))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 10: GetProfileIntA(appName, keyName, nDefault) — 3 args stdcall
   (func $handle_GetProfileIntA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_ini_get_int
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
       (call $g2w (local.get $arg0))
       (call $g2w (local.get $arg1))
       (local.get $arg2)
       (global.get $win_ini_name_ptr)
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; The locale values we can answer are one character each, so the two
@@ -654,21 +654,21 @@
   ;; an ANSI app asking for the decimal separator formatted numbers with
   ;; whatever it fell back to.
   (func $handle_GetLocaleInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $locale_info
+    (i32.store offset=0 (global.get $reg_base) (call $locale_info
       (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; SetLocaleInfoA(Locale, LCType, lpLCData) — accept & drop. Apps persist user prefs here; we don't store them but must return nonzero so callers proceed.
   (func $handle_SetLocaleInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; SetThreadLocale(Locale) → BOOL. We don't track thread locales; accept and return TRUE.
   (func $handle_SetThreadLocale (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 12: LoadLibraryA
@@ -677,17 +677,17 @@
     (local.set $tmp (call $find_loaded_dll (local.get $arg0)))
     (if (i32.ge_s (local.get $tmp) (i32.const 0))
       (then
-        (global.set $eax (i32.load (i32.add (global.get $DLL_TABLE) (i32.mul (local.get $tmp) (i32.const 32)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.load (i32.add (global.get $DLL_TABLE) (i32.mul (local.get $tmp) (i32.const 32)))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     ;; Not already loaded — check if DLL file exists in VFS
     (if (call $host_has_dll_file (call $g2w (local.get $arg0)))
       (then
         ;; DLL file found — yield to JS for loading
         (global.set $loadlib_name_ptr (call $g2w (local.get $arg0)))
-        (global.set $eip (call $gl32 (global.get $esp)))
+        (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
         (global.set $handler_set_eip (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (global.set $yield_reason (i32.const 5))
         (global.set $yield_flag (i32.const 1))
         (global.set $steps (i32.const 0))
@@ -696,12 +696,12 @@
     ;; handle makes VCL cache NULL theming procedure pointers, then call them.
     (if (call $dll_name_match (local.get $arg0) (i32.const 0x36D))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     ;; Not found — return EXE base (system DLL stub) so GetProcAddress can create thunks
-    (global.set $eax (global.get $image_base))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $image_base))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; LoadLibraryExA(lpFileName, hFile, dwFlags). With dwFlags=0 this is
@@ -713,7 +713,7 @@
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
     ;; LoadLibraryA consumed its return address plus one argument. Consume the
     ;; two additional Ex arguments without changing its result/yield state.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; DdeInitializeA(pidInst, callback, afCmd, ulRes). Provide the process-local
@@ -721,30 +721,30 @@
   (func $handle_DdeInitializeA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.ne (local.get $arg0) (i32.const 0))
       (then (call $gs32 (local.get $arg0) (i32.const 1))))
-    (global.set $eax (i32.const 0)) ;; DMLERR_NO_ERROR
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DMLERR_NO_ERROR
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; Process-local HSZ handles retain the guest string pointer. That is enough
   ;; for Wise's single-instance service registration and later free call.
   (func $handle_DdeCreateStringHandleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   (func $handle_DdeNameService (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   (func $handle_DdeFreeStringHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   (func $handle_DdeUninitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; Win9x installers use DDEML as a client of the Program Manager solely to
@@ -753,45 +753,43 @@
   ;; conversation and acknowledge its transactions. Explorer's real shell
   ;; integration remains independent of this compatibility contract.
   (func $handle_DdeConnect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0xDD000001) (i32.const 0)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0xDD000001) (i32.const 0)
         (i32.and (i32.ne (local.get $arg1) (i32.const 0))
                  (i32.ne (local.get $arg2) (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   (func $handle_DdeDisconnect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.ne (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_DdeClientTransaction (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $result_ptr i32)
     ;; The dispatcher exposes five fast arguments; read the remaining three
     ;; stdcall arguments from their original stack positions.
-    (local.set $result_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 32))))
+    (local.set $result_ptr (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
     (if (local.get $result_ptr)
       (then (call $gs32 (local.get $result_ptr) (i32.const 1))))
     ;; A non-zero HDDEDATA denotes an acknowledged synchronous transaction.
-    (global.set $eax
-      (select (i32.const 0xDD000002) (i32.const 0)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0xDD000002) (i32.const 0)
         (i32.ne (local.get $arg2) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))
   )
 
   (func $handle_DdeGetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) ;; DMLERR_NO_ERROR
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DMLERR_NO_ERROR
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_DdeFreeDataHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_DdeGetData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; Classic absolute SECURITY_DESCRIPTOR support used by InstallShield when
@@ -805,14 +803,14 @@
       (then
         (memory.fill (call $g2w (local.get $arg0)) (i32.const 0) (i32.const 20))
         (call $gs8 (local.get $arg0) (i32.const 1))
-        (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   (func $handle_AllocateAndInitializeSid (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $sid i32) (local $out i32)
-    (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 44))))
+    (local.set $out (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44))))
     (if (i32.and
           (i32.and
             (i32.ne (local.get $arg0) (i32.const 0))
@@ -833,20 +831,20 @@
             (call $gs32 (i32.add (local.get $sid) (i32.const 12)) (local.get $arg3))
             (call $gs32 (i32.add (local.get $sid) (i32.const 16)) (local.get $arg4))
             (call $gs32 (i32.add (local.get $sid) (i32.const 20))
-              (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
             (call $gs32 (i32.add (local.get $sid) (i32.const 24))
-              (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
             (call $gs32 (i32.add (local.get $sid) (i32.const 28))
-              (call $gl32 (i32.add (global.get $esp) (i32.const 32))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
             (call $gs32 (i32.add (local.get $sid) (i32.const 32))
-              (call $gl32 (i32.add (global.get $esp) (i32.const 36))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
             (call $gs32 (i32.add (local.get $sid) (i32.const 36))
-              (call $gl32 (i32.add (global.get $esp) (i32.const 40))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))))
             (call $gs32 (local.get $out) (local.get $sid))
-            (global.set $eax (i32.const 1)))
-          (else (global.set $eax (i32.const 0)))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 48)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+          (else (i32.store offset=0 (global.get $reg_base) (i32.const 0)))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 48)))
   )
 
   (func $handle_SetSecurityDescriptorOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -858,20 +856,20 @@
             (i32.and (call $gl16 (i32.add (local.get $arg0) (i32.const 2)))
               (i32.const 0xFFFE))
             (i32.ne (local.get $arg2) (i32.const 0))))
-        (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   (func $handle_FreeSid (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg0) (then (call $heap_free (local.get $arg0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_EqualSid (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $count i32) (local $size i32) (local $a i32) (local $b i32)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.and
           (i32.ne (local.get $arg0) (i32.const 0))
           (i32.ne (local.get $arg1) (i32.const 0)))
@@ -886,19 +884,19 @@
               (i32.mul (local.get $count) (i32.const 4))))
             (local.set $a (call $g2w (local.get $arg0)))
             (local.set $b (call $g2w (local.get $arg1)))
-            (global.set $eax (i32.const 1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1))
             (block $different
               (loop $compare
                 (br_if $different (i32.eqz (local.get $size)))
                 (if (i32.ne (i32.load8_u (local.get $a)) (i32.load8_u (local.get $b)))
                   (then
-                    (global.set $eax (i32.const 0))
+                    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
                     (br $different)))
                 (local.set $a (i32.add (local.get $a) (i32.const 1)))
                 (local.set $b (i32.add (local.get $b) (i32.const 1)))
                 (local.set $size (i32.sub (local.get $size) (i32.const 1)))
                 (br $compare)))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; The emulator deliberately presents Windows 98. InstallShield uses a
@@ -907,13 +905,13 @@
   ;; close operation for binaries which receive a service handle elsewhere.
   (func $handle_OpenSCManagerA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $last_error (i32.const 120)) ;; ERROR_CALL_NOT_IMPLEMENTED
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   (func $handle_CloseServiceHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.ne (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; DosDateTimeToFileTime(wFatDate, wFatTime, lpFileTime). Convert the FAT
@@ -993,45 +991,45 @@
                   (local.get $second))))
             (i64.const 10000000)))
         (i64.store (call $g2w (local.get $arg2)) (local.get $ticks))
-        (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 13: DeleteFileA(lpFileName) — 1 arg stdcall
   (func $handle_DeleteFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_delete_file (call $g2w (local.get $arg0)) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_delete_file (call $g2w (local.get $arg0)) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 14: CreateFileA(lpFileName, dwDesiredAccess, dwShareMode, lpSecAttr, dwCreation, dwFlags, hTemplate) — 7 args
   (func $handle_CreateFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32) (local $creation i32) (local $flags i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $creation (local.get $arg4))
     (local.set $flags (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
-    (global.set $eax (call $host_fs_create_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_file
       (call $g2w (local.get $arg0))  ;; pathWA
       (local.get $arg1)               ;; access
       (local.get $creation)            ;; creation disposition
       (local.get $flags)               ;; flags and attributes
       (i32.const 0)))                  ;; isWide=0
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))  ;; 7 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; 7 args + ret
   )
 
   ;; 15: FindFirstFileA(lpFileName, lpFindFileData) — 2 args stdcall
   (func $handle_FindFirstFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_find_first_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_find_first_file
       (call $g2w (local.get $arg0)) (local.get $arg1) (i32.const 0)))
-    (if (i32.eq (global.get $eax) (i32.const -1))
+    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
       (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 16: FindClose(hFindFile) — 1 arg stdcall
   (func $handle_FindClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_find_close (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_find_close (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 17: MulDiv
@@ -1047,21 +1045,21 @@
             (i32.eq (local.get $arg1) (i32.const 96)))
           (i32.eq (local.get $arg2) (i32.const 1440)))
       (then
-        (global.set $eax (i32.const 16))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 16))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.eqz (local.get $arg2))
-    (then (global.set $eax (i32.const -1)))
-    (else (global.set $eax (i32.wrap_i64 (i64.div_s
+    (then (i32.store offset=0 (global.get $reg_base) (i32.const -1)))
+    (else (i32.store offset=0 (global.get $reg_base) (i32.wrap_i64 (i64.div_s
     (i64.mul (i64.extend_i32_s (local.get $arg0)) (i64.extend_i32_s (local.get $arg1)))
     (i64.extend_i32_s (local.get $arg2)))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 18: RtlMoveMemory
   (func $handle_RtlMoveMemory (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $guest_memmove (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 19: _lcreat(lpPathName, iAttribute) — 2 args stdcall.
@@ -1072,56 +1070,56 @@
     ;; iAttribute: 0=normal, 1=readonly, 2=hidden, 3=system. Map low bits to
     ;; FILE_ATTRIBUTE_*; default to NORMAL when iAttribute=0.
     (local.set $attr (i32.or (local.get $arg1) (i32.const 0x80)))
-    (global.set $eax (call $host_fs_create_legacy_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_legacy_file
       (call $g2w (local.get $arg0))
       (i32.const 0xC0000000)  ;; GENERIC_READ | GENERIC_WRITE
       (i32.const 2)           ;; CREATE_ALWAYS
       (local.get $attr)
       (i32.const 0)))         ;; isWide=0
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; 2 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; 2 args + ret
   )
 
   ;; 20: _lopen — STUB: unimplemented
   (func $handle__lopen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; _lopen(lpPathName, iReadWrite) — 2 args stdcall
-    (global.set $eax (call $host_fs_create_legacy_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_legacy_file
       (call $g2w (local.get $arg0))
       (i32.const 0x80000000)  ;; GENERIC_READ
       (i32.const 3)           ;; OPEN_EXISTING
       (i32.const 0x80)        ;; FILE_ATTRIBUTE_NORMAL
       (i32.const 0)))         ;; isWide=0
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; 2 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; 2 args + ret
   )
 
   ;; 21: _lwrite(hFile, lpBuffer, uBytes) — 3 args stdcall.
   ;; Returns bytes written, or HFILE_ERROR(-1) on failure.
   (func $handle__lwrite (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes_written_ga i32) (local $bytes_written_wa i32)
-    (local.set $bytes_written_ga (i32.sub (global.get $esp) (i32.const 4)))
+    (local.set $bytes_written_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (local.set $bytes_written_wa (call $g2w (local.get $bytes_written_ga)))
     (i32.store (local.get $bytes_written_wa) (i32.const 0))
     (if (call $host_fs_write_file
           (local.get $arg0) (local.get $arg1)
           (local.get $arg2) (local.get $bytes_written_ga))
-      (then (global.set $eax (i32.load (local.get $bytes_written_wa))))
-      (else (global.set $eax (i32.const 0xFFFFFFFF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args + ret
+      (then (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $bytes_written_wa))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFFFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; 3 args + ret
   )
 
   ;; 22: _llseek — STUB: unimplemented
   (func $handle__llseek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; _llseek(hFile, lOffset, iOrigin) — 3 args stdcall
-    (global.set $eax (call $host_fs_set_file_pointer
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_file_pointer
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; 3 args + ret
   )
 
   ;; 23: _lclose — STUB: unimplemented
   (func $handle__lclose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; _lclose(hFile) — 1 arg stdcall
     (drop (call $host_fs_close_handle (local.get $arg0)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; 1 arg + ret
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; 1 arg + ret
   )
 
   ;; 24: _lread — STUB: unimplemented
@@ -1130,7 +1128,7 @@
     ;; host_fs_read_file(handle, bufferWA, nBytes, lpBytesRead_WA) -> bool
     ;; We use a scratch area on the stack for bytesRead
     (local $bytes_read_ga i32) (local $bytes_read_wa i32)
-    (local.set $bytes_read_ga (i32.sub (global.get $esp) (i32.const 4)))
+    (local.set $bytes_read_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (local.set $bytes_read_wa (call $g2w (local.get $bytes_read_ga)))
     (i32.store (local.get $bytes_read_wa) (i32.const 0))
     (drop (call $host_fs_read_file
@@ -1138,8 +1136,8 @@
       (local.get $arg1)
       (local.get $arg2)
       (local.get $bytes_read_ga)))
-    (global.set $eax (i32.load (local.get $bytes_read_wa)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args + ret
+    (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $bytes_read_wa)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; 3 args + ret
   )
 
   ;; VkKeyScanA(CHAR ch) → SHORT. The low byte is the virtual-key code and
@@ -1166,8 +1164,8 @@
     (i32.const 0xFFFF))
 
   (func $handle_VkKeyScanA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $vk_key_scan (i32.and (local.get $arg0) (i32.const 0xFF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $vk_key_scan (i32.and (local.get $arg0) (i32.const 0xFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; LZ32's file APIs also accept ordinary, uncompressed files. Font Viewer
   ;; uses that path for font-resource files, so map the handle operations onto
@@ -1187,38 +1185,38 @@
         (i32.store16 offset=2 (local.get $of_wa)
           (select (i32.const 2) (i32.const 0)
             (i32.eq (local.get $handle) (i32.const -1))))))
-    (global.set $eax (local.get $handle))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handle))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   (func $handle_LZRead (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes_ga i32) (local $bytes_wa i32)
-    (local.set $bytes_ga (i32.sub (global.get $esp) (i32.const 4)))
+    (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
     (i32.store (local.get $bytes_wa) (i32.const 0))
     (if (call $host_fs_read_file
           (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $bytes_ga))
-      (then (global.set $eax (i32.load (local.get $bytes_wa))))
-      (else (global.set $eax (i32.const -1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $bytes_wa))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   (func $handle_LZSeek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_set_file_pointer
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_file_pointer
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   (func $handle_LZClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (drop (call $host_fs_close_handle (local.get $arg0)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 938: _hread — identical to _lread
   (func $handle__hread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes_read_ga i32) (local $bytes_read_wa i32)
-    (local.set $bytes_read_ga (i32.sub (global.get $esp) (i32.const 4)))
+    (local.set $bytes_read_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (local.set $bytes_read_wa (call $g2w (local.get $bytes_read_ga)))
     (i32.store (local.get $bytes_read_wa) (i32.const 0))
     (drop (call $host_fs_read_file
@@ -1226,8 +1224,8 @@
       (local.get $arg1)
       (local.get $arg2)
       (local.get $bytes_read_ga)))
-    (global.set $eax (i32.load (local.get $bytes_read_wa)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $bytes_read_wa)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 25: Sleep — STUB: unimplemented
@@ -1235,8 +1233,8 @@
     ;; Sleep(dwMilliseconds) — 1 arg stdcall.
     ;; Always yield so other threads get execution time.
     ;; Sleep(0) only sets yield_flag (not sleep_yielded) — it won't deprioritize.
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (global.set $yield_flag (i32.const 1))
     (if (local.get $arg0)
       (then
@@ -1247,8 +1245,8 @@
   ;; 26: CloseHandle(hObject) — 1 arg stdcall, return TRUE
   (func $handle_CloseHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (drop (call $host_fs_close_handle (local.get $arg0)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 27: CreateEventA(lpAttr, bManualReset, bInitialState, lpName) — 4 args stdcall
@@ -1262,39 +1260,39 @@
       (then (local.set $existing (call $host_open_event (local.get $name_wa) (i32.const 0)))))
     (if (local.get $existing)
       (then
-        (global.set $eax (local.get $existing))
+        (i32.store offset=0 (global.get $reg_base) (local.get $existing))
         (global.set $last_error (i32.const 183)))
       (else
-        (global.set $eax (call $host_create_event
+        (i32.store offset=0 (global.get $reg_base) (call $host_create_event
           (local.get $arg1) (local.get $arg2) (local.get $name_wa) (i32.const 0)))
         (global.set $last_error (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; OpenEventA(dwDesiredAccess, bInheritHandle, lpName) — 3 args stdcall.
   ;; Access masks and inheritance do not change the cooperative process-local
   ;; object, but the name lookup and reference lifetime match Win32.
   (func $handle_OpenEventA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (if (result i32) (local.get $arg2)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (local.get $arg2)
       (then (call $host_open_event (call $g2w (local.get $arg2)) (i32.const 0)))
       (else (i32.const 0))))
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 28: CreateThread(lpAttr, dwStackSize, lpStartAddr, lpParam, dwFlags, lpThreadId) — 6 args stdcall
   (func $handle_CreateThread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $lpThreadId i32)
-    (local.set $lpThreadId (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $lpThreadId (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     ;; Pass dwCreationFlags into the host so CREATE_SUSPENDED is part of the
     ;; atomic creation event instead of a briefly-runnable create followed by
     ;; a separate SuspendThread call.
-    (global.set $eax (call $host_create_thread
+    (i32.store offset=0 (global.get $reg_base) (call $host_create_thread
       (local.get $arg2) (local.get $arg3) (local.get $arg1) (local.get $arg4)))
     (if (local.get $lpThreadId)
-      (then (call $gs32 (local.get $lpThreadId) (global.get $eax))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (then (call $gs32 (local.get $lpThreadId) (i32.load offset=0 (global.get $reg_base)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 29: WaitForSingleObject(hHandle, dwMilliseconds) — 2 args stdcall
@@ -1309,61 +1307,61 @@
         (global.set $wait_stack_bytes (i32.const 12))
         (global.set $steps (i32.const 0))
         (return)))
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 30: ResetEvent(hEvent) — 1 arg stdcall
   (func $handle_ResetEvent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reset_event (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_reset_event (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 31: SetEvent(hEvent) — 1 arg stdcall
   (func $handle_SetEvent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_set_event (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_set_event (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 32: WriteProfileStringA(appName, keyName, lpString) — stub, pretend success
   (func $handle_WriteProfileStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; WriteProfileStringA(appName, keyName, string) — 3 args stdcall, writes to win.ini
-    (global.set $eax (call $host_ini_write_string
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_write_string
       (call $g2w (local.get $arg0))
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (global.get $win_ini_name_ptr)
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 33: HeapCreate(flOptions, dwInitialSize, dwMaximumSize) — 3 args stdcall
   (func $handle_HeapCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00140000))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00140000))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 34: HeapDestroy(hHeap) → BOOL. We use a single shared heap; pretend success.
   (func $handle_HeapDestroy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 35: HeapAlloc
   (func $handle_HeapAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_alloc (local.get $arg2)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $arg2)))
     ;; Zero memory if HEAP_ZERO_MEMORY (0x08) — skip on OOM (eax=0)
-    (if (i32.and (i32.ne (global.get $eax) (i32.const 0))
+    (if (i32.and (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
                  (i32.ne (i32.and (local.get $arg1) (i32.const 0x08)) (i32.const 0)))
-    (then (call $zero_memory (call $g2w (global.get $eax)) (local.get $arg2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (then (call $zero_memory (call $g2w (i32.load offset=0 (global.get $reg_base))) (local.get $arg2))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 36: HeapFree
   (func $handle_HeapFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $heap_free (local.get $arg2))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 37: HeapReAlloc(hHeap, dwFlags, lpMem, dwBytes)
@@ -1429,8 +1427,8 @@
                 (call $g2w (i32.add (local.get $tmp) (local.get $copy)))
                 (i32.sub (local.get $arg3) (local.get $copy)))))
       (call $heap_free (local.get $arg2)))
-    (global.set $eax (local.get $tmp))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 38: VirtualAlloc(lpAddr, dwSize, flAllocType, flProtect)
@@ -1441,35 +1439,35 @@
     (local.set $size (i32.and (i32.add (local.get $arg1) (i32.const 0xFFF)) (i32.const 0xFFFFF000)))
     (if (i32.eqz (local.get $size))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (if (local.get $arg0)
       (then
         (if (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
           (then
             ;; Commit into a sparse high guest reserve.
-            (global.set $eax (call $virtual_map_commit (local.get $arg0) (local.get $size))))
+            (i32.store offset=0 (global.get $reg_base) (call $virtual_map_commit (local.get $arg0) (local.get $size))))
           (else
             ;; MEM_COMMIT at an existing low address. Refuse commits that would
             ;; map into emulator-private decoded-code/cache memory.
             (if (i32.gt_u
                   (call $g2w (i32.add (local.get $arg0) (local.get $size)))
                   (global.get $THREAD_CACHE_BASE))
-              (then (global.set $eax (i32.const 0)))
-              (else (global.set $eax (local.get $arg0)))))))
+              (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+              (else (i32.store offset=0 (global.get $reg_base) (local.get $arg0)))))))
       (else
         ;; Reserve from a sparse high guest-address arena, separate from
         ;; HeapAlloc's upward-growing low heap. MEM_RESERVE is address-space
         ;; bookkeeping; real backing is added only by MEM_COMMIT.
         (local.set $new_top (call $virtual_reserve_down (local.get $size)))
         (if (i32.eqz (local.get $new_top))
-          (then (global.set $eax (i32.const 0)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
           (else
             (if (i32.and (local.get $arg2) (i32.const 0x1000))
-              (then (global.set $eax (call $virtual_map_commit (local.get $new_top) (local.get $size))))
-              (else (global.set $eax (local.get $new_top))))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+              (then (i32.store offset=0 (global.get $reg_base) (call $virtual_map_commit (local.get $new_top) (local.get $size))))
+              (else (i32.store offset=0 (global.get $reg_base) (local.get $new_top))))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 39: VirtualFree. A sparse MEM_RELEASE must recover its map-table slot;
@@ -1483,26 +1481,26 @@
             (i32.eqz (local.get $arg1)))
           (i32.ne (i32.and (local.get $arg2) (i32.const 0x8000)) (i32.const 0)))
       (then (drop (call $virtual_map_release (local.get $arg0)))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 40: GetACP — process ANSI code page
   (func $handle_GetACP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $ansi_code_page))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $ansi_code_page))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 791: GetUserDefaultLangID() → LANGID (0x0409 = English US)
   (func $handle_GetUserDefaultLangID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x0409))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0409))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 41: GetOEMCP — STUB: unimplemented
   (func $handle_GetOEMCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 437))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 437))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 42: GetCPInfo
@@ -1511,8 +1509,8 @@
     ;; CPINFO struct: MaxCharSize(4), DefaultChar[2](2), LeadByte[12](12)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $cp (call $resolve_code_page (local.get $arg0)))
     (local.set $info (call $g2w (local.get $arg1)))
@@ -1541,19 +1539,19 @@
                 (i32.store8 offset=7 (local.get $info) (i32.const 0xFE)))))))
       (else
         (call $gs32 (local.get $arg1) (i32.const 1)))) ;; MaxCharSize = 1
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 43: MultiByteToWideChar
   (func $handle_MultiByteToWideChar (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $v i32) (local $i i32)
     ;; Simple: copy each byte to 16-bit. arg2=src, arg3=srcLen, arg4=dst, [esp+24]=dstLen
-    (local.set $v (call $gl32 (i32.add (global.get $esp) (i32.const 24)))) ;; arg5: dstLen
+    (local.set $v (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) ;; arg5: dstLen
     (if (i32.eq (local.get $arg3) (i32.const -1)) ;; srcLen=-1 means NUL-terminated
     (then (local.set $arg3 (i32.add (call $strlen (call $g2w (local.get $arg2))) (i32.const 1)))))
     (if (i32.eqz (local.get $arg4)) ;; query required size
-    (then (global.set $eax (local.get $arg3)))
+    (then (i32.store offset=0 (global.get $reg_base) (local.get $arg3)))
     (else
     (local.set $i (i32.const 0))
     (block $done (loop $lp
@@ -1563,15 +1561,15 @@
     (i32.load8_u (i32.add (call $g2w (local.get $arg2)) (local.get $i))))
     (local.set $i (i32.add (local.get $i) (i32.const 1)))
     (br $lp)))
-    (global.set $eax (local.get $i))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $i))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))) (return)
   )
 
   ;; 44: WideCharToMultiByte
   (func $handle_WideCharToMultiByte (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $v i32) (local $i i32)
     ;; Simple: copy low byte of each 16-bit char. arg2=src, arg3=srcLen, arg4=dst, [esp+24]=dstLen
-    (local.set $v (call $gl32 (i32.add (global.get $esp) (i32.const 24)))) ;; arg5: dstLen
+    (local.set $v (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) ;; arg5: dstLen
     (if (i32.eq (local.get $arg3) (i32.const -1))
     (then
     ;; Count wide string length
@@ -1582,7 +1580,7 @@
     (br $l2)))
     (local.set $arg3 (i32.add (local.get $arg3) (i32.const 1)))))
     (if (i32.eqz (local.get $arg4))
-    (then (global.set $eax (local.get $arg3)))
+    (then (i32.store offset=0 (global.get $reg_base) (local.get $arg3)))
     (else
     (local.set $i (i32.const 0))
     (block $done (loop $lp
@@ -1592,8 +1590,8 @@
     (i32.load8_u (i32.add (call $g2w (local.get $arg2)) (i32.shl (local.get $i) (i32.const 1)))))
     (local.set $i (i32.add (local.get $i) (i32.const 1)))
     (br $lp)))
-    (global.set $eax (local.get $i))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $i))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))) (return)
   )
 
   ;; ASCII CT_CTYPE1 classification used by GetStringTypeA/W and the Ex
@@ -1627,13 +1625,12 @@
   ;; BOOL IsCharAlphaA(CHAR ch). Win32 promotes the byte argument to a stack
   ;; slot; use the same invariant ANSI classification as GetStringTypeA.
   (func $handle_IsCharAlphaA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (i32.ne
+    (i32.store offset=0 (global.get $reg_base) (i32.ne
         (i32.and
           (call $ctype1_ascii_flags (i32.and (local.get $arg0) (i32.const 0xff)))
           (i32.const 0x100))
         (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetStringType{A,W} core: one CT_CTYPE1 word per source character. The
   ;; output is an array of WORDs either way; only the source stride differs.
@@ -1665,16 +1662,16 @@
 
   ;; 45: GetStringTypeA(Locale, dwInfoType, lpSrcStr, cchSrc, lpCharType) — single-byte CT_CTYPE1 classification.
   (func $handle_GetStringTypeA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $get_string_type_core
+    (i32.store offset=0 (global.get $reg_base) (call $get_string_type_core
       (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; stdcall, 5 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; stdcall, 5 args
   )
 
   ;; 46: GetStringTypeW(dwInfoType, lpSrcStr, cchSrc, lpCharType) — classify chars.
   (func $handle_GetStringTypeW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $get_string_type_core
+    (i32.store offset=0 (global.get $reg_base) (call $get_string_type_core
       (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; Identity implementation shared by LCMapStringA/W. Lengths and return
@@ -1710,50 +1707,48 @@
   ;; 47: LCMapStringA(Locale, dwMapFlags, lpSrcStr, cchSrc, lpDestStr, cchDest)
   (func $handle_LCMapStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $cchDest i32)
-    (local.set $cchDest (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $eax (call $lcmap_string_identity
+    (local.set $cchDest (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (call $lcmap_string_identity
       (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $cchDest) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 48: LCMapStringW — wide version of the same bounded identity mapping.
   (func $handle_LCMapStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $cchDest i32)
-    (local.set $cchDest (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $eax (call $lcmap_string_identity
+    (local.set $cchDest (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (call $lcmap_string_identity
       (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $cchDest) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; FlushInstructionCache(hProcess, lpBaseAddress, dwSize). Guest code is
   ;; interpreted from linear memory, so writes are visible without a host-side
   ;; instruction-cache operation. Match Windows' successful BOOL result.
   (func $handle_FlushInstructionCache (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 49: GetStdHandle(nStdHandle) — return fake handles for stdin/stdout/stderr
   (func $handle_GetStdHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; STD_INPUT_HANDLE=-10 → 1, STD_OUTPUT_HANDLE=-11 → 2, STD_ERROR_HANDLE=-12 → 3
     ;; GUI apps don't use these but CRT init checks them
-    (global.set $eax
-      (if (result i32) (i32.eq (local.get $arg0) (i32.const 0xFFFFFFF6)) ;; -10
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eq (local.get $arg0) (i32.const 0xFFFFFFF6)) ;; -10
         (then (i32.const 1))
         (else (if (result i32) (i32.eq (local.get $arg0) (i32.const 0xFFFFFFF5)) ;; -11
           (then (i32.const 2))
           (else (if (result i32) (i32.eq (local.get $arg0) (i32.const 0xFFFFFFF4)) ;; -12
             (then (i32.const 3))
             (else (i32.const 0xFFFFFFFF))))))))  ;; INVALID_HANDLE_VALUE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 50: GetFileType(hFile) — FILE_TYPE_CHAR=2 for console, FILE_TYPE_DISK=1 for files
   (func $handle_GetFileType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (i32.le_u (local.get $arg0) (i32.const 3))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.le_u (local.get $arg0) (i32.const 3))
         (then (i32.const 2))   ;; FILE_TYPE_CHAR (console)
         (else (i32.const 1)))) ;; FILE_TYPE_DISK (regular file)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 51: WriteFile(hFile, lpBuffer, nBytesToWrite, lpBytesWritten, lpOverlapped) — 5 args
@@ -1762,24 +1757,24 @@
     (if (i32.le_u (local.get $arg0) (i32.const 3))
       (then
         (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $arg2))))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (return)))
     ;; File handles — delegate to virtual FS
-    (global.set $eax (call $host_fs_write_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_write_file
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 52: SetHandleCount(uNumber) — no-op on Win32, return the count
   (func $handle_SetHandleCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 53: GetEnvironmentStrings — the undecorated name is the ANSI one.
   (func $handle_GetEnvironmentStrings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_strings (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $env_strings (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 54: GetModuleFileNameA
@@ -1820,8 +1815,8 @@
       (else (call $gs8 (local.get $p_g) (local.get $ch)))))
 
   (func $handle_GetModuleFileNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 55: UnhandledExceptionFilter(ExceptionInfo) -> LONG
@@ -1867,14 +1862,14 @@
       (else (call $host_unhandled_exception
               (i32.const 0) (i32.const 0) (i32.const 0)
               (global.get $unhandled_exception_filter))))
-    (global.set $eax (i32.const 1))  ;; EXCEPTION_EXECUTE_HANDLER
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; EXCEPTION_EXECUTE_HANDLER
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 56: GetCurrentProcess — return pseudo-handle -1 (0xFFFFFFFF)
   (func $handle_GetCurrentProcess (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0xFFFFFFFF))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFFFFFF))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 57: TerminateProcess
@@ -1889,26 +1884,26 @@
   (func $handle_OpenProcess (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eq (local.get $arg2) (call $current_process_id))
       (then
-        (global.set $eax (i32.or (i32.const 0x000E2000)
+        (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 0x000E2000)
           (i32.and (local.get $arg2) (i32.const 0xFFF))))
         (global.set $last_error (i32.const 0)))
       (else
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $last_error (i32.const 87)))) ;; ERROR_INVALID_PARAMETER
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 58: GetTickCount
   (func $handle_GetTickCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $tick_count (call $host_get_ticks))
-    (global.set $eax (global.get $tick_count))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $tick_count))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; GetDoubleClickTime() → UINT. Win32 default is 500 ms unless customized.
   (func $handle_GetDoubleClickTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 500))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 500))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 59: FindResourceA
@@ -1917,9 +1912,9 @@
     ;; arg0=hModule, arg1=lpName (MAKEINTRESOURCE or string), arg2=lpType
     ;; Walk resource directory: type(arg2) → name(arg1) → first lang → data entry RVA
     (call $push_rsrc_ctx (local.get $arg0))
-    (global.set $eax (call $find_resource (local.get $arg2) (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $find_resource (local.get $arg2) (local.get $arg1)))
     (call $pop_rsrc_ctx)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 60: LoadResource(hModule, hResInfo) → HGLOBAL/resource-data pointer.
@@ -1931,38 +1926,38 @@
     (local $rva i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $push_rsrc_ctx (local.get $arg0))
     (local.set $rva
       (call $gl32 (i32.add (call $r_base) (local.get $arg1))))
-    (global.set $eax (i32.add (call $r_base) (local.get $rva)))
+    (i32.store offset=0 (global.get $reg_base) (i32.add (call $r_base) (local.get $rva)))
     (call $pop_rsrc_ctx)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 61: LockResource
   (func $handle_LockResource (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; LoadResource already resolves HRSRC through the owning module and
     ;; returns the stable resource-data pointer. LockResource exposes it.
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 62: FreeResource(hResData) → BOOL
   ;; On Win32, resources are mapped from the PE image and don't need freeing. Returns FALSE (0).
   (func $handle_FreeResource (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; 63: RtlUnwind
   (func $handle_RtlUnwind (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Unlink SEH chain: set FS:[0] = TargetFrame->next
     (if (i32.ne (local.get $arg0) (i32.const 0))
     (then (call $gs32 (global.get $fs_base) (call $gl32 (local.get $arg0)))))
-    (global.set $eax (local.get $arg3)) ;; ReturnValue
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg3)) ;; ReturnValue
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 64: FreeLibrary — STUB: unimplemented
@@ -1972,12 +1967,12 @@
     (if (i32.eq (local.get $arg0) (global.get $freelib_last_handle))
       (then
         ;; Same handle freed again — already unloaded, return FALSE
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         ;; First free of this handle — succeed and remember it
         (global.set $freelib_last_handle (local.get $arg0))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 65: sndPlaySoundA(pszSound, fuSound) — legacy 2-arg sound API.
@@ -1992,8 +1987,8 @@
     (if (i32.or (i32.eqz (local.get $name_id))
                 (i32.and (local.get $flags) (i32.const 0x40)))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     ;; SND_MEMORY (0x4): pszSound points at a complete WAV image in memory.
     ;; Use the RIFF size at +4 plus the 8-byte RIFF header when it looks sane.
     (if (i32.and (local.get $flags) (i32.const 0x4))
@@ -2004,33 +1999,33 @@
               (i32.eq (i32.load (local.get $data_wa)) (i32.const 0x46464952)) ;; "RIFF"
               (i32.gt_u (local.get $data_size) (i32.const 12)))
           (then (call $host_play_sound (local.get $data_wa) (local.get $data_size))))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     ;; SND_RESOURCE (0x40004): pszSound is MAKEINTRESOURCE(id).
     (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x40000)))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     (if (i32.eqz (global.get $rsrc_rva))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     (local.set $hrsrc (call $find_resource_named_type (local.get $name_id)))
     (if (i32.eqz (local.get $hrsrc))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     (local.set $data_entry_wa (call $g2w (i32.add (global.get $image_base) (local.get $hrsrc))))
     (local.set $data_rva (i32.load (local.get $data_entry_wa)))
     (local.set $data_size (i32.load (i32.add (local.get $data_entry_wa) (i32.const 4))))
     (if (i32.eqz (local.get $data_size))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     (local.set $data_wa (call $g2w (i32.add (global.get $image_base) (local.get $data_rva))))
     (call $host_play_sound (local.get $data_wa) (local.get $data_size))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 863: PlaySoundW(pszSound, hmod, fdwSound) — 3 args stdcall
@@ -2045,25 +2040,25 @@
     (if (i32.or (i32.eqz (local.get $name_id))
                 (i32.and (local.get $flags) (i32.const 0x40)))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; Only handle SND_RESOURCE (0x40004) — find WAVE resource by integer ID
     (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x40000)))
       (then
         ;; Not a resource — just return TRUE (no file/alias support)
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; Find WAVE resource: walk type entries looking for named "WAVE"
     (if (i32.eqz (global.get $rsrc_rva))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; Find WAVE type entry (named type, need to match "WAVE" string)
     (local.set $hrsrc (call $find_resource_named_type (local.get $name_id)))
     (if (i32.eqz (local.get $hrsrc))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; hrsrc points to data entry (RVA, Size at rsrc_rva-relative offset)
     ;; Read data RVA and size from the resource data entry
     (local.set $data_entry_wa (call $g2w (i32.add (global.get $image_base) (local.get $hrsrc))))
@@ -2071,13 +2066,13 @@
     (local.set $data_size (i32.load (i32.add (local.get $data_entry_wa) (i32.const 4))))
     (if (i32.eqz (local.get $data_size))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; Convert data RVA to WASM address and call host
     (local.set $data_wa (call $g2w (i32.add (global.get $image_base) (local.get $data_rva))))
     (call $host_play_sound (local.get $data_wa) (local.get $data_size))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; PlaySoundA(pszSound, hmod, fdwSound) — 3 args stdcall. Shares logic with PlaySoundW:
@@ -2091,32 +2086,32 @@
     (if (i32.or (i32.eqz (local.get $name_id))
                 (i32.and (local.get $flags) (i32.const 0x40)))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x40000)))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (i32.eqz (global.get $rsrc_rva))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $hrsrc (call $find_resource_named_type (local.get $name_id)))
     (if (i32.eqz (local.get $hrsrc))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $data_entry_wa (call $g2w (i32.add (global.get $image_base) (local.get $hrsrc))))
     (local.set $data_rva (i32.load (local.get $data_entry_wa)))
     (local.set $data_size (i32.load (i32.add (local.get $data_entry_wa) (i32.const 4))))
     (if (i32.eqz (local.get $data_size))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $data_wa (call $g2w (i32.add (global.get $image_base) (local.get $data_rva))))
     (call $host_play_sound (local.get $data_wa) (local.get $data_size))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; RegisterWindowMessage is an *interning* call: registering the same name
@@ -2148,8 +2143,8 @@
 
   ;; 66: RegisterWindowMessageA(lpString) — return unique msg ID from 0xC000+ range
   (func $handle_RegisterWindowMessageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $register_window_message (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $register_window_message (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
 
@@ -2228,21 +2223,21 @@
                      (i32.lt_u (local.get $wndproc) (i32.const 0xFFFF0000)))
           (then
             (global.set $focus_hwnd (global.get $main_hwnd))
-            (local.set $ret_addr (call $gl32 (global.get $esp)))
+            (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
             ;; DestroyWindow stdcall(1): [ret, hwnd] = 8 bytes.
             ;; WndProc stdcall(4): [ret, hwnd, msg, wParam, lParam] = 20 bytes.
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 12)))
-            (call $gs32 (global.get $esp) (local.get $ret_addr))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (global.get $main_hwnd))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0x0007))  ;; WM_SETFOCUS
-            (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (i32.const 0))      ;; wParam = 0
-            (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (i32.const 0))      ;; lParam = 0
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (global.get $main_hwnd))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0x0007))  ;; WM_SETFOCUS
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.const 0))      ;; wParam = 0
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (i32.const 0))      ;; lParam = 0
             (global.set $eip (local.get $wndproc))
-            (global.set $eax (i32.const 1))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1))
             (global.set $steps (i32.const 0))
             (return)))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
 (func $compat_is_pinball_exe (result i32)
@@ -2280,8 +2275,8 @@
         (call $dc_apply_client_clip (local.get $hdc) (local.get $target_hwnd)))
       (else
         (local.set $hdc (call $host_alloc_screen_dc))))
-    (global.set $eax (local.get $hdc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $hdc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; The SM_* table, with no calling convention attached. GetSystemMetrics is
@@ -2401,16 +2396,16 @@
 
   ;; 90: GetSystemMetrics (actual slot used by imports)
   (func $handle_GetSystemMetrics (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $system_metric (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $system_metric (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ConvertToGlobalHandle promotes a process-local kernel handle so it can be
   ;; inherited by another process. This emulator has one process and stable
   ;; handle identities, therefore the promoted handle is the same handle.
   (func $handle_ConvertToGlobalHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 1099: EnumDisplayMonitors(hdc, lprcClip, lpfnEnum, dwData) — 4 args stdcall
@@ -2423,30 +2418,30 @@
     ;; If no callback, just return TRUE
     (if (i32.eqz (local.get $callback))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; Save original return address
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Pop EnumDisplayMonitors frame: ret + 4 args = 20 bytes
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     ;; Allocate RECT {0, 0, screenW, screenH} on stack (16 bytes)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 16)))
-    (local.set $rect_guest (i32.add (i32.sub (global.get $esp) (i32.const 0x12000)) (global.get $image_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (local.set $rect_guest (i32.add (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 0x12000)) (global.get $image_base)))
     (local.set $screen (call $host_get_screen_size))
-    (call $gs32 (global.get $esp) (i32.const 0))         ;; left
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (i32.const 0))   ;; top
-    (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.and (local.get $screen) (i32.const 0xFFFF))) ;; right
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (i32.shr_u (local.get $screen) (i32.const 16))) ;; bottom
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))         ;; left
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (i32.const 0))   ;; top
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.and (local.get $screen) (i32.const 0xFFFF))) ;; right
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.shr_u (local.get $screen) (i32.const 16))) ;; bottom
     ;; Push callback args right-to-left: dwData, lprcMonitor, hdcMonitor, hMonitor
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $data))          ;; dwData
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $rect_guest))    ;; lprcMonitor (guest addr)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))              ;; hdcMonitor = NULL
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0x00010001))     ;; hMonitor (fake handle)
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $data))          ;; dwData
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $rect_guest))    ;; lprcMonitor (guest addr)
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))              ;; hdcMonitor = NULL
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00010001))     ;; hMonitor (fake handle)
     ;; Push return address — callback is stdcall so it pops its own 16 bytes
     ;; After callback returns, RECT (16 bytes on stack) remains — but caller's ESP is restored
     ;; Actually the RECT sits below the callback frame, need to adjust:
@@ -2457,7 +2452,7 @@
     ;; Let's use WASM address 0xAD00 area which is below GUEST_BASE.
     ;; Actually — store RECT at a fixed known location in the sub-GUEST_BASE region.
     ;; Reset: undo stack RECT, use fixed scratch instead.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))) ;; undo the 4 pushes + RECT
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))) ;; undo the 4 pushes + RECT
     ;; Write RECT at WASM addr 0xAD40 (unused scratch below GUEST_BASE)
     (i32.store (i32.const 0xAD40) (i32.const 0))       ;; left
     (i32.store (i32.const 0xAD44) (i32.const 0))       ;; top
@@ -2470,17 +2465,17 @@
     ;; The callback reads RECT via the pointer — so it will do g2w(guest) and get 0xAD40. Should work.
     (local.set $rect_guest (i32.add (i32.sub (i32.const 0xAD40) (i32.const 0x12000)) (global.get $image_base)))
     ;; Push callback args right-to-left
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $data))          ;; dwData
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $rect_guest))    ;; lprcMonitor
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))              ;; hdcMonitor
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0x00010001))     ;; hMonitor
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $data))          ;; dwData
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $rect_guest))    ;; lprcMonitor
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))              ;; hdcMonitor
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00010001))     ;; hMonitor
     ;; Push return address — when stdcall callback pops 16 bytes and rets, goes to ret_addr
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     ;; Jump to callback
     (global.set $eip (local.get $callback))
     (global.set $steps (i32.const 0))
@@ -2531,8 +2526,8 @@
       (i32.and (local.get $cs) (i32.const 0xFFFF)))     ;; right = clientW
     (call $gs32 (i32.add (local.get $arg1) (i32.const 12))
       (i32.shr_u (local.get $cs) (i32.const 16)))       ;; bottom = clientH
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 92: GetWindowTextA(hwnd, lpString, nMaxCount) → int
@@ -2569,9 +2564,9 @@
       (local.get $hwnd) (call $g2w (local.get $buf)) (local.get $max)))
 
   (func $handle_GetWindowTextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $window_text_ansi
+    (i32.store offset=0 (global.get $reg_base) (call $window_text_ansi
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; Return the canonical Win32 name for a WAT-owned standard control. These
@@ -2617,26 +2612,26 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (if (i32.ge_s (local.get $len) (i32.const 0))
       (then
-        (global.set $eax (local.get $len))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $len))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
-    (global.set $eax (call $host_get_window_class
+    (i32.store offset=0 (global.get $reg_base) (call $host_get_window_class
       (local.get $arg0) (call $g2w (local.get $arg1)) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 93: GetWindowRect
   (func $handle_GetWindowRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetWindowRect(hwnd, lpRect) — fills RECT with screen coords
     (call $host_get_window_rect (local.get $arg0) (call $g2w (local.get $arg1)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 94: GetDlgCtrlID(hwnd) → the control id in this window's CONTROL_TABLE row
   (func $handle_GetDlgCtrlID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ctrl_table_get_id (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $ctrl_table_get_id (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 95: GetDlgItemTextA(hDlg, nIDDlgItem, lpString, nMaxCount) → int
@@ -2663,9 +2658,9 @@
     (i32.const 0))
 
   (func $handle_GetDlgItemTextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dlg_item_text_ansi
+    (i32.store offset=0 (global.get $reg_base) (call $dlg_item_text_ansi
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 96: GetDlgItem(hDlg, nIDDlgItem) → HWND of child control
@@ -2675,15 +2670,15 @@
     ;; NULL parent → no dialog → return NULL
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Look up real HWND from the control table. Returning a fabricated HWND
     ;; makes later APIs like SetWindowTextA report success against a non-window,
     ;; which hides missing-template/control bugs from the app.
     (local.set $result (call $ctrl_find_by_id (local.get $arg0) (local.get $arg1)))
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 97: GetCursorPos
@@ -2698,28 +2693,28 @@
     (global.set $last_msg_pos_y (local.get $y))
     (call $gs32 (local.get $arg0) (local.get $x))
     (call $gs32 (i32.add (local.get $arg0) (i32.const 4)) (local.get $y))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 98: GetLastActivePopup(hWnd) — 1 arg stdcall
   ;; Returns the last active popup owned by hWnd. We don't track popups,
   ;; so return hWnd itself (correct when no popup is active, per Win32 docs).
   (func $handle_GetLastActivePopup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 99: GetFocus — STUB: unimplemented
   (func $handle_GetFocus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $focus_hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $focus_hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; 100: ReleaseDC(hwnd, hdc) — release the WAT-owned DC, return 1.
   (func $handle_ReleaseDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (drop (call $host_release_dc (local.get $arg1)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 101: SetWindowLongA — STUB: unimplemented
@@ -2731,41 +2726,40 @@
     ;; Also positive indices for dialog extra bytes (DWLP_USER etc.)
     (if (i32.eq (local.get $arg1) (i32.const -21))  ;; GWL_USERDATA
       (then
-        (global.set $eax (call $wnd_set_userdata (local.get $arg0) (local.get $arg2)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_set_userdata (local.get $arg0) (local.get $arg2)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (i32.eq (local.get $arg1) (i32.const -4))   ;; GWL_WNDPROC — subclass
       (then
-        (global.set $eax (call $wnd_table_get (local.get $arg0)))  ;; return old wndproc
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_table_get (local.get $arg0)))  ;; return old wndproc
         ;; Top-level placeholders have no previous guest proc. Native controls,
         ;; however, must return the built-in sentinel so subclasses can chain
         ;; stateful messages through CallWindowProc.
         (if (i32.and
-              (i32.eq (global.get $eax) (global.get $WNDPROC_BUILTIN))
+              (i32.eq (i32.load offset=0 (global.get $reg_base)) (global.get $WNDPROC_BUILTIN))
               (i32.eqz (call $ctrl_table_get_class (local.get $arg0))))
-          (then (global.set $eax (i32.const 0))))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
         ;; If old wndproc is 0 (not in table), fall back to global wndproc for main window
-        (if (i32.and (i32.eqz (global.get $eax))
+        (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base)))
                      (i32.eq (local.get $arg0) (global.get $main_hwnd)))
-          (then (global.set $eax (global.get $wndproc_addr))))
+          (then (i32.store offset=0 (global.get $reg_base) (global.get $wndproc_addr))))
         ;; WAT-native trackbars already implement the common-control messages
         ;; Funtris uses. Letting the app replace their wndproc routes every
         ;; initialization SendMessage through an x86 subclass chain that never
         ;; reaches browser-idle again, so keep the native wndproc installed.
         (if (i32.eq (call $ctrl_table_get_class (local.get $arg0)) (i32.const 19))
           (then
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (call $wnd_table_set (local.get $arg0) (local.get $arg2)) ;; set new wndproc
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (i32.eq (local.get $arg1) (i32.const -12))  ;; GWL_ID
       (then
-        (global.set $eax
-          (call $ctrl_table_set_id (local.get $arg0) (local.get $arg2)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (call $ctrl_table_set_id (local.get $arg0) (local.get $arg2)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (i32.eq (local.get $arg1) (i32.const -16))  ;; GWL_STYLE
       (then
-        (global.set $eax (call $wnd_set_style (local.get $arg0) (local.get $arg2)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_set_style (local.get $arg0) (local.get $arg2)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; Dialog and registered-window extra bytes are independent of application
     ;; GWL_USERDATA. WinHelp's toolbar uses multiple positive LONG offsets.
     (if (i32.ge_s (local.get $arg1) (i32.const 0))
@@ -2808,21 +2802,20 @@
                       (i32.eq (local.get $thunk_api) (i32.const 2649))
                       (i32.eq (local.get $thunk_api) (i32.const 2650)))))))
           (then
-            (global.set $eax
-              (call $dialog_proc_set (local.get $arg0) (local.get $arg2)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (call $dialog_proc_set (local.get $arg0) (local.get $arg2)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (if (call $dialog_proc_get (local.get $arg0))
           (then
-            (global.set $eax (call $dialog_extra_set
+            (i32.store offset=0 (global.get $reg_base) (call $dialog_extra_set
               (local.get $arg0) (local.get $arg1) (local.get $arg2))))
           (else
-            (global.set $eax (call $wnd_extra_set
+            (i32.store offset=0 (global.get $reg_base) (call $wnd_extra_set
               (local.get $arg0) (local.get $arg1) (local.get $arg2)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     ;; Default: return 0 for unhandled indices
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; SetWindowWord(hWnd, nIndex, wNewWord) → WORD (previous value)
@@ -2847,7 +2840,7 @@
           (local.get $arg0) (local.get $arg1)
           (i32.and (local.get $arg2) (i32.const 0xFFFF))
           (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (return)))
     (local.set $slot (call $wnd_table_find (local.get $arg0)))
     ;; 16 bytes of extra storage per window; a word needs both of its bytes
@@ -2855,14 +2848,14 @@
     (if (i32.or (i32.lt_s (local.get $slot) (i32.const 0))
                 (i32.gt_u (local.get $arg1) (i32.const 14)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $p (call $wnd_extra_addr (local.get $slot) (local.get $arg1)))
     (local.set $old (i32.load16_u (local.get $p)))
     (i32.store16 (local.get $p) (i32.and (local.get $arg2) (i32.const 0xFFFF)))
-    (global.set $eax (local.get $old))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $old))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 102: SetWindowTextA
@@ -2870,8 +2863,8 @@
     (local $wa i32) (local $len i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (local.set $len (call $guest_strlen (local.get $arg1)))
@@ -2883,10 +2876,10 @@
             (i32.lt_u (call $ctrl_table_get_class (local.get $arg0)) (i32.const 10))
             (i32.gt_u (call $ctrl_table_get_class (local.get $arg0)) (i32.const 16))))
       (then
-        (global.set $eax (call $control_wndproc_dispatch
+        (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $arg1)))
         (call $host_set_window_text (local.get $arg0) (local.get $wa))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Native child windows such as RichEdit20A are not WAT control-table
     ;; controls, but SetWindowText still maps to WM_SETTEXT for them. Without
@@ -2898,10 +2891,10 @@
       (then
         (call $richedit_format_reset_hwnd (local.get $arg0))
         (call $title_table_set (local.get $arg0) (local.get $wa) (local.get $len))
-        (global.set $eax (call $wnd_send_message
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $arg1)))
         (call $host_set_window_text (local.get $arg0) (local.get $wa))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Store in TITLE_TABLE so DefWindowProc WM_NCPAINT can redraw the
     ;; caption text from WAT-side state. Also post WM_NCPAINT.
@@ -2912,8 +2905,8 @@
     ;; frame is already exposed. Paint the new caption immediately as USER does.
     (call $defwndproc_do_ncpaint (local.get $arg0))
     (call $host_set_window_text (local.get $arg0) (local.get $wa))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 103: SetDlgItemTextA — delegate to the control's wndproc via
@@ -2935,8 +2928,8 @@
                 (i32.const 0x000C)                    ;; WM_SETTEXT
                 (i32.const 0)
                 (local.get $arg2)))))                 ;; lpString (guest ptr)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 104: SetDlgItemInt(hDlg, nIDDlgItem, uValue, bSigned) — format integer
@@ -2992,53 +2985,53 @@
                     (local.get $buf)))
             (call $heap_free (local.get $buf)))))
       )
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
   ;; 105: SetForegroundWindow(hWnd) — 1 arg stdcall
   (func $handle_SetForegroundWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_activate_window (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $host_activate_window (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; SwitchToThisWindow(hWnd, fAltTab) — activate renderer window
   (func $handle_SwitchToThisWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (drop (call $host_activate_window (local.get $arg0)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; CloseWindow(hWnd) — despite the name, Win32 minimizes the window.
   (func $handle_CloseWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (drop (call $host_show_window (local.get $arg0) (i32.const 6))) ;; SW_MINIMIZE
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; CascadeWindows(hwndParent, how, lpRect, cKids, lpKids) → arranged count.
   (func $handle_CascadeWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_arrange_windows
+    (i32.store offset=0 (global.get $reg_base) (call $host_arrange_windows
       (i32.const 0) (local.get $arg1)
       (select (call $g2w (local.get $arg2)) (i32.const 0) (i32.ne (local.get $arg2) (i32.const 0)))
       (local.get $arg3)
       (select (call $g2w (local.get $arg4)) (i32.const 0) (i32.ne (local.get $arg4) (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; TileWindows(hwndParent, how, lpRect, cKids, lpKids) → arranged count.
   (func $handle_TileWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_arrange_windows
+    (i32.store offset=0 (global.get $reg_base) (call $host_arrange_windows
       (i32.const 1) (local.get $arg1)
       (select (call $g2w (local.get $arg2)) (i32.const 0) (i32.ne (local.get $arg2) (i32.const 0)))
       (local.get $arg3)
       (select (call $g2w (local.get $arg4)) (i32.const 0) (i32.ne (local.get $arg4) (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ArrangeIconicWindows(hwndParent) → height occupied by icon rows.
   (func $handle_ArrangeIconicWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_arrange_windows
+    (i32.store offset=0 (global.get $reg_base) (call $host_arrange_windows
       (i32.const 2) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Helper: apply a new cursor and return the previous handle. Shared by
   ;; $handle_SetCursor and DefWindowProc's WM_SETCURSOR path.
@@ -3051,15 +3044,15 @@
 
   ;; 106: SetCursor(hCursor) — 1 arg stdcall, returns previous HCURSOR.
   (func $handle_SetCursor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $set_cursor_internal (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $set_cursor_internal (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 107: SetFocus(hwnd) — 1 arg stdcall, return previous focus hwnd
   (func $handle_SetFocus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wndproc i32) (local $prev i32) (local $ret_addr i32)
     (local.set $prev (global.get $focus_hwnd))
-    (global.set $eax (local.get $prev))
+    (i32.store offset=0 (global.get $reg_base) (local.get $prev))
     ;; Focus change: post WM_KILLFOCUS to outgoing window. The incoming
     ;; WM_SETFOCUS is delivered synchronously below (EIP redirect).
     (if (i32.and (i32.ne (local.get $prev) (local.get $arg0))
@@ -3078,13 +3071,13 @@
       (then
         (drop (call $dialog_default_proc
           (local.get $arg0) (i32.const 0x0007) (local.get $prev) (i32.const 0)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     ;; WAT-native wndproc: dispatch inline
     (if (i32.ge_u (local.get $wndproc) (i32.const 0xFFFF0000))
       (then (drop (call $wat_wndproc_dispatch
               (local.get $arg0) (i32.const 0x0007) (local.get $prev) (i32.const 0)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     ;; x86 wndproc: no entry means try globals
     (if (i32.eqz (local.get $wndproc))
@@ -3096,23 +3089,23 @@
     ;; continuation frame below its original two-word stdcall frame.
     (if (local.get $wndproc)
       (then
-        (local.set $ret_addr (call $gl32 (global.get $esp)))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 40)))
-        (call $gs32 (global.get $esp) (global.get $setfocus_ret_thunk))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))     ;; hwnd
-        (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0x0007))    ;; WM_SETFOCUS
-        (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $prev))    ;; wParam = prev focus
-        (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (i32.const 0))        ;; lParam = 0
-        (call $gs32 (i32.add (global.get $esp) (i32.const 20)) (local.get $ret_addr))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $prev))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (global.get $ebx))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (global.get $esi))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 36)) (global.get $edi))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 40)) (global.get $ebp))
+        (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $setfocus_ret_thunk))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))     ;; hwnd
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0x0007))    ;; WM_SETFOCUS
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $prev))    ;; wParam = prev focus
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (i32.const 0))        ;; lParam = 0
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)) (local.get $ret_addr))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $prev))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.load offset=12 (global.get $reg_base)))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)) (i32.load offset=24 (global.get $reg_base)))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)) (i32.load offset=28 (global.get $reg_base)))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.load offset=20 (global.get $reg_base)))
         (global.set $eip (local.get $wndproc))
         (global.set $steps (i32.const 0))
         (return)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 108: LoadCursorA(hInstance, lpCursorName) — return HCURSOR encoding the IDC_*.
@@ -3123,14 +3116,14 @@
   (func $handle_LoadCursorA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and (i32.eqz (local.get $arg0))
                  (i32.lt_u (local.get $arg1) (i32.const 0x10000)))
-      (then (global.set $eax (i32.or (i32.const 0x60000)
+      (then (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 0x60000)
                                      (i32.and (local.get $arg1) (i32.const 0xFFFF)))))
       (else
         (if (i32.lt_u (local.get $arg1) (i32.const 0x10000))
-          (then (global.set $eax (i32.or (i32.const 0x680000)
+          (then (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 0x680000)
                                          (i32.and (local.get $arg1) (i32.const 0xFFFF)))))
-          (else (global.set $eax (i32.const 0x67F00)))))) ;; string cursor names unsupported
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+          (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x67F00)))))) ;; string cursor names unsupported
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ---- ICON_TABLE: HICON → the resource it was loaded from ----
@@ -3239,12 +3232,12 @@
     (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
                  (i32.le_u (local.get $arg1) (i32.const 0xFFFF)))
       (then
-        (global.set $eax (call $icon_intern (local.get $arg0) (local.get $arg1)))
-        (if (global.get $eax)
-          (then (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (call $icon_intern (local.get $arg0) (local.get $arg1)))
+        (if (i32.load offset=0 (global.get $reg_base))
+          (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
                 (return)))))
-    (global.set $eax (i32.const 0x60001)) ;; opaque HICON, no pixels
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x60001)) ;; opaque HICON, no pixels
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 110: LoadStringA
@@ -3253,12 +3246,12 @@
     ;; arg0 = hInstance — may be a satellite DLL (e.g. MCM's lang.dll). Route
     ;; the resource lookup to that module for the duration of the call.
     (call $push_rsrc_ctx (local.get $arg0))
-    (global.set $eax (call $string_load_a
+    (i32.store offset=0 (global.get $reg_base) (call $string_load_a
       (local.get $arg1)                ;; string ID
       (call $g2w (local.get $arg2))    ;; buffer (WASM ptr)
       (local.get $arg3)))              ;; max chars
     (call $pop_rsrc_ctx)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 111: LoadAcceleratorsA(hInstance, lpTableName)
@@ -3273,8 +3266,8 @@
     (global.set $haccel_data (local.get $data))
     (global.set $haccel_count (i32.div_u (global.get $rsrc_last_size) (i32.const 8)))
     (global.set $haccel (i32.const 0x60001))
-    (global.set $eax (i32.const 0x60001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x60001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 112: EnableWindow
@@ -3284,8 +3277,8 @@
     (local.set $idx (call $wnd_table_find (local.get $arg0)))
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $style (call $wnd_get_style (local.get $arg0)))
     (local.set $prev_enabled
@@ -3308,8 +3301,8 @@
           (select (i32.const 1) (i32.const 0) (local.get $arg1))
           (i32.const 0)))
         (call $invalidate_hwnd (local.get $arg0))))
-    (global.set $eax (local.get $prev_enabled))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $prev_enabled))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
 ;; 114: EndDialog(hDlg, nResult) — end modal dialog, set result
@@ -3343,8 +3336,8 @@
         (call $wnd_destroy_recursive (local.get $arg0))))
     ;; Don't set quit_flag — that kills the main message loop.
     ;; CACA0004 checks dlg_ended to exit the modal loop.
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 115: InvalidateRect(hwnd, lprc, bErase). lprc=NULL → full client rect.
@@ -3352,8 +3345,8 @@
     (local $l i32) (local $t i32) (local $r i32) (local $b i32) (local $wa i32) (local $cs i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (local.get $arg1)
       (then
         (local.set $wa (call $g2w (local.get $arg1)))
@@ -3384,8 +3377,8 @@
       (then (global.set $paint_pending (i32.const 1)))
       (else (call $paint_flag_set (local.get $arg0))))
     (call $host_invalidate (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 116: FillRect(hdc, lprc, hbr)
@@ -3394,13 +3387,13 @@
     (local.set $desc (global.get $GDI_LINE_DESC))
     (local.set $rc (call $g2w (local.get $arg1)))
     (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then (global.set $eax (call $gdi_fill_rect_desc
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_fill_rect_desc
         (local.get $arg0) (local.get $desc)
         (i32.load (local.get $rc)) (i32.load offset=4 (local.get $rc))
         (i32.load offset=8 (local.get $rc)) (i32.load offset=12 (local.get $rc))
         (local.get $arg2))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 117: FrameRect(hdc, lprc, hbr) — draw 1px frame using brush
@@ -3409,26 +3402,26 @@
     (local.set $wa (call $g2w (local.get $arg1)))
     (local.set $desc (global.get $GDI_LINE_DESC))
     (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then (global.set $eax (call $gdi_frame_rect_desc
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_frame_rect_desc
         (local.get $arg0) (local.get $desc)
         (i32.load (local.get $wa)) (i32.load offset=4 (local.get $wa))
         (i32.load offset=8 (local.get $wa)) (i32.load offset=12 (local.get $wa))
         (local.get $arg2))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; 118: LoadBitmapA
   (func $handle_LoadBitmapA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_bitmap_load_resource
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_bitmap_load_resource
       (local.get $arg0) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 119: OpenIcon(hwnd) — restores a minimized window; return nonzero
   (func $handle_OpenIcon (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 120: MoveWindow — hwnd(arg0), x(arg1), y(arg2), w(arg3), h(arg4), bRepaint=[esp+24]
@@ -3439,7 +3432,7 @@
   ;; creates an infinite WM_SIZE -> MoveWindow loop and starves paint/timers.
   (func $handle_MoveWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $cx i32) (local $cy i32) (local $cs i32) (local $old_cs i32) (local $dlg_rec i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (local.set $old_cs (call $host_get_window_client_size (local.get $arg0)))
     (call $host_move_window (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 0))
     (call $ctrl_geom_sync (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 0))
@@ -3500,7 +3493,7 @@
                   (drop (call $post_queue_push
                     (local.get $arg0) (i32.const 0x0005)
                     (i32.const 0) (local.get $cs)))))))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (return)
   )
 
@@ -3526,8 +3519,8 @@
             (i32.const 0)))))
       (local.set $id (i32.add (local.get $id) (i32.const 1)))
       (br $scan)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 124: CheckDlgButton — WAT-only; the _checkStates Map in host-imports
@@ -3538,8 +3531,8 @@
     (if (local.get $ctrl_hwnd)
       (then (call $ctrl_set_check_state (local.get $ctrl_hwnd) (local.get $arg2))
             (call $host_invalidate (local.get $ctrl_hwnd))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 125: CharNextA
@@ -3560,14 +3553,14 @@
       (i32.le_u (local.get $cur) (local.get $start))))
 
   (func $handle_CharNextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $char_next (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $char_next (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 126: CharPrevA
   (func $handle_CharPrevA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $char_prev (local.get $arg0) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $char_prev (local.get $arg0) (local.get $arg1) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 127: IsDialogMessageA(hDlg, lpMsg)
@@ -3589,8 +3582,8 @@
     (local $target i32) (local $msg i32) (local $vk i32)
     (local $walk i32) (local $depth i32) (local $inside i32)
     (local $code i32) (local $def i32) (local $id i32) (local $btn i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
       (then (return)))
     (local.set $target (call $gl32 (local.get $arg1)))
@@ -3625,7 +3618,7 @@
         (drop (call $wnd_send_message
           (local.get $arg0) (i32.const 0x0111) (i32.const 2)
           (call $ctrl_find_by_id (local.get $arg0) (i32.const 2))))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (return)))
     ;; VK_RETURN: the dialog's own default id when it claims one, IDOK when
     ;; it does not. A default button that exists but is disabled swallows the
@@ -3636,7 +3629,7 @@
       (then
         (local.set $id (i32.and (local.get $def) (i32.const 0xFFFF)))
         (local.set $btn (call $ctrl_find_by_id (local.get $arg0) (local.get $id)))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (if (i32.eqz (local.get $btn)) (then (return)))
         (if (i32.and (call $wnd_get_style (local.get $btn)) (i32.const 0x08000000))
           (then (return)))
@@ -3646,7 +3639,7 @@
     (drop (call $wnd_send_message
       (local.get $arg0) (i32.const 0x0111) (i32.const 1)
       (call $ctrl_find_by_id (local.get $arg0) (i32.const 1))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
   )
 
   ;; 128: IsIconic(hwnd) → BOOL — is the window minimized?
@@ -3655,8 +3648,8 @@
   ;; minimizes itself and then asks — the ordinary shape of a WM_SIZE or
   ;; WM_PAINT guard, and of "restore me before showing a dialog" — was told no.
   (func $handle_IsIconic (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wnd_min_get (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_min_get (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 129: ChildWindowFromPoint(hWndParent, POINT). POINT is passed by value.
@@ -3668,9 +3661,8 @@
       (local.get $arg0)
       (i32.add (call $wnd_client_screen_x (local.get $arg0)) (local.get $arg1))
       (i32.add (call $wnd_client_screen_y (local.get $arg0)) (local.get $arg2))))
-    (global.set $eax
-      (select (local.get $child) (local.get $arg0) (local.get $child)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (select (local.get $child) (local.get $arg0) (local.get $child)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 130: ScreenToClient
@@ -3683,8 +3675,8 @@
       (i32.sub (i32.load (local.get $pt)) (local.get $ox)))
     (i32.store offset=4 (local.get $pt)
       (i32.sub (i32.load offset=4 (local.get $pt)) (local.get $oy)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
 ;; 132: WinHelpA(hwnd, lpszHelp, uCommand, dwData) — unified WAT dispatcher
@@ -3693,29 +3685,29 @@
     (local.set $accepted (call $help_dispatch_api_a
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (call $help_present_dispatch (local.get $accepted) (local.get $arg2))
-    (global.set $eax (local.get $accepted))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $accepted))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 133: IsChild
   (func $handle_IsChild (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (if (result i32) (i32.and
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and
     (i32.ne (global.get $dlg_hwnd) (i32.const 0))
     (i32.eq (local.get $arg0) (global.get $dlg_hwnd)))
     (then (i32.const 1)) (else (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 134: GetSysColorBrush(nIndex) — 1 arg stdcall
   (func $handle_GetSysColorBrush (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_gdi_create_solid_brush (call $win98_sys_color (local.get $arg0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_create_solid_brush (call $win98_sys_color (local.get $arg0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 135: GetSysColor
   (func $handle_GetSysColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $win98_sys_color (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $win98_sys_color (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 136: DialogBoxParamA(hInstance, lpTemplate, hWndParent, lpDialogFunc, dwInitParam)
@@ -3802,18 +3794,18 @@
     ;; Show the dialog — real DialogBoxParam auto-shows before WM_INITDIALOG
     (drop (call $host_show_window (local.get $hwnd) (i32.const 1)))
     ;; Save return address — we'll restore it when EndDialog is called
-    (global.set $dlg_ret_addr (call $gl32 (global.get $esp)))
+    (global.set $dlg_ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Clean DialogBoxParamA frame (ret + 5 args = 24 bytes)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     ;; Set up call to dialog proc: push args for DlgProc(hwnd, WM_INITDIALOG, 0, dwInitParam)
     ;; Return to dialog loop thunk which pumps messages until EndDialog
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))  ;; 4 args + ret addr
-    (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))  ;; ret → dialog message loop
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $hwnd))          ;; hDlg
-    (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0x0110))         ;; WM_INITDIALOG
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; 4 args + ret addr
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))  ;; ret → dialog message loop
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $hwnd))          ;; hDlg
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0x0110))         ;; WM_INITDIALOG
     (global.set $dlg_init_focus_hwnd (global.get $focus_hwnd))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (global.get $dlg_init_focus_hwnd)) ;; wParam (focus hwnd)
-    (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $init_param))   ;; lParam
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (global.get $dlg_init_focus_hwnd)) ;; wParam (focus hwnd)
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $init_param))   ;; lParam
     ;; Set EIP to dialog proc and signal redirection (don't let caller override EIP)
     (global.set $eip (local.get $arg3))
     ;; Let the host observe/show the modal shell before WM_INITDIALOG starts,
@@ -3844,8 +3836,8 @@
     (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.add (i32.load (i32.add (local.get $wa) (i32.const 4))) (local.get $arg2)))  ;; top += dy
     (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.add (i32.load (i32.add (local.get $wa) (i32.const 8))) (local.get $arg1)))  ;; right += dx
     (i32.store (i32.add (local.get $wa) (i32.const 12)) (i32.add (i32.load (i32.add (local.get $wa) (i32.const 12))) (local.get $arg2))) ;; bottom += dy
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; 140: MapWindowPoints(hWndFrom, hWndTo, lpPoints, cPoints) → int
@@ -3873,9 +3865,9 @@
       (local.set $p (i32.add (local.get $p) (i32.const 8)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $apply)))
-    (global.set $eax (i32.or (i32.and (local.get $dx) (i32.const 0xFFFF))
+    (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (local.get $dx) (i32.const 0xFFFF))
                              (i32.shl (local.get $dy) (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 141: SetWindowPos
   ;; WINDOWPOS structs handed to guest wndprocs by $windowpos_notify. These are
@@ -3984,8 +3976,8 @@
     ;; SetWindowPos(hwnd, hWndInsertAfter, X, Y, cx, cy, uFlags)
     (local $cy i32) (local $uFlags i32) (local $dlg_rec i32)
     (local $old_wh i32) (local $new_wh i32)
-    (local.set $cy (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $uFlags (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $cy (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $uFlags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (local.set $old_wh (call $ctrl_get_wh_packed (local.get $arg0)))
     (if (i32.eqz (local.get $old_wh))
       (then (local.set $old_wh (call $host_get_window_client_size (local.get $arg0)))))
@@ -4051,13 +4043,13 @@
     ;; Last, so the window sees the geometry we have already committed.
     (call $windowpos_notify (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $cy) (local.get $uFlags))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; 142: DrawTextA(hdc, lpString, nCount, lpRect, uFormat)
   (func $handle_DrawTextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_gdi_draw_text
+    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_draw_text
       (local.get $arg0)
       (call $g2w (local.get $arg1))
       (local.get $arg2)
@@ -4065,7 +4057,7 @@
       (local.get $arg4)
       (i32.const 0) ;; isWide = 0
     ))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; stdcall, 5 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; stdcall, 5 args
   )
 
   ;; DrawTextEx applies DRAWTEXTPARAMS around the common DrawText backend.
@@ -4138,12 +4130,12 @@
 
   ;; DrawTextExA(hdc, lpString, nCount, lpRect, uFormat, lpDTParams)
   (func $handle_DrawTextExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $draw_text_ex
+    (i32.store offset=0 (global.get $reg_base) (call $draw_text_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args
   )
 
   ;; DrawEdge(hdc, qrc, edge, grfFlags) — 4 args stdcall
@@ -4152,13 +4144,13 @@
     (local.set $rc (call $g2w (local.get $arg1)))
     (local.set $desc (global.get $GDI_LINE_DESC))
     (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then (global.set $eax (call $gdi_draw_edge_desc
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_draw_edge_desc
         (local.get $arg0) (local.get $desc)
         (i32.load (local.get $rc)) (i32.load offset=4 (local.get $rc))
         (i32.load offset=8 (local.get $rc)) (i32.load offset=12 (local.get $rc))
         (local.get $arg2) (local.get $arg3) (local.get $rc))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 144: GetClipboardData(uFormat) → HANDLE
@@ -4171,15 +4163,15 @@
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (call $clipboard_get_data_handle (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $clipboard_get_data_handle (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
 
   ;; 187: KillTimer(hwnd, nIDEvent) — clear the timer
   (func $handle_KillTimer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $timer_kill (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $timer_kill (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 188: SetTimer
@@ -4196,16 +4188,15 @@
     (call $timer_set (local.get $arg0) (local.get $tid) (local.get $arg2) (local.get $arg3))
     ;; Window-timer success is boolean; do not turn an ID-zero timer into an
     ;; apparent failure even though its delivered/stored ID stays zero.
-    (global.set $eax
-      (select (i32.const 1) (local.get $tid)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 1) (local.get $tid)
         (i32.and (i32.ne (local.get $arg0) (i32.const 0)) (i32.eqz (local.get $tid)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 189: FindWindowA(lpClassName, lpWindowName) — return NULL (no existing window found)
   (func $handle_FindWindowA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))  ;; NULL — no window found
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; NULL — no window found
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 915: SearchPathA(lpPath, lpFileName, lpExtension, nBufLen, lpBuffer, lpFilePart) — 6 args stdcall
@@ -4226,67 +4217,67 @@
 
   (func $handle_SearchPathA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; 6th arg (lpFilePart) lives at esp+24 (skip ret addr + 5 visible args)
-    (global.set $eax (call $search_path
+    (i32.store offset=0 (global.get $reg_base) (call $search_path
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args
   )
 
   ;; 914: DllUnregisterServer() — no-op, return S_OK
   (func $handle_DllUnregisterServer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))  ;; S_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; S_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 913: FindWindowExA(hwndParent, hwndChildAfter, lpszClass, lpszWindow) — return NULL
   (func $handle_FindWindowExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
   ;; 190: BringWindowToTop(hWnd) — 1 arg stdcall
   ;; Sets window to top of Z-order. Single-window model: always succeeds.
   (func $handle_BringWindowToTop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 191: GetPrivateProfileIntA(lpAppName, lpKeyName, nDefault, lpFileName)
   ;; No INI file support — return nDefault (arg2)
   (func $handle_GetPrivateProfileIntA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetPrivateProfileIntA(appName, keyName, nDefault, fileName) — 4 args stdcall
-    (global.set $eax (call $host_ini_get_int
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
       (call $g2w (local.get $arg0))
       (call $g2w (local.get $arg1))
       (local.get $arg2)
       (call $g2w (local.get $arg3))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 192: WritePrivateProfileStringA(appName, keyName, string, fileName) — 4 args stdcall
   (func $handle_WritePrivateProfileStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_ini_write_string
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_write_string
       (call $g2w (local.get $arg0))
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (call $g2w (local.get $arg3))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 193: ShellExecuteA(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd)
   (func $handle_ShellExecuteA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_shell_execute
+    (i32.store offset=0 (global.get $reg_base) (call $host_shell_execute
       (local.get $arg0)
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (if (result i32) (local.get $arg3) (then (call $g2w (local.get $arg3))) (else (i32.const 0)))
       (if (result i32) (local.get $arg4) (then (call $g2w (local.get $arg4))) (else (i32.const 0)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))))) ;; nShowCmd
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))) ;; nShowCmd
     (drop (local.get $name_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; 6 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; 6 args + ret
   )
 
   ;; 194: ShellAboutA(hwnd, szApp, szOtherStuff, hIcon) — show About dialog
@@ -4305,8 +4296,8 @@
     (call $create_about_dialog
       (local.get $dlg) (local.get $arg0)
       (local.get $arg1) (local.get $arg2))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 195: SHGetSpecialFolderPathA(hwnd, pszPath, csidl, fCreate) — write fake path, return TRUE
@@ -4318,26 +4309,26 @@
     (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0x4F444E49))  ;; "INDO"
     (i32.store16 (i32.add (local.get $wa) (i32.const 8)) (i32.const 0x5357))    ;; "WS"
     (i32.store8 (i32.add (local.get $wa) (i32.const 10)) (i32.const 0))         ;; null term
-    (global.set $eax (i32.const 1))  ;; TRUE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; TRUE
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 196: DragAcceptFiles(hwnd, fAccept) — no-op (no drag-drop support)
   (func $handle_DragAcceptFiles (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 197: DragQueryFileA(hDrop, iFile, lpszFile, cch) — no drag-drop, return 0 files
   (func $handle_DragQueryFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; If iFile=0xFFFFFFFF, return count of files (0)
     ;; Otherwise return 0 (no file at that index)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
   ;; 198: DragFinish(hDrop) — free drop handle, no-op for us
   (func $handle_DragFinish (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 199: GetOpenFileNameA(lpOFN) — show modal Open dialog
@@ -4382,8 +4373,8 @@
     (local $p i32) (local $base i32) (local $ch i32) (local $len i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $p (local.get $arg0))
     (local.set $base (local.get $arg0))
@@ -4401,12 +4392,12 @@
     (if (i32.or (i32.eqz (local.get $arg1))
                 (i32.lt_u (local.get $arg2) (i32.add (local.get $len) (i32.const 1))))
       (then
-        (global.set $eax (i32.add (local.get $len) (i32.const 1)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $len) (i32.const 1)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $guest_strcpy (local.get $arg1) (local.get $base))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 201: ChooseFontA(lpCF) — show the WAT-driven Font picker with face/
@@ -4431,8 +4422,8 @@
     ;; created from inside $create_findreplace_dialog via host_register_dialog_frame.
     (drop (call $host_show_find_dialog (local.get $hwnd) (local.get $owner) (local.get $arg0)))
     (call $create_findreplace_dialog (local.get $hwnd) (local.get $owner) (local.get $arg0) (i32.const 0))
-    (global.set $eax (local.get $hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (local.get $hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; ReplaceTextA(lpFR) — create modeless Replace dialog, return HWND.
@@ -4444,8 +4435,8 @@
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (local.set $owner (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
     (call $create_findreplace_dialog (local.get $hwnd) (local.get $owner) (local.get $arg0) (i32.const 1))
-    (global.set $eax (local.get $hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 203: PageSetupDlgA(lpPS) — show placeholder modal dialog
@@ -4488,21 +4479,21 @@
 
   ;; 204: CommDlgExtendedError() — return 0 (no error)
   (func $handle_CommDlgExtendedError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 205: exit
   (func $handle_exit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; cdecl: pop only the return address; the caller owns the status arg.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (global.set $atexit_exit_code (local.get $arg0))
     (call $crt_atexit_run_next)
   )
 
   ;; 206: _exit
   (func $handle__exit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $host_exit (local.get $arg0))
     (global.set $eip (i32.const 0))
     (global.set $yield_flag (i32.const 1))
@@ -4534,8 +4525,8 @@
     (i32.store (i32.add (call $g2w (global.get $msvcrt_acmdln_ptr)) (i32.const 136)) (i32.const 0))))
     (call $gs32 (local.get $arg1) (i32.add (global.get $msvcrt_acmdln_ptr) (i32.const 128)))  ;; argv
     (call $gs32 (local.get $arg2) (i32.add (global.get $msvcrt_acmdln_ptr) (i32.const 136))) ;; envp
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 208: __p__fmode
@@ -4543,8 +4534,8 @@
     (if (i32.eqz (global.get $msvcrt_fmode_ptr))
     (then (global.set $msvcrt_fmode_ptr (call $heap_alloc (i32.const 4)))
     (call $gs32 (global.get $msvcrt_fmode_ptr) (i32.const 0))))
-    (global.set $eax (global.get $msvcrt_fmode_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_fmode_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 209: __p__commode
@@ -4552,8 +4543,8 @@
     (if (i32.eqz (global.get $msvcrt_commode_ptr))
     (then (global.set $msvcrt_commode_ptr (call $heap_alloc (i32.const 4)))
     (call $gs32 (global.get $msvcrt_commode_ptr) (i32.const 0))))
-    (global.set $eax (global.get $msvcrt_commode_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_commode_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 210: _initterm(start, end) — CRT init table walker
@@ -4562,11 +4553,11 @@
   (func $handle__initterm (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $fn i32)
     ;; Save return address and end pointer for continuation
-    (global.set $initterm_ret (call $gl32 (global.get $esp)))
+    (global.set $initterm_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     (global.set $initterm_end (local.get $arg1))
     (global.set $initterm_ptr (local.get $arg0))
     ;; cdecl: pop only the return address; the caller owns both arguments.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     ;; Find first non-NULL entry and call it
     (block $done (loop $scan
       (br_if $done (i32.ge_u (global.get $initterm_ptr) (global.get $initterm_end)))
@@ -4575,8 +4566,8 @@
       (if (local.get $fn)
         (then
           ;; Push continuation thunk as return address, then jump to fn
-          (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-          (call $gs32 (global.get $esp) (global.get $initterm_thunk))
+          (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+          (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $initterm_thunk))
           (global.set $eip (local.get $fn))
           (global.set $steps (i32.const 0))
           (return)))
@@ -4587,9 +4578,9 @@
 
   ;; 211: _controlfp(new, mask) — cdecl; return default FPU control word
   (func $handle__controlfp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x9001F))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x9001F))
     ;; The caller owns the two arguments. Pop only our return address.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 212: _strrev
@@ -4615,24 +4606,24 @@
     (local.set $i (i32.add (local.get $i) (i32.const 1)))
     (local.set $j (i32.sub (local.get $j) (i32.const 1)))
     (br $swap)))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 213: toupper
   (func $handle_toupper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Simple ASCII toupper
     (if (i32.and (i32.ge_u (local.get $arg0) (i32.const 0x61)) (i32.le_u (local.get $arg0) (i32.const 0x7A)))
-    (then (global.set $eax (i32.sub (local.get $arg0) (i32.const 0x20))))
-    (else (global.set $eax (local.get $arg0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (then (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $arg0) (i32.const 0x20))))
+    (else (i32.store offset=0 (global.get $reg_base) (local.get $arg0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 214: memmove
   (func $handle_memmove (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $guest_memmove (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 215: strchr
@@ -4641,23 +4632,23 @@
     ;; Implement strchr(str, char) — find char in string, return ptr or NULL
     (local.set $i (call $g2w (local.get $arg0)))
     (local.set $v (i32.and (local.get $arg1) (i32.const 0xFF)))
-    (global.set $eax (i32.const 0)) ;; default: not found
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; default: not found
     (block $done (loop $scan
     (local.set $j (i32.load8_u (local.get $i)))
     (if (i32.eq (local.get $j) (local.get $v))
-    (then (global.set $eax (i32.add (i32.sub (local.get $i) (global.get $GUEST_BASE)) (global.get $image_base))) (br $done)))
+    (then (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $i) (global.get $GUEST_BASE)) (global.get $image_base))) (br $done)))
     (br_if $done (i32.eqz (local.get $j)))
     (local.set $i (i32.add (local.get $i) (i32.const 1)))
     (br $scan)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 216: _XcptFilter — cdecl, returns EXCEPTION_CONTINUE_SEARCH (0).
   ;; nop was leaving ret-addr on stack and corrupting subsequent instructions;
   ;; pop the ret-addr (cdecl: caller pops args).
   (func $handle__XcptFilter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 217: _CxxThrowException — STUB: unimplemented
@@ -4734,88 +4725,88 @@
 
   ;; 218: lstrlenA
   (func $handle_lstrlenA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_len (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $lstr_len (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 219: lstrcpyA
   (func $handle_lstrcpyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $lstr_cpy (local.get $arg0) (local.get $arg1) (i32.const 0))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 220: lstrcatA
   (func $handle_lstrcatA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $lstr_cat (local.get $arg0) (local.get $arg1) (i32.const 0))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 221: lstrcpynA(dst, src, count) — copies at most count-1 chars.
   (func $handle_lstrcpynA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $lstr_cpyn (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 222: lstrcmpA
   (func $handle_lstrcmpA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 223: RegCloseKey(hKey) — 1 arg stdcall
   (func $handle_RegCloseKey (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_close_key (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_close_key (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; RegDeleteKeyA(hKey, lpSubKey) — 2 args stdcall
   (func $handle_RegDeleteKeyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_delete_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_delete_key
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; RegDeleteKeyW(hKey, lpSubKey) — 2 args stdcall
   (func $handle_RegDeleteKeyW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_delete_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_delete_key
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; RegDeleteValueA(hKey, lpValueName) — 2 args stdcall
   (func $handle_RegDeleteValueA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_delete_value
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_delete_value
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; RegDeleteValueW(hKey, lpValueName) — 2 args stdcall
   (func $handle_RegDeleteValueW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_delete_value
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_delete_value
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 224: RegCreateKeyA(hKey, lpSubKey, phkResult) — 3 args stdcall
   (func $handle_RegCreateKeyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_create_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_create_key
       (local.get $arg0) (call $g2w (local.get $arg1)) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 225: RegQueryValueExA(hKey, lpValueName, lpReserved, lpType, lpData, lpcbData) — 6 args stdcall
@@ -4831,10 +4822,10 @@
       (local.get $type_g) (local.get $data_g) (local.get $cb_g) (local.get $wide)))
 
   (func $handle_RegQueryValueExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_query_value_ex
+    (i32.store offset=0 (global.get $reg_base) (call $reg_query_value_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; SHQueryValueExA/W(hKey, pszValue, pdwReserved, pdwType, pvData, pcbData)
@@ -4843,17 +4834,17 @@
   ;; here stores no unexpanded strings, so the read is the same read.
   ;; Explorer reaches this through SHELL32 ordinal 509.
   (func $handle_SHQueryValueExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_query_value_ex
+    (i32.store offset=0 (global.get $reg_base) (call $reg_query_value_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   (func $handle_SHQueryValueExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_query_value_ex
+    (i32.store offset=0 (global.get $reg_base) (call $reg_query_value_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; RegSetValueEx{A,W}(hKey, lpValueName, Reserved, dwType, lpData, cbData)
@@ -4867,10 +4858,10 @@
 
   ;; 226: RegSetValueExA
   (func $handle_RegSetValueExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_set_value_ex
+    (i32.store offset=0 (global.get $reg_base) (call $reg_set_value_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 227-231: the Local* family, formerly routed through $dispatch_local, which
@@ -4879,36 +4870,36 @@
 
   ;; 227: LocalAlloc(uFlags, uBytes)
   (func $handle_LocalAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_alloc (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $arg1)))
     (if (i32.and (local.get $arg0) (i32.const 0x40)) ;; LMEM_ZEROINIT
-      (then (if (global.get $eax)
-              (then (call $zero_memory (call $g2w (global.get $eax)) (local.get $arg1))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+      (then (if (i32.load offset=0 (global.get $reg_base))
+              (then (call $zero_memory (call $g2w (i32.load offset=0 (global.get $reg_base))) (local.get $arg1))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 228: LocalFree
   (func $handle_LocalFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $heap_free (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 229: LocalLock — handles are pointers here, so locking is the identity.
   (func $handle_LocalLock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 230: LocalUnlock — returns FALSE, meaning the lock count reached zero.
   (func $handle_LocalUnlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 231: LocalReAlloc(hMem, uBytes, uFlags)
   (func $handle_LocalReAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_realloc (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_realloc (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; LocalSize(hMem) — LocalAlloc returns a fixed guest pointer whose aligned
@@ -4916,12 +4907,11 @@
   ;; it. Return the usable data bytes, matching the existing GlobalSize path.
   (func $handle_LocalSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (local.get $arg0))
-      (then (global.set $eax (i32.const 0)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
-        (global.set $eax
-          (i32.sub (call $gl32 (i32.sub (local.get $arg0) (i32.const 4)))
+        (i32.store offset=0 (global.get $reg_base) (i32.sub (call $gl32 (i32.sub (local.get $arg0) (i32.const 4)))
                    (i32.const 4)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 232-237: the Global* family, formerly routed through $dispatch_global,
@@ -4931,49 +4921,48 @@
 
   ;; 232: GlobalAlloc(uFlags, dwBytes)
   (func $handle_GlobalAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_alloc (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $arg1)))
     ;; The unified emulator heap reuses blocks freed by HeapAlloc/LocalAlloc as
     ;; GlobalAlloc results. That makes unrelated stale bytes much more visible
     ;; than on Win9x (Diablo's CEL decoder leaves transparent skip runs alone).
     ;; Zero is a valid result for memory whose contents are otherwise
     ;; unspecified, and keeps GlobalAlloc deterministic; GMEM_ZEROINIT remains
     ;; satisfied as a strict subset of this behavior.
-    (if (global.get $eax)
-      (then (call $zero_memory (call $g2w (global.get $eax)) (local.get $arg1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.load offset=0 (global.get $reg_base))
+      (then (call $zero_memory (call $g2w (i32.load offset=0 (global.get $reg_base))) (local.get $arg1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 233: GlobalFree
   (func $handle_GlobalFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $heap_free (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 234: GlobalLock
   (func $handle_GlobalLock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 235: GlobalUnlock
   (func $handle_GlobalUnlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 236: GlobalReAlloc(hMem, dwBytes, uFlags)
   (func $handle_GlobalReAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_realloc (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_realloc (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 237: GlobalSize — usable bytes, from the four-byte heap header before the
   ;; block. Same rule as $handle_LocalSize.
   (func $handle_GlobalSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (i32.sub (call $gl32 (i32.sub (local.get $arg0) (i32.const 4))) (i32.const 4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.sub (call $gl32 (i32.sub (local.get $arg0) (i32.const 4))) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 238: GlobalCompact — STUB: unimplemented
@@ -4989,9 +4978,9 @@
       (local.get $arg0) (call $g2w (local.get $arg1)) (i32.const 0)))
     (if (local.get $hResult)
       (then (call $gs32 (local.get $arg2) (local.get $hResult))
-             (global.set $eax (i32.const 0)))  ;; ERROR_SUCCESS
-      (else (global.set $eax (i32.const 2))))  ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+             (i32.store offset=0 (global.get $reg_base) (i32.const 0)))  ;; ERROR_SUCCESS
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 2))))  ;; ERROR_FILE_NOT_FOUND
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 240: RegOpenKeyExA(hKey, lpSubKey, ulOptions, samDesired, phkResult) — 5 args stdcall
@@ -5001,9 +4990,9 @@
       (local.get $arg0) (call $g2w (local.get $arg1)) (i32.const 0)))
     (if (local.get $hResult)
       (then (call $gs32 (local.get $arg4) (local.get $hResult))
-             (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+             (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 2))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 241: RegisterClassExA
@@ -5015,7 +5004,7 @@
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 8)))) ;; lpfnWndProc
     (local.set $class_name_wa (call $g2w (call $gl32 (i32.add (local.get $arg0) (i32.const 40)))))
     ;; Allocate class record (returns atom; WNDCLASSA filled in below)
-    (global.set $eax (call $class_table_register (local.get $class_name_wa)))
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register (local.get $class_name_wa)))
     ;; Convert WNDCLASSEX(+4..+40) → WNDCLASSA(+0..+36) (skip cbSize, copy 9 dwords)
     ;; into the embedded WNDCLASSA at class record + 8.
     (local.set $slot (call $class_find_slot (local.get $class_name_wa)))
@@ -5042,7 +5031,7 @@
             (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                      (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))
         (then (global.set $wndproc_addr2 (local.get $tmp))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 242: RegisterClassA
@@ -5054,7 +5043,7 @@
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))) ;; lpfnWndProc
     (local.set $class_name_wa (call $class_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 36)))))
     ;; Allocate class record (returns atom; WNDCLASSA filled in below)
-    (global.set $eax (call $class_table_register (local.get $class_name_wa)))
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register (local.get $class_name_wa)))
     ;; Copy full WNDCLASSA into the embedded slot at class record + 8.
     (local.set $slot (call $class_find_slot (local.get $class_name_wa)))
     (if (i32.ge_s (local.get $slot) (i32.const 0))
@@ -5079,7 +5068,7 @@
     ;; Keep the atom returned by class_table_register.  Callers commonly pass
     ;; it straight back to CreateWindowEx; collapsing every registration to
     ;; 0xC001 attaches later classes to the first registered WNDCLASS.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 243: BeginPaint
@@ -5211,8 +5200,8 @@
       (then (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (i32.const 1))))
     (if (local.get $erase_pending)
       (then (call $nc_flags_clear (local.get $arg0) (i32.const 2))))
-    (global.set $eax (local.get $hdc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $hdc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 244: OpenClipboard(hwndNewOwner) — single-process clipboard, always open.
@@ -5223,8 +5212,8 @@
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 245: CloseClipboard() — single-process clipboard, always succeeds.
@@ -5235,8 +5224,8 @@
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 246: IsClipboardFormatAvailable(format)
@@ -5246,8 +5235,8 @@
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (call $clipboard_is_format_available (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $clipboard_is_format_available (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 247: GetEnvironmentStringsW — a wide copy of the process environment.
@@ -5255,8 +5244,8 @@
   ;; handed back the command line, so the two disagreed about the environment
   ;; and neither described it. Both are copies of one real block now.
   (func $handle_GetEnvironmentStringsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_strings (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $env_strings (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 248: GetSaveFileNameA(lpOFN) — show modal Save As dialog
@@ -5289,16 +5278,16 @@
 
 ;; 250: lstrcmpiA
   (func $handle_lstrcmpiA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 251-252: FreeEnvironmentStrings{A,W} — release the copy handed out by
   ;; GetEnvironmentStrings. Both spellings free the same kind of heap block.
   (func $handle_FreeEnvironmentStringsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg0) (then (call $heap_free (local.get $arg0))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_FreeEnvironmentStringsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5308,25 +5297,25 @@
 
   ;; 253: GetVersion — return winver, 0 args
   (func $handle_GetVersion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $winver))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $winver))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
 ;; 255: wsprintfA
   (func $handle_wsprintfA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; wsprintfA(buf, fmt, ...) — cdecl, caller cleans stack
-    (global.set $eax (call $wsprintf_impl
-      (local.get $arg0) (local.get $arg1) (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $wsprintf_impl
+      (local.get $arg0) (local.get $arg1) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
     ;; cdecl: only pop return address
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; wvsprintfA(buf, fmt, arglist) — stdcall, 3 args
   (func $handle_wvsprintfA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; wsprintf_impl expects arg_ptr as a guest address and reads args with gl32.
-    (global.set $eax (call $wsprintf_impl
+    (i32.store offset=0 (global.get $reg_base) (call $wsprintf_impl
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; GetPrivateProfileString{A,W}(appName, keyName, default, retBuf, nSize, fileName)
@@ -5344,11 +5333,11 @@
       (local.get $wide)))
 
   (func $handle_GetPrivateProfileStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ini_get_string
+    (i32.store offset=0 (global.get $reg_base) (call $ini_get_string
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 257: __wgetmainargs
@@ -5359,8 +5348,8 @@
       (then (call $store_fake_wcmdline)))
     (call $gs32 (local.get $arg1) (i32.add (global.get $msvcrt_wcmdln_ptr) (i32.const 776)))
     (call $gs32 (local.get $arg2) (i32.add (global.get $msvcrt_wcmdln_ptr) (i32.const 784)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 258: __p__wcmdln
@@ -5368,8 +5357,8 @@
     (if (i32.eqz (global.get $msvcrt_wcmdln_ptr))
       (then (call $store_fake_wcmdline)))
     (call $gs32 (i32.add (global.get $msvcrt_wcmdln_ptr) (i32.const 768)) (global.get $msvcrt_wcmdln_ptr))
-    (global.set $eax (i32.add (global.get $msvcrt_wcmdln_ptr) (i32.const 768)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.add (global.get $msvcrt_wcmdln_ptr) (i32.const 768)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 259: __p__acmdln
@@ -5389,18 +5378,18 @@
       (i32.store8 (i32.add (local.get $dst) (global.get $exe_name_len)) (i32.const 0))
       ;; ptr-to-ptr at +128
       (call $gs32 (i32.add (global.get $msvcrt_acmdln_ptr) (i32.const 128)) (global.get $msvcrt_acmdln_ptr))))
-    (global.set $eax (i32.add (global.get $msvcrt_acmdln_ptr) (i32.const 128)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.add (global.get $msvcrt_acmdln_ptr) (i32.const 128)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 260: __set_app_type(type) — cdecl; sets GUI vs console, no-op for us
   (func $handle___set_app_type (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 261: __setusermatherr(handler) — cdecl; set math error handler, no-op
   (func $handle___setusermatherr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 262: _adjust_fdiv
@@ -5408,20 +5397,20 @@
     ;; Return pointer to a 0 dword (no FDIV bug)
     (if (i32.eqz (global.get $msvcrt_fmode_ptr))
       (then (global.set $msvcrt_fmode_ptr (call $heap_alloc (i32.const 4)))))
-    (global.set $eax (global.get $msvcrt_fmode_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_fmode_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 263: free(ptr) — cdecl
   (func $handle_free (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $heap_free (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 264: malloc(size) — cdecl
   (func $handle_malloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_alloc (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; operator new(size_t) / operator new[](size_t) — cdecl. The MSVC decorated
@@ -5430,8 +5419,8 @@
   ;; have no use for. Returning NULL on exhaustion matches the non-throwing
   ;; behaviour of the msvcrt these binaries link against.
   (func $cpp_operator_new (param $size i32)
-    (global.set $eax (call $heap_alloc (local.get $size)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $size)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
   (func $handle_??2@YAPAXI@Z (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $cpp_operator_new (local.get $arg0))
@@ -5444,7 +5433,7 @@
   ;; pointer is explicitly a no-op in C++.
   (func $cpp_operator_delete (param $ptr i32)
     (if (local.get $ptr) (then (call $heap_free (local.get $ptr))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
   (func $handle_??3@YAXPAX@Z (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $cpp_operator_delete (local.get $arg0))
@@ -5457,28 +5446,28 @@
   (func $handle_calloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32)
     (local.set $tmp (i32.mul (local.get $arg0) (local.get $arg1)))
-    (global.set $eax (call $heap_alloc (local.get $tmp)))
-    (call $zero_memory (call $g2w (global.get $eax)) (local.get $tmp))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $tmp)))
+    (call $zero_memory (call $g2w (i32.load offset=0 (global.get $reg_base))) (local.get $tmp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 266: rand
   (func $handle_rand (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $rand_seed (i32.add (i32.mul (global.get $rand_seed) (i32.const 1103515245)) (i32.const 12345)))
-    (global.set $eax (i32.and (i32.shr_u (global.get $rand_seed) (i32.const 16)) (i32.const 0x7FFF)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.shr_u (global.get $rand_seed) (i32.const 16)) (i32.const 0x7FFF)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 267: srand(seed) — cdecl
   (func $handle_srand (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $rand_seed (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 268: _purecall
   (func $handle__purecall (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_exit (i32.const 3))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 269: _onexit(func) — cdecl; accept the shutdown registration.
@@ -5486,14 +5475,14 @@
   ;; process-global CRT state left for these callbacks to release. Returning
   ;; the supplied function matches successful CRT registration.
   (func $handle__onexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 270: __dllonexit(func, begin, end) — cdecl; DLL-local counterpart.
   (func $handle___dllonexit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 271: _splitpath — STUB: unimplemented
@@ -5526,14 +5515,14 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (local.set $v (call $gl16 (i32.add (local.get $arg0) (i32.shl (local.get $i) (i32.const 1)))))
       (br $parse)))
-    (global.set $eax (local.get $tmp))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 274: _itow — int to wide string (STUB: unimplemented: write "0")
   (func $handle__itow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $crt_itoa (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $crt_itoa (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 275: wcscmp — STUB: unimplemented
@@ -5551,8 +5540,8 @@
       (call $gs16 (i32.add (local.get $arg0) (i32.shl (local.get $i) (i32.const 1))) (local.get $v))
       (br_if $d (i32.eqz (local.get $v)))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 277: wcslen — STUB: unimplemented
@@ -5563,15 +5552,15 @@
   ;; 278: memset(dest, ch, count) — cdecl
   (func $handle_memset (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $guest_memset (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 279: memcpy(dest, src, count) — cdecl
   (func $handle_memcpy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $guest_memmove (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 280: __CxxFrameHandler — C++ exception frame handler (STUB: unimplemented, return 1=ExceptionContinueSearch)
@@ -5600,8 +5589,8 @@
         (local.set $len (i32.add (call $guest_wcslen (local.get $arg0)) (i32.const 1)))
         (local.set $ansi (call $heap_alloc (local.get $len)))
         (if (i32.eqz (local.get $ansi))
-          (then (global.set $eax (i32.const 0))
-                (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
                 (return)))
         (drop (call $wide_to_ansi (local.get $arg0) (local.get $ansi) (local.get $len)))))
     (call $handle_GetModuleHandleA (local.get $ansi) (local.get $arg1) (local.get $arg2)
@@ -5611,16 +5600,16 @@
 
   ;; 284: GetModuleFileNameW — write L"C:\<exe_name>\0" as wide string
   (func $handle_GetModuleFileNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 285: GetCommandLineW
   (func $handle_GetCommandLineW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (global.get $msvcrt_wcmdln_ptr))
       (then (call $store_fake_wcmdline)))
-    (global.set $eax (global.get $msvcrt_wcmdln_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_wcmdln_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 286: CreateWindowExW — convert ASCII-compatible wide strings and reuse
@@ -5662,7 +5651,7 @@
     (local $tmp i32) (local $class_name_wa i32) (local $slot i32) (local $dst i32)
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
     (local.set $class_name_wa (call $class_wide_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 36)))))
-    (global.set $eax (call $class_table_register (local.get $class_name_wa)))
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register (local.get $class_name_wa)))
     (local.set $slot (call $class_find_slot (local.get $class_name_wa)))
     (if (i32.ge_s (local.get $slot) (i32.const 0))
       (then
@@ -5681,7 +5670,7 @@
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))
     (then (global.set $wndproc_addr2 (local.get $tmp))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 288: RegisterClassExW
@@ -5690,7 +5679,7 @@
     ;; WNDCLASSEXW: cbSize(+0) style(+4) lpfnWndProc(+8) ... lpszClassName(+40)
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
     (local.set $class_name_wa (call $class_wide_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 40)))))
-    (global.set $eax (call $class_table_register (local.get $class_name_wa)))
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register (local.get $class_name_wa)))
     (local.set $slot (call $class_find_slot (local.get $class_name_wa)))
     (if (i32.ge_s (local.get $slot) (i32.const 0))
       (then
@@ -5713,7 +5702,7 @@
             (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                      (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))
         (then (global.set $wndproc_addr2 (local.get $tmp))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 289: DefWindowProcW — same as DefWindowProcA
@@ -5740,16 +5729,16 @@
               (call $wnd_table_remove (local.get $arg0))))
           (call $host_destroy_window (local.get $arg0))
           (global.set $yield_flag (i32.const 1))
-          (global.set $eax (i32.const 0))
-          (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+          (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
           (return)))
       (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
         (then (global.set $quit_flag (i32.const 1))))
       (if (i32.eq (local.get $arg0) (global.get $focus_hwnd))
         (then (global.set $focus_hwnd (i32.const 0))))
       (call $wnd_destroy_recursive (local.get $arg0))
-      (global.set $eax (i32.const 0))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_ERASEBKGND (0x14): fill client area with background brush
     (if (i32.eq (local.get $arg1) (i32.const 0x0014))
     (then
@@ -5760,18 +5749,18 @@
     ;; and must not have its own background overwritten -- Hearts fills its
     ;; baize green and was registered with WHITE_BRUSH.
     (call $nc_flags_set (local.get $arg0) (i32.const 8))
-    (global.set $eax (call $host_erase_background (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_erase_background (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_PAINT: default handling is an empty paint cycle that validates the
     ;; update region, identical to DefWindowProcA.
     (if (i32.eq (local.get $arg1) (i32.const 0x000F))
     (then
     (call $update_clear_hwnd (local.get $arg0))
     (call $paint_flag_clear_hwnd (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 290: LoadCursorW(hInstance, lpCursorName) — a cursor named by ordinal is
@@ -5835,8 +5824,8 @@
     (local $text_gp i32) (local $text_wa i32) (local $len i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.ge_u (local.get $arg1) (i32.const 0x10000))
       (then
@@ -5857,11 +5846,11 @@
             (i32.lt_u (call $ctrl_table_get_class (local.get $arg0)) (i32.const 10))
             (i32.gt_u (call $ctrl_table_get_class (local.get $arg0)) (i32.const 16))))
       (then
-        (global.set $eax (call $control_wndproc_dispatch
+        (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $text_gp)))
         (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
         (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Native child windows such as RichEdit20A are not WAT control-table
     ;; controls, but SetWindowText still maps to WM_SETTEXT for them.
@@ -5871,19 +5860,19 @@
       (then
         (call $richedit_format_reset_hwnd (local.get $arg0))
         (call $title_table_set (local.get $arg0) (local.get $text_wa) (local.get $len))
-        (global.set $eax (call $wnd_send_message
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $text_gp)))
         (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
         (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $title_table_set (local.get $arg0) (local.get $text_wa) (local.get $len))
     (call $nc_flags_set (local.get $arg0) (i32.const 1))
     (call $defwndproc_do_ncpaint (local.get $arg0))
     (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
     (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 295: GetWindowTextW(hwnd, lpString, nMaxCount) → int (chars copied)
   ;; The same read as GetWindowTextA, staged through an ANSI buffer of the
@@ -5891,19 +5880,19 @@
   ;; "" for every window, which is a wrong answer rather than a missing one.
   (func $handle_GetWindowTextW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $len i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.le_s (local.get $arg2) (i32.const 0)))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (i32.store16 (call $g2w (local.get $arg1)) (i32.const 0))
     (local.set $tmp (call $heap_alloc (local.get $arg2)))
     (if (i32.eqz (local.get $tmp))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (call $gs8 (local.get $tmp) (i32.const 0))
     (local.set $len (call $window_text_ansi
       (local.get $arg0) (local.get $tmp) (local.get $arg2)))
     (drop (call $ansi_to_wide (local.get $tmp) (local.get $arg1) (local.get $arg2)))
     (call $heap_free (local.get $tmp))
-    (global.set $eax (local.get $len)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $len)))
 
   ;; 296: SendMessageW — routing and stack layout are identical to A. Message
   ;; payloads remain opaque here; individual WAT controls interpret the
@@ -5977,14 +5966,14 @@
 
   ;; 298: SetErrorMode — return 0, 1 arg stdcall
   (func $handle_SetErrorMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 299: GetCurrentThreadId — main thread is 1; worker threads get stable ids.
   (func $handle_GetCurrentThreadId (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $current_thread_id))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $current_thread_id))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 300: LoadLibraryW — convert the module name and use the same lookup/load
@@ -6008,8 +5997,8 @@
     (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 68))
     ;; Set cb = 68 (sizeof STARTUPINFOW)
     (call $gs32 (local.get $arg0) (i32.const 68))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 302: GetKeyState(nVirtKey) → SHORT — 1 arg stdcall
@@ -6017,11 +6006,10 @@
     ;; Return the current high-bit down state without consuming
     ;; GetAsyncKeyState's one-shot press latch. Toggle-key low bits are not
     ;; tracked yet.
-    (global.set $eax
-      (i32.and
+    (i32.store offset=0 (global.get $reg_base) (i32.and
         (call $host_get_key_down_state (local.get $arg0))
         (i32.const 0x8000)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ToAsciiEx(uVirtKey, uScanCode, lpKeyState, lpChar, uFlags, hkl) → int.
@@ -6057,9 +6045,9 @@
     (if (local.get $ch)
       (then
         (i32.store16 (local.get $out) (local.get $ch))
-        (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; GetKeyboardState(LPBYTE lpKeyState[256]) → BOOL — 1 arg stdcall.
@@ -6080,15 +6068,15 @@
           (i32.and (local.get $s) (i32.const 0x8000))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $loop)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 303: GetParent — STUB: unimplemented
   ;; GetParent(hwnd) — 1 arg stdcall, return parent hwnd or 0
   (func $handle_GetParent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wnd_get_parent_api (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_get_parent_api (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 304: GetWindow(hWnd, uCmd) — 2 args stdcall.
@@ -6105,65 +6093,61 @@
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
         ;; The renderer owns the combined top-level z-order across app
         ;; instances. WAT remains authoritative for local child siblings.
-        (global.set $eax
-          (if (result i32) (i32.eqz (local.get $parent))
+        (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
             (else (call $wnd_find_first_child (local.get $parent)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eq (local.get $arg1) (i32.const 1))
       (then
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
-        (global.set $eax
-          (if (result i32) (i32.eqz (local.get $parent))
+        (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
             (else (call $wnd_find_last_child (local.get $parent)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_HWNDNEXT = 2
     (if (i32.eq (local.get $arg1) (i32.const 2))
       (then
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
-        (global.set $eax
-          (if (result i32) (i32.eqz (local.get $parent))
+        (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
             (else (call $wnd_find_next_sibling (local.get $arg0)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_HWNDPREV = 3
     (if (i32.eq (local.get $arg1) (i32.const 3))
       (then
         (local.set $parent (call $wnd_get_parent (local.get $arg0)))
-        (global.set $eax
-          (if (result i32) (i32.eqz (local.get $parent))
+        (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (local.get $parent))
             (then (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
             (else (call $wnd_find_prev_sibling (local.get $arg0)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_OWNER = 4 → return owner hwnd, not child geometry parent.
     (if (i32.eq (local.get $arg1) (i32.const 4))
       (then
-        (global.set $eax (call $wnd_get_owner (local.get $arg0)))
-        (if (i32.and (i32.eqz (global.get $eax)) (i32.eqz (local.get $known)))
-          (then (global.set $eax (call $host_get_window_related (local.get $arg0) (local.get $arg1)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_get_owner (local.get $arg0)))
+        (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base))) (i32.eqz (local.get $known)))
+          (then (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (local.get $arg1)))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_CHILD = 5 → first child of hwnd
     (if (i32.eq (local.get $arg1) (i32.const 5))
       (then
-        (global.set $eax (call $wnd_find_first_child (local.get $arg0)))
-        (if (i32.and (i32.eqz (global.get $eax)) (i32.eqz (local.get $known)))
-          (then (global.set $eax (call $host_get_window_related (local.get $arg0) (local.get $arg1)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_find_first_child (local.get $arg0)))
+        (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base))) (i32.eqz (local.get $known)))
+          (then (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (local.get $arg1)))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; GW_ENABLEDPOPUP = 6 → enabled visible popup owned by hwnd, or hwnd itself.
     (if (i32.eq (local.get $arg1) (i32.const 6))
       (then
-        (global.set $eax (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (local.get $arg1)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; IsWindow(hwnd) → BOOL. The desktop is the one permanent HWND that does
@@ -6172,18 +6156,18 @@
   ;; HWND_BROADCAST (-1) is unsigned-greater than 0x10000, and treating it as a
   ;; window leaves old InstallShield splash pumps waiting for it forever.
   (func $handle_IsWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.and
+    (i32.store offset=0 (global.get $reg_base) (i32.and
       (i32.ne (local.get $arg0) (i32.const 0))
       (i32.or
         (i32.eq (local.get $arg0) (i32.const 0x10000))
         (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IsWindowUnicode(hwnd) reflects whether the HWND was created through a W
   ;; entry point. Native common controls use this to choose A/W message layouts.
   (func $handle_IsWindowUnicode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wnd_unicode_get (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_unicode_get (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Describe a system control class to an app that asked about it.
   ;;
@@ -6237,20 +6221,20 @@
         ;; Found — copy 40-byte WNDCLASS from class record to output buffer
         (local.set $src (call $class_wndclass_addr (local.get $slot)))
         (call $memcpy (call $g2w (local.get $arg2)) (local.get $src) (i32.const 40))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Not one of the app's own classes — it may be one of USER's.
     (if (call $system_class_describe
           (call $class_name_key (local.get $arg1))
           (local.get $arg1) (local.get $arg2) (local.get $arg0))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Not found — return FALSE
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 306: GetClassInfoW(hInstance, lpClassName, lpWndClass)
@@ -6262,8 +6246,8 @@
       (then
         (local.set $src (call $class_wndclass_addr (local.get $slot)))
         (call $memcpy (call $g2w (local.get $arg2)) (local.get $src) (i32.const 40))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; USER's own classes answer the W entry point too. Before this, an app that
     ;; asked for L"BUTTON" was told no such class exists, which is the same
@@ -6272,11 +6256,11 @@
     (if (call $system_class_describe
           (local.get $key) (local.get $arg1) (local.get $arg2) (local.get $arg0))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; GetClassInfoExA/W expose the same saved class data with cbSize prepended
@@ -6308,14 +6292,14 @@
     (i32.const 1))
 
   (func $handle_GetClassInfoExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $get_class_info_ex
+    (i32.store offset=0 (global.get $reg_base) (call $get_class_info_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_GetClassInfoExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $get_class_info_ex
+    (i32.store offset=0 (global.get $reg_base) (call $get_class_info_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 307: SetWindowLongW — STUB: unimplemented, return 0 (previous value)
   ;; SetWindowLongW — same as A for non-string indices
@@ -6346,69 +6330,69 @@
   ;; 309: InitCommonControlsEx — return 1 (success) — STUB: unimplemented
   (func $handle_InitCommonControlsEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; InitCommonControlsEx(lpInitCtrls) → BOOL. 1 arg stdcall. Return TRUE
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 310: OleInitialize(pvReserved) — 1 arg stdcall, return S_OK
   (func $handle_OleInitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 311: CoTaskMemFree(pv) — 1 arg stdcall, free via heap_free
   (func $handle_CoTaskMemFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg0)
       (then (call $heap_free (local.get $arg0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
 nW — STUB: unimplemented
   (func $handle_lstrlenW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_len (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $lstr_len (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 321: lstrcpyW
   (func $handle_lstrcpyW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $lstr_cpy (local.get $arg0) (local.get $arg1) (i32.const 1))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 322: lstrcmpW(lpString1, lpString2) → int
   (func $handle_lstrcmpW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 1) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 323: lstrcmpiW(lpString1, lpString2) → int, ASCII case-insensitive
   (func $handle_lstrcmpiW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $lstr_cmp (local.get $arg0) (local.get $arg1) (i32.const 1) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 324: CharNextW — advance by one wide char
   (func $handle_CharNextW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $char_next (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $char_next (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; CharPrevW(lpszStart, lpszCurrent) — step back one UTF-16 code unit.
   (func $handle_CharPrevW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $char_prev (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $char_prev (local.get $arg0) (local.get $arg1) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 325: wsprintfW — wide sprintf (cdecl, caller cleans up)
   ;; wsprintfW(buf, fmt, ...) — cdecl; varargs at guest esp+12 (after ret + buf + fmt)
   (func $handle_wsprintfW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; wsprintf_impl_w treats out/fmt/arg_ptr all as guest addresses (uses gl16/gl32 internally)
-    (global.set $eax (call $wsprintf_impl_w
+    (i32.store offset=0 (global.get $reg_base) (call $wsprintf_impl_w
       (local.get $arg0)
       (local.get $arg1)
-      (i32.add (global.get $esp) (i32.const 12))))
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
     ;; cdecl: only pop return address
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; 326: TlsAlloc — return next TLS index
   (func $handle_TlsAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6416,17 +6400,17 @@ nW — STUB: unimplemented
       (then
         (global.set $tls_slots (call $heap_alloc (i32.const 256)))
         (call $zero_memory (call $g2w (global.get $tls_slots)) (i32.const 256))))
-    (global.set $eax (global.get $tls_next_index))
+    (i32.store offset=0 (global.get $reg_base) (global.get $tls_next_index))
     (global.set $tls_next_index (i32.add (global.get $tls_next_index) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 327: TlsGetValue(index)
   (func $handle_TlsGetValue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (global.get $tls_slots))
-      (then (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
-    (global.set $eax (call $gl32 (i32.add (global.get $tls_slots) (i32.shl (local.get $arg0) (i32.const 2)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)))
+    (i32.store offset=0 (global.get $reg_base) (call $gl32 (i32.add (global.get $tls_slots) (i32.shl (local.get $arg0) (i32.const 2)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 328: TlsSetValue(index, value)
@@ -6436,14 +6420,14 @@ nW — STUB: unimplemented
         (global.set $tls_slots (call $heap_alloc (i32.const 256)))
         (call $zero_memory (call $g2w (global.get $tls_slots)) (i32.const 256))))
     (call $gs32 (i32.add (global.get $tls_slots) (i32.shl (local.get $arg0) (i32.const 2))) (local.get $arg1))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 329: TlsFree(index) — return TRUE
   (func $handle_TlsFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 330: InitializeCriticalSection(lpCriticalSection)
@@ -6458,7 +6442,7 @@ nW — STUB: unimplemented
     (i32.store offset=12 (local.get $cs) (i32.const 0))  ;; OwningThread
     (i32.store offset=16 (local.get $cs) (i32.const 0))  ;; LockSemaphore
     (i32.store offset=20 (local.get $cs) (i32.const 0))  ;; SpinCount
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; Park a contended EnterCriticalSection without consuming its stdcall
@@ -6506,7 +6490,7 @@ nW — STUB: unimplemented
     ;; call again; leaving the flag sticky suppresses the thunk auto-pop and
     ;; makes the first argument look like the return address.
     (global.set $handler_set_eip (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 332: LeaveCriticalSection(lpCriticalSection)
@@ -6529,7 +6513,7 @@ nW — STUB: unimplemented
           (else
             (i32.store offset=4 (local.get $cs)
               (i32.sub (local.get $recursion) (i32.const 1)))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 333: DeleteCriticalSection(lpCriticalSection)
@@ -6542,19 +6526,19 @@ nW — STUB: unimplemented
     (i32.store offset=12 (local.get $cs) (i32.const 0))
     (i32.store offset=16 (local.get $cs) (i32.const 0))
     (i32.store offset=20 (local.get $cs) (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 334: GetCurrentThread — 0 args, return pseudo-handle 0xFFFFFFFE (-2)
   (func $handle_GetCurrentThread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0xFFFFFFFE))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFFFFFE))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 335: GetProcessHeap — return fake heap handle — STUB: unimplemented
   (func $handle_GetProcessHeap (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00BEEF00))  ;; fake heap handle (HeapAlloc ignores it)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00BEEF00))  ;; fake heap handle (HeapAlloc ignores it)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 336: SetStdHandle(nStdHandle, hHandle) — no-op, return 1 — STUB: unimplemented
@@ -6565,22 +6549,22 @@ nW — STUB: unimplemented
   ;; 337: FlushFileBuffers — return 1 — STUB: unimplemented
   (func $handle_FlushFileBuffers (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; FlushFileBuffers(hFile) — 1 arg, return TRUE (no-op for virtual FS)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 338: IsValidCodePage(CodePage)
   (func $handle_IsValidCodePage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $is_supported_code_page (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $is_supported_code_page (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 339: GetEnvironmentStringsA — an ANSI copy of the process environment.
   ;; It used to return the command line, which is a different string entirely
   ;; and has no double NUL, so a CRT walking it read past the end.
   (func $handle_GetEnvironmentStringsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_strings (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $env_strings (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 340: InterlockedIncrement(ptr)
@@ -6588,8 +6572,8 @@ nW — STUB: unimplemented
     (local $tmp i32)
     (local.set $tmp (i32.add (call $gl32 (local.get $arg0)) (i32.const 1)))
     (call $gs32 (local.get $arg0) (local.get $tmp))
-    (global.set $eax (local.get $tmp))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 341: InterlockedDecrement(ptr)
@@ -6597,15 +6581,15 @@ nW — STUB: unimplemented
     (local $tmp i32)
     (local.set $tmp (i32.sub (call $gl32 (local.get $arg0)) (i32.const 1)))
     (call $gs32 (local.get $arg0) (local.get $tmp))
-    (global.set $eax (local.get $tmp))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (local.get $tmp))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 342: InterlockedExchange(ptr, value)
   (func $handle_InterlockedExchange (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gl32 (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $gl32 (local.get $arg0)))
     (call $gs32 (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; InterlockedCompareExchange(ptr, newVal, comparand) → original
@@ -6613,10 +6597,10 @@ nW — STUB: unimplemented
   (func $handle_InterlockedCompareExchange (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $orig i32)
     (local.set $orig (call $gl32 (local.get $arg0)))
-    (global.set $eax (local.get $orig))
+    (i32.store offset=0 (global.get $reg_base) (local.get $orig))
     (if (i32.eq (local.get $orig) (local.get $arg2))
       (then (call $gs32 (local.get $arg0) (local.get $arg1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
 ;; Is [ptr, ptr+len) unreadable? $g2w already knows the answer: it translates
@@ -6646,14 +6630,14 @@ nW — STUB: unimplemented
 
   ;; 343: IsBadReadPtr(lp, ucb) → BOOL. Nonzero means the range is NOT readable.
   (func $handle_IsBadReadPtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ptr_range_bad (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $ptr_range_bad (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 344: IsBadWritePtr(lp, ucb) → BOOL. Every page we can address is writable
   ;; here, so readability is the whole question.
   (func $handle_IsBadWritePtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ptr_range_bad (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (call $ptr_range_bad (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 345: SetUnhandledExceptionFilter(lpTopLevelFilter) -> previous filter.
@@ -6664,15 +6648,15 @@ nW — STUB: unimplemented
   ;; it displaced, so returning a fabricated 0 tells every caller it is the
   ;; first one and loses the filter the previous caller had installed.
   (func $handle_SetUnhandledExceptionFilter (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $unhandled_exception_filter))
+    (i32.store offset=0 (global.get $reg_base) (global.get $unhandled_exception_filter))
     (global.set $unhandled_exception_filter (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 937: SetPriorityClass(hProcess, dwPriorityClass) — no-op, return TRUE
   (func $handle_SetPriorityClass (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; SetProcessShutdownParameters(dwLevel, dwFlags) — record the process's
@@ -6681,8 +6665,8 @@ nW — STUB: unimplemented
   (func $handle_SetProcessShutdownParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $shutdown_level (local.get $arg0))
     (global.set $shutdown_flags (local.get $arg1))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; GetProcessShutdownParameters(lpdwLevel, lpdwFlags) — report stored values.
@@ -6691,20 +6675,20 @@ nW — STUB: unimplemented
       (then (i32.store (call $g2w (local.get $arg0)) (global.get $shutdown_level))))
     (if (local.get $arg1)
       (then (i32.store (call $g2w (local.get $arg1)) (global.get $shutdown_flags))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 1264: GetPriorityClass(hProcess) — return NORMAL_PRIORITY_CLASS (0x20)
   (func $handle_GetPriorityClass (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x20))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x20))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 1265: GetThreadPriority(hThread) — return THREAD_PRIORITY_NORMAL (0)
   (func $handle_GetThreadPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 1266: GetUpdateRgn(hWnd, hRgn, bErase) — copy updateRgn into hRgn.
@@ -6726,11 +6710,11 @@ nW — STUB: unimplemented
     ;; does -- treats anything else as "there is something to copy".
     (if (i32.eqz (call $wnd_table_get (local.get $arg0)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
-    (global.set $eax (select (i32.const 2) (i32.const 1) (local.get $rv)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 2) (i32.const 1) (local.get $rv)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 346: IsDebuggerPresent — return 0 — STUB: unimplemented
@@ -6741,18 +6725,18 @@ nW — STUB: unimplemented
   ;; 347: lstrcpynW — copy up to n wide chars
   (func $handle_lstrcpynW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $lstr_cpyn (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 348: FindFirstFileW — STUB: unimplemented
   (func $handle_FindFirstFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; FindFirstFileW(lpFileName, lpFindFileData) — 2 args
-    (global.set $eax (call $host_fs_find_first_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_find_first_file
       (call $g2w (local.get $arg0)) (local.get $arg1) (i32.const 1)))
-    (if (i32.eq (global.get $eax) (i32.const -1))
+    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
       (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 349: GetFileAttributesW — STUB: unimplemented
@@ -6761,26 +6745,26 @@ nW — STUB: unimplemented
     ;; GetFileAttributesW(lpFileName) — 1 arg
     (local.set $attrs (call $host_fs_get_file_attributes
       (call $g2w (local.get $arg0)) (i32.const 1)))
-    (global.set $eax (local.get $attrs))
+    (i32.store offset=0 (global.get $reg_base) (local.get $attrs))
     (if (i32.eq (local.get $attrs) (i32.const -1))
       (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 350: GetShortPathNameW — STUB: unimplemented
   (func $handle_GetShortPathNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetShortPathNameW(lpszLongPath, lpszShortPath, cchBuffer) — 3 args
-    (global.set $eax (call $host_fs_get_short_path_name
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_short_path_name
       (call $g2w (local.get $arg0)) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 351: CreateDirectoryW — STUB: unimplemented
   (func $handle_CreateDirectoryW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; CreateDirectoryW(lpPathName, lpSecurityAttributes) — 2 args
-    (global.set $eax (call $host_fs_create_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_directory
       (call $g2w (local.get $arg0)) (i32.const 1)))
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then (global.set $last_error (i32.const 0)))
       (else
         (global.set $last_error
@@ -6789,42 +6773,42 @@ nW — STUB: unimplemented
               (call $g2w (local.get $arg0)) (i32.const 1)) (i32.const -1))
             (then (i32.const 183)) ;; ERROR_ALREADY_EXISTS
             (else (i32.const 5)))))) ;; ERROR_ACCESS_DENIED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 352: IsDBCSLeadByte(ch)
   (func $handle_IsDBCSLeadByte (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $is_dbcs_lead_byte (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $is_dbcs_lead_byte (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 353: GetTempPathW — STUB: unimplemented
   (func $handle_GetTempPathW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetTempPathW(nBufferLength, lpBuffer) — 2 args
-    (global.set $eax (call $host_fs_get_temp_path
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_temp_path
       (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 354: GetTempFileNameW — STUB: unimplemented
   (func $handle_GetTempFileNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetTempFileNameW(lpPathName, lpPrefixString, uUnique, lpTempFileName) — 4 args
-    (global.set $eax (call $host_fs_get_temp_file_name
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_temp_file_name
       (call $g2w (local.get $arg0)) (call $g2w (local.get $arg1)) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 355: lstrcatW(dst, src) — concatenate wide strings, return dst
   (func $handle_lstrcatW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $lstr_cat (local.get $arg0) (local.get $arg1) (i32.const 1))
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 356: GlobalHandle — our GlobalLock returns ptr as-is, so GlobalHandle returns same value
   (func $handle_GlobalHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
 ctl32 can route an ANSI status-bar string through ExtTextOutW
@@ -6865,8 +6849,8 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (local.set $aux (call $gdi_dc_aux_entry (local.get $arg0) (i32.const 1)))
     (if (i32.eqz (local.get $aux))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $old_x (call $gdi_dc_aux_get (local.get $arg0) (i32.const 8) (i32.const 0)))
     (local.set $old_y (call $gdi_dc_aux_get (local.get $arg0) (i32.const 12) (i32.const 0)))
@@ -6881,26 +6865,26 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
       (local.get $arg1) (i32.const 0)))
     (drop (call $gdi_dc_aux_set (local.get $arg0) (i32.const 12)
       (local.get $arg2) (i32.const 0)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
 HookEx — no next hook in chain, return 0
   (func $handle_CallNextHookEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; CallNextHookEx(hhk, nCode, wParam, lParam) — 4 args stdcall
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 380: UnhookWindowsHookEx(hhk) → BOOL — always succeed
   (func $handle_UnhookWindowsHookEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; 854: UnhookWindowsHook(nCode, pfnFilterProc) → BOOL — legacy version
   (func $handle_UnhookWindowsHook (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 381: SetWindowsHookExW — return fake handle, 4 args stdcall
   ;; SetWindowsHookExW(idHook, lpfn, hMod, dwThreadId) — the hook proc is a
@@ -6916,8 +6900,8 @@ HookEx — no next hook in chain, return 0
     ;; Save CBT hook proc (WH_CBT = 5) for CreateWindowExA to call
     (if (i32.eq (local.get $arg0) (i32.const 5))
       (then (global.set $cbt_hook_proc (local.get $arg1))))
-    (global.set $eax (i32.const 0xBEEF))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xBEEF))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 382: RedrawWindow(hwnd, lprcUpdate, hrgnUpdate, flags). Minimal:
@@ -6927,8 +6911,8 @@ HookEx — no next hook in chain, return 0
     (local $l i32) (local $t i32) (local $r i32) (local $b i32) (local $wa i32) (local $cs i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; Derive rect: lprcUpdate if set, else hrgnUpdate bbox, else full client.
     (if (local.get $arg1)
       (then
@@ -6951,8 +6935,8 @@ HookEx — no next hook in chain, return 0
           (then (global.set $paint_pending (i32.const 1)))
           (else (call $paint_flag_set (local.get $arg0))))
         (call $host_invalidate (local.get $arg0))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 383: ValidateRect(hwnd, lprc). lprc=NULL → full client (clear all).
@@ -6960,8 +6944,8 @@ HookEx — no next hook in chain, return 0
     (local $l i32) (local $t i32) (local $r i32) (local $b i32) (local $wa i32) (local $cs i32) (local $empty i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     (if (local.get $arg1)
       (then
         (local.set $wa (call $g2w (local.get $arg1)))
@@ -6978,8 +6962,8 @@ HookEx — no next hook in chain, return 0
     (if (i32.and (i32.ne (local.get $empty) (i32.const 0))
                  (i32.eq (local.get $arg0) (global.get $main_hwnd)))
       (then (global.set $paint_pending (i32.const 0))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 384: GetWindowDC(hwnd) → HDC. Like GetDC but includes non-client area.
@@ -6997,8 +6981,8 @@ HookEx — no next hook in chain, return 0
         (local.set $hdc (call $host_alloc_window_dc (local.get $arg0) (i32.const 1)))
         (if (local.get $hdc)
           (then (call $dc_apply_window_clip (local.get $hdc) (local.get $arg0))))))
-    (global.set $eax (local.get $hdc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hdc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 385: GrayStringW — STUB: unimplemented
@@ -7008,7 +6992,7 @@ HookEx — no next hook in chain, return 0
 
   ;; 386: DrawTextW
   (func $handle_DrawTextW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_gdi_draw_text
+    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_draw_text
       (local.get $arg0)
       (call $g2w (local.get $arg1))
       (local.get $arg2)
@@ -7016,35 +7000,35 @@ HookEx — no next hook in chain, return 0
       (local.get $arg4)
       (i32.const 1) ;; isWide = 1
     ))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; stdcall, 5 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; stdcall, 5 args
   )
 
   ;; DrawTextExW
   (func $handle_DrawTextExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $draw_text_ex
+    (i32.store offset=0 (global.get $reg_base) (call $draw_text_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args
   )
 
   ;; 387: TabbedTextOutW — same WAT layout path with UTF-16 runs.
   (func $handle_TabbedTextOutW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_tabbed_text
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_tabbed_text
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 32)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
       (i32.const 1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))
   )
 
   ;; 388: DestroyIcon(hIcon) — 1 arg stdcall, return TRUE
   (func $handle_DestroyIcon (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; One LOGFONT{A,W} of system-font defaults at $buf. The two structs differ
@@ -7164,26 +7148,25 @@ HookEx — no next hook in chain, return 0
 
   ;; 389: SystemParametersInfoW — 4 args stdcall
   (func $handle_SystemParametersInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $spi_core (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (call $spi_core (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; SystemParametersInfoA(uiAction, uiParam, pvParam, fWinIni) — 4 args stdcall
   (func $handle_SystemParametersInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $spi_core (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (call $spi_core (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 390: IsWindowVisible
   (func $handle_IsWindowVisible (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
         (then
           (if (result i32) (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x10000000))
             (then (i32.const 1))
             (else (i32.const 0))))
         (else (call $host_get_window_info (local.get $arg0) (i32.const 1)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 391: InflateRect(lprc, dx, dy) → BOOL — 3 args stdcall
@@ -7202,15 +7185,15 @@ HookEx — no next hook in chain, return 0
     ;; bottom += dy
     (i32.store (i32.add (local.get $wa) (i32.const 12))
       (i32.add (i32.load (i32.add (local.get $wa) (i32.const 12))) (local.get $arg2)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 392: LoadBitmapW
   (func $handle_LoadBitmapW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_bitmap_load_resource
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_bitmap_load_resource
       (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 393: wvsprintfW — STUB: unimplemented
@@ -7220,9 +7203,9 @@ HookEx — no next hook in chain, return 0
   ;; va_list pointer rather than the caller's stack. NT Paint formats its
   ;; Stretch/Skew dialog through this, and trapped here.
   (func $handle_wvsprintfW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wsprintf_impl_w
+    (i32.store offset=0 (global.get $reg_base) (call $wsprintf_impl_w
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 121: DrawFocusRect(hdc, lprc)
@@ -7231,12 +7214,12 @@ HookEx — no next hook in chain, return 0
     (local.set $rc (call $g2w (local.get $arg1)))
     (local.set $desc (global.get $GDI_LINE_DESC))
     (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then (global.set $eax (call $gdi_focus_rect_desc
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_focus_rect_desc
         (local.get $arg0) (local.get $desc)
         (i32.load (local.get $rc)) (i32.load offset=4 (local.get $rc))
         (i32.load offset=8 (local.get $rc)) (i32.load offset=12 (local.get $rc)))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; ret + 2 args
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; ret + 2 args
   )
 
   ;; 395: PtInRect(lprc, pt.x, pt.y) -> BOOL — 3 args stdcall
@@ -7254,9 +7237,9 @@ HookEx — no next hook in chain, return 0
         (i32.lt_s (local.get $arg2) (i32.load (i32.add (local.get $rect_w) (i32.const 12))))  ;; y < bottom
       )
     )
-    (then (global.set $eax (i32.const 1)))
-    (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) ;; stdcall 3 params + ret
+    (then (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+    (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) ;; stdcall 3 params + ret
   )
 
   ;; 396: WinHelpW — normalize UTF-16 and share the WinHelpA engine
@@ -7265,15 +7248,15 @@ HookEx — no next hook in chain, return 0
     (local.set $accepted (call $help_dispatch_api_w
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (call $help_present_dispatch (local.get $accepted) (local.get $arg2))
-    (global.set $eax (local.get $accepted))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $accepted))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 397: GetCapture — STUB: unimplemented
   (func $handle_GetCapture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetCapture() — 0 args, returns hwnd that has mouse capture (or NULL)
-    (global.set $eax (global.get $capture_hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; 0 args
+    (i32.store offset=0 (global.get $reg_base) (global.get $capture_hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; 0 args
   )
 
   ;; 398: RegisterClipboardFormatW(lpszFormat) → UINT
@@ -7285,8 +7268,8 @@ HookEx — no next hook in chain, return 0
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (call $clipboard_register_format_w (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $clipboard_register_format_w (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; 399: CopyRect(lprcDst, lprcSrc) → BOOL — 2 args stdcall
   (func $handle_CopyRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -7297,8 +7280,8 @@ HookEx — no next hook in chain, return 0
     (i32.store (i32.add (local.get $dst) (i32.const 4)) (i32.load (i32.add (local.get $src) (i32.const 4))))
     (i32.store (i32.add (local.get $dst) (i32.const 8)) (i32.load (i32.add (local.get $src) (i32.const 8))))
     (i32.store (i32.add (local.get $dst) (i32.const 12)) (i32.load (i32.add (local.get $src) (i32.const 12))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 400: IntersectRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL
@@ -7333,17 +7316,17 @@ HookEx — no next hook in chain, return 0
         (i32.store (i32.add (local.get $dst) (i32.const 4)) (i32.const 0))
         (i32.store (i32.add (local.get $dst) (i32.const 8)) (i32.const 0))
         (i32.store (i32.add (local.get $dst) (i32.const 12)) (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
       )
       (else
         (i32.store (local.get $dst) (local.get $left))
         (i32.store (i32.add (local.get $dst) (i32.const 4)) (local.get $top))
         (i32.store (i32.add (local.get $dst) (i32.const 8)) (local.get $right))
         (i32.store (i32.add (local.get $dst) (i32.const 12)) (local.get $bottom))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
       )
     )
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; 401: UnionRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL
@@ -7375,7 +7358,7 @@ HookEx — no next hook in chain, return 0
         (i32.store offset=4 (local.get $dst) (i32.const 0))
         (i32.store offset=8 (local.get $dst) (i32.const 0))
         (i32.store offset=12 (local.get $dst) (i32.const 0))
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (if (local.get $e1)
           (then
@@ -7399,8 +7382,8 @@ HookEx — no next hook in chain, return 0
                   (select (local.get $s1r) (local.get $s2r) (i32.gt_s (local.get $s1r) (local.get $s2r))))
                 (i32.store offset=12 (local.get $dst)
                   (select (local.get $s1b) (local.get $s2b) (i32.gt_s (local.get $s1b) (local.get $s2b))))))))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; SubtractRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL. Only well-defined when src2 fully covers
@@ -7432,14 +7415,14 @@ HookEx — no next hook in chain, return 0
         (i32.store offset=4 (local.get $dst) (i32.const 0))
         (i32.store offset=8 (local.get $dst) (i32.const 0))
         (i32.store offset=12 (local.get $dst) (i32.const 0))
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (i32.store (local.get $dst) (local.get $s1l))
         (i32.store offset=4 (local.get $dst) (local.get $s1t))
         (i32.store offset=8 (local.get $dst) (local.get $s1r))
         (i32.store offset=12 (local.get $dst) (local.get $s1b))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; 402: WindowFromPoint(POINT pt) → HWND. POINT is passed by value as two
@@ -7448,8 +7431,8 @@ HookEx — no next hook in chain, return 0
   ;; answer — mspaint calls this during pencil drags to verify the cursor
   ;; is still inside the app, and returning 0 would abort the drag.
   (func $handle_WindowFromPoint (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $main_hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $main_hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 403: IsRectEmpty — STUB: unimplemented
@@ -7457,25 +7440,24 @@ HookEx — no next hook in chain, return 0
   (func $handle_IsRectEmpty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $r i32)
     (if (i32.eqz (local.get $arg0))
-      (then (global.set $eax (i32.const 1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
             (return)))
     (local.set $r (call $g2w (local.get $arg0)))
-    (global.set $eax
-      (i32.or
+    (i32.store offset=0 (global.get $reg_base) (i32.or
         (i32.le_s (i32.load (i32.add (local.get $r) (i32.const 8)))   ;; right
                   (i32.load (local.get $r)))                             ;; left
         (i32.le_s (i32.load (i32.add (local.get $r) (i32.const 12)))  ;; bottom
                   (i32.load (i32.add (local.get $r) (i32.const 4))))))  ;; top
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 404: EqualRect(lprc1, lprc2) → BOOL. Compares 4 LONGs (16 bytes).
   (func $handle_EqualRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $a i32) (local $b i32)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
-      (then (global.set $eax (i32.const 0)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (local.set $a (call $g2w (local.get $arg0)))
         (local.set $b (call $g2w (local.get $arg1)))
@@ -7484,8 +7466,8 @@ HookEx — no next hook in chain, return 0
                       (i32.ne (i32.load offset=4 (local.get $a)) (i32.load offset=4 (local.get $b))))
               (i32.or (i32.ne (i32.load offset=8 (local.get $a)) (i32.load offset=8 (local.get $b)))
                       (i32.ne (i32.load offset=12 (local.get $a)) (i32.load offset=12 (local.get $b)))))
-          (then (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 405: ClientToScreen
@@ -7498,48 +7480,48 @@ HookEx — no next hook in chain, return 0
       (i32.add (i32.load (local.get $pt)) (local.get $ox)))
     (i32.store offset=4 (local.get $pt)
       (i32.add (i32.load offset=4 (local.get $pt)) (local.get $oy)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 406: SetActiveWindow(hwnd) — return previous active window (fake: return arg)
   (func $handle_SetActiveWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
 ;; 408: SetFilePointer — STUB: unimplemented
   (func $handle_SetFilePointer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetFilePointer(hFile, lDistanceToMove, lpDistanceToMoveHigh, dwMoveMethod) — 4 args
-    (global.set $eax (call $host_fs_set_file_pointer
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_file_pointer
       (local.get $arg0) (local.get $arg1) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; ResumeThread(hThread) — 1 arg stdcall, return previous suspend count
   (func $handle_ResumeThread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_resume_thread (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_resume_thread (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 410: SetLastError(dwErrCode)
   (func $handle_SetLastError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $last_error (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 411: FindNextFileW — STUB: unimplemented
   (func $handle_FindNextFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; FindNextFileW(hFindFile, lpFindFileData) — 2 args
-    (global.set $eax (call $host_fs_find_next_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_find_next_file
       (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 412: RaiseException(dwExceptionCode, dwExceptionFlags, nNumberOfArguments, lpArguments)
   ;; 4 args stdcall. Pop first so SEH walker sees the caller's frame, then dispatch.
   (func $handle_RaiseException (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     ;; RaiseException is a software exception and must invoke each registered
     ;; handler with the standard four-argument EXCEPTION_DISPOSITION protocol.
     ;; Registration records are runtime-specific: VB6, Delphi and hand-written
@@ -7552,26 +7534,26 @@ HookEx — no next hook in chain, return 0
   ;; 413: GetUserDefaultLCID — STUB: unimplemented
   (func $handle_GetUserDefaultLCID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Return 0x0409 = English (US)
-    (global.set $eax (i32.const 0x0409))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0409))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; GetSystemDefaultLCID() -> LCID. RichEdit asks during DLL init.
   (func $handle_GetSystemDefaultLCID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x0409))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0409))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; GetSystemDefaultLangID() -> LANGID. Match US English locale stubs.
   (func $handle_GetSystemDefaultLangID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x0409))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0409))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; 414: FileTimeToSystemTime — STUB: unimplemented
   (func $handle_FileTimeToSystemTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; FileTimeToSystemTime(lpFileTime, lpSystemTime) — 2 args
-    (global.set $eax (call $host_fs_filetime_to_systemtime
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_filetime_to_systemtime
       (call $g2w (local.get $arg0)) (call $g2w (local.get $arg1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; 2 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; 2 args
   )
 
   ;; FileTimeToDosDateTime(lpFileTime, LPWORD lpFatDate, LPWORD lpFatTime)
@@ -7589,15 +7571,15 @@ HookEx — no next hook in chain, return 0
       (then (global.set $dosdate_scratch (call $heap_alloc (i32.const 16)))))
     (if (i32.eqz (global.get $dosdate_scratch))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $st (call $g2w (global.get $dosdate_scratch)))
     (if (i32.eqz (call $host_fs_filetime_to_systemtime
                    (call $g2w (local.get $arg0)) (local.get $st)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; The FAT epoch is 1980, and the field is 7 bits wide. Anything outside
     ;; 1980..2107 has no representation at all; Win32 reports failure rather
@@ -7606,8 +7588,8 @@ HookEx — no next hook in chain, return 0
     (if (i32.or (i32.lt_u (local.get $year) (i32.const 1980))
                 (i32.gt_u (local.get $year) (i32.const 2107)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (local.get $arg1)
       (then (i32.store16 (call $g2w (local.get $arg1))
@@ -7624,8 +7606,8 @@ HookEx — no next hook in chain, return 0
             (i32.shl (i32.load16_u offset=10 (local.get $st)) (i32.const 5))
             ;; Two-second resolution: the low bit does not exist in FAT.
             (i32.shr_u (i32.load16_u offset=12 (local.get $st)) (i32.const 1)))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 415: FileTimeToLocalFileTime(const FILETIME *src, LPFILETIME dst) → BOOL.
@@ -7636,55 +7618,55 @@ HookEx — no next hook in chain, return 0
     (local.set $d (call $g2w (local.get $arg1)))
     (i32.store (local.get $d) (i32.load (local.get $s)))
     (i32.store (i32.add (local.get $d) (i32.const 4)) (i32.load (i32.add (local.get $s) (i32.const 4))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 416: GetCurrentDirectoryW — STUB: unimplemented
   (func $handle_GetCurrentDirectoryW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetCurrentDirectoryW(nBufferLength, lpBuffer) — 2 args
-    (global.set $eax (call $host_fs_get_current_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_current_directory
       (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 417: SetFileAttributesW — STUB: unimplemented
   (func $handle_SetFileAttributesW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetFileAttributesW(lpFileName, dwFileAttributes) — 2 args
-    (global.set $eax (call $host_fs_set_file_attributes
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_file_attributes
       (call $g2w (local.get $arg0)) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 418: GetFullPathNameW — STUB: unimplemented
   (func $handle_GetFullPathNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetFullPathNameW(lpFileName, nBufferLength, lpBuffer, lpFilePart) — 4 args
-    (global.set $eax (call $host_fs_get_full_path_name
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_full_path_name
       (call $g2w (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 419: DeleteFileW — STUB: unimplemented
   (func $handle_DeleteFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; DeleteFileW(lpFileName) — 1 arg
-    (global.set $eax (call $host_fs_delete_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_delete_file
       (call $g2w (local.get $arg0)) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 420: MoveFileW — STUB: unimplemented
   (func $handle_MoveFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; MoveFileW(lpExistingFileName, lpNewFileName) — 2 args
-    (global.set $eax (call $host_fs_move_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_move_file
       (call $g2w (local.get $arg0)) (call $g2w (local.get $arg1)) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 421: SetEndOfFile
   (func $handle_SetEndOfFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetEndOfFile(hFile) — truncate or extend at the current file pointer.
-    (global.set $eax (call $host_fs_set_end_of_file (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_end_of_file (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 422: DuplicateHandle
@@ -7704,10 +7686,10 @@ HookEx — no next hook in chain, return 0
               (call $host_duplicate_current_thread (global.get $current_thread_id)))))
         (if (local.get $duplicate)
           (then (call $gs32 (local.get $arg3) (local.get $duplicate))))))
-    (global.set $eax (i32.and
+    (i32.store offset=0 (global.get $reg_base) (i32.and
       (i32.ne (local.get $arg3) (i32.const 0))
       (i32.ne (local.get $duplicate) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))) ;; 7 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))) ;; 7 args + ret
   )
 
   ;; 423: LockFile — STUB: unimplemented
@@ -7723,29 +7705,29 @@ HookEx — no next hook in chain, return 0
   ;; 425: ReadFile — STUB: unimplemented
   (func $handle_ReadFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; ReadFile(hFile, lpBuffer, nToRead, lpBytesRead, lpOverlapped) — 5 args
-    (global.set $eax (call $host_fs_read_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_read_file
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 426: CreateFileW — STUB: unimplemented
   (func $handle_CreateFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; CreateFileW — 7 args, same as CreateFileA but wide
     (local $wa_esp_w i32) (local $creation_w i32) (local $flags_w i32)
-    (local.set $wa_esp_w (call $g2w (global.get $esp)))
+    (local.set $wa_esp_w (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $creation_w (local.get $arg4))
     (local.set $flags_w (i32.load (i32.add (local.get $wa_esp_w) (i32.const 24))))
-    (global.set $eax (call $host_fs_create_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_file
       (call $g2w (local.get $arg0)) (local.get $arg1)
       (local.get $creation_w) (local.get $flags_w) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; 427: SetFileTime — STUB: unimplemented
   ;; SetFileTime(hFile, lpCreationTime, lpLastAccessTime, lpLastWriteTime) — no-op
   (func $handle_SetFileTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))  ;; TRUE = success
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; TRUE = success
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
   ;; 428: LocalFileTimeToFileTime. The emulator does not model a timezone, so
@@ -7757,9 +7739,9 @@ HookEx — no next hook in chain, return 0
         (local.set $src (call $g2w (local.get $arg0)))
         (local.set $dst (call $g2w (local.get $arg1)))
         (i64.store (local.get $dst) (i64.load (local.get $src)))
-        (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 429: SystemTimeToFileTime(const SYSTEMTIME*, FILETIME*) — 2 args stdcall.
@@ -7777,8 +7759,8 @@ HookEx — no next hook in chain, return 0
     (local $days i32)
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $st (call $g2w (local.get $arg0)))
     (local.set $year (i32.load16_u          (local.get $st)))
@@ -7802,8 +7784,8 @@ HookEx — no next hook in chain, return 0
                 (i32.or (i32.gt_u (local.get $sec) (i32.const 59))
                         (i32.gt_u (local.get $ms) (i32.const 999)))))))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Days since 1601-01-01.
     (local.set $y (i32.sub (local.get $year)
@@ -7839,8 +7821,8 @@ HookEx — no next hook in chain, return 0
                                 (local.get $sec)))))
           (i64.const 10000000))
         (i64.mul (i64.extend_i32_u (local.get $ms)) (i64.const 10000))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 430: RegOpenKeyW — STUB: unimplemented
@@ -7851,16 +7833,16 @@ HookEx — no next hook in chain, return 0
       (local.get $arg0) (call $g2w (local.get $arg1)) (i32.const 1)))
     (if (local.get $hResult)
       (then (call $gs32 (local.get $arg2) (local.get $hResult))
-             (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+             (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 2))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; RegEnumKeyW(hKey, dwIndex, lpName, cchName)
   (func $handle_RegEnumKeyW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_enum_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_enum_key
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 432: RegSetValueW — 5 args stdcall, return ERROR_SUCCESS (registry writes are no-op)
@@ -7871,30 +7853,30 @@ HookEx — no next hook in chain, return 0
 
   ;; RegSetValueA — 5 args stdcall, return ERROR_SUCCESS (registry writes are no-op)
   (func $handle_RegSetValueA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; RegQueryValueA(hKey, lpSubKey, lpData, lpcbData) — 4 args stdcall
   (func $handle_RegQueryValueA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 2))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 433: RegCreateKeyW — STUB: unimplemented
   (func $handle_RegCreateKeyW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; RegCreateKeyW(hKey, lpSubKey, phkResult) — 3 args stdcall
-    (global.set $eax (call $host_reg_create_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_create_key
       (local.get $arg0) (call $g2w (local.get $arg1)) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 434: RegSetValueExW
   (func $handle_RegSetValueExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_set_value_ex
+    (i32.store offset=0 (global.get $reg_base) (call $reg_set_value_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 435: RegCreateKeyExW — STUB: unimplemented
@@ -7902,36 +7884,36 @@ HookEx — no next hook in chain, return 0
     ;; RegCreateKeyExW(hKey, lpSubKey, Reserved, lpClass, dwOptions, samDesired, lpSecurityAttrs, phkResult, lpdwDisposition)
     ;; 9 args stdcall
     (local $wa_esp i32) (local $phkResult i32) (local $lpdwDisposition i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $phkResult (i32.load (i32.add (local.get $wa_esp) (i32.const 32))))
     (local.set $lpdwDisposition (i32.load (i32.add (local.get $wa_esp) (i32.const 36))))
-    (global.set $eax (call $host_reg_create_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_create_key
       (local.get $arg0) (call $g2w (local.get $arg1)) (local.get $phkResult) (i32.const 1)))
     ;; Set disposition = REG_CREATED_NEW_KEY (1) if requested
     (if (i32.ne (local.get $lpdwDisposition) (i32.const 0))
       (then (call $gs32 (local.get $lpdwDisposition) (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
   )
 
   ;; RegCreateKeyExA — same as ExW, 9 args stdcall
   (func $handle_RegCreateKeyExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32) (local $phkResult i32) (local $lpdwDisposition i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $phkResult (i32.load (i32.add (local.get $wa_esp) (i32.const 32))))
     (local.set $lpdwDisposition (i32.load (i32.add (local.get $wa_esp) (i32.const 36))))
-    (global.set $eax (call $host_reg_create_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_create_key
       (local.get $arg0) (call $g2w (local.get $arg1)) (local.get $phkResult) (i32.const 0)))
     (if (i32.ne (local.get $lpdwDisposition) (i32.const 0))
       (then (call $gs32 (local.get $lpdwDisposition) (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
   )
 
   ;; 436: RegQueryValueExW
   (func $handle_RegQueryValueExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_query_value_ex
+    (i32.store offset=0 (global.get $reg_base) (call $reg_query_value_ex
       (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 437: GetShortPathNameA(lpszLong, lpszShort, cchBuffer) — 3 args stdcall
@@ -7941,9 +7923,9 @@ HookEx — no next hook in chain, return 0
   ;; long path back verbatim, so the two spellings answered differently for
   ;; a path the VFS does have a short name for.
   (func $handle_GetShortPathNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_get_short_path_name
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_short_path_name
       (call $g2w (local.get $arg0)) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 453: ExtFloodFill(hdc, x, y, color, fillType)
@@ -7951,20 +7933,20 @@ HookEx — no next hook in chain, return 0
     (local $desc i32)
     (local.set $desc (global.get $GDI_BLIT_DST_DESC))
     (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then (global.set $eax (call $gdi_raster_flood_fill
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_raster_flood_fill
         (local.get $arg0) (local.get $desc) (local.get $arg1) (local.get $arg2)
         (local.get $arg3) (local.get $arg4)
         (call $gdi_dc_get_field (local.get $arg0) (i32.const 8) (i32.const 0x30010)))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
 : EnableScrollBar(hWnd, wSBflags, wArrows) — we have no scroll bars,
   ;; so enabling/disabling is a no-op. Return TRUE so apps don't think the
   ;; call failed.
   (func $handle_EnableScrollBar (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) ;; 3 args stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) ;; 3 args stdcall
   )
 
   (func $caret_schedule_repaint
@@ -7987,24 +7969,24 @@ HookEx — no next hook in chain, return 0
       (then
         (i32.store (call $g2w (local.get $arg0)) (global.get $caret_x))
         (i32.store (i32.add (call $g2w (local.get $arg0)) (i32.const 4)) (global.get $caret_y))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) ;; 1 arg stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) ;; 1 arg stdcall
   )
 
   ;; GetCaretBlinkTime() — the interval a caret spends in each phase. Callers
   ;; use it as a timer period, so returning a real value matters: HyperTerminal
   ;; feeds it straight to SetTimer for its cursor.
   (func $handle_GetCaretBlinkTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $caret_blink_time))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) ;; 0 args stdcall
+    (i32.store offset=0 (global.get $reg_base) (global.get $caret_blink_time))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) ;; 0 args stdcall
   )
 
   ;; SetCaretBlinkTime(uMSeconds) — store it so the Get above reports it back.
   (func $handle_SetCaretBlinkTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg0)
       (then (global.set $caret_blink_time (local.get $arg0))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) ;; 1 arg stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) ;; 1 arg stdcall
   )
 
   ;; Caret APIs — enough USER caret state for native controls such as RichEdit
@@ -8021,16 +8003,16 @@ HookEx — no next hook in chain, return 0
       (then (global.set $caret_h (local.get $arg3)))
       (else (global.set $caret_h (i32.const 13))))
     (global.set $caret_visible (i32.const 0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) ;; 4 args stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) ;; 4 args stdcall
   )
 
   (func $handle_DestroyCaret (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $caret_visible (i32.const 0))
     (call $caret_schedule_repaint)
     (global.set $caret_hwnd (i32.const 0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) ;; 0 args stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) ;; 0 args stdcall
   )
 
   (func $handle_HideCaret (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8040,8 +8022,8 @@ HookEx — no next hook in chain, return 0
       (then
         (global.set $caret_visible (i32.const 0))
         (call $caret_schedule_repaint)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) ;; 1 arg stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) ;; 1 arg stdcall
   )
 
   (func $handle_ShowCaret (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8049,8 +8031,8 @@ HookEx — no next hook in chain, return 0
       (then (global.set $caret_hwnd (local.get $arg0))))
     (global.set $caret_visible (i32.const 1))
     (call $caret_schedule_repaint)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) ;; 1 arg stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) ;; 1 arg stdcall
   )
 
   (func $handle_SetCaretPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8058,8 +8040,8 @@ HookEx — no next hook in chain, return 0
     (global.set $caret_y (local.get $arg1))
     (if (global.get $caret_visible)
       (then (call $caret_schedule_repaint)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) ;; 2 args stdcall
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) ;; 2 args stdcall
   )
 
   ;; 460: GetUpdateRect(hwnd, lpRect, bErase) — writes updateRgn bbox if present;
@@ -8083,24 +8065,24 @@ HookEx — no next hook in chain, return 0
             (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
               (then (local.set $rv (global.get $paint_pending)))))))
       (else (local.set $rv (call $update_get_rect (local.get $arg0) (i32.const 0)))))
-    (global.set $eax (local.get $rv))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $rv))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
 ;; 462: WriteClassStg(pStg, rclsid) — persist the root storage CLSID.
   (func $handle_WriteClassStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else
         (memory.copy (call $g2w (i32.add (local.get $arg0) (i32.const 20))) (call $g2w (local.get $arg1)) (i32.const 16))
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 463: WriteFmtUserTypeStg(pStg, cf, lpszUserType) — no-op success.
   (func $handle_WriteFmtUserTypeStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) ;; S_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; S_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 464: StringFromCLSID(rclsid, lplpsz) — 2 args stdcall
@@ -8185,8 +8167,8 @@ HookEx — no next hook in chain, return 0
     (i32.store16 (i32.add (local.get $dst) (i32.const 2)) (i32.const 0)) ;; null
     ;; Write pointer to *lplpsz
     (call $gs32 (local.get $arg1) (local.get $buf))
-    (global.set $eax (i32.const 0)) ;; S_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; S_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 465: ExtractIconW — 3 args stdcall, return fake icon handle
@@ -8197,8 +8179,8 @@ HookEx — no next hook in chain, return 0
 
   ;; ExtractIconA — 3 args stdcall, return fake icon handle
   (func $handle_ExtractIconA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x0000FACE))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0000FACE))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 466: ShellAboutW — return 1, 4 args stdcall
@@ -8219,11 +8201,11 @@ HookEx — no next hook in chain, return 0
     (local $lphMenu i32)
     (if (local.get $arg0)
       (then (call $crash_unimplemented (local.get $name_ptr))))
-    (local.set $lphMenu (call $gl32 (i32.add (global.get $esp) (i32.const 36))))
+    (local.set $lphMenu (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
     (if (local.get $lphMenu)
       (then (call $gs32 (local.get $lphMenu) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40)))  ;; 9 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))  ;; 9 args
   )
 
   ;; ShellAboutW(hwnd, szApp, szOtherStuff, hIcon) — the W twin of
@@ -8248,8 +8230,8 @@ HookEx — no next hook in chain, return 0
           (local.get $dlg) (local.get $arg0) (call $g2w (local.get $app))))
         (call $create_about_dialog
           (local.get $dlg) (local.get $arg0) (local.get $app) (local.get $other))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 467: CommandLineToArgvW — STUB: unimplemented
@@ -8265,8 +8247,8 @@ HookEx — no next hook in chain, return 0
     (i32.store (call $g2w (i32.add (local.get $buf) (i32.const 12))) (i32.const 0x00000070))  ;; "p\0"
     ;; *pNumArgs = 1
     (i32.store (call $g2w (local.get $arg1)) (i32.const 1))
-    (global.set $eax (local.get $buf))  ;; return pointer to argv array
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $buf))  ;; return pointer to argv array
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; --- Additional Shell32 APIs ---
@@ -8286,18 +8268,18 @@ HookEx — no next hook in chain, return 0
     (local.set $file  (call $shellexec_narrow_w (local.get $arg2)))
     (local.set $params (call $shellexec_narrow_w (local.get $arg3)))
     (local.set $dir   (call $shellexec_narrow_w (local.get $arg4)))
-    (global.set $eax (call $host_shell_execute
+    (i32.store offset=0 (global.get $reg_base) (call $host_shell_execute
       (local.get $arg0)
       (if (result i32) (local.get $op)    (then (call $g2w (local.get $op)))    (else (i32.const 0)))
       (if (result i32) (local.get $file)  (then (call $g2w (local.get $file)))  (else (i32.const 0)))
       (if (result i32) (local.get $params) (then (call $g2w (local.get $params))) (else (i32.const 0)))
       (if (result i32) (local.get $dir)   (then (call $g2w (local.get $dir)))   (else (i32.const 0)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))  ;; nShowCmd
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))  ;; nShowCmd
     (if (local.get $op)     (then (call $heap_free (local.get $op))))
     (if (local.get $file)   (then (call $heap_free (local.get $file))))
     (if (local.get $params) (then (call $heap_free (local.get $params))))
     (if (local.get $dir)    (then (call $heap_free (local.get $dir))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; UTF-16 → a fresh guest ANSI buffer, or 0 for a NULL argument. Caller frees.
@@ -8314,8 +8296,8 @@ HookEx — no next hook in chain, return 0
   (func $handle_ShellExecuteExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SHELLEXECUTEINFO.hInstApp at offset 28 = set to >32
     (i32.store (call $g2w (i32.add (local.get $arg0) (i32.const 28))) (i32.const 33))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; DragQueryFileW — same as A, return 0 files, 4 args
@@ -8374,40 +8356,40 @@ HookEx — no next hook in chain, return 0
   ;; SHGetFileInfoW(pszPath, attrs, psfi, cb, flags). Media Player asks for
   ;; SHGFI_DISPLAYNAME and uses szDisplayName in its caption.
   (func $handle_SHGetFileInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $sh_file_info_display_name
+    (i32.store offset=0 (global.get $reg_base) (call $sh_file_info_display_name
       (local.get $arg0) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; ExtractIconExA(lpszFile, nIconIndex, phiconLarge, phiconSmall, nIcons) — 5 args, return 0 icons
   (func $handle_ExtractIconExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; Shell_NotifyIconA(dwMessage, lpData) — tray icon, return TRUE, 2 args
   (func $handle_Shell_NotifyIconA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; SHBrowseForFolderA(lpbi) — 1 arg, return NULL (user cancelled)
   (func $handle_SHBrowseForFolderA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; SHGetMalloc(ppMalloc) — return E_NOTIMPL, 1 arg
   (func $handle_SHGetMalloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store (call $g2w (local.get $arg0)) (i32.const 0))
-    (global.set $eax (i32.const 0x80004001))  ;; E_NOTIMPL
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))  ;; E_NOTIMPL
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; SHFileOperationA(lpFileOp) — 1 arg, return 0 (success)
   (func $handle_SHFileOperationA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; RunFileDlg(hwndOwner, hIcon, lpszDir, lpszTitle, lpszDesc, uFlags)
@@ -8425,7 +8407,7 @@ HookEx — no next hook in chain, return 0
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $create_run_dialog
       (local.get $dlg) (local.get $arg0) (local.get $arg3) (local.get $arg4))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; 6 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; 6 args + ret
   )
 
   ;; ExitWindowsDialog(hwndOwner) — SHELL32 ordinal 60, Task Manager's
@@ -8436,7 +8418,7 @@ HookEx — no next hook in chain, return 0
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $create_shutdown_dialog (local.get $dlg) (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; RegisterHotKey(hwnd, id, modifiers, vk) / UnregisterHotKey(hwnd, id).
@@ -8445,12 +8427,12 @@ HookEx — no next hook in chain, return 0
   ;; stealing a real host shortcut. Explorer registers its Win-key bindings
   ;; while constructing the taskbar and treats FALSE as fatal.
   (func $handle_RegisterHotKey (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_UnregisterHotKey (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; RegisterShellHook(hwnd, dwType) — legacy Win9x shell-window subscriber.
   ;; dwType=1 registers and dwType=0 unregisters. TASKMAN.EXE calls
@@ -8471,22 +8453,22 @@ HookEx — no next hook in chain, return 0
           (then
             (global.set $shell_hook_hwnd (i32.const 0))
             (global.set $shell_hook_message (i32.const 0))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ArrangeWindows(hwndParent, dwReserved, lpRect, cKids, lpKids) — 5 args, return count
   (func $handle_ArrangeWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 468: IsBadCodePtr(lpfn) — 1 arg stdcall
   ;; Returns 0 if the pointer is callable, nonzero otherwise. We trust the guest
   ;; (any non-null pointer in the guest address space is treated as valid).
   (func $handle_IsBadCodePtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.eqz (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.eqz (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 469: ExitThread(dwExitCode) — 1 arg, no return
@@ -8500,23 +8482,23 @@ HookEx — no next hook in chain, return 0
   ;; 470: FindNextFileA — STUB: unimplemented
   (func $handle_FindNextFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; FindNextFileA(hFindFile, lpFindFileData) — 2 args
-    (global.set $eax (call $host_fs_find_next_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_find_next_file
       (local.get $arg0) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 471: GetEnvironmentVariableA(lpName, lpBuffer, nSize) → chars written
   (func $handle_GetEnvironmentVariableA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_get (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (call $env_get (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; ExpandEnvironmentStringsA(lpSrc, lpDst, nSize) -> required chars,
   ;; including the terminating NUL. Unknown variables remain verbatim.
   (func $handle_ExpandEnvironmentStringsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_expand_a
+    (i32.store offset=0 (global.get $reg_base) (call $env_expand_a
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; Fill OSVERSIONINFO from $winver. Both spellings share this: the struct is
@@ -8550,19 +8532,19 @@ HookEx — no next hook in chain, return 0
   ;; 472: GetVersionExA — fill OSVERSIONINFOA (148 bytes min) from $winver
   (func $handle_GetVersionExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $version_info (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 473: SetConsoleCtrlHandler(HandlerRoutine, Add) → BOOL
   (func $handle_SetConsoleCtrlHandler (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 474: SetEnvironmentVariableW(lpName, lpValue) → BOOL
   (func $handle_SetEnvironmentVariableW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_set (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $env_set (local.get $arg0) (local.get $arg1) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; CompareString core, shared by both spellings: the comparison rules are the
   ;; same, only the character stride differs. $p1/$p2 are WASM addresses,
@@ -8609,36 +8591,36 @@ HookEx — no next hook in chain, return 0
   ;; 475: CompareStringA(Locale, dwCmpFlags, lpString1, cchCount1, lpString2, cchCount2) → int
   (func $handle_CompareStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; arg4 = lpString2, cchCount2 (6th arg) is still on the guest stack at esp+24
-    (global.set $eax (call $compare_string (local.get $arg1)
+    (i32.store offset=0 (global.get $reg_base) (call $compare_string (local.get $arg1)
       (call $g2w (local.get $arg2)) (local.get $arg3)
-      (call $g2w (local.get $arg4)) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $g2w (local.get $arg4)) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; 476: CompareStringW — same comparison, wide characters
   (func $handle_CompareStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $compare_string (local.get $arg1)
+    (i32.store offset=0 (global.get $reg_base) (call $compare_string (local.get $arg1)
       (call $g2w (local.get $arg2)) (local.get $arg3)
-      (call $g2w (local.get $arg4)) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $g2w (local.get $arg4)) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; 477: IsValidLocale(Locale, dwFlags) → BOOL
   (func $handle_IsValidLocale (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 478: EnumSystemLocalesA(lpLocaleEnumProc, dwFlags) → BOOL — no-op
   (func $handle_EnumSystemLocalesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 479: GetLocaleInfoW(Locale, LCType, lpLCData, cchData) → chars written.
   ;; Same values as the A spelling, written as UTF-16 — see $locale_info.
   (func $handle_GetLocaleInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $locale_info
+    (i32.store offset=0 (global.get $reg_base) (call $locale_info
       (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 480: GetTimeZoneInformation(lpTZI) — zero-fill 172-byte struct, return TIME_ZONE_ID_UNKNOWN (0)
   (func $handle_GetTimeZoneInformation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8653,8 +8635,8 @@ HookEx — no next hook in chain, return 0
       (local.set $i (i32.add (local.get $i) (i32.const 4)))
       (br $loop)
     ))
-    (global.set $eax (i32.const 0))  ;; TIME_ZONE_ID_UNKNOWN
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; TIME_ZONE_ID_UNKNOWN
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; Win98 KERNEL32 ordinal 99 (ordinal-only, native RVA 0x1e260).
@@ -8662,14 +8644,14 @@ HookEx — no next hook in chain, return 0
   ;; public GetTimeZoneInformation API.  The guest has no modeled daylight
   ;; transition, so it is always in standard time after the optional refresh.
   (func $handle_KERNEL32_Ordinal99 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1)) ;; TIME_ZONE_ID_STANDARD
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) ;; ret 4
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1)) ;; TIME_ZONE_ID_STANDARD
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) ;; ret 4
   )
 
   ;; 481: SetEnvironmentVariableA(lpName, lpValue) → BOOL
   (func $handle_SetEnvironmentVariableA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $env_set (local.get $arg0) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $env_set (local.get $arg0) (local.get $arg1) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 482: Beep — STUB: unimplemented
@@ -8684,14 +8666,14 @@ HookEx — no next hook in chain, return 0
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 512))))   ;; BytesPerSector
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 524288)))) ;; FreeClusters (~2GB)
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 1048576)))) ;; TotalClusters (~4GB)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; stdcall, 5 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; stdcall, 5 args
   )
 
   ;; 484: GetLogicalDrives() — return bitmask of drives (bits 2/3 = C:/D:)
   (func $handle_GetLogicalDrives (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x0C))  ;; fixed C: plus CD-ROM D:
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0C))  ;; fixed C: plus CD-ROM D:
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; GetLogicalDriveStringsA(nBufferLength, lpBuffer) — return "C:\\\0D:\\\0\0".
@@ -8700,7 +8682,7 @@ HookEx — no next hook in chain, return 0
   (func $handle_GetLogicalDriveStringsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $buf i32)
     (if (i32.lt_u (local.get $arg0) (i32.const 9))
-      (then (global.set $eax (i32.const 9)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 9)))
       (else
         (local.set $buf (call $g2w (local.get $arg1)))
         (i32.store8 (local.get $buf) (i32.const 0x43))              ;; 'C'
@@ -8712,31 +8694,30 @@ HookEx — no next hook in chain, return 0
         (i32.store8 (i32.add (local.get $buf) (i32.const 6)) (i32.const 0x5C))  ;; '\\'
         (i32.store8 (i32.add (local.get $buf) (i32.const 7)) (i32.const 0))
         (i32.store8 (i32.add (local.get $buf) (i32.const 8)) (i32.const 0))
-        (global.set $eax (i32.const 8))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+        (i32.store offset=0 (global.get $reg_base) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; GetKeyboardType(nTypeFlag) → int. Enhanced 101/102-key (type 4, 12 func keys).
   ;; nTypeFlag: 0=type, 1=subtype, 2=num func keys. We report type=4, subtype=0, keys=12.
   (func $handle_GetKeyboardType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 12)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 12)
         (select (i32.const 0) (i32.const 4) (i32.eq (local.get $arg0) (i32.const 1)))
         (i32.eq (local.get $arg0) (i32.const 2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; GetKeyboardLayout(idThread) → HKL. Return US English (0x04090409, device+lang both en-US).
   (func $handle_GetKeyboardLayout (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x04090409))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x04090409))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; CreateIconFromResourceEx(presbits, dwResSize, fIcon, dwVer, cx, cy, Flags) — 7 args.
   ;; Return a dummy non-zero HICON; SDL only uses it for SetClassLong/WM_SETICON which we ignore.
   (func $handle_CreateIconFromResourceEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0xCAFE0001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xCAFE0001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; LookupIconIdFromDirectoryEx(presbits, fIcon, cxDesired, cyDesired, Flags)
@@ -8753,8 +8734,8 @@ HookEx — no next hook in chain, return 0
     (if (i32.or (i32.eqz (local.get $arg0))
           (i32.ne (call $gl16 (local.get $arg0)) (i32.const 0)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (i32.or
           (i32.and (local.get $arg1)
@@ -8764,8 +8745,8 @@ HookEx — no next hook in chain, return 0
             (i32.ne (call $gl16 (i32.add (local.get $arg0) (i32.const 2)))
                     (i32.const 2))))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $count (call $gl16 (i32.add (local.get $arg0) (i32.const 4))))
     (local.set $want_w (local.get $arg2))
@@ -8800,28 +8781,28 @@ HookEx — no next hook in chain, return 0
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (local.set $entry (i32.add (local.get $entry) (i32.const 14)))
       (br $scan)))
-    (global.set $eax (local.get $best_id))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $best_id))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; LoadKeyboardLayoutA(pwszKLID, Flags) — pretend the requested layout was activated.
   (func $handle_LoadKeyboardLayoutA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x04090409))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x04090409))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; GetKeyboardLayoutNameA(pwszKLID) — write 9-byte ASCIIZ "00000409" (US English) and return TRUE.
   (func $handle_GetKeyboardLayoutNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $p i32)
     (if (i32.eqz (local.get $arg0))
-      (then (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)))
     (local.set $p (call $g2w (local.get $arg0)))
     (i32.store (local.get $p) (i32.const 0x30303030))         ;; "0000"
     (i32.store offset=4 (local.get $p) (i32.const 0x39303430)) ;; "0409"
     (i32.store8 offset=8 (local.get $p) (i32.const 0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; GetKeyboardLayoutList(nBuff, lpList) — report one layout (US English).
@@ -8829,14 +8810,14 @@ HookEx — no next hook in chain, return 0
   (func $handle_GetKeyboardLayoutList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and (i32.ne (local.get $arg1) (i32.const 0)) (i32.ge_s (local.get $arg0) (i32.const 1)))
       (then (i32.store (call $g2w (local.get $arg1)) (i32.const 0x04090409))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; GetTextCharacterExtra(hdc) → int. Inter-character spacing (0 = default).
   (func $handle_GetTextCharacterExtra (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_dc_aux_get (local.get $arg0) (i32.const 20) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_aux_get (local.get $arg0) (i32.const 20) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 485: GetFileAttributesA — STUB: unimplemented
@@ -8845,42 +8826,42 @@ HookEx — no next hook in chain, return 0
     ;; GetFileAttributesA(lpFileName) — 1 arg
     (local.set $attrs (call $host_fs_get_file_attributes
       (call $g2w (local.get $arg0)) (i32.const 0)))
-    (global.set $eax (local.get $attrs))
+    (i32.store offset=0 (global.get $reg_base) (local.get $attrs))
     (if (i32.eq (local.get $attrs) (i32.const -1))
       (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 486: GetCurrentDirectoryA — STUB: unimplemented
   (func $handle_GetCurrentDirectoryA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetCurrentDirectoryA(nBufferLength, lpBuffer) — 2 args
-    (global.set $eax (call $host_fs_get_current_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_current_directory
       (local.get $arg0) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 487: SetCurrentDirectoryA — STUB: unimplemented
   (func $handle_SetCurrentDirectoryA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetCurrentDirectoryA(lpPathName) — 1 arg
-    (global.set $eax (call $host_fs_set_current_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_current_directory
       (call $g2w (local.get $arg0)) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 488: SetFileAttributesA — STUB: unimplemented
   (func $handle_SetFileAttributesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetFileAttributesA(lpFileName, dwFileAttributes) — 2 args
-    (global.set $eax (call $host_fs_set_file_attributes
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_file_attributes
       (call $g2w (local.get $arg0)) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 489: GetFullPathNameA — STUB: unimplemented
   (func $handle_GetFullPathNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart) — 4 args
-    (global.set $eax (call $host_fs_get_full_path_name
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_full_path_name
       (call $g2w (local.get $arg0)) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; GetDriveType{A,W}(lpRootPathName). The Win98 environment advertises only
@@ -8907,22 +8888,22 @@ HookEx — no next hook in chain, return 0
     (i32.const 1)) ;; DRIVE_NO_ROOT_DIR
 
   (func $handle_GetDriveTypeA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $drive_type (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $drive_type (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 491: GetCurrentProcessId — return this emulated process's stable PID
   (func $handle_GetCurrentProcessId (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $current_process_id))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $current_process_id))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 492: CreateDirectoryA — STUB: unimplemented
   (func $handle_CreateDirectoryA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; CreateDirectoryA(lpPathName, lpSecurityAttributes) — 2 args
-    (global.set $eax (call $host_fs_create_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_create_directory
       (call $g2w (local.get $arg0)) (i32.const 0)))
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then (global.set $last_error (i32.const 0)))
       (else
         (global.set $last_error
@@ -8931,45 +8912,45 @@ HookEx — no next hook in chain, return 0
               (call $g2w (local.get $arg0)) (i32.const 0)) (i32.const -1))
             (then (i32.const 183)) ;; ERROR_ALREADY_EXISTS
             (else (i32.const 5)))))) ;; ERROR_ACCESS_DENIED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 493: RemoveDirectoryA — STUB: unimplemented
   (func $handle_RemoveDirectoryA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; RemoveDirectoryA(lpPathName) — 1 arg
-    (global.set $eax (call $host_fs_remove_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_remove_directory
       (call $g2w (local.get $arg0)) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 494: SetCurrentDirectoryW — STUB: unimplemented
   (func $handle_SetCurrentDirectoryW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetCurrentDirectoryW(lpPathName) — 1 arg
-    (global.set $eax (call $host_fs_set_current_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_current_directory
       (call $g2w (local.get $arg0)) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 495: RemoveDirectoryW — STUB: unimplemented
   (func $handle_RemoveDirectoryW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; RemoveDirectoryW(lpPathName) — 1 arg
-    (global.set $eax (call $host_fs_remove_directory
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_remove_directory
       (call $g2w (local.get $arg0)) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 496: GetDriveTypeW — Unicode counterpart of GetDriveTypeA.
   (func $handle_GetDriveTypeW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $drive_type (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $drive_type (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 497: MoveFileA — STUB: unimplemented
   (func $handle_MoveFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; MoveFileA(lpExistingFileName, lpNewFileName) — 2 args
-    (global.set $eax (call $host_fs_move_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_move_file
       (call $g2w (local.get $arg0)) (call $g2w (local.get $arg1)) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 498: GetExitCodeProcess — STUB: unimplemented
@@ -8981,8 +8962,8 @@ HookEx — no next hook in chain, return 0
                   (i32.const 0x000E2000))
           (then (i32.const 259))  ;; STILL_ACTIVE
           (else (i32.const 0))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) ;; stdcall, 2 args
   )
 
   ;; 499: CreateProcessA — STUB: unimplemented
@@ -8990,8 +8971,8 @@ HookEx — no next hook in chain, return 0
     ;; Process launch is out-of-scope for the in-browser emulator. Decline the
     ;; launch after installers have extracted their files; this avoids waiting
     ;; on a fake child process that will never really run.
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 44))) ;; stdcall, 10 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44))) ;; stdcall, 10 args
   )
 
   ;; WinExec(lpCmdLine, uCmdShow) — legacy launcher. Pinball's Options →
@@ -9001,8 +8982,8 @@ HookEx — no next hook in chain, return 0
     (drop (local.get $arg0))
     (drop (local.get $arg1))
     (drop (local.get $name_ptr))
-    (global.set $eax (i32.const 33))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 33))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 500: CreateProcessW — STUB: unimplemented
@@ -9031,29 +9012,29 @@ HookEx — no next hook in chain, return 0
   (func $handle_ReadConsoleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (call $console_read (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0))
       (then (return)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 505: SetConsoleMode(hConsole, dwMode) → BOOL
   (func $handle_SetConsoleMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $console_mode (local.get $arg1))
     (call $console_input_set_mode (local.get $arg1))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 506: GetConsoleMode(hConsole, lpMode) → BOOL
   (func $handle_GetConsoleMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store (call $g2w (local.get $arg1)) (call $console_input_mode))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 507: WriteConsoleA — delegates to console buffer write
   (func $handle_WriteConsoleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_write (local.get $arg1) (local.get $arg2) (i32.const 0))
     (if (local.get $arg3)
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $arg2))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 508: GetFileInformationByHandle(hFile, lpFileInformation) → BOOL
   ;; Populate the stable fields exposed by the in-memory VFS. Timestamps are
@@ -9063,14 +9044,14 @@ HookEx — no next hook in chain, return 0
     (local $info i32) (local $size i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $size (call $host_fs_get_file_size (local.get $arg0)))
     (if (i32.eq (local.get $size) (i32.const -1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $info (call $g2w (local.get $arg1)))
     (i32.store offset=0 (local.get $info) (i32.const 0x20))       ;; FILE_ATTRIBUTE_ARCHIVE
@@ -9086,8 +9067,8 @@ HookEx — no next hook in chain, return 0
     (i32.store offset=40 (local.get $info) (i32.const 1))         ;; link count
     (i32.store offset=44 (local.get $info) (i32.const 0))
     (i32.store offset=48 (local.get $info) (local.get $arg0))     ;; stable per-open file index
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 509: PeekNamedPipe — STUB: unimplemented
@@ -9108,8 +9089,8 @@ HookEx — no next hook in chain, return 0
     (call $console_input_drop (local.get $n))
     (if (local.get $arg3)
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $n))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 511: PeekConsoleInputA(hConsole, lpBuffer, nLength, lpNumberOfEventsRead) → BOOL
   ;; Non-destructive: copies without dropping, and never blocks.
@@ -9118,14 +9099,14 @@ HookEx — no next hook in chain, return 0
       (then (i32.store (call $g2w (local.get $arg3))
         (call $console_read_input (local.get $arg1) (local.get $arg2) (i32.const 0))))
       (else (drop (call $console_read_input (local.get $arg1) (local.get $arg2) (i32.const 0)))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 512: GetNumberOfConsoleInputEvents(hConsole, lpNumberOfEvents) → BOOL
   (func $handle_GetNumberOfConsoleInputEvents (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store (call $g2w (local.get $arg1)) (call $console_input_count))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 513: CreatePipe — STUB: unimplemented
   (func $handle_CreatePipe (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -9140,7 +9121,7 @@ HookEx — no next hook in chain, return 0
     (i32.store (local.get $wa)
       (i32.add (i32.const 0x256D4000) (i32.mul (call $host_get_ticks) (i32.const 10000))))
     (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0x01BF53EB))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 515: SetLocalTime — STUB: unimplemented
@@ -9165,7 +9146,7 @@ HookEx — no next hook in chain, return 0
       (i32.rem_u (local.get $secs) (i32.const 60)))
     (i32.store16 (i32.add (local.get $wa) (i32.const 14))
       (i32.rem_u (call $host_get_ticks) (i32.const 1000)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 517: FormatMessageW(dwFlags, lpSource, dwMessageId, dwLanguageId, lpBuffer, nSize, Arguments)
@@ -9176,19 +9157,19 @@ HookEx — no next hook in chain, return 0
   (func $handle_FormatMessageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $nSize i32) (local $args_g i32) (local $len i32) (local $fmt_ga i32)
     (local $fmt_wa i32) (local $tmp_ga i32) (local $dst i32) (local $buf_ga i32)
-    (local.set $nSize (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $args_g (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $nSize (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $args_g (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (if (i32.and (local.get $arg0) (i32.const 0x200))
       (then (local.set $args_g (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))  ;; stdcall, 7 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; stdcall, 7 args
     (if (i32.and (local.get $arg0) (i32.const 0x400))
       (then
         (if (i32.eqz (local.get $arg1))
-          (then (global.set $eax (i32.const 0)) (return)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
         (local.set $fmt_ga (call $heap_alloc
           (i32.add (call $guest_wcslen (local.get $arg1)) (i32.const 1))))
         (if (i32.eqz (local.get $fmt_ga))
-          (then (global.set $eax (i32.const 0)) (return)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
         (drop (call $wide_to_ansi (local.get $arg1) (local.get $fmt_ga)
           (i32.add (call $guest_wcslen (local.get $arg1)) (i32.const 1))))
         (local.set $fmt_wa (call $g2w (local.get $fmt_ga)))))
@@ -9217,15 +9198,15 @@ HookEx — no next hook in chain, return 0
             (local.get $tmp_ga) (local.get $dst) (local.get $nSize)))))
         (call $heap_free (local.get $tmp_ga))))
     (if (local.get $fmt_ga) (then (call $heap_free (local.get $fmt_ga))))
-    (global.set $eax (local.get $len))
+    (i32.store offset=0 (global.get $reg_base) (local.get $len))
   )
 
   ;; 518: GetFileSize — STUB: unimplemented
   (func $handle_GetFileSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetFileSize(hFile, lpFileSizeHigh) — 2 args
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (call $host_fs_get_file_size (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_get_file_size (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 519: GetFileTime(hFile, lpCreationTime, lpLastAccessTime, lpLastWriteTime)
@@ -9250,39 +9231,39 @@ HookEx — no next hook in chain, return 0
       (then
         (call $gs32 (local.get $arg3) (local.get $lo))
         (call $gs32 (i32.add (local.get $arg3) (i32.const 4)) (local.get $hi))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; GetStringTypeExA(Locale, dwInfoType, lpSrcStr, cchSrc, lpCharType)
   (func $handle_GetStringTypeExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $get_string_type_core
+    (i32.store offset=0 (global.get $reg_base) (call $get_string_type_core
       (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 520: GetStringTypeExW(Locale, dwInfoType, lpSrcStr, cchSrc, lpCharType)
   (func $handle_GetStringTypeExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $get_string_type_core
+    (i32.store offset=0 (global.get $reg_base) (call $get_string_type_core
       (local.get $arg2) (local.get $arg3) (local.get $arg4) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 521: GetThreadLocale() → LCID — returns US English
   (func $handle_GetThreadLocale (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x0409))  ;; MAKELCID(LANG_ENGLISH, SUBLANG_ENGLISH_US)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x0409))  ;; MAKELCID(LANG_ENGLISH, SUBLANG_ENGLISH_US)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; 522: CreateSemaphoreW(lpAttr, lInit, lMax, lpName) → real counted semaphore via host.
   (func $handle_CreateSemaphoreW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_create_semaphore (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_create_semaphore (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 523: ReleaseSemaphore(hSem, lReleaseCount, lpPrevCount) → host increments and writes back prior count.
   (func $handle_ReleaseSemaphore (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_release_semaphore
+    (i32.store offset=0 (global.get $reg_base) (call $host_release_semaphore
       (local.get $arg0)
       (local.get $arg1)
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 524: CreateMutexW(lpMutexAttributes, bInitialOwner, lpName) → HANDLE
   ;; Returns a unique handle for the mutex. Single-threaded, so always succeeds.
@@ -9292,27 +9273,27 @@ HookEx — no next hook in chain, return 0
 
   ;; 525: ReleaseMutex(hMutex) — single-threaded, always succeeds
   (func $handle_ReleaseMutex (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; OpenMutexA(dwAccess, bInherit, lpName) — return 0 (not found) so single-instance checks
   ;; let the app fall through to CreateMutexA. Sets last error to ERROR_FILE_NOT_FOUND (2).
   (func $handle_OpenMutexA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $last_error (i32.const 2))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; CreateMutexA(lpAttr, bInitialOwner, lpName) — single-threaded, always succeeds with fresh handle
   (func $handle_CreateMutexA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
-    (global.set $eax (global.get $next_hwnd))
+    (i32.store offset=0 (global.get $reg_base) (global.get $next_hwnd))
     (global.set $last_error (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; CreateSemaphoreA(lpAttr, lInit, lMax, lpName) → real counted semaphore via host.
   (func $handle_CreateSemaphoreA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_create_semaphore (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_create_semaphore (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; OpenSemaphoreA(dwDesiredAccess, bInheritHandle, lpName). Named kernel
   ;; objects are process-local in the current host model, so a new emulator
@@ -9320,9 +9301,9 @@ HookEx — no next hook in chain, return 0
   ;; not-found result; callers such as DX-Ball then create their instance
   ;; semaphore through CreateSemaphoreA.
   (func $handle_OpenSemaphoreA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (global.set $last_error (i32.const 2)) ;; ERROR_FILE_NOT_FOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 526: CreateEventW(lpAttr, bManualReset, bInitialState, lpName) — 4 args stdcall
   (func $handle_CreateEventW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -9333,13 +9314,13 @@ HookEx — no next hook in chain, return 0
       (then (local.set $existing (call $host_open_event (local.get $name_wa) (i32.const 1)))))
     (if (local.get $existing)
       (then
-        (global.set $eax (local.get $existing))
+        (i32.store offset=0 (global.get $reg_base) (local.get $existing))
         (global.set $last_error (i32.const 183)))
       (else
-        (global.set $eax (call $host_create_event
+        (i32.store offset=0 (global.get $reg_base) (call $host_create_event
           (local.get $arg1) (local.get $arg2) (local.get $name_wa) (i32.const 1)))
         (global.set $last_error (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 527: WaitForMultipleObjects(nCount, lpHandles, bWaitAll, dwMilliseconds) — 4 args stdcall
@@ -9356,50 +9337,50 @@ HookEx — no next hook in chain, return 0
         (global.set $wait_stack_bytes (i32.const 20))
         (global.set $steps (i32.const 0))
         (return)))
-    (global.set $eax (local.get $result))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 528: GlobalAddAtomW(lpString) — 1 arg stdcall, shares the A namespace.
   (func $handle_GlobalAddAtomW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $narrow i32)
     (local.set $narrow (call $atom_narrow_w (local.get $arg0)))
-    (global.set $eax (call $atom_add (global.get $ATOM_GLOBAL_TABLE) (local.get $narrow)))
+    (i32.store offset=0 (global.get $reg_base) (call $atom_add (global.get $ATOM_GLOBAL_TABLE) (local.get $narrow)))
     (call $atom_narrow_free (local.get $arg0) (local.get $narrow))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 529: FindResourceW — same as FindResourceA (resource IDs are integer MAKEINTRESOURCE values)
   (func $handle_FindResourceW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $push_rsrc_ctx (local.get $arg0))
-    (global.set $eax (call $find_resource (local.get $arg2) (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $find_resource (local.get $arg2) (local.get $arg1)))
     (call $pop_rsrc_ctx)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 530: GlobalGetAtomNameW(nAtom, lpBuffer, nSize)
   (func $handle_GlobalGetAtomNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $atom_get_name (global.get $ATOM_GLOBAL_TABLE)
+    (i32.store offset=0 (global.get $reg_base) (call $atom_get_name (global.get $ATOM_GLOBAL_TABLE)
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 531: GetProfileIntW(appName, keyName, nDefault) — Unicode win.ini read
   (func $handle_GetProfileIntW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_ini_get_int
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
       (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (local.get $arg2)
       (global.get $win_ini_name_ptr)
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; GetProfileStringW(appName, keyName, default, retBuf, nSize) — Unicode win.ini read
   (func $handle_GetProfileStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_ini_get_string
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_string
       (if (result i32) (local.get $arg0) (then (call $g2w (local.get $arg0))) (else (i32.const 0)))
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
@@ -9407,7 +9388,7 @@ HookEx — no next hook in chain, return 0
       (local.get $arg4)
       (global.get $win_ini_name_ptr)
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect).
@@ -9421,11 +9402,11 @@ HookEx — no next hook in chain, return 0
           (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg3))))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (call $gs32 (local.get $arg3) (i32.const 0x40)) ;; PAGE_EXECUTE_READWRITE
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; VirtualQuery(lpAddress, lpBuffer, dwLength) → SIZE_T
@@ -9443,12 +9424,12 @@ HookEx — no next hook in chain, return 0
   (func $handle_VirtualQuery (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $buf i32)
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
     (if (i32.lt_u (local.get $arg2) (i32.const 28))
-      (then (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
     (local.set $buf (call $g2w (local.get $arg1)))
     (i32.store (local.get $buf)                            (i32.and (local.get $arg0) (i32.const 0xFFFFF000)))
@@ -9458,15 +9439,15 @@ HookEx — no next hook in chain, return 0
     (i32.store (i32.add (local.get $buf) (i32.const 16))   (i32.const 0x1000))    ;; State = MEM_COMMIT
     (i32.store (i32.add (local.get $buf) (i32.const 20))   (i32.const 0x04))      ;; Protect = PAGE_READWRITE
     (i32.store (i32.add (local.get $buf) (i32.const 24))   (i32.const 0x20000))   ;; Type = MEM_PRIVATE
-    (global.set $eax (i32.const 28))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 28))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetDeviceGammaRamp(hdc, lpRamp) — retrieve WAT-owned display LUT state.
   (func $handle_GetDeviceGammaRamp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_gamma_ramp_get (local.get $arg0)
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_gamma_ramp_get (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 533: FindResourceExW(hModule, lpType, lpName, wLanguage) → HRSRC
   ;; The resource walker addresses types and names by ordinal and matches
@@ -9482,21 +9463,20 @@ HookEx — no next hook in chain, return 0
     ;; hResInfo (arg1) is relative to hModule (same as FindResource return).
     ;; Data entry: [RVA:4][Size:4][CodePage:4][Reserved:4]
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)))
     (call $push_rsrc_ctx (local.get $arg0))
-    (global.set $eax
-      (call $gl32
+    (i32.store offset=0 (global.get $reg_base) (call $gl32
         (i32.add (call $r_base)
           (i32.add (local.get $arg1) (i32.const 4)))))
     (call $pop_rsrc_ctx)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 535: GetProcessVersion — 1 arg stdcall, return winver
   (func $handle_GetProcessVersion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $winver))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $winver))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; GetProcessAffinityMask(hProcess, *processMask, *systemMask) → BOOL
@@ -9506,15 +9486,15 @@ HookEx — no next hook in chain, return 0
       (then (i32.store (call $g2w (local.get $arg1)) (i32.const 1))))
     (if (local.get $arg2)
       (then (i32.store (call $g2w (local.get $arg2)) (i32.const 1))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; SetThreadAffinityMask(hThread, dwAffinityMask) → previous mask (DWORD_PTR)
   ;; Single-CPU emulator: always return 0x1 (the only valid mask). Nonzero = success.
   (func $handle_SetThreadAffinityMask (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 536: GlobalFlags(hMem) → flags/lock count.
@@ -9522,8 +9502,8 @@ HookEx — no next hook in chain, return 0
   ;; so there is no movable/discardable/lock-count state to report. Return 0,
   ;; which is the normal unlocked/fixed-memory result.
   (func $handle_GlobalFlags (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 537: GetDiskFreeSpaceW(lpRootPathName, ...) — every value this call
@@ -9540,72 +9520,72 @@ HookEx — no next hook in chain, return 0
   ;; The host search takes an isWide flag and does the conversion on both
   ;; sides of itself, so this is SearchPathA with that flag set.
   (func $handle_SearchPathW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $search_path
+    (i32.store offset=0 (global.get $reg_base) (call $search_path
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))  ;; stdcall, 6 args
   )
 
   ;; 539: SetThreadPriority — STUB: unimplemented
   (func $handle_SetThreadPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; SetThreadPriority(hThread, nPriority) — return TRUE
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 1250: GetExitCodeThread(hThread, lpExitCode) — 2 args stdcall
   (func $handle_GetExitCodeThread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Write exit code to lpExitCode
     (call $gs32 (local.get $arg1) (call $host_get_exit_code_thread (local.get $arg0)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; SuspendThread(hThread) — 1 arg stdcall, return previous suspend count (0 = not suspended)
   (func $handle_SuspendThread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_suspend_thread (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_suspend_thread (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 541: GetPrivateProfileIntW — STUB: unimplemented
   (func $handle_GetPrivateProfileIntW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetPrivateProfileIntW(appName, keyName, nDefault, fileName) — 4 args stdcall
-    (global.set $eax (call $host_ini_get_int
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_get_int
       (call $g2w (local.get $arg0))
       (call $g2w (local.get $arg1))
       (local.get $arg2)
       (call $g2w (local.get $arg3))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 542: GetPrivateProfileStringW — STUB: unimplemented
   (func $handle_GetPrivateProfileStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ini_get_string
+    (i32.store offset=0 (global.get $reg_base) (call $ini_get_string
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 543: WritePrivateProfileStringW(appName, keyName, string, fileName) — 4 args stdcall
   (func $handle_WritePrivateProfileStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_ini_write_string
+    (i32.store offset=0 (global.get $reg_base) (call $host_ini_write_string
       (call $g2w (local.get $arg0))
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (call $g2w (local.get $arg3))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 544: CopyFileW — STUB: unimplemented
   (func $handle_CopyFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; CopyFileW(lpExistingFileName, lpNewFileName, bFailIfExists) — 3 args
-    (global.set $eax (call $host_fs_copy_file
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_copy_file
       (call $g2w (local.get $arg0)) (call $g2w (local.get $arg1)) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 545: GetSystemDirectoryA(lpBuffer, uSize) — 2 args stdcall
@@ -9618,8 +9598,8 @@ HookEx — no next hook in chain, return 0
     (i32.store (i32.add (local.get $dst) (i32.const 8)) (i32.const 0x535c5357))   ;; WS\S
     (i32.store (i32.add (local.get $dst) (i32.const 12)) (i32.const 0x45545359))  ;; YSTE
     (i32.store16 (i32.add (local.get $dst) (i32.const 16)) (i32.const 0x004d))    ;; M\0
-    (global.set $eax (i32.const 17))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 17))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 813: GetWindowsDirectoryA(lpBuffer, uSize) → length
@@ -9631,16 +9611,16 @@ HookEx — no next hook in chain, return 0
     (i32.store (i32.add (local.get $dst) (i32.const 4)) (i32.const 0x4f444e49))   ;; INDO
     (i32.store16 (i32.add (local.get $dst) (i32.const 8)) (i32.const 0x5357))     ;; WS
     (i32.store8 (i32.add (local.get $dst) (i32.const 10)) (i32.const 0))          ;; NUL
-    (global.set $eax (i32.const 10))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 10))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 546: GetVolumeInformationW — the same volume GetVolumeInformationA
   ;; describes, with its two strings written as UTF-16.
   (func $handle_GetVolumeInformationW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $volume_information
+    (i32.store offset=0 (global.get $reg_base) (call $volume_information
       (local.get $arg1) (local.get $arg3) (local.get $arg4) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))) ;; stdcall 8 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))) ;; stdcall 8 args
   )
 
   ;; 782: GetVolumeInformationA — 8 args stdcall, return TRUE with fake data
@@ -9652,7 +9632,7 @@ HookEx — no next hook in chain, return 0
   (func $volume_information (param $name_buf i32) (param $serial i32)
                             (param $max_comp i32) (param $wide i32) (result i32)
     (local $wa_esp i32) (local $fs_flags i32) (local $fs_name i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $fs_flags (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
     (local.set $fs_name (i32.load (i32.add (local.get $wa_esp) (i32.const 28))))
     ;; The volume has no label: an empty string, in the caller's encoding.
@@ -9681,9 +9661,9 @@ HookEx — no next hook in chain, return 0
     (i32.const 1))
 
   (func $handle_GetVolumeInformationA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $volume_information
+    (i32.store offset=0 (global.get $reg_base) (call $volume_information
       (local.get $arg1) (local.get $arg3) (local.get $arg4) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))) ;; stdcall 8 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))) ;; stdcall 8 args
   )
 
   ;; 547: OutputDebugStringW — STUB: unimplemented
@@ -9704,46 +9684,46 @@ HookEx — no next hook in chain, return 0
 
   ;; 550: GlobalDeleteAtom(nAtom) — release one global reference; 0 = success.
   (func $handle_GlobalDeleteAtom (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $atom_delete (global.get $ATOM_GLOBAL_TABLE) (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $atom_delete (global.get $ATOM_GLOBAL_TABLE) (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; FindAtomA/W(lpString) — process-local lookup; 0 when never added.
   (func $handle_FindAtomA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $atom_find (global.get $ATOM_LOCAL_TABLE) (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $atom_find (global.get $ATOM_LOCAL_TABLE) (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_FindAtomW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $narrow i32)
     (local.set $narrow (call $atom_narrow_w (local.get $arg0)))
-    (global.set $eax (call $atom_find (global.get $ATOM_LOCAL_TABLE) (local.get $narrow)))
+    (i32.store offset=0 (global.get $reg_base) (call $atom_find (global.get $ATOM_LOCAL_TABLE) (local.get $narrow)))
     (call $atom_narrow_free (local.get $arg0) (local.get $narrow))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 551: GlobalFindAtomW(lpString) — global lookup; 0 when never added.
   (func $handle_GlobalFindAtomW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $narrow i32)
     (local.set $narrow (call $atom_narrow_w (local.get $arg0)))
-    (global.set $eax (call $atom_find (global.get $ATOM_GLOBAL_TABLE) (local.get $narrow)))
+    (i32.store offset=0 (global.get $reg_base) (call $atom_find (global.get $ATOM_GLOBAL_TABLE) (local.get $narrow)))
     (call $atom_narrow_free (local.get $arg0) (local.get $narrow))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   (func $handle_CopyMetaFileA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_metafile_copy (local.get $arg0) (i32.const 6)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_metafile_copy (local.get $arg0) (i32.const 6)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_CopyMetaFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_metafile_copy (local.get $arg0) (i32.const 6)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_metafile_copy (local.get $arg0) (i32.const 6)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 146: ExtCreatePen(style, width, LOGBRUSH*, styleCount, styleEntries).
   (func $handle_ExtCreatePen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $brush i32) (local $style i32) (local $color i32) (local $flags i32)
     (if (i32.eqz (local.get $arg2))
-      (then (global.set $eax (i32.const 0)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (local.set $brush (call $g2w (local.get $arg2)))
         (local.set $style (i32.and (local.get $arg0) (i32.const 0xF)))
@@ -9751,67 +9731,67 @@ HookEx — no next hook in chain, return 0
         (local.set $flags (i32.or
           (select (i32.const 1) (i32.const 0) (i32.eq (local.get $style) (i32.const 5)))
           (i32.and (local.get $arg0) (i32.const 0x000FFF00))))
-        (global.set $eax (call $gdi_object_alloc (i32.const 1)
+        (i32.store offset=0 (global.get $reg_base) (call $gdi_object_alloc (i32.const 1)
           (local.get $style) (local.get $arg1) (local.get $color) (local.get $flags)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 561: EnumMetaFile — validate and enumerate each classic WMF record through
   ;; the guest MFENUMPROC. The WAT callback context owns the HANDLETABLE.
   (func $handle_EnumMetaFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (call $gdi_metafile_enum_start (local.get $arg0) (local.get $arg1)
-      (local.get $arg2) (local.get $arg3) (local.get $ret) (global.get $esp))
+      (local.get $arg2) (local.get $arg3) (local.get $ret) (i32.load offset=16 (global.get $reg_base)))
   )
 
 ;; 563: PlayMetaFileRecord — replay one validated WMF record against the
   ;; caller's live HANDLETABLE, preserving object/state changes for the next
   ;; EnumMetaFile callback.
   (func $handle_PlayMetaFileRecord (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_metafile_play_wmf_record
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_metafile_play_wmf_record
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (if (result i32) (local.get $arg2)
         (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
 SetColorAdjustment — validate and copy complete per-DC state.
   (func $handle_SetColorAdjustment (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_color_adjustment_set
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_color_adjustment_set
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   (func $handle_GetColorAdjustment (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_color_adjustment_get
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_color_adjustment_get
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
 ;; 571: PolyDraw — WAT-owned PT_MOVETO/PT_LINETO/PT_BEZIERTO path execution.
   (func $handle_PolyDraw (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (call $gdi_dc_path_is_open (local.get $arg0))
-      (then (global.set $eax (call $gdi_dc_path_record_polydraw (local.get $arg0)
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_path_record_polydraw (local.get $arg0)
         (call $g2w (local.get $arg1)) (call $g2w (local.get $arg2)) (local.get $arg3))))
-      (else (global.set $eax (call $gdi_poly_draw (local.get $arg0)
+      (else (i32.store offset=0 (global.get $reg_base) (call $gdi_poly_draw (local.get $arg0)
         (call $g2w (local.get $arg1)) (call $g2w (local.get $arg2)) (local.get $arg3)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
  574: SetMapperFlags — per-DC font mapper flags.
   (func $handle_SetMapperFlags (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_dc_aux_set
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_dc_aux_set
       (local.get $arg0) (i32.const 16) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; StartDocW — the DOCINFO strings are only names for a print job nothing
@@ -9823,22 +9803,22 @@ SetColorAdjustment — validate and copy complete per-DC state.
 
   ;; 603: GetCharWidthW(hdc, first, last, widths) — UTF-16 range width query.
   (func $handle_GetCharWidthW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_font_char_widths
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_font_char_widths
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (if (result i32) (local.get $arg3)
         (then (call $g2w (local.get $arg3))) (else (i32.const 0)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 606: GetTextFaceW(hdc, cch, face) — UTF-16 variant of GetTextFaceA.
   (func $handle_GetTextFaceW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_font_write_text_face
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_font_write_text_face
       (local.get $arg0) (local.get $arg1)
       (if (result i32) (local.get $arg2)
         (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 607: MsgWaitForMultipleObjects(nCount, pHandles, fWaitAll, dwMilliseconds, dwWakeMask) → DWORD
@@ -9869,8 +9849,8 @@ SetColorAdjustment — validate and copy complete per-DC state.
                     (call $timer_check_due (call $paint_scratch_take) (i32.const 0)))))
       (then
         ;; Message available: return WAIT_OBJECT_0 + nCount
-        (global.set $eax (local.get $arg0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; Private message pumps use the handle only as another wake source. Polling
     ;; it here would consume auto-reset events before the worker can observe
@@ -9878,14 +9858,14 @@ SetColorAdjustment — validate and copy complete per-DC state.
     ;; Nothing ready — if timeout is 0, return WAIT_TIMEOUT
     (if (i32.eqz (local.get $arg3))
       (then
-        (global.set $eax (i32.const 0x102))  ;; WAIT_TIMEOUT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x102))  ;; WAIT_TIMEOUT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; Message-aware waits are commonly embedded in private PeekMessage loops.
     ;; Complete the stdcall frame before yielding the emulator slice so host
     ;; input cannot synchronously re-enter guest code with this frame live.
-    (global.set $eax (i32.const 0x102)) ;; WAIT_TIMEOUT
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x102)) ;; WAIT_TIMEOUT
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (global.set $yield_flag (i32.const 1))
     (global.set $steps (i32.const 0)))
 
@@ -9946,8 +9926,8 @@ SetColorAdjustment — validate and copy complete per-DC state.
       (else
         (call $host_get_window_rect (local.get $arg0)
           (i32.add (local.get $wa) (i32.const 28)))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
   ;; 609: RegisterWindowMessageW(lpString) — the A spelling's message, by name.
@@ -9955,40 +9935,39 @@ SetColorAdjustment — validate and copy complete per-DC state.
   ;; and received it from a component that registered it as A never matched.
   (func $handle_RegisterWindowMessageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ansi i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (if (i32.eqz (local.get $arg0))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (local.set $ansi (call $clipfmt_wide_to_ansi (local.get $arg0)))
     (if (i32.eqz (local.get $ansi))
-      (then (global.set $eax (i32.const 0)) (return)))
-    (global.set $eax (call $register_window_message (local.get $ansi)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
+    (i32.store offset=0 (global.get $reg_base) (call $register_window_message (local.get $ansi)))
     (call $heap_free (local.get $ansi))
   )
 
   ;; 610: GetForegroundWindow — STUB: unimplemented
   (func $handle_GetForegroundWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetForegroundWindow() — 0 args, return active window handle
-    (global.set $eax (global.get $main_hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $main_hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 611: GetMessagePos — returns the screen-space cursor position
   ;; (y<<16 | x) at the time of the last retrieved message.
   (func $handle_GetMessagePos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (i32.or
+    (i32.store offset=0 (global.get $reg_base) (i32.or
         (i32.and (global.get $last_msg_pos_x) (i32.const 0xFFFF))
         (i32.shl
           (i32.and (global.get $last_msg_pos_y) (i32.const 0xFFFF))
           (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 612: GetMessageTime — return tick count of the last message retrieved via
   ;; GetMessage/PeekMessage.
   (func $handle_GetMessageTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $last_msg_time))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $last_msg_time))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 613: RemovePropW(hwnd, lpString) -> HANDLE.
@@ -10024,12 +10003,12 @@ SetColorAdjustment — validate and copy complete per-DC state.
         (if (i32.and (i32.ge_u (local.get $arg2) (i32.const 0x1100))
                      (i32.le_u (local.get $arg2) (i32.const 0x1150)))
           (then
-            (global.set $eax (call $treeview_dispatch
+            (i32.store offset=0 (global.get $reg_base) (call $treeview_dispatch
               (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
             (return)))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; A system class marker handed out by GetClassInfo. The app subclassed one
     ;; of USER's controls and is chaining back to it for default handling, so
@@ -10053,9 +10032,9 @@ SetColorAdjustment — validate and copy complete per-DC state.
                   (local.get $ctrl_class)
                   (call $ctrl_table_get_id (local.get $arg1)))
                 (call $sysclass_replay_create (local.get $arg1) (local.get $thunk_idx))))))
-        (global.set $eax (call $control_wndproc_dispatch
+        (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
           (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; Sentinel 0xFFFE0001 = built-in control default wndproc.
     ;; Subclassed WAT controls chain here for stateful control messages such as
@@ -10067,20 +10046,20 @@ SetColorAdjustment — validate and copy complete per-DC state.
         (if (i32.and (i32.ne (local.get $ctrl_class) (i32.const 0))
                      (i32.ne (local.get $arg2) (i32.const 0x000F)))
           (then
-            (global.set $eax (call $control_wndproc_dispatch
+            (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
               (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4))))
           (else
-            (global.set $eax (i32.const 0))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; DefDlgProc marker returned by GWL_WNDPROC before a dialog is
     ;; subclassed. Execute the per-window DLGPROC and honor DWL_MSGRESULT.
     (if (i32.eq (local.get $arg0) (global.get $WNDPROC_DIALOG))
       (then
-        (global.set $eax (call $dialog_default_proc
+        (i32.store offset=0 (global.get $reg_base) (call $dialog_default_proc
           (local.get $arg1) (local.get $arg2)
           (local.get $arg3) (local.get $arg4)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; WAT-native wndprocs (for current controls, 0xFFFF0002) are markers,
     ;; not guest-code addresses. Dispatch them directly instead of jumping.
@@ -10092,17 +10071,17 @@ SetColorAdjustment — validate and copy complete per-DC state.
         ;; its dialog procedure is unwinding.
         (if (i32.eq (local.get $arg2) (i32.const 0x000F))
           (then
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
             (return)))
         (if (i32.eq (local.get $arg0) (global.get $WNDPROC_CTRL_NATIVE))
           (then
-            (global.set $eax (call $control_wndproc_dispatch
+            (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
               (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4))))
           (else
-            (global.set $eax (call $wat_wndproc_dispatch
+            (i32.store offset=0 (global.get $reg_base) (call $wat_wndproc_dispatch
               (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; DefWindowProc import thunks are common saved "previous wndprocs" for
     ;; MFC subclasses. Dispatch them directly instead of recursively entering
@@ -10122,7 +10101,7 @@ SetColorAdjustment — validate and copy complete per-DC state.
             ;; Skip lpPrevWndFunc; DefWindowProc's own stdcall cleanup then
             ;; consumes ret+hWnd+Msg+wParam+lParam = the full CallWindowProc
             ;; frame size.
-            (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
             (if (i32.eq (local.get $thunk_api) (i32.const 98))
               (then
                 (call $handle_DefWindowProcA
@@ -10140,30 +10119,30 @@ SetColorAdjustment — validate and copy complete per-DC state.
         ;; Current stack: [ret][prevFunc][hWnd][Msg][wParam][lParam]
         ;; WndProc thunk expects: [ret][hWnd][Msg][wParam][lParam]
         ;; Write ret over prevFunc slot, then advance ESP by 4
-        (call $gs32 (i32.add (global.get $esp) (i32.const 4))
-          (call $gl32 (global.get $esp)))  ;; copy ret into prevFunc slot
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))
+          (call $gl32 (i32.load offset=16 (global.get $reg_base))))  ;; copy ret into prevFunc slot
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         ;; Now stack: [ret][hWnd][Msg][wParam][lParam] — correct for stdcall(4)
         ;; Dispatch the thunk directly
         (call $win32_dispatch (i32.div_u
           (i32.sub (local.get $arg0) (global.get $thunk_guest_base)) (i32.const 8)))
         (return)))
     ;; prevWndFunc is real x86 code — set up call frame and jump
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Clean CallWindowProcA stdcall frame: ret + 5 args = 24 bytes
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     ;; Push WndProc args (stdcall order: lParam, wParam, Msg, hWnd)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg4))   ;; lParam
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg3))   ;; wParam
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg2))   ;; Msg
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg1))   ;; hWnd
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg4))   ;; lParam
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg3))   ;; wParam
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg2))   ;; Msg
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg1))   ;; hWnd
     ;; Push return address — WndProc returns directly to our caller
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     ;; Jump to WndProc
     (global.set $eip (local.get $arg0))
     (global.set $steps (i32.const 0))
@@ -10171,8 +10150,8 @@ SetColorAdjustment — validate and copy complete per-DC state.
 
   ;; 632: BeginDeferWindowPos(nNumWindows) → HDWP handle
   (func $handle_BeginDeferWindowPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0xDEF00001))  ;; fake HDWP handle
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xDEF00001))  ;; fake HDWP handle
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 633: DeferWindowPos(hWinPosInfo, hWnd, hWndInsertAfter, x, y, cx, cy, uFlags) → HDWP
@@ -10181,14 +10160,14 @@ SetColorAdjustment — validate and copy complete per-DC state.
     ;; Apply position immediately (no batching needed)
     ;; arg0=hDWP, arg1=hWnd, arg2=hInsertAfter, arg3=x, arg4=y, cx=stack[24], cy=stack[28], uFlags=stack[32]
     (local.set $old_cs (call $host_get_window_client_size (local.get $arg1)))
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 32))))
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
     (call $host_move_window (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
       (local.get $flags))
     (call $ctrl_geom_sync (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
       (local.get $flags))
     ;; Keep the WAT window style synchronized with the host visibility, just
     ;; as SetWindowPos and ShowWindow do. MFC hides dock bars with deferred
@@ -10238,14 +10217,14 @@ SetColorAdjustment — validate and copy complete per-DC state.
       (then
         (drop (call $control_wndproc_dispatch
           (local.get $arg1) (i32.const 0x000F) (i32.const 0) (i32.const 0)))))
-    (global.set $eax (local.get $arg0))  ;; return same HDWP handle
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36)))  ;; stdcall, 8 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))  ;; return same HDWP handle
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))  ;; stdcall, 8 args
   )
 
   ;; 631: EndDeferWindowPos(hWinPosInfo) → BOOL
   (func $handle_EndDeferWindowPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))  ;; TRUE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; TRUE
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 615: GetPropW(hwnd, lpString) -> HANDLE
@@ -10307,16 +10286,16 @@ SetColorAdjustment — validate and copy complete per-DC state.
           (then
             (drop (call $host_show_window (local.get $arg0) (local.get $show)))
             (call $wnd_apply_show_state (local.get $arg0) (local.get $show))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args
   )
 
 GetTopWindow(hWnd) — 1 arg stdcall
   (func $handle_GetTopWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wnd_find_first_child (local.get $arg0)))
-    (if (i32.eqz (global.get $eax))
-      (then (global.set $eax (call $host_get_window_related (local.get $arg0) (i32.const 5)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_find_first_child (local.get $arg0)))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (i32.store offset=0 (global.get $reg_base) (call $host_get_window_related (local.get $arg0) (i32.const 5)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 623: SetScrollPos(hwnd, nBar, nPos, bRedraw) → old pos
@@ -10329,9 +10308,9 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (i32.ne (local.get $arg1) (i32.const 0))))
         (local.set $old (i32.load (local.get $base)))
         (i32.store (local.get $base) (local.get $arg2))
-        (global.set $eax (local.get $old)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $old)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 624: GetScrollPos(hwnd, nBar) → pos
   (func $handle_GetScrollPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -10341,9 +10320,9 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then
         (local.set $base (call $scroll_bar_addr (local.get $slot)
           (i32.ne (local.get $arg1) (i32.const 0))))
-        (global.set $eax (i32.load (local.get $base))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $base))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 625: SetScrollRange(hwnd, nBar, nMinPos, nMaxPos, bRedraw) → BOOL
   (func $handle_SetScrollRange (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -10355,8 +10334,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
           (i32.ne (local.get $arg1) (i32.const 0))))
         (i32.store offset=4 (local.get $base) (local.get $arg2))
         (i32.store offset=8 (local.get $base) (local.get $arg3))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 626: GetScrollRange(hwnd, nBar, lpMinPos, lpMaxPos) → BOOL
   (func $handle_GetScrollRange (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -10372,13 +10351,13 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then (i32.store (call $g2w (local.get $arg2)) (local.get $wmin))))
     (if (local.get $arg3)
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $wmax))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 627: ShowScrollBar(hwnd, wBar, bShow) → BOOL
   (func $handle_ShowScrollBar (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 628: SetScrollInfo(hwnd, nBar, lpsi, bRedraw) → pos
   (func $handle_SetScrollInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -10472,9 +10451,9 @@ GetTopWindow(hWnd) — 1 arg stdcall
             ;; NC drain puts it back. USER gets this for free from the window's
             ;; non-client update region.
             (call $nc_flags_set (local.get $arg0) (i32.const 1))))
-        (global.set $eax (i32.load (local.get $base))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+        (i32.store offset=0 (global.get $reg_base) (i32.load (local.get $base))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 629: GetScrollInfo(hwnd, nBar, lpsi) → BOOL
   (func $handle_GetScrollInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -10505,20 +10484,19 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (if (i32.and (local.get $fMask) (i32.const 16))
           (then
             (i32.store offset=24 (local.get $lpsi) (i32.load offset=4 (local.get $aux)))))
-        (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 630: ScrollWindow(hWnd, XAmount, YAmount, lpRect, lpClipRect)
   ;; Host scrolls the target client backing-store rectangle by the requested
   ;; delta and fills exposed strips. lpRect/lpClipRect are client-relative and
   ;; are clipped/intersected host-side.
   (func $handle_ScrollWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $host_gdi_scroll_window
+    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_scroll_window
         (local.get $arg0) (local.get $arg1) (local.get $arg2)
         (local.get $arg3) (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 634: AdjustWindowRectEx(lpRect, dwStyle, bMenu, dwExStyle) — 4 args stdcall
   ;; Same as AdjustWindowRect but with extended style (ignored for now)
@@ -10552,8 +10530,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (i32.store offset=8  (local.get $wa) (i32.add (i32.load offset=8  (local.get $wa)) (i32.const 2)))
       (i32.store offset=12 (local.get $wa) (i32.add (i32.load offset=12 (local.get $wa)) (i32.const 2)))
     ))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
   ;; DispatchMessageW — see the note on $handle_GetMessageW. The parallel copy
@@ -10587,8 +10565,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (global.set $haccel_data (local.get $data))
     (global.set $haccel_count (i32.div_u (global.get $rsrc_last_size) (i32.const 8)))
     (global.set $haccel (i32.const 0x60001))
-    (global.set $eax (i32.const 0x60001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x60001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 639: TranslateAcceleratorW — identical behaviour to A (MSG layout is the same).
@@ -10601,26 +10579,25 @@ GetTopWindow(hWnd) — 1 arg stdcall
   (func $handle_IsWindowEnabled (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
-    (global.set $eax
-      (select (i32.const 0) (i32.const 1)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 1)
         (i32.and (call $wnd_get_style (local.get $arg0)) (i32.const 0x08000000))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 641: GetDesktopWindow — STUB: unimplemented
   (func $handle_GetDesktopWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; GetDesktopWindow() → HWND of desktop window. No args (0 params on stack, but ret addr is there)
-    (global.set $eax (i32.const 0x10000))  ;; return a fixed desktop HWND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x10000))  ;; return a fixed desktop HWND
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 642: GetActiveWindow — return main window handle
   (func $handle_GetActiveWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $main_hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (global.get $main_hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 643: ReuseDDElParam — STUB: unimplemented
@@ -10636,8 +10613,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; 645: WaitMessage — STUB: unimplemented
   (func $handle_WaitMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; WaitMessage() — 0 args, return TRUE (message always available in our event loop)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))  ;; stdcall, 0 args
   )
 
   ;; 646: GetWindowThreadProcessId
@@ -10656,13 +10633,13 @@ GetTopWindow(hWnd) — 1 arg stdcall
     ;; Invalid HWND: return zero and leave the caller's PID storage untouched.
     (if (i32.eqz (local.get $pid))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (local.get $pid))))
-    (global.set $eax (i32.const 1))  ;; fake thread ID = 1
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; fake thread ID = 1
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; GetMessageW — the A pump, which is the maintained one.
@@ -10704,13 +10681,13 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (local.set $top (i32.load (i32.add (local.get $wa) (i32.const 4))))
     (local.set $right (i32.load (i32.add (local.get $wa) (i32.const 8))))
     (local.set $bottom (i32.load (i32.add (local.get $wa) (i32.const 12))))
-    (global.set $eax (call $host_gdi_bitblt
+    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_bitblt
       (local.get $arg0) (local.get $left) (local.get $top)
       (i32.sub (local.get $right) (local.get $left))
       (i32.sub (local.get $bottom) (local.get $top))
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0x00550009)))  ;; DSTINVERT
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args + ret
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; stdcall, 2 args + ret
   )
 
   ;; 653: IsZoomed(hwnd) → BOOL — returns TRUE if window is maximized.
@@ -10718,16 +10695,16 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; and $wnd_max_get has tracked it since the caption's maximize glyph needed
   ;; to know which way to draw itself.
   (func $handle_IsZoomed (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wnd_max_get (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_max_get (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; 654: SetParent — STUB: unimplemented
   ;; SetParent(hWndChild=arg0, hWndNewParent=arg1) — returns previous parent (0 if none).
   (func $handle_SetParent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wnd_get_parent (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $wnd_get_parent (local.get $arg0)))
     (call $wnd_set_parent (local.get $arg0) (local.get $arg1))
     (call $host_set_parent (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
 rDragDrop(hwnd, pDropTarget) — return S_OK.
@@ -10735,22 +10712,22 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
   ;; from, so tracking the IDropTarget would be pure bookkeeping. Return S_OK so
   ;; callers proceed; any later drop events simply never arrive.
   (func $handle_RegisterDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; RevokeDragDrop(hwnd) — return S_OK, matching the RegisterDragDrop no-op above.
   (func $handle_RevokeDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; CoLockObjectExternal(pUnk, fLock, fLastUnlockReleases) — return S_OK.
   ;; mspaint probes this via GetProcAddress at startup and bails with a fatal
   ;; MessageBox if unresolved. No real OOP server lifetime to manage.
   (func $handle_CoLockObjectExternal (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
 ;; 657: GetDCEx — STUB: unimplemented
@@ -10775,8 +10752,8 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
           (else
             (local.set $hdc (call $host_alloc_window_dc (local.get $arg0) (i32.const 0)))
             (call $dc_apply_client_clip (local.get $hdc) (local.get $arg0))))))
-    (global.set $eax (local.get $hdc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hdc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 658: LockWindowUpdate — STUB: unimplemented
@@ -10785,17 +10762,17 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
     ;; unlocked with NULL. WordPad/MFC uses it around toolbar command UI
     ;; updates. We do not maintain host-side window locks, so accept both lock
     ;; and unlock requests as successful no-ops.
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 659: GetTabbedTextExtentA — packed width/height for tab-expanded text.
   (func $handle_GetTabbedTextExtentA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_tabbed_text
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_tabbed_text
       (local.get $arg0) (i32.const 0) (i32.const 0)
       (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
       (i32.const 0) (i32.const 0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 660: CreateDialogIndirectParamW — STUB: unimplemented
@@ -10820,17 +10797,16 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
   ;; IsDialogMessage keyboard traversal. bPrevious selects reverse order and
   ;; both directions wrap at the ends, matching USER32.
   (func $handle_GetNextDlgTabItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dialog_next_tabstop (local.get $arg0) (local.get $arg1)
+    (i32.store offset=0 (global.get $reg_base) (call $dialog_next_tabstop (local.get $arg0) (local.get $arg1)
         (select (i32.const -1) (i32.const 1) (local.get $arg2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 662: GetAsyncKeyState — STUB: unimplemented
   ;; GetAsyncKeyState(vKey) — stdcall(1). Reports current key state via host.
   (func $handle_GetAsyncKeyState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_get_async_key_state (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $host_get_async_key_state (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) (return)
   )
 
   ;; 663: MapDialogRect(hDlg, lpRect) — convert dialog units to pixels.
@@ -10838,8 +10814,8 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
     (local $p i32) (local $base_x i32) (local $base_y i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg1)))
     (local.set $base_x
@@ -10856,17 +10832,16 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
       (i32.div_s (i32.mul (i32.load offset=4 (local.get $p)) (local.get $base_y)) (i32.const 8)))
     (i32.store offset=12 (local.get $p)
       (i32.div_s (i32.mul (i32.load offset=12 (local.get $p)) (local.get $base_y)) (i32.const 8)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 664: GetDialogBaseUnits() → DWORD (loword=X, hiword=Y base units)
   ;; Win16 SYSTEM_FONT is 8x16; Win32's 8pt MS Sans Serif base is 6x13.
   (func $handle_GetDialogBaseUnits (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0x00100008) (i32.const 0x000D0006)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0x00100008) (i32.const 0x000D0006)
         (global.get $is_win16)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; 665: GetClassNameW(hwnd, lpClassName, nMaxCount) → chars copied.
   ;; The class name comes from the same place GetClassNameA reads it; only
@@ -10875,13 +10850,13 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
   ;; and a widen is the whole of it.
   (func $handle_GetClassNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $len i32) (local $control_len i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.le_s (local.get $arg2) (i32.const 0)))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (i32.store16 (call $g2w (local.get $arg1)) (i32.const 0))
     (local.set $tmp (call $heap_alloc (local.get $arg2)))
     (if (i32.eqz (local.get $tmp))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (call $gs8 (local.get $tmp) (i32.const 0))
     (local.set $control_len (call $copy_control_class_name
       (local.get $arg0) (local.get $tmp) (local.get $arg2)))
@@ -10892,7 +10867,7 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
           (local.get $arg0) (call $g2w (local.get $tmp)) (local.get $arg2)))))
     (drop (call $ansi_to_wide (local.get $tmp) (local.get $arg1) (local.get $arg2)))
     (call $heap_free (local.get $tmp))
-    (global.set $eax (local.get $len))
+    (i32.store offset=0 (global.get $reg_base) (local.get $len))
   )
 
   ;; 666: GetDlgItemInt(hDlg, nIDDlgItem, lpTranslated, bSigned) → UINT
@@ -10953,8 +10928,8 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
                   (then (local.set $val (i32.sub (i32.const 0) (local.get $val)))))))))))
     (if (local.get $arg2)
       (then (call $gs32 (local.get $arg2) (local.get $ok))))
-    (global.set $eax (local.get $val))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $val))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; stdcall, 4 args
   )
 
   ;; 667: GetDlgItemTextW(hDlg, nIDDlgItem, lpString, cchMax) — the same read
@@ -10963,19 +10938,19 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
   ;; control, which is a wrong answer rather than a missing one.
   (func $handle_GetDlgItemTextW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $len i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (if (i32.or (i32.eqz (local.get $arg2)) (i32.le_s (local.get $arg3) (i32.const 0)))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (i32.store16 (call $g2w (local.get $arg2)) (i32.const 0))
     (local.set $tmp (call $heap_alloc (local.get $arg3)))
     (if (i32.eqz (local.get $tmp))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (call $gs8 (local.get $tmp) (i32.const 0))
     (local.set $len (call $dlg_item_text_ansi
       (local.get $arg0) (local.get $arg1) (local.get $tmp) (local.get $arg3)))
     (drop (call $ansi_to_wide (local.get $tmp) (local.get $arg2) (local.get $arg3)))
     (call $heap_free (local.get $tmp))
-    (global.set $eax (local.get $len))
+    (i32.store offset=0 (global.get $reg_base) (local.get $len))
   )
 
   ;; 668: SetDlgItemTextW — return 1, 3 args stdcall
@@ -11006,9 +10981,9 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
     (local $ctrl_hwnd i32)
     (local.set $ctrl_hwnd (call $ctrl_find_by_id (local.get $arg0) (local.get $arg1)))
     (if (local.get $ctrl_hwnd)
-      (then (global.set $eax (call $ctrl_get_check_state (local.get $ctrl_hwnd))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+      (then (i32.store offset=0 (global.get $reg_base) (call $ctrl_get_check_state (local.get $ctrl_hwnd))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 670: ScrollWindowEx(hWnd, dx, dy, prcScroll, prcClip, hrgnUpdate,
@@ -11021,8 +10996,8 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
     (local $wa i32) (local $cs i32) (local $prcUpdate i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 36)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))
         (return)))
     (drop
       (call $host_gdi_scroll_window
@@ -11053,7 +11028,7 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
         (if (i32.lt_s (i32.load offset=12 (local.get $wa)) (local.get $b))
           (then (local.set $b (i32.load offset=12 (local.get $wa)))))))
     ;; prcUpdate is the 7th argument at [esp+28].
-    (local.set $prcUpdate (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $prcUpdate (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (if (i32.or
           (i32.le_s (local.get $r) (local.get $l))
           (i32.le_s (local.get $b) (local.get $t)))
@@ -11063,8 +11038,8 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
             (local.set $wa (call $g2w (local.get $prcUpdate)))
             (i64.store (local.get $wa) (i64.const 0))
             (i64.store offset=8 (local.get $wa) (i64.const 0))))
-        (global.set $eax (i32.const 1)) ;; NULLREGION
-        (global.set $esp (i32.add (global.get $esp) (i32.const 36)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)) ;; NULLREGION
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))
         (return)))
     (if (local.get $prcUpdate)
       (then
@@ -11078,8 +11053,8 @@ rDragDrop(hwnd, pDropTarget) — return S_OK.
       (then (global.set $paint_pending (i32.const 1)))
       (else (call $paint_flag_set (local.get $arg0))))
     (call $host_invalidate (local.get $arg0))
-    (global.set $eax (i32.const 2)) ;; SIMPLEREGION
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 2)) ;; SIMPLEREGION
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))
   )
 
   ;; 671: IsDialogMessageW — same policy as A: let the app dispatch messages.
@@ -11093,8 +11068,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
  676: SetCursorPos(x, y) → BOOL — 2 args stdcall
   (func $handle_SetCursorPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_set_mouse_position (local.get $arg0) (local.get $arg1))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 677: DestroyCursor — STUB: unimplemented
@@ -11103,8 +11078,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; DestroyIcon. A NULL handle is still an error, which is the one part of
   ;; the contract a caller can actually observe.
   (func $handle_DestroyCursor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.ne (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 678: FindWindowW(lpClassName, lpWindowName) → HWND
@@ -11116,11 +11091,11 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
 
   ;; 679: GetTabbedTextExtentW — packed width/height for UTF-16 text.
   (func $handle_GetTabbedTextExtentW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_tabbed_text
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_tabbed_text
       (local.get $arg0) (i32.const 0) (i32.const 0)
       (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
       (i32.const 0) (i32.const 1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 680: UnregisterClassW — STUB: unimplemented
@@ -11134,8 +11109,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; 681: ShowOwnedPopups(hwndOwner, fShow) — single-window model has no popups
   ;; to enumerate, so the show/hide is a no-op. Return TRUE.
   (func $handle_ShowOwnedPopups (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
 84: CopyAcceleratorTableW — STUB: unimplemented
   (func $handle_CopyAcceleratorTableW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11145,8 +11120,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; 685: InSendMessage — TRUE if current message was sent by another thread via
   ;; SendMessage. Single-threaded emulator → always FALSE. stdcall, 0 args.
   (func $handle_InSendMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; EnumWindows(lpEnumFunc, lParam) — enumerate all top-level windows, calling
@@ -11160,8 +11135,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; the callback. If a future use case needs real iteration, set up a CACA
   ;; continuation thunk that re-enters this handler to drive the next index.
   (func $handle_EnumWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; EnumThreadWindows(dwThreadId, lpfn, lParam) — the emulator exposes one
@@ -11169,16 +11144,16 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; enumeration until chained guest callbacks are available. WinHelp uses
   ;; this as a best-effort sweep for secondary windows while rebuilding GID.
   (func $handle_EnumThreadWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; EnumSystemCodePagesA(lpCodePageEnumProc, dwFlags) — report successful
   ;; enumeration. The emulator exposes its fixed ANSI/OEM code-page model via
   ;; GetACP/GetOEMCP; Win98 FTSRCH only requires this startup probe to succeed.
   (func $handle_EnumSystemCodePagesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; PostThreadMessageA/W(threadId, msg, wParam, lParam) — post to thread queue with hwnd=0
@@ -11209,8 +11184,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
         (i32.store (i32.add (local.get $tmp) (i32.const 8)) (local.get $arg2))
         (i32.store (i32.add (local.get $tmp) (i32.const 12)) (local.get $arg3))
         (global.set $post_queue_count (i32.add (global.get $post_queue_count) (i32.const 1)))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_PostThreadMessageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_PostThreadMessageA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -11229,8 +11204,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (call $clipboard_count_formats))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $clipboard_count_formats))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; EmptyClipboard() — clear all supported non-OLE clipboard data.
@@ -11242,8 +11217,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
     (call $clipboard_clear_all_data)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; SetClipboardData(uFormat, hMem) — copy CF_TEXT/CF_OEMTEXT and registered
@@ -11258,18 +11233,17 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (drop (local.get $name_ptr))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.and
           (i32.ne (global.get $clipboard_rtf_format_id) (i32.const 0))
           (i32.eq (local.get $arg0) (global.get $clipboard_rtf_format_id)))
       (then
-        (global.set $eax
-          (if (result i32) (call $clipboard_store_rtf_data (local.get $arg1))
+        (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $clipboard_store_rtf_data (local.get $arg1))
             (then (local.get $arg1))
             (else (i32.const 0))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz
           (i32.or (i32.eq (local.get $arg0) (i32.const 1))  ;; CF_TEXT
@@ -11277,11 +11251,11 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (then
         (if (i32.eq (local.get $arg0) (i32.const 8)) ;; CF_DIB
           (then
-            (global.set $eax (call $clipboard_store_binary_data (local.get $arg0) (local.get $arg1)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (i32.store offset=0 (global.get $reg_base) (call $clipboard_store_binary_data (local.get $arg0) (local.get $arg1)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
             (return)))
-        (global.set $eax (local.get $arg1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $richedit_clipboard_clear_format)
     (local.set $len (call $guest_strlen (local.get $arg1)))
@@ -11297,13 +11271,13 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (if (i32.eqz (global.get $clipboard_ptr))
       (then
         (global.set $clipboard_len (i32.const 0))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $memcpy (call $g2w (global.get $clipboard_ptr)) (call $g2w (local.get $arg1)) (local.get $need))
     (global.set $clipboard_len (local.get $len))
-    (global.set $eax (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; GetClipboardOwner() — no cross-window ownership model yet.
@@ -11314,19 +11288,18 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (drop (local.get $arg3))
     (drop (local.get $arg4))
     (drop (local.get $name_ptr))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 690: SetWindowContextHelpId(hwnd, dwContextHelpId). No imported getter
   ;; currently observes the value, but frameworks use the BOOL result while
   ;; initializing a real HWND (VB6 passes -1 to disable context help).
   (func $handle_SetWindowContextHelpId (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.ge_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
         (then (i32.const 1))
         (else (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 691: GetNextDlgGroupItem — STUB: unimplemented
@@ -11342,8 +11315,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (if (i32.eqz (local.get $arg0))
       (then
         (global.set $clip_cursor_active (i32.const 0))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $rc (call $g2w (local.get $arg0)))
     (global.set $clip_cursor_l (i32.load (local.get $rc)))
@@ -11354,8 +11327,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (i32.and
         (i32.lt_s (global.get $clip_cursor_l) (global.get $clip_cursor_r))
         (i32.lt_s (global.get $clip_cursor_t) (global.get $clip_cursor_b))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 693: EnumChildWindows — STUB: unimplemented
@@ -11382,10 +11355,10 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; EnumChildWindows reports TRUE whenever it ran, including a callback-
   ;; requested early stop.
   (func $enum_child_finish
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (global.set $eip (global.get $enum_child_ret))
     (global.set $enum_child_depth (i32.const 0))
-    (global.set $eax (i32.const 1)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
 
   ;; Invoke the callback for the next descendant at or after $enum_child_slot.
   (func $enum_child_dispatch
@@ -11403,31 +11376,31 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (br $scan)))
     (global.set $enum_child_slot (local.get $slot))
     ;; WNDENUMPROC(hwnd, lParam), stdcall — push right to left.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $enum_child_lparam))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $hwnd))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $enum_child_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_child_lparam))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_child_thunk))
     (global.set $eip (global.get $enum_child_cb))
     (global.set $steps (i32.const 0)))
 
   ;; CACA002B: the callback returned. FALSE stops the walk.
   (func $enum_child_continue
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $enum_child_finish) (return)))
     (global.set $enum_child_slot (i32.add (global.get $enum_child_slot) (i32.const 1)))
     (call $enum_child_dispatch))
 
   (func $handle_EnumChildWindows (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) ;; ret addr + 3 args
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) ;; ret addr + 3 args
     ;; No callback, or a callback re-entering the walk we are already running:
     ;; report success without touching the outer iteration state.
     (if (i32.or (i32.eqz (local.get $arg1)) (global.get $enum_child_depth))
       (then
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (global.set $eip (local.get $ret))
         (return)))
     (global.set $enum_child_depth (i32.const 1))
@@ -11437,8 +11410,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (global.set $enum_child_ret (local.get $ret))
     (global.set $enum_child_slot (i32.const 0))
     ;; Keep the API return address below the callback's stdcall frame.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret))
     (call $enum_child_dispatch)
   )
 
@@ -11447,8 +11420,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local $cs i32) (local $rt i32) (local $box i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (if (local.get $arg1)
       (then
         (local.set $box (call $paint_scratch_take))
@@ -11469,19 +11442,19 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (then (global.set $paint_pending (i32.const 1)))
       (else (call $paint_flag_set (local.get $arg0))))
     (call $host_invalidate (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 695: LoadStringW — load UTF-16 string resource
   (func $handle_LoadStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $push_rsrc_ctx (local.get $arg0))
-    (global.set $eax (call $string_load_w
+    (i32.store offset=0 (global.get $reg_base) (call $string_load_w
       (local.get $arg1)                ;; string ID
       (call $g2w (local.get $arg2))    ;; buffer (WASM ptr)
       (local.get $arg3)))              ;; max chars
     (call $pop_rsrc_ctx)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 696: CharUpperW(lpsz) — the wide twin of CharUpperA, with the same two
@@ -11517,29 +11490,29 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local.get $arg))
 
   (func $handle_CharUpperW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $char_upper (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $char_upper (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; CharUpperA(lpsz) — if high word is 0, uppercase the single char; else
   ;; lpsz is a pointer to a nul-terminated ANSI string uppercased in place.
   ;; Returns the input unchanged (char or pointer).
   (func $handle_CharUpperA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $char_upper (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $char_upper (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; IME stubs — we never inject IME composition, so Immm* are no-ops.
   ;; ImmAssociateContext(hWnd, hIMC) → prev HIMC (we always return 0 — no previous)
   (func $handle_ImmAssociateContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ImmGetContext(hWnd) → HIMC (return 0 = no IME context)
   (func $handle_ImmGetContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ImmGetDefaultIMEWnd(hWnd) → HWND of the thread's default IME window.
@@ -11547,34 +11520,34 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; Windows returns NULL in exactly that case and callers (MCM's input
   ;; setup) treat it as "no IME, use plain keyboard input".
   (func $handle_ImmGetDefaultIMEWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ImmReleaseContext(hWnd, hIMC) → BOOL
   (func $handle_ImmReleaseContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ImmNotifyIME(hIMC, action, index, value) → BOOL. We do not create an
   ;; input context or composition state, so there is nothing to notify.
   (func $handle_ImmNotifyIME (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; CharLowerA(lpsz) — mirror of CharUpperA.
   (func $handle_CharLowerA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $p i32) (local $c i32)
-    (global.set $eax (local.get $arg0))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
     (if (i32.eqz (i32.and (local.get $arg0) (i32.const 0xffff0000)))
       (then
         (local.set $c (i32.and (local.get $arg0) (i32.const 0xff)))
         (if (i32.and
               (i32.ge_u (local.get $c) (i32.const 0x41))
               (i32.le_u (local.get $c) (i32.const 0x5a)))
-          (then (global.set $eax (i32.add (local.get $c) (i32.const 0x20))))))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $c) (i32.const 0x20))))))
       (else
         (local.set $p (call $g2w (local.get $arg0)))
         (block $done (loop $lp
@@ -11586,7 +11559,7 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
             (then (i32.store8 (local.get $p) (i32.add (local.get $c) (i32.const 0x20)))))
           (local.set $p (i32.add (local.get $p) (i32.const 1)))
           (br $lp)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; CharLowerBuffA(lpsz, cchLength) — lowercase exactly cchLength ANSI bytes
@@ -11595,8 +11568,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local $p i32) (local $i i32) (local $c i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg0)))
     (block $done (loop $lp
@@ -11611,8 +11584,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
             (i32.add (local.get $c) (i32.const 0x20)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $lp)))
-    (global.set $eax (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; CharUpperBuffA(lpsz, cchLength) — uppercase cchLength characters in
@@ -11622,8 +11595,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local $p i32) (local $i i32) (local $c i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg0)))
     (block $done (loop $lp
@@ -11638,8 +11611,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
             (i32.sub (local.get $c) (i32.const 0x20)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $lp)))
-    (global.set $eax (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; OemToCharA(lpSrc, lpDst) — for US codepage, OEM ≡ ANSI; strcpy.
@@ -11654,8 +11627,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (local.set $src (i32.add (local.get $src) (i32.const 1)))
       (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
       (br $lp)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 697: ??1type_info@@UAE@XZ — soft-stub — STUB: unimplemented
@@ -11677,12 +11650,12 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
           (i32.ge_u (local.get $arg2) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))
           (i32.lt_u (local.get $arg2) (global.get $heap_ptr)))
       (then
-        (global.set $eax (i32.sub
+        (i32.store offset=0 (global.get $reg_base) (i32.sub
           (call $gl32 (i32.sub (local.get $arg2) (i32.const 4)))
           (i32.const 4))))
       (else
-        (global.set $eax (i32.const 0xFFFFFFFF))))  ;; not our allocation
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFFFFFF))))  ;; not our allocation
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 700: IsProcessorFeaturePresent — return TRUE (1 arg stdcall) — STUB: unimplemented
@@ -11695,8 +11668,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     ;; Write NULL to *lplpMsgFilter if non-null
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 716: _EH_prolog — MSVCRT SEH frame setup (special calling convention)
@@ -11707,23 +11680,23 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local $ret_addr i32)
     (local $old_seh i32)
     ;; [ESP] = return address (from the call instruction)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Push -1 (initial trylevel)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0xFFFFFFFF))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0xFFFFFFFF))
     ;; Push EAX (exception handler)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.load offset=0 (global.get $reg_base)))
     ;; Push old fs:[0] (previous SEH head)
     (local.set $old_seh (call $gl32 (global.get $fs_base)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $old_seh))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $old_seh))
     ;; Set fs:[0] = ESP (install new SEH frame)
-    (call $gs32 (global.get $fs_base) (global.get $esp))
+    (call $gs32 (global.get $fs_base) (i32.load offset=16 (global.get $reg_base)))
     ;; Save EBP where the return address was: [ESP+12] = EBP
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (global.get $ebp))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.load offset=20 (global.get $reg_base)))
     ;; LEA EBP, [ESP+12] — EBP points to saved EBP
-    (global.set $ebp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=20 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     ;; Set EIP to return address
     (global.set $eip (local.get $ret_addr))
   )
@@ -11761,8 +11734,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (br $digits)))
     (if (local.get $neg)
       (then (local.set $result (i32.sub (i32.const 0) (local.get $result)))))
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; Winsock handlers (socket, bind, listen, accept, connect, send, recv,
@@ -11779,9 +11752,9 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     ;; this one now, and from here on its mutations propagate.
     (if (local.get $arg1)
       (then (drop (call $gdi_rgn_mirror_ensure (local.get $arg1)))))
-    (global.set $eax (call $host_gdi_set_window_rgn
+    (i32.store offset=0 (global.get $reg_base) (call $host_gdi_set_window_rgn
       (local.get $arg0) (call $gdi_rgn_host_handle (local.get $arg1)) (local.get $arg2)))
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then
         (call $wnd_region_set
           (local.get $arg0)
@@ -11808,20 +11781,20 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
                   (local.get $w) (local.get $h)))))
           (else
             (call $defwndproc_do_nccalcsize (local.get $arg0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 922: GetWindowRgn(hwnd, hRgn) — 2 args stdcall, return ERROR (0)
   (func $handle_GetWindowRgn (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 918: MonitorFromRect(lprc, dwFlags) — 2 args stdcall
   ;; Return fake monitor handle 0x00010000 (single monitor)
   (func $handle_MonitorFromRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00010000))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00010000))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 919: GetMonitorInfoA(hMonitor, lpmi) — 2 args stdcall
@@ -11843,27 +11816,27 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (i32.store (i32.add (local.get $wa) (i32.const 32)) (i32.shr_u (local.get $screen) (i32.const 16)))
     ;; dwFlags: MONITORINFOF_PRIMARY = 1
     (i32.store (i32.add (local.get $wa) (i32.const 36)) (i32.const 1))
-    (global.set $eax (i32.const 1))  ;; success
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; success
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 920: MonitorFromWindow(hwnd, dwFlags) — 2 args stdcall
   (func $handle_MonitorFromWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00010000))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00010000))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; MonitorFromPoint(pt.x, pt.y, dwFlags) — POINT passed by value (2 dwords) + dwFlags = 3 args stdcall
   (func $handle_MonitorFromPoint (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00010000))  ;; same fake monitor handle as MonitorFromRect
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00010000))  ;; same fake monitor handle as MonitorFromRect
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; GetPrivateProfileStructA(appName, keyName, lpStruct, nSize, fileName) — 5 args stdcall
   (func $handle_GetPrivateProfileStructA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Return 0 (failure) — struct not found in INI
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 917: CoCreateGuid(pguid) — 1 arg stdcall
@@ -11876,30 +11849,30 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0x0000CAFE))
     (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.const 0xDEAD0040))
     (i32.store (i32.add (local.get $wa) (i32.const 12)) (i32.const 0xBEEF0000))
-    (global.set $eax (i32.const 0))  ;; S_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; S_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 916: RasEnumConnectionsA(lpRasConn, lpcb, lpcConnections) — 3 args stdcall
   ;; Return 0 (SUCCESS) with *lpcConnections = 0 (no dial-up connections)
   (func $handle_RasEnumConnectionsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (i32.store (call $g2w (local.get $arg2)) (i32.const 0)) ;; *lpcConnections = 0
-    (global.set $eax (i32.const 0))  ;; SUCCESS
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; SUCCESS
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; 941: GetClassLongA(hwnd, nIndex) — 2 args stdcall
   ;; GCL_HICON=-14, GCL_HICONSM=-34, GCL_HCURSOR=-12, GCL_HBRBACKGROUND=-10
   ;; GCL_STYLE=-26, GCL_WNDPROC=-24, GCL_CBWNDEXTRA=-18, GCL_CBCLSEXTRA=-20
   (func $handle_GetClassLongA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $class_long_get (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $class_long_get (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 942: CopyIcon(hIcon) — 1 arg stdcall, return same handle (no real copy needed)
   (func $handle_CopyIcon (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 953: PrintDlgA(lppd) — default printer data plus interactive form
@@ -11940,8 +11913,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     ;; PD_RETURNDEFAULT (0x400) is a noninteractive default-printer probe.
     (if (i32.and (local.get $flags) (i32.const 0x00000400))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
@@ -12001,8 +11974,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (call $gs16 (i32.add (local.get $arg0) (i32.const 32)) (i32.const 1))
     (if (i32.and (local.get $flags) (i32.const 0x00000400))   ;; PD_RETURNDEFAULT
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
@@ -12014,13 +11987,13 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
 
   ;; 954: CoFreeUnusedLibraries() — no args, no-op
   (func $handle_CoFreeUnusedLibraries (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 952: CoRevokeClassObject(dwRegister) — 1 arg stdcall.
   (func $handle_CoRevokeClassObject (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_com_revoke_class_object (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_com_revoke_class_object (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 951: CoRegisterClassObject(rclsid, pUnk, dwClsContext, flags, lpdwRegister)
@@ -12034,8 +12007,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
         (call $host_com_register_class_object
           (call $g2w (local.get $arg0)) (local.get $arg1)
           (local.get $arg2) (local.get $arg3)))))
-    (global.set $eax (i32.const 0))  ;; S_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; S_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 950: DrawFrameControl(hdc, lprc, uType, uState) — 4 args stdcall
@@ -12045,13 +12018,13 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local.set $rc (call $g2w (local.get $arg1)))
     (local.set $desc (global.get $GDI_LINE_DESC))
     (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then (global.set $eax (call $gdi_draw_edge_desc
+      (then (i32.store offset=0 (global.get $reg_base) (call $gdi_draw_edge_desc
         (local.get $arg0) (local.get $desc)
         (i32.load (local.get $rc)) (i32.load offset=4 (local.get $rc))
         (i32.load offset=8 (local.get $rc)) (i32.load offset=12 (local.get $rc))
         (i32.const 5) (i32.const 15) (local.get $rc))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; DrawCaptionTempA(hwnd, hdc, rect, font, icon, text, flags).  Explorer's
@@ -12061,13 +12034,13 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local $esp_w i32) (local $rc i32) (local $text_g i32) (local $flags i32)
     (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
     (local $text_left i32) (local $old_font i32) (local $old_bk i32) (local $old_color i32)
-    (local.set $esp_w (call $g2w (global.get $esp)))
+    (local.set $esp_w (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $text_g (i32.load offset=24 (local.get $esp_w)))
     (local.set $flags (i32.load offset=28 (local.get $esp_w)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
         (return)))
     (local.set $rc (call $g2w (local.get $arg2)))
     (local.set $left (i32.load (local.get $rc)))
@@ -12127,48 +12100,48 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
         (drop (call $host_gdi_set_bk_mode (local.get $arg1) (local.get $old_bk)))
         (if (local.get $arg3)
           (then (drop (call $host_gdi_select_object (local.get $arg1) (local.get $old_font)))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
 ;; 948: RegEnumKeyA(hKey, dwIndex, lpName, cchName) — 4 args stdcall
   (func $handle_RegEnumKeyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_reg_enum_key
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_enum_key
       (local.get $arg0)                    ;; hKey
       (local.get $arg1)                    ;; dwIndex
       (local.get $arg2)                    ;; lpName guest pointer
       (local.get $arg3)                    ;; cchName
       (i32.const 0)))                      ;; isWide = false
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; RegEnumValueA/W have eight arguments; args 5-7 are loaded from the guest stack.
   (func $handle_RegEnumValueA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
-    (global.set $eax (call $host_reg_enum_value
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_enum_value
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.load offset=24 (local.get $wa_esp))
       (i32.load offset=28 (local.get $wa_esp))
       (i32.load offset=32 (local.get $wa_esp))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   (func $handle_RegEnumValueW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
-    (global.set $eax (call $host_reg_enum_value
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_enum_value
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.load offset=24 (local.get $wa_esp))
       (i32.load offset=28 (local.get $wa_esp))
       (i32.load offset=32 (local.get $wa_esp))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   (func $handle_RegQueryInfoKeyA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
-    (global.set $eax (call $host_reg_query_info
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_query_info
       (local.get $arg0)
       (local.get $arg4)
       (i32.load offset=24 (local.get $wa_esp))
@@ -12181,12 +12154,12 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (then (call $gs32 (i32.load offset=28 (local.get $wa_esp)) (i32.const 0))))
     (if (i32.load offset=44 (local.get $wa_esp))
       (then (call $gs32 (i32.load offset=44 (local.get $wa_esp)) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 52))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 52))))
 
   (func $handle_RegQueryInfoKeyW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
-    (global.set $eax (call $host_reg_query_info
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (call $host_reg_query_info
       (local.get $arg0)
       (local.get $arg4)
       (i32.load offset=24 (local.get $wa_esp))
@@ -12199,18 +12172,18 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (then (call $gs32 (i32.load offset=28 (local.get $wa_esp)) (i32.const 0))))
     (if (i32.load offset=44 (local.get $wa_esp))
       (then (call $gs32 (i32.load offset=44 (local.get $wa_esp)) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 52))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 52))))
 
 ;; 946: CopyImage(hImage, uType, cx, cy, flags) — 5 args stdcall, return same handle
   (func $handle_CopyImage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 945: CreateIconIndirect(piconinfo) — 1 arg stdcall, return fake icon handle
   (func $handle_CreateIconIndirect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00CC0001))  ;; fake icon handle
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00CC0001))  ;; fake icon handle
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; CreateIcon(hInst, nWidth, nHeight, cPlanes, cBitsPixel, lpbANDbits, lpbXORbits)
@@ -12219,8 +12192,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; AND/XOR masks would give nothing anything to read them. Returning a handle
   ;; from the same space keeps DestroyIcon and CopyImage consistent.
   (func $handle_CreateIcon (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00CC0001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))  ;; ret + 7 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00CC0001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; ret + 7 args
   )
 
   ;; CreateCursor(hInst, xHotspot, yHotspot, width, height, ANDbits, XORbits)
@@ -12229,8 +12202,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   ;; the cursor, while host_set_cursor safely presents the default pointer for
   ;; handles that do not encode an IDC_* or PE resource cursor.
   (func $handle_CreateCursor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x00690001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))  ;; ret + 7 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x00690001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))  ;; ret + 7 args
   )
 
   ;; GetQueueStatus(flags). The high word reports requested categories that
@@ -12258,9 +12231,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
           (i32.or (global.get $paint_pending) (global.get $nc_flags_count))
           (call $paint_flag_any))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 0x0020)))))
-    (global.set $eax
-      (i32.shl (i32.and (local.get $bits) (local.get $arg0)) (i32.const 16)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.shl (i32.and (local.get $bits) (local.get $arg0)) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 944: DrawIconEx(hdc, x, y, hIcon, cx, cy, istep, hbrFlicker, diFlags) — 9 args stdcall
@@ -12269,15 +12241,15 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
   (func $handle_DrawIconEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $flags i32)
     (local.set $flags (i32.load (call $g2w
-      (i32.add (global.get $esp) (i32.const 36)))))  ;; ret + 8 args
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))))  ;; ret + 8 args
     (drop (call $icon_draw_handle
       (local.get $arg3) (local.get $arg0)
       (local.get $arg1) (local.get $arg2)
       (local.get $arg4)
-      (i32.load (call $g2w (i32.add (global.get $esp) (i32.const 24))))
+      (i32.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
       (local.get $flags)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40)))  ;; 9 args + ret
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))  ;; 9 args + ret
   )
 
   ;; DrawIcon(hdc, x, y, hIcon) — 4 args stdcall. The fixed-size sibling of
@@ -12287,8 +12259,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (local.get $arg3) (local.get $arg0)
       (local.get $arg1) (local.get $arg2)
       (i32.const 0) (i32.const 0) (global.get $DI_NORMAL)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; ret + 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; ret + 4 args
   )
 
   ;; 943: GetIconInfo(hIcon, piconinfo) — 2 args stdcall
@@ -12301,8 +12273,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (i32.store offset=8 (local.get $ptr) (i32.const 0))  ;; yHotspot
     (i32.store offset=12 (local.get $ptr) (i32.const 0)) ;; hbmMask = NULL
     (i32.store offset=16 (local.get $ptr) (i32.const 0)) ;; hbmColor = NULL
-    (global.set $eax (i32.const 1))  ;; success
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))  ;; success
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 957: ChooseColorA(lpcc) — show the WAT-driven Color picker with a
@@ -12349,10 +12321,10 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (then
         ;; entry points to data entry: +0=RVA, +4=size
         (local.set $size (call $gl32 (i32.add (global.get $image_base) (i32.add (local.get $entry) (i32.const 4)))))
-        (global.set $eax (local.get $size)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $size)))
       (else
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetFileVersionInfoA(lptstrFilename, dwHandle, dwLen, lpData) → BOOL
   ;; Copies the RT_VERSION resource data into the caller's buffer.
@@ -12362,8 +12334,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (local.set $entry (call $find_resource (i32.const 16) (i32.const 1)))
     (if (i32.eqz (local.get $entry))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $rva (call $gl32 (i32.add (global.get $image_base) (local.get $entry))))
     (local.set $size (call $gl32 (i32.add (global.get $image_base) (i32.add (local.get $entry) (i32.const 4)))))
@@ -12375,8 +12347,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
       (call $g2w (local.get $arg3))
       (call $g2w (i32.add (global.get $image_base) (local.get $rva)))
       (local.get $len))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; VerQueryValueA(pBlock, lpSubBlock, lplpBuffer, puLen) → BOOL
   ;; Only handles "\" (root query) — returns pointer to VS_FIXEDFILEINFO.
@@ -12400,8 +12372,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
           (i32.add (local.get $arg0) (i32.const 0x28)))
         ;; Set *puLen = sizeof(VS_FIXEDFILEINFO) = 52
         (call $gs32 (local.get $arg3) (i32.const 52))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; VB6 asks for the language/codepage array before selecting string-table
     ;; keys. Return the standard US-English Unicode pair (0409, 04B0).
@@ -12418,8 +12390,8 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
         (call $gs32 (global.get $version_query_scratch) (i32.const 0x04B00409))
         (call $gs32 (local.get $arg2) (global.get $version_query_scratch))
         (call $gs32 (local.get $arg3) (i32.const 4))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; The loaded JigSawedME image next asks for its ProductName through the
     ;; selected string table. VerQueryValueA returns an ANSI string and a
@@ -12439,44 +12411,43 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
         (call $gs32 (i32.add (global.get $version_query_scratch) (i32.const 8)) (i32.const 0x0000454d)) ;; "ME\0"
         (call $gs32 (local.get $arg2) (global.get $version_query_scratch))
         (call $gs32 (local.get $arg3) (i32.const 11))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; For any other sub-block or if signature doesn't match, return FALSE
     (if (local.get $arg3)
       (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; GetWindowTextLengthA(hwnd) → length in chars (no NUL).
   (func $handle_GetWindowTextLengthA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (call $ctrl_table_get_class (local.get $arg0))
       (then
-        (global.set $eax
-          (call $control_wndproc_dispatch
+        (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
             (local.get $arg0) (i32.const 0x000E)
             (i32.const 0) (i32.const 0)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
-    (global.set $eax (call $host_get_window_text_length (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; ret + 1 arg
+    (i32.store offset=0 (global.get $reg_base) (call $host_get_window_text_length (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; ret + 1 arg
   )
 
   (func $handle_GetCharWidth32W (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_font_char_widths
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_font_char_widths
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (if (result i32) (local.get $arg3)
         (then (call $g2w (local.get $arg3))) (else (i32.const 0)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_GetCharacterPlacementW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_character_placement_w
+    (i32.store offset=0 (global.get $reg_base) (call $gdi_character_placement_w
       (local.get $arg0)
       (if (result i32) (local.get $arg1)
         (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (local.get $arg2) (local.get $arg3)
       (if (result i32) (local.get $arg4)
         (then (call $g2w (local.get $arg4))) (else (i32.const 0)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))

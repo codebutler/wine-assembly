@@ -1155,7 +1155,7 @@
       (br $scan)))
     (if (i32.ge_u (local.get $i) (i32.const 8))
       (then
-        (global.set $eax (i32.const 0x4007))            ;; DMLERR_LOW_MEMORY
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x4007))            ;; DMLERR_LOW_MEMORY
         (call $win16_api_return (i32.const 16))
         (return)))
     ;; A monitor is a DDE spy: it serves nothing and expects to be told about
@@ -1168,7 +1168,7 @@
     (if (i32.and (call $win16_arg32 (i32.const 2)) (global.get $APPCLASS_MONITOR))
       (then
         (call $win16_dde_set_error (i32.const 0x4004))   ;; DMLERR_DLL_USAGE
-        (global.set $eax (i32.const 0x4004))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x4004))
         (call $win16_api_return (i32.const 16))
         (return)))
     (local.set $slot (call $win16_dde_inst (local.get $i)))
@@ -1179,7 +1179,7 @@
     ;; to be non-zero and has to come back unchanged.
     (call $gs32 (local.get $pid) (i32.add (local.get $i) (i32.const 1)))
     (call $win16_dde_set_error (i32.const 0))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 16)))
 
   ;; DDEML.3 DdeUninitialize(DWORD idInst) -> BOOL.
@@ -1190,7 +1190,7 @@
                  (i32.le_u (local.get $id) (i32.const 8)))
       (then (i32.store (call $win16_dde_inst (i32.sub (local.get $id) (i32.const 1)))
                        (i32.const 0))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; DDEML.21 DdeCreateStringHandle(DWORD idInst, LPCSTR psz, INT codepage)
@@ -1199,8 +1199,8 @@
     (local $hsz i32)
     (local.set $hsz (call $win16_dde_hsz_intern (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1)))))
-    (global.set $edx (i32.const 0))
-    (global.set $eax (local.get $hsz))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hsz))
     (call $win16_api_return (i32.const 10)))
 
   ;; DDEML.22 DdeFreeStringHandle(DWORD idInst, HSZ hsz) -> BOOL.
@@ -1214,7 +1214,7 @@
         (if (i32.load (local.get $slot))
           (then (i32.store (local.get $slot)
                   (i32.sub (i32.load (local.get $slot)) (i32.const 1)))))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; DDEML.27 DdeNameService(DWORD idInst, HSZ hsz1, HSZ hsz2, UINT afCmd)
@@ -1239,8 +1239,8 @@
                      (i32.sub (local.get $inst) (i32.const 1)))
           (select (i32.const 0) (local.get $hsz)
                   (i32.eq (local.get $cmd) (i32.const 2))))))
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_dde_set_error (i32.const 0))
     (call $win16_api_return (i32.const 14)))
 
@@ -1304,8 +1304,8 @@
     (if (i32.eqz (local.get $conv))
       (then
         (call $win16_dde_set_error (i32.const 0x4007))   ;; DMLERR_LOW_MEMORY
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 16))
         (return)))
     (i32.store (local.get $pend) (i32.const 1))
@@ -1354,11 +1354,11 @@
   ;; ESP walking down while nothing waited at all.
   (func $win16_dde_park (param $argbytes i32)
     (local $ip i32) (local $sel i32)
-    (local.set $ip  (call $gl16 (global.get $esp)))
-    (local.set $sel (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
+    (local.set $ip  (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $sel (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
     (global.set $win16_dde_ret (i32.or (i32.shl (local.get $sel) (i32.const 16))
                                        (local.get $ip)))
-    (global.set $esp (i32.add (global.get $esp)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
                               (i32.add (i32.const 4) (local.get $argbytes))))
     ;; CS first, EIP second, and in that order: the slot offset is meaningless
     ;; on its own, and $seg_base_cs is read AFTER the selector load. Parking
@@ -1393,11 +1393,10 @@
       (then
         (i32.store (local.get $pend) (i32.const 0))
         (call $win16_dde_set_error (i32.const 0))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         ;; A connect answers with its conversation, a transaction with the data
         ;; handle the far application produced.
-        (global.set $eax
-          (select (i32.load offset=20 (local.get $pend)) (local.get $conv)
+        (i32.store offset=0 (global.get $reg_base) (select (i32.load offset=20 (local.get $pend)) (local.get $conv)
                   (i32.eq (i32.load offset=16 (local.get $pend))
                           (global.get $DDE_WAIT_XACT))))
         (return (i32.const 0))))
@@ -1434,8 +1433,8 @@
         (call $win16_dde_set_error
           (select (i32.const 0x4001) (i32.const 0x4002)   ;; BUSY / DATAACKTIMEOUT
                   (i32.load offset=28 (local.get $pend))))
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return (i32.const 0))))
     ;; A connect that nobody answered. That is the honest reply for a room of
     ;; one, and it is what sends Hearts to its own table rather than an error.
@@ -1443,8 +1442,8 @@
     (i32.store (call $win16_dde_conv_slot (i32.sub (local.get $conv) (i32.const 1)))
                (i32.const 0))
     (call $win16_dde_set_error (i32.const 0x400A))       ;; DMLERR_NO_CONV_ESTABLISHED
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.const 0))
 
   ;; Drain the wire on this instance's behalf. $vsock_pump owns the reader and
@@ -1469,7 +1468,7 @@
             (drop (call $win16_dde_emit (i32.const 3) (local.get $conv)
               (i32.load offset=12 (local.get $slot)) (i32.const 0)))
             (i32.store (local.get $slot) (i32.const 0))))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; DDEML.11 DdeClientTransaction(LPBYTE pData, DWORD cbData, HCONV hConv,
@@ -1520,8 +1519,8 @@
       (then
         (call $win16_dde_set_error
           (select (i32.const 0x4009) (i32.const 0x400A) (local.get $live)))
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 28))
         (return)))
 
@@ -1540,8 +1539,8 @@
             ;; and DMLERR_LOW_MEMORY is the one DDEML gives when it cannot take
             ;; another transaction.
             (call $win16_dde_set_error (i32.const 0x4007))
-            (global.set $edx (i32.const 0))
-            (global.set $eax (i32.const 0))
+            (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (call $win16_api_return (i32.const 28))
             (return)))
         (local.set $pend (call $win16_dde_async_slot (local.get $len)))
@@ -1573,8 +1572,8 @@
         (if (call $win16_arg16 (i32.const 1))
           (then (call $gs32 (local.get $result) (global.get $win16_dde_xid))))
         (call $win16_dde_set_error (i32.const 0))
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (call $win16_api_return (i32.const 28))
         (return)))
 
@@ -1696,7 +1695,7 @@
                 (i32.const 0) (i32.const 0)))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; DDEML.14 DdeCreateDataHandle(DWORD idInst, LPBYTE pSrc, DWORD cb,
@@ -1717,8 +1716,8 @@
     (if (i32.ge_u (local.get $i) (i32.const 16))
       (then
         (call $win16_dde_set_error (i32.const 0x4007))   ;; DMLERR_LOW_MEMORY
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 24))
         (return)))
     ;; The block is fixed-size; a larger one would be a silent truncation, so it
@@ -1726,8 +1725,8 @@
     (if (i32.gt_u (i32.add (local.get $cb) (local.get $off)) (i32.const 512))
       (then
         (call $win16_dde_set_error (i32.const 0x4007))   ;; DMLERR_LOW_MEMORY
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 24))
         (return)))
     (local.set $slot (call $win16_dde_data_slot (local.get $i)))
@@ -1752,8 +1751,8 @@
           (local.set $n (i32.add (local.get $n) (i32.const 1)))
           (br $copy)))))
     (call $win16_dde_set_error (i32.const 0))
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.add (local.get $i) (i32.const 0x100)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $i) (i32.const 0x100)))
     (call $win16_api_return (i32.const 24)))
 
   ;; DDEML.16 DdeGetData(HDDEDATA hData, LPBYTE pDst, DWORD cbMax, DWORD cbOff)
@@ -1772,16 +1771,16 @@
     (if (i32.ge_u (local.get $h) (i32.const 16))
       (then
         (call $win16_dde_set_error (i32.const 0x4004))   ;; DMLERR_INVALIDPARAMETER
-        (global.set $edx (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 16))
         (return)))
     (local.set $slot (call $win16_dde_data_slot (local.get $h)))
     (local.set $len (i32.load offset=4 (local.get $slot)))
     (if (i32.eqz (local.get $dst))
       (then
-        (global.set $edx (i32.shr_u (local.get $len) (i32.const 16)))
-        (global.set $eax (i32.and (local.get $len) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $len) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $len) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 16))
         (return)))
     (if (i32.gt_u (local.get $off) (local.get $len))
@@ -1796,13 +1795,13 @@
                               (local.get $n))))
       (local.set $n (i32.add (local.get $n) (i32.const 1)))
       (br $copy)))
-    (global.set $edx (i32.shr_u (local.get $len) (i32.const 16)))
-    (global.set $eax (i32.and (local.get $len) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $len) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $len) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 16)))
 
   ;; DDEML.20 DdeGetLastError(DWORD idInst) -> UINT, and clears it.
   (func $win16_DdeGetLastError
-    (global.set $eax (i32.load (call $win16_dde_error_slot)))
+    (i32.store offset=0 (global.get $reg_base) (i32.load (call $win16_dde_error_slot)))
     (i32.store (call $win16_dde_error_slot) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 

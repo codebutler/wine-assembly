@@ -1862,14 +1862,28 @@
   ;; ============================================================
   ;; CPU STATE
   ;; ============================================================
-  (global $eax (mut i32) (i32.const 0))
-  (global $ecx (mut i32) (i32.const 0))
-  (global $edx (mut i32) (i32.const 0))
-  (global $ebx (mut i32) (i32.const 0))
-  (global $esp (mut i32) (i32.const 0))
-  (global $ebp (mut i32) (i32.const 0))
-  (global $esi (mut i32) (i32.const 0))
-  (global $edi (mut i32) (i32.const 0))
+  ;; The eight x86 GPRs live in a per-thread register file in shared linear
+  ;; memory, not in wasm globals. Slot order is x86 register order:
+  ;;   +0 eax  +4 ecx  +8 edx  +12 ebx  +16 esp  +20 ebp  +24 esi  +28 edi
+  ;; so `$get_reg(r)` is `i32.load (reg_base + r*4)` — one indexed load, with no
+  ;; call and no br_table.
+  ;;
+  ;; Memory is SHARED between instances (see the memory import) while globals
+  ;; are per-instance, so a single fixed address would give every worker thread
+  ;; the same register file. The file is therefore partitioned by tid exactly
+  ;; like $THREAD_BASE is: REGFILE_BASE + tid*REGFILE_STRIDE, with the stride a
+  ;; full 64-byte cache line so two threads never share a line. 64 bytes is
+  ;; also 16 slots for 8 registers, which bounds the damage from an out-of-range
+  ;; index: every index expression in the tree is either a decoder-emitted 0..7
+  ;; or masked to 4 bits, so a bad r lands in this thread's own padding and can
+  ;; never reach another thread's file. (The old br_table folded r>7 onto edi;
+  ;; this gives those indices dead slots instead.) $reg_base is a
+  ;; per-instance mutable global holding this thread's slice; it is initialised
+  ;; to the tid-0 slice here and reassigned in $init_thread for workers.
+  (global $REGFILE_BASE   i32 (i32.const 0x07008000))
+  (global $REGFILE_STRIDE i32 (i32.const 64))
+  (global $REGFILE_BASE_SIZE i32 (i32.const 0x00000200))
+  (global $reg_base (mut i32) (i32.const 0x07008000))
   (global $eip (mut i32) (i32.const 0))
   (global $dbg_prev_eip (mut i32) (i32.const 0))
   ;; The block before that one — see the run loop in 13-exports.wat. A decoder
