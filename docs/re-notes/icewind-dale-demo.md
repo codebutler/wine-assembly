@@ -15,6 +15,35 @@ node test/test-icewind-dale-demo.js
 
 ## Original installer investigation
 
+### Latest DirectPlay4 checkpoint
+
+The pre-DP4 rejection recorded below is now fixed in compiled factory tests.
+QueryInterface upgrades the same ANSI object to a generated 53-slot vtable,
+preserving its 47 inherited entries and appending the six SDK tail methods.
+`test-directplay4.js` loads a Win32 PE and calls the generated thunks through
+the emulator dispatch loop, checking slot IDs, HRESULTs, output buffers, and
+stdcall stack cleanup. It also checks restoration of the appended thread
+vtable registry entry. The factory/identity suite passes 31 cases.
+
+Synchronous local SendEx, send/receive queue queries, and cancellation of
+pending queue entries are implemented. Async production/completion and public
+group-ownership policy/notifications remain explicitly unsupported; both
+ownership methods preserve state/output rather than report false success.
+Cancellation tests inject pending entries and do not claim an async transport.
+The earlier internal ownership storage is not a completed public contract.
+
+The full build passed (native 1,076,220 bytes, compatibility 1,076,684 bytes;
+layout `d36314e0fcee18b2`). A fresh frozen CLI run used only the original
+installer's `/private/tmp/iwd-profile-fixed-installed-vfs`, with the same
+EXE/cwd and no INI/KEY substitutions. The inspected menu at batch 300 is
+`/private/tmp/iwd-dp4-menu.png`. Clicking Create Game at (480,175), then
+stepping 100 batches, **still produces Cannot connect to the game session**;
+the inspected capture is `/private/tmp/iwd-dp4-create-game.png`. The process
+was explicitly quit at batch 400. This is not gameplay acceptance, and the
+new result disproves treating the missing IID as the sole session blocker.
+Next is a targeted COM/DirectPlay trace beyond the now-supported activation
+request. Older checkpoints below describe their respective builds.
+
 ### Decoder overlap correction
 
 The long install's exit counters reported roughly 101 million retired
@@ -150,7 +179,7 @@ legacy fixture's earlier success does not establish that it still works on
 this newer COM implementation; the original-installed error should not be
 attributed to INI/KEY/CD layout without further evidence.
 
-Next is a real 53-slot ANSI DirectPlay4 implementation. Its additional methods
+At that checkpoint, the next step was a 53-slot ANSI DirectPlay4 implementation. Its additional methods
 are group-owner get/set, extended send, queue inspection, and cancellation by
 message or priority, as defined in the
 [Wine DirectPlay header](https://raw.githubusercontent.com/wine-mirror/wine/master/include/dplay.h).
@@ -203,7 +232,8 @@ cleanup, capacity rollback, copied bytes, event ordering, and recipient slot 31.
 Provider/session initialization, network/session joining, anonymous sends,
 SendEx and asynchronous completion still need implementation. Existing entity
 enumeration/mutation methods also need a full session-isolation audit. The DP4
-IID remains rejected; no new gameplay pass is claimed.
+IID remained rejected at that checkpoint; see the latest result above. No new
+gameplay pass is claimed.
 
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted

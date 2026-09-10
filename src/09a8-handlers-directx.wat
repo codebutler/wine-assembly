@@ -162,7 +162,7 @@
   ;; guest code begins. Reserve the tail of the auxiliary-wrapper region
   ;; rather than overlapping VSOCK_TABLE at 0x07FFE000.
   (global $DX_VTBL_REGISTRY i32 (region.addr $DX_VTBL_REGISTRY 0))
-  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 64))
+  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 65))
 
   ;; Vtable blocks — arrays of thunk guest-addrs, one per interface type.
   ;; Must be in guest-reachable memory (above image_base), so allocated from heap.
@@ -177,6 +177,7 @@
   (global $DX_VTBL_DINPUT     (mut i32) (i32.const 0))
   (global $DX_VTBL_DIDEV      (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAY3     (mut i32) (i32.const 0))
+  (global $DX_VTBL_DPLAY4     (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAYLOBBY2 (mut i32) (i32.const 0))
   (global $DX_VTBL_D3D        (mut i32) (i32.const 0))
   (global $DX_VTBL_D3D3       (mut i32) (i32.const 0))
@@ -335,7 +336,8 @@
     ;; retains its existing cross-thread offset.
     (global.set $DX_VTBL_DDSURF3 (i32.load offset=248 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_D3DSWAP9 (i32.load offset=252 (global.get $DX_VTBL_REGISTRY)))
-    (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY))))
+    (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_DPLAY4 (i32.load offset=260 (global.get $DX_VTBL_REGISTRY))))
 
   (func $dx_sync_thread_vtables_if_needed
     (if (i32.eqz (global.get $DX_VTBL_DDRAW))
@@ -7841,6 +7843,12 @@
   ;; The temporary ID list lets allocation failure undo only this send.
   (func $dp_send_local (param $owner i32) (param $from i32) (param $to i32)
       (param $flags i32) (param $data i32) (param $size i32) (result i32)
+    (call $dp_send_local_priority (local.get $owner) (local.get $from) (local.get $to)
+      (local.get $flags) (local.get $data) (local.get $size)
+      (select (i32.const 65535) (i32.const 0) (i32.and (local.get $flags) (i32.const 2)))))
+
+  (func $dp_send_local_priority (param $owner i32) (param $from i32) (param $to i32)
+      (param $flags i32) (param $data i32) (param $size i32) (param $priority i32) (result i32)
     (local $entry i32) (local $target i32) (local $group_bit i32)
     (local $i i32) (local $recipients i32) (local $ids i32) (local $count i32)
     (local $id i32) (local $event i32)
@@ -7896,7 +7904,7 @@
             (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
           (local.set $id (call $dp_message_enqueue (local.get $owner) (local.get $from)
             (call $gl32 (local.get $entry)) (local.get $data) (local.get $size)
-            (select (i32.const 65535) (i32.const 0) (i32.and (local.get $flags) (i32.const 2)))
+            (local.get $priority)
             (i32.const 1)))
           (if (i32.eqz (local.get $id))
             (then
@@ -8262,7 +8270,7 @@
     (call $dp_enum_continue))
 
   ;; Query the two bounded ANSI DirectPlay families that this runtime exposes.
-  ;; family 0: IDirectPlay2A/3A (47-slot vtable); family 1:
+  ;; family 0: IDirectPlay2A/3A/4A (upgraded to 53 slots for 4A); family 1:
   ;; IDirectPlayLobbyA/Lobby2A (15-slot vtable). Unicode and later generations
   ;; need different string semantics or additional slots, so fail honestly.
   (func $dplay_query_interface_wa (param $obj i32) (param $iid_wa i32)
@@ -8278,6 +8286,13 @@
             (i32.const 0x000000C0) (i32.const 0x46000000)))
         (if (i32.eqz (local.get $family))
           (then
+            ;; Upgrade the same COM identity, preserving all 47 inherited slots.
+            (if (call $guid_words_equal (local.get $iid_wa)
+                  (i32.const 0x0AB1C531) (i32.const 0x11D14745)
+                  (i32.const 0x0000A1A7) (i32.const 0xFCAB03F8))
+              (then
+                (call $gs32 (local.get $obj) (global.get $DX_VTBL_DPLAY4))
+                (local.set $supported (i32.const 1))))
             ;; IID_IDirectPlay2A {9D460580-A822-11CF-960C-0080C7534E82}.
             (local.set $supported (i32.or (local.get $supported)
               (call $guid_words_equal (local.get $iid_wa)
@@ -8316,6 +8331,85 @@
     (global.set $eax (call $dplay_query_interface
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $dp_owned_entity (param $owner i32) (param $id i32) (param $type i32) (result i32)
+    (local $entry i32)
+    (local.set $entry (call $dp_find_entity (local.get $id) (local.get $type)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (select (local.get $entry) (i32.const 0)
+      (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))))
+
+  ;; Ownership notifications/migration are not yet implemented. Keep output
+  ;; buffers untouched and fail explicitly instead of publishing guessed policy.
+  (func $handle_IDirectPlay4_GetGroupOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x80004001))
+    (if (i32.eqz (local.get $arg2)) (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 0)))
+      (then (global.set $eax (i32.const 0x8877009B)))))
+
+  (func $handle_IDirectPlay4_SetGroupOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x80004001))
+    (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 0)))
+      (then (global.set $eax (i32.const 0x8877009B)) (return)))
+    (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg2) (i32.const 1)))
+      (then (global.set $eax (i32.const 0x88770096)))))
+
+  (func $handle_IDirectPlay4_SendEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $size i32) (local $priority i32)
+    (local.set $size (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $priority (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 44)))
+    (if (i32.gt_u (local.get $priority) (i32.const 65535))
+      (then (global.set $eax (i32.const 0x88770186)) (return)))
+    ;; Synchronous delivery has no pending-send ID or completion context.
+    (global.set $eax (call $dp_send_local_priority (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $size) (local.get $priority))))
+
+  (func $handle_IDirectPlay4_GetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $bytes i32) (local $kind i32)
+    (local.set $bytes (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (if (i32.gt_u (local.get $arg3) (i32.const 2))
+      (then (global.set $eax (i32.const 0x88770078)) (return)))
+    (if (local.get $arg1)
+      (then (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 1)))
+        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+    (if (local.get $arg2)
+      (then (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg2) (i32.const 1)))
+        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+    (local.set $kind (i32.eq (local.get $arg3) (i32.const 2)))
+    (if (local.get $arg4) (then (call $gs32 (local.get $arg4)
+      (call $dp_message_query (local.get $arg0) (local.get $kind) (local.get $arg1) (local.get $arg2) (i32.const 0)))))
+    (if (local.get $bytes) (then (call $gs32 (local.get $bytes)
+      (call $dp_message_query (local.get $arg0) (local.get $kind) (local.get $arg1) (local.get $arg2) (i32.const 1)))))
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_IDirectPlay4_CancelMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x88770078))
+    (if (local.get $arg2) (then (return)))
+    (global.set $eax (i32.const 0))
+    (if (i32.eqz (local.get $arg1))
+      (then (drop (call $dp_message_cancel_range (local.get $arg0) (i32.const 0) (i32.const 0) (i32.const -1))) (return)))
+    (global.set $eax (i32.const 0x8877017C))
+    (local.set $entry (call $dp_message_find (local.get $arg0) (local.get $arg1)))
+    (if (i32.eqz (local.get $entry)) (then (return)))
+    (if (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (then (return)))
+    (drop (call $dp_message_remove (local.get $arg0) (local.get $arg1)))
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_IDirectPlay4_CancelPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (global.set $eax (i32.const 0x88770078))
+    (if (local.get $arg3) (then (return)))
+    (global.set $eax (i32.const 0x88770186))
+    (if (i32.gt_u (local.get $arg1) (local.get $arg2)) (then (return)))
+    (if (i32.gt_u (local.get $arg2) (i32.const 65535)) (then (return)))
+    (drop (call $dp_message_cancel_range (local.get $arg0) (i32.const 0) (local.get $arg1) (local.get $arg2)))
+    (global.set $eax (i32.const 0)))
 
   (func $handle_IDirectPlay3_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)

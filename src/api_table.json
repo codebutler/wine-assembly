@@ -28156,5 +28156,47 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 1108399800
+  },
+  {
+    "id": 3357,
+    "name": "IDirectPlay4_GetGroupOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3797241412
+  },
+  {
+    "id": 3358,
+    "name": "IDirectPlay4_SetGroupOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 33594136
+  },
+  {
+    "id": 3359,
+    "name": "IDirectPlay4_SendEx",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 301568793
+  },
+  {
+    "id": 3360,
+    "name": "IDirectPlay4_GetMessageQueue",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3526839172
+  },
+  {
+    "id": 3361,
+    "name": "IDirectPlay4_CancelMessage",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1273887899
+  },
+  {
+    "id": 3362,
+    "name": "IDirectPlay4_CancelPriority",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2695000068
   }
 ]
