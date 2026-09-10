@@ -7833,7 +7833,7 @@
   {
     "id": 888,
     "name": "MenuHelp",
-    "nargs": 5,
+    "nargs": 7,
     "convention": "stdcall",
     "hash": 3189261661
   },

@@ -313,6 +313,18 @@
     (field padding_packed      i32) ;; +72  TB_SETPADDING, cx | cy<<16
     (field hot_index           i32)) ;; +76 default -1; ends at +80
 
+  ;; Status bar (ctrl_class 22, and the WAT paint mirror for a registered
+  ;; comctl32 status bar). MenuHelp writes transient help to simple part 0xFF
+  ;; and toggles SB_SIMPLE; it does not destroy pane zero's normal text.
+  ;; Retaining both strings lets closing a menu restore the application's
+  ;; ordinary status line. TITLE_TABLE mirrors whichever string is active.
+  (layout StatusBarState
+    (field normal_text_ptr i32)    ;; +0  guest heap ptr, ANSI
+    (field normal_text_len i32)    ;; +4
+    (field simple_text_ptr i32)    ;; +8  guest heap ptr, ANSI
+    (field simple_text_len i32)    ;; +12
+    (field simple_mode     i32))   ;; +16 BOOL; ends at +20
+
   ;; ---- ButtonState accessors ----
   ;;
   ;; $sw is the *WASM* address of the struct — $g2w of WND_RECORDS.state_ptr.
@@ -787,6 +799,119 @@
 
   ;; ---- Control table helpers (legacy CONTROL_TABLE) ----
 
+  (func $statusbar_normal_ptr (param $sw ptr<StatusBarState>) (result i32)
+    (load.field StatusBarState normal_text_ptr (local.get $sw)))
+  (func $statusbar_set_normal_ptr (param $sw ptr<StatusBarState>) (param $v i32)
+    (store.field StatusBarState normal_text_ptr (local.get $sw) (local.get $v)))
+  (func $statusbar_normal_len (param $sw ptr<StatusBarState>) (result i32)
+    (load.field.memarg StatusBarState normal_text_len (local.get $sw)))
+  (func $statusbar_set_normal_len (param $sw ptr<StatusBarState>) (param $v i32)
+    (store.field.memarg StatusBarState normal_text_len (local.get $sw) (local.get $v)))
+  (func $statusbar_simple_ptr (param $sw ptr<StatusBarState>) (result i32)
+    (load.field.memarg StatusBarState simple_text_ptr (local.get $sw)))
+  (func $statusbar_set_simple_ptr (param $sw ptr<StatusBarState>) (param $v i32)
+    (store.field.memarg StatusBarState simple_text_ptr (local.get $sw) (local.get $v)))
+  (func $statusbar_simple_len (param $sw ptr<StatusBarState>) (result i32)
+    (load.field.memarg StatusBarState simple_text_len (local.get $sw)))
+  (func $statusbar_set_simple_len (param $sw ptr<StatusBarState>) (param $v i32)
+    (store.field.memarg StatusBarState simple_text_len (local.get $sw) (local.get $v)))
+  (func $statusbar_simple_mode (param $sw ptr<StatusBarState>) (result i32)
+    (load.field.memarg StatusBarState simple_mode (local.get $sw)))
+  (func $statusbar_set_simple_mode (param $sw ptr<StatusBarState>) (param $v i32)
+    (store.field.memarg StatusBarState simple_mode (local.get $sw) (local.get $v)))
+
+  ;; Copy one status-bar string from a WASM address into state-owned guest
+  ;; storage. Allocate before retiring the old string so an OOM leaves the
+  ;; status bar exactly as it was.
+  (func $statusbar_state_store_text
+      (param $sw ptr<StatusBarState>) (param $simple i32)
+      (param $src_wa i32) (param $len i32) (result i32)
+    (local $old i32) (local $buf i32) (local $buf_wa i32)
+    (if (i32.gt_u (local.get $len) (i32.const 255))
+      (then (local.set $len (i32.const 255))))
+    (local.set $old
+      (if (result i32) (local.get $simple)
+        (then (call $statusbar_simple_ptr (local.get $sw)))
+        (else (call $statusbar_normal_ptr (local.get $sw)))))
+    (if (i32.eqz (local.get $len))
+      (then
+        (if (local.get $old) (then (call $heap_free (local.get $old))))
+        (if (local.get $simple)
+          (then
+            (call $statusbar_set_simple_ptr (local.get $sw) (i32.const 0))
+            (call $statusbar_set_simple_len (local.get $sw) (i32.const 0)))
+          (else
+            (call $statusbar_set_normal_ptr (local.get $sw) (i32.const 0))
+            (call $statusbar_set_normal_len (local.get $sw) (i32.const 0))))
+        (return (i32.const 1))))
+    (local.set $buf (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+    (if (i32.eqz (local.get $buf)) (then (return (i32.const 0))))
+    (local.set $buf_wa (call $g2w (local.get $buf)))
+    (memory.copy (local.get $buf_wa) (local.get $src_wa) (local.get $len))
+    (i32.store8 (i32.add (local.get $buf_wa) (local.get $len)) (i32.const 0))
+    (if (local.get $old) (then (call $heap_free (local.get $old))))
+    (if (local.get $simple)
+      (then
+        (call $statusbar_set_simple_ptr (local.get $sw) (local.get $buf))
+        (call $statusbar_set_simple_len (local.get $sw) (local.get $len)))
+      (else
+        (call $statusbar_set_normal_ptr (local.get $sw) (local.get $buf))
+        (call $statusbar_set_normal_len (local.get $sw) (local.get $len))))
+    (i32.const 1))
+
+  (func $statusbar_state_publish (param $hwnd i32) (param $sw ptr<StatusBarState>)
+    (local $ptr i32) (local $len i32)
+    (if (call $statusbar_simple_mode (local.get $sw))
+      (then
+        (local.set $ptr (call $statusbar_simple_ptr (local.get $sw)))
+        (local.set $len (call $statusbar_simple_len (local.get $sw))))
+      (else
+        (local.set $ptr (call $statusbar_normal_ptr (local.get $sw)))
+        (local.set $len (call $statusbar_normal_len (local.get $sw)))))
+    (call $title_table_set
+      (local.get $hwnd)
+      (if (result i32) (local.get $ptr)
+        (then (call $g2w (local.get $ptr)))
+        (else (i32.const 0)))
+      (local.get $len))
+    (call $invalidate_hwnd (local.get $hwnd)))
+
+  ;; Lazily attach the paint mirror. Registered native status bars do not run
+  ;; their WM_CREATE through the WAT proc, so seed pane zero from TITLE_TABLE
+  ;; the first time one of their status messages reaches us.
+  (func $statusbar_state_get (param $hwnd i32) (param $create i32) (result i32)
+    (local $state i32) (local $sw ptr<StatusBarState>)
+    (local $title_wa i32) (local $title_len i32)
+    (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+    (if (local.get $state) (then (return (local.get $state))))
+    (if (i32.eqz (local.get $create)) (then (return (i32.const 0))))
+    (local.set $state (call $heap_alloc (i32.const 20)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+    (memory.fill (local.get $sw) (i32.const 0) (i32.const 20))
+    (call $wnd_set_state_ptr (local.get $hwnd) (local.get $state))
+    (local.set $title_wa (call $title_table_get_ptr (local.get $hwnd)))
+    (local.set $title_len (call $title_table_get_len (local.get $hwnd)))
+    (if (i32.and (i32.ne (local.get $title_wa) (i32.const 0))
+                 (i32.ne (local.get $title_len) (i32.const 0)))
+      (then
+        (drop (call $statusbar_state_store_text
+          (local.get $sw) (i32.const 0)
+          (local.get $title_wa) (local.get $title_len)))))
+    (local.get $state))
+
+  (func $statusbar_state_release (param $hwnd i32)
+    (local $state i32) (local $sw ptr<StatusBarState>) (local $ptr i32)
+    (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
+    (if (i32.eqz (local.get $state)) (then (return)))
+    (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+    (local.set $ptr (call $statusbar_normal_ptr (local.get $sw)))
+    (if (local.get $ptr) (then (call $heap_free (local.get $ptr))))
+    (local.set $ptr (call $statusbar_simple_ptr (local.get $sw)))
+    (if (local.get $ptr) (then (call $heap_free (local.get $ptr))))
+    (call $heap_free (local.get $state))
+    (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0)))
+
   ;; Mark a registered native status-bar window without classifying it as a
   ;; WAT control. Its guest comctl32/MFC wndproc must remain authoritative for
   ;; CCS_BOTTOM layout, while the shared renderer surface still needs WAT to
@@ -1153,6 +1278,10 @@
   (func $ctrl_table_reset_slot (param $slot i32)
     (local $addr i32)
     (call $tab_native_state_release (call $wnd_slot_hwnd (local.get $slot)))
+    (if (i32.or
+          (i32.eq (i32.load (call $ctrl_slot_addr (local.get $slot))) (i32.const 22))
+          (call $statusbar_native_is (call $wnd_slot_hwnd (local.get $slot))))
+      (then (call $statusbar_state_release (call $wnd_slot_hwnd (local.get $slot)))))
     (call $statusbar_native_mark_slot (local.get $slot) (i32.const 0))
     (call $tab_native_mark_slot (local.get $slot) (i32.const 0))
     (local.set $addr (call $ctrl_slot_addr (local.get $slot)))
@@ -7416,39 +7545,103 @@
   (func $statusbar_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $hdc i32) (local $sz i32) (local $w i32) (local $h i32)
     (local $text_w i32) (local $text_len i32) (local $right i32)
+    (local $state i32) (local $sw ptr<StatusBarState>)
+    (local $simple i32) (local $text_g i32) (local $tmp_g i32)
     (local $is_paint i32)
     (local $parent i32) (local $view i32) (local $view_sz i32) (local $slot i32)
     (local $mouse i32) (local $coord_x i32) (local $coord_y i32)
     (local $coord_w i32) (local $coord_len i32) (local $part_len i32)
-    ;; WM_SETTEXT and SB_SETTEXTA. Paint uses the former for its help prompt;
-    ;; accepting part zero/simple-mode SB_SETTEXTA also covers common callers.
+    ;; A WAT-owned status bar gets its normal text from CREATESTRUCT. Native
+    ;; comctl32 bars are initialized lazily from TITLE_TABLE instead because
+    ;; their guest wndproc owns WM_CREATE.
+    (if (i32.eq (local.get $msg) (i32.const 0x0001))
+      (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (local.get $state)
+          (then
+            (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+            (local.set $text_g (call $gl32 (i32.add (local.get $lParam) (i32.const 36))))
+            (local.set $text_len
+              (if (result i32) (local.get $text_g)
+                (then (call $guest_strlen (local.get $text_g)))
+                (else (i32.const 0))))
+            (drop (call $statusbar_state_store_text
+              (local.get $sw) (i32.const 0)
+              (if (result i32) (local.get $text_g)
+                (then (call $g2w (local.get $text_g)))
+                (else (i32.const 0)))
+              (local.get $text_len)))
+            (call $statusbar_state_publish (local.get $hwnd) (local.get $sw))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0002))
+      (then
+        (call $statusbar_state_release (local.get $hwnd))
+        (return (i32.const 0))))
+    ;; WM_SETTEXT updates the ordinary pane. SB_SETTEXTA/W part 0xFF updates
+    ;; the simple pane that MenuHelp uses; part zero remains the ordinary pane.
     (if (i32.or
           (i32.eq (local.get $msg) (i32.const 0x000C))
-          (i32.eq (local.get $msg) (i32.const 0x0401)))
+          (i32.or
+            (i32.eq (local.get $msg) (i32.const 0x0401))
+            (i32.eq (local.get $msg) (i32.const 0x040B))))
       (then
+        (local.set $simple
+          (i32.and
+            (i32.ne (local.get $msg) (i32.const 0x000C))
+            (i32.eq (i32.and (local.get $wParam) (i32.const 0xFF)) (i32.const 0xFF))))
         (if (i32.or
               (i32.eq (local.get $msg) (i32.const 0x000C))
               (i32.or
                 (i32.eqz (i32.and (local.get $wParam) (i32.const 0xFF)))
-                (i32.eq (i32.and (local.get $wParam) (i32.const 0xFF)) (i32.const 0xFF))))
+                (local.get $simple)))
           (then
-            (local.set $text_len
-              (if (result i32) (local.get $lParam)
-                (then (call $guest_strlen (local.get $lParam)))
-                (else (i32.const 0))))
-            (call $title_table_set
-              (local.get $hwnd)
-              (if (result i32) (local.get $lParam)
-                (then (call $g2w (local.get $lParam)))
-                (else (i32.const 0)))
-              (local.get $text_len))
-            (call $invalidate_hwnd (local.get $hwnd))))
+            (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+            (if (local.get $state)
+              (then
+                (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+                (if (i32.eq (local.get $msg) (i32.const 0x040B))
+                  (then
+                    (local.set $tmp_g (call $heap_alloc (i32.const 256)))
+                    (if (local.get $tmp_g)
+                      (then
+                        (local.set $text_len
+                          (if (result i32) (local.get $lParam)
+                            (then (call $wide_to_ansi
+                              (local.get $lParam) (local.get $tmp_g) (i32.const 256)))
+                            (else (i32.const 0))))
+                        (drop (call $statusbar_state_store_text
+                          (local.get $sw) (local.get $simple)
+                          (call $g2w (local.get $tmp_g)) (local.get $text_len)))
+                        (call $heap_free (local.get $tmp_g)))))
+                  (else
+                    (local.set $text_len
+                      (if (result i32) (local.get $lParam)
+                        (then (call $guest_strlen (local.get $lParam)))
+                        (else (i32.const 0))))
+                    (drop (call $statusbar_state_store_text
+                      (local.get $sw) (local.get $simple)
+                      (if (result i32) (local.get $lParam)
+                        (then (call $g2w (local.get $lParam)))
+                        (else (i32.const 0)))
+                      (local.get $text_len)))))
+                (if (i32.eq (local.get $simple)
+                            (call $statusbar_simple_mode (local.get $sw)))
+                  (then (call $statusbar_state_publish
+                    (local.get $hwnd) (local.get $sw))))))))
         (return (i32.const 1))))
-    ;; SB_SETPARTS / SB_SIMPLE: retain API success. The Paint/MFC status bar
-    ;; presents its active prompt through the whole first pane.
-    (if (i32.or
-          (i32.eq (local.get $msg) (i32.const 0x0404))
-          (i32.eq (local.get $msg) (i32.const 0x0409)))
+    ;; SB_SIMPLE selects between the preserved ordinary pane and simple part.
+    (if (i32.eq (local.get $msg) (i32.const 0x0409))
+      (then
+        (local.set $state (call $statusbar_state_get (local.get $hwnd) (i32.const 1)))
+        (if (local.get $state)
+          (then
+            (local.set $sw (cast ptr<StatusBarState> (call $g2w (local.get $state))))
+            (call $statusbar_set_simple_mode
+              (local.get $sw) (i32.ne (local.get $wParam) (i32.const 0)))
+            (call $statusbar_state_publish (local.get $hwnd) (local.get $sw))))
+        (return (i32.const 1))))
+    ;; SB_SETPARTS: retain API success. The current painter presents one pane.
+    (if (i32.eq (local.get $msg) (i32.const 0x0404))
       (then
         (call $invalidate_hwnd (local.get $hwnd))
         (return (i32.const 1))))
@@ -16934,13 +17127,19 @@
         (if (i32.eq (local.get $msg) (i32.const 0x000F))
           (then (return (call $tab_native_paint (local.get $hwnd)))))))
     ;; A registered status bar keeps ctrl_class=0 so its guest wndproc can
-    ;; perform MFC layout. Its shared-surface paint and WM_SETTEXT invalidation
-    ;; are WAT-owned; otherwise Print Preview can leave the old prompt visible
-    ;; after MFC changes the status title to "Page 1".
+    ;; perform MFC layout. Its shared-surface paint and text/simple-mode mirror
+    ;; are WAT-owned; otherwise Print Preview can leave an old prompt visible,
+    ;; and MenuHelp's SB_SETTEXTW/SB_SIMPLE pair never reaches the pixels.
     (if (i32.and (call $statusbar_native_is (local.get $hwnd))
                  (i32.or
-                   (i32.eq (local.get $msg) (i32.const 0x000F))
-                   (i32.eq (local.get $msg) (i32.const 0x000C))))
+                   (i32.or
+                     (i32.eq (local.get $msg) (i32.const 0x000F))
+                     (i32.eq (local.get $msg) (i32.const 0x000C)))
+                   (i32.or
+                     (i32.eq (local.get $msg) (i32.const 0x0401))
+                     (i32.or
+                       (i32.eq (local.get $msg) (i32.const 0x0409))
+                       (i32.eq (local.get $msg) (i32.const 0x040B))))))
       (then (return (call $statusbar_wndproc
         (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; Keep the exported/test-driver path consistent with SendMessageA and

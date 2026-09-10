@@ -969,10 +969,101 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; MenuHelp(uMsg, wParam, lParam, hMainMenu, hInst) — 5 args, void
+  ;; Resolve the RT_STRING id selected by WM_MENUSELECT. lpwIDs is already a
+  ;; translated WASM address and has the historical MENUHELPUINTS shape:
+  ;;   [command-id offset, main-menu popup-index offset,
+  ;;    nested popup string id, nested popup HMENU, ..., 0, 0]
+  ;; The public documentation describes the trailing pairs but omits the two
+  ;; leading offsets; the Win98 comctl32 code and classic SDK usage require
+  ;; both. A zero result means display an empty help string.
+  (func $menu_help_resource_id
+      (param $wParam i32) (param $lParam i32) (param $hMainMenu i32)
+      (param $ids_w i32) (result i32)
+    (local $flags i32) (local $item i32) (local $submenu i32)
+    (local $pair i32) (local $i i32) (local $string_id i32)
+    (if (i32.eqz (local.get $ids_w)) (then (return (i32.const 0))))
+    (local.set $flags (i32.shr_u (local.get $wParam) (i32.const 16)))
+    (local.set $item (i32.and (local.get $wParam) (i32.const 0xFFFF)))
+    (if (i32.or
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x800)) (i32.const 0)) ;; MF_SEPARATOR
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x2000)) (i32.const 0))) ;; MF_SYSMENU
+      (then (return (i32.const 0))))
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x10))) ;; !MF_POPUP
+      (then (return (i32.add (i32.load (local.get $ids_w)) (local.get $item)))))
+    ;; Direct children of the main menu use their zero-based position plus the
+    ;; second offset. Nested popups use the explicit (string id, HMENU) pairs.
+    (if (i32.eq (local.get $lParam) (local.get $hMainMenu))
+      (then (return (i32.add (i32.load offset=4 (local.get $ids_w)) (local.get $item)))))
+    (local.set $submenu
+      (call $menu_handle_submenu (local.get $lParam) (local.get $item)))
+    (if (i32.eqz (local.get $submenu)) (then (return (i32.const 0))))
+    (local.set $pair (i32.add (local.get $ids_w) (i32.const 8)))
+    ;; The native routine walks to a zero string id. Bound malformed caller
+    ;; input so a bad table cannot turn one guest call into an unending host run.
+    (block $done
+      (loop $scan
+        (br_if $done (i32.ge_u (local.get $i) (i32.const 256)))
+        (local.set $string_id (i32.load (local.get $pair)))
+        (br_if $done (i32.eqz (local.get $string_id)))
+        (if (i32.eq (i32.load offset=4 (local.get $pair)) (local.get $submenu))
+          (then (return (local.get $string_id))))
+        (local.set $pair (i32.add (local.get $pair) (i32.const 8)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
+
+  ;; MenuHelp(uMsg, wParam, lParam, hMainMenu, hInst, hwndStatus, lpwIDs)
+  ;; — 7 args, void. Win98's implementation handles WM_MENUSELECT, writes a
+  ;; UTF-16 string to status-bar simple part 0xFF, and leaves WM_COMMAND alone
+  ;; despite the broader wording in current documentation.
   (func $handle_MenuHelp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Processes WM_MENUSELECT and WM_COMMAND for status bar help text — no-op
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local $hwnd_status i32) (local $ids_g i32) (local $ids_w i32)
+    (local $flags i32) (local $string_id i32) (local $buf_g i32)
+    ;; The generic handler ABI passes five register locals; remaining stdcall
+    ;; arguments stay on the guest stack after the return address and arg0..4.
+    (local.set $hwnd_status
+      (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $ids_g
+      (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (if (i32.eq (local.get $arg0) (i32.const 0x011F)) ;; WM_MENUSELECT
+      (then
+        (local.set $flags (i32.shr_u (local.get $arg1) (i32.const 16)))
+        ;; WM_MENUSELECT's closed sentinel returns the status bar to its normal
+        ;; panes. Win98 requires lParam==NULL as well as flags==0xFFFF.
+        (if (i32.and
+              (i32.eq (local.get $flags) (i32.const 0xFFFF))
+              (i32.eqz (local.get $arg2)))
+          (then
+            (drop (call $wnd_send_message
+              (local.get $hwnd_status) (i32.const 0x0409) ;; SB_SIMPLE
+              (i32.const 0) (i32.const 0))))
+          (else
+            (local.set $ids_w
+              (if (result i32) (local.get $ids_g)
+                (then (call $g2w (local.get $ids_g)))
+                (else (i32.const 0))))
+            (local.set $string_id (call $menu_help_resource_id
+              (local.get $arg1) (local.get $arg2) (local.get $arg3)
+              (local.get $ids_w)))
+            (local.set $buf_g (call $heap_alloc (i32.const 512)))
+            (if (local.get $buf_g)
+              (then
+                (memory.fill (call $g2w (local.get $buf_g)) (i32.const 0) (i32.const 512))
+                (if (local.get $string_id)
+                  (then
+                    (call $push_rsrc_ctx (local.get $arg4))
+                    (drop (call $string_load_w
+                      (local.get $string_id) (call $g2w (local.get $buf_g))
+                      (i32.const 256)))
+                    (call $pop_rsrc_ctx)))))
+            (drop (call $wnd_send_message
+              (local.get $hwnd_status) (i32.const 0x040B) ;; SB_SETTEXTW
+              (i32.const 0x01FF) (local.get $buf_g)))
+            (drop (call $wnd_send_message
+              (local.get $hwnd_status) (i32.const 0x0409) ;; SB_SIMPLE
+              (i32.const 1) (i32.const 0)))
+            (if (local.get $buf_g) (then (call $heap_free (local.get $buf_g))))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
   )
 
   ;; ShowHideMenuCtl(hWnd, uFlags, lpInfo) — 3 args, returns BOOL
