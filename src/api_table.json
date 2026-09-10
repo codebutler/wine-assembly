@@ -28142,5 +28142,19 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 1636215742
+  },
+  {
+    "id": 3355,
+    "name": "WritePrivateProfileSectionA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1477507418
+  },
+  {
+    "id": 3356,
+    "name": "WritePrivateProfileSectionW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1108399800
   }
 ]

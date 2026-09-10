@@ -696,6 +696,8 @@
   ;; ini_get_int(appNameWA, keyNameWA, nDefault, fileNameWA, isWide) → int value
   (import "host" "ini_write_string" (func $host_ini_write_string (param i32 i32 i32 i32 i32) (result i32)))
   ;; ini_write_string(appNameWA, keyNameWA, valueWA, fileNameWA, isWide) → BOOL
+  (import "host" "ini_write_section" (func $host_ini_write_section (param i32 i32 i32 i32) (result i32)))
+  ;; ini_write_section(appNameWA, stringsWA, fileNameWA, isWide) -> Win32 error
 
   (import "host" "get_window_client_size" (func $host_get_window_client_size (param i32) (result i32)))
   ;; get_window_client_size(hwnd) → (clientW | (clientH << 16))

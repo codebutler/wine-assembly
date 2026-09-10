@@ -7609,6 +7609,24 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
+  (func $write_private_profile_section (param $app i32) (param $strings i32) (param $file i32) (param $wide i32)
+    (local $error i32)
+    (local.set $error (call $host_ini_write_section
+      (if (result i32) (local.get $app) (then (call $g2w (local.get $app))) (else (i32.const 0)))
+      (if (result i32) (local.get $strings) (then (call $g2w (local.get $strings))) (else (i32.const 0)))
+      (if (result i32) (local.get $file) (then (call $g2w (local.get $file))) (else (i32.const 0)))
+      (local.get $wide)))
+    (if (local.get $error) (then (global.set $last_error (local.get $error))))
+    (global.set $eax (i32.eqz (local.get $error))))
+
+  (func $handle_WritePrivateProfileSectionA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $write_private_profile_section (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_WritePrivateProfileSectionW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $write_private_profile_section (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
   ;; 193: ShellExecuteA(hwnd, lpOperation, lpFile, lpParameters, lpDirectory, nShowCmd)
   (func $handle_ShellExecuteA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $host_shell_execute
