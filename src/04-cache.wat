@@ -429,10 +429,11 @@
   ;; ============================================================
   ;; A compiled page owns one 8KB index (4096 u16 entries, guest page offset ->
   ;; offset within the page's threaded-code chunk) and one contiguous chunk in
-  ;; this thread's arena. Nothing here is required for correctness: every path
-  ;; that cannot page an address falls back to the hash cache above, which is
-  ;; untouched. That is the property that makes each sizing constant a tuning
-  ;; knob rather than a correctness constraint.
+  ;; this thread's arena. Nothing here is required for correctness: when a
+  ;; freshly decoded block cannot be published, $publish_block returns its emit
+  ;; scratch so this entry can execute, and a later entry decodes it again.
+  ;; That is the property that makes each sizing constant a tuning knob rather
+  ;; than a correctness constraint; there is no second cache or lookup fallback.
 
   (func $page_dir_slot (param $page_base i32) (result i32)
     (i32.add (global.get $PAGE_DIR)
@@ -934,7 +935,7 @@
     ;; whole cache and restart at $eip. The fresh decode will produce
     ;; valid threaded code. This recovers from rare corruption rather
     ;; than trapping with wasm "table index out of bounds".
-    (if (i32.ge_u (local.get $fn) (i32.const 447))
+    (if (i32.ge_u (local.get $fn) (i32.const 454))
       (then
         (return_call $dispatch_bad (local.get $fn))))
     (if (global.get $handler_hist_enabled)

@@ -5,6 +5,8 @@
 // load_pe, the exe-name/cmdline pokes, and the DLL dependency walk.
 // lib/process-boot.js is a classic script loaded ahead of this one.
 const ProcessBoot = (typeof window !== 'undefined' && window.processBoot) || null;
+const HostMemUtils = (typeof window !== 'undefined' && window.memUtils) ||
+  (typeof require !== 'undefined' ? require('./lib/mem-utils') : null);
 
 // iOS decides whether a page may be heard at all, and WebAudio alone does not
 // get a say. A page that only ever makes sound through an AudioContext lands
@@ -523,7 +525,11 @@ if (typeof window !== 'undefined') {
 }
 
 class WineAssembly {
-  static SOURCE_VERSION = '299';
+  static SOURCE_VERSION = String(globalThis.WINE_SOURCE_VERSION || 'dev');
+  static versionedUrl(source) {
+    const separator = source.includes('?') ? '&' : '?';
+    return source + separator + 'v=' + encodeURIComponent(WineAssembly.SOURCE_VERSION);
+  }
   static ASSET_PART_SIZE = 10 * 1024 * 1024;
   // Ceiling on any sleep the drive loop takes while the guest is parked. Every
   // sleep is bounded by a deadline the guest actually named; this bounds the
@@ -1611,32 +1617,19 @@ class WineAssembly {
     h.get_exit_code_thread = (handle) => self.threadManager ? self.threadManager.getExitCodeThread(handle) : 0x103;
     h.terminate_thread = (handle, exitCode) => self.threadManager
       ? self.threadManager.terminateThread(handle, exitCode) : 0;
-    const readSyncObjectName = (nameWa, wide) => {
-      if (!nameWa) return '';
-      if (!(wide & 1)) return self.readString(nameWa);
-      const memoryBuffer = self.memory && (self.memory.buffer || self.memory);
-      if (!(memoryBuffer instanceof ArrayBuffer) &&
-          !(typeof SharedArrayBuffer !== 'undefined' && memoryBuffer instanceof SharedArrayBuffer)) return '';
-      const dv = new DataView(memoryBuffer);
-      let name = '';
-      for (let i = 0; i < 512; i++) {
-        const ch = dv.getUint16(nameWa + i * 2, true);
-        if (!ch) break;
-        name += String.fromCharCode(ch);
-      }
-      return name;
-    };
+    const readSyncName = (nameWa, flags) =>
+      HostMemUtils ? HostMemUtils.readSyncObjectName(self.memory, nameWa, flags) : '';
     const win32ThreadId = () => ((ctx.threadId | 0) + 1) | 0;
     h.create_event = (m, i, nameWa, wide) => {
       if (!self.threadManager) return 0;
-      const name = readSyncObjectName(nameWa, wide);
+      const name = readSyncName(nameWa, wide);
       return (wide & 2)
         ? self.threadManager.createMutex(i, name, win32ThreadId())
         : self.threadManager.createEvent(m, i, name);
     };
     h.open_event = (nameWa, wide) => {
       if (!self.threadManager) return 0;
-      const name = readSyncObjectName(nameWa, wide);
+      const name = readSyncName(nameWa, wide);
       return (wide & 2) ? self.threadManager.openMutex(name) : self.threadManager.openEvent(name);
     };
     h.set_event = (handle) => {
@@ -1724,7 +1717,7 @@ class WineAssembly {
     const wasmReady = WineAssembly.getWasmModule();
     const apiTableReady = !this.apiTable ? (async () => {
       try {
-        const r = await fetch(`src/api_table.json?v=${WineAssembly.SOURCE_VERSION}`);
+        const r = await fetch(WineAssembly.versionedUrl('src/api_table.json'));
         this.apiTable = await r.json();
       } catch (e) {
         console.warn('[host] failed to load api_table.json:', e);
@@ -1993,7 +1986,7 @@ class WineAssembly {
             ? 'build/wine-assembly.wasm'
             : 'build/wine-assembly.compat.wasm';
           try {
-            const response = await fetch(`${artifact}?v=${WineAssembly.SOURCE_VERSION}`, fetchOptions);
+            const response = await fetch(WineAssembly.versionedUrl(artifact), fetchOptions);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             return await WebAssembly.compile(await response.arrayBuffer());
           } catch (error) {
@@ -2020,6 +2013,7 @@ class WineAssembly {
           // bytes and has to be checked; see below.
           const built = await window.watxLauncher.compileDetailed({ tailCalls }, {
             version: WineAssembly.SOURCE_VERSION,
+            workerUrl: WineAssembly.versionedUrl('lib/watx-compile-worker.js'),
             noStore: debugFetch,
             // Diagnostic/low-memory escape hatch: compile cooperatively on the
             // page thread, yielding between compiler stages and function
@@ -2135,9 +2129,8 @@ class WineAssembly {
   _guestToWasmAddress(addr) {
     const ex = this.instance && this.instance.exports;
     if (!ex || !this.memory || !this.memory.buffer || !ex.get_image_base) return -1;
-    const imageBase = ex.get_image_base() >>> 0;
-    const guestBase = ex.get_guest_base ? (ex.get_guest_base() >>> 0) : 0x12000;
-    return (((addr >>> 0) - imageBase + guestBase) >>> 0);
+    return HostMemUtils.guestToWasm(
+      addr, ex, this.memory, ex.get_image_base() >>> 0);
   }
 
   // The patch table is lib/app-profiles.js, shared with the CLI harness — it
@@ -2180,7 +2173,7 @@ class WineAssembly {
       return;
     }
     try {
-      const res = await fetch('lib/host-import-sigs.generated.json?v=10');
+      const res = await fetch(WineAssembly.versionedUrl('lib/host-import-sigs.generated.json'));
       if (!res.ok) throw new Error(`sigs HTTP ${res.status}`);
       const sigs = (await res.json()).sigs;
       const self = this;
@@ -2189,7 +2182,7 @@ class WineAssembly {
         module: wasmModule,
         sigs,
         hostImports: this._mainImports.host,
-        workerUrl: 'lib/guest-worker.js?v=32',
+        workerUrl: WineAssembly.versionedUrl('lib/guest-worker.js'),
         forwardGlLogs: !!this.verbose || !!(window.__waTraceApiNames && window.__waTraceApiNames.size),
         d3dRenderWorker: window.WINE_D3D_RENDER_WORKER === true,
         log: msg => { console.log(msg); self.logToUI(msg); },
@@ -2413,7 +2406,7 @@ class WineAssembly {
     if (!fontMounts) return;
     let manifest;
     try {
-      const response = await fetch('fonts/substitutions.json?v=1');
+      const response = await fetch(WineAssembly.versionedUrl('fonts/substitutions.json'));
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       manifest = await response.json();
     } catch (err) {
@@ -2983,7 +2976,16 @@ class WineAssembly {
     // run is over -- --png, --dump, the hit counts and the MMX tally at exit
     // -- and it gets its memory back by exiting the process, so it has
     // nothing to gain here and everything to lose.
-    if (typeof window !== 'undefined' && !this._releaseTimer) {
+    // pagehide freezes Safari's page before a zero-delay timer is guaranteed
+    // to run. A cached old page would then retain this 512MB while the new
+    // document tries to allocate its own and fail at WebAssembly.Memory.
+    // releaseNow is reserved for that outside-the-guest-call lifecycle edge;
+    // ordinary stops must keep the deferred path above.
+    if (typeof window !== 'undefined' && options.releaseNow) {
+      if (this._releaseTimer) clearTimeout(this._releaseTimer);
+      this._releaseTimer = null;
+      this._releaseGuestMemory();
+    } else if (typeof window !== 'undefined' && !this._releaseTimer) {
       this._releaseTimer = setTimeout(() => {
         this._releaseTimer = null;
         if (this._stopped) this._releaseGuestMemory();
@@ -3770,16 +3772,30 @@ class WineAssembly {
     const tm = this.threadManager;
     // A worker with runnable code is the other half of this step. It is not
     // idle just because the main thread is.
-    if (tm && tm.hasActiveThreads && tm.hasActiveThreads()) return 0;
+    let threadDelay = Infinity;
+    if (tm && tm.hasActiveThreads && tm.hasActiveThreads()) {
+      threadDelay = tm.parkedThreadDelay
+        ? tm.parkedThreadDelay(WineAssembly.MAX_PARK_SLEEP_MS) : 0;
+      if (!(threadDelay > 0)) return 0;
+    }
     const ex = this.instance && this.instance.exports;
     if (!ex) return 0;
     const now = this._audioSchedulerNow();
     // A click or keypress lands as a queued input event that the very next
     // slice consumes. Do not sleep through the tail of an interaction.
     const wake = this.renderer && this.renderer._recentMessageWakeAt;
-    if (wake && (now - wake) < 120) return 0;
-    let best = Infinity;
-    if (tm && tm._mainSleepUntil) best = Math.min(best, tm._mainSleepUntil - now);
+    // An explicit queue/clock park is fresh evidence that the guest has
+    // finished this turn and is waiting again. Recent input must not turn
+    // that park into another 120ms of busy polling; new input still invokes
+    // _wakeStep immediately, cancelling the sleep.
+    if (spin <= 0 && wake && (now - wake) < 120) return 0;
+    let best = threadDelay;
+    // Sleep deadlines are recorded on ThreadManager's guest wait clock;
+    // recent input above is timestamped on the host profiling clock.
+    if (tm && tm._mainSleepUntil) {
+      const waitNow = tm._waitNow ? tm._waitNow() : now;
+      best = Math.min(best, tm._mainSleepUntil - waitNow);
+    }
     let yr = 0;
     try { yr = ex.get_yield_reason ? (ex.get_yield_reason() >>> 0) : 0; } catch (_) { return 0; }
     if (yr === 1) {
@@ -4128,7 +4144,9 @@ class WineAssembly {
           // (14) or on an empty message queue (15), and the handler parked
           // instead of answering "not yet" for the thousandth time. EIP is on
           // the thunk and the frame is intact, so clearing the yield re-enters
-          // the same call.
+          // the same call. Win16 WaitMessage also uses queue park 15, but
+          // completes its Pascal far return before parking; clear_yield is
+          // stack-neutral and resumes that caller without a Win32 frame pop.
           //
           // Deliberately NOT an early return with its own timer, the way the
           // vblank park is: this is a plain parked main thread, and the drive
