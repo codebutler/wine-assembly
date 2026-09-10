@@ -30,6 +30,13 @@ const N = apiTable.length;
 const out = [];
 const PAGE_SIZE = 256;
 
+function watName(name, label) {
+  if (!/^[A-Za-z0-9_?@$]+$/.test(name)) {
+    fatal(`${label} has invalid WAT identifier ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
 // Hand-written fast paths and the COM-vtable bootstrap still need a few IDs,
 // but their source must never bake in api_table.json's current array indexes.
 // Emit the names beside the generated dispatcher so an append/reorder repair
@@ -59,6 +66,44 @@ for (const [name, symbol] of namedApiIds) {
   out.push(`  (global $${symbol} i32 (i32.const ${matches[0].id}))`);
 }
 out.push('');
+
+// Test-only direct-call exports used by focused WAT harnesses.  These have one
+// mechanical ABI: expose the API's declared arguments, zero-fill the handler's
+// remaining argument registers/name pointer, and restore ESP after the stdcall
+// handler advances it.  Anything needing a synthetic stack frame or other
+// setup remains hand-written in 13-exports.wat.
+const testCallApis = apiTable.filter(api => api.test_call === true);
+for (const api of apiTable) {
+  if (api.test_call !== undefined && api.test_call !== true) {
+    fatal(`API ${api.name} test_call must be true when present`);
+  }
+}
+if (testCallApis.length) {
+  out.push('  ;; ============================================================');
+  out.push('  ;; TEST-CALL EXPORTS — GENERATED, do not edit');
+  out.push('  ;; Opted in with test_call:true in api_table.json.');
+  out.push('  ;; ============================================================');
+}
+for (const api of testCallApis) {
+  if (!Number.isInteger(api.nargs) || api.nargs < 0 || api.nargs > 5) {
+    fatal(`API ${api.name} test_call requires integer nargs in range 0..5`);
+    continue;
+  }
+  const handler = watName(api.handler || api.name, `API ${api.name} handler`);
+  const params = Array.from({ length: api.nargs }, (_, i) => ` (param $arg${i} i32)`).join('');
+  const args = Array.from({ length: 5 }, (_, i) =>
+    i < api.nargs ? `(local.get $arg${i})` : '(i32.const 0)');
+  args.push('(i32.const 0)');
+  out.push(`  (func (export "test_call_${api.name}")${params} (result i32)`);
+  out.push('    (local $saved_esp i32)');
+  out.push('    (local.set $saved_esp (global.get $esp))');
+  out.push(`    (call $handle_${handler}`);
+  out.push(`      ${args.slice(0, 3).join(' ')}`);
+  out.push(`      ${args.slice(3).join(' ')})`);
+  out.push('    (global.set $esp (local.get $saved_esp))');
+  out.push('    (global.get $eax))');
+}
+if (testCallApis.length) out.push('');
 
 // OpenGL/WGL exports share one ABI bridge. `words` counts physical 32-bit
 // stack words (GLdouble consumes two), while api_table nargs remains the
@@ -155,10 +200,7 @@ function handlerCall(api) {
     const slot = parseInt(daSlot[2], 10);
     return `      (call $handle_IDirectAnimationDA${iface}_DirectSlot (i32.const ${slot}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
   }
-  const handler = api.handler || api.name;
-  if (!/^[A-Za-z0-9_?@$]+$/.test(handler)) {
-    fatal(`API ${api.name} has invalid handler alias ${JSON.stringify(handler)}`);
-  }
+  const handler = watName(api.handler || api.name, `API ${api.name} handler alias`);
   return `      (call $handle_${handler} (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
 }
 

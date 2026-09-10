@@ -3266,6 +3266,7 @@
     "id": 365,
     "name": "GlobalAddAtomA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1849296691
   },
@@ -3273,6 +3274,7 @@
     "id": 366,
     "name": "GlobalAddAtomW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2218404309
   },
@@ -3294,6 +3296,7 @@
     "id": 369,
     "name": "GlobalDeleteAtom",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1897652388
   },
@@ -3301,6 +3304,7 @@
     "id": 370,
     "name": "GlobalFindAtomW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3426830105
   },
@@ -3322,6 +3326,7 @@
     "id": 373,
     "name": "GlobalGetAtomNameW",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3873670297
   },
@@ -16758,6 +16763,7 @@
     "id": 2039,
     "name": "FindAtomA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4106462786,
     "ret": "WORD"
@@ -16766,6 +16772,7 @@
     "id": 2040,
     "name": "FindAtomW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3737355168,
     "ret": "WORD"
@@ -17044,6 +17051,7 @@
     "id": 2077,
     "name": "AddAtomA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 828448364
   },
@@ -17065,6 +17073,7 @@
     "id": 2080,
     "name": "DeleteAtom",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3236544775
   },
@@ -19716,6 +19725,7 @@
     "id": 2383,
     "name": "GlobalFindAtomA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3728827247
   },
@@ -19723,6 +19733,7 @@
     "id": 2384,
     "name": "GlobalGetAtomNameA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4175667439
   },
@@ -19730,6 +19741,7 @@
     "id": 2385,
     "name": "AddAtomW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1063335030
   },
@@ -19737,6 +19749,7 @@
     "id": 2386,
     "name": "GetAtomNameA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4023690724
   },
@@ -19744,6 +19757,7 @@
     "id": 2387,
     "name": "GetAtomNameW",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4258577390
   },
