@@ -15,6 +15,26 @@ node test/test-icewind-dale-demo.js
 
 ## Original installer investigation
 
+### Decoder overlap correction
+
+The long install's exit counters reported roughly 101 million retired
+blocks but only 127,641 invalidation calls. The retirement counter also
+counts `page_publish` replacing overlapping entries; it does not prove
+that the guest modified its code. The hot cabinet loop at relocated
+`0x007b4d21` has ordinary interior branch targets. Alternating an outer
+entry with an interior entry made the one-owner-per-byte cache continually
+retire the other decode.
+
+`decode_block` now emits an ordinary block end when it reaches an already
+cached instruction entry, preserving that suffix instead of overlapping
+it again. No guest address or cabinet format is special-cased. The focused
+regression in `test-sparse-generated-code-cache.js` failed before this
+change because the interior entry vanished after re-entering the outer
+prefix. It now requires both entries to remain cached while alternating
+them, and retains the subsequent shared-immediate rewrite check. Sparse
+and cross-instance invalidation, page-chunk allocation, and 138 x86 cases
+pass with this correction.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves
