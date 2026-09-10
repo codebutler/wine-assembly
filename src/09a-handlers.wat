@@ -4532,43 +4532,8 @@
 
   ;; 91: GetClientRect
   (func $handle_GetClientRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $cs i32) (local $style i32) (local $cw i32) (local $ch i32)
-    ;; Controls live entirely in WAT (CONTROL_GEOM) — asking the host for
-    ;; their client size falls back to the 640×480 desktop default because
-    ;; child hwnds aren't in renderer.windows[], which then corrupts any
-    ;; size calc the guest does from it (calc's dialog resize is one such
-    ;; path). For controls, read the size directly from CONTROL_GEOM.
-    ;; Generic child HWNDs (RichEdit, MFC views, etc.) also need WAT-owned
-    ;; geometry. Their JS window objects are parent-relative surfaces, while
-    ;; host_get_window_client_size returns top-level/client fallback sizes.
-    (if (call $ctrl_table_get_class (local.get $arg0))
-      (then (local.set $cs (call $ctrl_get_wh_packed (local.get $arg0))))
-      (else
-        (local.set $style (call $wnd_get_style (local.get $arg0)))
-        (if (i32.and
-              (i32.ne (call $wnd_get_parent (local.get $arg0)) (i32.const 0))
-              (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
-          (then
-            (call $defwndproc_do_nccalcsize (local.get $arg0))
-            (local.set $cw
-              (i32.sub
-                (call $client_rect_get_r (local.get $arg0))
-                (call $client_rect_get_l (local.get $arg0))))
-            (local.set $ch
-              (i32.sub
-                (call $client_rect_get_b (local.get $arg0))
-                (call $client_rect_get_t (local.get $arg0))))
-            (if (i32.or
-                  (i32.le_s (local.get $cw) (i32.const 0))
-                  (i32.le_s (local.get $ch) (i32.const 0)))
-              (then (local.set $cs (call $ctrl_get_wh_packed (local.get $arg0))))
-              (else
-                (local.set $cs
-                  (i32.or
-                    (i32.and (local.get $cw) (i32.const 0xFFFF))
-                    (i32.shl (local.get $ch) (i32.const 16)))))))
-          (else
-            (local.set $cs (call $host_get_window_client_size (local.get $arg0)))))))
+    (local $cs i32)
+    (local.set $cs (call $wnd_get_client_size_packed (local.get $arg0)))
     (call $gs32 (local.get $arg1) (i32.const 0))       ;; left
     (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (i32.const 0))   ;; top
     (call $gs32 (i32.add (local.get $arg1) (i32.const 8))
@@ -11763,9 +11728,83 @@ HookEx — no next hook in chain, return 0
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; SubtractRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL. Only well-defined when src2 fully covers
-  ;; src1 in one axis; apps use it for update-region math. Approximation: copy src1→dst unless
-  ;; src2 fully contains src1 (→ empty). Returns FALSE for empty result.
+  ;; Store the bounding rectangle left after subtracting src2 from src1.
+  ;; Win32 only trims when the intersection spans src1 completely along one
+  ;; axis; a corner overlap cannot be represented by one RECT and therefore
+  ;; leaves src1 unchanged. Inputs are values rather than pointers so dst may
+  ;; alias either source, as the API permits in common docking call patterns.
+  (func $rect_subtract_to_wa
+      (param $dst i32)
+      (param $s1l i32) (param $s1t i32) (param $s1r i32) (param $s1b i32)
+      (param $s2l i32) (param $s2t i32) (param $s2r i32) (param $s2b i32)
+      (result i32)
+    (local $il i32) (local $it i32) (local $ir i32) (local $ib i32)
+    (store.field Rect left (local.get $dst) (local.get $s1l))
+    (store.field.memarg Rect top (local.get $dst) (local.get $s1t))
+    (store.field.memarg Rect right (local.get $dst) (local.get $s1r))
+    (store.field.memarg Rect bottom (local.get $dst) (local.get $s1b))
+    (if (i32.or
+          (i32.ge_s (local.get $s1l) (local.get $s1r))
+          (i32.ge_s (local.get $s1t) (local.get $s1b)))
+      (then
+        (store.field Rect left (local.get $dst) (i32.const 0))
+        (store.field.memarg Rect top (local.get $dst) (i32.const 0))
+        (store.field.memarg Rect right (local.get $dst) (i32.const 0))
+        (store.field.memarg Rect bottom (local.get $dst) (i32.const 0))
+        (return (i32.const 0))))
+    (local.set $il
+      (select (local.get $s1l) (local.get $s2l)
+        (i32.gt_s (local.get $s1l) (local.get $s2l))))
+    (local.set $it
+      (select (local.get $s1t) (local.get $s2t)
+        (i32.gt_s (local.get $s1t) (local.get $s2t))))
+    (local.set $ir
+      (select (local.get $s1r) (local.get $s2r)
+        (i32.lt_s (local.get $s1r) (local.get $s2r))))
+    (local.set $ib
+      (select (local.get $s1b) (local.get $s2b)
+        (i32.lt_s (local.get $s1b) (local.get $s2b))))
+    ;; No intersection: the result is the source rectangle copied above.
+    (if (i32.or
+          (i32.ge_s (local.get $il) (local.get $ir))
+          (i32.ge_s (local.get $it) (local.get $ib)))
+      (then (return (i32.const 1))))
+    ;; Complete coverage has an empty geometric difference.
+    (if (i32.and
+          (i32.and (i32.eq (local.get $il) (local.get $s1l))
+                   (i32.eq (local.get $it) (local.get $s1t)))
+          (i32.and (i32.eq (local.get $ir) (local.get $s1r))
+                   (i32.eq (local.get $ib) (local.get $s1b))))
+      (then
+        (store.field Rect left (local.get $dst) (i32.const 0))
+        (store.field.memarg Rect top (local.get $dst) (i32.const 0))
+        (store.field.memarg Rect right (local.get $dst) (i32.const 0))
+        (store.field.memarg Rect bottom (local.get $dst) (i32.const 0))
+        (return (i32.const 0))))
+    ;; A full-height intersection can trim a left or right strip.
+    (if (i32.and
+          (i32.eq (local.get $it) (local.get $s1t))
+          (i32.eq (local.get $ib) (local.get $s1b)))
+      (then
+        (if (i32.eq (local.get $il) (local.get $s1l))
+          (then (store.field Rect left (local.get $dst) (local.get $ir)))
+          (else
+            (if (i32.eq (local.get $ir) (local.get $s1r))
+              (then (store.field.memarg Rect right (local.get $dst) (local.get $il)))))))
+      (else
+        ;; A full-width intersection can trim a top or bottom strip.
+        (if (i32.and
+              (i32.eq (local.get $il) (local.get $s1l))
+              (i32.eq (local.get $ir) (local.get $s1r)))
+          (then
+            (if (i32.eq (local.get $it) (local.get $s1t))
+              (then (store.field.memarg Rect top (local.get $dst) (local.get $ib)))
+              (else
+                (if (i32.eq (local.get $ib) (local.get $s1b))
+                  (then (store.field.memarg Rect bottom (local.get $dst) (local.get $it))))))))))
+    (i32.const 1))
+
+  ;; SubtractRect(lprcDst, lprcSrc1, lprcSrc2) → BOOL.
   (func $handle_SubtractRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dst i32) (local $s1 i32) (local $s2 i32)
     (local $s1l i32) (local $s1t i32) (local $s1r i32) (local $s1b i32)
@@ -11781,24 +11820,11 @@ HookEx — no next hook in chain, return 0
     (local.set $s2t (load.field.memarg Rect top (local.get $s2)))
     (local.set $s2r (load.field.memarg Rect right (local.get $s2)))
     (local.set $s2b (load.field.memarg Rect bottom (local.get $s2)))
-    ;; If src2 fully contains src1, result is empty.
-    (if (i32.and
-          (i32.and (i32.le_s (local.get $s2l) (local.get $s1l))
-                   (i32.le_s (local.get $s2t) (local.get $s1t)))
-          (i32.and (i32.ge_s (local.get $s2r) (local.get $s1r))
-                   (i32.ge_s (local.get $s2b) (local.get $s1b))))
-      (then
-        (store.field Rect left (local.get $dst) (i32.const 0))
-        (store.field.memarg Rect top (local.get $dst) (i32.const 0))
-        (store.field.memarg Rect right (local.get $dst) (i32.const 0))
-        (store.field.memarg Rect bottom (local.get $dst) (i32.const 0))
-        (global.set $eax (i32.const 0)))
-      (else
-        (store.field Rect left (local.get $dst) (local.get $s1l))
-        (store.field.memarg Rect top (local.get $dst) (local.get $s1t))
-        (store.field.memarg Rect right (local.get $dst) (local.get $s1r))
-        (store.field.memarg Rect bottom (local.get $dst) (local.get $s1b))
-        (global.set $eax (i32.const 1))))
+    (global.set $eax
+      (call $rect_subtract_to_wa
+        (local.get $dst)
+        (local.get $s1l) (local.get $s1t) (local.get $s1r) (local.get $s1b)
+        (local.get $s2l) (local.get $s2t) (local.get $s2r) (local.get $s2b)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 

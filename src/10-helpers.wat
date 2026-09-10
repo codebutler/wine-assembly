@@ -2028,6 +2028,40 @@
     (if (local.get $wh) (then (return (local.get $wh))))
     (call $host_get_window_client_size (local.get $hwnd)))
 
+  ;; Win32 GetClientRect's canonical size calculation. WAT-native controls
+  ;; own their geometry outright; generic WS_CHILD windows first refresh the
+  ;; recorded non-client split; only top-level windows ask the browser host.
+  ;; Keep this in one helper so APIs such as comctl32's
+  ;; GetEffectiveClientRect start from exactly the rectangle GetClientRect
+  ;; would have returned instead of inventing a desktop-sized fallback.
+  (func $wnd_get_client_size_packed (param $hwnd i32) (result i32)
+    (local $style i32) (local $cw i32) (local $ch i32)
+    (if (call $ctrl_table_get_class (local.get $hwnd))
+      (then (return (call $ctrl_get_wh_packed (local.get $hwnd)))))
+    (local.set $style (call $wnd_get_style (local.get $hwnd)))
+    (if (i32.and
+          (i32.ne (call $wnd_get_parent (local.get $hwnd)) (i32.const 0))
+          (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
+      (then
+        (call $defwndproc_do_nccalcsize (local.get $hwnd))
+        (local.set $cw
+          (i32.sub
+            (call $client_rect_get_r (local.get $hwnd))
+            (call $client_rect_get_l (local.get $hwnd))))
+        (local.set $ch
+          (i32.sub
+            (call $client_rect_get_b (local.get $hwnd))
+            (call $client_rect_get_t (local.get $hwnd))))
+        (if (i32.or
+              (i32.le_s (local.get $cw) (i32.const 0))
+              (i32.le_s (local.get $ch) (i32.const 0)))
+          (then (return (call $ctrl_get_wh_packed (local.get $hwnd)))))
+        (return
+          (i32.or
+            (i32.and (local.get $cw) (i32.const 0xFFFF))
+            (i32.shl (local.get $ch) (i32.const 16))))))
+    (call $host_get_window_client_size (local.get $hwnd)))
+
   (func $update_invalidate_full (param $hwnd i32)
     (local $cs i32) (local $wh i32) (local $w i32) (local $h i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))

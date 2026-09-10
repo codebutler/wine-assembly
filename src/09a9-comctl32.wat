@@ -924,14 +924,71 @@
 
   ;; GetEffectiveClientRect(hWnd, lprc, lpInfo) — 3 args, void
   (func $handle_GetEffectiveClientRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Calculates the client rect excluding toolbars/status bars
-    ;; For now, just call GetClientRect equivalent — fill rect with window client area
-    (local $wa i32)
-    (local.set $wa (call $g2w (local.get $arg1)))
-    (i32.store (local.get $wa) (i32.const 0))          ;; left
-    (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0))  ;; top
-    (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.const 640))  ;; right
-    (i32.store (i32.add (local.get $wa) (i32.const 12)) (i32.const 480)) ;; bottom
+    (local $rect i32) (local $info i32) (local $cs i32)
+    (local $pair_count i32) (local $child i32)
+    (local $xy i32) (local $wh i32)
+    (local $x i32) (local $y i32) (local $w i32) (local $h i32)
+    ;; The SDK requires valid output and mapping pointers. Keep the browser
+    ;; process alive for malformed callers while retaining the useful part of
+    ;; the contract: a null table still receives the ordinary client rect.
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $rect (call $g2w (local.get $arg1)))
+    (local.set $cs (call $wnd_get_client_size_packed (local.get $arg0)))
+    (store.field Rect left (local.get $rect) (i32.const 0))
+    (store.field.memarg Rect top (local.get $rect) (i32.const 0))
+    (store.field.memarg Rect right (local.get $rect)
+      (i32.and (local.get $cs) (i32.const 0xFFFF)))
+    (store.field.memarg Rect bottom (local.get $rect)
+      (i32.shr_u (local.get $cs) (i32.const 16)))
+    (if (local.get $arg2)
+      (then
+        ;; Win98 comctl32 skips the first pair (the menu entry), then treats
+        ;; each following pair as selector/control-id until selector == 0.
+        (local.set $info (i32.add (call $g2w (local.get $arg2)) (i32.const 8)))
+        (block $done (loop $controls
+          ;; Bound a malformed unterminated table rather than walking arbitrary
+          ;; host memory forever. Valid Win32 tables terminate long before this.
+          (br_if $done (i32.ge_u (local.get $pair_count) (i32.const 256)))
+          (br_if $done (i32.eqz (i32.load (local.get $info))))
+          (local.set $child
+            (call $ctrl_find_by_id
+              (local.get $arg0) (i32.load offset=4 (local.get $info))))
+          ;; Checking WS_VISIBLE itself, rather than effective ancestor
+          ;; visibility, is what makes a child count while a hidden parent is
+          ;; waiting to be shown; this is both the SDK rule and Win98's test.
+          (if (i32.and
+                (i32.ne (local.get $child) (i32.const 0))
+                (i32.ne
+                  (i32.and (call $wnd_get_style (local.get $child))
+                           (i32.const 0x10000000))
+                  (i32.const 0)))
+            (then
+              ;; GetDlgItem guarantees a direct child here. CONTROL_GEOM is
+              ;; stored in parent-client coordinates, exactly the result of
+              ;; Win98's GetWindowRect + MapWindowPoints(NULL, parent, ...).
+              (local.set $xy (call $ctrl_get_xy_packed (local.get $child)))
+              (local.set $wh (call $ctrl_get_wh_packed (local.get $child)))
+              (local.set $x
+                (i32.shr_s (i32.shl (local.get $xy) (i32.const 16)) (i32.const 16)))
+              (local.set $y (i32.shr_s (local.get $xy) (i32.const 16)))
+              (local.set $w (i32.and (local.get $wh) (i32.const 0xFFFF)))
+              (local.set $h (i32.shr_u (local.get $wh) (i32.const 16)))
+              (drop
+                (call $rect_subtract_to_wa
+                  (local.get $rect)
+                  (load.field Rect left (local.get $rect))
+                  (load.field.memarg Rect top (local.get $rect))
+                  (load.field.memarg Rect right (local.get $rect))
+                  (load.field.memarg Rect bottom (local.get $rect))
+                  (local.get $x) (local.get $y)
+                  (i32.add (local.get $x) (local.get $w))
+                  (i32.add (local.get $y) (local.get $h))))))
+          (local.set $info (i32.add (local.get $info) (i32.const 8)))
+          (local.set $pair_count (i32.add (local.get $pair_count) (i32.const 1)))
+          (br $controls)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
