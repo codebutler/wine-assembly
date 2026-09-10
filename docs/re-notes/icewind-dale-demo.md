@@ -160,6 +160,17 @@ stdcall contracts need coverage before changing the current rejection test.
 The trace run was explicitly quit at batch 350; its inspected session-error
 capture is `/private/tmp/iwd-original-dp4-error.png`.
 
+Implementation has started with an internal ownership-storage prerequisite:
+the local entity entry now retains an explicit owner ID. Assignment requires
+a live group and a live player; transfer replaces that ID, player destruction
+invalidates references to it, and group destruction/Close/slot reuse discard
+old ownership. Compiled entity tests cover those transitions and failed
+assignments preserving prior state. This is not yet `GetGroupOwner` or
+`SetGroupOwner` API support: default selection, membership policy, ownership
+notifications/migration, per-object session isolation, and public HRESULT
+contracts still need to be established. No DP4 IID or additional vtable slot
+has been exposed by this prerequisite.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves

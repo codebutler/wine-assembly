@@ -7460,13 +7460,14 @@
   ;; is real state: IDs are unique, DPNAMEs are copied, membership survives
   ;; until removal, and enumeration calls back for every matching live entity.
   ;;
-  ;; Entity entry (guest heap, 32 entries x 40 bytes):
+  ;; Entity entry (guest heap, 32 entries x 44 bytes):
   ;;   +0 id, +4 type (0 group, 1 player), +8 copied DPNAME,
   ;;   +12 create flags, +16 group-membership bitset, +20 live,
   ;;   +24 remote/shared data pointer, +28 remote size,
-  ;;   +32 local-only data pointer, +36 local size.
+  ;;   +32 local-only data pointer, +36 local size,
+  ;;   +40 explicitly assigned owner player ID (-1 if not assigned).
   (global $DP_ENTITY_MAX i32 (i32.const 32))
-  (global $DP_ENTITY_STRIDE i32 (i32.const 40))
+  (global $DP_ENTITY_STRIDE i32 (i32.const 44))
   (global $dp_entity_table (mut i32) (i32.const 0))
   (global $dp_entity_next_id (mut i32) (i32.const 0x100))
 
@@ -7556,10 +7557,28 @@
             (i32.or (local.get $flags) (i32.const 0x00000008)))
           (call $gs32 (i32.add (local.get $entry) (i32.const 16)) (i32.const 0))
           (call $gs32 (i32.add (local.get $entry) (i32.const 20)) (i32.const 1))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 40)) (i32.const -1))
           (return (local.get $entry))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const 0))
+
+  ;; Internal storage primitives. Public DP4 ownership policy and notification
+  ;; delivery are separate from assigning an already-validated local identity.
+  (func $dp_assign_group_owner (param $group_id i32) (param $player_id i32) (result i32)
+    (local $group i32)
+    (local.set $group (call $dp_find_entity (local.get $group_id) (i32.const 0)))
+    (if (i32.eqz (local.get $group)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $dp_find_entity (local.get $player_id) (i32.const 1)))
+      (then (return (i32.const 0))))
+    (call $gs32 (i32.add (local.get $group) (i32.const 40)) (local.get $player_id))
+    (i32.const 1))
+
+  (func $dp_group_owner (param $group_id i32) (result i32)
+    (local $group i32)
+    (local.set $group (call $dp_find_entity (local.get $group_id) (i32.const 0)))
+    (if (i32.eqz (local.get $group)) (then (return (i32.const -1))))
+    (call $gl32 (i32.add (local.get $group) (i32.const 40))))
 
   (func $dp_replace_data
       (param $entry i32) (param $data i32) (param $size i32) (param $local_only i32)
@@ -7653,7 +7672,19 @@
             (i32.and (call $gl32 (i32.add (local.get $scan) (i32.const 16)))
               (i32.xor (local.get $bit) (i32.const -1))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br $clear_members)))))
+          (br $clear_members))))
+      (else
+        (block $owners_done (loop $clear_owners
+          (br_if $owners_done (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+          (local.set $scan
+            (i32.add (global.get $dp_entity_table)
+              (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+          (if (i32.eq
+                (call $gl32 (i32.add (local.get $scan) (i32.const 40)))
+                (local.get $id))
+            (then (call $gs32 (i32.add (local.get $scan) (i32.const 40)) (i32.const -1))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $clear_owners)))))
     (call $dp_free_name (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
     (if (call $gl32 (i32.add (local.get $entry) (i32.const 24)))
       (then (call $heap_free
