@@ -16961,6 +16961,7 @@
     "id": 2052,
     "name": "StgIsStorageFile",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 2147680507 },
     "convention": "stdcall",
     "hash": 2828024486
   },
@@ -17333,6 +17334,7 @@
     "id": 2097,
     "name": "ILockBytes_Flush",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 0 },
     "convention": "stdcall",
     "hash": 1871531943
   },
@@ -17347,6 +17349,7 @@
     "id": 2099,
     "name": "ILockBytes_LockRegion",
     "nargs": 6,
+    "stub": { "pop": 28, "ret": 0 },
     "convention": "stdcall",
     "hash": 3251546320
   },
@@ -17354,6 +17357,7 @@
     "id": 2100,
     "name": "ILockBytes_UnlockRegion",
     "nargs": 6,
+    "stub": { "pop": 28, "ret": 0 },
     "convention": "stdcall",
     "hash": 3278977363
   },
@@ -17600,6 +17604,7 @@
     "id": 2130,
     "name": "IStorage_SetElementTimes",
     "nargs": 5,
+    "stub": { "pop": 24, "ret": 0 },
     "convention": "stdcall",
     "hash": 1490303668
   },
@@ -17799,6 +17804,7 @@
     "id": 2148,
     "name": "IDataObject_DUnadvise",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 2147745796 },
     "convention": "stdcall",
     "hash": 3856140751
   },
@@ -17982,6 +17988,7 @@
     "id": 2169,
     "name": "IOleObject_SetMoniker",
     "nargs": 3,
+    "stub": { "pop": 16, "ret": 2147500033 },
     "convention": "stdcall",
     "hash": 2367689803
   },
@@ -18010,6 +18017,7 @@
     "id": 2173,
     "name": "IOleObject_DoVerb",
     "nargs": 7,
+    "stub": { "pop": 32, "ret": 2147746048 },
     "convention": "stdcall",
     "hash": 241602258
   },
@@ -18024,6 +18032,7 @@
     "id": 2175,
     "name": "IOleObject_Update",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 0 },
     "convention": "stdcall",
     "hash": 691549207
   },
@@ -18031,6 +18040,7 @@
     "id": 2176,
     "name": "IOleObject_IsUpToDate",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 0 },
     "convention": "stdcall",
     "hash": 2757278334
   },
@@ -18094,6 +18104,7 @@
     "id": 2185,
     "name": "IOleObject_SetColorScheme",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 83796750
   },
@@ -18270,6 +18281,7 @@
     "id": 2204,
     "name": "IOleCache_InitCache",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 3920739603
   },
@@ -18342,6 +18354,7 @@
     "id": 2212,
     "name": "IViewObject_Unfreeze",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 756718563
   },
@@ -18349,6 +18362,7 @@
     "id": 2213,
     "name": "IViewObject_SetAdvise",
     "nargs": 4,
+    "stub": { "pop": 20, "ret": 0 },
     "convention": "stdcall",
     "hash": 3367103449
   },
@@ -18370,6 +18384,7 @@
     "id": 2216,
     "name": "OleUIUpdateLinksA",
     "nargs": 4,
+    "stub": { "pop": 20, "ret": 1 },
     "convention": "stdcall",
     "hash": 754592658
   },
@@ -18899,6 +18914,7 @@
     "id": 2281,
     "name": "IMoniker_IsDirty",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 602413002
   },
@@ -20428,6 +20444,7 @@
     "id": 2444,
     "name": "IFont_SetRatio",
     "nargs": 3,
+    "stub": { "pop": 16, "ret": 0 },
     "convention": "stdcall",
     "hash": 2216503609
   },
@@ -20442,6 +20459,7 @@
     "id": 2446,
     "name": "IFont_AddRefHfont",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 2169197931
   },
@@ -20449,6 +20467,7 @@
     "id": 2447,
     "name": "IFont_ReleaseHfont",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 2639763140
   },
@@ -20456,6 +20475,7 @@
     "id": 2448,
     "name": "IFont_SetHdc",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 1026454271
   },

@@ -1052,9 +1052,6 @@
         (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  (func $handle_IMoniker_IsDirty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1)) ;; S_FALSE: immutable value
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   (func $handle_IMoniker_Load (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $state i32) (local $ret i32) (local $ctx i32)
@@ -1364,10 +1361,6 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; StgIsStorageFile(pwcsName) — report "not a structured storage file".
-  (func $handle_StgIsStorageFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x800300FB)) ;; STG_E_INVALIDHEADER
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-  )
 
   ;; StgOpenStorage(pwcsName, pstgPriority, grfMode, snbExclude, reserved, ppstgOpen)
   ;; Structured storage is not implemented; zero the out pointer and fail
@@ -2363,9 +2356,6 @@
   ;; SetRatio scales logical to himetric units. The emulator renders at a
   ;; fixed 96 dpi with no logical mapping, so the ratio changes nothing;
   ;; accepting it keeps callers that always set it from failing.
-  (func $handle_IFont_SetRatio (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_IFont_QueryTextMetrics (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $h i32) (local $ave i32)
@@ -2398,19 +2388,10 @@
   ;; AddRefHfont/ReleaseHfont let a caller pin a realized HFONT. The object
   ;; owns exactly one HFONT for its whole lifetime here, so the pin is
   ;; already implied and there is nothing to count.
-  (func $handle_IFont_AddRefHfont (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  (func $handle_IFont_ReleaseHfont (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; SetHdc names the DC future realizations should target. All DCs share one
   ;; 96 dpi strike set, so the choice does not affect the resulting HFONT.
-  (func $handle_IFont_SetHdc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; OleCreateFontIndirect(lpFontDesc, riid, ppvObj)
   (func $handle_OleCreateFontIndirect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4768,15 +4749,9 @@
         (global.set $eax (call $ole_stream_write (local.get $arg0) (local.get $arg3) (local.get $arg4) (local.get $written_out)))
         (call $ole_set_data_position (local.get $arg0) (local.get $old_pos))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
-  (func $handle_ILockBytes_Flush (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_ILockBytes_SetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (select (call $ole_resize_buffer (local.get $arg0) (local.get $arg1)) (i32.const 0x80030019) (i32.eqz (local.get $arg2))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_ILockBytes_LockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
-  (func $handle_ILockBytes_UnlockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_ILockBytes_Stat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $ole_fill_statstg (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
@@ -5006,8 +4981,6 @@
   (func $handle_IStorage_RenameElement (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $ole_storage_rename_element (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_IStorage_SetElementTimes (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
   (func $handle_IStorage_SetClass (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (local.get $arg1)) (then (global.set $eax (i32.const 0x80004003)))
       (else
@@ -7018,8 +6991,6 @@
     (local $out i32) (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
     (if (local.get $out) (then (call $gs32 (local.get $out) (i32.const 0))))
     (global.set $eax (i32.const 0x80040003)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
-  (func $handle_IDataObject_DUnadvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80040004)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IDataObject_EnumDAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
     (global.set $eax (i32.const 0x80040003)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
@@ -8827,8 +8798,6 @@
       (i32.add (global.get $esp) (i32.const 12))
       (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 0) (i32.const 0)))
     (drop (call $ole_guest_callback_invoke1 (local.get $ctx) (local.get $site) (i32.const 3))))
-  (func $handle_IOleObject_SetMoniker (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IOleObject_GetMoniker (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
     (global.set $eax (i32.const 0x80004001)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
@@ -8904,15 +8873,9 @@
                 (call $gs32 (local.get $arg2) (local.get $data))
                 (global.set $eax (i32.const 0))))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_IOleObject_DoVerb (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80040100)) (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
   (func $handle_IOleObject_EnumVerbs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
     (global.set $eax (i32.const 0x80040180)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-  (func $handle_IOleObject_Update (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
-  (func $handle_IOleObject_IsUpToDate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IOleObject_GetUserClassID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (memory.copy (call $g2w (local.get $arg1)) (call $g2w (i32.add (local.get $arg0) (i32.const 24))) (i32.const 16))))
     (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (local.get $arg1)))
@@ -9024,8 +8987,6 @@
             (call $gs32 (local.get $arg2) (call $gl32 (i32.add (local.get $arg0) (i32.const 136))))
             (global.set $eax (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_IOleObject_SetColorScheme (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   (func $handle_IPersistStorage_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $ole_static_query_interface (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2)))
@@ -10025,8 +9986,6 @@
           (then (call $gs32 (local.get $arg1) (local.get $obj)) (global.set $eax (i32.const 0)))
           (else (global.set $eax (i32.const 0x8007000E))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-  (func $handle_IOleCache_InitCache (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IOleCache_SetData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $retired_out i32) (local $retired i32) (local $root i32) (local $data_iface i32)
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
@@ -10102,10 +10061,6 @@
   (func $handle_IViewObject_Freeze (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 1))))
     (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
-  (func $handle_IViewObject_Unfreeze (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-  (func $handle_IViewObject_SetAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
   (func $handle_IViewObject_GetAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 1))))
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
@@ -11329,9 +11284,6 @@
   ;; OleUIUpdateLinksA(lpOleUILinkContainer, hwndParent, lpszTitle, cLinks)
   ;; Static RichEdit pictures expose no updateable links. Report successful
   ;; completion without opening the optional OLEDLG user interface.
-  (func $handle_OleUIUpdateLinksA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; OleDraw(pUnknown, dwAspect, hdcDraw, lprcBounds). RichEdit uses this
   ;; helper rather than invoking IViewObject::Draw directly for cached static
