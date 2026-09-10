@@ -55,9 +55,55 @@ write failures. Single-key profile writes preserve the section-written keys.
 The storage regression and full build pass. `test/test-profile-section.js`
 also exercises both compiled WAT handlers with guest pointers, Unicode text,
 NULL deletion/flush arguments, BOOL/LastError, and three-argument stdcall
-cleanup. This closes the missing API implementation, not installer acceptance:
-the original installer has not yet been rerun through its final stage on this
-fix, and the installed game's original INI/CD layout remains unverified.
+cleanup. The original-installer acceptance below now passes; gameplay using
+the installed game's original INI/CD layout remains unverified.
+
+### Completed original installation
+
+The clean guest-produced engine replay on the integrated profile-fix build
+(1,073,129-byte WASM, layout `f73bfdc3f7f38137`) completed the original
+installation. It passed the former profile-section trap, created shortcuts,
+and displayed the compatible-DirectX reinstall question at batch 27750.
+Answering No with `dlg-cmd:7` reached the actual **Setup Complete** screen at
+batch 27800. Finish (ID 1) led to guest `[Exit] code=0` and a successful VFS
+export at batch 27840. This is not a deadline-only or copy-progress acceptance.
+
+The separate output is `/private/tmp/iwd-profile-fixed-installed-vfs`.
+Its `program files/black isle/icewind dale demo` subtree contains 1,079 files
+totaling 470,164,222 bytes. Read-only comparison with the existing
+`installed-extracted/Recommended_compressed` reference found 1,076 identical
+files, one changed `icewind.ini`, and two installer-created extras:
+`readme.txt` and `uninst.isu`. All 640 sound-set WAVs are present. The original
+`CHITIN.KEY` is byte-identical to the reference's original key, not the
+legacy modified `CHITIN-full.KEY`. The installer itself wrote these aliases:
+
+```ini
+[Alias]
+HD0:=C:\Program Files\Black Isle\Icewind Dale Demo\
+CD1:=C:\Program Files\Black Isle\Icewind Dale Demo\CD1\
+CD2:=C:\CD2\
+```
+
+No host decompressor or INI/KEY patch supplied the installed payload. The
+export also retains the original `cd2` source tree. Next launch must mount
+this entire VFS and use the installed executable's guest path and working
+directory, retaining the original CD2 layout and compressed resources.
+Do not substitute legacy expanded BIFs or the modified key as gameplay proof.
+
+Inspected screenshots: `/private/tmp/iwd-profile-directx-question.png` and
+`/private/tmp/iwd-profile-setup-final.png`. The latter shows Setup Complete.
+Replay used `--max-seconds=3600 --control=8137 --control-stdin --frozen`.
+This terminal closed stdin, so all wizard actions and checkpoints used HTTP.
+Long step requests can exceed HTTP's 30-second response deadline while the
+guest keeps running: inspect `/snapshot` credits until zero before issuing
+another step. Independent file-size checks established continued progress.
+The process priority was lowered during high host load; no benchmark was run.
+
+Two follow-up observations are not covered by this install acceptance: the
+Readme checkbox input issued a ShellExecute request before Finish, and VFS
+export reported an empty `c:\windows` file/directory collision, preserving
+the file as `windows.__vfs_file__`. Neither caused a setup error, but both
+deserve separate investigation rather than being silently treated as correct.
 
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
