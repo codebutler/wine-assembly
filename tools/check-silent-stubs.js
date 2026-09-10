@@ -233,8 +233,8 @@ const digest = crypto.createHash('sha256')
 // a shared guard. Their old non-recording stubs are NOT claimed implemented.
 // 2026-09-09: 411 -> 410. SetGammaRamp retains the per-device API ramp;
 // unsupported display gamma remains unadvertised. Get/default/copy tested.
-const EXPECTED_COUNT = 369;
-const EXPECTED_SHA256 = '42313f56585c1b8c74833cc29aed1fc7f05f706695d660e8706f9e0ad821d662';
+const EXPECTED_COUNT = 367;
+const EXPECTED_SHA256 = 'd94b17ad787478599337913f415d30093604e37aa864db7f839f46c83f6b5e30';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

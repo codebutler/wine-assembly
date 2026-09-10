@@ -212,3 +212,7 @@ interfaces, and distinguishes invalid input, empty lists, and list end.
 2026-09-10: 370 -> 369. mixerMessage now enforces the documented
 device-id-only, MXDM_USER-or-higher contract and reports unsupported private
 driver messages instead of claiming every driver-specific request succeeded.
+
+2026-09-10: 369 -> 367. DPA_Destroy and DSA_Destroy now validate opaque live
+handles, retire them, and return both their backing arrays and handle records
+to the process heap instead of claiming success while leaking every array.

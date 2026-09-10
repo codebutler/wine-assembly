@@ -1116,29 +1116,115 @@
   )
 
   ;; ============================================================
+  ;; DSA/DPA handles are opaque heap objects.  Keep a live marker outside the
+  ;; legacy fields so every operation can reject NULL and already-destroyed
+  ;; handles before translating or dereferencing them.  The marker is cleared
+  ;; before the block is returned to the heap; heap_free then overwrites only
+  ;; the first payload word with its next link.
+  (global $DSA_MAGIC i32 (i32.const 0x31415344)) ;; "DSA1"
+  (global $DPA_MAGIC i32 (i32.const 0x31415044)) ;; "DPA1"
+
+  (func $dsa_record (param $hdsa i32) (result i32)
+    (local $wa i32) (local $block i32) (local $size i32)
+    (if (i32.or
+          (i32.eqz (local.get $hdsa))
+          (i32.ne (i32.and (local.get $hdsa) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $hdsa) (i32.const 4)))
+    (if (i32.eqz (call $heap_arena_find (local.get $block)))
+      (then (return (i32.const 0))))
+    (local.set $size (i32.load (call $g2w (local.get $block))))
+    (if (i32.or
+          (i32.lt_u (local.get $size) (i32.const 24))
+          (call $heap_block_bad (local.get $block) (local.get $size)))
+      (then (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $hdsa)))
+    (if (i32.ne (i32.load offset=16 (local.get $wa)) (global.get $DSA_MAGIC))
+      (then (return (i32.const 0))))
+    (local.get $wa))
+
+  (func $dpa_record (param $hdpa i32) (result i32)
+    (local $wa i32) (local $block i32) (local $size i32)
+    (if (i32.or
+          (i32.eqz (local.get $hdpa))
+          (i32.ne (i32.and (local.get $hdpa) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $hdpa) (i32.const 4)))
+    (if (i32.eqz (call $heap_arena_find (local.get $block)))
+      (then (return (i32.const 0))))
+    (local.set $size (i32.load (call $g2w (local.get $block))))
+    (if (i32.or
+          (i32.lt_u (local.get $size) (i32.const 24))
+          (call $heap_block_bad (local.get $block) (local.get $size)))
+      (then (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $hdpa)))
+    (if (i32.ne (i32.load offset=12 (local.get $wa)) (global.get $DPA_MAGIC))
+      (then (return (i32.const 0))))
+    (local.get $wa))
+
   ;; DSA (Dynamic Structure Array) — real implementation
-  ;; DSA layout in memory: [item_size:4, count:4, capacity:4, data_ptr:4]
+  ;; DSA layout in memory:
+  ;; [item_size:4, count:4, capacity:4, data_ptr:4, live_magic:4]
   ;; ============================================================
 
   ;; DSA_Create(cbItem, cItemGrow) — 2 args, returns HDSA
   (func $handle_DSA_Create (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dsa i32) (local $dsa_wa i32)
-    (local $cap i32)
-    (local.set $cap (select (local.get $arg1) (i32.const 8) (i32.gt_u (local.get $arg1) (i32.const 0))))
-    (local.set $dsa (call $heap_alloc (i32.const 16))) (local.set $dsa_wa (call $g2w (local.get $dsa)))
+    (local $cap i32) (local $data i32)
+    (local.set $cap
+      (select (local.get $arg1) (i32.const 8)
+        (i32.gt_s (local.get $arg1) (i32.const 0))))
+    ;; cbItem is a positive byte count, and the initial backing multiplication
+    ;; must stay within the heap allocator's documented maximum request.
+    (if (i32.le_s (local.get $arg0) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.gt_u (local.get $cap)
+          (i32.div_u (i32.const 0x7FFFFFF0) (local.get $arg0)))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $dsa (call $heap_alloc (i32.const 20)))
+    (if (i32.eqz (local.get $dsa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $data (call $heap_alloc (i32.mul (local.get $cap) (local.get $arg0))))
+    (if (i32.eqz (local.get $data))
+      (then
+        (call $heap_free (local.get $dsa))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $dsa_wa (call $g2w (local.get $dsa)))
     (i32.store (local.get $dsa_wa) (local.get $arg0))           ;; item_size
     (i32.store offset=4 (local.get $dsa_wa) (i32.const 0))  ;; count
     (i32.store offset=8 (local.get $dsa_wa) (local.get $cap))  ;; capacity
-    ;; Allocate data buffer: capacity * item_size
-    (i32.store offset=12 (local.get $dsa_wa)
-      (call $heap_alloc (i32.mul (local.get $cap) (local.get $arg0))))
+    (i32.store offset=12 (local.get $dsa_wa) (local.get $data))
+    (i32.store offset=16 (local.get $dsa_wa) (global.get $DSA_MAGIC))
     (global.set $eax (local.get $dsa))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; DSA_Destroy(hdsa) — 1 arg, returns BOOL
   (func $handle_DSA_Destroy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Can't free, just return TRUE
+    (local $dsa_wa i32) (local $data i32)
+    (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dsa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $data (i32.load offset=12 (local.get $dsa_wa)))
+    ;; Retire first, then release backing storage and finally the handle.
+    (i32.store offset=12 (local.get $dsa_wa) (i32.const 0))
+    (i32.store offset=16 (local.get $dsa_wa) (i32.const 0))
+    (call $heap_free (local.get $data))
+    (call $heap_free (local.get $arg0))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
@@ -1146,17 +1232,24 @@
   ;; DSA_GetItem(hdsa, index, pitem) — 3 args, returns BOOL
   (func $handle_DSA_GetItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $item_size i32) (local $dsa_wa i32)
-    (local $data_ptr i32)
+    (local $data_ptr i32) (local $data_wa i32) (local $item_wa i32)
     (local $count i32)
-    (local.set $dsa_wa (call $g2w (local.get $arg0)))
+    (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
+    (if (i32.or (i32.eqz (local.get $dsa_wa)) (i32.eqz (local.get $arg2)))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
     (local.set $data_ptr (i32.load offset=12 (local.get $dsa_wa)))
     (if (i32.lt_u (local.get $arg1) (local.get $count))
       (then
+        (local.set $data_wa (call $g2w (local.get $data_ptr)))
+        (local.set $item_wa (call $g2w (local.get $arg2)))
         ;; Copy item_size bytes from data[index*item_size] to pitem
-        (memory.copy (call $g2w (local.get $arg2))
-          (call $g2w (i32.add (local.get $data_ptr) (i32.mul (local.get $arg1) (local.get $item_size))))
+        (memory.copy (local.get $item_wa)
+          (i32.add (local.get $data_wa) (i32.mul (local.get $arg1) (local.get $item_size)))
           (local.get $item_size))
         (global.set $eax (i32.const 1)))
       (else
@@ -1169,7 +1262,12 @@
     (local $item_size i32) (local $dsa_wa i32)
     (local $data_ptr i32)
     (local $count i32)
-    (local.set $dsa_wa (call $g2w (local.get $arg0)))
+    (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dsa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
     (local.set $data_ptr (i32.load offset=12 (local.get $dsa_wa)))
@@ -1194,8 +1292,13 @@
     (local $data_ptr i32)
     (local $idx i32)
     (local $new_cap i32)
-    (local $new_data i32) (local $new_data_wa i32)
-    (local.set $dsa_wa (call $g2w (local.get $arg0)))
+    (local $new_data i32) (local $new_data_wa i32) (local $item_wa i32)
+    (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
+    (if (i32.or (i32.eqz (local.get $dsa_wa)) (i32.eqz (local.get $arg2)))
+      (then
+        (global.set $eax (i32.const -1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
     (local.set $cap (i32.load offset=8 (local.get $dsa_wa)))
@@ -1206,10 +1309,28 @@
     ;; Grow first so the extra slot exists before the shift.
     (if (i32.ge_u (local.get $count) (local.get $cap))
       (then
+        (if (i32.gt_u (local.get $cap) (i32.const 0x3FFFFFFF))
+          (then
+            (global.set $eax (i32.const -1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
         (local.set $new_cap (i32.shl (local.get $cap) (i32.const 1)))
         (if (i32.lt_u (local.get $new_cap) (i32.const 8))
           (then (local.set $new_cap (i32.const 8))))
-        (local.set $new_data (call $heap_alloc (i32.mul (local.get $new_cap) (local.get $item_size)))) (local.set $new_data_wa (call $g2w (local.get $new_data)))
+        (if (i32.gt_u (local.get $new_cap)
+              (i32.div_u (i32.const 0x7FFFFFF0) (local.get $item_size)))
+          (then
+            (global.set $eax (i32.const -1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
+        (local.set $new_data
+          (call $heap_alloc (i32.mul (local.get $new_cap) (local.get $item_size))))
+        (if (i32.eqz (local.get $new_data))
+          (then
+            (global.set $eax (i32.const -1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
+        (local.set $new_data_wa (call $g2w (local.get $new_data)))
         (if (local.get $count)
           (then
             (memory.copy (local.get $new_data_wa) (local.get $data_wa)
@@ -1228,9 +1349,10 @@
           (i32.add (local.get $data_wa) (i32.mul (local.get $idx) (local.get $item_size)))
           (i32.mul (i32.sub (local.get $count) (local.get $idx)) (local.get $item_size)))))
     ;; Copy item data to data[idx * item_size]
+    (local.set $item_wa (call $g2w (local.get $arg2)))
     (memory.copy
       (i32.add (local.get $data_wa) (i32.mul (local.get $idx) (local.get $item_size)))
-      (call $g2w (local.get $arg2))
+      (local.get $item_wa)
       (local.get $item_size))
     ;; Increment count
     (i32.store offset=4 (local.get $dsa_wa)
@@ -1248,7 +1370,12 @@
     (local $item_size i32) (local $dsa_wa i32) (local $data_wa i32)
     (local $count i32)
     (local $data_ptr i32)
-    (local.set $dsa_wa (call $g2w (local.get $arg0)))
+    (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dsa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
     (local.set $data_ptr (i32.load offset=12 (local.get $dsa_wa))) (local.set $data_wa (call $g2w (local.get $data_ptr)))
@@ -1273,25 +1400,57 @@
 
   ;; ============================================================
   ;; DPA (Dynamic Pointer Array) — real implementation
-  ;; DPA layout: [count:4, capacity:4, ptrs_ptr:4]
+  ;; DPA layout: [count:4, capacity:4, ptrs_ptr:4, live_magic:4]
   ;; ============================================================
 
   ;; DPA_Create(cItemGrow) — 1 arg, returns HDPA
   (func $handle_DPA_Create (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dpa i32) (local $dpa_wa i32)
-    (local $cap i32)
-    (local.set $cap (select (local.get $arg0) (i32.const 8) (i32.gt_u (local.get $arg0) (i32.const 0))))
-    (local.set $dpa (call $heap_alloc (i32.const 12))) (local.set $dpa_wa (call $g2w (local.get $dpa)))
+    (local $cap i32) (local $ptrs i32)
+    (local.set $cap
+      (select (local.get $arg0) (i32.const 8)
+        (i32.gt_s (local.get $arg0) (i32.const 0))))
+    (if (i32.gt_u (local.get $cap) (i32.const 0x1FFFFFFC))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $dpa (call $heap_alloc (i32.const 16)))
+    (if (i32.eqz (local.get $dpa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $ptrs (call $heap_alloc (i32.shl (local.get $cap) (i32.const 2))))
+    (if (i32.eqz (local.get $ptrs))
+      (then
+        (call $heap_free (local.get $dpa))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $dpa_wa (call $g2w (local.get $dpa)))
     (i32.store (local.get $dpa_wa) (i32.const 0))           ;; count
     (i32.store offset=4 (local.get $dpa_wa) (local.get $cap))  ;; capacity
-    (i32.store offset=8 (local.get $dpa_wa)
-      (call $heap_alloc (i32.shl (local.get $cap) (i32.const 2))))   ;; ptrs array
+    (i32.store offset=8 (local.get $dpa_wa) (local.get $ptrs))
+    (i32.store offset=12 (local.get $dpa_wa) (global.get $DPA_MAGIC))
     (global.set $eax (local.get $dpa))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
   ;; DPA_Destroy(hdpa) — 1 arg, returns BOOL
   (func $handle_DPA_Destroy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dpa_wa i32) (local $ptrs i32)
+    (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dpa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
+    (i32.store offset=8 (local.get $dpa_wa) (i32.const 0))
+    (i32.store offset=12 (local.get $dpa_wa) (i32.const 0))
+    (call $heap_free (local.get $ptrs))
+    (call $heap_free (local.get $arg0))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
@@ -1300,7 +1459,12 @@
   (func $handle_DPA_GetPtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $count i32) (local $dpa_wa i32)
     (local $ptrs i32)
-    (local.set $dpa_wa (call $g2w (local.get $arg0)))
+    (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dpa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (local.set $count (i32.load (local.get $dpa_wa)))
     (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
     (if (i32.lt_u (local.get $arg1) (local.get $count))
@@ -1326,7 +1490,12 @@
     (local $new_cap i32)
     (local $new_ptrs i32)
     (local $dpa_wa i32) (local $ptrs_wa i32) (local $new_ptrs_wa i32)
-    (local.set $dpa_wa (call $g2w (local.get $arg0)))
+    (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dpa_wa))
+      (then
+        (global.set $eax (i32.const -1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (local.set $count (i32.load (local.get $dpa_wa)))
     (local.set $cap (i32.load offset=4 (local.get $dpa_wa)))
     (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
@@ -1338,10 +1507,20 @@
     ;; Grow before the shift so the extra slot exists.
     (if (i32.ge_u (local.get $count) (local.get $cap))
       (then
+        (if (i32.gt_u (local.get $cap) (i32.const 0x0FFFFFFE))
+          (then
+            (global.set $eax (i32.const -1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
         (local.set $new_cap (i32.shl (local.get $cap) (i32.const 1)))
         (if (i32.lt_u (local.get $new_cap) (i32.const 8))
           (then (local.set $new_cap (i32.const 8))))
         (local.set $new_ptrs (call $heap_alloc (i32.shl (local.get $new_cap) (i32.const 2))))
+        (if (i32.eqz (local.get $new_ptrs))
+          (then
+            (global.set $eax (i32.const -1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
         (local.set $new_ptrs_wa (call $g2w (local.get $new_ptrs)))
         (local.set $i (i32.const 0))
         (block $copy_done (loop $copy
@@ -1385,7 +1564,12 @@
     (local $removed i32)
     (local $i i32)
     (local $dpa_wa i32) (local $ptrs_wa i32)
-    (local.set $dpa_wa (call $g2w (local.get $arg0)))
+    (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dpa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (local.set $count (i32.load (local.get $dpa_wa)))
     (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
     (if (local.get $ptrs)
@@ -1411,8 +1595,14 @@
 
   ;; DPA_DeleteAllPtrs(hdpa) — 1 arg, returns BOOL
   (func $handle_DPA_DeleteAllPtrs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Set count to 0
-    (i32.store (call $g2w (local.get $arg0)) (i32.const 0))
+    (local $dpa_wa i32)
+    (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
+    (if (i32.eqz (local.get $dpa_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (i32.store (local.get $dpa_wa) (i32.const 0))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
