@@ -188,3 +188,19 @@ immediately after each rewritten region. The result supports extending the
 straight semantic catalog while retaining scalar fallback at every unproved
 shape. SIB-aware address lowering and larger decode-time stack-renamed regions
 remain the next separate steps.
+
+### Browser opt-in
+
+The debug toolbar exposes an unchecked **x87 fold** switch. It enables both the
+bounded generic catalog/island gate and the Alpha-specific affine gate for the
+next launched emulator instance; `?debug&x87-fold` provides the same setting
+for scripted browser runs. The setting is copied to the slot-0 guest Worker and
+to later `CreateThread` WASM instances. Toggling an already-decoded program is
+not a clean comparison, so A/B runs must toggle and relaunch.
+
+This switch does not make matching permissive. Decode-time semantic, stack,
+address-shape, and ordering proofs still decide whether each candidate is
+rewritten; every unproved or unsupported sequence retains the scalar x87
+handlers. The default remains off until fixed-work application tests establish
+both correctness and a repeatable whole-program benefit across more than the
+current Quake II OpenGL candidate.

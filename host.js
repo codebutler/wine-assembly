@@ -1820,12 +1820,30 @@ class WineAssembly {
     if (window.WineSuperops && this.instance.exports.set_rle_run) {
       this.instance.exports.set_rle_run(window.WineSuperops.rleRun === false ? 0 : 1);
     }
+    const x87Fusion = window.WineSuperops && window.WineSuperops.x87Fusion === true ? 1 : 0;
+    if (this.instance.exports.set_x87_pipeline4_fusion) {
+      this.instance.exports.set_x87_pipeline4_fusion(x87Fusion);
+    }
+    if (this.instance.exports.set_x87_affine_fusion) {
+      this.instance.exports.set_x87_affine_fusion(x87Fusion);
+    }
     this._wasmModule = wasmModule;
     // Kept so an experimental guest worker can be handed the SAME host import
     // table this instance uses — the point of the broker is that there is one
     // implementation of every host call, not two.
     this._mainImports = imports;
     await this._maybeStartGuestWorker(wasmModule);
+    // In real-thread mode slot 0 owns a second WASM instance in a Worker.
+    // Configure that live decoder too; the browser-thread instance above is
+    // then only an ownership token and host-call mirror.
+    if (this.guestWorker) {
+      if (this.instance.exports.set_x87_pipeline4_fusion) {
+        await this.guestWorker.callExport('set_x87_pipeline4_fusion', x87Fusion);
+      }
+      if (this.instance.exports.set_x87_affine_fusion) {
+        await this.guestWorker.callExport('set_x87_affine_fusion', x87Fusion);
+      }
+    }
     if (this.renderer) {
       this.renderer.wasm = this.instance;
       this.renderer.wasmMemory = this.memory;
@@ -1927,6 +1945,10 @@ class WineAssembly {
         }
       },
     });
+    // Future CreateThread instances need the same decoder configuration. A
+    // mutable WASM global is instance-local, including the meaningful OFF=0.
+    this.threadManager.recordInheritedWasmGlobal('set_x87_pipeline4_fusion', x87Fusion);
+    this.threadManager.recordInheritedWasmGlobal('set_x87_affine_fusion', x87Fusion);
 
     // A room address is a property of this whole process, and the guest reads
     // it the moment it opens a socket, so it has to be in place before the
