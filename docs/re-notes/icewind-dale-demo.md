@@ -35,6 +35,19 @@ them, and retains the subsequent shared-immediate rewrite check. Sparse
 and cross-instance invalidation, page-chunk allocation, and 138 x86 cases
 pass with this correction.
 
+The actual clean installer run on this build passed inspected copy screens
+at batch 8750 (30%) and 18750 (56%). Its next large stdio step did not
+return a checkpoint for a long interval: a live process and CPU activity
+were not sufficient evidence of installation progress. Final output did
+establish a new stopping point at batch 27726: the installer left its
+copy-progress UI and trapped on the still-unimplemented
+`WritePrivateProfileSectionA`. The caller is `0x0041d366`, returning to
+`0x0041d36c` in the emitted InstallShield engine. Process exit was 1,
+not Setup Complete. Implement and test the real section-writing semantics
+before another full installer acceptance; do not silently return success.
+Use shorter step requests or a separately accessible control channel so
+progress and orderly-stop commands are not queued behind a long step.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves
