@@ -214,3 +214,9 @@ message queue, negotiates buffer size, filters sender/recipient, and supports
 peek or consumption instead of unconditionally reporting no messages.
 The reviewed inventory diff removes only this handler; no entries were added
 or otherwise changed. Message production and DP4 activation remain separate.
+
+2026-09-10: 404 -> 403. IDirectPlay3 Send now copies messages into local
+recipient queues and signals their events, validates sender ownership and
+unsupported modes, and rolls back partial multicast allocation failure.
+The reviewed inventory diff removes only Send, with no added or modified
+quiet entries. Network transport and asynchronous sending are not implemented.

@@ -7467,7 +7467,7 @@
   ;;   +32 local-only data pointer, +36 local size,
   ;;   +40 explicitly assigned owner player ID (-1 if not assigned).
   (global $DP_ENTITY_MAX i32 (i32.const 32))
-  (global $DP_ENTITY_STRIDE i32 (i32.const 44))
+  (global $DP_ENTITY_STRIDE i32 (i32.const 52))
   (global $dp_entity_table (mut i32) (i32.const 0))
   (global $dp_entity_next_id (mut i32) (i32.const 0x100))
 
@@ -7747,6 +7747,8 @@
           (call $gs32 (i32.add (local.get $entry) (i32.const 16)) (i32.const 0))
           (call $gs32 (i32.add (local.get $entry) (i32.const 20)) (i32.const 1))
           (call $gs32 (i32.add (local.get $entry) (i32.const 40)) (i32.const -1))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 44)) (i32.const 0)) ;; creator COM object
+          (call $gs32 (i32.add (local.get $entry) (i32.const 48)) (i32.const 0)) ;; borrowed receive event
           (return (local.get $entry))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -7827,6 +7829,132 @@
         (i32.sub (local.get $group) (global.get $dp_entity_table))
         (global.get $DP_ENTITY_STRIDE))))
 
+  (func $dp_bind_entity (param $id i32) (param $owner i32) (param $event i32)
+    (local $entry i32)
+    (local.set $entry (call $dp_find_entity (local.get $id) (i32.const -1)))
+    (if (local.get $entry)
+      (then
+        (call $gs32 (i32.add (local.get $entry) (i32.const 44)) (local.get $owner))
+        (call $gs32 (i32.add (local.get $entry) (i32.const 48)) (local.get $event)))))
+
+  ;; A local send publishes all recipient copies before signaling any event.
+  ;; The temporary ID list lets allocation failure undo only this send.
+  (func $dp_send_local (param $owner i32) (param $from i32) (param $to i32)
+      (param $flags i32) (param $data i32) (param $size i32) (result i32)
+    (local $entry i32) (local $target i32) (local $group_bit i32)
+    (local $i i32) (local $recipients i32) (local $ids i32) (local $count i32)
+    (local $id i32) (local $event i32)
+    (if (i32.eqz (local.get $owner)) (then (return (i32.const 0x88770082))))
+    (if (i32.and (local.get $flags) (i32.const 0xFFFFF904))
+      (then (return (i32.const 0x88770078)))) ;; unknown DPSEND flags
+    (if (i32.and (local.get $flags) (i32.const -4))
+      (then (return (i32.const 0x80004001)))) ;; streams/security/async are not implemented
+    (if (i32.gt_u (local.get $size) (i32.const 1048576))
+      (then (return (i32.const 0x887700E6)))) ;; DPERR_SENDTOOBIG
+    (if (i32.and (i32.ne (local.get $size) (i32.const 0)) (i32.eqz (local.get $data)))
+      (then (return (i32.const 0x80070057))))
+    (local.set $entry (call $dp_find_entity (local.get $from) (i32.const 1)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0x88770096))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))
+      (then (return (i32.const 0x88770096))))
+    (if (local.get $to)
+      (then
+        (local.set $target (call $dp_find_entity (local.get $to) (i32.const -1)))
+        (if (i32.eqz (local.get $target)) (then (return (i32.const 0x88770096))))
+        ;; Do not silently connect unrelated COM objects before session joining exists.
+        (if (i32.ne (call $gl32 (i32.add (local.get $target) (i32.const 44))) (local.get $owner))
+          (then (return (i32.const 0x887700AA)))) ;; DPERR_NOCONNECTION
+        (if (i32.eqz (call $gl32 (i32.add (local.get $target) (i32.const 4))))
+          (then (local.set $group_bit (call $dp_group_bit (local.get $target)))))))
+    (block $selected (loop $select
+      (br_if $selected (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (local.set $entry (i32.add (global.get $dp_entity_table)
+        (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+      (if (i32.and
+            (i32.and (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 20))) (i32.const 0))
+              (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))
+            (i32.and
+              (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))
+                (i32.ne (call $gl32 (local.get $entry)) (local.get $from)))
+              (i32.or (i32.eqz (local.get $to))
+                (i32.or (i32.eq (local.get $entry) (local.get $target))
+                  (i32.ne (i32.and (call $gl32 (i32.add (local.get $entry) (i32.const 16)))
+                    (local.get $group_bit)) (i32.const 0))))))
+        (then (local.set $recipients (i32.or (local.get $recipients)
+          (i32.shl (i32.const 1) (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $select)))
+    (if (i32.eqz (local.get $recipients)) (then (return (i32.const 0))))
+    (local.set $ids (call $heap_alloc (i32.mul (global.get $DP_ENTITY_MAX) (i32.const 4))))
+    (if (i32.eqz (local.get $ids)) (then (return (i32.const 0x8007000E))))
+    (local.set $i (i32.const 0))
+    (block $queued (loop $enqueue
+      (br_if $queued (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (if (i32.and (local.get $recipients) (i32.shl (i32.const 1) (local.get $i)))
+        (then
+          (local.set $entry (i32.add (global.get $dp_entity_table)
+            (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+          (local.set $id (call $dp_message_enqueue (local.get $owner) (local.get $from)
+            (call $gl32 (local.get $entry)) (local.get $data) (local.get $size)
+            (select (i32.const 65535) (i32.const 0) (i32.and (local.get $flags) (i32.const 2)))
+            (i32.const 1)))
+          (if (i32.eqz (local.get $id))
+            (then
+              (block $rolled_back (loop $rollback
+                (br_if $rolled_back (i32.eqz (local.get $count)))
+                (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+                (drop (call $dp_message_remove (local.get $owner)
+                  (call $gl32 (i32.add (local.get $ids) (i32.shl (local.get $count) (i32.const 2))))))
+                (br $rollback)))
+              (call $heap_free (local.get $ids))
+              (return (i32.const 0x8007000E))))
+          (call $gs32 (i32.add (local.get $ids) (i32.shl (local.get $count) (i32.const 2))) (local.get $id))
+          (local.set $count (i32.add (local.get $count) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $enqueue)))
+    (call $heap_free (local.get $ids))
+    (local.set $i (i32.const 0))
+    (block $notified (loop $notify
+      (br_if $notified (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (if (i32.and (local.get $recipients) (i32.shl (i32.const 1) (local.get $i)))
+        (then
+          (local.set $entry (i32.add (global.get $dp_entity_table)
+            (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+          (local.set $event (call $gl32 (i32.add (local.get $entry) (i32.const 48))))
+          (if (local.get $event) (then (drop (call $host_set_event (local.get $event)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $notify)))
+    (i32.const 0))
+
+  (func $dp_discard_player_messages (param $player i32)
+    (local $i i32) (local $entry i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (if (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (i32.const 1))
+            (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 12))) (local.get $player)))
+        (then (drop (call $dp_message_remove
+          (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (call $gl32 (local.get $entry))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  (func $dp_close_owner (param $owner i32)
+    (local $i i32) (local $entry i32)
+    (call $dp_messages_clear_owner (local.get $owner))
+    (if (i32.eqz (global.get $dp_entity_table)) (then (return)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (local.set $entry (i32.add (global.get $dp_entity_table)
+        (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+      (if (i32.and (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 20))) (i32.const 0))
+            (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner)))
+        (then (drop (call $dp_destroy_entity (call $gl32 (local.get $entry))
+          (call $gl32 (i32.add (local.get $entry) (i32.const 4)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
   (func $dp_set_membership
       (param $member_id i32) (param $group_id i32) (param $add i32) (result i32)
     (local $member i32) (local $group i32) (local $bits i32) (local $bit i32)
@@ -7849,6 +7977,8 @@
     (local $entry i32) (local $i i32) (local $scan i32) (local $bit i32)
     (local.set $entry (call $dp_find_entity (local.get $id) (local.get $type)))
     (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $type) (i32.const 1))
+      (then (call $dp_discard_player_messages (local.get $id))))
     (if (i32.eq (local.get $type) (i32.const 0))
       (then
         (local.set $bit (call $dp_group_bit (local.get $entry)))
@@ -8201,7 +8331,7 @@
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (if (i32.le_s (local.get $rc) (i32.const 0))
       (then
-        (call $dp_messages_clear_owner (local.get $arg0))
+        (call $dp_close_owner (local.get $arg0))
         (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))
       (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (global.set $eax (local.get $rc))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
@@ -8212,7 +8342,7 @@
         (call $dp_set_membership (local.get $arg2) (local.get $arg1) (i32.const 1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IDirectPlay3_Close (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $dp_clear_entities)
+    (call $dp_close_owner (local.get $arg0))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IDirectPlay3_CreateGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8222,6 +8352,8 @@
       (call $dp_create_entity
         (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
         (local.get $flags) (i32.const 0)))
+    (if (i32.eqz (global.get $eax))
+      (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_IDirectPlay3_CreatePlayer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32) (local $flags i32)
@@ -8231,6 +8363,8 @@
       (call $dp_create_entity
         (local.get $arg1) (local.get $arg2) (local.get $arg4) (local.get $size)
         (local.get $flags) (i32.const 1)))
+    (if (i32.eqz (global.get $eax))
+      (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (local.get $arg3))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
   (func $handle_IDirectPlay3_DeletePlayerFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
@@ -8379,7 +8513,9 @@
       (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_IDirectPlay3_Send (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $eax (call $dp_send_local (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_IDirectPlay3_SetGroupData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
       (call $dp_set_data
@@ -8425,6 +8561,7 @@
     (if (i32.eqz (local.get $hr))
       (then
         (local.set $id (call $gl32 (local.get $arg2)))
+        (call $dp_bind_entity (local.get $id) (local.get $arg0) (i32.const 0))
         (if (i32.eqz
               (call $dp_set_membership (local.get $id) (local.get $arg1) (i32.const 1)))
           (then

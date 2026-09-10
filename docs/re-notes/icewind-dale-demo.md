@@ -187,9 +187,22 @@ removing another object's queue; non-final Release retains them. The compiled
 test exercises those handlers and their stdcall stack cleanup. Receive's
 copy/peek/filter behavior follows the
 [Wine receive implementation](https://github.com/wine-mirror/wine/blob/master/dlls/dplayx/dplay.c).
-Tests inject received entries directly: public Send/SendEx delivery, provider
-initialization checks, asynchronous completion, and per-object session/entity
-isolation are still missing. Close still clears shared session state. The DP4
+The storage tests inject received entries directly. A separate compiled
+`test-directplay-send.js` now exercises public Send-to-Receive delivery:
+local unicast, broadcast and direct group membership, excluding the sender.
+Each recipient gets copied bytes and its borrowed receive event is signaled
+only after all copies exist. Capacity failure rolls back this send without
+discarding prior messages or signaling events. Unknown flags fail, while
+streams, security and asynchronous modes explicitly return unsupported.
+Entity entries retain creator-object and event fields; sends require a local
+sender belonging to the caller and do not silently join unrelated objects.
+Close and final Release retire only the caller's entities/messages. Destroying
+a recipient discards its unread messages but destroying a sender does not
+retract already-delivered messages. Tests cover those transitions, two-object
+cleanup, capacity rollback, copied bytes, event ordering, and recipient slot 31.
+Provider/session initialization, network/session joining, anonymous sends,
+SendEx and asynchronous completion still need implementation. Existing entity
+enumeration/mutation methods also need a full session-isolation audit. The DP4
 IID remains rejected; no new gameplay pass is claimed.
 
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
