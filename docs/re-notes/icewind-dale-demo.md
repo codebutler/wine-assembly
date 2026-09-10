@@ -105,6 +105,34 @@ export reported an empty `c:\windows` file/directory collision, preserving
 the file as `windows.__vfs_file__`. Neither caused a setup error, but both
 deserve separate investigation rather than being silently treated as correct.
 
+### Original-installed game startup
+
+A low-priority headless run mounted the complete exported VFS, loaded
+`program files/black isle/icewind dale demo/iddemo.exe`, and set both its
+guest executable path and working directory to that installed directory.
+No INI, KEY, CD2, override, or compressed resource was changed or removed.
+With `--batch-size=200000 --time-scale=10 --repaint-every=10`, Escape at
+batches 100, 160, 220, and 280 skipped the intro sequences. The inspected
+`/private/tmp/iwd-original-game-later.png` at batch 285 shows the full menu
+with readable labels, not just background artwork.
+
+Clicking Create Game at `(480,175)` at batch 300 instead produced
+**Cannot connect to the game session**. The inspected error screenshot is
+`/private/tmp/iwd-original-party.png` at batch 400; despite its filename it
+does not show Party Formation. The run was explicitly quit at batch 450.
+This differs from the legacy modified-fixture acceptance and remains the
+next gameplay blocker. The error text alone does not establish whether
+DirectPlay address creation, COM activation, or another step failed.
+
+A subsequent selective DirectPlay/COM API trace stopped at the internal
+180-second deadline at batch 200, before the Create Game click. It provides
+no failing session API evidence. Note that `--trace-api=Names` also enables
+unfiltered file-read/find diagnostics through `_debugReadFile` and
+`_debugFindFile`, so even a nominally selective startup trace emits extensive
+resource I/O. Next investigation should enable the relevant tracing at the
+menu or suppress those independent file diagnostics while retaining the
+DirectPlay/COM trace, then compare with the legacy route on the same build.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves
