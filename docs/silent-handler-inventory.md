@@ -208,3 +208,7 @@ ownership, clear current selection, and release attachment references.
 2026-09-06: 435 -> 432. Direct3D Device 1/2/3 NextViewport now walks each
 device's retained Win9x viewport list, returns AddRef'd HEAD/TAIL/NEXT
 interfaces, and distinguishes invalid input, empty lists, and list end.
+
+2026-09-10: 370 -> 369. mixerMessage now enforces the documented
+device-id-only, MXDM_USER-or-higher contract and reports unsupported private
+driver messages instead of claiming every driver-specific request succeeded.
