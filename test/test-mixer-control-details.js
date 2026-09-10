@@ -5,6 +5,18 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_mixer_open") (param $out i32) (result i32)
+    (global.set $esp (i32.const 0x00300000))
+    (call $handle_mixerOpen
+      (local.get $out) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_mixer_close") (param $handle i32) (result i32)
+    (global.set $esp (i32.const 0x00300000))
+    (call $handle_mixerClose
+      (local.get $handle) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
   (func (export "test_mixer_get_control_details_a") (param $pmxcd i32) (result i32)
     (global.set $esp (i32.const 0x00300000))
     (call $handle_mixerGetControlDetailsA
@@ -44,6 +56,29 @@ const extraWat = String.raw`
   const pmxcd = e.guest_to_wasm(pmxcdGuest) >>> 0;
   const values = e.guest_to_wasm(valuesGuest) >>> 0;
   const dv = new DataView(memory.buffer);
+
+  assert.strictEqual(e.test_mixer_open(0), 11,
+    'mixerOpen rejects its required output pointer');
+  const handleOutGuest = imageBase + 0x2500;
+  const handleOut = e.guest_to_wasm(handleOutGuest) >>> 0;
+  assert.strictEqual(e.test_mixer_open(handleOutGuest), 0,
+    'first mixerOpen succeeds');
+  const firstHandle = dv.getUint32(handleOut, true);
+  assert.strictEqual(firstHandle, 0x00090001,
+    'first mixer handle preserves the established value');
+  assert.strictEqual(e.test_mixer_open(handleOutGuest), 0,
+    'a second independent mixerOpen succeeds');
+  const secondHandle = dv.getUint32(handleOut, true);
+  assert.notStrictEqual(secondHandle, firstHandle,
+    'separate opens receive distinct handles');
+  assert.strictEqual(e.test_mixer_close(firstHandle), 0,
+    'mixerClose retires a live handle');
+  assert.strictEqual(e.test_mixer_close(firstHandle), 5,
+    'a closed handle is no longer valid');
+  assert.strictEqual(e.test_mixer_close(0x12345678), 5,
+    'mixerClose rejects an arbitrary handle');
+  assert.strictEqual(e.test_mixer_close(secondHandle), 0,
+    'closing one handle does not retire another open handle');
 
   function prepare(controlId, channels) {
     for (let i = 0; i < 24; i += 4) dv.setUint32(pmxcd + i, 0, true);

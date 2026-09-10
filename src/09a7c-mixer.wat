@@ -6,6 +6,38 @@
   ;; ============================================================
 
   ;; WINMM mixer model: speaker master with separate wave and MIDI sources.
+  ;; mixerOpen returns opaque handles, not the device id. Keep 32 live handles
+  ;; per instance: enough for Win98 applications while making close invalidate
+  ;; exactly the handle it consumes instead of accepting every integer forever.
+  (global $mixer_open_mask (mut i32) (i32.const 0))
+
+  (func $mixer_alloc_handle (result i32)
+    (local $slot i32) (local $bit i32)
+    (block $full
+      (loop $scan
+        (br_if $full (i32.ge_u (local.get $slot) (i32.const 32)))
+        (local.set $bit (i32.shl (i32.const 1) (local.get $slot)))
+        (if (i32.eqz (i32.and (global.get $mixer_open_mask) (local.get $bit)))
+          (then
+            (global.set $mixer_open_mask
+              (i32.or (global.get $mixer_open_mask) (local.get $bit)))
+            (return (i32.add (i32.const 0x00090001) (local.get $slot)))))
+        (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
+
+  (func $mixer_close_handle (param $handle i32) (result i32)
+    (local $slot i32) (local $bit i32)
+    (local.set $slot (i32.sub (local.get $handle) (i32.const 0x00090001)))
+    (if (i32.ge_u (local.get $slot) (i32.const 32))
+      (then (return (i32.const 5)))) ;; MMSYSERR_INVALHANDLE
+    (local.set $bit (i32.shl (i32.const 1) (local.get $slot)))
+    (if (i32.eqz (i32.and (global.get $mixer_open_mask) (local.get $bit)))
+      (then (return (i32.const 5))))
+    (global.set $mixer_open_mask
+      (i32.and (global.get $mixer_open_mask) (i32.xor (local.get $bit) (i32.const -1))))
+    (i32.const 0))
+
   (func $fill_mixer_caps (param $p i32) (param $wide i32) (param $cb i32)
     (if (i32.eqz (local.get $p)) (then (return)))
     (if (local.get $cb)
@@ -299,13 +331,24 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_mixerOpen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg0)
-      (then (i32.store (call $g2w (local.get $arg0)) (i32.const 0x00090001))))
+    (local $handle i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (global.set $eax (i32.const 11)) ;; MMSYSERR_INVALPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (local.set $handle (call $mixer_alloc_handle))
+    (if (i32.eqz (local.get $handle))
+      (then
+        (global.set $eax (i32.const 7)) ;; MMSYSERR_NOMEM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (i32.store (call $g2w (local.get $arg0)) (local.get $handle))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   (func $handle_mixerClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $mixer_close_handle (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   (func $handle_mixerMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
