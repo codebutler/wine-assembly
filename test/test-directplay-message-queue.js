@@ -13,6 +13,29 @@ const extraWat = String.raw`
   (export "test_clear" (func $dp_clear_entities))
   (export "test_sparse_map" (func $virtual_map_commit))
   (export "test_g2w" (func $g2w))
+  (export "test_create_entity" (func $dp_create_entity))
+  (func (export "test_object") (result i32)
+    (call $dx_create_com_obj (i32.const 26) (global.get $DX_VTBL_DPLAY3)))
+  (func (export "test_receive") (param $owner i32) (param $from i32) (param $to i32)
+      (param $flags i32) (param $data i32) (param $size i32) (result i32)
+    (global.set $esp (i32.const 0x074FF000))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $size))
+    (call $handle_IDirectPlay3_Receive (local.get $owner) (local.get $from) (local.get $to)
+      (local.get $flags) (local.get $data) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_count") (param $owner i32) (param $player i32) (param $out i32) (result i32)
+    (global.set $esp (i32.const 0x074FF000))
+    (call $handle_IDirectPlay3_GetMessageCount (local.get $owner) (local.get $player)
+      (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_ref") (param $owner i32) (param $add i32) (result i32)
+    (global.set $esp (i32.const 0x074FF000))
+    (if (local.get $add)
+      (then (call $handle_IDirectPlay3_AddRef (local.get $owner) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+      (else (call $handle_IDirectPlay3_Release (local.get $owner) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+    (global.get $eax))
   (func (export "test_bytes") (result i32) (global.get $dp_message_bytes))
   (func (export "test_id_limit") (param $id i32) (global.set $dp_message_next_id (local.get $id)))
 `;
@@ -100,12 +123,106 @@ const extraWat = String.raw`
   assert(add(1, 1048576), 'removal releases byte capacity');
   e.test_clear();
   assert.strictEqual(e.test_bytes(), 0);
+  const owner = e.test_object() >>> 0;
+  const otherOwner = e.test_object() >>> 0;
+  assert(owner && otherOwner && owner !== otherOwner);
+  const fromPtr = e.guest_alloc(4) >>> 0;
+  const toPtr = e.guest_alloc(4) >>> 0;
+  const sizePtr = e.guest_alloc(4) >>> 0;
+  const countPtr = e.guest_alloc(4) >>> 0;
+  const out = e.guest_alloc(16) >>> 0;
+  assert.strictEqual(e.test_create_entity(toPtr, 0, 0, 0, 0, 1), 0);
+  const player = e.guest_read32(toPtr) >>> 0;
+  const incoming = e.test_enqueue(owner, 10, player, data, 4, 0, 1) >>> 0;
+  const system = e.test_enqueue(owner, 0, player, data, 4, 0, 1) >>> 0;
+  const foreign = e.test_enqueue(otherOwner, 10, player, data, 4, 0, 1) >>> 0;
+  const pending = e.test_enqueue(owner, 10, player, data, 4, 0, 0) >>> 0;
+  assert(incoming && system && foreign && pending);
+  const receive = (flags = 0, buffer = out) => {
+    const result = e.test_receive(owner, fromPtr, toPtr, flags, buffer, sizePtr) >>> 0;
+    assert.strictEqual(e.get_esp() >>> 0, 0x074ff01c, 'Receive pops six stdcall arguments');
+    return result;
+  };
+  const count = (target = player) => {
+    assert.strictEqual(e.test_count(owner, target, countPtr), 0);
+    assert.strictEqual(e.get_esp() >>> 0, 0x074ff010, 'GetMessageCount pops three arguments');
+    return e.guest_read32(countPtr) >>> 0;
+  };
+  assert.strictEqual(count(), 2, 'count excludes sends and other COM objects');
+  assert.strictEqual(count(0), 2);
+  e.guest_write32(countPtr, 0xfeedface);
+  assert.strictEqual(e.test_count(owner, 0xdeadbeef, countPtr) >>> 0, 0x88770096);
+  assert.strictEqual(e.guest_read32(countPtr) >>> 0, 0xfeedface);
+  assert.strictEqual(e.test_count(owner, player, 0) >>> 0, 0x80070057);
+  e.guest_write32(fromPtr, 99);
+  e.guest_write32(sizePtr, 16);
+  e.guest_write32(out, 0xfeedface);
+  assert.strictEqual(receive(4), 0x887700be, 'unmatched FROMPLAYER preserves outputs');
+  assert.strictEqual(e.guest_read32(sizePtr), 16);
+  assert.strictEqual(e.guest_read32(fromPtr), 99);
+  assert.strictEqual(receive(16), 0x88770078, 'unknown flags fail');
+  assert.strictEqual(e.guest_read32(out) >>> 0, 0xfeedface);
+  e.guest_write32(sizePtr, 3);
+  assert.strictEqual(receive(), 0x8877001e);
+  assert.strictEqual(e.guest_read32(sizePtr), 4);
+  assert.strictEqual(e.guest_read32(fromPtr), 99);
+  assert.strictEqual(e.guest_read32(out) >>> 0, 0xfeedface);
+  assert.strictEqual(receive(0, 0), 0x8877001e, 'null-buffer query retains message');
+  assert.strictEqual(count(), 2);
+  e.guest_write32(fromPtr, 0);
+  e.guest_write32(sizePtr, 16);
+  assert.strictEqual(receive(4 | 8), 0, 'peek exact system sender, not wildcard');
+  assert.strictEqual(e.guest_read32(fromPtr), 0);
+  assert.strictEqual(e.guest_read32(toPtr) >>> 0, player);
+  assert.strictEqual(e.guest_read32(out), e.guest_read32(data));
+  assert(e.test_find(owner, system));
+  assert.strictEqual(count(), 2);
+  assert.strictEqual(receive(4), 0);
+  assert.strictEqual(e.test_find(owner, system), 0);
+  assert.strictEqual(count(), 1);
+  e.guest_write32(toPtr, player + 1);
+  e.guest_write32(sizePtr, 16);
+  assert.strictEqual(receive(2), 0x887700be);
+  e.guest_write32(toPtr, player);
+  assert.strictEqual(receive(2), 0);
+  assert.strictEqual(e.guest_read32(fromPtr), 10);
+  assert.strictEqual(e.test_find(owner, incoming), 0);
+  assert.strictEqual(count(), 0);
+  assert.strictEqual(receive(), 0x887700be, 'pending sends are not received');
+  pattern.forEach((value, i) => e.guest_write8(data + i, value));
+  assert(e.test_enqueue(owner, 10, player, data, 8, 0, 1));
+  e.guest_write32(sizePtr, 8);
+  assert.strictEqual(receive(0, page + 4092), 0);
+  assert.deepStrictEqual(pattern.map((_, i) => e.guest_read8(page + 4092 + i)), pattern,
+    'Receive copies across noncontiguous destination pages');
+  assert(e.test_enqueue(owner, 10, player, 0, 0, 0, 1));
+  e.guest_write32(sizePtr, 0);
+  assert.strictEqual(receive(0, 0), 0x8877001e);
+  assert.strictEqual(count(), 1, 'null-buffer probe retains an empty message too');
+  assert.strictEqual(receive(), 0);
+  assert.strictEqual(e.guest_read32(sizePtr), 0);
+  assert.strictEqual(count(), 0);
+  for (const args of [[0, toPtr, sizePtr], [fromPtr, 0, sizePtr], [fromPtr, toPtr, 0]]) {
+    assert.strictEqual(e.test_receive(owner, args[0], args[1], 0, out, args[2]) >>> 0, 0x80070057);
+    assert.strictEqual(e.get_esp() >>> 0, 0x074ff01c);
+  }
+  assert.strictEqual(e.test_ref(owner, 1), 2);
+  assert.strictEqual(e.test_ref(owner, 0), 1);
+  assert(e.test_find(owner, pending), 'non-final Release retains queued sends');
+  assert.strictEqual(e.test_ref(owner, 0), 0);
+  assert.strictEqual(e.get_esp() >>> 0, 0x074ff008, 'Release pops this and return address');
+  assert.strictEqual(e.test_find(owner, pending), 0);
+  assert(e.test_find(otherOwner, foreign), 'final Release does not clear another object');
+  assert.strictEqual(e.test_bytes(), 4);
+  assert.strictEqual(e.test_ref(otherOwner, 0), 0);
+  assert.strictEqual(e.test_bytes(), 0);
+  e.test_clear();
   e.test_id_limit(-1);
   assert.strictEqual(add(1, 0), 0xffffffff);
   assert.strictEqual(add(1, 0), 0, 'ID exhaustion cannot silently wrap and alias');
   e.test_clear();
   assert.strictEqual(e.test_bytes(), 0);
-  console.log('PASS DirectPlay internal queue ownership, copied bytes, cancellation, limits, and cleanup');
+  console.log('PASS DirectPlay queue storage, public Receive/count contracts, and COM-release cleanup');
 })().catch(error => {
   console.error(error.stack || error);
   process.exitCode = 1;

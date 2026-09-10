@@ -208,3 +208,9 @@ ownership, clear current selection, and release attachment references.
 2026-09-06: 435 -> 432. Direct3D Device 1/2/3 NextViewport now walks each
 device's retained Win9x viewport list, returns AddRef'd HEAD/TAIL/NEXT
 interfaces, and distinguishes invalid input, empty lists, and list end.
+
+2026-09-10: 405 -> 404. IDirectPlay3 Receive now reads its object's received
+message queue, negotiates buffer size, filters sender/recipient, and supports
+peek or consumption instead of unconditionally reporting no messages.
+The reviewed inventory diff removes only this handler; no entries were added
+or otherwise changed. Message production and DP4 activation remain separate.

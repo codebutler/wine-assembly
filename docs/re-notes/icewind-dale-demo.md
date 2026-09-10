@@ -178,10 +178,19 @@ cancellation is owner-scoped and separates send from receive entries. Storage
 is bounded to 64 entries, 1 MiB per payload, and 4 MiB total. Close clears it
 even when no entity table has been allocated. The compiled
 `test-directplay-message-queue.js` covers those invariants, ID exhaustion, and
-copies spanning non-contiguous guest-page backing. These are internal
-primitives only: public SendEx/Receive delivery, flags/HRESULTs, asynchronous
-completion, COM lifetime cleanup, and per-object session isolation remain
-unimplemented. The DP4 IID remains rejected; no new gameplay pass is claimed.
+copies spanning non-contiguous guest-page backing. `Receive` now consumes
+received entries through the public handler, with buffer-size negotiation,
+peek, FIFO, explicit sender/recipient filters (including system sender zero),
+and sparse destination copies. `GetMessageCount` reports received entries for
+the caller's object. Final COM Release removes that object's messages without
+removing another object's queue; non-final Release retains them. The compiled
+test exercises those handlers and their stdcall stack cleanup. Receive's
+copy/peek/filter behavior follows the
+[Wine receive implementation](https://github.com/wine-mirror/wine/blob/master/dlls/dplayx/dplay.c).
+Tests inject received entries directly: public Send/SendEx delivery, provider
+initialization checks, asynchronous completion, and per-object session/entity
+isolation are still missing. Close still clears shared session state. The DP4
+IID remains rejected; no new gameplay pass is claimed.
 
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
