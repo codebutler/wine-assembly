@@ -37,6 +37,10 @@ function watName(name, label) {
   return name;
 }
 
+function watI32(value) {
+  return value > 0x7fffffff ? `0x${value.toString(16)}` : String(value);
+}
+
 // Hand-written fast paths and the COM-vtable bootstrap still need a few IDs,
 // but their source must never bake in api_table.json's current array indexes.
 // Emit the names beside the generated dispatcher so an append/reorder repair
@@ -66,6 +70,47 @@ for (const [name, symbol] of namedApiIds) {
   out.push(`  (global $${symbol} i32 (i32.const ${matches[0].id}))`);
 }
 out.push('');
+
+// Constant compatibility stubs are data, not behavior worth transcribing in
+// a hand-written handler file.  The explicit pop count keeps unusual calling
+// conventions reviewable; stdcall rows are additionally checked against nargs.
+const stubApis = apiTable.filter(api => api.stub !== undefined);
+const stubHandlers = new Set();
+for (const api of stubApis) {
+  const stub = api.stub;
+  if (!stub || typeof stub !== 'object' || Array.isArray(stub) ||
+      Object.keys(stub).some(key => key !== 'pop' && key !== 'ret') ||
+      !Number.isInteger(stub.pop) || stub.pop < 0 || stub.pop % 4 !== 0 ||
+      !Number.isInteger(stub.ret) || stub.ret < -0x80000000 || stub.ret > 0xffffffff) {
+    fatal(`API ${api.name} stub must be {"pop": aligned nonnegative integer, "ret": i32 integer}`);
+    continue;
+  }
+  if (api.handler) {
+    fatal(`API ${api.name} cannot combine stub metadata with a handler alias`);
+    continue;
+  }
+  if (api.convention === 'stdcall' && Number.isInteger(api.nargs) &&
+      stub.pop !== 4 * (api.nargs + 1)) {
+    fatal(`API ${api.name} stub pop ${stub.pop} disagrees with stdcall nargs ${api.nargs}`);
+  }
+  const handler = watName(api.name, `API ${api.name} stub handler`);
+  if (stubHandlers.has(handler)) fatal(`duplicate generated stub handler $handle_${handler}`);
+  stubHandlers.add(handler);
+}
+if (stubApis.length) {
+  out.push('  ;; ============================================================');
+  out.push('  ;; CONSTANT API STUBS — GENERATED, do not edit');
+  out.push('  ;; Opted in with stub:{pop,ret} in api_table.json.');
+  out.push('  ;; ============================================================');
+}
+for (const api of stubApis) {
+  if (!stubHandlers.has(api.name)) continue;
+  out.push(`  ;; ${api.name}: pop ${api.stub.pop}, return ${watI32(api.stub.ret)}`);
+  out.push(`  (func $handle_${api.name} (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)`);
+  out.push(`    (global.set $eax (i32.const ${watI32(api.stub.ret)}))`);
+  out.push(`    (global.set $esp (i32.add (global.get $esp) (i32.const ${api.stub.pop}))))`);
+  out.push('');
+}
 
 // Test-only direct-call exports used by focused WAT harnesses.  These have one
 // mechanical ABI: expose the API's declared arguments, zero-fill the handler's

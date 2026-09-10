@@ -26535,6 +26535,7 @@
     "id": 3149,
     "name": "BASS_Init",
     "nargs": 5,
+    "stub": { "pop": 24, "ret": 1 },
     "convention": "stdcall",
     "hash": 1091029657
   },
@@ -26542,6 +26543,7 @@
     "id": 3150,
     "name": "BASS_PluginLoad",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 0 },
     "convention": "stdcall",
     "hash": 3225957768
   },
@@ -26549,6 +26551,7 @@
     "id": 3151,
     "name": "BASS_Start",
     "nargs": 0,
+    "stub": { "pop": 4, "ret": 1 },
     "convention": "stdcall",
     "hash": 4126220373
   },
@@ -26556,6 +26559,7 @@
     "id": 3152,
     "name": "BASS_SetConfig",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 1 },
     "convention": "stdcall",
     "hash": 1312639463
   },
@@ -26577,6 +26581,7 @@
     "id": 3155,
     "name": "BASS_SampleFree",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 2486226915
   },
@@ -26591,6 +26596,7 @@
     "id": 3157,
     "name": "BASS_StreamFree",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 2097151389
   },
@@ -26605,6 +26611,7 @@
     "id": 3159,
     "name": "BASS_MusicFree",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 2057867384
   },
@@ -26612,6 +26619,7 @@
     "id": 3160,
     "name": "BASS_ChannelPlay",
     "nargs": 2,
+    "stub": { "pop": 12, "ret": 1 },
     "convention": "stdcall",
     "hash": 3057207504
   },
@@ -26619,6 +26627,7 @@
     "id": 3161,
     "name": "BASS_ChannelStop",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 2062661846
   },
@@ -26626,6 +26635,7 @@
     "id": 3162,
     "name": "BASS_ChannelSetAttribute",
     "nargs": 3,
+    "stub": { "pop": 16, "ret": 1 },
     "convention": "stdcall",
     "hash": 2223407122
   },
@@ -26633,6 +26643,7 @@
     "id": 3163,
     "name": "BASS_ChannelSetPosition",
     "nargs": 4,
+    "stub": { "pop": 20, "ret": 1 },
     "convention": "stdcall",
     "hash": 3603486577
   },
@@ -26640,6 +26651,7 @@
     "id": 3164,
     "name": "BASS_ErrorGetCode",
     "nargs": 0,
+    "stub": { "pop": 4, "ret": 0 },
     "convention": "stdcall",
     "hash": 1566729216
   },
@@ -26647,6 +26659,7 @@
     "id": 3165,
     "name": "BASS_Free",
     "nargs": 0,
+    "stub": { "pop": 4, "ret": 1 },
     "convention": "stdcall",
     "hash": 1278475261
   },
@@ -26661,6 +26674,7 @@
     "id": 3167,
     "name": "BASS_ChannelPause",
     "nargs": 1,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 2168932184
   },

@@ -11,6 +11,10 @@ const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 const PRINT_PIN = process.argv.includes('--print-pin');
 const LIST = process.argv.includes('--list');
+const apiTable = JSON.parse(fs.readFileSync(path.join(SRC, 'api_table.json'), 'utf8'));
+const metadataStubs = new Set(apiTable
+  .filter(api => api.stub !== undefined)
+  .map(api => `handle_${api.name}`));
 
 function functions(source, prefix) {
   const clean = source.replace(/;;.*$/gm, '');
@@ -62,9 +66,23 @@ for (const [label, flat, expected] of [
 }
 
 const quiet = [];
+const seenMetadataStubs = new Set();
 for (const file of fs.readdirSync(SRC).filter(name => name.endsWith('.wat')).sort()) {
   const source = fs.readFileSync(path.join(SRC, file), 'utf8');
-  quiet.push(...quietEntries(file, source));
+  for (const entry of quietEntries(file, source)) {
+    const handler = entry.name.slice(entry.name.indexOf(':') + 1);
+    if (file === '09b2-dispatch-table.generated.wat' && metadataStubs.has(handler)) {
+      seenMetadataStubs.add(handler);
+    } else {
+      quiet.push(entry);
+    }
+  }
+}
+
+for (const handler of metadataStubs) {
+  if (!seenMetadataStubs.has(handler)) {
+    throw new Error(`api_table metadata stub $${handler} is not a generated quiet handler`);
+  }
 }
 
 quiet.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
@@ -215,8 +233,8 @@ const digest = crypto.createHash('sha256')
 // a shared guard. Their old non-recording stubs are NOT claimed implemented.
 // 2026-09-09: 411 -> 410. SetGammaRamp retains the per-device API ramp;
 // unsupported display gamma remains unadvertised. Get/default/copy tested.
-const EXPECTED_COUNT = 405;
-const EXPECTED_SHA256 = '0d9e8f43b3d441426b6418018dfbc607ffeba2de52cd666bb502f27307485e3c';
+const EXPECTED_COUNT = 391;
+const EXPECTED_SHA256 = 'a3fe78ff3532be68e00519d5ef8b31bab2f1ae12b132ea249a8dd2454768aa81';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
@@ -320,5 +338,5 @@ if (dangerous.length) {
   process.exit(1);
 }
 
-console.log(`PASS  straight-line silent-handler inventory is pinned (${quiet.length})`);
+console.log(`PASS  straight-line silent-handler inventory is pinned (${quiet.length} manual + ${metadataStubs.size} metadata)`);
 console.log('PASS  D3D9 resource/output stubs fail loudly');
