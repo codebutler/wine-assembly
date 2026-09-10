@@ -17,6 +17,7 @@
     "id": 2,
     "name": "AbortDoc",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 502303393
   },
@@ -285,6 +286,7 @@
     "id": 33,
     "name": "CloseMetaFile",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2747611672
   },
@@ -427,6 +429,7 @@
     "id": 51,
     "name": "CreateBitmap",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1422932062
   },
@@ -434,6 +437,7 @@
     "id": 52,
     "name": "CreateCompatibleBitmap",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3117641712
   },
@@ -441,6 +445,7 @@
     "id": 53,
     "name": "CreateCompatibleDC",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3510766298,
     "args": [
@@ -476,6 +481,7 @@
     "id": 57,
     "name": "CreateDIBPatternBrushPt",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 776694922
   },
@@ -706,6 +712,7 @@
     "id": 74,
     "name": "CreateHalftonePalette",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2448112635
   },
@@ -713,6 +720,7 @@
     "id": 75,
     "name": "CreateHatchBrush",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 236471847
   },
@@ -808,6 +816,7 @@
     "id": 81,
     "name": "CreatePalette",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3769941528
   },
@@ -815,6 +824,7 @@
     "id": 82,
     "name": "CreatePatternBrush",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 172938239
   },
@@ -822,6 +832,7 @@
     "id": 83,
     "name": "CreatePen",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 397399176
   },
@@ -857,6 +868,7 @@
     "id": 88,
     "name": "CreateRectRgn",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3296935866
   },
@@ -878,6 +890,7 @@
     "id": 91,
     "name": "CreateSolidBrush",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3429015740
   },
@@ -1006,6 +1019,7 @@
     "id": 102,
     "name": "DeleteDC",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3125056139
   },
@@ -1041,6 +1055,7 @@
     "id": 106,
     "name": "DeleteMetaFile",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3178389145
   },
@@ -1048,6 +1063,7 @@
     "id": 107,
     "name": "DeleteObject",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4239041921
   },
@@ -1069,6 +1085,7 @@
     "id": 110,
     "name": "DestroyMenu",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2274907194
   },
@@ -1153,6 +1170,7 @@
     "id": 120,
     "name": "DrawEdge",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1753347774
   },
@@ -1160,6 +1178,7 @@
     "id": 121,
     "name": "DrawFocusRect",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2835393271
   },
@@ -1174,6 +1193,7 @@
     "id": 123,
     "name": "DrawTextA",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4189274127,
     "args": [
@@ -1205,6 +1225,7 @@
     "id": 124,
     "name": "DrawTextW",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3887276985,
     "args": [
@@ -1243,6 +1264,7 @@
     "id": 126,
     "name": "Ellipse",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3055437297
   },
@@ -1285,6 +1307,7 @@
     "id": 132,
     "name": "EndDoc",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2150909844
   },
@@ -1292,6 +1315,7 @@
     "id": 133,
     "name": "EndPage",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1402847089
   },
@@ -1383,6 +1407,7 @@
     "id": 146,
     "name": "ExtCreatePen",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 547966643
   },
@@ -1390,6 +1415,7 @@
     "id": 147,
     "name": "ExtFloodFill",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2870731505
   },
@@ -1453,6 +1479,7 @@
     "id": 156,
     "name": "FillRect",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 979982022,
     "args": [
@@ -1598,6 +1625,7 @@
     "id": 173,
     "name": "FrameRect",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2576154068
   },
@@ -1790,6 +1818,7 @@
     "id": 195,
     "name": "GetCommandLineW",
     "nargs": 0,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1241535699
   },
@@ -1888,6 +1917,7 @@
     "id": 209,
     "name": "GetDC",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3360662078,
     "args": [
@@ -1909,6 +1939,7 @@
     "id": 211,
     "name": "GetDCOrgEx",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 854077129
   },
@@ -2002,6 +2033,7 @@
     "id": 218,
     "name": "GetDiskFreeSpaceA",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1585670433
   },
@@ -2051,6 +2083,7 @@
     "id": 225,
     "name": "GetDriveTypeA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3255818108
   },
@@ -2058,6 +2091,7 @@
     "id": 226,
     "name": "GetDriveTypeW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2953820966
   },
@@ -2219,6 +2253,7 @@
     "id": 248,
     "name": "GetLastError",
     "nargs": 0,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1347870519,
     "ret": "DWORD"
@@ -2255,6 +2290,7 @@
     "id": 253,
     "name": "GetLogicalDrives",
     "nargs": 0,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 764756619
   },
@@ -2373,6 +2409,7 @@
     "id": 266,
     "name": "GetModuleFileNameA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2583414333,
     "args": [
@@ -2403,6 +2440,7 @@
     "id": 268,
     "name": "GetModuleHandleA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3831749180,
     "args": [
@@ -2417,6 +2455,7 @@
     "id": 269,
     "name": "GetModuleHandleW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3529752038
   },
@@ -2431,6 +2470,7 @@
     "id": 271,
     "name": "GetNearestPaletteIndex",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1241153326
   },
@@ -2466,6 +2506,7 @@
     "id": 276,
     "name": "GetObjectA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3035458063,
     "args": [
@@ -2489,6 +2530,7 @@
     "id": 277,
     "name": "GetObjectType",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1468294620
   },
@@ -2496,6 +2538,7 @@
     "id": 278,
     "name": "GetObjectW",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2733460921,
     "args": [
@@ -2526,6 +2569,7 @@
     "id": 280,
     "name": "GetPaletteEntries",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2340187870
   },
@@ -2540,6 +2584,7 @@
     "id": 282,
     "name": "GetPixel",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2066195485
   },
@@ -2871,6 +2916,7 @@
     "id": 317,
     "name": "GetSystemMetrics",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2956099219
   },
@@ -2899,6 +2945,7 @@
     "id": 321,
     "name": "GetTabbedTextExtentA",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2693933257
   },
@@ -2906,6 +2953,7 @@
     "id": 322,
     "name": "GetTabbedTextExtentW",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2459046591
   },
@@ -2962,6 +3010,7 @@
     "id": 330,
     "name": "GetTextExtentPoint32A",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3020746514
   },
@@ -2990,6 +3039,7 @@
     "id": 334,
     "name": "GetTextFaceW",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2288605458
   },
@@ -2997,6 +3047,7 @@
     "id": 335,
     "name": "GetTextMetricsA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 947919340,
     "args": [
@@ -3147,6 +3198,7 @@
     "id": 353,
     "name": "GetWindowDC",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1339497294,
     "args": [
@@ -3788,6 +3840,7 @@
     "id": 430,
     "name": "LineTo",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4187813618
   },
@@ -3809,6 +3862,7 @@
     "id": 433,
     "name": "LoadBitmapA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2594218657
   },
@@ -3816,6 +3870,7 @@
     "id": 434,
     "name": "LoadBitmapW",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2359331991
   },
@@ -4409,6 +4464,7 @@
     "id": 493,
     "name": "PlayMetaFile",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1043218136
   },
@@ -4423,6 +4479,7 @@
     "id": 495,
     "name": "PolyBezier",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 584274180
   },
@@ -4430,6 +4487,7 @@
     "id": 496,
     "name": "PolyBezierTo",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 789314125
   },
@@ -4437,6 +4495,7 @@
     "id": 497,
     "name": "PolyDraw",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1289490373
   },
@@ -4444,6 +4503,7 @@
     "id": 498,
     "name": "Polygon",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2386032169
   },
@@ -4451,6 +4511,7 @@
     "id": 499,
     "name": "Polyline",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1736705525
   },
@@ -4458,6 +4519,7 @@
     "id": 500,
     "name": "PolylineTo",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4195778580
   },
@@ -4614,6 +4676,7 @@
     "id": 517,
     "name": "RealizePalette",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2306759920
   },
@@ -4628,6 +4691,7 @@
     "id": 519,
     "name": "Rectangle",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 385702446,
     "args": [
@@ -4784,6 +4848,7 @@
     "id": 538,
     "name": "RegisterClassA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3945250267,
     "args": [
@@ -4812,6 +4877,7 @@
     "id": 540,
     "name": "RegisterClassExW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4205005358
   },
@@ -4819,6 +4885,7 @@
     "id": 541,
     "name": "RegisterClassW",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3777474077
   },
@@ -4875,6 +4942,7 @@
     "id": 549,
     "name": "ReleaseDC",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 692780823,
     "args": [
@@ -4949,6 +5017,7 @@
     "id": 557,
     "name": "ResizePalette",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 466927116
   },
@@ -4956,6 +5025,7 @@
     "id": 558,
     "name": "RestoreDC",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2465531204
   },
@@ -5040,6 +5110,7 @@
     "id": 570,
     "name": "SaveDC",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1264176901
   },
@@ -5144,6 +5215,7 @@
     "id": 578,
     "name": "SelectClipPath",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4120546884
   },
@@ -5158,6 +5230,7 @@
     "id": 580,
     "name": "SelectObject",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2373253186,
     "args": [
@@ -5267,6 +5340,7 @@
     "id": 588,
     "name": "SetArcDirection",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3100486146
   },
@@ -5310,6 +5384,7 @@
     "id": 591,
     "name": "SetBrushOrgEx",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1028071952
   },
@@ -5331,6 +5406,7 @@
     "id": 594,
     "name": "SetColorAdjustment",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4012420137
   },
@@ -5422,6 +5498,7 @@
     "id": 607,
     "name": "SetDIBColorTable",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 300398431
   },
@@ -5595,6 +5672,7 @@
     "id": 628,
     "name": "SetMapMode",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3813429468,
     "args": [
@@ -5613,6 +5691,7 @@
     "id": 629,
     "name": "SetMapperFlags",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2942832013
   },
@@ -5641,6 +5720,7 @@
     "id": 633,
     "name": "SetPaletteEntries",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2494099954
   },
@@ -5655,6 +5735,7 @@
     "id": 635,
     "name": "SetPixel",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3378645025
   },
@@ -5789,6 +5870,7 @@
     "id": 648,
     "name": "SetSystemPaletteUse",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1493501796
   },
@@ -5803,6 +5885,7 @@
     "id": 650,
     "name": "SetTextCharacterExtra",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 429775591
   },
@@ -5828,6 +5911,7 @@
     "id": 652,
     "name": "SetTextJustification",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1248203302
   },
@@ -6079,6 +6163,7 @@
     "id": 681,
     "name": "StartPage",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3225503364
   },
@@ -6177,6 +6262,7 @@
     "id": 695,
     "name": "TextOutA",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3988924089,
     "args": [
@@ -7451,6 +7537,7 @@
     "id": 851,
     "name": "GetCurrentObject",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3418506431,
     "args": [
@@ -7978,6 +8065,7 @@
     "id": 921,
     "name": "SetWindowRgn",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2506989278
   },
@@ -7985,6 +8073,7 @@
     "id": 922,
     "name": "GetWindowRgn",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2551412386
   },
@@ -7992,6 +8081,7 @@
     "id": 923,
     "name": "WSAStartup",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 538074207,
     "args": [
@@ -8441,6 +8531,7 @@
     "id": 958,
     "name": "CreateBrushIndirect",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2143438409
   },
@@ -8448,6 +8539,7 @@
     "id": 959,
     "name": "AppendMenuA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 221152021
   },
@@ -8455,6 +8547,7 @@
     "id": 960,
     "name": "InsertMenuA",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3555705674
   },
@@ -8483,6 +8576,7 @@
     "id": 964,
     "name": "CreatePopupMenu",
     "nargs": 0,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 59869194
   },
@@ -9628,6 +9722,7 @@
     "id": 1110,
     "name": "joyGetNumDevs",
     "nargs": 0,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 559761077
   },
@@ -9635,6 +9730,7 @@
     "id": 1111,
     "name": "GetFileVersionInfoSizeA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1550233293
   },
@@ -9642,6 +9738,7 @@
     "id": 1112,
     "name": "GetFileVersionInfoA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1121446610
   },
@@ -9649,6 +9746,7 @@
     "id": 1113,
     "name": "VerQueryValueA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3396095850
   },
@@ -10555,6 +10653,7 @@
     "id": 1224,
     "name": "GetLogicalDriveStringsA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3860817427
   },
@@ -10576,6 +10675,7 @@
     "id": 1227,
     "name": "GetTextCharacterExtra",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 315056275
   },
@@ -12837,6 +12937,7 @@
     "id": 1508,
     "name": "GetDeviceGammaRamp",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2175164542
   },
@@ -16657,6 +16758,7 @@
     "id": 2028,
     "name": "GetTextFaceA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2456381648,
     "ret": "INT"
@@ -16665,6 +16767,7 @@
     "id": 2029,
     "name": "GetCharWidthA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 582208576,
     "args": [
@@ -18288,6 +18391,7 @@
     "id": 2219,
     "name": "CreateMetaFileA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1212659125
   },
@@ -18369,6 +18473,7 @@
     "id": 2228,
     "name": "GetColorAdjustment",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1473038309
   },
@@ -18383,6 +18488,7 @@
     "id": 2230,
     "name": "CreateBitmapIndirect",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1988083472
   },
@@ -18390,6 +18496,7 @@
     "id": 2231,
     "name": "CreatePolyPolygonRgn",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2170679898
   },
@@ -18404,6 +18511,7 @@
     "id": 2233,
     "name": "GetBitmapBits",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1797037436
   },
@@ -18411,6 +18519,7 @@
     "id": 2234,
     "name": "GetBitmapDimensionEx",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2278466117
   },
@@ -18418,6 +18527,7 @@
     "id": 2235,
     "name": "GetBrushOrgEx",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1897263924
   },
@@ -18425,6 +18535,7 @@
     "id": 2236,
     "name": "GetRegionData",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3688326247
   },
@@ -18439,6 +18550,7 @@
     "id": 2238,
     "name": "PtInRegion",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3428002046
   },
@@ -18446,6 +18558,7 @@
     "id": 2239,
     "name": "SetBitmapBits",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2322223040
   },
@@ -18453,6 +18566,7 @@
     "id": 2240,
     "name": "AnimatePalette",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3756997263
   },
@@ -18460,6 +18574,7 @@
     "id": 2241,
     "name": "ChoosePixelFormat",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1867974379
   },
@@ -18467,6 +18582,7 @@
     "id": 2242,
     "name": "DescribePixelFormat",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2680520403
   },
@@ -18474,6 +18590,7 @@
     "id": 2243,
     "name": "GdiSetBatchLimit",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4151768924
   },
@@ -18481,6 +18598,7 @@
     "id": 2244,
     "name": "GetGraphicsMode",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3160631945
   },
@@ -18488,6 +18606,7 @@
     "id": 2245,
     "name": "GetPixelFormat",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3615803402
   },
@@ -18495,6 +18614,7 @@
     "id": 2246,
     "name": "GetSystemPaletteUse",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 141363448
   },
@@ -18502,6 +18622,7 @@
     "id": 2247,
     "name": "SetDeviceGammaRamp",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 115763842
   },
@@ -18509,6 +18630,7 @@
     "id": 2248,
     "name": "SetGraphicsMode",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4257062381
   },
@@ -18516,6 +18638,7 @@
     "id": 2249,
     "name": "SetPixelFormat",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4050401086
   },
@@ -18523,6 +18646,7 @@
     "id": 2250,
     "name": "SwapBuffers",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3666440497
   },
@@ -18530,6 +18654,7 @@
     "id": 2251,
     "name": "AddFontResourceA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1890756352
   },
@@ -18544,6 +18669,7 @@
     "id": 2253,
     "name": "GetCharABCWidthsA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1237940971
   },
@@ -18551,6 +18677,7 @@
     "id": 2254,
     "name": "GetFontData",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2438712894
   },
@@ -18579,6 +18706,7 @@
     "id": 2258,
     "name": "RemoveFontResourceA",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3342577783
   },
@@ -18586,6 +18714,7 @@
     "id": 2259,
     "name": "CopyEnhMetaFileA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 88951893
   },
@@ -18593,6 +18722,7 @@
     "id": 2260,
     "name": "DeleteEnhMetaFile",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2647597704
   },
@@ -18600,6 +18730,7 @@
     "id": 2261,
     "name": "GetEnhMetaFileBits",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1327510823
   },
@@ -18607,6 +18738,7 @@
     "id": 2262,
     "name": "GetEnhMetaFileHeader",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 329960786
   },
@@ -18614,6 +18746,7 @@
     "id": 2263,
     "name": "GetEnhMetaFilePaletteEntries",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3524212402
   },
@@ -18621,6 +18754,7 @@
     "id": 2264,
     "name": "GetICMProfileA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 680522106
   },
@@ -18628,6 +18762,7 @@
     "id": 2265,
     "name": "GetMetaFileBitsEx",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3835014617
   },
@@ -18635,6 +18770,7 @@
     "id": 2266,
     "name": "GetWinMetaFileBits",
     "nargs": 5,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2741867076
   },
@@ -18642,6 +18778,7 @@
     "id": 2267,
     "name": "PlayEnhMetaFile",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 852379543
   },
@@ -18649,6 +18786,7 @@
     "id": 2268,
     "name": "ResetDCA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3158243892
   },
@@ -18656,6 +18794,7 @@
     "id": 2269,
     "name": "SetEnhMetaFileBits",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2603202195
   },
@@ -18663,6 +18802,7 @@
     "id": 2270,
     "name": "SetMetaFileBitsEx",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3505863061
   },
@@ -18670,6 +18810,7 @@
     "id": 2271,
     "name": "SetWinMetaFileBits",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3624457120
   },
@@ -19137,6 +19278,7 @@
     "id": 2327,
     "name": "EnumThreadWindows",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4016057677
   },
@@ -19270,6 +19412,7 @@
     "id": 2346,
     "name": "joyGetDevCapsA",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1963353722
   },
@@ -19277,6 +19420,7 @@
     "id": 2347,
     "name": "joySetCapture",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3171549331
   },
@@ -19284,6 +19428,7 @@
     "id": 2348,
     "name": "joyReleaseCapture",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1503308548
   },
@@ -19291,6 +19436,7 @@
     "id": 2349,
     "name": "SetProcessWorkingSetSize",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3154411128
   },
@@ -19347,6 +19493,7 @@
     "id": 2357,
     "name": "PolyPolyline",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3337921375
   },
@@ -19375,6 +19522,7 @@
     "id": 2361,
     "name": "AbortPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2928650786
   },
@@ -19382,6 +19530,7 @@
     "id": 2362,
     "name": "BeginPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3440408789
   },
@@ -19389,6 +19538,7 @@
     "id": 2363,
     "name": "CloseFigure",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 782234579
   },
@@ -19396,6 +19546,7 @@
     "id": 2364,
     "name": "EndPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1215483161
   },
@@ -19403,6 +19554,7 @@
     "id": 2365,
     "name": "GetPath",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2542725184
   },
@@ -19410,6 +19562,7 @@
     "id": 2366,
     "name": "PathToRegion",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 907611139
   },
@@ -19417,6 +19570,7 @@
     "id": 2367,
     "name": "FlattenPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1147976626
   },
@@ -19424,6 +19578,7 @@
     "id": 2368,
     "name": "FillPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2890507071
   },
@@ -19431,6 +19586,7 @@
     "id": 2369,
     "name": "StrokePath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1975810022
   },
@@ -19438,6 +19594,7 @@
     "id": 2370,
     "name": "StrokeAndFillPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 359656012
   },
@@ -19711,6 +19868,7 @@
     "id": 2382,
     "name": "WidenPath",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2041929067,
     "args": [
@@ -19793,6 +19951,7 @@
     "id": 2392,
     "name": "InsertMenuItemA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3697208235
   },
@@ -20631,6 +20790,7 @@
     "id": 2468,
     "name": "CloseEnhMetaFile",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 768795607
   },
@@ -20638,6 +20798,7 @@
     "id": 2469,
     "name": "ColorMatchToTarget",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3979646369
   },
@@ -20645,6 +20806,7 @@
     "id": 2470,
     "name": "CreateEllipticRgnIndirect",
     "nargs": 1,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2295203464
   },
@@ -20652,6 +20814,7 @@
     "id": 2471,
     "name": "CreateEnhMetaFileA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3772733284
   },
@@ -20659,6 +20822,7 @@
     "id": 2472,
     "name": "EqualRgn",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3154701738
   },
@@ -20666,6 +20830,7 @@
     "id": 2473,
     "name": "ExtCreateRegion",
     "nargs": 3,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1379260324
   },
@@ -20680,6 +20845,7 @@
     "id": 2475,
     "name": "SetICMMode",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 517416389
   },
@@ -20687,6 +20853,7 @@
     "id": 2476,
     "name": "SetICMProfileA",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 5371878
   },
@@ -24779,6 +24946,7 @@
     "id": 2955,
     "name": "GetFileVersionInfoSizeW",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1181125675
   },
@@ -24786,6 +24954,7 @@
     "id": 2956,
     "name": "GetFileVersionInfoW",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 1289222800
   },
@@ -24828,6 +24997,7 @@
     "id": 2962,
     "name": "GetLogicalDriveStringsW",
     "nargs": 2,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 4229925045
   },
@@ -27483,6 +27653,7 @@
     "id": 3298,
     "name": "CreateScalableFontResourceA",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 3483756338
   },
@@ -27490,6 +27661,7 @@
     "id": 3299,
     "name": "mmioSetBuffer",
     "nargs": 4,
+    "test_call": true,
     "convention": "stdcall",
     "hash": 2705998195
   },
