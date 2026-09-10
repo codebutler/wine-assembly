@@ -28198,5 +28198,35 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 2695000068
+  },
+  {
+    "id": 3363,
+    "name": "IDirectPlayLobby3_ConnectEx",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2892910834
+  },
+  {
+    "id": 3364,
+    "name": "IDirectPlayLobby3_RegisterApplication",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1698421876,
+    "handler": "dplobby3_application_unsupported"
+  },
+  {
+    "id": 3365,
+    "name": "IDirectPlayLobby3_UnregisterApplication",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2112391621,
+    "handler": "dplobby3_application_unsupported"
+  },
+  {
+    "id": 3366,
+    "name": "IDirectPlayLobby3_WaitForConnectionSettings",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2723015888
   }
 ]

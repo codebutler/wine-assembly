@@ -162,7 +162,7 @@
   ;; guest code begins. Reserve the tail of the auxiliary-wrapper region
   ;; rather than overlapping VSOCK_TABLE at 0x07FFE000.
   (global $DX_VTBL_REGISTRY i32 (region.addr $DX_VTBL_REGISTRY 0))
-  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 65))
+  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 66))
 
   ;; Vtable blocks — arrays of thunk guest-addrs, one per interface type.
   ;; Must be in guest-reachable memory (above image_base), so allocated from heap.
@@ -178,6 +178,7 @@
   (global $DX_VTBL_DIDEV      (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAY3     (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAY4     (mut i32) (i32.const 0))
+  (global $DX_VTBL_DPLAYLOBBY3 (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAYLOBBY2 (mut i32) (i32.const 0))
   (global $DX_VTBL_D3D        (mut i32) (i32.const 0))
   (global $DX_VTBL_D3D3       (mut i32) (i32.const 0))
@@ -337,7 +338,8 @@
     (global.set $DX_VTBL_DDSURF3 (i32.load offset=248 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_D3DSWAP9 (i32.load offset=252 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY)))
-    (global.set $DX_VTBL_DPLAY4 (i32.load offset=260 (global.get $DX_VTBL_REGISTRY))))
+    (global.set $DX_VTBL_DPLAY4 (i32.load offset=260 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_DPLAYLOBBY3 (i32.load offset=264 (global.get $DX_VTBL_REGISTRY))))
 
   (func $dx_sync_thread_vtables_if_needed
     (if (i32.eqz (global.get $DX_VTBL_DDRAW))
@@ -8271,7 +8273,7 @@
 
   ;; Query the two bounded ANSI DirectPlay families that this runtime exposes.
   ;; family 0: IDirectPlay2A/3A/4A (upgraded to 53 slots for 4A); family 1:
-  ;; IDirectPlayLobbyA/Lobby2A (15-slot vtable). Unicode and later generations
+  ;; IDirectPlayLobbyA/Lobby2A/Lobby3A (15/19 slots). Unicode and later generations
   ;; need different string semantics or additional slots, so fail honestly.
   (func $dplay_query_interface_wa (param $obj i32) (param $iid_wa i32)
         (param $out i32) (param $family i32) (result i32)
@@ -8304,6 +8306,12 @@
                 (i32.const 0x133EFE41) (i32.const 0x11D032DC)
                 (i32.const 0xA000FB9C) (i32.const 0xCB430AC9)))))
           (else
+            (if (call $guid_words_equal (local.get $iid_wa)
+                  (i32.const 0x2DB72491) (i32.const 0x11D1652C)
+                  (i32.const 0x0000A8A7) (i32.const 0xFCAB03F8))
+              (then
+                (call $gs32 (local.get $obj) (global.get $DX_VTBL_DPLAYLOBBY3))
+                (local.set $supported (i32.const 1))))
             ;; IID_IDirectPlayLobbyA {26C66A70-B367-11CF-A024-00AA006157AC}.
             (local.set $supported (i32.or (local.get $supported)
               (call $guid_words_equal (local.get $iid_wa)
@@ -8418,6 +8426,32 @@
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
     (global.set $eax (local.get $rc))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; The Lobby3 ABI is callable, but application registration and external
+  ;; lobby launch/settings handoff are not implemented. Never invent a connection.
+  (func $handle_IDirectPlayLobby3_ConnectEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (global.set $eax (i32.const 0x80070057))
+    (if (i32.eqz (local.get $arg3)) (then (return)))
+    (call $gs32 (local.get $arg3) (i32.const 0))
+    (if (i32.eqz (local.get $arg2)) (then (return)))
+    (global.set $eax (i32.const 0x80040110))
+    (if (local.get $arg4) (then (return)))
+    (global.set $eax (i32.const 0x80004001)))
+
+  (func $handle_dplobby3_application_unsupported (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x88770078))
+    (if (local.get $arg1) (then (return)))
+    (global.set $eax (i32.const 0x80070057))
+    (if (i32.eqz (local.get $arg2)) (then (return)))
+    (global.set $eax (i32.const 0x80004001)))
+
+  (func $handle_IDirectPlayLobby3_WaitForConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (global.set $eax (i32.const 0x80004001))
+    (if (i32.and (local.get $arg1) (i32.const -2))
+      (then (global.set $eax (i32.const 0x88770078)))))
 
   (func $handle_IDirectPlay3_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)

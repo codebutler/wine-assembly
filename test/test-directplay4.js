@@ -9,6 +9,12 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_object") (result i32)
     (call $dx_create_com_obj (i32.const 26) (global.get $DX_VTBL_DPLAY3)))
+  (func (export "test_lobby") (result i32)
+    (call $dx_create_com_obj (i32.const 27) (global.get $DX_VTBL_DPLAYLOBBY2)))
+  (func (export "test_sync_lobby") (result i32)
+    (global.set $DX_VTBL_DPLAYLOBBY3 (i32.const 0))
+    (call $dx_sync_thread_vtables)
+    (global.get $DX_VTBL_DPLAYLOBBY3))
   (export "test_enqueue" (func $dp_message_enqueue))
   (export "test_query" (func $dp_message_query))
   (func (export "test_sync") (result i32)
@@ -109,6 +115,41 @@ const extraWat = String.raw`
   assert.strictEqual(call(owner, 2), 1);
   assert.strictEqual(call(owner, 2), 0);
   assert.strictEqual(call(other, 2), 0);
+  const lobby = e.test_lobby() >>> 0;
+  const oldLobby = read(lobby);
+  [0x2db72491, 0x11d1652c, 0x0000a8a7, 0xfcab03f8].forEach((v, i) => e.guest_write32(iid + i * 4, v));
+  assert.strictEqual(call(lobby, 0, iid, 0), 0x80004003);
+  assert.strictEqual(read(lobby), oldLobby, 'failed QI cannot change the interface');
+  assert.strictEqual(call(lobby, 0, iid, out), 0, 'exact IWD Lobby3A request succeeds');
+  assert.strictEqual(read(out), lobby);
+  const lobbyTable = read(lobby);
+  assert.notStrictEqual(lobbyTable, oldLobby);
+  for (let slot = 0; slot < 15; slot++) assert.strictEqual(read(lobbyTable + slot * 4), read(oldLobby + slot * 4));
+  ['ConnectEx', 'RegisterApplication', 'UnregisterApplication', 'WaitForConnectionSettings'].forEach((name, i) =>
+    assert.strictEqual(apis[read(read(lobbyTable + (15 + i) * 4) + 4)].name, `IDirectPlayLobby3_${name}`));
+  assert.strictEqual(e.test_sync_lobby() >>> 0, lobbyTable);
+  e.guest_write32(iid, 0x2db72490);
+  assert.strictEqual(call(lobby, 0, iid, out), 0x80004002, 'Unicode Lobby3 remains unsupported');
+  assert.strictEqual(read(out), 0);
+  e.guest_write32(out, 0xfeedface);
+  assert.strictEqual(call(lobby, 15, 0, iid, out, 0), 0x80004001);
+  assert.strictEqual(read(out), 0, 'ConnectEx cannot fabricate a connected object');
+  assert.strictEqual(call(lobby, 15, 0, iid, 0, 0), 0x80070057);
+  assert.strictEqual(call(lobby, 15, 0, 0, out, 0), 0x80070057);
+  assert.strictEqual(call(lobby, 15, 0, iid, out, lobby), 0x80040110);
+  const desc = alloc(52);
+  e.guest_write32(desc, 52);
+  for (const [slot, arg] of [[16, desc], [17, iid]]) {
+    assert.strictEqual(call(lobby, slot, 0, arg), 0x80004001);
+    assert.strictEqual(call(lobby, slot, 1, arg), 0x88770078);
+    assert.strictEqual(call(lobby, slot, 0, 0), 0x80070057);
+  }
+  assert.strictEqual(call(lobby, 18, 0), 0x80004001);
+  assert.strictEqual(call(lobby, 18, 1), 0x80004001);
+  assert.strictEqual(call(lobby, 18, 2), 0x88770078);
+  assert.strictEqual(call(lobby, 2), 1);
+  assert.strictEqual(call(lobby, 2), 0);
+  console.log('PASS Lobby3A 19-slot generated ABI, same identity, worker registry, and explicit unsupported operations');
   console.log('PASS DirectPlay4 53-slot generated ABI, local SendEx, queue/cancel contracts, and explicit unsupported modes');
 })().catch(error => {
   console.error(error.stack || error);

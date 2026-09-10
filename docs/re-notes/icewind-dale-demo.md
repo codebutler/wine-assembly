@@ -15,7 +15,47 @@ node test/test-icewind-dale-demo.js
 
 ## Original installer investigation
 
-### Latest DirectPlay4 checkpoint
+### Latest Lobby3A checkpoint: character generation reached
+
+The targeted trace after the DP4 fix identified a second rejected interface:
+`IDirectPlayLobby2_QueryInterface` at return address `0x008d3796` requested
+`{2db72491-652c-11d1-a7a8-0000f803abfc}` (Lobby3A), not another DirectPlay4
+interface. Its `E_NOINTERFACE` path released the lobby and abandoned setup.
+
+Lobby3A now upgrades the same ANSI object to the SDK's 19-slot layout,
+preserving all 15 inherited slots and appending ConnectEx,
+RegisterApplication, UnregisterApplication, and WaitForConnectionSettings.
+The signatures follow the [Wine DirectPlay lobby header](https://raw.githubusercontent.com/wine-mirror/wine/master/include/dplobby.h).
+These four new operations remain explicitly unsupported, with argument
+validation and no fabricated connection or registration success. Unicode
+Lobby3 remains rejected. This is ABI support, not full lobby functionality.
+
+The real-thunk `test-directplay4.js` regression passes for both DP4 and
+Lobby3A, including identity, inherited slots, worker registry restoration,
+HRESULTs, output clearing, and stdcall cleanup. The inherited lobby-address
+suite also passes. Full build gates pass: native 1,076,563 bytes,
+compatibility 1,077,027 bytes, layout `fc765043612db8cc`.
+
+A fresh low-priority, frozen CLI run used the original install's complete
+`/private/tmp/iwd-profile-fixed-installed-vfs`, without substituting the
+EXE, INI, KEY, or compressed archives. The trace now reports Lobby3A QI
+`S_OK`, followed by `IDirectPlay3_EnumConnections`. Inspected captures:
+
+- Batch 300: `/private/tmp/iwd-lobby3-menu.png`, complete menu.
+- Click (480,175), step 50: `/private/tmp/iwd-lobby3-create-game.png`,
+  actual Party Formation with six slots, no session error.
+- Click (145,145), step 20: `/private/tmp/iwd-lobby3-character-choice.png`,
+  the native Create/Delete/Cancel dialog.
+- Click (320,215), step 20: `/private/tmp/iwd-lobby3-character.png`,
+  Character Generation with its initial Gender step and explanatory text.
+
+The process was explicitly quit at batch 390, exit 0. This fixes the observed
+Create Game blocker but is not gameplay acceptance. Next complete a character
+and verify first-area loading, unpaused movement, and native session saving
+using this original-installed VFS. Older acceptance below used the modified
+legacy fixture and cannot establish those results for the original install.
+
+### Earlier DirectPlay4 checkpoint
 
 The pre-DP4 rejection recorded below is now fixed in compiled factory tests.
 QueryInterface upgrades the same ANSI object to a generated 53-slot vtable,
