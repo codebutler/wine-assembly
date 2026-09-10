@@ -1321,9 +1321,69 @@
       (load.field.memarg GdiBitmap width (local.get $record))
       (load.field.memarg GdiBitmap height (local.get $record)))))
 
+  ;; CMB_MASKED returns a display bitmap twice the source width: the mapped
+  ;; color image occupies the left half and a black/white transparency mask
+  ;; occupies the right. Win98 derives that mask after color mapping, with
+  ;; mapped magenta as white and every other pixel as black.
+  (func $mapped_bitmap_create_masked (param $source i32) (result i32)
+    (local $record i32) (local $width i32) (local $height i32)
+    (local $result i32) (local $scratch_g i32) (local $scratch i32)
+    (local $src_desc i32) (local $dst_desc i32)
+    (local $x i32) (local $y i32) (local $color i32)
+    (local.set $record (call $gdi_object_record (local.get $source)))
+    (if (i32.eqz (call $gdi_bitmap_record_valid (local.get $record)))
+      (then (return (i32.const 0))))
+    (local.set $width (load.field.memarg GdiBitmap width (local.get $record)))
+    (local.set $height (load.field.memarg GdiBitmap height (local.get $record)))
+    (if (i32.gt_u (local.get $width) (i32.const 0x3FFFFFFF))
+      (then (return (i32.const 0))))
+    (local.set $result (call $gdi_bitmap_create_bitmap
+      (i32.shl (local.get $width) (i32.const 1)) (local.get $height)
+      (i32.const 1) (i32.const 32) (i32.const 0)))
+    (if (i32.eqz (local.get $result)) (then (return (i32.const 0))))
+    (local.set $scratch_g (call $heap_alloc (i32.const 160)))
+    (if (i32.eqz (local.get $scratch_g))
+      (then
+        (drop (call $gdi_object_delete_full (local.get $result)))
+        (return (i32.const 0))))
+    (local.set $scratch (call $g2w (local.get $scratch_g)))
+    (local.set $src_desc (local.get $scratch))
+    (local.set $dst_desc (i32.add (local.get $scratch) (i32.const 80)))
+    (if (i32.eqz (i32.and
+          (call $gdi_raster_desc_from_bitmap (local.get $source) (local.get $src_desc))
+          (call $gdi_raster_desc_from_bitmap (local.get $result) (local.get $dst_desc))))
+      (then
+        (call $heap_free (local.get $scratch_g))
+        (drop (call $gdi_object_delete_full (local.get $result)))
+        (return (i32.const 0))))
+    (block $rows_done (loop $rows
+      (br_if $rows_done (i32.ge_u (local.get $y) (local.get $height)))
+      (local.set $x (i32.const 0))
+      (block $cols_done (loop $cols
+        (br_if $cols_done (i32.ge_u (local.get $x) (local.get $width)))
+        (local.set $color
+          (call $gdi_raster_read (local.get $src_desc) (local.get $x) (local.get $y)))
+        (drop (call $gdi_raster_write
+          (local.get $dst_desc) (local.get $x) (local.get $y) (local.get $color)))
+        (drop (call $gdi_raster_write
+          (local.get $dst_desc) (i32.add (local.get $x) (local.get $width))
+          (local.get $y)
+          (select (i32.const 0x00FFFFFF) (i32.const 0)
+            (i32.eq (i32.and (local.get $color) (i32.const 0x00FFFFFF))
+                    (i32.const 0x00FF00FF)))))
+        (local.set $x (i32.add (local.get $x) (i32.const 1)))
+        (br $cols)))
+      (local.set $y (i32.add (local.get $y) (i32.const 1)))
+      (br $rows)))
+    (call $heap_free (local.get $scratch_g))
+    (drop (call $host_gdi_surface_upload
+      (local.get $result) (i32.const 0) (i32.const 0)
+      (i32.shl (local.get $width) (i32.const 1)) (local.get $height)))
+    (local.get $result))
+
   ;; CreateMappedBitmap(hInstance, idBitmap, wFlags, lpColorMap, iNumMaps) — 5 args, returns HBITMAP
   (func $handle_CreateMappedBitmap (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $bitmap i32) (local $map i32) (local $map_count i32)
+    (local $bitmap i32) (local $masked i32) (local $map i32) (local $map_count i32)
     (local.set $bitmap
       (call $host_gdi_load_bitmap
         (local.get $arg0)
@@ -1341,7 +1401,12 @@
             (local.set $map_count (local.get $arg4)))
           (else (local.set $map_count (i32.const 6))))
         (call $mapped_bitmap_apply_colors
-          (local.get $bitmap) (local.get $map) (local.get $map_count))))
+          (local.get $bitmap) (local.get $map) (local.get $map_count))
+        (if (i32.ne (i32.and (local.get $arg2) (i32.const 2)) (i32.const 0))
+          (then
+            (local.set $masked (call $mapped_bitmap_create_masked (local.get $bitmap)))
+            (drop (call $gdi_object_delete_full (local.get $bitmap)))
+            (local.set $bitmap (local.get $masked))))))
     ;; Load failure is failure. Win98 returns NULL; fabricating a blank 16x16
     ;; bitmap hides missing resources and produces plausible empty toolbars.
     (global.set $eax (local.get $bitmap))

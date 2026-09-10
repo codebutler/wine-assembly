@@ -98,6 +98,29 @@ const extraWat = String.raw`
   assert.strictEqual(paletteWord(noMaps), 0x000000FF,
     'a non-NULL zero-length map leaves the palette unchanged');
 
+  bytes.set([
+    0xFF, 0x00, 0xFF, 0, // mapped magenta: transparent mask bit
+    0x00, 0x00, 0x00, 0, // black: opaque mask bit
+  ], payload + 40);
+  const masked = e.test_create_mapped_bitmap(0, 101, 2, map, 0) >>> 0;
+  assert(masked);
+  const maskedPresentation = gdi.surfacePresentations.get(masked);
+  assert.strictEqual(maskedPresentation.width, 4,
+    'CMB_MASKED doubles the source width for image and mask halves');
+  assert.strictEqual(maskedPresentation.height, 2);
+  assert.strictEqual(maskedPresentation.surface.bpp, 32,
+    'CMB_MASKED returns a display-compatible color bitmap');
+  maskedPresentation.flush();
+  const maskedRgba = maskedPresentation.surface.rgbaRect(0, 0, 4, 2);
+  const rgb = pixel => [...maskedRgba.subarray(pixel * 4, pixel * 4 + 3)];
+  assert.deepStrictEqual([0, 1, 2, 3].map(rgb), [
+    [0, 0, 0], [255, 0, 255], [0, 0, 0], [255, 255, 255],
+  ], 'top row contains mapped image followed by black/white transparency mask');
+  assert.deepStrictEqual([4, 5, 6, 7].map(rgb), [
+    [255, 0, 255], [0, 0, 0], [255, 255, 255], [0, 0, 0],
+  ], 'bottom row preserves orientation in both CMB_MASKED halves');
+
+  bytes.set([0xFF, 0, 0, 0, 0, 0, 0, 0], payload + 40);
   const tooMany = e.guest_alloc(17 * 8) >>> 0;
   for (let i = 0; i < 17; i++) {
     e.guest_write32(tooMany + i * 8, i === 16 ? 0x00FF0000 : 0x00010203);
@@ -111,7 +134,7 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_create_mapped_bitmap(0, 999, 0, 0, 0), 0,
     'a missing RT_BITMAP returns NULL instead of a fabricated blank bitmap');
 
-  console.log('PASS  CreateMappedBitmap applies Win98 color maps and fails missing resources');
+  console.log('PASS  CreateMappedBitmap applies Win98 color maps, masks, and load failures');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
