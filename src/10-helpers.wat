@@ -4681,6 +4681,7 @@
     (local $style i32) (local $parent i32) (local $myxy i32) (local $myx i32) (local $myy i32)
     (local $slot i32) (local $my_slot i32) (local $my_z i32) (local $sib i32)
     (local $xy i32) (local $wh i32) (local $sx i32) (local $sy i32) (local $sw i32) (local $sh i32)
+    (local $clip_sibling i32) (local $win16_frame i32)
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
     (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
     (if (i32.eqz (local.get $parent)) (then (return)))
@@ -4691,6 +4692,13 @@
     ;; half of its earlier overlapping owner-draw Play button every second.
     (if (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000))) ;; WS_CLIPSIBLINGS
       (then
+        ;; Win16 native controls must not be hidden by earlier decorative
+        ;; frames. Custom painters still need the dialog visible-region clip:
+        ;; WEPUTIL's later frame otherwise draws across its earlier heading.
+        ;; Explicit WS_CLIPSIBLINGS always takes precedence in either case.
+        (if (i32.and (global.get $is_win16)
+              (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0)))
+          (then (return)))
         (if (i32.and
               (i32.ne (call $wnd_table_get (local.get $parent)) (global.get $WNDPROC_DIALOG))
               (i32.eqz (call $wnd_class_is_dialog (local.get $parent))))
@@ -4700,11 +4708,28 @@
     (local.set $my_z (call $wnd_z_get (local.get $hwnd)))
     (local.set $myx (call $ctrl_get_x_s (local.get $hwnd)))
     (local.set $myy (call $ctrl_get_y_s (local.get $hwnd)))
+    (local.set $win16_frame (i32.and (global.get $is_win16)
+      (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000)))))
     (local.set $slot (i32.const 0))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
       (local.set $sib (call $wnd_slot_hwnd (local.get $slot)))
-      (if (call $wnd_z_is_above_sibling (local.get $hwnd) (local.get $sib))
+      (local.set $clip_sibling (call $wnd_z_is_above_sibling (local.get $hwnd) (local.get $sib)))
+      (if (local.get $win16_frame)
+        (then
+          ;; A Win16 decorative custom painter must leave native labels
+          ;; visible regardless of template ordering. An exactly coincident
+          ;; custom frame is the label's own border, however, and must draw.
+          (local.set $clip_sibling
+            (i32.and
+              (i32.and (i32.ne (call $ctrl_table_get_class (local.get $sib)) (i32.const 0))
+                (i32.eq (call $wnd_get_parent (local.get $sib)) (local.get $parent)))
+              (i32.and
+                (i32.ne (i32.and (call $wnd_get_style (local.get $sib)) (i32.const 0x10000000)) (i32.const 0))
+                (i32.eqz (i32.and
+                  (i32.eq (call $ctrl_get_xy_packed (local.get $sib)) (call $ctrl_get_xy_packed (local.get $hwnd)))
+                  (i32.eq (call $ctrl_get_wh_packed (local.get $sib)) (call $ctrl_get_wh_packed (local.get $hwnd))))))))))
+      (if (local.get $clip_sibling)
         (then
           (local.set $wh (call $ctrl_get_wh_packed (local.get $sib)))
           (local.set $sx (call $ctrl_get_x_s (local.get $sib)))

@@ -11,6 +11,52 @@ the original remains the desktop edition and the remake is separately
 selectable as `rodent2000`. See [rodent2000.md](rodent2000.md) for the remake's
 OLE picture startup fix and gameplay command.
 
+## High Scores close corruption and invisible saved names (2026-09-10)
+
+Two independent bugs reproduced in non-isolated Chrome with the compatibility
+WASM artifact explicitly forced (tail-call support selects the artifact;
+SharedArrayBuffer availability does not).
+
+* Closing the viewer raised a garbage-text message box and eventually consumed
+  the Win16 stack. The modal return at WEPUTIL `1:0xc07` was correct. The real
+  corruption happened during owner-draw painting: the fourth 32-byte
+  DRAWITEMSTRUCT scratch slot at DGROUP `0x12 + 3*32 = 0x72` overwrote VB's
+  nesting counter with `ODT_BUTTON=4`, and nearby runtime fields with the rest
+  of the structure. VB declares an empty static DGROUP then initializes its
+  own runtime data there. USER's message/font copies now occupy a dedicated,
+  lazily allocated selector instead. Existing heap/stack spacing is retained.
+* Saved name/score strings were present in the actual STATIC controls but
+  invisible. The implicit Win32-dialog sibling clip treated WEPUTIL's earlier
+  decorative IndentBox as an opaque occluder of later enclosed labels. Win16
+  native controls now require explicit WS_CLIPSIBLINGS; custom painters retain
+  the dialog visible-region clip around native controls, including headings
+  later in template order. An exactly coincident custom frame is the label's
+  own border and remains drawable. The existing Win32 rule and explicit Win16 clipping
+  remain intact. Disabling implicit clipping for all Win16 controls was too
+  broad: it restored names but drew horizontal frame lines across headings.
+
+Verification: `test-win16-user-scratch.js` checks all DGROUP bytes, the four-slot
+ring, DRAWITEM fields, and EnumFonts far pointers. The window-surface regression
+checks Win16 implicit/explicit and Win32 dialog clips. A compat-browser probe
+substituted the real WepScore API call for WepFame with a test score of 9999,
+typed `PhoneProbe` through browser keyboard events, inspected both real score
+lists and their pixels, and closed back to the idle game with ESP `0x1179ea`.
+This exercises WEPUTIL's actual entry/save/viewer code, not a naturally earned
+game-over or Safari keyboard policy. Probe: `/private/tmp/rodent-compat-close.js`
+with `SCORE_PROBE=1`; capture: `/private/tmp/rodent-score-saved.png`.
+
+The broader `test-win16-dialog.js` Solitaire suite still fails its final
+Cancel/closed-screenshot assertion, identically with the pre-fix HEAD artifact
+and the new build. It is not a green-suite claim; the scratch, clipping matrix,
+native caret, and actual WEPUTIL resource tests pass.
+
+The board-profile presentation area is now used for both Fit and Fill,
+including modal windows, and accounts for the CSS safe-area insets and visual
+viewport top. A host already below the status bar does not double the inset;
+keyboard-open retains the frozen area and landscape retains its side rails.
+Single-app and touch-control tests cover these bounds. The phone preview uses
+Chrome with an explicitly simulated 47px top inset, not an actual Safari capture.
+
 ## Idle CPU: Win16 WaitMessage busy loop (2026-09-10)
 
 Browser block tracing found a repeating 34-block pump, ending at
