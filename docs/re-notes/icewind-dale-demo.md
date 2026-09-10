@@ -133,6 +133,33 @@ resource I/O. Next investigation should enable the relevant tracing at the
 menu or suppress those independent file diagnostics while retaining the
 DirectPlay/COM trace, then compare with the legacy route on the same build.
 
+The follow-up frozen trace identified a concrete interface gap during menu
+initialization, before Create Game: at `0x008d3680`, the executable calls
+`CoCreateInstance(0x00997c50, NULL, 1, 0x00997c40, out)` with return address
+`0x008d3686`. Decoding the original executable's GUID bytes gives
+`CLSID_DirectPlay` and `IID_IDirectPlay4A`
+`{0AB1C531-4745-11D1-A7A1-0000F803ABFC}`. The caller stores the HRESULT at
+`[ebp-0x1c]` and tests it after `CoUninitialize`.
+
+The current `dplay_query_interface_wa` intentionally rejects this IID because
+only the 47-slot ANSI DirectPlay2/3 vtable exists. The compiled
+`test-directplay-query-interface.js` now reproduces the exact factory request:
+`E_NOINTERFACE`, cleared output, and no leaked temporary object. Its passing
+negative test describes a missing feature, not working IWD gameplay. The
+legacy fixture's earlier success does not establish that it still works on
+this newer COM implementation; the original-installed error should not be
+attributed to INI/KEY/CD layout without further evidence.
+
+Next is a real 53-slot ANSI DirectPlay4 implementation. Its additional methods
+are group-owner get/set, extended send, queue inspection, and cancellation by
+message or priority, as defined in the
+[Wine DirectPlay header](https://raw.githubusercontent.com/wine-mirror/wine/master/include/dplay.h).
+Simply accepting the IID on the shorter vtable would permit calls past its
+end. Ownership, queue state, cancellation, reference lifetimes, and all tail
+stdcall contracts need coverage before changing the current rejection test.
+The trace run was explicitly quit at batch 350; its inspected session-error
+capture is `/private/tmp/iwd-original-dp4-error.png`.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves

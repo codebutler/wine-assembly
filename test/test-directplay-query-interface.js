@@ -167,6 +167,12 @@ async function main() {
   check('CoCreateInstance rejects the Unicode DirectPlay sibling without leaking',
     (e.test_cocreate(clsidDirectPlay, 0, dplay3w, out) >>> 0) === 0x80004002 &&
     dv.getUint32(wa(out), true) === 0 && e.test_dx_live_count() === liveBeforeFactories);
+  // Icewind Dale asks for this IID at 0x008d3680 during menu initialization.
+  // Change this baseline to a full-vtable success test when DP4A is implemented.
+  dv.setUint32(wa(out), 0xfeedface, true);
+  check('CoCreateInstance reproduces the IWD DirectPlay4A activation gap without leaking',
+    (e.test_cocreate(clsidDirectPlay, 0, dplay4a, out) >>> 0) === 0x80004002 &&
+    dv.getUint32(wa(out), true) === 0 && e.test_dx_live_count() === liveBeforeFactories);
   check('CoCreateInstance rejects DirectPlay aggregation and clears output',
     (e.test_cocreate(clsidDirectPlay, 1, dplay3a, out) >>> 0) === 0x80040110 &&
     dv.getUint32(wa(out), true) === 0 && e.test_dx_live_count() === liveBeforeFactories);
