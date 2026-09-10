@@ -7471,6 +7471,154 @@
   (global $dp_entity_table (mut i32) (i32.const 0))
   (global $dp_entity_next_id (mut i32) (i32.const 0x100))
 
+  ;; Internal DP4 queue storage; transport and public flag/error contracts are
+  ;; separate. Slots contain id/owner/from/to/payload/size/priority/kind.
+  ;; kind 0 is pending send, kind 1 is received. IDs never recycle.
+  (global $DP_MESSAGE_MAX i32 (i32.const 64))
+  (global $DP_MESSAGE_STRIDE i32 (i32.const 32))
+  (global $dp_message_table (mut i32) (i32.const 0))
+  (global $dp_message_next_id (mut i32) (i32.const 1))
+  (global $dp_message_bytes (mut i32) (i32.const 0))
+
+  (func $dp_message_enqueue (param $owner i32) (param $from i32) (param $to i32)
+      (param $data i32) (param $size i32) (param $priority i32) (param $kind i32) (result i32)
+    (local $i i32) (local $entry i32) (local $payload i32) (local $id i32)
+    (if (i32.eqz (local.get $owner)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $kind) (i32.const 1)) (then (return (i32.const 0))))
+    (if (i32.eqz (global.get $dp_message_next_id)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $size) (i32.const 1048576)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $size)
+          (i32.sub (i32.const 4194304) (global.get $dp_message_bytes)))
+      (then (return (i32.const 0))))
+    (if (local.get $size)
+      (then (if (i32.eqz (local.get $data)) (then (return (i32.const 0))))))
+    (if (i32.eqz (global.get $dp_message_table))
+      (then
+        (global.set $dp_message_table (call $heap_alloc
+          (i32.mul (global.get $DP_MESSAGE_MAX) (global.get $DP_MESSAGE_STRIDE))))
+        (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+        (call $zero_memory (call $g2w (global.get $dp_message_table))
+          (i32.mul (global.get $DP_MESSAGE_MAX) (global.get $DP_MESSAGE_STRIDE)))))
+    (block $full (loop $scan
+      (br_if $full (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (if (i32.eqz (call $gl32 (local.get $entry)))
+        (then
+          (if (local.get $size)
+            (then
+              (local.set $payload (call $heap_alloc (local.get $size)))
+              (if (i32.eqz (local.get $payload)) (then (return (i32.const 0))))
+              (call $guest_memmove (local.get $payload) (local.get $data)
+                (local.get $size))))
+          (local.set $id (global.get $dp_message_next_id))
+          (global.set $dp_message_next_id (i32.add (local.get $id) (i32.const 1)))
+          (call $gs32 (local.get $entry) (local.get $id))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 4)) (local.get $owner))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 8)) (local.get $from))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 12)) (local.get $to))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 16)) (local.get $payload))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 20)) (local.get $size))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 24)) (local.get $priority))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 28)) (local.get $kind))
+          (global.set $dp_message_bytes (i32.add (global.get $dp_message_bytes) (local.get $size)))
+          (return (local.get $id))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $dp_message_find (param $owner i32) (param $id i32) (result i32)
+    (local $i i32) (local $entry i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $id)) (then (return (i32.const 0))))
+    (block $missing (loop $scan
+      (br_if $missing (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (if (i32.and (i32.eq (call $gl32 (local.get $entry)) (local.get $id))
+            (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (local.get $owner)))
+        (then (return (local.get $entry))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $dp_message_remove (param $owner i32) (param $id i32) (result i32)
+    (local $entry i32) (local $payload i32)
+    (local.set $entry (call $dp_message_find (local.get $owner) (local.get $id)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (local.set $payload (call $gl32 (i32.add (local.get $entry) (i32.const 16))))
+    (if (local.get $payload) (then (call $heap_free (local.get $payload))))
+    (global.set $dp_message_bytes (i32.sub (global.get $dp_message_bytes)
+      (call $gl32 (i32.add (local.get $entry) (i32.const 20)))))
+    (call $zero_memory (call $g2w (local.get $entry)) (global.get $DP_MESSAGE_STRIDE))
+    (i32.const 1))
+
+  ;; Query mode: 0 message count, 1 bytes, 2 oldest matching entry. Sender and
+  ;; recipient zero are wildcards. Slot order is not FIFO after a cancellation.
+  (func $dp_message_query (param $owner i32) (param $kind i32)
+      (param $from i32) (param $to i32) (param $mode i32) (result i32)
+    (local $i i32) (local $entry i32) (local $id i32) (local $result i32)
+    (local $oldest i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $mode) (i32.const 2)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (local.set $id (call $gl32 (local.get $entry)))
+      (if (i32.and (i32.ne (local.get $id) (i32.const 0))
+            (i32.and
+              (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (local.get $owner))
+                (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (local.get $kind)))
+              (i32.and
+                (i32.or (i32.eqz (local.get $from))
+                  (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 8))) (local.get $from)))
+                (i32.or (i32.eqz (local.get $to))
+                  (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 12))) (local.get $to))))))
+        (then
+          (if (i32.eq (local.get $mode) (i32.const 2))
+            (then
+              (if (i32.or (i32.eqz (local.get $oldest)) (i32.lt_u (local.get $id) (local.get $oldest)))
+                (then (local.set $oldest (local.get $id)) (local.set $result (local.get $entry)))))
+            (else (local.set $result (i32.add (local.get $result)
+              (select (call $gl32 (i32.add (local.get $entry) (i32.const 20))) (i32.const 1)
+                (local.get $mode))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $result))
+
+  (func $dp_message_cancel_range (param $owner i32) (param $kind i32)
+      (param $low i32) (param $high i32) (result i32)
+    (local $i i32) (local $entry i32) (local $priority i32) (local $count i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (local.set $priority (call $gl32 (i32.add (local.get $entry) (i32.const 24))))
+      (if (i32.and
+            (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (local.get $owner))
+              (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (local.get $kind)))
+            (i32.and (i32.ge_u (local.get $priority) (local.get $low))
+              (i32.le_u (local.get $priority) (local.get $high))))
+        (then (local.set $count (i32.add (local.get $count)
+          (call $dp_message_remove (local.get $owner) (call $gl32 (local.get $entry)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $count))
+
+  (func $dp_messages_clear
+    (local $i i32) (local $entry i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (drop (call $dp_message_remove
+        (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (call $gl32 (local.get $entry))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
   (func $dp_ensure_entities (result i32)
     (if (i32.eqz (global.get $dp_entity_table))
       (then
@@ -7821,6 +7969,7 @@
 
   (func $dp_clear_entities
     (local $i i32) (local $entry i32)
+    (call $dp_messages_clear)
     (if (i32.eqz (global.get $dp_entity_table)) (then (return)))
     (block $done (loop $clear
       (br_if $done (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))

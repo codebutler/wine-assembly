@@ -171,6 +171,18 @@ notifications/migration, per-object session isolation, and public HRESULT
 contracts still need to be established. No DP4 IID or additional vtable slot
 has been exposed by this prerequisite.
 
+Internal message storage now retains copied payloads, owner keys, sender and
+recipient IDs, unsigned priorities, and non-recycled message IDs. Queries
+count messages/bytes or find the oldest match independent of slot reuse;
+cancellation is owner-scoped and separates send from receive entries. Storage
+is bounded to 64 entries, 1 MiB per payload, and 4 MiB total. Close clears it
+even when no entity table has been allocated. The compiled
+`test-directplay-message-queue.js` covers those invariants, ID exhaustion, and
+copies spanning non-contiguous guest-page backing. These are internal
+primitives only: public SendEx/Receive delivery, flags/HRESULTs, asynchronous
+completion, COM lifetime cleanup, and per-object session isolation remain
+unimplemented. The DP4 IID remains rejected; no new gameplay pass is claimed.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves
