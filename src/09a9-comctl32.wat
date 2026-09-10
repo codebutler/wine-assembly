@@ -1237,25 +1237,114 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
+  ;; Convert COLORREF (00BBGGRR) to the RGBQUAD word used by owned indexed
+  ;; bitmap palettes (00RRGGBB).
+  (func $mapped_bitmap_palette_color (param $colorref i32) (result i32)
+    (call $gdi_raster_swap_rb (i32.and (local.get $colorref) (i32.const 0x00FFFFFF))))
+
+  ;; Win98's six default toolbar mappings. The source colors are COLORREFs;
+  ;; the targets are resolved through the process's current system colors.
+  (func $mapped_bitmap_default_from (param $index i32) (result i32)
+    (if (i32.eq (local.get $index) (i32.const 0)) (then (return (i32.const 0x00000000))))
+    (if (i32.eq (local.get $index) (i32.const 1)) (then (return (i32.const 0x00808080))))
+    (if (i32.eq (local.get $index) (i32.const 2)) (then (return (i32.const 0x00C0C0C0))))
+    (if (i32.eq (local.get $index) (i32.const 3)) (then (return (i32.const 0x00FFFFFF))))
+    (if (i32.eq (local.get $index) (i32.const 4)) (then (return (i32.const 0x00FF0000))))
+    (i32.const 0x00FF00FF))
+
+  (func $mapped_bitmap_default_to (param $index i32) (result i32)
+    (if (i32.eq (local.get $index) (i32.const 0)) (then (return (call $win98_sys_color (i32.const 18)))))
+    (if (i32.eq (local.get $index) (i32.const 1)) (then (return (call $win98_sys_color (i32.const 16)))))
+    (if (i32.eq (local.get $index) (i32.const 2)) (then (return (call $win98_sys_color (i32.const 15)))))
+    (if (i32.eq (local.get $index) (i32.const 3)) (then (return (call $win98_sys_color (i32.const 20)))))
+    (if (i32.eq (local.get $index) (i32.const 4)) (then (return (call $win98_sys_color (i32.const 13)))))
+    (call $win98_sys_color (i32.const 5)))
+
+  ;; Apply at most Win98's 16 accepted COLORMAP entries to an indexed bitmap's
+  ;; owned palette. $map is a translated WASM pointer, or zero for the six
+  ;; system-color defaults above.
+  (func $mapped_bitmap_apply_colors
+      (param $bitmap i32) (param $map i32) (param $map_count i32)
+    (local $record i32) (local $palette i32) (local $palette_count i32)
+    (local $i i32) (local $j i32) (local $entry i32)
+    (local $from i32) (local $to i32)
+    (local.set $record (call $gdi_object_record (local.get $bitmap)))
+    (if (i32.eqz (call $gdi_bitmap_record_valid (local.get $record))) (then (return)))
+    (local.set $palette (load.field.memarg GdiBitmap palette (local.get $record)))
+    (local.set $palette_count
+      (load.field.memarg GdiBitmap palette_count (local.get $record)))
+    ;; A 16-bpp mask triplet uses the same record fields but is not a color
+    ;; table. CreateMappedBitmap is fully defined only for <=256-color images.
+    (if (i32.or
+          (i32.eqz (local.get $palette))
+          (i32.or
+            (i32.gt_u (load.field.memarg GdiBitmap bpp (local.get $record)) (i32.const 8))
+            (i32.le_s (local.get $map_count) (i32.const 0))))
+      (then (return)))
+    (if (i32.gt_s (local.get $map_count) (i32.const 16))
+      (then (local.set $map_count (i32.const 16))))
+    (block $palette_done (loop $palette_entries
+      (br_if $palette_done (i32.ge_u (local.get $i) (local.get $palette_count)))
+      (local.set $entry
+        (i32.and
+          (i32.load (i32.add (local.get $palette) (i32.shl (local.get $i) (i32.const 2))))
+          (i32.const 0x00FFFFFF)))
+      (local.set $j (i32.const 0))
+      (block $maps_done (loop $maps
+        (br_if $maps_done (i32.ge_u (local.get $j) (local.get $map_count)))
+        (if (local.get $map)
+          (then
+            (local.set $from (call $mapped_bitmap_palette_color
+              (i32.load (i32.add (local.get $map) (i32.shl (local.get $j) (i32.const 3))))))
+            (local.set $to (call $mapped_bitmap_palette_color
+              (i32.load offset=4
+                (i32.add (local.get $map) (i32.shl (local.get $j) (i32.const 3)))))))
+          (else
+            (local.set $from (call $mapped_bitmap_palette_color
+              (call $mapped_bitmap_default_from (local.get $j))))
+            (local.set $to (call $mapped_bitmap_palette_color
+              (call $mapped_bitmap_default_to (local.get $j))))))
+        (if (i32.eq (local.get $entry) (local.get $from))
+          (then
+            (i32.store
+              (i32.add (local.get $palette) (i32.shl (local.get $i) (i32.const 2)))
+              (local.get $to))
+            (br $maps_done)))
+        (local.set $j (i32.add (local.get $j) (i32.const 1)))
+        (br $maps)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $palette_entries)))
+    ;; The browser surface is a derived presentation of this WAT-owned record;
+    ;; refresh it after changing the canonical palette.
+    (drop (call $host_gdi_surface_upload
+      (local.get $bitmap) (i32.const 0) (i32.const 0)
+      (load.field.memarg GdiBitmap width (local.get $record))
+      (load.field.memarg GdiBitmap height (local.get $record)))))
+
   ;; CreateMappedBitmap(hInstance, idBitmap, wFlags, lpColorMap, iNumMaps) — 5 args, returns HBITMAP
   (func $handle_CreateMappedBitmap (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $tmp i32)
-    ;; Bounded compatibility: load the requested RT_BITMAP and skip the
-    ;; optional comctl32 color map for now. Returning a real HBITMAP matters
-    ;; more than the previous fake handle because toolbar/image painters can
-    ;; validate and blit it.
-    (local.set $tmp
+    (local $bitmap i32) (local $map i32) (local $map_count i32)
+    (local.set $bitmap
       (call $host_gdi_load_bitmap
         (local.get $arg0)
-        (if (result i32) (i32.gt_u (local.get $arg1) (i32.const 0xFFFF))
-          (then (local.get $arg1))
-          (else (i32.and (local.get $arg1) (i32.const 0xFFFF))))))
-    (if (i32.eqz (local.get $tmp))
+        ;; Win98's export reads idBitmap as a WORD resource id even though the
+        ;; modern prototype spells the slot INT_PTR.
+        (i32.and (local.get $arg1) (i32.const 0xFFFF))))
+    (if (local.get $bitmap)
       (then
-        (local.set $tmp
-          (call $host_gdi_create_compat_bitmap
-            (i32.const 0) (i32.const 16) (i32.const 16) (i32.const 0)))))
-    (global.set $eax (local.get $tmp))
+        (if (local.get $arg3)
+          (then
+            ;; Translate the caller's COLORMAP array once, then walk it in
+            ;; linear memory. The Win98 implementation clamps custom maps to
+            ;; sixteen entries.
+            (local.set $map (call $g2w (local.get $arg3)))
+            (local.set $map_count (local.get $arg4)))
+          (else (local.set $map_count (i32.const 6))))
+        (call $mapped_bitmap_apply_colors
+          (local.get $bitmap) (local.get $map) (local.get $map_count))))
+    ;; Load failure is failure. Win98 returns NULL; fabricating a blank 16x16
+    ;; bitmap hides missing resources and produces plausible empty toolbars.
+    (global.set $eax (local.get $bitmap))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
