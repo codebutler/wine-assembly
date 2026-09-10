@@ -204,3 +204,33 @@ rewritten; every unproved or unsupported sequence retains the scalar x87
 handlers. The default remains off until fixed-work application tests establish
 both correctness and a repeatable whole-program benefit across more than the
 current Quake II OpenGL candidate.
+
+### Targeted game-module census
+
+A 2026-09-10 linear code-section sweep of 28 unpacked game/runtime modules
+(excluding installer payloads and bundled system/DirectX DLLs) ranked these
+3D-era candidates highest. `balanced x87 ops` counts instructions inside the
+census tool's bounded, stack-balanced regions; it is an opportunity ceiling for
+a future region compiler, not the narrower current H449 catalog match count.
+
+| module | static x87 / decoded instructions | balanced x87 ops |
+|---|---:|---:|
+| Quake II `ref_soft.dll` | 12.17% | 2,037 |
+| Deus Ex `render.dll` | 10.43% | 5,390 |
+| Half-Life `hl.dll` | 9.80% | 11,633 |
+| Half-Life `hw.dll` | 9.30% | 12,872 |
+| Half-Life `sw.dll` | 9.15% | 11,198 |
+| MechWarrior 3 `mech3demo.exe` | 8.45% | 23,247 |
+| Quake II `ref_gl.dll` | 6.98% | 1,833 |
+| Quake II `quake2.exe` | 5.81% | 2,764 |
+| Deus Ex `engine.dll` | 4.14% | 13,477 |
+
+This is candidate selection, not performance evidence. Linear static density
+does not weight executed blocks: Alpha's `terran.exe` measured only 0.62% and
+Jazz2 0.99% here even though their measured movie/game windows concentrate much
+more heavily in a few x87 paths. Quake II also demonstrates that topology
+matters: the OpenGL renderer has lower file-wide density than `ref_soft.dll`,
+but its hot x87 work sits in tight self-loops and therefore amortizes the
+current island handler much better. Direct3D/OpenGL offload rasterization; guest
+code still performs animation, transforms, clipping, lightmap construction,
+and API argument preparation before calling the host renderer.
