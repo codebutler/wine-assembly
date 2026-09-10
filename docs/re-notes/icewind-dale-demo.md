@@ -48,6 +48,17 @@ before another full installer acceptance; do not silently return success.
 Use shorter step requests or a separately accessible control channel so
 progress and orderly-stop commands are not queued behind a long step.
 
+`WritePrivateProfileSectionA/W` are now implemented in `db04f9a8`: section
+replacement/deletion writes the VFS file, retains an existing UTF-16LE file's
+encoding, and reports invalid parameters, missing parents, and read-only
+write failures. Single-key profile writes preserve the section-written keys.
+The storage regression and full build pass. `test/test-profile-section.js`
+also exercises both compiled WAT handlers with guest pointers, Unicode text,
+NULL deletion/flush arguments, BOOL/LastError, and three-argument stdcall
+cleanup. This closes the missing API implementation, not installer acceptance:
+the original installer has not yet been rerun through its final stage on this
+fix, and the installed game's original INI/CD layout remains unverified.
+
 The original `Setup.exe` successfully emits its InstallShield 5.5 engine
 through guest execution. Replay that emitted engine, not a host-extracted
 cabinet. The following frozen CLI route uses an isolated build and leaves
