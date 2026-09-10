@@ -1069,49 +1069,135 @@
 
   ;; ============================================================
   ;; COMCTL32 internal heap functions (ordinal-only)
+  ;; Win98 comctl32.dll ordinals 71..74 are thin wrappers over HeapAlloc with
+  ;; HEAP_ZERO_MEMORY, HeapReAlloc with HEAP_ZERO_MEMORY, HeapFree, and HeapSize
+  ;; respectively.  Keep that contract here; only the private heap's storage
+  ;; representation differs inside the browser runtime.
   ;; ============================================================
+
+  ;; Keep the allocator's private size/liveness header immediately before the
+  ;; pointer exposed to common-control callers:
+  ;;   heap payload [magic:4, requested_size:4, caller bytes...]
+  ;; The underlying heap header remains four bytes before that payload.  This
+  ;; gives GetSize the requested extent and lets Free/ReAlloc reject stale or
+  ;; foreign pointers without guessing from adjacent guest memory.
+  (global $COMCTL_ALLOC_MAGIC i32 (i32.const 0x31414343)) ;; "CCA1"
+
+  ;; Return the private header's wasm address, or zero when pv is not one of
+  ;; this family's live allocations.  The guest pointer is translated once.
+  (func $comctl_alloc_record (param $ptr i32) (result i32)
+    (local $block i32) (local $block_wa i32) (local $block_size i32)
+    (local $raw_wa i32) (local $requested i32)
+    (if (i32.or
+          (i32.lt_u (local.get $ptr) (i32.const 12))
+          (i32.ne (i32.and (local.get $ptr) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $ptr) (i32.const 12)))
+    (if (i32.eqz (call $heap_arena_find (local.get $block)))
+      (then (return (i32.const 0))))
+    (local.set $block_wa (call $g2w (local.get $block)))
+    (local.set $block_size (i32.load (local.get $block_wa)))
+    (if (i32.or
+          (i32.lt_u (local.get $block_size) (i32.const 16))
+          (call $heap_block_bad (local.get $block) (local.get $block_size)))
+      (then (return (i32.const 0))))
+    (local.set $raw_wa (i32.add (local.get $block_wa) (i32.const 4)))
+    (if (i32.ne (i32.load (local.get $raw_wa)) (global.get $COMCTL_ALLOC_MAGIC))
+      (then (return (i32.const 0))))
+    (local.set $requested (i32.load offset=4 (local.get $raw_wa)))
+    (if (i32.gt_u (local.get $requested)
+          (i32.sub (local.get $block_size) (i32.const 12)))
+      (then (return (i32.const 0))))
+    (local.get $raw_wa))
+
+  (func $comctl_alloc_new (param $size i32) (result i32)
+    (local $raw i32) (local $raw_wa i32)
+    (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFE8))
+      (then (return (i32.const 0))))
+    (local.set $raw
+      (call $heap_alloc (i32.add (local.get $size) (i32.const 8))))
+    (if (i32.eqz (local.get $raw)) (then (return (i32.const 0))))
+    (local.set $raw_wa (call $g2w (local.get $raw)))
+    (i32.store (local.get $raw_wa) (global.get $COMCTL_ALLOC_MAGIC))
+    (i32.store offset=4 (local.get $raw_wa) (local.get $size))
+    (if (local.get $size)
+      (then
+        (memory.fill (i32.add (local.get $raw_wa) (i32.const 8))
+          (i32.const 0) (local.get $size))))
+    (i32.add (local.get $raw) (i32.const 8)))
 
   ;; Comctl32_Alloc(dwSize) — 1 arg, returns pointer (zeroed)
   (func $handle_Comctl32_Alloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ptr i32)
-    (local.set $ptr (call $heap_alloc (local.get $arg0)))
-    ;; Zero the allocation
-    (if (local.get $arg0)
-      (then (memory.fill (call $g2w (local.get $ptr)) (i32.const 0) (local.get $arg0))))
-    (global.set $eax (local.get $ptr))
+    (global.set $eax (call $comctl_alloc_new (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
   ;; Comctl32_ReAlloc(pv, cbNew) — 2 args, returns pointer
   (func $handle_Comctl32_ReAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Simple: allocate new, copy, return new (no free of old — heap doesn't support free yet)
-    (local $new_ptr i32)
+    (local $old_wa i32) (local $old_size i32)
+    (local $new_raw i32) (local $new_wa i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        ;; NULL input = just alloc
-        (local.set $new_ptr (call $heap_alloc (local.get $arg1)))
-        (if (local.get $arg1)
-          (then (memory.fill (call $g2w (local.get $new_ptr)) (i32.const 0) (local.get $arg1)))))
-      (else
-        ;; Realloc: alloc new, copy old data
-        (local.set $new_ptr (call $heap_alloc (local.get $arg1)))
-        (if (local.get $arg1)
-          (then (memory.copy (call $g2w (local.get $new_ptr)) (call $g2w (local.get $arg0)) (local.get $arg1))))))
-    (global.set $eax (local.get $new_ptr))
+        (global.set $eax (call $comctl_alloc_new (local.get $arg1)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $old_wa (call $comctl_alloc_record (local.get $arg0)))
+    (if (i32.or
+          (i32.eqz (local.get $old_wa))
+          (i32.gt_u (local.get $arg1) (i32.const 0x7FFFFFE8)))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $old_size (i32.load offset=4 (local.get $old_wa)))
+    (local.set $new_raw
+      (call $heap_realloc
+        (i32.sub (local.get $arg0) (i32.const 8))
+        (i32.add (local.get $arg1) (i32.const 8))
+        (i32.const 0)))
+    (if (i32.eqz (local.get $new_raw))
+      (then
+        ;; The original allocation remains live when reallocation fails.
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $new_wa (call $g2w (local.get $new_raw)))
+    (i32.store (local.get $new_wa) (global.get $COMCTL_ALLOC_MAGIC))
+    (i32.store offset=4 (local.get $new_wa) (local.get $arg1))
+    (if (i32.gt_u (local.get $arg1) (local.get $old_size))
+      (then
+        (memory.fill
+          (i32.add (local.get $new_wa)
+            (i32.add (i32.const 8) (local.get $old_size)))
+          (i32.const 0)
+          (i32.sub (local.get $arg1) (local.get $old_size)))))
+    (global.set $eax (i32.add (local.get $new_raw) (i32.const 8)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; Comctl32_Free(pv) — 1 arg, returns BOOL
   (func $handle_Comctl32_Free (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Our heap doesn't support free, just return TRUE
+    (local $raw_wa i32)
+    (local.set $raw_wa (call $comctl_alloc_record (local.get $arg0)))
+    (if (i32.eqz (local.get $raw_wa))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (i32.store (local.get $raw_wa) (i32.const 0))
+    (i32.store offset=4 (local.get $raw_wa) (i32.const 0))
+    (call $heap_free (i32.sub (local.get $arg0) (i32.const 8)))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
   ;; Comctl32_GetSize(pv) — 1 arg, returns DWORD size
   (func $handle_Comctl32_GetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Our heap doesn't track sizes, return a reasonable default
-    (global.set $eax (i32.const 256))
+    (local $raw_wa i32)
+    (local.set $raw_wa (call $comctl_alloc_record (local.get $arg0)))
+    (if (local.get $raw_wa)
+      (then (global.set $eax (i32.load offset=4 (local.get $raw_wa))))
+      (else (global.set $eax (i32.const -1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 

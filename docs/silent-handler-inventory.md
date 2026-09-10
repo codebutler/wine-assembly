@@ -216,3 +216,8 @@ driver messages instead of claiming every driver-specific request succeeded.
 2026-09-10: 369 -> 367. DPA_Destroy and DSA_Destroy now validate opaque live
 handles, retire them, and return both their backing arrays and handle records
 to the process heap instead of claiming success while leaking every array.
+
+2026-09-10: 367 -> 365. Comctl32_Free and Comctl32_GetSize now operate on
+validated live allocations instead of returning unconditional TRUE and 256;
+the same tracked extent also makes ReAlloc preserve only owned bytes, retire
+moved storage, and fail without destroying the original allocation.

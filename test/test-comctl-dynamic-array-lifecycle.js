@@ -13,6 +13,32 @@ const extraWat = String.raw`
   (func (export "test_heap_alloc") (param $size i32) (result i32)
     (call $heap_alloc (local.get $size)))
 
+  (func (export "test_comctl_alloc") (param $size i32) (result i32)
+    (call $test_api_stack)
+    (call $handle_Comctl32_Alloc
+      (local.get $size) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_comctl_realloc")
+      (param $ptr i32) (param $size i32) (result i32)
+    (call $test_api_stack)
+    (call $handle_Comctl32_ReAlloc
+      (local.get $ptr) (local.get $size) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_comctl_free") (param $ptr i32) (result i32)
+    (call $test_api_stack)
+    (call $handle_Comctl32_Free
+      (local.get $ptr) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_comctl_get_size") (param $ptr i32) (result i32)
+    (call $test_api_stack)
+    (call $handle_Comctl32_GetSize
+      (local.get $ptr) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+
   (func (export "test_dsa_create") (param $size i32) (param $grow i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_Create
@@ -94,7 +120,59 @@ const extraWat = String.raw`
 (async () => {
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const view = new DataView(memory.buffer);
+  const bytes = new Uint8Array(memory.buffer);
   const wasm = guest => e.guest_to_wasm(guest) >>> 0;
+
+  let comctl = e.test_comctl_alloc(13) >>> 0;
+  assert(comctl, 'Comctl32_Alloc returns a live allocation');
+  assert.strictEqual(e.test_comctl_get_size(comctl), 13,
+    'Comctl32_GetSize reports the requested allocation extent');
+  assert.deepStrictEqual([...bytes.subarray(wasm(comctl), wasm(comctl) + 13)],
+    new Array(13).fill(0), 'Comctl32_Alloc zero-initializes caller bytes');
+  for (let i = 0; i < 13; i++) bytes[wasm(comctl) + i] = 0x40 + i;
+
+  const oldComctl = comctl;
+  comctl = e.test_comctl_realloc(comctl, 29) >>> 0;
+  assert(comctl, 'Comctl32_ReAlloc grows a live allocation');
+  assert.strictEqual(e.test_comctl_get_size(comctl), 29);
+  for (let i = 0; i < 13; i++) {
+    assert.strictEqual(bytes[wasm(comctl) + i], 0x40 + i,
+      `Comctl32_ReAlloc preserves byte ${i}`);
+  }
+  assert.deepStrictEqual([...bytes.subarray(wasm(comctl) + 13, wasm(comctl) + 29)],
+    new Array(16).fill(0), 'Comctl32_ReAlloc zeroes the grown tail');
+  if (comctl !== oldComctl) {
+    assert.strictEqual(e.test_comctl_get_size(oldComctl), -1,
+      'a moved reallocation retires its old pointer');
+  }
+
+  const shrunk = e.test_comctl_realloc(comctl, 5) >>> 0;
+  assert(shrunk, 'Comctl32_ReAlloc shrinks a live allocation');
+  assert.strictEqual(e.test_comctl_get_size(shrunk), 5,
+    'GetSize tracks a shrink rather than returning allocator padding');
+  assert.deepStrictEqual([...bytes.subarray(wasm(shrunk), wasm(shrunk) + 5)],
+    [0x40, 0x41, 0x42, 0x43, 0x44]);
+  assert.strictEqual(e.test_comctl_free(shrunk), 1,
+    'Comctl32_Free releases a live allocation');
+  assert.strictEqual(e.test_comctl_get_size(shrunk), -1,
+    'GetSize rejects freed pointers');
+  assert.strictEqual(e.test_comctl_free(shrunk), 0,
+    'Comctl32_Free rejects double free');
+  assert.strictEqual(e.test_comctl_realloc(shrunk, 10), 0,
+    'Comctl32_ReAlloc rejects a retired pointer');
+
+  const nullRealloc = e.test_comctl_realloc(0, 7) >>> 0;
+  assert(nullRealloc, 'Comctl32_ReAlloc(NULL) allocates');
+  assert.strictEqual(e.test_comctl_get_size(nullRealloc), 7);
+  assert.deepStrictEqual([...bytes.subarray(wasm(nullRealloc), wasm(nullRealloc) + 7)],
+    new Array(7).fill(0));
+  assert.strictEqual(e.test_comctl_free(nullRealloc), 1);
+  assert.strictEqual(e.test_comctl_alloc(0x7ffffff0), 0,
+    'Comctl32_Alloc rejects private-header overflow');
+  assert.strictEqual(e.test_comctl_free(0), 0);
+  assert.strictEqual(e.test_comctl_get_size(0x1234567c), -1,
+    'Comctl32_GetSize rejects a non-heap pointer without trapping');
+
   const itemA = e.test_heap_alloc(8) >>> 0;
   const itemB = e.test_heap_alloc(8) >>> 0;
   const itemC = e.test_heap_alloc(8) >>> 0;
@@ -175,7 +253,7 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_dpa_destroy(arbitrary), 0,
     'DPA rejects an aligned non-heap handle without trapping');
 
-  console.log('PASS  comctl32 DPA/DSA own backing storage and retire destroyed handles');
+  console.log('PASS  comctl32 heap and dynamic arrays own storage and reject retired handles');
 })().catch(error => {
   console.error(error);
   process.exit(1);
