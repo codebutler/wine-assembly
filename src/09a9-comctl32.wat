@@ -1066,9 +1066,117 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
   )
 
-  ;; ShowHideMenuCtl(hWnd, uFlags, lpInfo) — 3 args, returns BOOL
+  ;; Show or hide one mapped child while keeping its menu check synchronized.
+  ;; This is the child-window subset of ShowWindow that ShowHideMenuCtl uses;
+  ;; it retains the browser surface, USER style, WM_SHOWWINDOW, invalidation,
+  ;; and hidden-subtree cleanup without running top-level activation policy.
+  (func $show_hide_menu_control_visible
+      (param $hwnd i32) (param $show i32) (result i32)
+    (if (i32.eqz (call $wnd_table_get (local.get $hwnd)))
+      (then (return (i32.const 0))))
+    (drop (call $post_queue_push
+      (local.get $hwnd) (i32.const 0x0018) ;; WM_SHOWWINDOW
+      (local.get $show) (i32.const 0)))
+    (drop (call $host_show_window
+      (local.get $hwnd) (select (i32.const 5) (i32.const 0) (local.get $show))))
+    (call $wnd_apply_show_state
+      (local.get $hwnd) (select (i32.const 5) (i32.const 0) (local.get $show)))
+    (if (local.get $show)
+      (then
+        (drop (call $wnd_set_style (local.get $hwnd)
+          (i32.or (call $wnd_get_style (local.get $hwnd)) (i32.const 0x10000000))))
+        (call $nc_flags_set (local.get $hwnd) (i32.const 2))
+        (call $paint_flag_set_inv (local.get $hwnd))
+        (drop (call $paint_seed_child_paints (local.get $hwnd))))
+      (else
+        (call $wnd_uncover_parent (local.get $hwnd))
+        (drop (call $wnd_set_style (local.get $hwnd)
+          (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0xEFFFFFFF))))
+        (call $paint_clear_subtree (local.get $hwnd))))
+    (i32.const 1))
+
+  ;; The first lpInfo pair maps a selector to the application's whole menu.
+  ;; Reuse SetMenu's handle normalization and non-client repaint sequence.
+  (func $show_hide_menu_bar
+      (param $hwnd i32) (param $hmenu i32) (param $show i32) (result i32)
+    (local $menu_key i32)
+    (if (i32.eqz (call $wnd_table_get (local.get $hwnd)))
+      (then (return (i32.const 0))))
+    (local.set $menu_key (select (local.get $hmenu) (i32.const 0) (local.get $show)))
+    (if (i32.and
+          (local.get $show)
+          (i32.or
+            (i32.eq (local.get $menu_key) (i32.const 0x00080001))
+            (i32.eq
+              (i32.and (local.get $menu_key) (i32.const 0xFFFF0000))
+              (i32.const 0x00BE0000))))
+      (then (local.set $menu_key
+        (i32.and (local.get $menu_key) (i32.const 0xFFFF)))))
+    (call $menu_load (local.get $hwnd) (local.get $menu_key))
+    (call $defwndproc_do_nccalcsize (local.get $hwnd))
+    (call $host_set_menu (local.get $hwnd) (local.get $menu_key))
+    (if (call $wnd_is_effectively_visible (local.get $hwnd))
+      (then
+        (call $defwndproc_do_ncpaint (local.get $hwnd))
+        (call $paint_flag_set_inv (local.get $hwnd))))
+    (i32.const 1))
+
+  ;; ShowHideMenuCtl(hWnd, uFlags, lpInfo) — 3 args, returns BOOL.
+  ;; lpInfo is {selector, main HMENU}, followed by {menu id, child control id}
+  ;; pairs and a zero selector terminator. Win98 toggles from the menu item's
+  ;; current MF_CHECKED state rather than from the window's visibility bit.
   (func $handle_ShowHideMenuCtl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (local $info_w i32) (local $pair i32) (local $hmenu i32)
+    (local $index i32) (local $old_state i32) (local $new_check i32)
+    (local $ctrl i32) (local $result i32)
+    (if (i32.and
+          (i32.ne (call $wnd_table_get (local.get $arg0)) (i32.const 0))
+          (i32.ne (local.get $arg2) (i32.const 0)))
+      (then
+        ;; Translate the caller's pair table once; every scan/load below uses
+        ;; the same WASM address rather than repeatedly converting arg2.
+        (local.set $info_w (call $g2w (local.get $arg2)))
+        (local.set $hmenu (i32.load offset=4 (local.get $info_w)))
+        (local.set $pair (local.get $info_w))
+        (block $done
+          (loop $scan
+            (br_if $done (i32.ge_u (local.get $index) (i32.const 256)))
+            (br_if $done (i32.eqz (i32.load (local.get $pair))))
+            (if (i32.eq (i32.load (local.get $pair)) (local.get $arg1))
+              (then
+                (if (i32.eqz (local.get $index))
+                  (then
+                    ;; Once detached, its menu blob is intentionally absent;
+                    ;; attachment state is the durable truth for this special
+                    ;; pair and makes the next call reattach it.
+                    (local.set $new_check
+                      (select (i32.const 0) (i32.const 8)
+                        (i32.ne (call $menu_source_get (local.get $arg0)) (i32.const 0))))
+                    (local.set $result (call $show_hide_menu_bar
+                      (local.get $arg0) (local.get $hmenu)
+                      (i32.ne (local.get $new_check) (i32.const 0)))))
+                  (else
+                    (local.set $old_state
+                      (call $menu_handle_state_by_id (local.get $hmenu) (local.get $arg1)))
+                    (local.set $new_check
+                      (select (i32.const 0) (i32.const 8)
+                        (i32.ne (i32.and (local.get $old_state) (i32.const 8)) (i32.const 0))))
+                    (local.set $ctrl (call $ctrl_find_by_id
+                      (local.get $arg0) (i32.load offset=4 (local.get $pair))))
+                    (if (local.get $ctrl)
+                      (then (local.set $result (call $show_hide_menu_control_visible
+                        (local.get $ctrl) (i32.ne (local.get $new_check) (i32.const 0)))))
+                      (else (local.set $new_check (i32.const 0))))))
+                ;; Win98 updates the main menu and its first submenu. The WAT
+                ;; menu mutation walks the whole attached blob, so one call
+                ;; covers both identities without double-toggling anything.
+                (drop (call $menu_check_item_global
+                  (local.get $arg1) (local.get $new_check)))
+                (br $done)))
+            (local.set $pair (i32.add (local.get $pair) (i32.const 8)))
+            (local.set $index (i32.add (local.get $index) (i32.const 1)))
+            (br $scan)))))
+    (global.set $eax (local.get $result))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 

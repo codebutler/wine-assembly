@@ -225,3 +225,8 @@ moved storage, and fail without destroying the original allocation.
 2026-09-10: 365 -> 364. MenuHelp now uses its real seven-argument stdcall ABI,
 resolves command and popup help-string resources, and drives the status bar's
 separate Win98 simple pane instead of silently doing nothing.
+
+2026-09-10: 364 -> 363. ShowHideMenuCtl now parses its documented selector
+pairs, toggles the corresponding child or whole menu, synchronizes the menu
+check, and fails for absent mappings or controls instead of always returning
+TRUE.
