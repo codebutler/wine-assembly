@@ -1097,3 +1097,28 @@ Unlike89033, this includes the intervening typed-constant and resumable-setup
 checkpoint20d77477 as well as best-fit backing allocation; a gameplay difference
 alone cannot isolate allocator effects from every intervening change. The
 focused allocation fixture above is the controlled evidence for placement.
+
+### Best-fit probe terminal and current controlled run (2026-09-11)
+
+Frozen best-fit run78421 exited0 at its100000000-batch guard after12988.208s,
+not a guest crash. Its final inspected frame12964.png shows SelectProfile /
+NewProfileName over the menu. Intro reached1787 (finish1786); renderer failures
+remained0 and lastError null. No input was sent, so this is not gameplay or
+post-Continue allocator acceptance. Artifacts remain in
+`/var/folders/dz/1fqkk_jd4350qkm91pm9_q3c0000gp/T/bw-software-probe-0mxUdH`.
+
+The probe now accepts an explicit positive-safe-integer `--max-batches`, default
+1000000000, while retaining its bounded wall-clock and shutdown guards. This
+prevents the old batch ceiling ending a four-hour run early. Invalid0, negative,
+fractional, NaN and unsafe-integer values were checked before guest launch.
+
+New controlled run73697 uses full-build34288 frozen as
+`/private/tmp/bw-current-controlled.1sR1mR/wine.wasm`, SHA256
+`18df41dd31bfcee90facf716f961036ace4f919fa40f2a7385c1fadab224725d`.
+It includes subsequent constant/vector/CALL implementation, not a pure allocator
+A/B. Arguments: seconds14400, max-batches1000000000, capture-every60,
+control-stdin, allocation-probe and the frozen wasm path. Observer installation
+returned armedtrue/address10125769/request10848128. Artifacts are
+`/var/folders/dz/1fqkk_jd4350qkm91pm9_q3c0000gp/T/bw-software-probe-1Fi3BW`.
+Initial55s sample reaches intro19 with zero renderer failures and no input held.
+The parent owns the terminal handle; subagent handles are not interchangeable.

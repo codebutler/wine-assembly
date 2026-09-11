@@ -6,6 +6,7 @@
 // [--capture-every=60] keeps periodic frames during long progression runs.
 // [--control-stdin] relays existing CLI JSON controls while sampling continues;
 // replies use the original caller id and the standard [ctl] prefix.
+// [--max-batches=1000000000] is a secondary guard; --seconds is the wall budget.
 // [--allocation-probe] captures the 10.3MiB gameplay allocation return,
 // keeping the debugger armed through earlier allocations at the shared site.
 const fs=require('fs'),path=require('path'),os=require('os'),readline=require('readline');
@@ -18,6 +19,8 @@ const seconds=Number(arg('seconds','60'));
 // Software rendering on a loaded host can spend more than thirty minutes in
 // the unmodified intro alone. Keep an explicit guard, but allow gameplay runs.
 if(!Number.isFinite(seconds)||seconds<1||seconds>14400)throw Error('seconds must be1..14400');
+const maxBatches=Number(arg('max-batches','1000000000'));
+if(!Number.isSafeInteger(maxBatches)||maxBatches<1)throw Error('max-batches must be a positive safe integer');
 const captureEvery=Number(arg('capture-every','0'));
 if(!Number.isFinite(captureEvery)||(captureEvery!==0&&(captureEvery<10||captureEvery>1800)))
   throw Error('capture-every must be0 (off) or10..1800 seconds');
@@ -27,7 +30,7 @@ const root=path.resolve(__dirname,'..');
 const flags=[`--exe=${path.join(game,'BW2Demo.exe')}`,'--vfs-include=**/*',
   `--dll-seed=${['d3dx9_25.dll','binkw32.dll','dbghelp.dll'].map(f=>path.join(game,f)).join(',')}`,
   '--d3d9-renderer=software','--d3d9-programmable','--control-stdin','--real-ticks',
-  '--quiet-api','--quiet-blocks','--batch-size=200000','--max-batches=100000000',`--max-seconds=${seconds+30}`,
+  '--quiet-api','--quiet-blocks','--batch-size=200000',`--max-batches=${maxBatches}`,`--max-seconds=${seconds+30}`,
   '--trace-eip-range=0x00526d93-0x00526d97','--trace-eip-detail','--trace-eip-stream'];
 if(arg('wasm',null))flags.push(`--wasm=${path.resolve(arg('wasm'))}`,'--no-build');
 else if(args.includes('--no-build'))flags.push('--no-build');
