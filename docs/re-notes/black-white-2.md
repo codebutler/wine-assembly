@@ -767,3 +767,47 @@ background. At7331 seconds the renderer reports20665 completed draws and zero
 failures. This proves the glyph fix reaches the real game's menu, not just the
 standalone font probe. Profile selection and changing gameplay remain unverified;
 the frozen executable artifact predates lighting/cache/scissor checkpoints.
+
+The same run98750 is now terminal (CLI exit1), not waiting for more input.
+Holding Return was accepted at batch591383; at batch591475 the real profile-name
+encoding loop called unimplemented `PathGetCharTypeW(0x50)` and trapped.
+The call site is00857c90 (`push eax; call ebx`), return00857c93, then `test al,1`:
+valid long-filename characters are copied directly; others take the formatting
+branch at00857c9e. The preceding sample reports93956 completed draws and zero
+renderer failures. Thus keyboard input reaches profile processing; this is not
+evidence of gameplay or of a renderer failure. Earlier mouse motion550,400
+mapped to native687,500 (640x480 presentation of800x600 window), drained its
+queue, and did not visibly dismiss the profile dialog. No guest state was patched.
+
+`PathGetCharTypeA/W` is now implemented from Microsoft's API contract and the
+supplied native `test/binaries/explorer98/dlls/shlwapi.dll`, version5.00.2614.3500,
+SHA256 `731b1ffdcb821a87e8ef1aa92fc956a0c385eaa6b8f4ad20c89db8b923f1aeae`.
+Exports485/486 are70bdde1d/70bf16c2. Native disassembly classifies controls0–31,
+quote, less/greater-than and pipe as0; space/comma/semicolon as1; star/question
+as4; slash/colon/backslash as8; all remaining BYTE/WORD inputs as3. These are
+character flags, not whole-filename validity; do not impose separate DOS name
+rules on plus, equals, brackets, DEL or high Unicode values. A truncates toBYTE,
+W toWORD, with no codepage conversion. `test/test-path-get-char-type.js` passes
+both entry points over the entire65536-value domain, upper-bit truncation and
+stdcall cleanup. This is a disassembly-derived fixture, not a native execution
+oracle. A fresh game run with this implementation remains required. No Wine
+implementation source was used.
+
+Fresh frozen run24571 now verifies that progression: snapshot
+`/private/tmp/bw-path-char.ly0IRU/wine.wasm` contains the PathGetCharType fix,
+and `/private/tmp/bw-path-current-screen.png` shows the profile-creation dialog.
+Normal Return down at batch224427 and up at224621 closes it without trapping;
+`/private/tmp/bw-path-after-profile.png` shows the island main menu headed
+“Player”. Renderer completions continue with zero reported failures. This is
+successful profile creation, not gameplay. This frozen snapshot predates the
+later backbuffer-lock/ownership and programmed-VS pixel-center checkpoints.
+
+A synthetic click at155,445 was accepted at225653, but a later capture
+`/private/tmp/bw-path-new-game.png` still shows the same main menu. A held mouse
+down at those coordinates was delivered at226972 to distinguish short-click
+polling from menu behavior; mouse-up was delivered at228211. A later settled
+capture at229794 (`/private/tmp/bw-path-settled-new-game.png`) still shows the
+main menu, so neither click variant proves New Game activation. No key or mouse
+button is left held by these controls. The
+live probe remains24571 with artifacts under `bw-software-probe-8o44XX` in the
+system temporary directory. No guest state or instruction stream was patched.

@@ -1515,3 +1515,16 @@ fullbuild95791 reached the silent-handler inventory gate then stopped during
 concurrent monitor-handler work (353 versus356 baseline); its owner was notified.
 That full-build result is not a pass; browser compilation and focused tests are
 the current evidence for this checkpoint.
+
+Live B&W24571 has now passed the profile-creation blocker using the frozen
+PathGetCharType implementation: normal Return224427/up224621 closes the dialog
+and the inspected menu capture is headed Player. This verifies progression
+beyond the prior native API trap, not gameplay. New Game click225653 and held
+mouse226972→228211 were delivered, but settled capture229794 remains at the menu.
+The run is still live with zero reported renderer failures; the frozen snapshot
+predates recent lock/ownership and programmed-VS corrections. See the B&W RE
+notes for artifact paths and exact inputs; no guest state was patched.
+
+Fullbuild76498 passed the updated silent-handler inventory, then stopped on four
+raw PaintRect accesses in concurrent monitor work in09a-handlers.wat. The owner
+was notified; full-build revalidation of the latest snapshot change is pending.
