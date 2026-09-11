@@ -1366,3 +1366,30 @@ The existing21/22 color/alias/readback/lifetime suite passes in the same run.
 These fixtures establish implementation behavior, not a native-driver oracle
 for unusual compressed edge rectangles; that characterization remains open.
 No new formats are advertised, and implicit swapchain destinations remain open.
+
+Implicit UpdateSurface destinations are now supported through the same ordered
+color RESOURCE_UPDATE command (null resource means the device backbuffer).
+Native validation uses the actual implicit wrapper/dimensions, not bound RT0;
+the source must match its X8 format. Both backends preserve outside pixels and
+WebGL addresses the logical canvas inside any oversized depth-backed target.
+Native13640 passes implicit rectangle upload/Present plus GetDC exclusion and
+ReleaseDC identity/double-release checks. A dedicated DxObject surface flag
+tracks guest GetDC ownership: compositor DC bindings are not outstanding guest
+acquisitions. Initial43971/41086 checks incorrectly used generic DC state,
+which Present creates internally; the explicit ownership flag fixes this.
+Backend70704/66547 pass39 checks through direct/worker software and WebGL1/2.
+Actual-x86 browser81042 software and7175 WebGL pass both guest modes, including
+upload/Present with an independent RT bound. Initial browser69564/43603 failed
+only the fixture's expected backbuffer Release count (device ownership retains1,
+not0); corrected fixture checks1. Fullbuild40843 passes1153777/1154245 bytes.
+
+Parallel review found and fixed a software-only outside-alpha overwrite:
+X8 normalization now touches only uploaded rows/columns, matching WebGL's
+subimage update. The added parity fixture begins with nonopaque implicit color
+and checks outside alpha through READBACK, not just the displayed image.
+Review also identified a still-open GDI synchronization gap: GetDC binds the
+canonical CPU buffer without fencing/downloading executor-dirty pixels, and
+ReleaseDC does not upload GDI writes. The ownership flag prevents UpdateSurface
+while acquired but does not solve those transfers. Full D3D/GDI interoperability
+requires ordered acquire/readback and release/upload; current tests deliberately
+do not establish that behavior.

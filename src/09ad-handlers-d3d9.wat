@@ -2035,8 +2035,13 @@
       (global.set $eax (i32.const 0x8876086C)) ;; D3DERR_INVALIDCALL
       (return)))
     (local.set $hdc (i32.add (i32.const 0x200000) (call $dx_slot_of (local.get $entry))))
+    ;; Presentation also binds this HDC internally. Only guest GetDC owns it.
+    (if (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0x40000000))
+      (then (global.set $eax (i32.const 0x8876086c)) (return)))
     (if (call $gdi_dx_dc_bind (local.get $hdc))
       (then
+        (store.field DxObject flags (local.get $entry)
+          (i32.or (load.field DxObject flags (local.get $entry)) (i32.const 0x40000000)))
         (call $gs32 (local.get $arg1) (local.get $hdc))
         (global.set $eax (i32.const 0)))
       (else (global.set $eax (i32.const 0x8876086C)))))
@@ -2044,12 +2049,21 @@
   ;; IDirect3DSurface9_ReleaseDC(this, hdc). Unlike the DirectDraw twin this
   ;; does NOT present — under D3D9 the frame reaches the screen on Present.
   (func $handle_IDirect3DSurface9_ReleaseDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
+    (local $entry i32)
+    (if (i32.or (call $d3d9_is_depth_surface (local.get $arg0))
+      (i32.or (call $d3d9_is_color_surface (local.get $arg0)) (call $d3d9_is_texture_surface (local.get $arg0)))) (then
       (global.set $eax (i32.const 0x8876086c))
       (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (global.set $eax (i32.const 0x8876086c))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.eqz (local.get $entry)) (then (return)))
+    (if (i32.or (i32.ne (local.get $arg1) (i32.add (i32.const 0x200000) (call $dx_slot_of (local.get $entry))))
+      (i32.eqz (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0x40000000)))) (then (return)))
+    (store.field DxObject flags (local.get $entry)
+      (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0xbfffffff)))
     (call $gdi_dx_dc_release (local.get $arg1))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (global.set $eax (i32.const 0)))
 
 
   ;; ── Direct3DCreate9 ───────────────────────────────────────────────

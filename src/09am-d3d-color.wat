@@ -147,10 +147,24 @@
   (if (i32.eq (local.get $result) (i32.const 1)) (then (global.set $eax (i32.const 0)))))
 
 ;; UpdateSurface view: width,height,format,bitsWA,pitch,colorStorageGuest,
-;; dirtyCounterWA,reserved. Normal texture levels remain CPU authoritative;
+;; dirtyCounterWA,implicitBackbuffer. Normal texture levels remain CPU authoritative;
 ;; render-target aliases resolve to the same executor-owned color identity.
 (func $d3d9_update_view (param $surface i32) (param $device i32) (param $pool i32) (param $out i32) (result i32)
   (local $p i32) (local $parent i32) (local $mip i32) (local $storage i32)
+  (i32.store offset=28 (local.get $out) (i32.const 0))
+  (if (i32.eqz (local.get $pool)) (then
+    (local.set $p (call $d3ddev_rt_entry (local.get $device)))
+    (if (i32.and (i32.ne (local.get $surface) (i32.const 0))
+      (i32.eq (local.get $surface) (call $dx_get_wrapper_for_vtbl
+        (call $dx_slot_of (local.get $p)) (global.get $DX_VTBL_D3DSURF9)))) (then
+      (if (i32.and (load.field DxObject flags (local.get $p)) (i32.const 0x40000000))
+        (then (return (i32.const 0))))
+      (i32.store (local.get $out) (load.field DxObject width (local.get $p)))
+      (i32.store offset=4 (local.get $out) (load.field DxObject height (local.get $p)))
+      (i32.store offset=8 (local.get $out) (i32.const 22))
+      (i32.store offset=20 (local.get $out) (i32.const 0))
+      (i32.store offset=28 (local.get $out) (i32.const 1))
+      (return (i32.const 1))))))
   (local.set $storage (call $d3d9_color_storage (local.get $surface)))
   (if (local.get $storage) (then
     (local.set $p (call $g2w (local.get $storage)))
@@ -237,7 +251,7 @@
           (i32.ne (i32.add (local.get $dy) (local.get $h)) (i32.load offset=4 (local.get $d)))))))))
     (local.set $bits (i32.add (i32.load offset=12 (local.get $s))
       (i32.add (i32.mul (local.get $y) (i32.load offset=16 (local.get $s))) (i32.mul (local.get $x) (i32.const 4)))))
-    (if (i32.load offset=20 (local.get $d)) (then
+    (if (i32.or (i32.load offset=20 (local.get $d)) (i32.load offset=28 (local.get $d))) (then
       (local.set $desc (call $d3d9_gpu_descriptor (local.get $device)))
       (i32.store offset=24 (local.get $desc) (i32.load offset=20 (local.get $d)))
       (i32.store offset=28 (local.get $desc) (local.get $bits))

@@ -30,6 +30,14 @@
   }
   await api.update(b,new Uint8Array([1,2,3,4]),4,{x:5,y:0,width:1,height:1});
   check(Array.from((await api.read(b)).pixels.slice(20,24)).join()==='1,2,3,255','rect upload X8 alpha and top edge');
+  await api.clear([0,0,1,.25],1,1,null,null,0);
+  await api.update(null,new Uint8Array([9,8,7,6,5,4,3,2]),4,{x:7,y:0,width:1,height:2});
+  const back=await api.present();
+  check(Array.from(back.pixels.slice(28,32)).join()==='9,8,7,255','implicit top-right upload');
+  check(Array.from(back.pixels.slice(60,64)).join()==='5,4,3,255','implicit second row upload');
+  check(Array.from((await api.read(null)).pixels.slice(0,4)).join()==='255,0,0,64','implicit outside pixels including alpha survive');
+  check((await api.read(a)).pixels.every((v,i)=>v===patched.pixels[i]),'implicit upload preserves explicit target');
+  await api.clear([0,0,1,1],1,1,null,null,0);
   await api.clear([0,0,0,1],7,1,null,depth,0,a);await api.draw(draw(a,depth,.25));
   await api.clear([0,1,0,1],1,1,null,depth,0,b);await api.draw(draw(b,depth,.75));
   const shared=await api.read(b);check(shared.pixels[1]===255&&shared.pixels[2]===0,'same depth identity rejects B behind A');

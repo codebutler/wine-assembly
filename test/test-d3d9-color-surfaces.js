@@ -13,7 +13,7 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     'SetScissorRect','GetScissorRect','GetRenderTargetData','ColorFill','UpdateSurface','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
     Texture9:['GetSurfaceLevel','LockRect','Release'],
     CubeTexture9:['GetCubeMapSurface','Release'],
-    Surface9:['GetDesc','AddRef','Release','GetDevice','LockRect','UnlockRect']};
+    Surface9:['GetDesc','AddRef','Release','GetDevice','LockRect','UnlockRect','GetDC','ReleaseDC']};
   const {exports:e,memory,module}=await bootRenderHarness({fonts:'none',
     extraHostOverrides:{gpu_gl_call:(op,p,a)=>productionImport(op,p,a)},extraWat:`
     ${Object.entries(api).flatMap(([type,names])=>names.map(name=>`
@@ -70,6 +70,8 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0x3f800000))
       (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 0))
       (call $handle_IDirect3DDevice9_Clear (local.get $d) (i32.const 0) (i32.const 0) (i32.const 1) (local.get $color) (i32.const 0)) (global.get $eax))
+    (func (export "update_view") (param $s i32) (param $d i32) (param $pool i32) (param $out i32) (result i32)
+      (call $d3d9_update_view (local.get $s) (local.get $d) (local.get $pool) (call $g2w (local.get $out))))
     (func (export "back_bits") (param $d i32) (result i32)
       (load.field DxObject misc1 (call $d3ddev_rt_entry (local.get $d))))
     (func (export "blockers") (param $d i32) (result i32)
@@ -199,6 +201,19 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       [0xff010203,0xff203045,0xff203046,0xff010203,0xff203049,0xff20304a]);
     bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint));
     ok(await invoke(e.Surface9_UnlockRect,fillSurface),'destination unlock');
+    write(rect,[1,1,3,3]);write(destPoint,[6,0]);
+    assert.strictEqual(e.update_view(ab,ad,0,out),1,'implicit view resolves after compositor DC binding');
+    const backWidth=read(out),backHeight=read(out+4);assert(backWidth>=8&&backHeight>=2);assert.strictEqual(read(out+8),22);
+    ok(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,ab,destPoint),'implicit backbuffer UpdateSurface');
+    ok(await invoke(e.Device9_Present,ad),'updated implicit Present');
+    const backFrame=new Uint32Array(memory.buffer,e.back_bits(ad),backWidth*backHeight);
+    assert.deepStrictEqual([backFrame[0],backFrame[6],backFrame[7],backFrame[backWidth+6],backFrame[backWidth+7]],
+      [0xff102030,0xff203045,0xff203046,0xff203049,0xff20304a]);
+    ok(e.Surface9_GetDC(ab,out),'backbuffer DC');const backDC=read(out);
+    bad(e.Surface9_GetDC(ab,out));bad(e.Surface9_ReleaseDC(ab,backDC+1));
+    bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,ab,destPoint));
+    ok(e.Surface9_ReleaseDC(ab,backDC),'release backbuffer DC');
+    bad(e.Surface9_ReleaseDC(ab,backDC));
     bad(await invoke(e.Device9_UpdateSurface,ad,fillSurface,0,uploadSource,0));
     bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,0,fillSurface,0));
     write(destPoint,[-1,0]);bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint));
