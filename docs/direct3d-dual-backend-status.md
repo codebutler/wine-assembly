@@ -1289,3 +1289,16 @@ readback and Reset sequence. Full build7818 passes canonical1151612 and
 compat1152080 with layout9c6027bce1d500a1 and no data-segment overlaps. The
 recorded edge-coverage and staged shader-fixture issues remain open; this is a
 resource checkpoint, not complete raster/profile or gameplay acceptance.
+
+Shader browser fixture transport repaired (2026-09-10): shader-web97596 passes
+WebGL2 and35181 passes forced WebGL1 through terminal exit0. This resolves the
+recorded80127 fixture failure. The test loads the serialized native-IR reader and
+restores Uint8Array bytes after Puppeteer's JSON argument boundary; ordinary
+cases still use production compileNativeIR and ignore redundant JS projections.
+The private PS1.4 block first asserts production-profile rejection, then uses a
+synchronous test-only compileIR adapter for that block and restores production
+compilation in finally. No shipping validation or capability gate changed.
+Coverage again includes dependent/matrix/cube instructions, PS1.2, PS1.3 depth,
+the private PS1.4 lowering subset, and manual mip-atlas/native comparisons on
+both GL versions. Shader unit tests and diff checks also pass. This does not
+enable or prove a complete public PS1.4 profile.
