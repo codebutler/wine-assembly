@@ -2111,3 +2111,86 @@ Baseline IR77266 passes84 after migrating LOOP from unsupported-opcode to
 truncated-operand expectations. Browser tests are explicitly E2E; the1076-test
 tier/timeout/discovery checks pass. Mixed a0/aL reads in one instruction remain
 rejected by the native single-constant-port rule; GLSL does not widen that rule.
+
+### Private VS2 subroutines (2026-09-11, WIP)
+
+CALL25/CALLNZ26/RET28/LABEL30 retain normalized IR ABI1. Labels use source
+bank18 with the private canonical identity selector; CALLNZ uses b0..15 with
+modifier0 or Boolean NOT13. The11-bit label bound is an encoding-bound private
+policy, not a verified native maximum. Microsoft's
+[CALL reference](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/call---vs)
+allows only one call level in VS2.0 and forward targets; four levels belong to
+VS3. Main and each routine have one terminal RET, with main RET optional only
+when there are no subroutines. CALLNZ uses the conservative profile-table
+three-slot cost despite its individual page saying one; CALL costs2, RET1,
+LABEL0. Calls contribute to the static flow count16.
+
+The decoder resolves labels with bounded source scans and replays a callee's
+validation at each callsite using the actual incoming definitions. It does not
+execute shaders, duplicate IR records, or charge lexical slots more than once.
+CALL applies exact effects, including scratch clobbers; CALLNZ intersects the
+taken and skipped definition states. LOOP entry-dependent reads/must-writes
+survive calls, and a replay frame fence prevents a callee from closing caller
+IF/loop blocks. Inherited aL requires every callsite inside LOOP; caller/callee
+loop nesting cannot exceed one. Uncalled routines receive syntax validation;
+their external-aL requirement is vacuous until called. Existing896-byte
+validation scratch is reused and freed.
+
+Native packets69/70/71/72 implement calls, conditional calls, return and labels.
+Targets are linked after stable DEF hoisting. Return PC74100 and active flag74104
+extend the context to74108 without moving older fields. Main RET ends execution;
+callee RET resumes the saved PC, with target/kind/range checks. Integer Boolean
+truth preserves nonzero values, including high-bit words. Budget and cancellation
+remain checked at every visited packet, including suspended calls. Caller aL
+and loop counters remain in their existing context fields.
+
+Evidence: native RED79458 compile0 becomes81842 PASS37 for repeated calls,
+conditional/NOT execution, one-packet budgets, cancellation, invalid call/return
+targets, inherited or local loops and malformed routine structure. Adjacent
+private VM22370 passes1662, legacy37480 passes263, LOOP26107 passes33 and native
+software pipeline88898 passes364. Decoder80207 passes143, adjacent LOOP/REP/IF
+passes115/148/151, legacy IR/view passes, and baseline58105 passes84 after its
+CALL truncation expectation migration. Full79796 stopped at an unrelated
+in-progress HookNode layout snapshot; its owner subsequently corrected that
+snapshot. Full97842 then passes canonical1184406/compat1184875 bytes with
+layout9c6027bce1d500a1 and233 nonoverlapping data segments. Actual WebGL call/parity
+verification remains pending.
+Public gates are unchanged; this is not full-profile or gameplay acceptance.
+
+Admission audit after CALL: no remaining mandatory opcode omission was found,
+but opcode presence is not complete VS2 semantics. The next gates include:
+
+- Vector a0: current MOVA masks, relative selectors and initialization tracking
+  are scalar-x-only. The [address-register page](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-registers-address)
+  and [VS2 feature comparison](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-differences)
+  specify four components, while MOVA's individual remarks say2_x. Resolve the
+  discrepancy explicitly and implement component-wise dataflow before admission.
+- Accepted-record mismatch: witness81837 compiles1100 repeated DEFs plus MOV
+  into1101 native IR records (140960 bytes), but VM compilation rejects its
+  arbitrary1024-record ceiling. This uses the existing private last-wins policy;
+  it is not a Windows duplicate-definition oracle. Record count is not the256
+  executable instruction-slot limit. Deduplicate or budget actual packet storage.
+- End-to-end256 float constants: API/stateblocks/snapshots/software still stop
+  at96. Raising that guard alone is unsafe: software constant upload is linear
+  and would overwrite other register banks above c127; use the appended mapping.
+- Advertised execution count is distinct from scheduling slices; define/test
+  MaxVShaderInstructionsExecuted, including long LOOP+CALL, before exposing VS2.
+- Conservative SINCOS direct/relative same-encoded-index coefficient rejection
+  remains an acceptance-policy question. NEG-only ordinary VS2 source modifiers
+  and current SGN scratch clobber handling match the inspected reference rules.
+
+Record-budget follow-up: actual-native-IR test64151 reproduces executor rejection
+at1101 records. The VM compiler, context constructor, executor and point-size
+query now consistently use the shared4096-record ceiling, with checked packet
+storage bounded to262160 bytes. This is a storage limit, not a raised profile
+instruction-slot or uninterruptible execution budget. Test76083 passes1101 and
+4096 records with last-wins DEF output,17-packet yields, high-index point-size
+discovery and4097 rejection. Call85060 passes38 cases after also fixing the
+point-size query: a CALL to label514 at an odd packet target must not masquerade
+as the flat514 destination/write-mask words of a real oPts write. Typed/control
+packets are now excluded from that query.
+
+Native checkpoint verification: full32196 passes canonical1184420/compat1184889,
+unchanged layout and233 nonoverlapping data segments. GLSL call source and its
+browser/parity verification remain a separate pending integration; this native
+checkpoint does not claim completed accelerated subroutines.
