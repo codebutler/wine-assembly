@@ -283,6 +283,48 @@ function win(x, y, w, h, extra) {
     'the output centre should map to the centre of the cropped guest display');
 }
 
+// Pinball's Table view contains the whole table, not an aspect-fill slice.
+{
+  const app = require('../lib/apps').APPS.pinball;
+  assert.strictEqual(app.singleAppArgs, '-fullscreen');
+  assert.strictEqual(app.args, undefined, 'ordinary desktop launch stays windowed');
+  assert(shellSource.includes('SINGLE_APP() && app.singleAppArgs !== undefined'));
+  for (const [w,h] of [[375,628],[844,390]]) {
+    const renderer = makeRenderer(400,670,w,h);
+    renderer.mobileCrop = app.mobileCrop;
+    const game = win(0,0,641,481);
+    renderer.windows={1:game};renderer._exclusiveFullscreen=true;
+    renderer.handleScreenResize(641,481,844,481);
+    assert.deepStrictEqual([game.w,game.h],[641,481],
+      'phone rotation does not resize a native exclusive game');
+    const normal = renderer._computeExclusiveView(game).viewport;
+    assert.deepStrictEqual([normal.cropW,normal.cropH],[641,481]);
+    renderer.setViewMode('zoom');
+    const table = renderer._computeExclusiveView(game).viewport;
+    assert.deepStrictEqual([table.cropX,table.cropY,table.cropW,table.cropH],[32,32,352,449]);
+    assert(Math.abs(table.dstW / table.dstH - 352/449) < 0.005,
+      'Table preserves aspect without cropping either end');
+    assert(table.dstW <= w && table.dstH <= h);
+  }
+}
+
+// A genuine modal gets its own uncropped phone view and does not change the
+// game's selected Table/Fill mode. A modeless dialog must not steal the view.
+for (const modalExport of ['modal_dialog_hwnd', 'dialogbox_hwnd']) {
+  const renderer=makeRenderer(641,670,375,628);
+  let active=2;
+  const wasm={exports:{[modalExport]:()=>active}};
+  const game={...win(0,0,641,481),hwnd:1,visible:true,wasm};
+  const modal={...win(110,110,419,259),hwnd:2,visible:true,isDialog:true,wasm};
+  renderer.windows={1:game,2:modal};renderer.setViewMode('zoom');
+  renderer.mobileCrop=require('../lib/apps').APPS.pinball.mobileCrop;
+  const result=renderer._computeSingleAppZoom([game,modal]);
+  assert.deepStrictEqual([result.viewport.cropX,result.viewport.cropY,result.viewport.cropW,result.viewport.cropH],
+    [110,110,419,259]);
+  assert.strictEqual(renderer.viewMode,'zoom','modal does not overwrite the game view choice');
+  active=0;assert.strictEqual(renderer.getActiveModalWindow(),null,'modeless is not modal');
+}
+
 // The presented rectangle the touch zones are laid out against follows the
 // viewport, inset and all.
 {

@@ -56,7 +56,7 @@ const runningApps = [{ name: 'quake2_demo', relativeMouse: true, wine: { running
 const renderer = {
   windows: {},
   _exclusiveTransform: { hwnd: 1 },
-  wantsRelativeMouse: () => wantsRelative,
+  wantsRelativeMouse: (x, y, explicit) => explicit === true,
   wantsHiddenMouse: () => wantsRelative,
   handleMouseMove: (x, y) => calls.absolute.push([x, y]),
   handleRelativeMouseMove: (x, y) => calls.relative.push([x, y]),

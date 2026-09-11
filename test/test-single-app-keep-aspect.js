@@ -62,6 +62,25 @@ function win(x, y, w, h, chromeW, chromeH) {
 
 const aspect = rect => rect.w / rect.h;
 
+// Mouse joystick Fit leaves both side rails clear for exclusive surfaces;
+// Fill still covers the display. Source dimensions and mapping stay native.
+{
+  const r = makeRenderer(844, 390, false);
+  r.touchOverlay = { layout: {mouseJoystick:{}}, isVisible:()=>true,
+    getBoardArea:()=>({x:148/844,y:0,w:(844-296)/844,h:1}) };
+  const t = {srcX:0,srcY:0,srcW:640,srcH:480};
+  const v = r._computeExclusivePresentationViewport(t,false,0,false);
+  assert(v.dstX >= 148 && v.dstX+v.dstW <=844-148);
+  assert(Math.abs(v.dstW/v.dstH-4/3)<0.01);
+  assert.strictEqual(v.nativeW,640);
+  const fill=r._computeExclusivePresentationViewport(t,false,0,true);
+  assert.strictEqual(fill.dstW,844);
+  r.presentationCanvas={width:390,height:844};
+  r.touchOverlay.getBoardArea=()=>({x:0,y:0,w:1,h:(844-200)/844});
+  const portrait=r._computeExclusivePresentationViewport(t,false,0,false);
+  assert(portrait.dstY+portrait.dstH <=844-200);
+}
+
 // Auto-maximize preserves the startup request as a logical desktop floor,
 // without pinning the app to an aspect ratio or capturing popup dimensions.
 {

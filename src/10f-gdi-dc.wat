@@ -1547,8 +1547,9 @@
 
   (func $gdi_dx_dc_release (param $hdc i32)
     (call $gdi_dc_clip_release (local.get $hdc))
-    (call $gdi_dc_state_release (local.get $hdc))
-    (drop (call $host_gdi_surface_delete (local.get $hdc))))
+    ;; ReleaseDC releases DC state, not the DirectDraw surface. Its derived
+    ;; canvas survives until dx_free's kind-22 surface retirement notification.
+    (call $gdi_dc_state_release (local.get $hdc)))
 
   (func $host_alloc_window_dc (param $hwnd i32) (param $whole i32) (result i32)
     (local $hdc i32) (local $own i32)

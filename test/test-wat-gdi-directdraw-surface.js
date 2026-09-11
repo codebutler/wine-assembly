@@ -12,7 +12,7 @@ const DX_OBJECTS = RegionMap.BASE.DX_OBJECTS;
 const DX_ENTRY_SIZE = 32;
 
 (async () => {
-  const { exports: wat, memory, gdi } = await bootRenderHarness();
+  const { exports: wat, memory, gdi, host } = await bootRenderHarness();
   const dv = new DataView(memory.buffer);
   const bytes = new Uint8Array(memory.buffer);
   const slot = 7;
@@ -74,7 +74,33 @@ const DX_ENTRY_SIZE = 32;
   wat.test_gdi_dx_dc_release(hdc);
   assert.deepStrictEqual(bytes.slice(bitsWa, bitsWa + stride * height), nativeBeforePoison,
     'ReleaseDC must never copy stale or corrupted Canvas pixels into WAT memory');
-  assert(!gdi.surfacePresentations.has(hdc), 'ReleaseDC must delete the transient presentation');
+  assert.strictEqual(gdi.surfacePresentations.get(hdc), presentation,
+    'ReleaseDC must retain the surface cache rather than allocate it every frame');
+  const retainedCanvas = presentation.canvas;
+  const flipBitsGa = wat.guest_alloc(stride * height) >>> 0;
+  const flipBitsWa = RegionMap.g2w(flipBitsGa, wat.get_image_base());
+  bytes.set(nativeBeforePoison, flipBitsWa);
+  bytes.set([255, 0, 0], flipBitsWa + stride + 4); // blue in alternate DIB
+  let allocations = 0;
+  const createImageData = canvasContext.createImageData.bind(canvasContext);
+  canvasContext.createImageData = (...args) => { allocations++; return createImageData(...args); };
+  for (let i = 0; i < 100; i++) {
+    const nextBits = i % 2 ? bitsWa : flipBitsWa;
+    dv.setUint32(entry + 20, nextBits, true);
+    assert.strictEqual(wat.test_gdi_dx_dc_bind(hdc), 1);
+    assert.strictEqual(gdi.surfacePresentations.get(hdc).canvas, retainedCanvas);
+    assert.strictEqual(presentation.bitsWa, nextBits);
+    presentation.flush();
+    assert.deepStrictEqual([...canvasContext.getImageData(1, 1, 1, 1).data],
+      i % 2 ? [255, 0, 0, 255] : [0, 0, 255, 255], 'Flip refreshes from the newly bound DIB');
+    wat.test_gdi_dx_dc_release(hdc);
+  }
+  assert.deepStrictEqual(
+    [...canvasContext.getImageData(1, 1, 1, 1).data], [255, 0, 0, 255],
+    'rebinding refreshes canonical pixels, including writes outside GDI');
+  assert(allocations <= 1, '100 DC acquire/release cycles reuse the full-frame upload buffer');
+  host.dx_trace(22, slot, 0, 0, 0);
+  assert(!gdi.surfacePresentations.has(hdc), 'actual DDSurface destruction retires the cache');
 
   const indexedSlot = 8;
   const indexedHdc = 0x200000 + indexedSlot;

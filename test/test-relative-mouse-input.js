@@ -35,9 +35,9 @@ renderer._exclusiveTransform = {
   dstX: 0, dstY: 0, dstW: 1280, dstH: 960,
 };
 
-assert.strictEqual(renderer.wantsRelativeMouse(640, 480), true,
-  'an exclusive guest ClipCursor region should opt into browser pointer lock');
-assert.strictEqual(renderer.wantsRelativeMouse(1279, 959), true,
+assert.strictEqual(renderer.wantsRelativeMouse(640, 480), false,
+  'ClipCursor alone must not opt into browser pointer lock');
+assert.strictEqual(renderer.wantsRelativeMouse(1279, 959, true), true,
   'the full clipped image remains eligible at its lower-right edge');
 
 renderer.setMousePosition(420, 290); // guest SetCursorPos recenter

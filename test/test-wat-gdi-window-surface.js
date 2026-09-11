@@ -286,6 +286,17 @@ async function main() {
     `(rects=${systemClipRects}, box=${systemClipBox.join(',')})`);
   assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
     'a higher-z overlapping sibling must be excluded from the child DC');
+  wat.test_clip_dialog_mode(HWND, 0);
+  wat.test_clip_control_class(CHILD, 2);
+  wat.wnd_set_style_export(CHILD, 0x50000000);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 1,
+    'Win32 EDIT without WS_CLIPSIBLINGS may overlay a score label');
+  wat.wnd_set_style_export(CHILD, 0x54000000);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
+    'Win32 EDIT with explicit WS_CLIPSIBLINGS still clips');
+  wat.test_clip_control_class(CHILD, 0);
   wat.test_clip_dialog_mode(HWND, 1);
   wat.dc_apply_client_clip(siblingDc, CHILD);
   assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,

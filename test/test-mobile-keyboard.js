@@ -48,6 +48,16 @@ assert.strictEqual(
   keyboardProxyAction({ hasCaret: true, proxyFocused: false, gesture: false, caretIsNew: false }),
   'none', 'a caret the user already dismissed the keyboard on stays dismissed');
 
+assert.strictEqual(keyboardProxyAction({ hasCaret: true, proxyFocused: true,
+  gesture: true, focusNeedsGesture: true, keyboardVisible: false }), 'refocus',
+  'late dialog focus without an iOS keyboard can be retried by tapping');
+assert.strictEqual(keyboardProxyAction({ hasCaret: true, proxyFocused: true,
+  gesture: true, focusNeedsGesture: true, keyboardVisible: true }), 'none',
+  'late focus that already opened a keyboard must not restart it');
+assert.strictEqual(keyboardProxyAction({ hasCaret: true, proxyFocused: true,
+  gesture: false, focusNeedsGesture: true }), 'none',
+  'the caret polling timer must not keep refocusing');
+
 // The manual keyboard. A fullscreen DirectDraw game -- Diablo II asking for a
 // character name, StarCraft's chat line, a Half-Life console -- draws its own
 // text field and never calls CreateCaret, so hasCaret is false for the entire

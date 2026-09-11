@@ -5108,6 +5108,10 @@
       (local.get $smax)))
   (func (export "modal_dialog_hwnd") (result i32)
     (i32.atomic.load (global.get $SHARED_MODAL_DLG_HWND)))
+  ;; Guest DialogBoxParam has a different pump from WAT common dialogs.
+  ;; Keep the existing export's input-routing semantics unchanged.
+  (func (export "dialogbox_hwnd") (result i32)
+    (i32.atomic.load (global.get $SHARED_DLG_PUMP_HWND)))
   (func (export "modal_cancel_if_hwnd") (param $hwnd i32)
     (if (i32.eq (i32.atomic.load (global.get $SHARED_MODAL_DLG_HWND)) (local.get $hwnd))
       (then

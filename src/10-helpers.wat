@@ -4692,12 +4692,12 @@
     ;; half of its earlier overlapping owner-draw Play button every second.
     (if (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000))) ;; WS_CLIPSIBLINGS
       (then
-        ;; Win16 native controls must not be hidden by earlier decorative
-        ;; frames. Custom painters still need the dialog visible-region clip:
-        ;; WEPUTIL's later frame otherwise draws across its earlier heading.
-        ;; Explicit WS_CLIPSIBLINGS always takes precedence in either case.
-        (if (i32.and (global.get $is_win16)
-              (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0)))
+        ;; Native controls obey the explicit style, in both Win16 and Win32.
+        ;; Pinball intentionally overlays an EDIT on its static score label;
+        ;; implicit sibling clipping leaves only three rows of the edit and
+        ;; hides all typed glyphs. Custom painters retain the dialog exception
+        ;; needed by CD Player's LED and WEPUTIL's decorative frame.
+        (if (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0))
           (then (return)))
         (if (i32.and
               (i32.ne (call $wnd_table_get (local.get $parent)) (global.get $WNDPROC_DIALOG))

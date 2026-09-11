@@ -92,7 +92,8 @@ global.document = {
   visibilityState: 'visible',
   addEventListener(type, fn) { documentListeners.set(type, fn); },
 };
-global.setInterval = () => 1;
+const intervalCallbacks = [];
+global.setInterval = fn => { intervalCallbacks.push(fn); return intervalCallbacks.length; };
 global.clearInterval = () => {};
 try {
   delete require.cache[require.resolve('../lib/browser-input')];
@@ -100,10 +101,10 @@ try {
   const releases = [];
   const relativeMoves = [];
   let touchWantsRelative = true;
-  const runningApps = [];
+  const runningApps = [{ name: 'quake2_demo', relativeMouse: true }];
   const renderer = {
-    windows: {}, _mouseX: 400, _mouseY: 250,
-    wantsRelativeMouse: () => touchWantsRelative,
+    windows: {}, _mouseX: 400, _mouseY: 250, _exclusiveTransform: { hwnd: 1 },
+    wantsRelativeMouse: (x, y, explicit) => explicit === true,
     _unmapExclusiveInputPoint: () => ({ x: 320, y: 200 }),
     handleMouseDown() {},
     handleMouseUp: (x, y, button) => releases.push({ x, y, button }),
@@ -160,6 +161,7 @@ try {
   // with a button held down for the length of the gesture.
   const touchStart = canvasListeners.get('touchstart');
   assert(touchStart, 'the canvas should take touchstart');
+  runningApps.length = 0;
   touchWantsRelative = false;
   const modes = [];
   global.window.TouchControls = {
@@ -202,12 +204,16 @@ try {
   // A fresh single touch is an ordinary click again. Direct touch delays the
   // pair until release so the same stationary gesture can become right-click.
   const downs = [];
-  renderer.handleMouseDown = (x, y, b) => downs.push([x, y, b]);
+  const directEvents = [];
+  renderer.handleMouseMove = (x, y) => directEvents.push(['move', x, y]);
+  renderer.handleMouseDown = (x, y, b) => { downs.push([x, y, b]); directEvents.push(['down', x, y]); };
   touchStart(tev([finger(4, 100, 100)], [finger(4, 100, 100)]));
   assert.strictEqual(downs.length, 0, 'direct touch waits for tap versus hold');
   (listeners.get('touchend') || []).at(-1)(tev([], [finger(4, 100, 100)]));
   assert.deepStrictEqual(downs.at(-1), [100, 100, 0],
     'once the pinch is over a released single touch clicks normally');
+  assert.deepStrictEqual(directEvents, [['move',100,100],['move',100,100],['down',100,100]],
+    'a direct tap updates the software cursor before clicking, without requiring a hover');
 
   // A stationary hold is a clean right click: no preceding or trailing left
   // click, in both direct and trackpad modes.
@@ -245,7 +251,7 @@ try {
   // sends deltas without holding button 0 (mouse-look must not also fire),
   // while a stationary tap clicks at the guest cursor rather than where the
   // finger happened to land.
-  runningApps.push({ name: 'mw3_demo', mobileTouch: 'auto', wine: { running: true } });
+  runningApps.push({ name: 'quake2_demo', relativeMouse: true, mobileTouch: 'auto', wine: { running: true } });
   renderer._exclusiveTransform = { hwnd: 1 };
   touchWantsRelative = true;
   relativeMoves.length = 0;
@@ -262,7 +268,7 @@ try {
   assert.strictEqual(downs.length, 0, 'a trackpad drag must not turn into a click');
   assert.strictEqual(releases.length, 0, 'a trackpad drag must not emit a stray release');
 
-  touchWantsRelative = false; // the session latch remains armed by the first gesture
+  touchWantsRelative = false; // explicit configuration is independent of cursor state
   const tap = finger(6, 300, 300);
   touchStart(tev([tap], [tap]));
   (listeners.get('touchend') || []).at(-1)(tev([], [tap]));
@@ -307,9 +313,10 @@ try {
   // WM_KEYDOWN with nothing.
   {
     const proxyListeners = new Map();
+    let proxyFocusCount = 0;
     const proxy = {
       tagName: 'TEXTAREA', value: '',
-      focus() { global.document.activeElement = proxy; },
+      focus() { proxyFocusCount++; global.document.activeElement = proxy; },
       blur() {
         global.document.activeElement = canvas;
         const fn = proxyListeners.get('blur');
@@ -367,8 +374,33 @@ try {
     proxy.blur();
     assert.strictEqual(global.window.__wineKeyboardOpen(), false,
       'dismissing the keyboard from iOS clears the manual flag');
+    kbRenderer.caretRect = () => ({ x: 10, y: 10, w: 2, h: 15 });
+    intervalCallbacks.at(-1)();
+    const lateFocusCount = proxyFocusCount;
+    assert.strictEqual(global.document.activeElement, proxy, 'new dialog caret gets late DOM focus');
+    global.window.__wineFocusKeyboardProxy();
+    assert.strictEqual(proxyFocusCount, lateFocusCount + 1,
+      'trusted tap retries late focus that did not raise the keyboard');
+    global.window.__wineFocusKeyboardProxy();
+    assert.strictEqual(proxyFocusCount, lateFocusCount + 1, 'retry happens only once');
     delete global.window.MobileKeyboard;
   }
+  // With an analog mouse joystick, the untouched canvas still behaves like
+  // a physical mouse: games can observe the held state between guest frames.
+  runningApps.length = 0;
+  runningApps.push({ name:'blobby_volley', mobileTouch:'direct', touchControls:{mouseJoystick:{}} });
+  const heldEvents=[];
+  renderer.handleMouseMove=(x,y)=>heldEvents.push(['move',x,y]);
+  renderer.handleMouseDown=(x,y,b)=>heldEvents.push(['down',x,y,b]);
+  renderer.handleMouseUp=(x,y,b)=>heldEvents.push(['up',x,y,b]);
+  touchStart(tev([finger(91,200,150)],[finger(91,200,150)]));
+  assert.deepStrictEqual(heldEvents,[['move',200,150],['down',200,150,0]],
+    'mouse-game touch-down updates position and starts a real held press');
+  (listeners.get('touchend')||[]).at(-1)(tev([],[finger(91,200,150)]));
+  assert.deepStrictEqual(heldEvents.at(-1),['up',200,150,0]);
+  touchStart(tev([finger(92,200,150)],[finger(92,200,150)]));
+  (listeners.get('touchcancel')||[]).at(-1)(tev([],[finger(92,200,150)]));
+  assert.deepStrictEqual(heldEvents.at(-1),['up',200,150,0],'cancel also releases the held mouse');
 } finally {
   global.window = originalWindow;
   global.document = originalDocument;

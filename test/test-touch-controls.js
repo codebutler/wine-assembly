@@ -73,6 +73,8 @@ global.document = {
   body,
   createElement: (tag) => makeEl(tag),
   getElementById: (id) => (id === 'screen-wrap' ? wrap : null),
+  addEventListener: (...args) => body.addEventListener(...args),
+  removeEventListener: (...args) => body.removeEventListener(...args),
 };
 global.window = { addEventListener() {}, removeEventListener() {}, innerHeight: 844 };
 global.location = { search: '' };
@@ -705,6 +707,14 @@ TouchControls.destroy();
     assert(APPS[id] && APPS[id].touchControls,
       `${id} should expose phone gameplay controls`);
   }
+  for (const id of ['blobby_volley', 'dxball']) {
+    assert.strictEqual(APPS[id].mobileTouch, 'direct', 'canvas remains an absolute mouse alongside the joystick');
+    assert.strictEqual(APPS[id].touchControls.mouseJoystick.maxSpeed, 900);
+    assert.strictEqual(APPS[id].touchControls.mouseJoystick.responseExponent, 3);
+    assert.strictEqual(APPS[id].touchControls.boardLayout, true);
+    assert(!APPS[id].touchControls.dpad, 'mouse games must not get a keyboard pad');
+    assert.strictEqual(APPS[id].touchControls.buttons[0].mouseButton, 0);
+  }
   assert.deepStrictEqual(APPS.blobby_volley.touchControls.buttons,
     [{ mouseButton: 0, label: 'Jump', pos: 'br' }],
     'public Blobby should expose its shipped mouse-control jump action');
@@ -717,7 +727,135 @@ TouchControls.destroy();
     'Deus Ex should combine its WASD pad with deterministic trackpad look');
 }
 
+// Pinball zones follow the table, not the score panel, in Normal view.
+{
+  const app=require('../lib/apps').APPS.pinball;
+  assert.strictEqual(app.touchControls.zones[0].rect.w,app.touchControls.zones[1].rect.w,
+    'flipper touch zones are symmetric');
+  assert(app.touchControls.zones[2].rect.y >= 0.7 && app.touchControls.zones[2].rect.h <= 0.25,
+    'plunger is a small lower-right touch region');
+  const r={mobileCrop:app.mobileCrop,viewMode:'fit',
+    getPresentedRectClient:()=>({x:0,y:0,w:641,h:481})};
+  TouchControls.install({document,renderer:r}); TouchControls.setRenderer(r);
+  TouchControls.setLayout(app.touchControls);
+  TouchControls.el._rect={left:0,top:0,right:641,bottom:481,width:641,height:481};
+  TouchControls.layoutZones();
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.left),32);
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.width),176);
+  r.viewMode='zoom';r.getPresentedRectClient=()=>({x:0,y:0,w:352,h:449});
+  TouchControls.layoutZones();
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.left),0);
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.width),176);
+  TouchControls.syncViewMode();
+  assert.strictEqual(TouchControls._modeEl.textContent,'Normal');
+  r.viewMode='fit';TouchControls.syncViewMode();
+  assert.strictEqual(TouchControls._modeEl.textContent,'Table');
+  r.getActiveModalWindow=()=>({hwnd:2});TouchControls.layoutZones();
+  assert(TouchControls._zones.every(z=>z.style.visibility==='hidden'),'modal hides game hit areas');
+  assert.strictEqual(TouchControls._modeEl.style.visibility,'hidden');
+  assert.notStrictEqual(TouchControls._keyEl.style.visibility,'hidden','keyboard stays available for dialog text');
+  r.getActiveModalWindow=()=>null;TouchControls.layoutZones();
+  assert(TouchControls._zones.every(z=>z.style.visibility===''),'game controls return after dismissal');
+  TouchControls.destroy();
+}
+
 console.log('PASS  touch controls hold, pair and release guest keys');
+
+// Analog mouse joystick: velocity (not keys), no idle RAF, exact release,
+// independent click, radial response, and native/presentation mapping.
+{
+  const pending = new Map(); let serial = 0, time = 0;
+  window.requestAnimationFrame = fn => { pending.set(++serial, fn); return serial; };
+  window.cancelAnimationFrame = id => pending.delete(id);
+  const tick = () => { time += 16; const callbacks = [...pending.values()]; pending.clear(); callbacks.forEach(fn => fn(time)); };
+  const moves = [], clicks = [];
+  const mouse = { canvas: {width:400,height:300}, _mouseX:320, _mouseY:240,
+    _exclusiveTransform: {srcX:0,srcY:0,srcW:640,srcH:480},
+    _unmapExclusiveInputPoint: (x,y) => ({x:x/2,y:y/2}),
+    handleMouseMove(x,y) { this._mouseX=x*2; this._mouseY=y*2; moves.push([this._mouseX,this._mouseY]); },
+    handleMouseDown(x,y,b) { clicks.push(['down',x*2,y*2,b]); },
+    handleMouseUp(x,y,b) { clicks.push(['up',x*2,y*2,b]); },
+  };
+  TouchControls.install({document,renderer:mouse});
+  TouchControls.setRenderer(mouse);
+  TouchControls.setLayout({boardLayout:true,mouseJoystick:{pos:'bl'},buttons:[{mouseButton:0,label:'Jump',pos:'br'}]});
+  TouchControls.el._rect={left:0,top:0,right:712,bottom:375,width:712,height:375};
+  document.querySelector=()=>({content:'width=device-width, initial-scale=1'});
+  TouchControls.layoutZones();
+  assert.strictEqual(TouchControls._corners.bl.style.paddingLeft,'8px', 'Safari auto-inset viewport must not add the notch twice');
+  assert.strictEqual(TouchControls._corners.br.style.paddingRight,'8px');
+  assert.strictEqual(TouchControls._corners.bl.style.paddingBottom,
+    'calc(36px + env(safe-area-inset-bottom, 0px))', 'joystick has comfortable vertical edge clearance');
+  assert.strictEqual(TouchControls._corners.br.style.paddingBottom,
+    TouchControls._corners.bl.style.paddingBottom, 'action button has matching clearance');
+  document.querySelector=()=>({content:'width=device-width, viewport-fit=cover'});
+  TouchControls.layoutZones();
+  assert(TouchControls._corners.bl.style.paddingLeft.includes('safe-area-inset-left'), 'cover viewports still protect the notch');
+  delete document.querySelector;
+  const stick=TouchControls._widgets.find(w=>w.className.includes('tc-mouse-joystick'));
+  const button=TouchControls._widgets.find(w=>w.className==='tc-btn');
+  TouchControls.el._rect={left:0,top:0,right:375,bottom:628,width:375,height:628};
+  mouse.getPresentedRectClient=()=>({x:0,y:70,w:375,h:281});
+  TouchControls.layoutZones();
+  assert.strictEqual(parseFloat(TouchControls._corners.bl.style.bottom),105,
+    'portrait stick starts 24px below the actual picture, not at the phone bottom');
+  assert.strictEqual(parseFloat(TouchControls._corners.br.style.bottom),159,
+    'primary action top aligns with the joystick top');
+  const oldKey=TouchControls._keyEl, oldMode=TouchControls._modeEl;
+  TouchControls._keyEl=document.createElement('button');
+  TouchControls._modeEl=document.createElement('button');
+  button._rect={left:278,right:357,top:375,bottom:433,width:79,height:58};
+  TouchControls._placeModeToggle(mouse.getPresentedRectClient(),TouchControls.el._rect);
+  assert.strictEqual(TouchControls._keyEl.style.top,'451px','utility pills sit below Jump with 18px gap');
+  assert.strictEqual(TouchControls._modeEl.style.top,'451px');
+  TouchControls._keyEl=oldKey; TouchControls._modeEl=oldMode;
+  mouse.getPresentedRectClient=()=>({x:0,y:0,w:375,h:628});
+  TouchControls.layoutZones();
+  assert.strictEqual(parseFloat(TouchControls._corners.br.style.bottom),58,
+    'Fill fallback reserves the entire utility row above the safe bottom');
+  delete mouse.getPresentedRectClient;
+  stick._rect={left:0,top:0,width:112,height:112};
+  const send=(type,id,x,y)=>stick.dispatch(type,touchEvent([touch(id,x,y)]));
+  send('touchstart',1,57,56); assert.strictEqual(pending.size,0,'dead zone schedules no frames');
+  send('touchmove',1,65,56); tick();
+  const preciseBegin=mouse._mouseX; for(let i=0;i<64;i++)tick();
+  assert(mouse._mouseX-preciseBegin >= 1 && mouse._mouseX-preciseBegin <= 2,
+    'quarter tilt accumulates subpixel movement for very slow positioning');
+  send('touchmove',1,56,56); mouse._mouseX=320;
+  send('touchmove',1,74,56); tick();
+  const begin=mouse._mouseX; for(let i=0;i<8;i++)tick(); const slow=mouse._mouseX-begin;
+  assert(slow >= 7 && slow <= 9, 'half tilt gives about 63 guest px/s, not the old 200');
+  send('touchmove',1,92,56); const faster=mouse._mouseX; for(let i=0;i<8;i++)tick();
+  assert(slow>0 && mouse._mouseX-faster>slow*2,'more deflection produces higher speed');
+  assert(mouse._mouseX-faster >= 114 && mouse._mouseX-faster <= 116,
+    'full tilt still gives 900 guest px/s');
+  assert.strictEqual(mouse._mouseY,240,'horizontal tilt does not move vertically');
+  const clickX=mouse._mouseX;
+  button.dispatch('touchstart',touchEvent([touch(2,300,250)]));
+  tick(); assert.strictEqual(clicks[0][1],clickX,'click uses cursor before next frame');
+  send('touchstart',3,20,56); // cannot steal the stick from finger 1
+  send('touchend',3,20,56); assert(pending.size>0);
+  send('touchend',1,92,56); assert.strictEqual(pending.size,0,'release cancels animation immediately');
+  const stopped=mouse._mouseX; tick(); assert.strictEqual(mouse._mouseX,stopped);
+  assert.strictEqual(clicks.length,1,'releasing steering does not release Jump');
+  button.dispatch('touchend',touchEvent([touch(2,300,250)]));
+  assert.strictEqual(clicks[1][0],'up');
+  send('touchstart',4,56,92); tick();tick(); assert(mouse._mouseY>240,'vertical axis supports menus');
+  send('touchcancel',4,56,92); assert.strictEqual(pending.size,0);
+  send('touchstart',5,92,56); TouchControls.releaseAll(); assert.strictEqual(pending.size,0);
+  assert.strictEqual(stick.children[0].style.transform,'translate(0px, 0px)');
+  send('touchstart',6,92,56); TouchControls.setLayout(null); assert.strictEqual(pending.size,0);
+  TouchControls.setLayout({mouseJoystick:{pos:'bl',responseExponent:1}});
+  const linearStick=TouchControls._widgets.find(w=>w.className.includes('tc-mouse-joystick'));
+  linearStick._rect={left:0,top:0,width:112,height:112}; mouse._mouseX=100;
+  linearStick.dispatch('touchstart',touchEvent([touch(7,74,56)])); tick();
+  for(let i=0;i<8;i++)tick();
+  assert(mouse._mouseX >= 147 && mouse._mouseX <= 148,
+    'per-game response exponent overrides the soft-center default');
+  TouchControls.destroy();
+  delete window.requestAnimationFrame; delete window.cancelAnimationFrame;
+  console.log('PASS analog mouse joystick speed, mapping, dead zone, click pairing and cleanup');
+}
 
 {
   TouchControls.install({ document: global.document, renderer });

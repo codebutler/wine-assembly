@@ -1,22 +1,20 @@
 #!/usr/bin/env node
 'use strict';
 
-// A game that hides/clips its cursor from inside the frame loop can publish
-// that state a frame after the click that should have captured the mouse.
-// The bridge latches the renderer heuristic per exclusive presentation, so a
-// click whose sampled state loses that race still requests Pointer Lock —
-// without any relativeMouse manifest declaration.
+// Regression: hiding/clipping an absolute cursor must not arm a sticky
+// capture latch. Only explicit relativeMouse configuration may request lock.
 
 const assert = require('assert');
 
 const listeners = new Map();
 const addListener = (type, fn) => listeners.set(type, fn);
 const lockRequests = [];
+const cursorClasses = new Set();
 const canvas = {
   width: 640,
   height: 480,
   style: {},
-  classList: { toggle() {} },
+  classList: { toggle(name, on) { if (on) cursorClasses.add(name); else cursorClasses.delete(name); } },
   getBoundingClientRect: () => ({ left: 0, top: 0, width: 640, height: 480 }),
   addEventListener: addListener,
   removeEventListener() {},
@@ -53,13 +51,13 @@ global.clearInterval = () => {};
 
 const calls = { absolute: [] };
 let heuristic = false;
-// Deliberately no relativeMouse manifest flag: the latch alone must decide.
-const runningApps = [{ name: 'mw3_demo', wine: { running: true } }];
+// Diablo's software cursor does not change its absolute input protocol.
+const runningApps = [{ name: 'diablo_shareware', wine: { running: true } }];
 const renderer = {
   windows: {},
   _exclusiveTransform: { hwnd: 1 },
-  wantsRelativeMouse: () => heuristic,
-  wantsHiddenMouse: () => false,
+  wantsRelativeMouse: (x, y, explicit) => explicit === true,
+  wantsHiddenMouse: () => heuristic,
   handleMouseMove: (x, y) => calls.absolute.push([x, y]),
   handleRelativeMouseMove() {},
   handleMenuHover() {},
@@ -89,20 +87,22 @@ try {
 
   heuristic = true;
   canvas.onmousemove({ clientX: 300, clientY: 200, movementX: 1, movementY: 0 });
-  assert.deepStrictEqual(calls.absolute, [],
-    'a relative-mouse guest must not receive the arming hover as absolute motion');
+  assert.deepStrictEqual(calls.absolute, [[300, 200]],
+    'hidden-cursor absolute games receive hover without capture');
+  assert(cursorClasses.has('guest-cursor-hidden'),
+    'absolute input still hides the duplicate browser cursor');
 
   heuristic = false;
   click(320, 240);
-  assert.strictEqual(lockRequests.length, 1,
-    'a click that loses the state race must still capture once the latch armed');
+  assert.strictEqual(lockRequests.length, 0,
+    'cursor visibility changes must not leave a sticky capture latch');
 
   renderer._exclusiveTransform = null;
   canvas.onmousemove({ clientX: 123, clientY: 234, movementX: 1, movementY: 0 });
-  assert.deepStrictEqual(calls.absolute, [[123, 234]],
+  assert.deepStrictEqual(calls.absolute, [[300, 200], [123, 234]],
     'the latch must drop with the exclusive presentation');
   click(123, 234);
-  assert.strictEqual(lockRequests.length, 1,
+  assert.strictEqual(lockRequests.length, 0,
     'a windowed guest must not inherit a stale latch');
 
   renderer._exclusiveTransform = { hwnd: 1 };
@@ -110,11 +110,20 @@ try {
   for (const fn of intervalFns) fn();
   heuristic = false;
   click(320, 240);
-  assert.strictEqual(lockRequests.length, 2,
-    'the stationary-pointer poll must arm the latch between input events');
+  assert.strictEqual(lockRequests.length, 0,
+    'stationary cursor visibility polling must not arm capture');
+  runningApps[0].relativeMouse = true;
+  click(320, 240);
+  assert.strictEqual(lockRequests.length, 1, 'explicit relative app captures');
+  runningApps[0] = { name: 'diablo_shareware', wine: { running: true } };
+  canvas.onmousemove({ clientX: 210, clientY: 190 });
+  assert.deepStrictEqual(calls.absolute.at(-1), [210, 190],
+    'switching to an absolute app restores ordinary motion immediately');
+  click(210, 190);
+  assert.strictEqual(lockRequests.length, 1, 'absolute app does not inherit capture intent');
 } finally {
   global.setInterval = realSetInterval;
   global.clearInterval = realClearInterval;
 }
 
-console.log('PASS  relative-mouse latch survives the guest cursor-state race');
+console.log('PASS explicit relative input; no cursor-state capture latch');

@@ -32,8 +32,10 @@ renderer._exclusiveTransform = {
   srcX: 0, srcY: 0, srcW: 640, srcH: 480,
   dstX: 0, dstY: 0, dstW: 640, dstH: 480,
 };
-assert.strictEqual(renderer.wantsRelativeMouse(320, 240), true,
-  'an exclusive software-cursor guest should opt into relative capture without requiring exclusive DirectInput');
+assert.strictEqual(renderer.wantsRelativeMouse(320, 240), false,
+  'an exclusive software cursor must not imply relative capture');
+assert.strictEqual(renderer.wantsRelativeMouse(320, 240, true), true,
+  'explicit relative input remains available');
 
 cursorCount = 0;
 assert.strictEqual(renderer.wantsHiddenMouse(320, 240), false,

@@ -4640,7 +4640,8 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))) ;; 5 args
 
-  ;; ReleaseDC drops the transient HDC/text cache. WAT has already written
+  ;; ReleaseDC drops transient HDC state, not the surface presentation cache.
+  ;; WAT has already written
   ;; GDI output directly into the surface's native DIB.
   (func $handle_IDirectDrawSurface_ReleaseDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $slot i32)

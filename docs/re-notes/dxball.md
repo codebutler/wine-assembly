@@ -190,6 +190,48 @@ node test/run.js --app=dxball --quiet-api --max-batches=3000 --no-close \
      --count=0x402270,0x402286,0x402295
 ```
 
+## iPhone allocation failure / DirectDraw DC cache lifetime (2026-09-10)
+
+The iOS 17.6.1 report on LAN8088 failed in `_dxPresentImage`'s
+`createImageData`, guest EIP `0x0040d910`. That stack identifies the allocation
+that failed, not necessarily the source of memory pressure. The phone session
+disconnected before its surface dimensions could be inspected.
+
+A real Chrome touch/gameplay probe instrumenting `createImageData` measured
+865 allocations of 640x480 in `gdi_surface_create` from `$gdi_dx_dc_bind`, plus
+859 full-size flush images, versus **one** `_dxPresentImage` allocation. Those
+two GDI sites alone requested about 2.12 GB of pixel arrays during the probe;
+this is cumulative allocation, not retained heap. Creation also allocated a
+canvas and a temporary RGBA conversion array on every cycle.
+
+Two invalidation paths: `$gdi_dx_dc_release` deleted the presentation on every
+ReleaseDC, and the same-storage reuse predicate rejected every Flip pointer
+swap. Fixing ReleaseDC alone did **not** reduce gameplay churn. Instrumenting
+Map replacement then confirmed two alternating native DIB pointers, with
+unchanged 640x480/8bpp/640-byte-stride geometry. This browser path does use Flip,
+unlike the earlier headless software-limiter census above.
+
+Release now drops only transient native DC/clip state. The cache is owned by
+the DDSurface and deleted on its kind-22 retirement notification. Matching
+DirectDraw geometry reuses the cache across pointer swaps; rebinding updates
+its storage and marks canonical pixels dirty so intervening Lock writes
+cannot leave stale pixels. The native regression covers 100 alternating-DIB
+bind/release cycles, upload-buffer reuse, canonical pixel refresh and actual
+surface retirement.
+
+The same Chrome touch/gameplay probe after both fixes measured **one** DX DC
+cache allocation and **one** full-size flush image (versus 865 and 859), plus
+one window cache and one DX presenter image. Steering, simultaneous launch,
+portrait/landscape layout and release cleanup passed with no page errors.
+Canonical/compat builds and focused GDI/DirectDraw regression suites passed.
+The browser probe also passed using the actual compatibility artifact with
+tail-call detection forced false and the SharedArrayBuffer global hidden:
+the same one-plus-one allocation counts and no page errors. This tests the
+compat dispatch path in Chrome, not Safari's memory limits.
+
+This is a confirmed allocation-pressure bug, not yet proof that it was the
+only cause of the particular iPhone OOM. Device retest remains required.
+
 ## Ruled out
 
 - **"It ignores the clock."** It does not. It reads the clock twice per frame
