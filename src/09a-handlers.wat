@@ -2238,8 +2238,7 @@
 
   ;; The emulator deliberately presents Windows 98. InstallShield uses a
   ;; successful OpenSCManager call to select its Windows NT service/security
-  ;; path, so report that the SCM is unavailable just as on Win9x. Keep the
-  ;; close operation for binaries which receive a service handle elsewhere.
+  ;; path, so report that the SCM is unavailable just as on Win9x.
   (func $handle_OpenSCManagerA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $last_error (i32.const 120)) ;; ERROR_CALL_NOT_IMPLEMENTED
     (global.set $eax (i32.const 0))
@@ -2247,7 +2246,11 @@
   )
 
   (func $handle_CloseServiceHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.ne (local.get $arg0) (i32.const 0)))
+    ;; No service-control-manager handle can be produced by this Win98
+    ;; personality, so accepting a fabricated nonzero value would be a false
+    ;; success. Match the documented invalid-handle failure contract.
+    (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 

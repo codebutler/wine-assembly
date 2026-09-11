@@ -35,7 +35,12 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_get_last_error(), 120,
     'failure reports ERROR_CALL_NOT_IMPLEMENTED');
   assert.strictEqual(e.test_call_CloseServiceHandle(0), 0);
-  assert.strictEqual(e.test_call_CloseServiceHandle(0x53434d31), 1);
+  assert.strictEqual(e.test_get_last_error(), 6,
+    'a null service handle reports ERROR_INVALID_HANDLE');
+  assert.strictEqual(e.test_call_CloseServiceHandle(0x53434d31), 0,
+    'a fabricated service handle is not accepted');
+  assert.strictEqual(e.test_get_last_error(), 6,
+    'a fabricated service handle reports ERROR_INVALID_HANDLE');
   console.log('PASS  Win98 SCM probe selects the non-NT installer path');
 })().catch(error => {
   console.error(error && error.stack || error);

@@ -344,3 +344,10 @@ the emulator's hot guest load/store path.
 the active WH_KEYBOARD/WH_CBT chain and returns its exact LRESULT. Hook installs
 prepend distinct heap-backed handles, while legacy and Ex unhook operations
 unlink only the named procedure and defer storage retirement across callbacks.
+
+2026-09-11: 333 -> 333. CloseServiceHandle no longer treats every fabricated
+nonzero value as a valid service handle. This Win98 personality cannot produce
+an SCM or service handle, so both NULL and nonzero inputs now fail with
+ERROR_INVALID_HANDLE. The audit count is unchanged because it intentionally
+tracks deterministic quiet failures as well as quiet successes; its identity
+hash changed with the corrected contract.
