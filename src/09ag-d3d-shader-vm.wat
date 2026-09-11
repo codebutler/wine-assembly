@@ -199,6 +199,7 @@
 ;; lowering can alias constants with a0, outputs, or sampler metadata.
 (func $d3d_shader_vm_arity20 (param $op i32) (result i32)
   (if (i32.eq (local.get $op) (i32.const 34)) (then (return (i32.const 4))))
+  (if (i32.eq (local.get $op) (i32.const 37)) (then (return (i32.const 4))))
   (if (i32.or (i32.eq (local.get $op) (i32.const 32)) (i32.eq (local.get $op) (i32.const 33))) (then (return (i32.const 3))))
   (if (i32.or (i32.eq (local.get $op) (i32.const 36))
     (i32.or (i32.eq (local.get $op) (i32.const 35)) (i32.eq (local.get $op) (i32.const 46))))
@@ -212,12 +213,16 @@
   (if (i32.eqz (i32.or (i32.le_u (local.get $op) (i32.const 18))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 19)) (i32.le_u (local.get $op) (i32.const 24)))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 31)) (i32.le_u (local.get $op) (i32.const 34)))
-    (i32.or (i32.or (i32.eq (local.get $op) (i32.const 35)) (i32.eq (local.get $op) (i32.const 36)))
+    (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 35)) (i32.le_u (local.get $op) (i32.const 37)))
     (i32.or (i32.eq (local.get $op) (i32.const 46))
       (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79))) (i32.eq (local.get $op) (i32.const 81))))))))) (then (return (i32.const 0))))
   (local.set $arity (call $d3d_shader_vm_arity20 (local.get $op)))
   (if (i32.or (i32.ne (i32.load offset=8 (local.get $ins)) (local.get $arity))
     (i32.load offset=12 (local.get $ins))) (then (return (i32.const 0))))
+  (if (i32.eq (local.get $op) (i32.const 37)) (then
+    (if (i32.or (i32.load offset=16 (local.get $ins)) (i32.gt_u (i32.load offset=24 (local.get $ins)) (i32.const 3))) (then (return (i32.const 0))))
+    (if (i64.eq (i64.load offset=16 (local.get $ins)) (i64.load offset=32 (local.get $ins))) (then (return (i32.const 0))))
+    (if (i64.eq (i64.load offset=48 (local.get $ins)) (i64.load offset=64 (local.get $ins))) (then (return (i32.const 0))))))
   (if (i32.or (i32.eq (local.get $op) (i32.const 32)) (i32.or (i32.eq (local.get $op) (i32.const 33)) (i32.eq (local.get $op) (i32.const 36)))) (then
     (if (i32.load offset=16 (local.get $ins)) (then (return (i32.const 0))))
     (if (i32.and (i32.eq (local.get $op) (i32.const 33)) (i32.gt_u (i32.load offset=24 (local.get $ins)) (i32.const 7)))
@@ -269,6 +274,8 @@
             (i32.or (i32.and (i32.eq (local.get $bank) (i32.const 5)) (i32.lt_u (local.get $index) (i32.const 2)))
               (i32.and (i32.eq (local.get $bank) (i32.const 6)) (i32.lt_u (local.get $index) (i32.const 8))))))) (then (return (i32.const 0))))))
       ) (else
+        (if (i32.and (i32.eq (local.get $op) (i32.const 37)) (i32.ge_u (local.get $j) (i32.const 2))) (then
+          (if (i32.ne (local.get $bank) (i32.const 2)) (then (return (i32.const 0))))))
         ;; SGN src1/src2 are distinct temporary scratch registers, not inputs.
         (if (i32.and (i32.eq (local.get $op) (i32.const 34)) (i32.ge_u (local.get $j) (i32.const 2))) (then
           (if (local.get $bank) (then (return (i32.const 0))))
@@ -286,9 +293,9 @@
             (i32.and (i32.eq (local.get $bank) (i32.const 2)) (i32.lt_u (local.get $index) (i32.const 256)))))) (then (return (i32.const 0))))
         (if (i32.or (i32.gt_u (local.get $selector) (i32.const 255))
           (i32.gt_u (i32.and (local.get $mod) (i32.const -257)) (i32.const 1))) (then (return (i32.const 0))))
-        (if (i32.or (i32.eq (local.get $op) (i32.const 32)) (i32.or
+        (if (i32.or (i32.and (i32.eq (local.get $op) (i32.const 37)) (i32.eq (local.get $j) (i32.const 1))) (i32.or (i32.eq (local.get $op) (i32.const 32)) (i32.or
           (i32.and (i32.ge_u (local.get $op) (i32.const 14)) (i32.le_u (local.get $op) (i32.const 15)))
-          (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79))))) (then
+          (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79)))))) (then
           (if (i32.ne (local.get $selector) (i32.mul (i32.and (local.get $selector) (i32.const 3)) (i32.const 85)))
             (then (return (i32.const 0))))))
         (if (i32.and (i32.ne (local.get $rows) (i32.const 0)) (i32.eq (local.get $j) (i32.const 2))) (then
@@ -531,6 +538,7 @@
     (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 36))) (then (i32.store (local.get $pkt) (i32.const 56))))
     (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 32))) (then (i32.store (local.get $pkt) (i32.const 57))))
     (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 34))) (then (i32.store (local.get $pkt) (i32.const 58))))
+    (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 37))) (then (i32.store (local.get $pkt) (i32.const 59))))
     (if (i32.eq (local.get $op) (i32.const 84)) (then (i32.store (local.get $pkt) (i32.const 47))))
     (if (i32.and (i32.ge_u (local.get $op) (i32.const 6)) (i32.le_u (local.get $op) (i32.const 7)))
       (then (i32.store (local.get $pkt) (i32.add (local.get $op) (i32.const 14)))))
@@ -1082,6 +1090,34 @@
   (local.set $v (v128.bitselect (local.get $a) (local.get $v) (f32x4.eq (local.get $a) (f32x4.splat (f32.const inf)))))
   (v128.bitselect (local.get $a) (local.get $v) (f32x4.ne (local.get $a) (local.get $a))))
 
+;; SINCOS's defined angle domain is [-pi,+pi]. Taylor polynomials of degree
+;; 17/16 use ordinary SIMD (no host math import or runtime-generated Wasm).
+;; Required VS2 coefficient constants are a guest contract; valid programs
+;; receive mathematical sin/cos rather than a driver-specific macro expansion.
+;; Outside the documented domain, this adapter evaluates the same polynomial.
+(func $d3d_shader_vm_sincos (param $x v128) (param $component i32) (result v128)
+  (local $z v128) (local $p v128)
+  (local.set $z (f32x4.mul (local.get $x) (local.get $x)))
+  (if (local.get $component) (then
+    (local.set $p (f32x4.splat (f32.const 2.8114572543455206e-15)))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -7.647163731819816e-13))))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 1.6059043836821613e-10))))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -2.505210838544172e-8))))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 2.7557319223985893e-6))))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -0.0001984126984126984))))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 0.008333333333333333))))
+    (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -0.16666666666666666))))
+    (return (f32x4.mul (local.get $x) (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 1)))))))
+  (local.set $p (f32x4.splat (f32.const 4.779477332387385e-14)))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -1.1470745597729725e-11))))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 2.08767569878681e-9))))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -2.755731922398589e-7))))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 0.0000248015873015873))))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -0.001388888888888889))))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 0.041666666666666664))))
+  (local.set $p (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const -0.5))))
+  (f32x4.add (f32x4.mul (local.get $p) (local.get $z)) (f32x4.splat (f32.const 1))))
+
 (func $d3d_shader_vm_alu (param $op i32) (param $a v128) (param $b v128) (param $c v128) (result v128)
   ;; Dedicated static dispatch, not the x86 function table. No recursive NEXT.
   (block $bad (block $max (block $min (block $mul (block $mad (block $sub (block $add (block $mov
@@ -1285,6 +1321,9 @@
     ;; clamp, with NaN->1. Not a claim of historic native undefined behavior.
     (local.set $v (v128.bitselect (f32x4.splat (f32.const 1)) (local.get $v) (f32x4.ne (local.get $v) (local.get $v))))
     (return (f32x4.min (f32x4.max (local.get $v) (f32x4.splat (f32.const 0))) (f32x4.splat (f32.const 1))))))
+  (if (i32.eq (local.get $op) (i32.const 59)) (then
+    (return (call $d3d_shader_vm_sincos
+      (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 16)) (i32.const 0)) (local.get $comp)))))
   (if (i32.eq (local.get $op) (i32.const 58)) (then
     (local.set $v (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 16)) (local.get $comp)))
     ;; Literal ordered comparisons: signed zero -> +0; NaN -> +1 is our

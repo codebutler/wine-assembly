@@ -1835,3 +1835,34 @@ and no data overlaps. Independent read-only review found no concrete defect.
 Same-IR55356 PASS120 actual GL1/2 frames against60 native position/raster frames,
 including uninitialized scratches and reverse-swizzled/negated signs mapped to
 visible colors. SINCOS, flow and complete profile/gameplay gates remain open.
+
+Private SINCOS follow-up: opcode37 / packet59 uses ordinary four-lane
+SIMD Taylor polynomials (sine degree17, cosine degree16) on the documented
+[-pi,+pi] domain. Native73923 passes1520 cases including a 1024-angle sweep with
+maximum absolute error3.7030587629605094e-7 against independent JS sin/cos,
+bounded by2e-6 in the test. The driver reference permits0.002 absolute error.
+The helper makes no host math calls and generates no runtime Wasm. Native
+RED46272 confirmed the missing opcode before implementation. Legacy33994
+passes263; full37288 passes canonical1164618 / compat1165086, unchanged layout
+and no data overlaps.
+
+Decoder42062 passes84 SINCOS cases; neighboring suites42062/25097 pass. TEMP
+destination masks1/2/3, scalar angle, source/destination non-aliasing, two
+distinct coefficient-register indices and eight slots are checked. VS2 clears
+XYZ definition bits before publishing written XY, preserving W's definition.
+General coefficient modifiers/swizzles/relative syntax remain available; the
+same encoded index is conservatively rejected even across relative/static
+operands. Required effective coefficient values remain a runtime valid-program
+contract. Mathematical lowering is not a claim to reproduce a driver's exact
+macro expansion or behavior with invalid coefficient values. The primary driver
+page's coefficient signs/denominators conflict internally, so its literal table
+is not an independent numeric oracle. Public profile gates remain unchanged.
+GLSL emits mathematical cos/sin with the existing masked assignment, retaining
+W; behavior outside the documented angle domain is not a parity claim (the
+software helper continues its polynomial). Actual GPU93447 PASS90 includes10
+new SINCOS GL1/2 cases; undefined XYZ are redefined before color observation.
+Same-IR69392 PASS138 GL1/2 frames against69 native frames. Nine new cases cover
+0 and +/-pi/2 with masksX/Y/XY and exact stable UNORM pixels; only their position
+comparisons use the explicit2e-6 arithmetic tolerance. Every older position
+check remains exact. VM68401 repeats1520 PASS with Taylor-derived coefficient
+vectors seeded. Full profiles, flow control and changing gameplay remain open.

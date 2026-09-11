@@ -157,15 +157,28 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     {name:'sgn partial mask preserves YW',op:34,mask:5,input:[-2,3,4,-5],expected:[0,.65,1,.8]},
     {name:'sgn finite extremes',op:34,input:[-3.4028234663852886e38,3.4028234663852886e38,-1e-37,1e-37],expected:[0,1,0,1]},
     {name:'sgn infinities',op:34,input:[-Infinity,Infinity,0,-0],expected:[0,1,.5,.5]},
+    {name:'sincos zero XY and preserved W',op:37,mask:3,input:[0,0,0,0],expected:[1,.5,.7,.8]},
+    {name:'sincos positive half pi XY',op:37,mask:3,input:[Math.PI/2,0,0,0],expected:[.5,1,.7,.8]},
+    {name:'sincos positive half pi X',op:37,mask:1,input:[Math.PI/2,0,0,0],expected:[.5,.65,.7,.8]},
+    {name:'sincos negative half pi Y',op:37,mask:2,input:[-Math.PI/2,0,0,0],expected:[.6,0,.7,.8]},
+    {name:'sincos W swizzle and NEG',op:37,mask:3,swizzle:255,negate:true,input:[9,9,9,Math.PI/2],expected:[.5,0,.7,.8]},
    ];
    for(const version of[1,2])for(const fixture of fixtures){
     const instructions=[{opcode:1,offset:1,args:[0xc00f0000,0x90e40000]}];
-    const src=(0x90000001|((fixture.swizzle??(fixture.op===32?0:228))<<16)|(fixture.negate?0x01000000:0))>>>0;
+    const src=(0x90000001|((fixture.swizzle??([32,37].includes(fixture.op)?0:228))<<16)|(fixture.negate?0x01000000:0))>>>0;
     if(fixture.op===32){
      instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
       {opcode:32,offset:3,args:[0x80000000|((fixture.mask??15)<<16),src,(0xa0ff0003|(fixture.exponentNegate?0x01000000:0))>>>0]},
       fixture.infinite?{opcode:12,offset:4,args:[0xd00f0000,0xa0e40000,0x80e40000]}:
        {opcode:5,offset:4,args:[0xd00f0000,0x80e40000,0xa0e40000]});
+    }else if(fixture.op===37){
+     instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
+      {opcode:37,offset:3,args:[0x80000000|(fixture.mask<<16),src,0xa0e40003,0xa0e40004]},
+      // VS2 leaves unwritten XYZ undefined: redefine them before observing
+      // color. W alone must retain its preinstruction value.
+      {opcode:1,offset:4,args:[0x80000000|((7^fixture.mask)<<16),0xa0e40002]},
+      {opcode:5,offset:5,args:[0x800f0001,0x80e40000,0xa0e40000]},
+      {opcode:2,offset:6,args:[0xd00f0000,0x80e40001,0xa0e40001]});
     }else if(fixture.op===34){
      // r2/r3 are undefined scratch outputs, not initialized value sources.
      instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
@@ -202,11 +215,18 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     const position=gl.getAttribLocation(p,'d3d_v0');gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,4,gl.FLOAT,false,0,0);
     const input=gl.getAttribLocation(p,'d3d_v1');gl.disableVertexAttribArray(input);gl.vertexAttrib4f(input,...fixture.input);
     const scalar=(n,x)=>gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c'+n),x,x,x,x);
-    scalar(0,fixture.op===32?(fixture.infinite?3.4028234663852886e38:fixture.scale??1):[33,34].includes(fixture.op)?.5:fixture.zero?1e-37:.25);
-    scalar(1,[33,34].includes(fixture.op)?.5:fixture.zero?.025:fixture.bias);
+    scalar(0,fixture.op===32?(fixture.infinite?3.4028234663852886e38:fixture.scale??1):[33,34,37].includes(fixture.op)?.5:fixture.zero?1e-37:.25);
+    scalar(1,[33,34,37].includes(fixture.op)?.5:fixture.zero?.025:fixture.bias);
     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c2'),.2,.3,.4,.6);
     if(fixture.matrix)gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),...fixture.matrix);
     if(fixture.op===32)scalar(3,fixture.exponent);
+    if(fixture.op===37){
+     // Signed half-angle Taylor coefficients derived from the DDI's
+     // mathematical expansion, NOT independently verified SDK macro bytes.
+     // Its coefficient table conflicts with its Taylor formula at -1/8.
+     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),-1/(5040*128),-1/(720*64),1/(24*16),1/(120*32));
+     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c4'),-1/(6*8),-1/8,1,.5);
+    }
     gl.drawArrays(gl.TRIANGLES,0,3);const pixels=new Uint8Array(64);gl.readPixels(0,0,4,4,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
     results.push({version,name:fixture.name,expected:fixture.expected.map(x=>Math.round(x*255)),pixels:Array.from(pixels),error:gl.getError()});
     gl.deleteBuffer(buffer);gl.deleteProgram(p);gl.deleteShader(v);gl.deleteShader(f);gl.getExtension('WEBGL_lose_context')?.loseContext();
@@ -214,6 +234,6 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
   });
   for(const result of vectorResults){assert.strictEqual(result.error,0);result.pixels.forEach((actual,i)=>
    assert(Math.abs(actual-result.expected[i%4])<=1,JSON.stringify({result,i,actual})));}
-  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' CRS/NRM/POW/SGN actual WebGL1/2 pixel cases');
+  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' CRS/NRM/POW/SGN/SINCOS actual WebGL1/2 pixel cases');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

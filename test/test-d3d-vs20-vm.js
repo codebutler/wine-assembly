@@ -44,7 +44,57 @@ const { bootRenderHarness } = require('./render-helper');
       f.fill(c + component / 4, register(ctx, 2, c) + component * 4, register(ctx, 2, c) + component * 4 + 4);
   }
   function release(...pointers) { pointers.forEach(p => e.d3d_shader_vm_free(p)); }
+  function seedSincosCoefficients(ctx) {
+    // Signed half-angle Taylor coefficients from the DDI derivation. Its
+    // separate literal table contains conflicting signs/denominators; these
+    // fixtures test mathematical results, not a verified SDK macro expansion.
+    const coefficients=[[-1/(5040*128),-1/(720*64),1/(24*16),1/(120*32)],[-1/(6*8),-1/(2*4),1,.5]];
+    coefficients.forEach((values,index)=>values.forEach((value,component)=>
+      f.fill(value,register(ctx,2,254+index)+component*4,register(ctx,2,254+index)+component*4+4)));
+  }
   assert.strictEqual(e.d3d_shader_vm_context_bytes(), 73760);
+  for (const mask of [1,2,3]) for (const lanes of [15,5])
+  for (const selector of [0,85,170,255]) for (const negate of [0,1]) {
+    const destination = 1;
+    const program = compile([ins(37,dst(destination,mask),operand(0,0,selector,negate),constant(254),constant(255))]);
+    const ctx=e.d3d_shader_vm_context(program,lanes);assert(ctx);
+    seedSincosCoefficients(ctx);
+    f.fill(77,register(ctx,0,1),register(ctx,0,1)+16);
+    f.fill(9,register(ctx,0,0),register(ctx,0,0)+16);
+    const angles=[-0,0,-Math.PI/2,Math.PI];
+    f.set(angles,register(ctx,0,0)+(selector&3)*4);
+    const previous=Array.from(f.slice(register(ctx,0,destination),register(ctx,0,destination)+16));
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),0);
+    for(let component=0;component<4;component++)for(let lane=0;lane<4;lane++){
+      const actual=f[register(ctx,0,destination)+component*4+lane];
+      if((mask&(1<<component))&&(lanes&(1<<lane))){
+        const angle=Math.fround(angles[lane])*(negate?-1:1);
+        const expected=component===0?Math.cos(angle):Math.sin(angle);
+        assert(Math.abs(actual-expected)<=2e-6,`SINCOS component${component} ${angle}: ${actual} vs${expected}`);
+        if(expected===0)assert.strictEqual(actual,expected);
+      }else if(component===3 || !(lanes&(1<<lane)))assert.strictEqual(actual,previous[component*4+lane]);
+      // Unwritten XYZ are undefined for VS2; do not constrain their values.
+    }
+    release(ctx,program);cases++;
+  }
+  {
+    const program=compile([ins(37,dst(1,3),operand(0,0,0),constant(254),constant(255))]);
+    let worst=0;
+    for(let batch=0;batch<256;batch++){
+      const ctx=e.d3d_shader_vm_context(program,15);assert(ctx);
+      seedSincosCoefficients(ctx);
+      const angles=Array.from({length:4},(_,lane)=>Math.fround(-Math.PI+2*Math.PI*(batch*4+lane)/1023));
+      f.set(angles,register(ctx,0,0));
+      assert.strictEqual(e.d3d_shader_vm_run(ctx,1),0);
+      for(let component=0;component<2;component++)for(let lane=0;lane<4;lane++){
+        const expected=component?Math.sin(angles[lane]):Math.cos(angles[lane]);
+        const error=Math.abs(f[register(ctx,0,1)+component*4+lane]-expected);
+        worst=Math.max(worst,error);assert(error<=2e-6,`SINCOS sweep ${angles[lane]} error${error}`);
+      }
+      release(ctx);cases++;
+    }
+    release(program);console.log(`SINCOS 1024 angles max absolute error ${worst}`);
+  }
   for (let mask = 1; mask < 16; mask++) for (const lanes of [15, 5])
   for (const selector of [228, 27, 0, 255]) for (const negate of [0, 1]) {
     const program = compile([ins(34, dst(1, mask), operand(0, 0, selector, negate), source(2), source(3))]);
@@ -274,6 +324,14 @@ const { bootRenderHarness } = require('./render-helper');
     release(ctx, program); cases++;
   }
   for (const bad of [ins(46, dst(0), source(0)), ins(46, operand(3, 0, 2), source(0)),
+    ...[0,4,8,15].map(mask=>ins(37,dst(1,mask),operand(0,0,0),constant(254),constant(255))),
+    ins(37,dst(0,3),operand(0,0,0),constant(254),constant(255)),
+    ins(37,operand(5,0,3),operand(0,0,0),constant(254),constant(255)),
+    ins(37,dst(1,3),source(0),constant(254),constant(255)),
+    ins(37,dst(1,3),operand(0,0,0),source(2),constant(255)),
+    ins(37,dst(1,3),operand(0,0,0),constant(254),source(2)),
+    ins(37,dst(1,3),operand(0,0,0),constant(254),constant(254)),
+    ins(37,dst(1,3),operand(0,0,0),constant(254),constant(256)),
     ins(34, dst(0), source(1), source(2), source(2)),
     ins(34, dst(0), source(1), constant(2), source(3)),
     ins(34, dst(0), source(1), source(2), operand(1, 3)),
