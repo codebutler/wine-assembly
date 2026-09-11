@@ -24,11 +24,17 @@ const TVM_SELECTITEM = 0x110B;
 const TVM_GETITEMA = 0x110C;
 const TVM_SETITEMA = 0x110D;
 const TVM_HITTEST = 0x1111;
+const TVM_ENSUREVISIBLE = 0x1114;
 const TVGN_FIRSTVISIBLE = 5;
 const TVGN_NEXTVISIBLE = 6;
+const TVGN_DROPHILITE = 8;
 const TVGN_CARET = 9;
 const TVE_COLLAPSE = 1;
 const TVE_EXPAND = 2;
+const TVIS_SELECTED = 0x0002;
+const TVIS_DROPHILITED = 0x0008;
+const TVIS_EXPANDED = 0x0020;
+const TVIS_EXPANDEDONCE = 0x0040;
 const TVN_ITEMEXPANDEDA = -406;
 const WM_VSCROLL = 0x0115;
 const WM_LBUTTONDOWN = 0x0201;
@@ -107,6 +113,26 @@ async function main() {
   }
   function firstVisibleHandle() {
     return e.send_message(tv, TVM_GETNEXTITEM, TVGN_FIRSTVISIBLE, 0) >>> 0;
+  }
+  function getItemState(handle, stateMask = 0xFFFF) {
+    const item = e.guest_alloc(40);
+    const p = wa(item);
+    u8.fill(0, p, p + 40);
+    dv.setUint32(p + 0, 0x0008, true); // TVIF_STATE
+    dv.setUint32(p + 4, handle, true);
+    dv.setUint32(p + 12, stateMask, true);
+    const ret = e.send_message(tv, TVM_GETITEMA, 0, item) | 0;
+    return { ret, state: dv.getUint32(p + 8, true) };
+  }
+  function setItemState(handle, state, stateMask) {
+    const item = e.guest_alloc(40);
+    const p = wa(item);
+    u8.fill(0, p, p + 40);
+    dv.setUint32(p + 0, 0x0008, true); // TVIF_STATE
+    dv.setUint32(p + 4, handle, true);
+    dv.setUint32(p + 8, state, true);
+    dv.setUint32(p + 12, stateMask, true);
+    return e.send_message(tv, TVM_SETITEMA, 0, item) | 0;
   }
 
   const baselineSlots = e.wnd_count_used();
@@ -253,6 +279,69 @@ async function main() {
       e.treeview_get_debug_expand_notify_action() === TVE_COLLAPSE &&
       (e.treeview_get_debug_expand_notify_item() >>> 0) === parent &&
       e.treeview_get_debug_expand_notify_children() === 1);
+
+  // Native Win98 keeps TVITEM state and the caret related but distinct.
+  // TVM_SETITEM can set TVIS_SELECTED without moving the caret, and collapsing
+  // that hidden item must not erase the independently assigned state bit.
+  check('TVM_SETITEM TVIS_SELECTED does not move the caret',
+    setItemState(childB, TVIS_SELECTED, TVIS_SELECTED) === 1 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
+      (getItemState(parent).state & TVIS_SELECTED) !== 0 &&
+      (getItemState(childB).state & TVIS_SELECTED) !== 0);
+  e.send_message(tv, TVM_EXPAND, TVE_EXPAND, parent);
+  e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, parent);
+  check('collapse preserves non-caret selected state on a hidden descendant',
+    (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
+      (getItemState(childB).state & TVIS_SELECTED) !== 0);
+  setItemState(childB, 0, TVIS_SELECTED);
+
+  // TVM_SELECTITEM has three Win98-era modes. Selecting a hidden caret reveals
+  // its ancestors and minimally scrolls it into view; FIRSTVISIBLE reveals it
+  // and places it at the top when the remaining content permits; DROPHILITE is
+  // a separate, unique state that does not change the caret.
+  check('TVGN_CARET reveals a hidden descendant and scrolls it into view',
+    e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, childC) === 1 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === childC &&
+      e.treeview_get_visible_count() === 17 &&
+      e.treeview_get_first_visible_row() === 12 &&
+      (getItemState(parent).state & (TVIS_EXPANDED | TVIS_EXPANDEDONCE)) ===
+        (TVIS_EXPANDED | TVIS_EXPANDEDONCE));
+  e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, parent);
+  check('collapsing over the caret moves it quietly to the parent',
+    (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
+      (getItemState(parent).state & TVIS_SELECTED) !== 0 &&
+      (getItemState(childC).state & TVIS_SELECTED) === 0);
+
+  check('TVGN_FIRSTVISIBLE reveals without changing the caret',
+    e.send_message(tv, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, childA) === 1 &&
+      firstVisibleHandle() === childA &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
+      (getItemState(parent).state & (TVIS_EXPANDED | TVIS_EXPANDEDONCE)) ===
+        (TVIS_EXPANDED | TVIS_EXPANDEDONCE));
+  e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, parent);
+  check('TVM_ENSUREVISIBLE reveals and minimally scrolls a hidden item',
+    e.send_message(tv, TVM_ENSUREVISIBLE, 0, childC) === 0 &&
+      e.treeview_get_first_visible_row() === 12 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent);
+  e.send_message(tv, WM_VSCROLL, 6, 0); // SB_TOP, ancestors remain expanded
+  check('TVM_ENSUREVISIBLE returns nonzero for scrolling without expansion',
+    e.send_message(tv, TVM_ENSUREVISIBLE, 0, childC) === 1 &&
+      e.treeview_get_first_visible_row() === 12);
+
+  check('TVGN_DROPHILITE marks a unique drag target without moving the caret',
+    e.send_message(tv, TVM_SELECTITEM, TVGN_DROPHILITE, childB) === 1 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_DROPHILITE, 0) >>> 0) === childB &&
+      (getItemState(childB).state & TVIS_DROPHILITED) !== 0 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
+      e.send_message(tv, TVM_SELECTITEM, TVGN_DROPHILITE, parent) === 1 &&
+      (getItemState(childB).state & TVIS_DROPHILITED) === 0 &&
+      (getItemState(parent).state & TVIS_DROPHILITED) !== 0);
+  check('TVGN_DROPHILITE with NULL clears the drag target',
+    e.send_message(tv, TVM_SELECTITEM, TVGN_DROPHILITE, 0) === 1 &&
+      e.send_message(tv, TVM_GETNEXTITEM, TVGN_DROPHILITE, 0) === 0 &&
+      (getItemState(parent).state & TVIS_DROPHILITED) === 0);
+  check('TVM_SELECTITEM rejects an unknown mode',
+    e.send_message(tv, TVM_SELECTITEM, 0x7FFF, parent) === 0);
 
   // RegEdit depends on standard TreeView mouse semantics: merely crossing a
   // plus box must not expand it or move the caret. Expansion belongs to an

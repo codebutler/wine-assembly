@@ -816,6 +816,40 @@
       (br $rows)))
     (i32.const 0))
 
+  ;; Absolute display row for an item, independent of the current viewport.
+  ;; Returns -1 when the item is not in the expanded display-order walk.
+  (func $tv_visible_row_for_handle (param $target i32) (result i32)
+    (local $hItem i32) (local $row i32) (local $guard i32)
+    (local.set $hItem (call $tv_visible_handle_at_row (i32.const 0)))
+    (block $done (loop $items
+      (br_if $done (i32.eqz (local.get $hItem)))
+      (if (i32.eq (local.get $hItem) (local.get $target))
+        (then (return (local.get $row))))
+      (br_if $done (i32.ge_u (local.get $guard) (call $tv_slot_limit)))
+      (local.set $hItem (call $tv_next_visible_handle (local.get $hItem)))
+      (local.set $row (i32.add (local.get $row) (i32.const 1)))
+      (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+      (br $items)))
+    (i32.const -1))
+
+  (func $tv_first_item_with_state (param $mask i32) (result i32)
+    (local $i i32) (local $base i32)
+    (block $done (loop $items
+      (br_if $done (i32.ge_u (local.get $i) (call $tv_slot_limit)))
+      (local.set $base
+        (i32.add (global.get $TV_TABLE) (i32.mul (local.get $i) (i32.const 32))))
+      (if (i32.and
+            (i32.and
+              (i32.ne (i32.load (local.get $base)) (i32.const 0))
+              (call $tv_slot_in_view (local.get $i)))
+            (i32.ne
+              (i32.and (i32.load offset=20 (local.get $base)) (local.get $mask))
+              (i32.const 0)))
+        (then (return (i32.load (local.get $base)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $items)))
+    (i32.const 0))
+
   ;; TVM_GETNEXTITEM handler
   (func $tv_get_next (param $flag i32) (param $hItem i32) (result i32)
     (local $slot i32) (local $base i32) (local $i i32)
@@ -841,6 +875,9 @@
     ;; TVGN_FIRSTVISIBLE (5)
     (if (i32.eq (local.get $flag) (i32.const 5))
       (then (return (call $tv_first_visible))))
+    ;; TVGN_DROPHILITE (8)
+    (if (i32.eq (local.get $flag) (i32.const 8))
+      (then (return (call $tv_first_item_with_state (i32.const 0x0008)))))
     ;; Need to find the item
     (local.set $slot (call $tv_find_slot (local.get $hItem)))
     (if (i32.eq (local.get $slot) (i32.const -1))
@@ -971,6 +1008,124 @@
     (call $heap_free (local.get $notify_g))
     (local.get $ret))
 
+  ;; Expand every ancestor from the root down. TVM_SELECTITEM with TVGN_CARET
+  ;; and TVGN_FIRSTVISIBLE both reveal a descendant hidden below collapsed
+  ;; parents on Win98. Going root-first preserves the notification order and
+  ;; bounds recursion even if an application's item links are malformed.
+  ;; Result: -1 = failure, 0 = already revealed, 1 = at least one ancestor
+  ;; expanded. The distinction is observable through TVM_ENSUREVISIBLE.
+  (func $tv_expand_ancestors (param $hwnd i32) (param $hItem i32) (param $depth i32) (result i32)
+    (local $slot i32) (local $base i32) (local $parent i32)
+    (local $parent_slot i32) (local $parent_base i32)
+    (local $expanded i32) (local $ret i32)
+    (if (i32.ge_u (local.get $depth) (call $tv_slot_limit))
+      (then (return (i32.const -1))))
+    (local.set $slot (call $tv_find_slot (local.get $hItem)))
+    (if (i32.eq (local.get $slot) (i32.const -1))
+      (then (return (i32.const -1))))
+    (local.set $base
+      (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+    (local.set $parent (i32.load offset=4 (local.get $base)))
+    (if (i32.eqz (local.get $parent))
+      (then (return (i32.const 0))))
+    (local.set $ret (call $tv_expand_ancestors
+      (local.get $hwnd) (local.get $parent)
+      (i32.add (local.get $depth) (i32.const 1))))
+    (if (i32.lt_s (local.get $ret) (i32.const 0))
+      (then (return (i32.const -1))))
+    (local.set $parent_slot (call $tv_find_slot (local.get $parent)))
+    (if (i32.eq (local.get $parent_slot) (i32.const -1))
+      (then (return (i32.const -1))))
+    (local.set $parent_base
+      (i32.add (global.get $TV_TABLE)
+        (i32.mul (local.get $parent_slot) (i32.const 32))))
+    (local.set $expanded
+      (i32.ne
+        (i32.and (i32.load offset=20 (local.get $parent_base)) (i32.const 0x20))
+        (i32.const 0)))
+    (if (i32.eqz (call $tv_set_expanded
+          (local.get $hwnd) (local.get $parent) (i32.const 2)))
+      (then (return (i32.const -1))))
+    (select
+      (i32.const 1)
+      (local.get $ret)
+      (i32.eqz (local.get $expanded))))
+
+  ;; Reveal an item and project that content position into the TreeView's
+  ;; standard vertical scrollbar. With make_first=0, scroll only as far as
+  ;; needed; with make_first=1, place the item at the top when the tail length
+  ;; permits it (TVGN_FIRSTVISIBLE semantics).
+  (func $tv_reveal_item (param $hwnd i32) (param $hItem i32) (param $make_first i32) (result i32)
+    (local $sz i32) (local $h i32) (local $row i32)
+    (local $first i32) (local $visible i32) (local $target i32)
+    (local $expanded i32) (local $new_first i32) (local $flags i32)
+    (if (i32.eqz (local.get $hItem))
+      (then (return (i32.const 0))))
+    (local.set $expanded (call $tv_expand_ancestors
+      (local.get $hwnd) (local.get $hItem) (i32.const 0)))
+    (if (i32.lt_s (local.get $expanded) (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $row (call $tv_visible_row_for_handle (local.get $hItem)))
+    (if (i32.lt_s (local.get $row) (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+    (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
+    (local.set $first (call $tv_view_row))
+    (local.set $visible (call $tv_visible_rows_for_h (local.get $h)))
+    (local.set $target (local.get $first))
+    (if (local.get $make_first)
+      (then (local.set $target (local.get $row)))
+      (else
+        (if (i32.lt_s (local.get $row) (local.get $first))
+          (then (local.set $target (local.get $row)))
+          (else
+            (if (i32.ge_s
+                  (local.get $row)
+                  (i32.add (local.get $first) (local.get $visible)))
+              (then
+                (local.set $target
+                  (i32.add
+                    (i32.sub (local.get $row) (local.get $visible))
+                    (i32.const 1)))))))))
+    (local.set $new_first (call $tv_scroll_to_for_h
+      (local.get $hwnd) (local.get $h) (local.get $target)))
+    ;; bit 0 = success, bit 1 = expanded, bit 2 = scrolled.
+    (local.set $flags (i32.const 1))
+    (if (local.get $expanded)
+      (then (local.set $flags (i32.or (local.get $flags) (i32.const 2)))))
+    (if (i32.ne (local.get $new_first) (local.get $first))
+      (then (local.set $flags (i32.or (local.get $flags) (i32.const 4)))))
+    (local.get $flags))
+
+  (func $tv_select_drop_target (param $hwnd i32) (param $hItem i32) (result i32)
+    (local $slot i32) (local $base i32) (local $i i32)
+    (if (i32.and
+          (i32.ne (local.get $hItem) (i32.const 0))
+          (i32.eq (call $tv_find_slot (local.get $hItem)) (i32.const -1)))
+      (then (return (i32.const 0))))
+    (block $clear_done (loop $clear_items
+      (br_if $clear_done (i32.ge_u (local.get $i) (call $tv_slot_limit)))
+      (local.set $base
+        (i32.add (global.get $TV_TABLE) (i32.mul (local.get $i) (i32.const 32))))
+      (if (i32.and
+            (i32.ne (i32.load (local.get $base)) (i32.const 0))
+            (call $tv_slot_in_view (local.get $i)))
+        (then
+          (i32.store offset=20 (local.get $base)
+            (i32.and (i32.load offset=20 (local.get $base)) (i32.const 0xFFFFFFF7)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $clear_items)))
+    (if (local.get $hItem)
+      (then
+        (local.set $slot (call $tv_find_slot (local.get $hItem)))
+        (local.set $base
+          (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+        (i32.store offset=20 (local.get $base)
+          (i32.or (i32.load offset=20 (local.get $base)) (i32.const 0x0008)))))
+    (call $paint_flag_set_inv (local.get $hwnd))
+    (call $treeview_paint_wat (local.get $hwnd))
+    (i32.const 1))
+
   (func $tv_select_caret (param $hwnd i32) (param $hItem i32) (param $action i32) (result i32)
     (local $old_sel i32) (local $slot i32) (local $base i32)
     (local $i i32) (local $scan_base i32)
@@ -978,6 +1133,11 @@
           (i32.ne (local.get $hItem) (i32.const 0))
           (i32.eq (call $tv_find_slot (local.get $hItem)) (i32.const -1)))
       (then (return (i32.const 0))))
+    (if (local.get $hItem)
+      (then
+        (if (i32.eqz (call $tv_reveal_item
+              (local.get $hwnd) (local.get $hItem) (i32.const 0)))
+          (then (return (i32.const 0))))))
     (local.set $old_sel (call $tv_view_sel))
     (if (local.get $old_sel)
       (then
@@ -1067,7 +1227,6 @@
     (local $slot i32) (local $base i32) (local $state i32) (local $cmd i32)
     (local $was_expanded i32) (local $notify_action i32)
     (local $sel_slot i32) (local $sel_base i32)
-    (local $i i32) (local $scan_base i32)
     (local.set $slot (call $tv_find_slot (local.get $hItem)))
     (if (i32.eq (local.get $slot) (i32.const -1))
       (then (return (i32.const 0))))
@@ -1080,10 +1239,17 @@
       (then (local.set $state (i32.and (local.get $state) (i32.const 0xFFFFFFDF))))
       (else
         (if (i32.eq (local.get $cmd) (i32.const 2))
-          (then (local.set $state (i32.or (local.get $state) (i32.const 0x20))))
+          ;; Win98 sets TVIS_EXPANDEDONCE together with TVIS_EXPANDED. The
+          ;; former survives collapse and is observable through TVM_GETITEM.
+          (then (local.set $state (i32.or (local.get $state) (i32.const 0x60))))
           (else
             (if (i32.eq (local.get $cmd) (i32.const 3))
-              (then (local.set $state (i32.xor (local.get $state) (i32.const 0x20)))))))))
+              (then
+                (if (i32.and (local.get $state) (i32.const 0x20))
+                  (then (local.set $state
+                    (i32.and (local.get $state) (i32.const 0xFFFFFFDF))))
+                  (else (local.set $state
+                    (i32.or (local.get $state) (i32.const 0x60)))))))))))
     (if (i32.eq
           (local.get $was_expanded)
           (i32.and (local.get $state) (i32.const 0x20)))
@@ -1105,27 +1271,20 @@
             (local.set $sel_base (i32.add (global.get $TV_TABLE)
               (i32.mul (local.get $sel_slot) (i32.const 32))))
             (if (i32.eqz (call $tv_item_visible (local.get $sel_base)))
-              (then (return (call $tv_select_caret
-                (local.get $hwnd) (local.get $hItem) (i32.const 1)))))))))
-    (if (i32.eqz (i32.and (local.get $state) (i32.const 0x20)))
-      (then
-        (local.set $i (i32.const 0))
-        (block $scan_done (loop $scan_items
-          (br_if $scan_done (i32.ge_u (local.get $i) (call $tv_slot_limit)))
-          (local.set $scan_base (i32.add (global.get $TV_TABLE) (i32.mul (local.get $i) (i32.const 32))))
-          (if (i32.and
-                (i32.and
-                  (i32.ne (i32.load (local.get $scan_base)) (i32.const 0))
-                  (call $tv_slot_in_view (local.get $i)))
-                (i32.ne
-                  (i32.and (i32.load offset=20 (local.get $scan_base)) (i32.const 0x0002))
-                  (i32.const 0)))
-            (then
-              (if (i32.eqz (call $tv_item_visible (local.get $scan_base)))
-                (then (return (call $tv_select_caret
-                  (local.get $hwnd) (local.get $hItem) (i32.const 1)))))))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br $scan_items)))))
+              (then
+                ;; Collapsing over the caret moves it to the collapsing item
+                ;; without selection-change notifications on Win98. Only the
+                ;; caret's selected bit moves: independently set TVIS_SELECTED
+                ;; bits on other hidden descendants remain intact.
+                (i32.store offset=20 (local.get $sel_base)
+                  (i32.and
+                    (i32.load offset=20 (local.get $sel_base))
+                    (i32.const 0xFFFFFFFD)))
+                (i32.store offset=20 (local.get $base)
+                  (i32.or
+                    (i32.load offset=20 (local.get $base))
+                    (i32.const 0x0002)))
+                (call $tv_view_set_sel (local.get $hItem))))))))
     (call $paint_flag_set_inv (local.get $hwnd))
     (call $treeview_paint_wat (local.get $hwnd))
     (drop (call $tv_notify_item_expand
@@ -1332,7 +1491,20 @@
           (then
             (return (call $tv_select_caret
               (local.get $hwnd) (local.get $lParam) (i32.const 0)))))
-        (return (i32.const 1))))
+        (if (i32.eq (local.get $wParam) (i32.const 8)) ;; TVGN_DROPHILITE
+          (then
+            (return (call $tv_select_drop_target
+              (local.get $hwnd) (local.get $lParam)))))
+        (if (i32.eq (local.get $wParam) (i32.const 5)) ;; TVGN_FIRSTVISIBLE
+          (then
+            (local.set $ret (call $tv_reveal_item
+              (local.get $hwnd) (local.get $lParam) (i32.const 1)))
+            (if (local.get $ret)
+              (then
+                (call $paint_flag_set_inv (local.get $hwnd))
+                (call $treeview_paint_wat (local.get $hwnd))))
+            (return (i32.ne (local.get $ret) (i32.const 0)))))
+        (return (i32.const 0))))
     ;; TVM_GETITEMA (0x110c)
     (if (i32.eq (local.get $msg) (i32.const 0x110c))
       (then (return (call $tv_get_item (call $g2w (local.get $lParam))))))
@@ -1342,6 +1514,21 @@
     ;; TVM_HITTEST (0x1111)
     (if (i32.eq (local.get $msg) (i32.const 0x1111))
       (then (return (call $tv_hit_test (call $g2w (local.get $lParam))))))
+    ;; TVM_ENSUREVISIBLE (0x1114)
+    (if (i32.eq (local.get $msg) (i32.const 0x1114))
+      (then
+        (local.set $ret (call $tv_reveal_item
+          (local.get $hwnd) (local.get $lParam) (i32.const 0)))
+        (if (local.get $ret)
+          (then
+            (call $paint_flag_set_inv (local.get $hwnd))
+            (call $treeview_paint_wat (local.get $hwnd))))
+        ;; Microsoft documents the historical return value as nonzero only
+        ;; when scrolling occurred and no ancestor was expanded.
+        (return
+          (i32.eq
+            (i32.and (local.get $ret) (i32.const 0x6))
+            (i32.const 0x4)))))
     ;; Default
     (i32.const 0))
 
@@ -1435,14 +1622,14 @@
                 (then
                   (local.set $depth (call $tv_item_depth (local.get $base)))
 	              (local.set $x (i32.add (i32.const 4) (i32.mul (local.get $depth) (i32.const 16))))
+	              ;; Selection paint follows this item's state exactly. Win98
+	              ;; permits TVM_SETITEM to mark a hidden descendant selected
+	              ;; without moving the caret; that does not select its parent
+	              ;; by proxy.
 	              (local.set $selected
-	                (i32.or
-	                  (i32.ne (i32.and (local.get $state) (i32.const 0x0002)) (i32.const 0))
-	                  (i32.and
-	                    (i32.and
-	                      (call $tv_item_has_children (local.get $base))
-	                      (i32.eqz (i32.and (local.get $state) (i32.const 0x20))))
-	                    (call $tv_has_selected_descendant (local.get $base)))))
+	                (i32.ne
+	                  (i32.and (local.get $state) (i32.const 0x0002))
+	                  (i32.const 0)))
 
 	              (if (call $tv_item_has_children (local.get $base))
                 (then
