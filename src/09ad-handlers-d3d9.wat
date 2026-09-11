@@ -1194,7 +1194,6 @@
 
   ;; IDirect3DDevice9_SetViewport — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_SetViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
     (call $d3d9_viewport (local.get $arg0) (local.get $arg1) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 

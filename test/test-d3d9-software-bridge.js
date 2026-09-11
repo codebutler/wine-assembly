@@ -8,10 +8,14 @@ const {Bridge} = require('../lib/d3d9-host');
   const names=['CreateVertexShader','CreatePixelShader','SetVertexShader','SetPixelShader',
     'SetVertexShaderConstantF','SetPixelShaderConstantF','SetMaterial','SetLight','LightEnable',
     'SetDepthStencilSurface','GetDepthStencilSurface',
-    'Reset','TestCooperativeLevel','GetVertexShader','GetPixelShader','GetViewport','GetRenderState',
+    'Reset','TestCooperativeLevel','GetVertexShader','GetPixelShader','GetViewport','GetRenderState','BeginStateBlock','EndStateBlock',
     'SetFVF','SetRenderState','SetTransform','SetViewport','SetStreamSource','SetTexture','SetSamplerState','DrawPrimitive','DrawPrimitiveUP','Present'];
   const {exports:e,memory}=await bootRenderHarness({fonts:'none',
     extraHostOverrides:{gpu_gl_call:(op,p,a)=>bridge.call(op,p,a)},extraWat:`
+    ${['Apply','Release'].map(n=>`(func (export "block_${n}") (param $b i32) (result i32)
+      (global.set $esp (i32.const 0x00300000))
+      (call $handle_IDirect3DStateBlock9_${n} (local.get $b) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))`).join('\n')}
     (func (export "create_depth") (param $d i32) (param $format i32) (param $out i32) (result i32)
       (global.set $esp (i32.const 0x00300000))
       (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0))
@@ -577,6 +581,19 @@ const {Bridge} = require('../lib/d3d9-host');
   mat.fill(0);litDraw([32,64,96,128],'emissive without enabled lights');
   shader([0xffff0101,1,0x800f0000,0x90e40000,0xffff],true);
   litDraw([32,64,96,128],'lit fixed VS feeds actual PS1.1 v0');
+  ok(e.BeginStateBlock(device),'record viewport');
+  [8,0,8,10,0,0x3f800000].forEach((v,i)=>e.guest_write32(viewport+i*4,v));
+  ok(e.SetViewport(device,viewport),'record right-half viewport');
+  litDraw([32,64,96,128],'recorded viewport does not affect live draw');
+  ok(e.EndStateBlock(device,out),'finish viewport block');const viewportBlock=e.guest_read32(out)>>>0;
+  new Uint8Array(memory.buffer,wa(viewport),24).fill(0);
+  // Clear uses the current viewport too: erase the old left-hand triangle
+  // before switching, so retained pixels cannot masquerade as a new draw.
+  ok(e.clear_target(device,0,0,1,0xff000000,1),'clear full target before viewport Apply');
+  ok(e.block_Apply(viewportBlock),'apply recorded viewport');
+  litDraw([0,0,0,255],'viewport block changes native raster coverage');
+  assert.strictEqual(resized[25],0x80204060,'lit triangle moves to the right-half viewport');
+  assert.strictEqual(e.block_Release(viewportBlock),0);
   assert.strictEqual(entry.kind,'software');
   assert.strictEqual(entry.queue.completed,entry.queue.submitted);
   assert(entry.queue.completed>=3,'initial clear, draw and Present use one queue');

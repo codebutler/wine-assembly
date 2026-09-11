@@ -742,3 +742,13 @@ failures. At587 seconds the new run reaches intro frame105, with785 completed
 draws and zero reported renderer failures; menu/gameplay acceptance is pending.
 Artifacts: `bw-software-probe-DLH67d` under the host temporary directory. This is
 a progression observation, not a throughput benchmark (launch loadavg39).
+
+Local Candidates now includes `black_white_2_demo` (Black & White 2 Demo).
+The prepared MainApp tree is copied to the ignored local corpus directory
+`test/binaries/win98-games-a-d/Black and White 2-DX9-D3D/installed/`;
+`node tools/gen-win98-games-a-d-manifests.js` inventories its363 companions.
+The entry seeds the same three native DLLs as the CLI probe and opts into the
+experimental programmable profile for this app only; renderer selection stays
+user-controlled (`?d3d9-renderer=software` for software, WebGL by default).
+CLI: `node test/run.js --app=black_white_2_demo --d3d9-renderer=software`.
+This registers the extracted game, not an installer-success or gameplay claim.

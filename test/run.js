@@ -1972,7 +1972,7 @@ async function main() {
   const ctx = {
     getMemory: () => ctx._memory ? ctx._memory.buffer : null,
     d3d9Backend: D3D9_RENDERER || 'webgl',
-    d3d9Programmable: D3D9_PROGRAMMABLE,
+    d3d9Programmable: D3D9_PROGRAMMABLE || APP_ENTRY?.d3d9Programmable === true,
     createD3DRenderWorker: () => {
       const {Worker} = require('worker_threads');
       const {WorkerConsumer} = require('../lib/d3d-command-stream');

@@ -24,11 +24,14 @@ const root=path.join(__dirname,'..');
       const page=await browser.newPage();const errors=[],consoleErrors=[];
       page.on('pageerror',error=>errors.push(String(error)));
       page.on('console',message=>{if(message.type()==='error')consoleErrors.push(message.text());});
-      await page.goto(`http://127.0.0.1:${server.address().port}/index.html?debug&frozen&d3d9-renderer=software&d3d9-programmable`,
+      await page.goto(`http://127.0.0.1:${server.address().port}/index.html?debug&frozen&d3d9-renderer=software`,
         {waitUntil:'domcontentloaded',timeout:60000});
       await page.waitForFunction('typeof launchApp === "function"');
       console.log(`Browser render worker: launching ${threaded?'guest-worker':'cooperative'} calc`);
       await page.evaluate(async threaded=>{
+        // Exercise the per-app profile used by local Black & White launches,
+        // without loading its large assets for this focused COM regression.
+        window.wineApps.APPS.calc.d3d9Programmable=true;
         await setThreads(threaded);document.getElementById('app-select').value='calc';launchApp();
       },threaded);
       await page.waitForFunction(()=>typeof runningApps!=='undefined' && runningApps[0]?.wine?.running && runningApps[0].wine._frozenStep,

@@ -22,6 +22,22 @@ and [interval semantics](https://learn.microsoft.com/en-us/windows/win32/direct3
 
 ## Current integration checkpoint
 
+Viewport state-block prerequisite95990 PASS: `SetViewport` now records owned
+24-byte values without changing live state; repeated writes retain the last
+valid value. Capture/Apply, untouched live getters, unrecorded-state preservation
+and null/wrapped/unmapped-pointer rejection have focused native coverage.
+Existing selective-block suite39847 also passes. Real COM82253 proves that
+recording leaves coverage unchanged and Apply moves the lit triangle into the
+recorded viewport. Combined build51597 passes canonical1146581/compat1147049;
+browser20945 passes cooperative and guest-main Worker paths with the software
+render Worker, default packet cache and per-app experimental profile selection.
+An earlier sandbox browser65745 stopped at navigation timeout before guest
+launch; the successful retry used a fresh matched canonical snapshot.
+This follows the documented
+[recordable state methods](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-beginstateblock).
+Full typed ALL/PIXEL/VERTEX creation remains an open gate; scissor, palette,
+clip-plane and other missing categories are not silently claimed by this change.
+
 Directional-lighting state checkpoint: native material/light state15817 PASS
 replaces silent-success setters and trapping getters. Device storage appends a
 68-byte material and a linked list keyed by arbitrary DWORD light indices;
@@ -1090,7 +1106,28 @@ The DLT1 binder appends real native VM vertex operations and replaces its owned
 VS IR/packet only after successful compilation; older cascade and vertex-input
 ABIs are unchanged. Point/spot and specular lighting remain explicit gates,
 as does lit programmed-PS secondary-color linkage pending conformance. No new
-caps or Windows reference conformance are claimed. Software fixed programs still
-recompile per draw and embed state constants: semantic specialization/cache reuse
-is an outstanding design task, not completed by this slice. Complex combinations
+caps or Windows reference conformance are claimed. At this checkpoint software
+fixed programs still recompiled per draw; the subsequent bounded packet-cache
+slice below removes repeated packet compilation, not descriptor lowering. Complex combinations
 remain bounded by the existing128-instruction native fixed-program budget.
+
+Native fixed semantic packet cache (2026-09-10): each software Device now owns
+a native LRU cache, at most64 variants and a reserved byte capacity (default
+min(256KiB,maxBytes/16), opt-out fixedCacheBytes:0). Matching compares complete
+native IR headers/instructions/operands, excluding only the four DEF literal
+words. A hit copies immutable packet code and rebinds the current DEF prologue
+in WAT; matrices, directional-light/material colors and pixel constants are not
+variant keys. Shader profile/compiler version and all semantic operands remain
+part of the exact comparison. Templates own detached IR/packet bytes, so
+in-flight private packet copies survive eviction and cache retirement. Reset and
+device destruction retire the cache; distinct devices do not share ownership.
+
+Focused cache61583 passes actual lighting and pixel-stage factor/constant pixels with compile-count checks,
+semantic changes/reuse, bounded eviction, clone-allocation OOM preserving cache
+state, admission OOM returning an uncached valid program, invalid-state pixel
+preservation, asynchronous execution after cache retirement, cancellation,
+Reset and device lifetime. Lighting31992 passes21 pixel/malformed-descriptor
+cases; fragment and logical-AND gates pass. This is packet compilation reuse,
+not the final constant-binding architecture: descriptor-to-IR validation/lowering
+still executes on each draw, and each draw allocates a private packet copy.
+No throughput improvement or elimination of those costs has been measured.

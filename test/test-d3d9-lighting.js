@@ -12,7 +12,7 @@ const fixtures=require('./fixtures/d3d9-lighting-cases');
   }
   calls++;return e.d3d_fixed_bind_lighting(bundle,desc,lighting);
  }};
- const d=new Device({getExports:()=>native,getMemory:()=>memory.buffer,width:4,height:4}),base=d.bytes;
+ const d=new Device({getExports:()=>native,getMemory:()=>memory.buffer,width:4,height:4,fixedCacheBytes:0}),base=d.bytes;
  try{
   for(const c of fixtures.cases()){
    d.clear([0,0,0,1],1);assert.strictEqual(d.draw(c.draw),1,c.name);
@@ -25,5 +25,6 @@ const fixtures=require('./fixtures/d3d9-lighting-cases');
    const snapshot=fixtures.draw();edit(snapshot,snapshot.fixedFunction);assert.throws(()=>d.draw(snapshot));assert.strictEqual(d.bytes,base);
   }
  }finally{d.destroy();}
+ assert(calls>=21,'direct native binder interception ran the malformed descriptor matrix');
  console.log('native directional lighting PASS '+calls+' pixel cases and malformed descriptor/retirement checks');
 })().catch(e=>{console.error(e);process.exitCode=1;});
