@@ -30,7 +30,8 @@ assert(html.includes('const vv = window.visualViewport'),
 assert(html.includes('const phoneSized = sw < 640 || sh < 520'),
   'the threshold is whether a 640x480 guest screen and its taskbar fit at 1:1 — '
   + '800x600 was a comfortable desktop in 1998 and is still a desktop here');
-assert(html.includes('function applySingleAppMode()') && html.includes('applySingleAppMode();\n      const canvas'),
+assert(html.includes('function applySingleAppMode()') &&
+  /function resizeCanvas\(\)\s*\{\s*applySingleAppMode\(\);/.test(html),
   'resizing across the threshold should switch the mode, not require a reload');
 assert(html.includes("params.has('single-app')"), 'single-app mode should be forceable for testing');
 assert(!/function detectSingleAppMode\(\)[\s\S]{0,400}if \(DEBUG_MODE\) return false;/.test(html),
