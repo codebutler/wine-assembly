@@ -276,3 +276,8 @@ unlock returns E_UNEXPECTED. DLL-private implementations use the suspended
 guest callback bridge; emulator-local objects complete synchronously. The
 fLastUnlockReleases proxy-disconnection distinction is not observable because
 the runtime does not expose out-of-process marshaled connections.
+
+2026-09-11: 345 -> 344. CoSetState now retains the replacement thread-state
+IUnknown before releasing the former object, while CoGetState returns an
+independently AddRefed pointer. Both paths preserve the same ownership rules
+for emulator-local and DLL-private guest implementations.

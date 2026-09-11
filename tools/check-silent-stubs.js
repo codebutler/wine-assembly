@@ -252,8 +252,8 @@ const digest = crypto.createHash('sha256')
 // 2026-09-11: 346 -> 345. CoLockObjectExternal now retains one strong COM
 // reference per lock and releases exactly one per balanced unlock, including
 // DLL-private objects reached through the guest callback continuation.
-const EXPECTED_COUNT = 345;
-const EXPECTED_SHA256 = 'cef18634c84af5962b04550ed2542a130334d17286a0fbac2d3b4cb846cee232';
+const EXPECTED_COUNT = 344;
+const EXPECTED_SHA256 = '8e9ad1451c40e1b8445ada9fd6b74de1599349326e48307bed711b7df79b765b';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
