@@ -387,6 +387,19 @@ for (const [width, height, area, side] of [
 
 console.log('PASS  single-app mode: phone detection, chrome, and window zoom');
 
+// Both modes must contain the complete modal dialog within the phone's safe
+// visible area, not only the board-only Fill path.
+for (const mode of ['fit', 'zoom']) {
+  const renderer = makeRenderer(844, 844, 390, 844);
+  renderer.mobileCrop = { contain: true };
+  renderer.touchOverlay = { getBoardArea: () => ({ x: 0, y: 47 / 844, w: 1, h: 593 / 844 }) };
+  renderer.setViewMode(mode);
+  const v = renderer._computeSingleAppZoom([win(56, 108, 282, 357), win(20, 80, 345, 364)]).viewport;
+  assert(v.dstY >= 47, `${mode}: title bar clears the status area`);
+  assert(v.dstY + v.dstH <= 640, `${mode}: buttons clear the control band`);
+  assert.strictEqual(v.cropY, 80, `${mode}: retain the full dialog caption`);
+}
+
 {
   const renderer = makeRenderer(844, 664, 390, 664);
   renderer.mobileCrop = { x: 3 / 282, y: 78 / 357, w: 276 / 282, h: 276 / 357, contain: true, portraitTrimX: 12 };

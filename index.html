@@ -1392,6 +1392,7 @@
         <label title="Write emulator runtime messages to the browser console and debug log pane"><input id="runtime-log-toggle" type="checkbox" onchange="setRuntimeLogging(this.checked)">Runtime log</label>
         <label><input id="perf-hud-toggle" type="checkbox" onchange="setPerfHud(this.checked)">FPS graph</label>
         <label title="Fold Caesar III's run-length sprite blit into one dispatch (handler 424). Decode-time, so it steers blocks decoded after the toggle — relaunch for a clean A/B."><input id="rle-run-toggle" type="checkbox" checked onchange="setRleRun(this.checked)">RLE fold</label>
+        <label title="Experimental: compile proven x87 expression regions and fold contiguous x87 islands. Decode-time, so relaunch for a clean A/B."><input id="x87-fold-toggle" type="checkbox" onchange="setX87Fusion(this.checked)">x87 fold</label>
         <label><input id="perf-stream-toggle" type="checkbox" onchange="setPerfStream(this.checked)">Stream</label>
         <label title="Experimental: opt into real guest threads. Needs cross-origin isolation; the worker backend is still phase 1."><input id="threads-toggle" type="checkbox" onchange="setThreads(this.checked)">Threads</label>
         <span id="threads-status" style="color:#606060"></span>
@@ -1610,7 +1611,13 @@ Resource-aware Win98 emulator
       "lib/host-window.js",
       "lib/gpu-backend.js",
       "lib/d3d9-shader.js",
+      "lib/d3d-shader-ir.js",
+      "lib/d3d9-fixed.js",
+      "lib/d3d9-texture.js",
       "lib/d3d9-backend.js",
+      "lib/d3d-command-stream.js",
+      "lib/d3d-geometry-batches.js",
+      "lib/d3d9-software-backend.js",
       "lib/d3d9-host.js",
       "lib/gl-command-stream.js",
       "lib/gl-compat.js",
@@ -2344,8 +2351,11 @@ Resource-aware Win98 emulator
     // Decode-time superop switches. The flag is read when an instance is
     // created (host.js), so the honest A/B is toggle-then-relaunch; toggling
     // mid-run only steers blocks decoded from here on, which is why the
-    // checkbox says so. ?no-rle-run starts it off, for a scripted comparison.
-    window.WineSuperops = window.WineSuperops || { rleRun: true };
+    // checkbox says so. ?no-rle-run starts it off, for a scripted comparison;
+    // ?x87-fold opts into the still-experimental x87 catalog/island compiler.
+    window.WineSuperops = window.WineSuperops || {};
+    if (typeof window.WineSuperops.rleRun !== 'boolean') window.WineSuperops.rleRun = true;
+    if (typeof window.WineSuperops.x87Fusion !== 'boolean') window.WineSuperops.x87Fusion = false;
     function setRleRun(on) {
       window.WineSuperops.rleRun = !!on;
       const box = document.getElementById('rle-run-toggle');
@@ -2357,6 +2367,19 @@ Resource-aware Win98 emulator
       window.addEventListener('load', () => {
         const box = document.getElementById('rle-run-toggle');
         if (box) box.checked = false;
+      });
+    }
+    function setX87Fusion(on) {
+      window.WineSuperops.x87Fusion = !!on;
+      const box = document.getElementById('x87-fold-toggle');
+      if (box) box.checked = !!on;
+      appendDebugLog(`[superop] x87 fold ${on ? 'on' : 'off'} — takes effect on the next launch`);
+    }
+    if (new URLSearchParams(location.search).has('x87-fold')) {
+      window.WineSuperops.x87Fusion = true;
+      window.addEventListener('load', () => {
+        const box = document.getElementById('x87-fold-toggle');
+        if (box) box.checked = true;
       });
     }
     // Streaming can be switched on mid-session from the toolbar. Requiring a

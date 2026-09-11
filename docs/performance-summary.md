@@ -129,7 +129,8 @@ the machinery it exercises. This is what resolved the CASE_CHAIN contradiction:
   next run of that same binary was the slowest of the set. Point build-vs-build
   questions at `--toggle` (a flag on one binary) or at whole-app fixed-work runs.
 * **A flag beats two builds.** `--no-case-chain`, `--loop-superops`, `--no-rle-run`
-  all exist so the A/B is one binary.
+  and the browser's default-off `x87 fold` / `?x87-fold` opt-in all keep the A/B
+  on one binary.
 * Never take fps or latency numbers from headless Chrome; see `lib/perf-hud.js` and
   `tools/profile-web-frames.js --headful`.
 

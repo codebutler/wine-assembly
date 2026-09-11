@@ -11,6 +11,8 @@
   (global $API_ID_IDirect3DBuffer9_BASE i32 (i32.const 3329))
   (global $API_ID_IDirect3DVertexDeclaration9_BASE i32 (i32.const 3343))
   (global $API_ID_IDirect3DStateBlock9_BASE i32 (i32.const 3348))
+  (global $API_ID_IDirect3DQuery9_BASE i32 (i32.const 3357))
+  (global $API_ID_IDirect3DCubeTexture9_BASE i32 (i32.const 3369))
 
   ;; ============================================================
   ;; CONSTANT API STUBS — GENERATED, do not edit
@@ -1739,7 +1741,7 @@
       (then
         (call $dispatch_api_table_page_12 (i32.sub (local.get $api_id) (i32.const 3072)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
-    (if (i32.lt_u (local.get $api_id) (i32.const 3356))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3392))
       (then
         (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
@@ -15163,8 +15165,44 @@
   )
 
   (func $dispatch_api_table_page_13 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; api ids 3328..3355
+    ;; api ids 3328..3391
     (block $fallback
+    (block $api_63
+    (block $api_62
+    (block $api_61
+    (block $api_60
+    (block $api_59
+    (block $api_58
+    (block $api_57
+    (block $api_56
+    (block $api_55
+    (block $api_54
+    (block $api_53
+    (block $api_52
+    (block $api_51
+    (block $api_50
+    (block $api_49
+    (block $api_48
+    (block $api_47
+    (block $api_46
+    (block $api_45
+    (block $api_44
+    (block $api_43
+    (block $api_42
+    (block $api_41
+    (block $api_40
+    (block $api_39
+    (block $api_38
+    (block $api_37
+    (block $api_36
+    (block $api_35
+    (block $api_34
+    (block $api_33
+    (block $api_32
+    (block $api_31
+    (block $api_30
+    (block $api_29
+    (block $api_28
     (block $api_27
     (block $api_26
     (block $api_25
@@ -15193,7 +15231,7 @@
     (block $api_2
     (block $api_1
     (block $api_0
-      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $fallback (local.get $api_id))
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $fallback (local.get $api_id))
     ) ;; 3328: DirectXSetup
       (call $handle_DirectXSetup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
@@ -15275,7 +15313,115 @@
     ) ;; 3354: ReadFileEx
       (call $handle_ReadFileEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
-    ) ;; 3355: DestroyPropertySheetPage
+    ) ;; 3355: ConvertDefaultLocale
+      (call $handle_ConvertDefaultLocale (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3356: GetFontLanguageInfo
+      (call $handle_GetFontLanguageInfo (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3357: IDirect3DQuery9_QueryInterface
+      (call $handle_IDirect3DQuery9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3358: IDirect3DQuery9_AddRef
+      (call $handle_IDirect3DQuery9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3359: IDirect3DQuery9_Release
+      (call $handle_IDirect3DQuery9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3360: IDirect3DQuery9_GetDevice
+      (call $handle_IDirect3DQuery9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3361: IDirect3DQuery9_GetType
+      (call $handle_IDirect3DQuery9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3362: IDirect3DQuery9_GetDataSize
+      (call $handle_IDirect3DQuery9_GetDataSize (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3363: IDirect3DQuery9_Issue
+      (call $handle_IDirect3DQuery9_Issue (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3364: IDirect3DQuery9_GetData
+      (call $handle_IDirect3DQuery9_GetData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3365: AddFontMemResourceEx
+      (call $handle_AddFontMemResourceEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3366: RemoveFontMemResourceEx
+      (call $handle_RemoveFontMemResourceEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3367: CoFileTimeToDosDateTime
+      (call $handle_CoFileTimeToDosDateTime (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3368: GetKeyNameTextW
+      (call $handle_GetKeyNameTextW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3369: IDirect3DCubeTexture9_QueryInterface
+      (call $handle_IDirect3DCubeTexture9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3370: IDirect3DCubeTexture9_AddRef
+      (call $handle_IDirect3DCubeTexture9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3371: IDirect3DCubeTexture9_Release
+      (call $handle_IDirect3DCubeTexture9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3372: IDirect3DCubeTexture9_GetDevice
+      (call $handle_IDirect3DCubeTexture9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3373: IDirect3DCubeTexture9_SetPrivateData
+      (call $handle_IDirect3DCubeTexture9_SetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3374: IDirect3DCubeTexture9_GetPrivateData
+      (call $handle_IDirect3DCubeTexture9_GetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3375: IDirect3DCubeTexture9_FreePrivateData
+      (call $handle_IDirect3DCubeTexture9_FreePrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3376: IDirect3DCubeTexture9_SetPriority
+      (call $handle_IDirect3DCubeTexture9_SetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3377: IDirect3DCubeTexture9_GetPriority
+      (call $handle_IDirect3DCubeTexture9_GetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3378: IDirect3DCubeTexture9_PreLoad
+      (call $handle_IDirect3DCubeTexture9_PreLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3379: IDirect3DCubeTexture9_GetType
+      (call $handle_IDirect3DCubeTexture9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3380: IDirect3DCubeTexture9_SetLOD
+      (call $handle_IDirect3DCubeTexture9_SetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3381: IDirect3DCubeTexture9_GetLOD
+      (call $handle_IDirect3DCubeTexture9_GetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3382: IDirect3DCubeTexture9_GetLevelCount
+      (call $handle_IDirect3DCubeTexture9_GetLevelCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3383: IDirect3DCubeTexture9_SetAutoGenFilterType
+      (call $handle_IDirect3DCubeTexture9_SetAutoGenFilterType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3384: IDirect3DCubeTexture9_GetAutoGenFilterType
+      (call $handle_IDirect3DCubeTexture9_GetAutoGenFilterType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3385: IDirect3DCubeTexture9_GenerateMipSubLevels
+      (call $handle_IDirect3DCubeTexture9_GenerateMipSubLevels (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3386: IDirect3DCubeTexture9_GetLevelDesc
+      (call $handle_IDirect3DCubeTexture9_GetLevelDesc (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3387: IDirect3DCubeTexture9_GetCubeMapSurface
+      (call $handle_IDirect3DCubeTexture9_GetCubeMapSurface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3388: IDirect3DCubeTexture9_LockRect
+      (call $handle_IDirect3DCubeTexture9_LockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3389: IDirect3DCubeTexture9_UnlockRect
+      (call $handle_IDirect3DCubeTexture9_UnlockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3390: IDirect3DCubeTexture9_AddDirtyRect
+      (call $handle_IDirect3DCubeTexture9_AddDirtyRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3391: DestroyPropertySheetPage
       (call $handle_DestroyPropertySheetPage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; fallback

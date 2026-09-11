@@ -156,6 +156,10 @@
               (unreachable)))))
 
       ;; Exit if a blocking API yielded. JS owns resuming these waits.
+      ;; 16 = render_wait: immutable command already submitted; retry consumes
+      ;; its broker token only after the host has observed actual completion.
+      (if (i32.eq (global.get $yield_reason) (i32.const 16))
+        (then (global.set $last_run_halt (i32.const 4)) (br $halt)))
       (if (i32.or
         (i32.eq (global.get $yield_reason) (i32.const 1))
         (i32.or
@@ -2758,6 +2762,13 @@
     (call $virtual_map_commit (local.get $guest) (local.get $size)))
   (func (export "guest_free") (param $g i32)
     (call $heap_free (local.get $g)))
+  ;; Paired with guest_map_alloc; heap_free cannot release a sparse mapping.
+  (func (export "guest_map_free") (param $g i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $result (call $virtual_map_release (local.get $g)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $result))
 
   ;; Host launchers call this before guest entry. Queue entries in fixed low
   ;; memory so launch compatibility settings do not eagerly allocate the

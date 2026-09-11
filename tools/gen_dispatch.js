@@ -57,6 +57,8 @@ const namedApiIds = [
   ['IDirect3DBuffer9_QueryInterface', 'API_ID_IDirect3DBuffer9_BASE'],
   ['IDirect3DVertexDeclaration9_QueryInterface', 'API_ID_IDirect3DVertexDeclaration9_BASE'],
   ['IDirect3DStateBlock9_QueryInterface', 'API_ID_IDirect3DStateBlock9_BASE'],
+  ['IDirect3DQuery9_QueryInterface', 'API_ID_IDirect3DQuery9_BASE'],
+  ['IDirect3DCubeTexture9_QueryInterface', 'API_ID_IDirect3DCubeTexture9_BASE'],
 ];
 
 out.push('  ;; Named API ids consumed by hand-written dispatch fast paths.');

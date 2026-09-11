@@ -3716,7 +3716,7 @@
   (global $WIN16_WH_CALLWNDPROC i32 (i32.const 4))
   (global $win16_hook_cwp (mut i32) (i32.const 0))
   (global $win16_cursor_count (mut i32) (i32.const 0))
-  ;; A ring of four 32-byte buffers at the bottom of DGROUP, where a message
+  ;; A ring of four 32-byte buffers in a USER-owned segment, where a message
   ;; that carries a pointer can hand a 16-bit task a struct in its own shape at
   ;; an address one of its own selectors covers. Four, not one, because a
   ;; dialog redraws several owner-draw controls before any of them returns.
@@ -3724,14 +3724,13 @@
   ;; Raised while the 32-bit bridge frame is open, so $win16_arg16 can refuse
   ;; to read an argument off the scratch stack instead of the task's.
   (global $win16_in_call32 (mut i32) (i32.const 0))
-  (global $win16_msg_scratch (mut i32) (i32.const 0))
+  (global $win16_scratch_seg (mut i32) (i32.const 0))
   (global $win16_msg_slot (mut i32) (i32.const 0))
-  ;; A LOGFONT and a TEXTMETRIC for EnumFonts to show its callback, in DGROUP
+  ;; A LOGFONT and a TEXTMETRIC for EnumFonts to show its callback, in USER's segment
   ;; beside the message scratch and for the same reason: the callback is given
   ;; a far pointer to them and reads them with 16-bit code, so they cannot live
   ;; in this emulator's private memory. 50 + 31 bytes, rounded up.
   (global $WIN16_FONT_SCRATCH_SIZE i32 (i32.const 96))
-  (global $win16_font_scratch (mut i32) (i32.const 0))
   (global $win16_lheap_base (mut i32) (i32.const 0))
   (global $win16_lheap_ptr (mut i32) (i32.const 0))
   (global $win16_lheap_end (mut i32) (i32.const 0))
