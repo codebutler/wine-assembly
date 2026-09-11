@@ -1012,3 +1012,29 @@ NULL allocation precedes the unchecked copy, even with heap-tail reclamation
 and shader-context compaction. It does not yet identify why obtaining another
 large sparse arena failed: virtual allocation records/backing-space census
 were not captured. No missing CPU opcode or new shader failure is demonstrated.
+
+Allocator review: even perfect coalescing of the captured main-instance free
+blocks cannot satisfy this request. A new sparse arena requires10878976 bytes
+(166*64KiB), including aligned allocation/header overhead. The next failure
+branches to distinguish are the shared guest reservation limit,2048 mapping
+slots, contiguous physical backing/PTE publication, and1024 heap arena slots.
+The recorded virtual_alloc_top is instance-local, not the authoritative shared
+reservation cursor. Existing MEM_DECOMMIT/release/failed-reservation lifecycle
+gaps were found during review, but none is established as this run's cause.
+
+The observer now captures matching-layout VIRTUAL_MAP_STATE, all bounded map
+records and heap arena records, active/free backing bytes and largest gap.
+Optional section failures preserve return registers and other diagnostics.
+Counts are capped by descriptors and2048 maps/1024 arenas; unpublished arena
+records and best-effort consistency are explicit. The caller loads the same
+RegionMap mirror after the CLI's WASM-layout check and adds --dump-virtual-maps
+as a terminal backup. Focused tests and syntax/region-copy/diff gates pass.
+
+New probe89033 is live on the identical frozen7dee27a0... wasm, whose layout
+stamp was rechecked as9c6027bce1d500a1; this changes diagnostics, not the guest or
+emulator under comparison. Same14400-second guard,60-second capture interval,
+control stdin and allocation observer. Artifacts:
+/var/folders/dz/1fqkk_jd4350qkm91pm9_q3c0000gp/T/bw-software-probe-w9Dofc.
+Installation reported armedtrue, address10125769/request10848128. No input has
+been sent. This is the instrumented follow-up to a terminal run, not a restart
+caused by an observation timeout, and no allocator fix is claimed yet.
