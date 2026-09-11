@@ -28,6 +28,7 @@ const gl = {
   drawArrays: (...a) => calls.push(['drawArrays', ...a]),
   drawElements() {}, uniformMatrix4fv: (...a) => calls.push(['uniformMatrix4fv', ...a]),
   uniform1i: (...a) => calls.push(['uniform1i', ...a]), uniform1f() {}, uniform4fv() {},
+  uniform4iv: (location, value) => calls.push(['uniform4iv', location, Array.from(value)]),
   enable() {}, disable() {}, viewport() {}, scissor() {}, depthFunc() {}, depthMask() {},
   depthRange() {}, blendFunc() {}, cullFace() {}, frontFace() {}, lineWidth() {},
   clearColor() {}, clear() {}, readPixels() {}, finish() {}, flush() {}, getParameter: () => 4096,
@@ -65,6 +66,15 @@ gpu.setUniform(program, 'u', '1i', 8);
 assert.strictEqual(calls.filter(call => call[0] === 'uniform1i').length, 2,
   'changed uniform values still reach WebGL');
 const secondBuffer = gpu.createBuffer();
+const integers = new Int32Array([-2147483648, 7, 2147483647, -1]);
+gpu.setUniform(program, 'u', '4i', integers);
+gpu.setUniform(program, 'u', '4i', integers);
+assert.strictEqual(calls.filter(c => c[0] === 'uniform4iv').length, 1);
+integers[1] = 8;
+gpu.setUniform(program, 'u', '4i', integers);
+assert.deepStrictEqual(calls.filter(c => c[0] === 'uniform4iv').map(c => c[2]),
+  [[-2147483648, 7, 2147483647, -1], [-2147483648, 8, 2147483647, -1]],
+  'integer cache snapshots every lane and preserves signed words');
 gpu.draw({ ...command, vertexBuffer: secondBuffer });
 assert.strictEqual(calls.filter(call => call[0] === 'vertexAttribPointer').length, 2,
   'changing the source buffer invalidates the cached attribute pointer');

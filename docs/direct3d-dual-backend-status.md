@@ -2062,3 +2062,52 @@ cooperative-main plus guest-main Worker scissor/targets/render-to-texture/Lock/
 Present and native retirement. These close focused software integration gates,
 not full-profile or gameplay acceptance. WebGL typed integration is still pending
 its separate actual-GL result. The previously noted PS1.4 suite gap remains open.
+
+### Typed GPU integration and private VS2 LOOP (2026-09-11, WIP)
+
+The GPU adapter now validates all four typed banks before GPU or depth-binding
+side effects, uploads signed integer vectors through the shared GPU uniform
+cache, normalizes Boolean execution values, and resets absent uniforms to zero.
+Component-specific integerUniformRanges are enforced before submission; shader
+DEFI overrides API values. Actual WebGL1/2 test36956 passes five rendered states
+per version and22 invalid-bank/count cases per version. Follow-up60915 adds
+eight invalid LOOP parameter tuples per version and legal boundary tuples.
+This closes the previously pending focused GPU typed-transport gate, not full
+state-block, shader-profile or lifecycle acceptance.
+
+Private LOOP27/ENDLOOP29 uses two canonical sources, aL and i0..15. The decoder
+shares REP definite-initialization and backedge checks, with combined LOOP/REP
+depth1 and static flow count16. Relative constant operands retain bit8 and add
+bit10 for aL; immutable reader relativeAddressBanks metadata preserves this
+distinction without inventing a guest-token bit. Public shader admission stays
+unchanged. Decoder92735 passes LOOP115, REP148, IF151 and legacy IR/view;
+matrix99910 passes165.
+
+Native packets67/68 use paired body/end targets after definition hoisting.
+The context retains aL at74092 and appends signed stride at74096 (total74100).
+Entry captures count/start/stride once; ENDLOOP increments aL and decrements the
+remaining count. The runtime rejects count/start outside0..255, stride outside
+-128..127 or nonzero w with status-5, including invalid zero-count parameters.
+Relative gathers check bounds before accessing constants and return zero out
+of range, preserving the c127/c128 storage discontinuity. Every visited packet
+retains existing budget/cancellation checks. Invalid paired targets and mutated
+loop kinds fail explicitly.
+
+Native16877 passes33 loop domain, stride, relative-access, malformed-flow,
+parameter-snapshot, high-constant, budget and cancellation cases. Legacy45667
+passes263 and pipeline98795 passes364 actual native software cases. Full79569
+passes canonical1181589/compat1182058 bytes, layout9c6027bce1d500a1 and233
+nonoverlapping data segments. Private VS2 VM98226 passes1662 after migrating
+the expected context size to74100. Same-native-IR parity74947 passes174 WebGL1/2
+frames against87 software rasters: six new LOOP witnesses cover both stride
+directions, zero stride/count, c127/c128, nested IFs and late duplicate DEFI
+overrides with exact positions and full-frame pixels. Calls and remaining mandatory
+profile behavior, full frontend constant coverage, resources/lifecycle and
+changing Black & White gameplay remain open; this is not public VS2 support.
+
+Standalone GLSL56545 additionally passes18 real WebGL1/2 frames, domain rejection
+and range metadata, including constant255 and both out-of-range directions.
+Baseline IR77266 passes84 after migrating LOOP from unsupported-opcode to
+truncated-operand expectations. Browser tests are explicitly E2E; the1076-test
+tier/timeout/discovery checks pass. Mixed a0/aL reads in one instruction remain
+rejected by the native single-constant-port rule; GLSL does not widen that rule.
