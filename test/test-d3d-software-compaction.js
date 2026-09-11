@@ -9,16 +9,28 @@ const fixtures=require('./fixtures/d3d9-triangle-edge-cases');
   (func (export "free_head") (result i32) (global.get $free_list))`});
  const word=p=>new DataView(memory.buffer).getUint32(p,true);
  let records=[],failAt=0,creates=0;
- const ex={...e,d3d_software_create(desc){
-  if(++creates===failAt)return 0;
-  const n=word(desc+36),count=word(desc+48),p=e.d3d_software_create(desc);
+ const pending=new Map();
+ function record(desc,p){
+  const n=word(desc+36),count=word(desc+48);
   if(p){const emitted=word(p+48),point=!!(word(p+100)&8),capacity=Math.ceil(emitted/7),bytes=288+capacity*(point?1050:1022);
    assert.strictEqual(word(p+196),bytes,'minimal compatible capacity');
    assert.strictEqual(word(p+156),p+288+capacity*1008,'relocated indices');
    assert.strictEqual(word(p-4),(bytes+11)&~7,'actual heap block shrunk');
    assert(e.d3d_software_retained_bound(p)<=e.d3d_software_allocation_bound(n,count));
    records.push({p,bytes,count,emitted,point});
-  }return p;
+  }
+ }
+ const ex={...e,d3d_software_create(desc){
+  if(++creates===failAt)return 0;
+  const p=e.d3d_software_create(desc);record(desc,p);return p;
+ },d3d_software_create_deferred(desc,typed){
+  if(++creates===failAt)return 0;
+  const p=e.d3d_software_create_deferred(desc,typed);if(p)pending.set(p,desc);return p;
+ },d3d_software_prepare_step(p,packets,primitives){
+  const status=e.d3d_software_prepare_step(p,packets,primitives);
+  if(status===0&&pending.has(p)){record(pending.get(p),p);pending.delete(p);}
+  return status;
+ },d3d_software_free(p){pending.delete(p);e.d3d_software_free(p);
  }};
  const d=new Device({width:8,height:8,getExports:()=>ex,getMemory:()=>memory.buffer});
  let tests=0;

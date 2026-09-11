@@ -8,6 +8,7 @@ const {bootRenderHarness}=require('./render-helper');
   const manifest=fs.readFileSync(path.join(__dirname,'../src/main.watx'),'utf8');
   const extraWat=['09af-d3d-shader-ir.wat','09ag-d3d-shader-vm.wat','09ah-d3d-software.wat']
     .map(file=>manifest.includes(file)?'':fs.readFileSync(path.join(__dirname,'../src',file),'utf8')).join('\n')+`
+      (export "test_compile20" (func $d3d_shader_ir_compile20))
       (func (export "line_coverage") (param $a i32) (param $b i32) (param $x i32) (param $y i32) (param $last i32) (result i32)
         (call $d3d_software_line_inside (local.get $a) (local.get $b) (local.get $x) (local.get $y) (local.get $last)))
       (func (export "test_scan14") (param $p i32) (param $n i32) (param $out i32) (result i32)
@@ -24,9 +25,9 @@ const {bootRenderHarness}=require('./render-helper');
       ir=alloc(32+count*128);u8.fill(0,ir,ir+32+count*128);
       u32.set([0x44534952,1,1,0xffff0104,count,tokens.length,32+count*128,0],ir/4);
       assert.strictEqual(e.test_scan14(p,tokens.length,ir),count);
-    }else ir=e.d3d_shader_ir_compile(p,tokens.length);
+    }else ir=tokens[0]===0xfffe0200?e.test_compile20(p,tokens.length):e.d3d_shader_ir_compile(p,tokens.length);
     assert.ok(ir,`IR error ${e.d3d_shader_ir_error()}`);
-    const result=e.d3d_shader_vm_compile(ir);e.d3d_shader_ir_free(ir);assert.ok(result,'VM compilation');return result;
+    const result=tokens[0]===0xfffe0200?e.d3d_shader_vm_compile_vs20(ir):e.d3d_shader_vm_compile(ir);e.d3d_shader_ir_free(ir);assert.ok(result,'VM compilation');return result;
   }
   const vs=program([0xfffe0101,1,0xc00f0000,0x90e40000,1,0xd00f0000,0x90e40001,1,0xe00f0000,0x90e40002,0xffff]);
   const ps=program([0xffff0101,5,0x800f0000,0x90e40000,0xa0e40000,0xffff]);
@@ -45,7 +46,7 @@ const {bootRenderHarness}=require('./render-helper');
     u32.set([0x44535031,options.abi||1,width,height,color,pitch,depth,pitch,input,vertices.length,stride,indexPtr,indices?indices.length:vertices.length,options.vs||vs,options.ps||ps,0,0,constants,1,options.vx||0,options.vy||0,options.vw||width,options.vh||height],desc/4);
     f32[desc/4+23]=options.minZ===undefined?0:options.minZ;f32[desc/4+24]=options.maxZ===undefined?1:options.maxZ;
     u32.set([options.flags===undefined?3:options.flags,options.depthFunc||2,options.mask===undefined?15:options.mask,options.cull||1,options.inputMap||0,options.uvCount||0,options.extraMap||0],desc/4+25);
-    const ctx=e.d3d_software_create(desc);
+    const ctx=options.typed===undefined?e.d3d_software_create(desc):e.d3d_software_create_typed(desc,options.typed);
     if(ctx&&options.fill)assert(e.d3d_software_bind_fill(ctx,options.fill,options.lastPixel===false?0:1));
     function run(budget=3){let result=1,n=0;while(result===1){result=e.d3d_software_step(ctx,budget);assert.ok(++n<10000,'bounded completion');}const vm=u32[(ctx+148)/4];assert.strictEqual(result,0,`pipeline status ${result}, VM status ${u32[(vm+12)/4]|0}, PC ${u32[(vm+8)/4]}, mask ${u32[(vm+16)/4]}, helpers ${u32[(vm+24)/4]}`);return n;}
     const pixel=(x,y)=>u32[(color+y*pitch+x*4)/4]>>>0;
@@ -58,6 +59,41 @@ const {bootRenderHarness}=require('./render-helper');
   }
   const triangle=[vertex(-1,1),vertex(1,1),vertex(-1,-1)];
   let cases=0;
+  {
+    const I=(op,...args)=>[(args.length<<24)|op,...args];
+    const bits=value=>new Uint32Array(new Float32Array([value]).buffer)[0];
+    const typedTokens=[0xfffe0200,...I(31,0x80000000,0x900f0000),
+      ...I(81,0xa00f0000,...[0,0,0,1].map(bits)),...I(81,0xa00f0001,...[.25,0,0,0].map(bits)),
+      ...I(81,0xa00f0002,...[0,1,0,1].map(bits)),...I(1,0x800f0000,0xa0e40000),
+      ...I(40,0xe0e40800),...I(38,0xf0e40000),...I(2,0x800f0000,0x80e40000,0xa0e40001),...I(39),
+      ...I(42),...I(1,0x800f0000,0xa0e40002),...I(43),
+      ...I(1,0xc00f0000,0x90e40000),...I(1,0xd00f0000,0x80e40000),65535];
+    const typedVS=program(typedTokens);
+    for(const boolean of [0,1,0x80000000])for(const count of [0,1,3]) {
+      const typed=alloc(640);u8.fill(0,typed,typed+640);
+      u32.set([count,0xffffffff,0x80000000,0x7fc00000],typed/4);
+      u32[typed/4+64]=boolean;u32[typed/4+80]=0x80000000;u32[typed/4+144]=0xffffffff;
+      const d=draw(triangle,{vs:typedVS,typed});assert(d.ctx,'typed banks precede vertex execution');
+      const vm=u32[(d.ctx+148)/4];
+      assert.strictEqual(u32[(vm+73760)/4],0x80000000,'pixel integer bank keeps bits');
+      assert.strictEqual(u32[(vm+74016)/4],1,'pixel Boolean nonzero normalized');
+      u8.fill(0,typed,typed+640);d.run();
+      assert.strictEqual(d.pixel(1,1),boolean?((0xff000000|Math.round(count*.25*255)<<16)>>>0):0xff00ff00);
+      d.guards();e.d3d_software_free(d.ctx);cases++;
+    }
+    for(const typed of [0xf0,memory.buffer.byteLength-636,0xfffffff0]) {
+      const d=draw(triangle,{vs:typedVS,typed});assert.strictEqual(d.ctx,0);d.guards();cases++;
+    }
+    const definedVS=program([...typedTokens.slice(0,-1),
+      ...I(47,0xe00f0800,1),...I(48,0xf00f0000,2,0,0,0),65535]);
+    const typed=alloc(640);u8.fill(0,typed,typed+640);
+    u32[typed/4]=0xffffffff; // invalid REP count if API bank incorrectly wins
+    const defined=draw(triangle,{vs:definedVS,typed});
+    assert(defined.ctx,'shader definitions override external banks before execution');
+    defined.run();assert.strictEqual(defined.pixel(1,1),0xff800000);
+    defined.guards();e.d3d_software_free(defined.ctx);e.d3d_shader_vm_free(definedVS);cases++;
+    e.d3d_shader_vm_free(typedVS);
+  }
   {const wideVS=program([0xfffe0101,1,0xc00f0000,0x90e40000,1,0xd00f0000,0x90e4000a,0xffff]);
    const vertices=triangle.map(v=>[...v,...Array(7).fill([0,0,0,1]).flat(),...green]);
    const options={abi:5,uvCount:11,extraMap:0xa9876543,stride:176,vs:wideVS};

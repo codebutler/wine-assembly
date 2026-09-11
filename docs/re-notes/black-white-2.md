@@ -1038,3 +1038,34 @@ control stdin and allocation observer. Artifacts:
 Installation reported armedtrue, address10125769/request10848128. No input has
 been sent. This is the instrumented follow-up to a terminal run, not a restart
 caused by an observation timeout, and no allocator fix is claimed yet.
+
+### Full backing census reproduction89033 (terminal, 2026-09-11)
+
+The same frozen run completed intro1787 and accepted Player with Return
+down212752/up213871. New Game at host156,446 (native195,557, checked before
+pressing) down215469/up215908 reached the tutorial. Continue at321,451
+(native401,563) down218934/up221373 triggered loading. All inputs were released.
+The process then exited1: capture221408 immediately precedes crash221409 at the
+same unchecked copy. Do not poll/restart handle89033 as though it were live.
+
+Durable evidence is `[BW-ALLOC-CAPTURE]` at line2758 of
+`/var/folders/dz/1fqkk_jd4350qkm91pm9_q3c0000gp/T/bw-software-probe-w9Dofc/run.log`.
+EIP009a81c9, EDI10848128, EAX0, skipped1; main free-list census exactly matches
+10715:10248 blocks,5678096 bytes, largest44592, no invalid/truncated records.
+The new sections identify the previously missing backing constraint:
+
+- 170 maps of2048;65 heap arenas of1024, no overflow or unpublished arena.
+- Shared reservation top828637184, matching the local cursor in this capture.
+- Backing base134217728, size331350016; cursor465559552 is exactly the pool end.
+- Active backing234962944 bytes; free96387072 bytes, but largest gap10678272.
+- Required new arena10878976 exceeds that gap by200704 bytes.
+- No overlap; both bounded sections report stateChanged=false (best-effort
+ consistency, not a globally locked snapshot).
+
+This establishes insufficient contiguous backing space for the new arena
+despite substantial total free space; map/arena slot exhaustion is not supported
+by this capture. It does not prove relocation is safe: native renderer contexts
+and host views can retain physical WASM addresses. Next allocator work must
+preserve those leases or avoid their fragmentation at allocation time, with a
+bounded reproduction before another hour-long game run. No shader/CPU-opcode fix
+or gameplay success is demonstrated by this result.

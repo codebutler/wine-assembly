@@ -1981,3 +1981,84 @@ six exact-position/pixel REP cases. Pipeline28432 PASS351; full64782 PASS
 canonical1170072 / compat1170540, unchanged layout and no data overlaps.
 Independent loop-link/runtime review found no concrete defect. LOOP/ENDLOOP,
 calls, full profiles, typed frontend binding and changing gameplay remain open.
+
+### Typed constant API and software transport integration (2026-09-11, WIP)
+
+All eight D3D9 integer/boolean Get/Set methods now use native device-owned
+banks: sixteen ivec4 and sixteen BOOL registers per stage. Device state appends
+640 bytes (total22684); selective recorded state blocks append64 selection
+bytes and640 value bytes (total23068). Complete ranges are validated before
+copying or changing selection masks. Recording changes the block, not live
+state; Capture/Apply preserve selection, and successful Reset clears the banks.
+Raw BOOL words round-trip as an explicit adapter policy; execution normalizes
+nonzero values. This is not a native BOOL-bitpattern oracle. Full CreateStateBlock
+ALL/VERTEX/PIXEL modes remain unimplemented.
+
+Draw snapshots detach all four typed banks through the existing neutral queue.
+The software adapter packs640 bytes once per draw and binds them before vertex
+execution through an additive typed constructor, preserving the128-byte raster
+descriptor. Native shader contexts copy these bytes, so caller reuse is safe.
+Shader definitions execute afterward and retain their overriding semantics.
+
+Evidence: native API suite26734 PASS92, existing selective stateblock/lightstate/
+software COM/direct-worker query chain63911 passes. Actual COM bridge32835 passes
+four-bank transport and mutation-after-submission checks: VS values are inspected
+at constructor entry (its VM retires before return), PS values in the retained
+native context. Pipeline62754 PASS364 independently checks actual VS pixels,
+raw signed data, BOOL normalization, source reuse, invalid pointer bounds and
+DEFB/DEFI overriding an otherwise invalid external REP count.
+
+Bridge85634 also passes20 malformed-bank cases which reject before native
+storage access. Verification is not complete: software-backend suite40560 fails
+at its PS1.4 raw-token sampler5 fixture with native IR error2. Read-only baseline
+run7719 reproduces it using committed WAT and software adapter source: the public
+IR entry accepts PS1.1–1.3, not PS1.4. This is a pre-existing test/admission gap,
+not a typed transport regression; no capability gate was widened to hide it.
+Full build43529 stops at the shared silent-handler inventory
+check during concurrent DirectSound work. GPU typed uniforms/range validation
+are under separate integration testing. Public profile gates remain unchanged.
+Review also identified the existing one-shot8192-packet vertex constructor
+budget: valid long REP programs require resumable vertex/setup work, not an
+increased blocking loop or a claim of full raster/profile support.
+
+### Resumable vertex and clipping setup (2026-09-11, WIP)
+
+An additive native deferred constructor now owns packed input bytes and typed
+constants before returning pending. A64-byte setup record retains the vertex
+group cursor and clipping progress; the shader VM retains packet PC across
+yields. `d3d_software_prepare_step` takes separate packet/primitive budgets.
+Pending contexts reject binders, do not write target pixels, and cannot claim
+the smaller retained allocation bound. Cancellation/error retirement covers
+setup state, packed inputs, VM contexts and clipping workspace. Existing
+synchronous constructor callers still return ready or failed.
+
+Both direct draw and async draw now use the same setup state machine in the
+software adapter. Split batches prepare serially; each ready context compacts
+before reserving the next peak. All setup/binding succeeds before rasterization
+begins. Async callbacks use1024 packets and8 primitives per native setup step,
+with the existing elapsed-time and step-count scheduler bounds. Deferred direct
+API inputs use the queue's existing bounded copy routine, exported for reuse;
+snapshot storage is charged until completion/cancellation rather than retaining
+caller aliases. No second queue or shader parser was added.
+
+Native29470 passes longREP beyond8192 packets, tiny-budget PC resumption,
+immutable inputs, clipping yields, cancellation/error free-list ownership and
+synchronous compatibility. Existing native pipeline39378 passes364 cases.
+Actual COM bridge65892 passes with the deferred constructor. Async38349 uses
+test-only privateVS2 admission to prove longREP yields through production
+scheduling, pixel output, mutation-after-submit isolation and cancellation both
+before construction and mid-setup. Compaction36033 passes25 cases after moving
+deferred observations to readiness; it retains clipped-wire/point pixels,
+freed-tail reuse, split-batch budget pressure and late-failure no-pixel checks.
+The JS scheduler oracle and neutral command-stream tests also pass. Full-build,
+worker/browser and broader adapter regressions remain required before this WIP
+is treated as an integrated release checkpoint.
+
+Follow-up acceptance: full5669 passes canonical1173043/compat1173511 bytes,
+layout9c6027bce1d500a1,233 data segments without overlaps. Typed API94705 passes92;
+production worker84731, real x86 guest-worker9384 and direct/worker occlusion32827
+pass. Browser90559 independently compiles1173006 canonical bytes and passes
+cooperative-main plus guest-main Worker scissor/targets/render-to-texture/Lock/
+Present and native retirement. These close focused software integration gates,
+not full-profile or gameplay acceptance. WebGL typed integration is still pending
+its separate actual-GL result. The previously noted PS1.4 suite gap remains open.

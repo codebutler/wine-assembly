@@ -3,10 +3,22 @@
 const assert = require('assert');
 const {bootRenderHarness} = require('./render-helper');
 const {Bridge} = require('../lib/d3d9-host');
+const {Device:SoftwareDevice} = require('../lib/d3d9-software-backend');
 (async () => {
+  // Malformed transport banks must fail before even coalescing native storage.
+  for(const stage of ['vertex','pixel'])for(const [kind,Type,length] of
+    [['Integer',Int32Array,64],['Boolean',Uint32Array,16]]){
+    for(const value of [null,Array(length).fill(0),new Float32Array(length),new Type(length-1),new Type(length+1)]){
+      assert.throws(()=>SoftwareDevice.prototype.prepare.call({idle(){},exports(){
+        throw Error('malformed typed banks touched native storage');
+      }},{[stage+kind+'Constants']:value}),/invalid typed shader constants/);
+    }
+  }
   let bridge;
+  const typedExecutions=[];
   const names=['CreateVertexShader','CreatePixelShader','SetVertexShader','SetPixelShader',
     'SetVertexShaderConstantF','SetPixelShaderConstantF','SetMaterial','SetLight','LightEnable',
+    'SetVertexShaderConstantI','SetVertexShaderConstantB','SetPixelShaderConstantI','SetPixelShaderConstantB',
     'SetDepthStencilSurface','GetDepthStencilSurface',
     'Reset','TestCooperativeLevel','GetVertexShader','GetPixelShader','GetViewport','GetRenderState','BeginStateBlock','EndStateBlock','SetScissorRect',
     'SetFVF','SetRenderState','SetTransform','SetViewport','SetStreamSource','SetTexture','SetSamplerState','DrawPrimitive','DrawPrimitiveUP','Present'];
@@ -88,7 +100,19 @@ const {Bridge} = require('../lib/d3d9-host');
   `});
   assert.strictEqual(typeof document,'undefined','this is a browser-free integration gate');
   bridge=new Bridge({backend:'software',enableProgrammable:true,
-    getExports:()=>({...e,d3d_shader_ir_compile(){throw Error('draw must consume retained creation IR');}}),getMemory:()=>memory.buffer,guestToWasm:p=>e.guest_to_wasm(p)>>>0});
+    getExports:()=>({...e,d3d_shader_ir_compile(){throw Error('draw must consume retained creation IR');},
+      d3d_software_create_deferred(...args){
+        const vertex={integer:new Int32Array(memory.buffer,args[1],64).slice(),
+          boolean:new Uint32Array(memory.buffer,args[1]+256,16).slice().map(v=>v?1:0)};
+        const ctx=e.d3d_software_create_deferred(...args)>>>0;
+        if(ctx){
+          // Inspect copied PS constants before setup starts executing packets.
+          const vm=new Uint32Array(memory.buffer,ctx+148,1)[0];
+          typedExecutions.push([vertex,{integer:new Int32Array(memory.buffer,vm+73760,64).slice(),
+            boolean:new Uint32Array(memory.buffer,vm+74016,16).slice()}]);
+        }
+        return ctx;
+      }}),getMemory:()=>memory.buffer,guestToWasm:p=>e.guest_to_wasm(p)>>>0});
   e.init_dx_com_thunks();
   const alloc=n=>e.guest_alloc(n)>>>0,wa=p=>e.guest_to_wasm(p)>>>0;
   const out=alloc(4),pp=alloc(64);
@@ -119,9 +143,33 @@ const {Bridge} = require('../lib/d3d9-host');
   // programmable shaders with an exact 8-bit boundary and masked DWORD ref.
   ok(e.SetRenderState(device,15,1,0,0),'enable alpha test with default comparator');
   ok(e.SetRenderState(device,24,255,0,0),'maximum alpha reference');
+  const typedInput=alloc(256);
+  const typedBanks=[
+    ['Vertex','I',Int32Array,64],['Vertex','B',Uint32Array,16],
+    ['Pixel','I',Int32Array,64],['Pixel','B',Uint32Array,16],
+  ];
+  const typedExpected=typedBanks.map(([stage,kind,Type,length],bank)=>{
+    const values=Type.from({length},(_,i)=>kind==='I'?(i%2?-2147483648+i:2147483647-i):
+      (i%3===0?0:i%3===1?0x80000000:0xffffffff));
+    new Type(memory.buffer,wa(typedInput),length).set(values);
+    ok(e[`Set${stage}ShaderConstant${kind}`](device,0,typedInput,16,0),`typed bank ${bank}`);
+    new Uint8Array(memory.buffer,wa(typedInput),256).fill(0);
+    return values;
+  });
   for(let i=0;i<3;i++)view.setUint32(wa(input)+i*16+12,0x00ff0000,true);
+  typedExecutions.length=0;
   ok(e.DrawPrimitiveUP(device,4,1,input,16),'programmed alpha default ALWAYS draw');
+  // Setters after submission must not rewrite the queued draw's detached banks.
+  for(const [stage,kind] of typedBanks)
+    ok(e[`Set${stage}ShaderConstant${kind}`](device,0,typedInput,16,0),'clear live typed bank');
   ok(e.Present(device,0,0,0,0),'alpha default Present');
+  assert(typedExecutions.length>0,'bridge uses typed constructor');
+  for(const execution of typedExecutions)for(let stage=0;stage<2;stage++){
+    assert.deepStrictEqual(execution[stage].integer,typedExpected[stage*2],'detached signed integer bank reaches native VM');
+    assert.deepStrictEqual(execution[stage].boolean,typedExpected[stage*2+1].map(v=>v?1:0),
+      'raw BOOL bank is normalized only at execution');
+  }
+  typedExecutions.length=0;
   const alphaPixel=()=>new Uint32Array(memory.buffer,e.target_bits(device)>>>0,64)[9];
   assert.strictEqual(alphaPixel(),0x00ff0000,'default ALWAYS accepts alpha below reference');
   for(let i=0;i<3;i++)view.setUint32(wa(input)+i*16+12,0x8000ff00,true);
@@ -129,6 +177,11 @@ const {Bridge} = require('../lib/d3d9-host');
   ok(e.SetRenderState(device,25,5,0,0),'alpha GREATER');
   ok(e.DrawPrimitiveUP(device,4,1,input,16),'programmed alpha equal rejects GREATER');
   ok(e.Present(device,0,0,0,0),'rejected alpha Present');
+  assert(typedExecutions.length>0,'second draw reaches typed constructor');
+  for(const execution of typedExecutions)for(const stage of execution){
+    assert(stage.integer.every(v=>v===0),'next draw sees cleared integer constants');
+    assert(stage.boolean.every(v=>v===0),'next draw sees cleared boolean constants');
+  }
   assert.strictEqual(alphaPixel(),0x00ff0000,'rejected programmable alpha leaves canonical target unchanged');
   ok(e.SetRenderState(device,25,7,0,0),'alpha GREATEREQUAL');
   ok(e.DrawPrimitiveUP(device,4,1,input,16),'programmed alpha boundary accepted');

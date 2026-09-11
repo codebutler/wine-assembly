@@ -688,14 +688,16 @@
     ;; +22112 sampler values; +22240 material mask,+22244 material68,
     ;; +22312 selective light-list head; +22316 viewport mask,+22320 viewport24.
     ;; +22344 scissor mask,+22348 RECT16. Explicit empty rectangles are valid.
-    (local.set $obj (call $heap_alloc (i32.const 22364)))
+    ;; +22364 typed constant byte masks[64], +22428 values[640].
+    ;; Bank order VS I/B, PS I/B; each I is vec4, each BOOL one raw DWORD.
+    (local.set $obj (call $heap_alloc (i32.const 23068)))
     (if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x8007000e)) (return)))
     (local.set $wa (call $g2w (local.get $obj)))
-    (call $zero_memory (local.get $wa) (i32.const 22364))
+    (call $zero_memory (local.get $wa) (i32.const 23068))
     (i32.store (local.get $wa) (local.get $vtbl))
     (i32.store offset=8 (local.get $wa) (local.get $device))
     (i32.store offset=12 (local.get $wa) (i32.const 0xd3d90003))
-    (i32.store offset=16 (local.get $wa) (i32.const 22364))
+    (i32.store offset=16 (local.get $wa) (i32.const 23068))
     (i32.store offset=20 (local.get $wa) (i32.const 1))
     (call $gs32 (i32.add (local.get $state) (i32.const 1740)) (local.get $obj))
     (global.set $eax (i32.const 0)))
@@ -714,6 +716,37 @@
     (if (i32.ne (call $g2w (i32.sub (i32.add (local.get $ptr) (local.get $bytes)) (i32.const 1)))
       (i32.sub (i32.add (local.get $wa) (local.get $bytes)) (i32.const 1))) (then (return (i32.const 0))))
     (local.get $wa))
+
+  ;; API typed constants live independently of shader-local DEFI/DEFB.
+  ;; https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setvertexshaderconstanti
+  ;; https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-setvertexshaderconstantb
+  (func $d3d9_typed_constants (param $device i32) (param $start i32) (param $data i32)
+    (param $count i32) (param $pixel i32) (param $boolean i32) (param $get i32)
+    (local $state i32) (local $wa i32) (local $offset i32) (local $bytes i32) (local $block i32) (local $dest i32)
+    (global.set $eax (i32.const 0x8876086c))
+    (if (i32.gt_u (local.get $start) (i32.const 16)) (then (return)))
+    (if (i32.gt_u (local.get $count) (i32.sub (i32.const 16) (local.get $start))) (then (return)))
+    (local.set $state (call $d3d9_program_state (local.get $device)))
+    (if (i32.eqz (local.get $state)) (then (return)))
+    (if (i32.eqz (local.get $count)) (then (global.set $eax (i32.const 0)) (return)))
+    (local.set $bytes (i32.mul (local.get $count) (select (i32.const 4) (i32.const 16) (local.get $boolean))))
+    (local.set $wa (call $d3d9_state_bytes (local.get $data) (local.get $bytes)))
+    (if (i32.eqz (local.get $wa)) (then (return)))
+    (local.set $offset (i32.add (i32.add (i32.mul (local.get $pixel) (i32.const 320))
+      (i32.mul (local.get $boolean) (i32.const 256)))
+      (i32.mul (local.get $start) (select (i32.const 4) (i32.const 16) (local.get $boolean)))))
+    (local.set $dest (i32.add (call $g2w (local.get $state)) (i32.add (i32.const 22044) (local.get $offset))))
+    (if (local.get $get) (then (memory.copy (local.get $wa) (local.get $dest) (local.get $bytes)))
+    (else
+      (local.set $block (call $gl32 (i32.add (local.get $state) (i32.const 1740))))
+      (if (local.get $block) (then
+        (local.set $block (call $g2w (local.get $block)))
+        (memory.fill (i32.add (local.get $block) (i32.add (i32.const 22364)
+          (i32.add (local.get $start) (i32.add (i32.mul (local.get $pixel) (i32.const 32)) (i32.mul (local.get $boolean) (i32.const 16))))))
+          (i32.const 1) (local.get $count))
+        (local.set $dest (i32.add (local.get $block) (i32.add (i32.const 22428) (local.get $offset))))))
+      (memory.copy (local.get $dest) (local.get $wa) (local.get $bytes))))
+    (global.set $eax (i32.const 0)))
 
   (func $d3d9_scissor (param $device i32) (param $ptr i32) (param $get i32)
     (local $state i32) (local $wa i32) (local $rt i32) (local $block i32) (local $slot i32)
@@ -1067,6 +1100,7 @@
 
   (func $d3d9_stateblock_transfer (param $obj i32) (param $apply i32)
     (local $wa i32) (local $device i32) (local $state i32) (local $rs i32) (local $values i32) (local $live i32)
+    (local $typed_offset i32) (local $typed_bytes i32)
     (local.set $wa (call $g2w (local.get $obj)))
     (local.set $device (i32.load offset=8 (local.get $wa)))
     (local.set $state (call $d3d9_program_state (local.get $device)))
@@ -1174,6 +1208,20 @@
           (select (local.get $values) (local.get $live) (local.get $apply)) (i32.const 16))))
       (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
       (br_if $constants (i32.lt_u (local.get $rs) (i32.const 104))))
+    (local.set $rs (i32.const 0))
+    (loop $typed_constants
+      (if (i32.load8_u offset=22364 (i32.add (local.get $wa) (local.get $rs))) (then
+        (local.set $typed_bytes (select (i32.const 4) (i32.const 16) (i32.and (local.get $rs) (i32.const 16))))
+        (local.set $typed_offset (i32.add
+          (i32.add (i32.mul (i32.shr_u (local.get $rs) (i32.const 5)) (i32.const 320))
+            (i32.shl (i32.and (local.get $rs) (i32.const 16)) (i32.const 4)))
+          (i32.mul (i32.and (local.get $rs) (i32.const 15)) (local.get $typed_bytes))))
+        (local.set $live (i32.add (call $g2w (local.get $state)) (i32.add (i32.const 22044) (local.get $typed_offset))))
+        (local.set $values (i32.add (local.get $wa) (i32.add (i32.const 22428) (local.get $typed_offset))))
+        (memory.copy (select (local.get $live) (local.get $values) (local.get $apply))
+          (select (local.get $values) (local.get $live) (local.get $apply)) (local.get $typed_bytes))))
+      (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
+      (br_if $typed_constants (i32.lt_u (local.get $rs) (i32.const 64))))
     (local.set $rs (i32.const 0))
     (loop $texture_stages
       (if (i32.load8_u offset=20728 (i32.add (local.get $wa) (local.get $rs))) (then
