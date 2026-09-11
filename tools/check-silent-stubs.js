@@ -246,8 +246,8 @@ const digest = crypto.createHash('sha256')
 // the remaining eight quiet handlers instead of blessing them as exceptions.
 // 2026-09-10 merge: 359 -> 357. DirectPlay Receive and Send now use the
 // owned local message queues; all 34 metadata compatibility stubs remain.
-const EXPECTED_COUNT = 353;
-const EXPECTED_SHA256 = '9018af015b1c6f789e2b351602c51aef73e9b96204959cb1f404b9060835af5c';
+const EXPECTED_COUNT = 348;
+const EXPECTED_SHA256 = 'd8b4baf34f0b3dab31d380054636497c2b35de0431808cf9c8df349906a8714e';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

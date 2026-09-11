@@ -249,3 +249,13 @@ honor MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, and
 MONITOR_DEFAULTTONEAREST instead of always returning the primary handle.
 The same slice validates GetMonitorInfoA and makes its work area agree with
 SPI_GETWORKAREA and the browser desktop's existing 28-pixel Win98 taskbar.
+
+2026-09-11: 353 -> 348. DirectInput device Acquire, Unacquire,
+SetDataFormat, SetCooperativeLevel, and Poll now follow the documented device
+lifecycle instead of returning unconditional success. The device retains its
+standard keyboard or mouse data format and cooperative-level HWND/flags;
+acquisition is non-reference-counted, data access requires acquisition, and
+invalid formats, windows, flag pairs, and acquired format changes return their
+documented HRESULTs. The browser still exposes only the system keyboard and
+mouse and does not yet model acquisition competition or automatic foreground
+loss.
