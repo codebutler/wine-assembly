@@ -351,3 +351,8 @@ an SCM or service handle, so both NULL and nonzero inputs now fail with
 ERROR_INVALID_HANDLE. The audit count is unchanged because it intentionally
 tracks deterministic quiet failures as well as quiet successes; its identity
 hash changed with the corrected contract.
+
+2026-09-11: 333 -> 332. GetProcessVersion now accepts only PID zero or the
+runtime's one published process ID, rejects invented process IDs, and reads the
+major/minor subsystem version stamped in the mapped executable's PE header. It
+no longer returns the Win98 GetVersion encoding for every possible PID.

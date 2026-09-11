@@ -15772,10 +15772,31 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-  ;; 535: GetProcessVersion — 1 arg stdcall, return winver
+  ;; 535: GetProcessVersion(ProcessId). PID zero names the caller. This runtime
+  ;; has one process, whose original PE headers remain mapped at image_base.
+  ;; Windows returns the executable's stamped subsystem version with the major
+  ;; component in the high word and minor component in the low word; this is
+  ;; not the differently encoded operating-system value returned by GetVersion.
   (func $handle_GetProcessVersion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $winver))
+    (local $pe_wa i32)
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (if (i32.and
+          (i32.ne (local.get $arg0) (i32.const 0))
+          (i32.ne (local.get $arg0) (call $current_process_id)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return)))
+    (local.set $pe_wa
+      (call $g2w
+        (i32.add (global.get $image_base)
+          (call $gl32 (i32.add (global.get $image_base) (i32.const 0x3c))))))
+    (global.set $eax
+      (i32.or
+        (i32.shl
+          (i32.load16_u offset=0x48 (local.get $pe_wa))
+          (i32.const 16))
+        (i32.load16_u offset=0x4a (local.get $pe_wa))))
   )
 
   ;; GetProcessAffinityMask(hProcess, *processMask, *systemMask) → BOOL.
