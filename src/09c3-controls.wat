@@ -7922,7 +7922,7 @@
   ;;
   ;; Bounded SysListView32 subset for report/list panes. This is intentionally
   ;; smaller than a full common-control clone: it stores columns, fixed 8-slot
-  ;; subitem text rows, a single selected row, and a vertical top index. That is
+  ;; subitem text rows, per-item LVIS_* state, and a vertical top index. That is
   ;; enough for RegEdit/installer details panes to become stateful and for the
   ;; shared Win98 scrollbar helpers to be reused here.
   ;;
@@ -7937,7 +7937,9 @@
   ;;   +20  col_cap
   ;;   +24  col_widths_ptr   guest ptr to u32[]
   ;;   +28  col_texts_ptr    guest ptr to u32[] heap string pointers
-  ;;   +32  selected_index   -1 = none
+  ;;   +32  selection_mark   most recently selected row, -1 = none. Selection
+  ;;                         itself is the per-item LVIS_SELECTED bit: Win98's
+  ;;                         default ListView permits multiple selected rows.
   ;;   +36  top_index        content viewport (LVM_GETTOPINDEX), distinct from
   ;;                         the thumb-only state changed by SetScrollPos
   ;;   +40  extended_style   LVM_SETEXTENDEDLISTVIEWSTYLE shadow
@@ -8198,12 +8200,59 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $tick))))))
 
-  ;; LVIS_* state bits for one item. Only the state-image field (0xF000) is
-  ;; kept here; selection lives in the control's own "selected index" slot.
+  ;; Complete LVIS_* state for one item. Selection, focus, cut/drop highlight,
+  ;; overlay index and state-image index all belong to the item; +32 in the
+  ;; control record is only the most recent selection mark.
   (func $lv_item_state_addr (param $sw i32) (param $item i32) (result i32)
     (i32.add
       (call $g2w (call $lv_cells_ptr (local.get $sw)))
       (i32.add (i32.mul (local.get $item) (i32.const 44)) (i32.const 40))))
+
+  (func $lv_find_item_with_state (param $sw i32) (param $after i32) (param $mask i32) (result i32)
+    (local $i i32) (local $count i32)
+    (local.set $i (i32.add (local.get $after) (i32.const 1)))
+    (if (i32.lt_s (local.get $i) (i32.const 0))
+      (then (local.set $i (i32.const 0))))
+    (local.set $count (call $lv_item_count (local.get $sw)))
+    (block $done (loop $items
+      (br_if $done (i32.ge_s (local.get $i) (local.get $count)))
+      (if (i32.eq
+            (i32.and
+              (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $i)))
+              (local.get $mask))
+            (local.get $mask))
+        (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $items)))
+    (i32.const -1))
+
+  (func $lv_selected_count (param $sw i32) (result i32)
+    (local $i i32) (local $count i32) (local $selected i32)
+    (local.set $count (call $lv_item_count (local.get $sw)))
+    (block $done (loop $items
+      (br_if $done (i32.ge_s (local.get $i) (local.get $count)))
+      (if (i32.and
+            (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $i)))
+            (i32.const 0x0002))
+        (then (local.set $selected (i32.add (local.get $selected) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $items)))
+    (local.get $selected))
+
+  (func $lv_refresh_selection_mark (param $sw i32)
+    (local $mark i32)
+    (local.set $mark (call $lv_selected (local.get $sw)))
+    (if (i32.and
+          (i32.and (i32.ge_s (local.get $mark) (i32.const 0))
+                   (i32.lt_s (local.get $mark) (call $lv_item_count (local.get $sw))))
+          (i32.ne
+            (i32.and
+              (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $mark)))
+              (i32.const 0x0002))
+            (i32.const 0)))
+      (then (return)))
+    (call $lv_set_selected (local.get $sw)
+      (call $lv_find_item_with_state (local.get $sw) (i32.const -1) (i32.const 0x0002))))
 
   (func $lv_ensure_item_capacity (param $sw i32) (param $want i32)
     (local $cap i32) (local $new_cap i32) (local $new_bytes i32)
@@ -8383,8 +8432,7 @@
     (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
                 (i32.ge_s (local.get $idx) (local.get $count)))
       (then (return (i32.const 0))))
-    (if (i32.eq (call $lv_selected (local.get $sw)) (local.get $idx))
-      (then (drop (call $lv_select_item (local.get $hwnd) (local.get $sw) (i32.const -1)))))
+    (local.set $selected (call $lv_selected (local.get $sw)))
     (call $lv_free_row_text (local.get $sw) (local.get $idx))
     (local.set $tail (i32.sub (i32.sub (local.get $count) (local.get $idx)) (i32.const 1)))
     (if (i32.gt_s (local.get $tail) (i32.const 0))
@@ -8397,9 +8445,12 @@
       (call $lv_cell_addr (local.get $sw) (i32.sub (local.get $count) (i32.const 1)) (i32.const 0))
       (i32.const 44))
     (call $lv_set_item_count (local.get $sw) (i32.sub (local.get $count) (i32.const 1)))
-    (local.set $selected (call $lv_selected (local.get $sw)))
     (if (i32.gt_s (local.get $selected) (local.get $idx))
       (then (call $lv_set_selected (local.get $sw) (i32.sub (local.get $selected) (i32.const 1)))))
+    (if (i32.eq (local.get $selected) (local.get $idx))
+      (then
+        (call $lv_set_selected (local.get $sw) (i32.const -1))
+        (call $lv_refresh_selection_mark (local.get $sw))))
     (local.set $h (call $ctrl_get_h (local.get $hwnd)))
     (drop (call $lv_scroll_to_for_h
       (local.get $hwnd) (local.get $sw) (local.get $h) (call $lv_top_index (local.get $sw))))
@@ -8558,34 +8609,125 @@
     (call $heap_free (local.get $notify_g))
     (local.get $ret))
 
+  ;; Apply one LVITEM.state/stateMask pair. The record at +40 is authoritative;
+  ;; the control-level selection mark merely remembers the most recently
+  ;; selected row. Win98 enforces one focused item, and LVS_SINGLESEL enforces
+  ;; one selected item, by clearing the old row as part of the same operation.
+  ;; Broadcast callers can request LVN_ITEMCHANGING even for an unchanged row,
+  ;; which is what Win98 comctl32 does while walking a normal multi-select list.
+  (func $lv_change_item_state
+    (param $hwnd i32) (param $sw i32) (param $idx i32)
+    (param $state i32) (param $mask i32)
+    (param $exclusive_selection i32) (param $notify_unchanged i32) (result i32)
+    (local $old_state i32) (local $new_state i32) (local $unique_mask i32)
+    (local $i i32) (local $other_state i32) (local $other_new i32)
+    (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
+                (i32.ge_s (local.get $idx) (call $lv_item_count (local.get $sw))))
+      (then (return (i32.const 0))))
+    (local.set $old_state
+      (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $idx))))
+    (local.set $new_state
+      (i32.or
+        (i32.and (local.get $old_state) (i32.xor (local.get $mask) (i32.const -1)))
+        (i32.and (local.get $state) (local.get $mask))))
+
+    ;; Ask the parent about the requested row before disturbing any row whose
+    ;; unique focus/selection would have to be cleared for it.
+    (if (i32.or (local.get $notify_unchanged)
+                (i32.ne (local.get $old_state) (local.get $new_state)))
+      (then
+        (if (call $lv_notify_item_state
+              (local.get $hwnd) (local.get $idx)
+              (i32.and (local.get $old_state) (local.get $mask))
+              (i32.and (local.get $new_state) (local.get $mask))
+              (i32.const -100)) ;; LVN_ITEMCHANGINGA
+          (then (return (i32.const 0))))))
+
+    (local.set $unique_mask (i32.const 0))
+    (if (i32.and (local.get $state)
+          (i32.and (local.get $mask) (i32.const 0x0001))) ;; LVIS_FOCUSED
+      (then (local.set $unique_mask (i32.or (local.get $unique_mask) (i32.const 0x0001)))))
+    (if (i32.and
+          (i32.ne
+            (i32.and (local.get $state)
+                     (i32.and (local.get $mask) (i32.const 0x0002)))
+            (i32.const 0))
+          (i32.or
+            (local.get $exclusive_selection)
+            (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0004))
+                    (i32.const 0)))) ;; LVS_SINGLESEL
+      (then (local.set $unique_mask (i32.or (local.get $unique_mask) (i32.const 0x0002)))))
+
+    ;; Clear unique bits on every other row. Notify only rows that really lose
+    ;; state; native comctl32 does not fabricate ITEMCHANGED for no-op rows.
+    (if (local.get $unique_mask)
+      (then
+        (local.set $i (i32.const 0))
+        (block $unique_done (loop $unique_rows
+          (br_if $unique_done (i32.ge_s (local.get $i) (call $lv_item_count (local.get $sw))))
+          (if (i32.ne (local.get $i) (local.get $idx))
+            (then
+              (local.set $other_state
+                (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $i))))
+              (local.set $other_new
+                (i32.and (local.get $other_state)
+                         (i32.xor (local.get $unique_mask) (i32.const -1))))
+              (if (i32.ne (local.get $other_state) (local.get $other_new))
+                (then
+                  (if (call $lv_notify_item_state
+                        (local.get $hwnd) (local.get $i)
+                        (i32.and (local.get $other_state) (local.get $unique_mask))
+                        (i32.const 0) (i32.const -100))
+                    (then (return (i32.const 0))))
+                  (i32.store
+                    (call $lv_item_state_addr (local.get $sw) (local.get $i))
+                    (local.get $other_new))
+                  (drop (call $lv_notify_item_state
+                    (local.get $hwnd) (local.get $i)
+                    (i32.and (local.get $other_state) (local.get $unique_mask))
+                    (i32.const 0) (i32.const -101)))))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $unique_rows)))))
+
+    (if (i32.ne (local.get $old_state) (local.get $new_state))
+      (then
+        (i32.store (call $lv_item_state_addr (local.get $sw) (local.get $idx))
+          (local.get $new_state))
+        (drop (call $lv_notify_item_state
+          (local.get $hwnd) (local.get $idx)
+          (i32.and (local.get $old_state) (local.get $mask))
+          (i32.and (local.get $new_state) (local.get $mask))
+          (i32.const -101))))) ;; LVN_ITEMCHANGEDA
+
+    (if (i32.and (local.get $mask) (i32.const 0x0002))
+      (then
+        (if (i32.and (local.get $state) (i32.const 0x0002))
+          (then (call $lv_set_selected (local.get $sw) (local.get $idx)))
+          (else (call $lv_refresh_selection_mark (local.get $sw))))))
+    (i32.const 1))
+
   (func $lv_select_item (param $hwnd i32) (param $sw i32) (param $idx i32) (result i32)
-    (local $old_idx i32)
     (if (i32.and
           (i32.ne (local.get $idx) (i32.const -1))
           (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
                   (i32.ge_s (local.get $idx) (call $lv_item_count (local.get $sw)))))
       (then (return (i32.const 0))))
-    (local.set $old_idx (call $lv_selected (local.get $sw)))
-    (if (i32.eq (local.get $old_idx) (local.get $idx))
-      (then (return (i32.const 1))))
-    (if (i32.ge_s (local.get $idx) (i32.const 0))
+    (if (i32.eq (local.get $idx) (i32.const -1))
       (then
-        (if (call $lv_notify_item_state
-              (local.get $hwnd) (local.get $idx)
-              (i32.const 0) (i32.const 0x0002) (i32.const -100))
-          (then (return (i32.const 0))))))
-    (if (i32.ge_s (local.get $old_idx) (i32.const 0))
-      (then
-        (drop (call $lv_notify_item_state
-          (local.get $hwnd) (local.get $old_idx)
-          (i32.const 0x0002) (i32.const 0) (i32.const -101)))))
-    (call $lv_set_selected (local.get $sw) (local.get $idx))
-    (if (i32.ge_s (local.get $idx) (i32.const 0))
-      (then
-        (drop (call $lv_notify_item_state
-          (local.get $hwnd) (local.get $idx)
-          (i32.const 0) (i32.const 0x0002) (i32.const -101)))))
-    (i32.const 1))
+        (block $clear_done (loop $clear_selected
+          (local.set $idx
+            (call $lv_find_item_with_state (local.get $sw) (i32.const -1) (i32.const 0x0002)))
+          (br_if $clear_done (i32.lt_s (local.get $idx) (i32.const 0)))
+          (if (i32.eqz (call $lv_change_item_state
+                (local.get $hwnd) (local.get $sw) (local.get $idx)
+                (i32.const 0) (i32.const 0x0002) (i32.const 0) (i32.const 0)))
+            (then (return (i32.const 0))))
+          (br $clear_selected)))
+        (call $lv_set_selected (local.get $sw) (i32.const -1))
+        (return (i32.const 1))))
+    (call $lv_change_item_state
+      (local.get $hwnd) (local.get $sw) (local.get $idx)
+      (i32.const 0x0002) (i32.const 0x0002) (i32.const 1) (i32.const 0)))
 
   (func $lv_paint_report_icon
     (param $hdc i32) (param $sw i32) (param $row i32) (param $x i32) (param $y i32) (result i32)
@@ -9408,6 +9550,12 @@
           (i32.mul (i32.sub (local.get $count) (local.get $idx)) (i32.const 44)))
         (call $zero_memory (call $lv_cell_addr (local.get $sw) (local.get $idx) (i32.const 0)) (i32.const 44))
         (i32.store (call $lv_item_image_addr (local.get $sw) (local.get $idx)) (i32.const -1))
+        ;; The record shift also moves per-item state. Keep the control-level
+        ;; selection mark attached to the same logical row.
+        (local.set $old (call $lv_selected (local.get $sw)))
+        (if (i32.ge_s (local.get $old) (local.get $idx))
+          (then (call $lv_set_selected (local.get $sw)
+            (i32.add (local.get $old) (i32.const 1)))))
         (call $lv_set_item_count (local.get $sw) (i32.add (local.get $count) (i32.const 1)))
         (if (i32.and (local.get $mask) (i32.const 0x0001))
           (then
@@ -9425,10 +9573,11 @@
               (i32.load offset=32 (local.get $lvi_w)))))
         (if (i32.and (local.get $mask) (i32.const 0x0008))
           (then
-            (if (i32.and (i32.load offset=16 (local.get $lvi_w)) (i32.const 0x0002))
-              (then
-                (if (i32.and (i32.load offset=12 (local.get $lvi_w)) (i32.const 0x0002))
-                  (then (drop (call $lv_select_item (local.get $hwnd) (local.get $sw) (local.get $idx)))))))))
+            (drop (call $lv_change_item_state
+              (local.get $hwnd) (local.get $sw) (local.get $idx)
+              (i32.load offset=12 (local.get $lvi_w))
+              (i32.load offset=16 (local.get $lvi_w))
+              (i32.const 0) (i32.const 0)))))
         (call $lv_resolve_insert_callbacks
           (local.get $hwnd) (local.get $sw) (local.get $idx)
           (i32.and
@@ -9468,17 +9617,12 @@
               (i32.load offset=32 (local.get $lvi_w)))))
         (if (i32.and (i32.load (local.get $lvi_w)) (i32.const 0x0008))
           (then
-            (if (i32.and (i32.load offset=16 (local.get $lvi_w)) (i32.const 0x0002))
-              (then
-                (if (i32.and (i32.load offset=12 (local.get $lvi_w)) (i32.const 0x0002))
-                  (then
-                    (if (i32.eqz (call $lv_select_item (local.get $hwnd) (local.get $sw) (local.get $idx)))
-                      (then (return (i32.const 0)))))
-                  (else
-                    (if (i32.eq (call $lv_selected (local.get $sw)) (local.get $idx))
-                      (then
-                        (if (i32.eqz (call $lv_select_item (local.get $hwnd) (local.get $sw) (i32.const -1)))
-                          (then (return (i32.const 0))))))))))))
+            (if (i32.eqz (call $lv_change_item_state
+                  (local.get $hwnd) (local.get $sw) (local.get $idx)
+                  (i32.load offset=12 (local.get $lvi_w))
+                  (i32.load offset=16 (local.get $lvi_w))
+                  (i32.const 0) (i32.const 0)))
+              (then (return (i32.const 0))))))
         ;; DefView commonly inserts the PIDL/lParam first and assigns
         ;; LPSTR_TEXTCALLBACKA/I_IMAGECALLBACK with a later LVM_SETITEMA.
         ;; Resolve that form too; handling only INSERTITEM left stock desktop
@@ -9508,6 +9652,9 @@
           (select (i32.load offset=4 (local.get $lvi_w)) (local.get $wParam)
                   (i32.eq (local.get $msg) (i32.const 0x1005))))
         (local.set $sub (i32.load offset=8 (local.get $lvi_w)))
+        (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
+                    (i32.ge_s (local.get $idx) (call $lv_item_count (local.get $sw))))
+          (then (return (i32.const 0))))
         (if (i32.eq (local.get $msg) (i32.const 0x1005))
           (then
             (if (i32.and (i32.load (local.get $lvi_w)) (i32.const 0x0002))
@@ -9521,8 +9668,17 @@
             (if (i32.and (i32.load (local.get $lvi_w)) (i32.const 0x0008))
               (then
                 (i32.store offset=12 (local.get $lvi_w)
-                  (select (i32.const 0x0002) (i32.const 0)
-                          (i32.eq (call $lv_selected (local.get $sw)) (local.get $idx))))))))
+                  (i32.and
+                    (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $idx)))
+                    (i32.load offset=16 (local.get $lvi_w))))))
+            (if (i32.and (i32.load (local.get $lvi_w)) (i32.const 0x0001))
+              (then
+                (drop (call $lv_copy_cell_text
+                  (local.get $sw) (local.get $idx) (local.get $sub)
+                  (i32.load offset=20 (local.get $lvi_w))
+                  (i32.load offset=24 (local.get $lvi_w))))))
+            ;; LVM_GETITEM returns BOOL, not the copied text length.
+            (return (i32.const 1))))
         (return (call $lv_copy_cell_text
           (local.get $sw) (local.get $idx) (local.get $sub)
           (i32.load offset=20 (local.get $lvi_w))
@@ -9533,65 +9689,87 @@
       (then
         (if (i32.eqz (local.get $lParam)) (then (return (i32.const 0))))
         (local.set $idx (local.get $wParam))
+        (local.set $lvi_w (call $g2w (local.get $lParam)))
+        (local.set $mask (i32.load offset=16 (local.get $lvi_w)))
+        (local.set $old (i32.load offset=12 (local.get $lvi_w)))
+        ;; Win98 applies index -1 to every item, except when the requested
+        ;; state cannot be shared: focus is unique, and LVS_SINGLESEL cannot
+        ;; select all. Those two requests fail atomically.
+        (if (i32.eq (local.get $idx) (i32.const -1))
+          (then
+            (if (i32.and
+                  (i32.and (local.get $old) (local.get $mask))
+                  (i32.const 0x0001)) ;; LVIS_FOCUSED
+              (then (return (i32.const 0))))
+            (if (i32.and
+                  (i32.ne
+                    (i32.and (i32.and (local.get $old) (local.get $mask)) (i32.const 0x0002))
+                    (i32.const 0))
+                  (i32.ne
+                    (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0004))
+                    (i32.const 0))) ;; LVS_SINGLESEL
+              (then (return (i32.const 0))))
+            ;; Win98's single-select clear visits only its selected row.
+            (if (i32.and
+                  (i32.and
+                    (i32.eqz (i32.and (local.get $old) (i32.const 0x0002)))
+                    (i32.ne (i32.and (local.get $mask) (i32.const 0x0002)) (i32.const 0)))
+                  (i32.ne
+                    (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x0004))
+                    (i32.const 0)))
+              (then
+                (local.set $i
+                  (call $lv_find_item_with_state
+                    (local.get $sw) (i32.const -1) (i32.const 0x0002)))
+                (if (i32.ge_s (local.get $i) (i32.const 0))
+                  (then
+                    (if (i32.eqz (call $lv_change_item_state
+                          (local.get $hwnd) (local.get $sw) (local.get $i)
+                          (local.get $old) (local.get $mask)
+                          (i32.const 0) (i32.const 0)))
+                      (then (return (i32.const 0))))))
+                (call $paint_flag_set_inv (local.get $hwnd))
+                (return (i32.const 1))))
+            (local.set $i (i32.const 0))
+            (block $broadcast_done (loop $broadcast_items
+              (br_if $broadcast_done
+                (i32.ge_s (local.get $i) (call $lv_item_count (local.get $sw))))
+              (if (i32.eqz (call $lv_change_item_state
+                    (local.get $hwnd) (local.get $sw) (local.get $i)
+                    (local.get $old) (local.get $mask)
+                    (i32.const 0) (i32.const 1)))
+                (then (return (i32.const 0))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $broadcast_items)))
+            (call $paint_flag_set_inv (local.get $hwnd))
+            (return (i32.const 1))))
         (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
                     (i32.ge_s (local.get $idx) (call $lv_item_count (local.get $sw))))
           (then (return (i32.const 0))))
-        (local.set $lvi_w (call $g2w (local.get $lParam)))
-        ;; LVIS_STATEIMAGEMASK -- the check box. Index 1 is unchecked and 2 is
-        ;; checked by the convention every caller of LVSIL_STATE follows.
-        (if (i32.and (i32.load offset=16 (local.get $lvi_w)) (i32.const 0xF000))
-          (then
-            (i32.store (call $lv_item_state_addr (local.get $sw) (local.get $idx))
-              (i32.or
-                (i32.and (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $idx)))
-                         (i32.const 0xFFFF0FFF))
-                (i32.and (i32.load offset=12 (local.get $lvi_w)) (i32.const 0xF000))))))
-        (if (i32.and (i32.load offset=16 (local.get $lvi_w)) (i32.const 0x0002))
-          (then
-            (if (i32.and (i32.load offset=12 (local.get $lvi_w)) (i32.const 0x0002))
-              (then
-                (if (i32.eqz (call $lv_select_item (local.get $hwnd) (local.get $sw) (local.get $idx)))
-                  (then (return (i32.const 0))))))
-            (if (i32.and
-                  (i32.eqz (i32.and (i32.load offset=12 (local.get $lvi_w)) (i32.const 0x0002)))
-                  (i32.eq (call $lv_selected (local.get $sw)) (local.get $idx)))
-              (then
-                (if (i32.eqz (call $lv_select_item (local.get $hwnd) (local.get $sw) (i32.const -1)))
-                  (then (return (i32.const 0))))))))
+        (if (i32.eqz (call $lv_change_item_state
+              (local.get $hwnd) (local.get $sw) (local.get $idx)
+              (local.get $old) (local.get $mask)
+              (i32.const 0) (i32.const 0)))
+          (then (return (i32.const 0))))
         (call $paint_flag_set_inv (local.get $hwnd))
         (return (i32.const 1))))
     (if (i32.eq (local.get $msg) (i32.const 0x102C))
       (then
-        (local.set $old (i32.const 0))
-        (if (i32.and (local.get $lParam) (i32.const 0x0002))
-          (then
-            (if (i32.eq (call $lv_selected (local.get $sw)) (local.get $wParam))
-              (then (local.set $old (i32.const 0x0002))))))
-        ;; ListView_GetCheckState is this message masked to 0xF000, so the
-        ;; check box has to answer here or every app reads back "unchecked".
-        (if (i32.and (local.get $lParam) (i32.const 0xF000))
-          (then
-            (if (i32.and (i32.ge_s (local.get $wParam) (i32.const 0))
-                         (i32.lt_s (local.get $wParam) (call $lv_item_count (local.get $sw))))
-              (then
-                (local.set $old (i32.or (local.get $old)
-                  (i32.and (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $wParam)))
-                           (i32.const 0xF000))))))))
-        (return (local.get $old))))
+        (if (i32.or (i32.lt_s (local.get $wParam) (i32.const 0))
+                    (i32.ge_s (local.get $wParam) (call $lv_item_count (local.get $sw))))
+          (then (return (i32.const 0))))
+        (return (i32.and
+          (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $wParam)))
+          (local.get $lParam)))))
     (if (i32.eq (local.get $msg) (i32.const 0x1032))
-      (then
-        (return (select (i32.const 1) (i32.const 0)
-                  (i32.ge_s (call $lv_selected (local.get $sw)) (i32.const 0))))))
+      (then (return (call $lv_selected_count (local.get $sw)))))
     (if (i32.eq (local.get $msg) (i32.const 0x100C))
       (then
         (local.set $idx (i32.add (local.get $wParam) (i32.const 1)))
-        (if (i32.and (local.get $lParam) (i32.const 0x0002))
-          (then
-            (if (i32.and
-                  (i32.ge_s (call $lv_selected (local.get $sw)) (local.get $idx))
-                  (i32.lt_s (call $lv_selected (local.get $sw)) (call $lv_item_count (local.get $sw))))
-              (then (return (call $lv_selected (local.get $sw)))))
-            (return (i32.const -1))))
+        (local.set $mask (i32.and (local.get $lParam) (i32.const 0x000F)))
+        (if (local.get $mask)
+          (then (return (call $lv_find_item_with_state
+            (local.get $sw) (local.get $wParam) (local.get $mask)))))
         (if (i32.lt_s (local.get $idx) (call $lv_item_count (local.get $sw)))
           (then (return (local.get $idx))))
         (return (i32.const -1))))
@@ -10108,7 +10286,9 @@
           (local.set $y (i32.add (local.get $header_h) (i32.mul (local.get $draw_row) (i32.const 16))))
           (if (i32.lt_s (local.get $y) (local.get $h))
             (then
-              (if (i32.eq (local.get $row) (call $lv_selected (local.get $sw)))
+              (if (i32.and
+                    (i32.load (call $lv_item_state_addr (local.get $sw) (local.get $row)))
+                    (i32.const 0x0002))
                 (then
                   (drop (call $host_gdi_fill_rect (local.get $hdc)
                           (i32.const 0) (local.get $y)
