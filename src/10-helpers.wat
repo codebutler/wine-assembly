@@ -996,6 +996,32 @@
     ;; Return guest pointer past the size header
     (i32.add (local.get $ptr) (i32.const 4)))
 
+  ;; Shrink a live allocation in place without allocating or moving its prefix.
+  ;; Internal callers use this after constructing a bounded worst-case buffer.
+  ;; Returns the original guest pointer, or zero for an invalid block/growth.
+  ;; The original arena still covers both headers; only the unused suffix moves
+  ;; to this instance's free list. Sub-minimum suffixes remain padding.
+  (func $heap_shrink (param $guest_ptr i32) (param $size i32) (result i32)
+    (local $block i32) (local $wa i32) (local $old i32) (local $need i32)
+    (local $tail i32) (local $remaining i32)
+    (if (i32.or (i32.eqz (local.get $guest_ptr))
+      (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))) (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (if (i32.eqz (call $heap_arena_find (local.get $block))) (then (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $block)))
+    (local.set $old (i32.load (local.get $wa)))
+    (if (call $heap_block_bad (local.get $block) (local.get $old)) (then (return (i32.const 0))))
+    (local.set $need (i32.and (i32.add (local.get $size) (i32.const 11)) (i32.const -8)))
+    (if (i32.lt_u (local.get $need) (i32.const 16)) (then (local.set $need (i32.const 16))))
+    (if (i32.gt_u (local.get $need) (local.get $old)) (then (return (i32.const 0))))
+    (local.set $remaining (i32.sub (local.get $old) (local.get $need)))
+    (if (i32.ge_u (local.get $remaining) (i32.const 16)) (then
+      (local.set $tail (i32.add (local.get $block) (local.get $need)))
+      (i32.store (local.get $wa) (local.get $need))
+      (i32.store (call $g2w (local.get $tail)) (local.get $remaining))
+      (call $heap_free (i32.add (local.get $tail) (i32.const 4)))))
+    (local.get $guest_ptr))
+
   ;; heap_free: return block to free list
   (func $heap_free (param $guest_ptr i32)
     (local $block i32) (local $w i32) (local $size i32)

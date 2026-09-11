@@ -1612,3 +1612,25 @@ validation and heap-handle tests pass. Full build97264 passes canonical1155999 /
 compat1156467, unchanged layout9c6027bce1d500a1 and no overlaps. These are real
 memory-budget fixes, not proof that B&W's10.3MiB allocation now succeeds.
 Active run21705 is deliberately preserved on its pre-tail frozen snapshot.
+
+Prepared software contexts now release unused worst-case clipping capacity
+before the next batch is prepared. Vertices remain in place; indices and POINT
+size sidecars move into the smallest compatible sevenfold layout. An internal
+nonmoving heap shrink returns the unused suffix to the owning free list.
+No vertex shader is reexecuted, and every batch still completes validation
+before any raster writes. The host reserves the original creation peak, then
+charges a conservative retained bound including VM/binder slack. This reduces
+multi-batch retained memory without weakening preflight or deferred lifetimes.
+
+Native compaction89280 passes25 cases: analytic clipping and zero output,
+actual heap-header shrink, allocator reuse/overwrite of the freed tail while
+the context is live, POINT scalar relocation, wire edge provenance, an
+800-triangle draw under a budget that rejects the old summed creation bounds,
+exact pixels/sample counts, and late-batch failure with no writes or retained
+budget leak. Heap-shrink10519 passes30 low/sparse alignment, ownership, live
+guard, invalid-input and repeated-shrink cases. Pipeline1308 passes351,
+PSIZE36512 passes, and edge62951 passes74. Production software-worker55789
+passes real-WAT parity, ordering and cleanup. Full build22476 passes
+canonical1156377 / compat1156845 with no data overlaps; test-tier gates pass.
+These establish bounded-context improvements, not resolution of the separate
+B&W guest allocation failure or complete gameplay/backend parity.
