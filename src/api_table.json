@@ -28362,5 +28362,12 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 1636215742
+  },
+  {
+    "id": 3355,
+    "name": "DestroyPropertySheetPage",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3718931680
   }
 ]

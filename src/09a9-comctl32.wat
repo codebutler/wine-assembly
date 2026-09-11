@@ -1413,11 +1413,96 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
-  ;; CreatePropertySheetPageA(lppsp) — 1 arg, returns HPROPSHEETPAGE
+  ;; HPROPSHEETPAGE is an opaque, owned copy of PROPSHEETPAGEA. The handle
+  ;; points at the copied public structure so WM_INITDIALOG can receive the
+  ;; documented lParam; the two private words immediately before it retain the
+  ;; live marker and exact extent. The heap header is another four bytes back.
+  (global $PROPSHEET_PAGE_MAGIC i32 (i32.const 0x31475050)) ;; "PPG1"
+
+  ;; Return the private header's wasm address, or zero for NULL, stale, foreign,
+  ;; truncated, and forged handles. Translate the guest allocation only once.
+  (func $propsheet_page_record (param $page i32) (result i32)
+    (local $block i32) (local $block_w i32) (local $block_size i32)
+    (local $raw_w i32) (local $size i32)
+    (if (i32.or
+          (i32.lt_u (local.get $page) (i32.const 12))
+          (i32.ne (i32.and (local.get $page) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $page) (i32.const 12)))
+    (if (i32.eqz (call $heap_arena_find (local.get $block)))
+      (then (return (i32.const 0))))
+    (local.set $block_w (call $g2w (local.get $block)))
+    (local.set $block_size (i32.load (local.get $block_w)))
+    (if (i32.or
+          (i32.lt_u (local.get $block_size) (i32.const 56))
+          (call $heap_block_bad (local.get $block) (local.get $block_size)))
+      (then (return (i32.const 0))))
+    (local.set $raw_w (i32.add (local.get $block_w) (i32.const 4)))
+    (if (i32.ne (i32.load (local.get $raw_w)) (global.get $PROPSHEET_PAGE_MAGIC))
+      (then (return (i32.const 0))))
+    (local.set $size (i32.load offset=4 (local.get $raw_w)))
+    (if (i32.or
+          (i32.or (i32.lt_u (local.get $size) (i32.const 40))
+                  (i32.gt_u (local.get $size) (i32.const 0x1000)))
+          (i32.or
+            (i32.gt_u (local.get $size)
+              (i32.sub (local.get $block_size) (i32.const 12)))
+            (i32.ne (i32.load offset=8 (local.get $raw_w)) (local.get $size))))
+      (then (return (i32.const 0))))
+    (local.get $raw_w))
+
+  (func $propsheet_page_destroy_owned (param $page i32) (result i32)
+    (local $raw_w i32)
+    (local.set $raw_w (call $propsheet_page_record (local.get $page)))
+    (if (i32.eqz (local.get $raw_w)) (then (return (i32.const 0))))
+    (i32.store (local.get $raw_w) (i32.const 0))
+    (i32.store offset=4 (local.get $raw_w) (i32.const 0))
+    (call $heap_free (i32.sub (local.get $page) (i32.const 8)))
+    (i32.const 1))
+
+  ;; CreatePropertySheetPageA(lppsp) — 1 arg, returns HPROPSHEETPAGE.
+  ;; Win98 accepts 40..4096-byte structures and rejects flag bits above bit 15.
+  ;; PSP_USECALLBACK needs a synchronous guest PSPCB_CREATE/RELEASE pair. Until
+  ;; that continuation exists, fail explicitly instead of returning a handle
+  ;; whose documented lifetime callbacks would silently never run.
   (func $handle_CreatePropertySheetPageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Return a fake handle
-    (local.set $arg0 (call $heap_alloc (i32.const 4)))
-    (global.set $eax (local.get $arg0))
+    (local $src_w i32) (local $size i32) (local $flags i32)
+    (local $raw i32) (local $raw_w i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $src_w (call $g2w (local.get $arg0)))
+    (local.set $size (i32.load (local.get $src_w)))
+    (local.set $flags (i32.load offset=4 (local.get $src_w)))
+    (if (i32.or
+          (i32.or (i32.lt_u (local.get $size) (i32.const 40))
+                  (i32.gt_u (local.get $size) (i32.const 0x1000)))
+          (i32.or
+            (i32.ne (i32.and (local.get $flags) (i32.const 0xFFFF0000)) (i32.const 0))
+            (i32.ne (i32.and (local.get $flags) (i32.const 0x00000080)) (i32.const 0))))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $raw (call $heap_alloc (i32.add (local.get $size) (i32.const 8))))
+    (if (i32.eqz (local.get $raw))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $raw_w (call $g2w (local.get $raw)))
+    (i32.store (local.get $raw_w) (global.get $PROPSHEET_PAGE_MAGIC))
+    (i32.store offset=4 (local.get $raw_w) (local.get $size))
+    (memory.copy (i32.add (local.get $raw_w) (i32.const 8))
+      (local.get $src_w) (local.get $size))
+    (global.set $eax (i32.add (local.get $raw) (i32.const 8)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; DestroyPropertySheetPage(hPSPage) — 1 arg, returns BOOL.
+  (func $handle_DestroyPropertySheetPage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $propsheet_page_destroy_owned (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 

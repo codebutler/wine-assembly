@@ -17676,15 +17676,21 @@
     (i32.const 1))
 
   (func $modal_finish_local (param $result i32)
-    (local $owner i32) (local $hwnd i32)
+    (local $owner i32) (local $hwnd i32) (local $class i32)
     (local.set $hwnd (global.get $modal_dlg_hwnd))
     (if (i32.eqz (local.get $hwnd)) (then (return)))
+    (local.set $class (call $ctrl_table_get_class (local.get $hwnd)))
     ;; The shell picker sends the selected HTREEITEM through shared modal
     ;; state. Convert it to a caller-owned PIDL only in this owning instance;
     ;; renderer shadows have separate heap globals even though memory is shared.
-    (if (i32.eq (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 31))
+    (if (i32.eq (local.get $class) (i32.const 31))
       (then (local.set $result
         (call $browse_modal_finish (local.get $hwnd) (local.get $result)))))
+    ;; A successful PropertySheet call owns every HPROPSHEETPAGE passed in its
+    ;; handle array. Retire those copied page objects with the frame, matching
+    ;; the lifetime transfer documented for PropertySheet.
+    (if (i32.eq (local.get $class) (i32.const 32))
+      (then (call $propsheet_release_page_handles)))
     (global.set $modal_result (local.get $result))
     (call $cd_modal_writeback (local.get $result))
     (local.set $owner (call $wnd_get_owner (local.get $hwnd)))
@@ -17715,10 +17721,53 @@
           (then (i32.atomic.store (global.get $SHARED_MODAL_DONE) (i32.const 1)))))))
 
   ;; ---- COMCTL32 property-sheet wizard ----
-  ;; This implements the classic PROPSHEETHEADERA + inline PROPSHEETPAGEA
-  ;; form used by Win9x installers. The page itself remains application code:
-  ;; its resource template is loaded normally and its DLGPROC receives the
-  ;; standard initialization and PSN_* notifications.
+  ;; This implements both classic PROPSHEETHEADERA page forms: an inline
+  ;; PROPSHEETPAGEA array and an HPROPSHEETPAGE array produced by
+  ;; CreatePropertySheetPageA. The page itself remains application code: its
+  ;; resource template is loaded normally and its DLGPROC receives the standard
+  ;; initialization and PSN_* notifications.
+  (func $propsheet_resolve_page (param $index i32) (result i32)
+    (local $pages_w i32) (local $psp_g i32) (local $psp_w i32)
+    (local $size i32) (local $flags i32) (local $page i32)
+    (if (i32.ge_u (local.get $index) (global.get $propsheet_page_count))
+      (then (return (i32.const 0))))
+    ;; Convert the array base once. Inline entries use wasm pointer arithmetic;
+    ;; handle arrays translate each validated page through its owned record.
+    (local.set $pages_w (call $g2w (global.get $propsheet_pages)))
+    (if (global.get $propsheet_pages_are_handles)
+      (then
+        (local.set $page (i32.load (i32.add (local.get $pages_w)
+          (i32.shl (local.get $index) (i32.const 2)))))
+        (if (i32.eqz (call $propsheet_page_record (local.get $page)))
+          (then (return (i32.const 0))))
+        (return (local.get $page))))
+    (local.set $size (i32.load (local.get $pages_w)))
+    (if (i32.or (i32.lt_u (local.get $size) (i32.const 40))
+                (i32.gt_u (local.get $size) (i32.const 0x1000)))
+      (then (return (i32.const 0))))
+    (local.set $psp_g (i32.add (global.get $propsheet_pages)
+      (i32.mul (local.get $index) (local.get $size))))
+    (local.set $psp_w (i32.add (local.get $pages_w)
+      (i32.mul (local.get $index) (local.get $size))))
+    (local.set $flags (i32.load offset=4 (local.get $psp_w)))
+    (if (i32.or
+          (i32.ne (i32.load (local.get $psp_w)) (local.get $size))
+          (i32.ne (i32.and (local.get $flags) (i32.const 0xFFFF0000)) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (local.get $psp_g))
+
+  (func $propsheet_release_page_handles
+    (local $pages_w i32) (local $i i32) (local $page i32)
+    (if (i32.eqz (global.get $propsheet_owns_page_handles)) (then (return)))
+    (local.set $pages_w (call $g2w (global.get $propsheet_pages)))
+    (block $done (loop $pages
+      (br_if $done (i32.ge_u (local.get $i) (global.get $propsheet_page_count)))
+      (local.set $page (i32.load (i32.add (local.get $pages_w)
+        (i32.shl (local.get $i) (i32.const 2)))))
+      (drop (call $propsheet_page_destroy_owned (local.get $page)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $pages)))
+    (global.set $propsheet_owns_page_handles (i32.const 0)))
   (func $propsheet_notify (param $page i32) (param $code i32) (result i32)
     (local $nm_g i32) (local $nm_w i32) (local $ret i32)
     (if (i32.eqz (local.get $page)) (then (return (i32.const 0))))
@@ -17775,14 +17824,10 @@
   (func $propsheet_show_page (param $index i32) (result i32)
     (local $psp_g i32) (local $psp_w i32) (local $size i32)
     (local $page i32) (local $hinst i32) (local $template i32) (local $proc i32)
-    (if (i32.ge_u (local.get $index) (global.get $propsheet_page_count))
-      (then (return (i32.const 0))))
-    (local.set $psp_g (global.get $propsheet_pages))
-    (local.set $size (i32.load (call $g2w (local.get $psp_g))))
-    (if (i32.lt_u (local.get $size) (i32.const 28))
-      (then (return (i32.const 0))))
-    (local.set $psp_g (i32.add (local.get $psp_g) (i32.mul (local.get $index) (local.get $size))))
+    (local.set $psp_g (call $propsheet_resolve_page (local.get $index)))
+    (if (i32.eqz (local.get $psp_g)) (then (return (i32.const 0))))
     (local.set $psp_w (call $g2w (local.get $psp_g)))
+    (local.set $size (i32.load (local.get $psp_w)))
     (local.set $hinst (i32.load offset=8 (local.get $psp_w)))
     (local.set $template (i32.load offset=12 (local.get $psp_w)))
     (local.set $proc (i32.load offset=24 (local.get $psp_w)))
@@ -17876,15 +17921,16 @@
     (if (i32.lt_u (i32.load (local.get $header_w)) (i32.const 36))
       (then (return (i32.const 0))))
     (local.set $flags (i32.load offset=4 (local.get $header_w)))
-    ;; PSH_PROPSHEETPAGE is required here; HPROPSHEETPAGE arrays are retained
-    ;; for CreatePropertySheetPageA compatibility but are not yet expanded.
-    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x00000008)))
-      (then (return (i32.const 0))))
     (global.set $propsheet_header (local.get $header_g))
     (global.set $propsheet_page_count (i32.load offset=24 (local.get $header_w)))
     (global.set $propsheet_pages (i32.load offset=32 (local.get $header_w)))
+    (global.set $propsheet_pages_are_handles
+      (i32.eqz (i32.and (local.get $flags) (i32.const 0x00000008))))
+    (global.set $propsheet_owns_page_handles (i32.const 0))
     (if (i32.or (i32.eqz (global.get $propsheet_page_count))
-                (i32.eqz (global.get $propsheet_pages)))
+                (i32.or
+                  (i32.gt_u (global.get $propsheet_page_count) (i32.const 100))
+                  (i32.eqz (global.get $propsheet_pages))))
       (then (return (i32.const 0))))
     (local.set $owner (i32.load offset=8 (local.get $header_w)))
     (local.set $caption_g (i32.load offset=20 (local.get $header_w)))
@@ -17924,6 +17970,8 @@
         (call $host_destroy_window (local.get $dlg))
         (global.set $propsheet_frame_hwnd (i32.const 0))
         (return (i32.const 0))))
+    (global.set $propsheet_owns_page_handles
+      (global.get $propsheet_pages_are_handles))
     (global.set $main_hwnd (local.get $dlg))
     (local.get $dlg))
 

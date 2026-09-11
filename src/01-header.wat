@@ -3326,6 +3326,8 @@
   (global $propsheet_header (mut i32) (i32.const 0))
   (global $propsheet_pages (mut i32) (i32.const 0))
   (global $propsheet_page_count (mut i32) (i32.const 0))
+  (global $propsheet_pages_are_handles (mut i32) (i32.const 0))
+  (global $propsheet_owns_page_handles (mut i32) (i32.const 0))
   (global $propsheet_page_index (mut i32) (i32.const 0))
   (global $propsheet_page_hwnd (mut i32) (i32.const 0))
   (global $propsheet_frame_hwnd (mut i32) (i32.const 0))
