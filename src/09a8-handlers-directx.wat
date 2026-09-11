@@ -132,7 +132,8 @@
   ;; rectangle matching keeps ordinary small-surface blits untouched.
   ;;
   ;; DirectSound buffers use the same per-slot storage as a disjoint union:
-  ;;   +0 owner DirectSound slot + 1, +4 creation DSBCAPS, +8 current DSSCL.
+  ;;   +0 owner DirectSound slot + 1, +4 creation DSBCAPS, +8 current DSSCL,
+  ;;   +12 play-cursor base (the stopped position or live snapshot origin).
   ;; $dx_create_com_obj clears the full record before either type publishes it.
   (global $DX_SURF_STATE i32 (region.addr $DX_SURF_STATE 0))
   (global $DX_SURF_STATE_SIZE i32 (region.size $DX_SURF_STATE))
@@ -6089,6 +6090,10 @@
       (call $dx_surf_state_ptr (local.get $dst_entry))
       (call $dx_surf_state_ptr (local.get $src_entry))
       (i32.const 32))
+    ;; DuplicateSoundBuffer copies the sample data and controls, but the new
+    ;; object is stopped at the beginning of its own playback timeline.
+    (i32.store offset=12 (call $dx_surf_state_ptr (local.get $dst_entry))
+      (i32.const 0))
     ;; Copy format info from source: bufsize(+12), channels(+16), bits(+18), sampleRate(+24)
     (local.set $buf_size (i32.load (i32.add (local.get $src_entry) (i32.const 12))))
     (i32.store (i32.add (local.get $dst_entry) (i32.const 12)) (local.get $buf_size))
@@ -6322,13 +6327,25 @@
 
   ;; GetCurrentPosition(this, lpdwCurrentPlayCursor, lpdwCurrentWriteCursor)
   (func $handle_IDirectSoundBuffer_GetCurrentPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $handle i32) (local $pos i32)
+    (local $entry i32) (local $state i32) (local $handle i32) (local $pos i32)
     (local $size i32) (local $align i32) (local $lead i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (local.set $size (i32.load offset=12 (local.get $entry)))
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
-    (if (local.get $handle)
+    ;; The host cursor is relative to the current snapshot. Add the position
+    ;; at which that snapshot began; while stopped, the stored base itself is
+    ;; the exact cursor that the next Play must use.
+    (if (i32.and
+          (i32.ne (i32.and (load.field DxObject flags (local.get $entry))
+            (i32.const 1)) (i32.const 0))
+          (i32.ne (local.get $handle) (i32.const 0)))
       (then (local.set $pos (call $host_voice_get_pos (local.get $handle))))
       (else (local.set $pos (i32.const 0))))
+    (local.set $pos
+      (i32.add (i32.load offset=12 (local.get $state)) (local.get $pos)))
+    (if (i32.ne (local.get $size) (i32.const 0))
+      (then (local.set $pos (i32.rem_u (local.get $pos) (local.get $size)))))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (local.get $pos))))
     ;; The write cursor is not the play cursor. DirectSound guarantees it leads
     ;; by whatever the driver has already committed to the DMA -- on Win98
@@ -6338,7 +6355,6 @@
     ;; write cursor was told that region was free.
     (if (local.get $arg2)
       (then
-        (local.set $size (i32.load (i32.add (local.get $entry) (i32.const 12))))
         ;; 15ms of this buffer's own format, truncated to a whole sample frame
         ;; so the lead never lands mid-sample.
         (local.set $align (i32.div_u
@@ -6510,8 +6526,10 @@
   ;; each other the way the old single-waveOut routing did.
   (func $handle_IDirectSoundBuffer_Play (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $handle i32) (local $dib_wa i32) (local $buf_size i32)
-    (local $channels i32) (local $bits i32) (local $rate i32) (local $loop i32)
+    (local $state i32) (local $channels i32) (local $bits i32)
+    (local $rate i32) (local $loop i32) (local $start i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
     (local.set $buf_size (i32.load (i32.add (local.get $entry) (i32.const 12))))
     (local.set $channels (load.field DxObject bpp (local.get $entry)))
@@ -6526,19 +6544,59 @@
       (store.field DxObject misc0 (local.get $entry) (local.get $handle))))
     ;; DSBPLAY_LOOPING = 1
     (local.set $loop (i32.and (local.get $arg3) (i32.const 1)))
+    (local.set $start (i32.load offset=12 (local.get $state)))
     ;; Bitwise i32.and on (ptr, size) silently drops the play call whenever
     ;; their bits don't happen to overlap. Coerce both to 0/1 for logical AND.
     (if (i32.and (i32.ne (local.get $dib_wa) (i32.const 0))
                  (i32.ne (local.get $buf_size) (i32.const 0))) (then
       (drop (call $host_voice_play_ring
         (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
-        (i32.const 0) (local.get $loop)))))
+        (local.get $start) (local.get $loop)))))
     (store.field DxObject flags (local.get $entry) (i32.or (i32.const 1) (i32.shl (local.get $loop) (i32.const 2))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
-  ;; SetCurrentPosition — no-op (can't seek waveOut)
+  ;; SetCurrentPosition(this, dwNewPosition). This is a DirectSound secondary-
+  ;; buffer operation: a stopped buffer remembers where its next Play starts;
+  ;; a live buffer immediately replaces its browser snapshot at that byte.
   (func $handle_IDirectSoundBuffer_SetCurrentPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $state i32) (local $size i32)
+    (local $status i32) (local $handle i32) (local $loop i32)
+    (local $dib_wa i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 5))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (if (i32.ne
+          (i32.and (i32.load offset=4 (local.get $state)) (i32.const 1))
+          (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $size (i32.load offset=12 (local.get $entry)))
+    (if (i32.or (i32.eqz (local.get $size))
+                (i32.ge_u (local.get $arg1) (local.get $size)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (i32.store offset=12 (local.get $state) (local.get $arg1))
+    (local.set $status (load.field DxObject flags (local.get $entry)))
+    (local.set $handle (load.field DxObject misc0 (local.get $entry)))
+    (if (i32.and
+          (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0))
+          (i32.ne (local.get $handle) (i32.const 0)))
+      (then
+        (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
+        (local.set $loop
+          (i32.ne (i32.and (local.get $status) (i32.const 4)) (i32.const 0)))
+        (drop (call $host_voice_play_ring
+          (local.get $handle) (local.get $dib_wa) (local.get $size)
+          (local.get $arg1) (local.get $loop)))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
@@ -6649,9 +6707,27 @@
 
   ;; Stop(this) — stop playback but keep the voice; Play() may be called again
   (func $handle_IDirectSoundBuffer_Stop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $handle i32)
+    (local $entry i32) (local $state i32) (local $handle i32)
+    (local $size i32) (local $position i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
+    ;; Stop freezes the live cursor. Leaving only the snapshot origin here
+    ;; would make a subsequent Play jump backwards to its previous start.
+    (if (i32.and
+          (i32.ne (i32.and (load.field DxObject flags (local.get $entry))
+            (i32.const 1)) (i32.const 0))
+          (i32.ne (local.get $handle) (i32.const 0)))
+      (then
+        (local.set $size (i32.load offset=12 (local.get $entry)))
+        (local.set $position
+          (i32.add (i32.load offset=12 (local.get $state))
+                   (call $host_voice_get_pos (local.get $handle))))
+        (if (i32.ne (local.get $size) (i32.const 0))
+          (then
+            (local.set $position
+              (i32.rem_u (local.get $position) (local.get $size)))))
+        (i32.store offset=12 (local.get $state) (local.get $position))))
     (if (local.get $handle) (then
       (drop (call $host_voice_stop (local.get $handle)))))
     (store.field DxObject flags (local.get $entry) (i32.const 0))

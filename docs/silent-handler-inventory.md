@@ -322,3 +322,11 @@ with DSBSTATUS_PLAYING; primary SetFormat requires PRIORITY, rejects secondary
 buffers, validates PCM structure fields, and observes WRITEPRIMARY's stopped-
 buffer rule. The browser has no fragmented hardware sound heap, so a permitted
 Compact remains a successful no-op after its native privilege check.
+
+2026-09-11: 336 -> 335. IDirectSoundBuffer::SetCurrentPosition now owns a
+per-secondary-buffer play-cursor origin instead of returning success without
+moving anything. Stopped buffers retain the byte used by their next Play;
+playing buffers immediately restart the browser snapshot at that byte; Stop
+freezes the live cursor; and GetCurrentPosition rebases the host-relative
+cursor onto the retained DirectSound position. Primary buffers and offsets
+outside the backing store fail rather than corrupting cursor state.
