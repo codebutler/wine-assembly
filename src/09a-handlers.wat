@@ -18592,9 +18592,11 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
-  ;; ImmReleaseContext(hWnd, hIMC) → BOOL
+  ;; ImmReleaseContext(hWnd, hIMC) balances a successful ImmGetContext call.
+  ;; This no-IME machine never issues a HIMC, so neither NULL nor a fabricated
+  ;; numeric value can name acquired context state to release.
   (func $handle_ImmReleaseContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 

@@ -356,3 +356,8 @@ hash changed with the corrected contract.
 runtime's one published process ID, rejects invented process IDs, and reads the
 major/minor subsystem version stamped in the mapped executable's PE header. It
 no longer returns the Win98 GetVersion encoding for every possible PID.
+
+2026-09-11: 332 -> 332. ImmReleaseContext now agrees with the explicit no-IME
+machine model: because ImmGetContext cannot issue a HIMC, neither NULL nor a
+fabricated numeric handle can be released successfully. The audit count is
+unchanged because the corrected deterministic failure remains a quiet handler.

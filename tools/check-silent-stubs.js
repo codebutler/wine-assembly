@@ -253,7 +253,7 @@ const digest = crypto.createHash('sha256')
 // reference per lock and releases exactly one per balanced unlock, including
 // DLL-private objects reached through the guest callback continuation.
 const EXPECTED_COUNT = 332;
-const EXPECTED_SHA256 = '031d13dd94964f632934ca10c76c60d78020a415239ece6182e56071873ecc70';
+const EXPECTED_SHA256 = '9f73c4f81144960c0df957bc258f892a3f14f06028bb28215cf38022c2667be8';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
