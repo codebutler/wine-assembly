@@ -42,6 +42,7 @@ const TVN_SELCHANGINGA = -401;
 const TVN_SELCHANGEDA = -402;
 const TVN_ITEMEXPANDEDA = -406;
 const WM_VSCROLL = 0x0115;
+const WM_SETFOCUS = 0x0007;
 const WM_LBUTTONDOWN = 0x0201;
 const WM_LBUTTONUP = 0x0202;
 const WM_LBUTTONDBLCLK = 0x0203;
@@ -208,8 +209,12 @@ async function main() {
       i === 0 ? 2 : null, i === 0 ? 3 : null));
   }
   check('TVM_INSERTITEMA returned handles', handles.every(Boolean));
-  check('first inserted item becomes the native default caret',
-    (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === handles[0]);
+  check('insertion does not create a caret before the control receives focus',
+    e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) === 0);
+  e.send_message(tv, WM_SETFOCUS, 0, 0);
+  check('WM_SETFOCUS selects the first item when the TreeView has no caret',
+    (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === handles[0] &&
+      (getItemState(handles[0]).state & TVIS_SELECTED) !== 0);
   const imageItem = e.guest_alloc(40);
   const imageItemP = wa(imageItem);
   u8.fill(0, imageItemP, imageItemP + 40);

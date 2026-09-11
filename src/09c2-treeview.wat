@@ -478,13 +478,6 @@
                     (br $find)))))))))
     (if (i32.eqz (local.get $hParent))
       (then (call $tv_link_root_item (local.get $base) (local.get $handle))))
-    ;; Win98's TreeView gives the first inserted item the caret. WinHelp
-    ;; immediately queries TVGN_CARET and relies on that native default.
-    (if (i32.eqz (call $tv_view_sel))
-      (then
-        (call $tv_view_set_sel (local.get $handle))
-        (i32.store offset=20 (local.get $base)
-          (i32.or (i32.load offset=20 (local.get $base)) (i32.const 0x2)))))
     (local.get $handle))
 
   ;; TVM_GETITEMA handler — read TVITEM, fill requested fields
@@ -2009,6 +2002,7 @@
 
   (func $treeview_wndproc_owned (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $code i32) (local $delta i32) (local $sz i32) (local $h i32) (local $old_row i32) (local $new_row i32)
+    (local $first i32)
     ;; WM_DESTROY — free this control's internal copies and view record. Item
     ;; lParam data remains owned by the application, as on Win32.
     (if (i32.eq (local.get $msg) (i32.const 0x0002))
@@ -2025,6 +2019,19 @@
     ;; WM_ERASEBKGND (0x0014)
     (if (i32.eq (local.get $msg) (i32.const 0x0014))
       (then (return (i32.const 1))))
+    ;; WM_SETFOCUS. Win98 does not select during insertion—even when the
+    ;; control already has focus. If a populated control receives focus with
+    ;; no caret, it selects the first root through the normal vetoable path.
+    (if (i32.eq (local.get $msg) (i32.const 0x0007))
+      (then
+        (if (i32.eqz (call $tv_view_sel))
+          (then
+            (local.set $first (call $tv_get_next (i32.const 0) (i32.const 0)))
+            (if (local.get $first)
+              (then
+                (drop (call $tv_select_caret
+                  (local.get $hwnd) (local.get $first) (i32.const 0)))))))
+        (return (i32.const 0))))
     ;; WM_MOUSEWHEEL (0x020A): 120 delta = 3 rows, positive delta scrolls up.
     (if (i32.eq (local.get $msg) (i32.const 0x020A))
       (then
