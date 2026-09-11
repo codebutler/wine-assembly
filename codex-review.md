@@ -2,6 +2,8 @@
 
 ## Recovery execution update — 2026-09-11
 
+**Final build update:** OLE owner fix `f1b91444` resolves the intermediate handler-checker failure described below. Clean committed main `90503599` now passes the full canonical/compatibility build at **1,160,121 / 1,160,589 bytes**, layout `9c6027bce1d500a1`; the 24 native x87 isolation checks and 11 pipeline differential cases pass. The full test suite was not run. Broad recovery remains isolated pending newer-main reconciliation and coordinated handling of active overlapping edits.
+
 Ownership checks found live shape-census/region-folding processes and active release/mobile/D3D/GL work. Those lanes were excluded from takeover and cleanup. The closed-session screensaver work and this team's review branch were recovered into `codex/recovery-main-20260910`, preserving the original branches/worktrees. The unreferenced x87 optimization commit now has safety ref `codex/recovery-x87-islands-20260910`; it is **not accepted for main** on the available timings.
 
 The broad recovery candidate reconciles 24 review commits with main through `10b0f53e`, adapts the screensaver, fixes a real Worker font-startup integration failure, and appends screensaver storage without relocating existing canonical regions. Canonical/compatibility builds pass at **1,174,169 / 1,174,637 bytes**. Focused native, Worker, storage, font, lazy-I/O, callback and Chrome OPFS checks pass; save-bundle/sync passes **112 checks**. The real-browser screensaver catalog/Preview check and final **full Chrome Worker matrix pass**: Notepad/Calculator parity, both Rodents' rendering and held-arrow gameplay, Winamp's three Workers and live playback, and COM success/failure recovery.
