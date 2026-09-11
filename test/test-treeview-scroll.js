@@ -32,6 +32,7 @@ const TVGN_DROPHILITE = 8;
 const TVGN_CARET = 9;
 const TVE_COLLAPSE = 1;
 const TVE_EXPAND = 2;
+const TVE_COLLAPSERESET = 0x8000;
 const TVIS_SELECTED = 0x0002;
 const TVIS_DROPHILITED = 0x0008;
 const TVIS_EXPANDED = 0x0020;
@@ -296,7 +297,7 @@ async function main() {
     e.send_message(tv, TVM_GETITEMA, 0, textItem) === 1 &&
       Buffer.from(u8.subarray(wa(textBuffer), wa(textBuffer) + 16))
         .toString('latin1').split('\0')[0] === 'Collapsed parent');
-  const laterRoot = insertItem('Later root');
+  const laterRoot = insertItem('Later root', 0, 0);
   const childA = insertItem('Child A', parent);
   const childB = insertItem('Child B', parent);
   // Three consecutive slot-encoded handles guarantee that at least one has
@@ -334,12 +335,15 @@ async function main() {
   check('TVM_EXPAND collapse hides all children again',
     e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, parent) === 1 &&
       e.treeview_get_visible_count() === 14);
-  check('TVM_EXPAND collapse emits expanding/expanded notifications',
-    e.treeview_get_debug_expand_notify_count() === beforeCollapseNotify + 2 &&
-      (e.treeview_get_debug_expand_notify_code() | 0) === TVN_ITEMEXPANDEDA &&
-      e.treeview_get_debug_expand_notify_action() === TVE_COLLAPSE &&
-      (e.treeview_get_debug_expand_notify_item() >>> 0) === parent &&
-      e.treeview_get_debug_expand_notify_children() === 1);
+  check('collapse after first expansion is quiet while EXPANDEDONCE remains set',
+    e.treeview_get_debug_expand_notify_count() === beforeCollapseNotify);
+  const leafExpandResult = e.send_message(tv, TVM_EXPAND, TVE_EXPAND, laterRoot) | 0;
+  const leafCollapseResult = e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, laterRoot) | 0;
+  const leafExpansionState = getItemState(laterRoot).state;
+  check('expanding or collapsing a leaf fails without changing its state',
+    leafExpandResult === 0 && leafCollapseResult === 0 &&
+      (leafExpansionState & (TVIS_EXPANDED | TVIS_EXPANDEDONCE)) === 0,
+    `expand=${leafExpandResult} collapse=${leafCollapseResult} state=0x${leafExpansionState.toString(16)}`);
 
   // Native Win98 keeps TVITEM state and the caret related but distinct.
   // TVM_SETITEM can set TVIS_SELECTED without moving the caret, and collapsing
@@ -349,11 +353,13 @@ async function main() {
       (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
       (getItemState(parent).state & TVIS_SELECTED) !== 0 &&
       (getItemState(childB).state & TVIS_SELECTED) !== 0);
+  const beforeRepeatExpandNotify = e.treeview_get_debug_expand_notify_count();
   e.send_message(tv, TVM_EXPAND, TVE_EXPAND, parent);
   e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, parent);
   check('collapse preserves non-caret selected state on a hidden descendant',
     (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
-      (getItemState(childB).state & TVIS_SELECTED) !== 0);
+      (getItemState(childB).state & TVIS_SELECTED) !== 0 &&
+      e.treeview_get_debug_expand_notify_count() === beforeRepeatExpandNotify);
   setItemState(childB, 0, TVIS_SELECTED);
 
   // TVM_SELECTITEM has three Win98-era modes. Selecting a hidden caret reveals
@@ -467,6 +473,37 @@ async function main() {
   e.send_message(tv, WM_LBUTTONDBLCLK, 1, makeLParam(32, 4));
   check('double-click on row text expands the item',
     e.treeview_get_visible_count() === hoverCollapsedCount + 1);
+
+  // TVE_COLLAPSERESET is a destructive collapse used by lazy trees: it
+  // removes descendants child-first and clears EXPANDEDONCE so a later
+  // expansion can notify/populate again.
+  const resetRoot = insertItem('Reset root');
+  const resetChild = insertItem('Reset child', resetRoot);
+  const resetGrandchild = insertItem('Reset grandchild', resetChild);
+  check('reset fixture expands and selects a descendant',
+    e.send_message(tv, TVM_EXPAND, TVE_EXPAND, resetRoot) === 1 &&
+      e.send_message(tv, TVM_EXPAND, TVE_EXPAND, resetChild) === 1 &&
+      e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, resetGrandchild) === 1);
+  const beforeExpandedReset = e.send_message(tv, TVM_GETCOUNT, 0, 0);
+  check('TVE_COLLAPSERESET removes descendants and resets expansion state',
+    e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE | TVE_COLLAPSERESET, resetRoot) === 1 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === beforeExpandedReset - 2 &&
+      e.send_message(tv, TVM_GETNEXTITEM, 4, resetRoot) === 0 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === resetRoot &&
+      (getItemState(resetRoot).state & (TVIS_EXPANDED | TVIS_EXPANDEDONCE)) === 0 &&
+      getItemState(resetChild).ret === 0 && getItemState(resetGrandchild).ret === 0);
+  const collapsedResetRoot = insertItem('Already collapsed reset root');
+  const collapsedResetChild = insertItem('Already collapsed reset child', collapsedResetRoot);
+  e.send_message(tv, TVM_EXPAND, TVE_EXPAND, collapsedResetRoot);
+  e.send_message(tv, TVM_EXPAND, TVE_COLLAPSE, collapsedResetRoot);
+  const beforeCollapsedReset = e.send_message(tv, TVM_GETCOUNT, 0, 0);
+  check('COLLAPSERESET on an already-collapsed branch returns FALSE but still resets',
+    e.send_message(tv, TVM_EXPAND,
+      TVE_COLLAPSE | TVE_COLLAPSERESET, collapsedResetRoot) === 0 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === beforeCollapsedReset - 1 &&
+      e.send_message(tv, TVM_GETNEXTITEM, 4, collapsedResetRoot) === 0 &&
+      (getItemState(collapsedResetRoot).state & TVIS_EXPANDEDONCE) === 0 &&
+      getItemState(collapsedResetChild).ret === 0);
 
   // Native TVM_DELETEITEM removes a whole branch in post-order, unlinks the
   // surviving siblings, invalidates every removed handle and moves a caret

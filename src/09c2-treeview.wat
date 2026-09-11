@@ -1266,48 +1266,77 @@
 
   (func $tv_set_expanded (param $hwnd i32) (param $hItem i32) (param $action i32) (result i32)
     (local $slot i32) (local $base i32) (local $state i32) (local $cmd i32)
-    (local $was_expanded i32) (local $notify_action i32)
+    (local $was_expanded i32) (local $was_expanded_once i32)
+    (local $notify_first_expand i32) (local $collapse_reset i32) (local $ret i32)
     (local $sel_slot i32) (local $sel_base i32)
+    (local $child i32) (local $child_slot i32) (local $child_base i32)
+    (local $next_child i32) (local $guard i32) (local $sz i32) (local $h i32)
     (local.set $slot (call $tv_find_slot (local.get $hItem)))
-    (if (i32.eq (local.get $slot) (i32.const -1))
+    (if (i32.or
+          (i32.eq (local.get $slot) (i32.const -1))
+          (i32.eqz (call $tv_slot_in_view (local.get $slot))))
       (then (return (i32.const 0))))
     (local.set $base (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
     (local.set $state (i32.load offset=20 (local.get $base)))
     (local.set $was_expanded (i32.and (local.get $state) (i32.const 0x20)))
+    (local.set $was_expanded_once (i32.and (local.get $state) (i32.const 0x40)))
     (local.set $cmd (i32.and (local.get $action) (i32.const 0x000F)))
+    (local.set $collapse_reset (i32.and (local.get $action) (i32.const 0x8000)))
     ;; TVE_COLLAPSE=1, TVE_EXPAND=2, TVE_TOGGLE=3.
-    (if (i32.eq (local.get $cmd) (i32.const 1))
-      (then (local.set $state (i32.and (local.get $state) (i32.const 0xFFFFFFDF))))
-      (else
-        (if (i32.eq (local.get $cmd) (i32.const 2))
-          ;; Win98 sets TVIS_EXPANDEDONCE together with TVIS_EXPANDED. The
-          ;; former survives collapse and is observable through TVM_GETITEM.
-          (then (local.set $state (i32.or (local.get $state) (i32.const 0x60))))
-          (else
-            (if (i32.eq (local.get $cmd) (i32.const 3))
-              (then
-                (if (i32.and (local.get $state) (i32.const 0x20))
-                  (then (local.set $state
-                    (i32.and (local.get $state) (i32.const 0xFFFFFFDF))))
-                  (else (local.set $state
-                    (i32.or (local.get $state) (i32.const 0x60)))))))))))
-    (if (i32.eq
-          (local.get $was_expanded)
-          (i32.and (local.get $state) (i32.const 0x20)))
-      (then (return (i32.const 1))))
-    (local.set $notify_action
-      (select (i32.const 2) (i32.const 1)
-        (i32.ne (i32.and (local.get $state) (i32.const 0x20)) (i32.const 0))))
-    (if (call $tv_notify_item_expand
-          (local.get $hwnd) (local.get $hItem) (local.get $notify_action) (i32.const -405))
-      (then (return (i32.const 0))))
-    (i32.store offset=20 (local.get $base) (local.get $state))
+    (if (i32.eq (local.get $cmd) (i32.const 3))
+      (then
+        (local.set $cmd
+          (select (i32.const 1) (i32.const 2)
+            (i32.ne (local.get $was_expanded) (i32.const 0))))))
     (if (i32.and
-          (i32.eqz (i32.and (local.get $state) (i32.const 0x20)))
-          (i32.ne (call $tv_view_sel) (i32.const 0)))
+          (i32.ne (local.get $cmd) (i32.const 1))
+          (i32.ne (local.get $cmd) (i32.const 2)))
+      (then (return (i32.const 0))))
+
+    ;; Expanding a leaf fails. An already-expanded branch succeeds quietly.
+    ;; Only the first expansion while TVIS_EXPANDEDONCE is clear is vetoable
+    ;; and emits TVN_ITEMEXPANDING/TVN_ITEMEXPANDED on Win98.
+    (if (i32.eq (local.get $cmd) (i32.const 2))
+      (then
+        (if (i32.eqz (call $tv_item_has_children (local.get $base)))
+          (then (return (i32.const 0))))
+        (if (local.get $was_expanded)
+          (then (return (i32.const 1))))
+        (if (i32.eqz (local.get $was_expanded_once))
+          (then
+            (if (call $tv_notify_item_expand
+                  (local.get $hwnd) (local.get $hItem) (i32.const 2) (i32.const -405))
+              (then (return (i32.const 0))))
+            (local.set $notify_first_expand (i32.const 1))))
+        (local.set $state (i32.or (local.get $state) (i32.const 0x60)))
+        (i32.store offset=20 (local.get $base) (local.get $state))
+        (call $paint_flag_set_inv (local.get $hwnd))
+        (call $treeview_paint_wat (local.get $hwnd))
+        (if (local.get $notify_first_expand)
+          (then
+            (drop (call $tv_notify_item_expand
+              (local.get $hwnd) (local.get $hItem) (i32.const 2) (i32.const -406)))))
+        (return (i32.const 1))))
+
+    ;; A plain collapse of an already-collapsed branch fails without changes.
+    ;; COLLAPSERESET is different: it still removes descendants and clears
+    ;; EXPANDEDONCE, while preserving that FALSE return value.
+    (local.set $ret (i32.ne (local.get $was_expanded) (i32.const 0)))
+    (if (i32.and
+          (i32.eqz (local.get $was_expanded))
+          (i32.eqz (local.get $collapse_reset)))
+      (then (return (i32.const 0))))
+    (local.set $state (i32.and (local.get $state) (i32.const 0xFFFFFFDF)))
+    (if (local.get $collapse_reset)
+      (then (local.set $state (i32.and (local.get $state) (i32.const 0xFFFFFFBF)))))
+    (i32.store offset=20 (local.get $base) (local.get $state))
+
+    (if (i32.ne (call $tv_view_sel) (i32.const 0))
       (then
         (local.set $sel_slot (call $tv_find_slot (call $tv_view_sel)))
-        (if (i32.ne (local.get $sel_slot) (i32.const -1))
+        (if (i32.and
+              (i32.ne (local.get $sel_slot) (i32.const -1))
+              (call $tv_slot_in_view (local.get $sel_slot)))
           (then
             (local.set $sel_base (i32.add (global.get $TV_TABLE)
               (i32.mul (local.get $sel_slot) (i32.const 32))))
@@ -1326,11 +1355,34 @@
                     (i32.load offset=20 (local.get $base))
                     (i32.const 0x0002)))
                 (call $tv_view_set_sel (local.get $hItem))))))))
+
+    (if (local.get $collapse_reset)
+      (then
+        (local.set $child (i32.load offset=8 (local.get $base)))
+        ;; Detach first so re-entrant delete notifications see the same empty
+        ;; child list that Win98 exposes once reset processing has begun.
+        (i32.store offset=8 (local.get $base) (i32.const 0))
+        (block $children_done (loop $children
+          (br_if $children_done (i32.eqz (local.get $child)))
+          (br_if $children_done (i32.ge_u (local.get $guard) (call $tv_slot_limit)))
+          (local.set $child_slot (call $tv_find_slot (local.get $child)))
+          (br_if $children_done (i32.eq (local.get $child_slot) (i32.const -1)))
+          (local.set $child_base
+            (i32.add (global.get $TV_TABLE)
+              (i32.mul (local.get $child_slot) (i32.const 32))))
+          (local.set $next_child (i32.load offset=12 (local.get $child_base)))
+          (drop (call $tv_delete_branch
+            (local.get $hwnd) (local.get $child) (i32.const 0)))
+          (local.set $child (local.get $next_child))
+          (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+          (br $children)))))
+    (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+    (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
+    (drop (call $tv_scroll_to_for_h
+      (local.get $hwnd) (local.get $h) (call $tv_view_row)))
     (call $paint_flag_set_inv (local.get $hwnd))
     (call $treeview_paint_wat (local.get $hwnd))
-    (drop (call $tv_notify_item_expand
-      (local.get $hwnd) (local.get $hItem) (local.get $notify_action) (i32.const -406)))
-    (i32.const 1))
+    (local.get $ret))
 
   ;; Clear one item record after its children have already been removed.
   (func $tv_delete_branch (param $hwnd i32) (param $hItem i32) (param $depth i32) (result i32)
