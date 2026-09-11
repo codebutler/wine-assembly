@@ -22,12 +22,15 @@ const extraWat = String.raw`
     (i32.store offset=12 (local.get $entry) (i32.const 64))
     (store.field DxObject bpp (local.get $entry) (i32.const 1))
     (store.field DxObject pitch (local.get $entry) (i32.const 8))
-    (store.field DxObject misc1 (local.get $entry) (i32.const 0x12000))
+    (store.field DxObject misc1 (local.get $entry) (global.get $STRING_CONSTANTS))
     (store.field DxObject misc2 (local.get $entry) (i32.const 1000))
     (local.get $obj))
 
   (func (export "test_ds_create_root") (result i32)
     (call $dx_create_com_obj (i32.const 4) (global.get $DX_VTBL_DSOUND)))
+
+  (func (export "test_dsbuf_data_address") (result i32)
+    (global.get $STRING_CONSTANTS))
 
   (func (export "test_dsbuf_set_position")
       (param $this i32) (param $position i32) (result i32)
@@ -93,6 +96,7 @@ const extraWat = String.raw`
   const secondary = wat.test_dsbuf_create(0) >>> 0;
   const primary = wat.test_dsbuf_create(1) >>> 0;
   const root = wat.test_ds_create_root() >>> 0;
+  const dataAddress = wat.test_dsbuf_data_address() >>> 0;
 
   assert.strictEqual(wat.test_dsbuf_get_position(secondary, playOut, writeOut) >>> 0, 0);
   assert.strictEqual(wat.guest_read32(playOut) >>> 0, 0);
@@ -114,7 +118,7 @@ const extraWat = String.raw`
     'a different DirectSound interface is not a sound buffer');
 
   assert.strictEqual(wat.test_dsbuf_play(secondary, 0) >>> 0, 0);
-  assert.deepStrictEqual(plays.shift(), [77, 0x12000, 64, 16, 0],
+  assert.deepStrictEqual(plays.shift(), [77, dataAddress, 64, 16, 0],
     'Play begins at the remembered stopped cursor');
   hostPosition = 5;
   wat.test_dsbuf_get_position(secondary, playOut, writeOut);
@@ -123,7 +127,7 @@ const extraWat = String.raw`
   assert.strictEqual(wat.guest_read32(writeOut) >>> 0, 36);
 
   assert.strictEqual(wat.test_dsbuf_set_position(secondary, 24) >>> 0, 0);
-  assert.deepStrictEqual(plays.shift(), [77, 0x12000, 64, 24, 0],
+  assert.deepStrictEqual(plays.shift(), [77, dataAddress, 64, 24, 0],
     'a playing buffer immediately restarts its snapshot at the new byte');
   hostPosition = 6;
   assert.strictEqual(wat.test_dsbuf_stop(secondary) >>> 0, 0);
@@ -134,9 +138,9 @@ const extraWat = String.raw`
     'Stop freezes the live cursor instead of letting the host clock advance');
 
   assert.strictEqual(wat.test_dsbuf_play(secondary, 1) >>> 0, 0);
-  assert.deepStrictEqual(plays.shift(), [77, 0x12000, 64, 30, 1]);
+  assert.deepStrictEqual(plays.shift(), [77, dataAddress, 64, 30, 1]);
   assert.strictEqual(wat.test_dsbuf_set_position(secondary, 0) >>> 0, 0);
-  assert.deepStrictEqual(plays.shift(), [77, 0x12000, 64, 0, 1],
+  assert.deepStrictEqual(plays.shift(), [77, dataAddress, 64, 0, 1],
     'the common looping-effect rewind continues with DSBPLAY_LOOPING');
 
   console.log('PASS DirectSound SetCurrentPosition owns stopped and live cursor state');
