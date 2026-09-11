@@ -312,3 +312,13 @@ IsClipListChanged detects and latches window geometry changes until that list is
 copied. Final Release frees retained region storage, and BltFast now rejects any
 attached clipper as documented. Browser composition supplies HWND occlusion;
 explicit RGNDATA rectangles are enforced in the DirectDraw framebuffer.
+
+2026-09-11: 338 -> 336. IDirectSound::SetCooperativeLevel now validates the
+live top-level application HWND and one exact Win98 DSSCL value, retains that
+device state, and propagates later level changes to its existing buffers.
+Compact requires PRIORITY or stronger instead of always succeeding. Primary
+buffer identity now lives in immutable creation state rather than colliding
+with DSBSTATUS_PLAYING; primary SetFormat requires PRIORITY, rejects secondary
+buffers, validates PCM structure fields, and observes WRITEPRIMARY's stopped-
+buffer rule. The browser has no fragmented hardware sound heap, so a permitted
+Compact remains a successful no-op after its native privilege check.

@@ -36,6 +36,11 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $eax))
 
+  (func (export "test_register_top_level") (param $hwnd i32)
+    (call $wnd_table_set (local.get $hwnd) (i32.const 0x401000))
+    (drop (call $wnd_set_style (local.get $hwnd) (i32.const 0x10000000)))
+    (call $wnd_set_parent (local.get $hwnd) (i32.const 0)))
+
   (func (export "test_query_interface")
       (param $this i32) (param $iid i32) (param $out i32) (result i32)
     (global.set $esp (i32.const 0x30000))
@@ -116,6 +121,7 @@ const extraWat = String.raw`
   const setCooperativeLevel = wat.guest_read32(vtable + 6 * 4) >>> 0;
   assert.strictEqual(wat.guest_read32(setCooperativeLevel + 4) >>> 0, 1050,
     'slot 6 dispatches IDirectSound::SetCooperativeLevel');
+  wat.test_register_top_level(0x10001);
   assert.strictEqual(wat.test_set_cooperative_level(sound, 0x10001, 3) >>> 0, 0);
   assert.strictEqual(wat.test_esp() >>> 0, 0x30010,
     'SetCooperativeLevel consumes return, this, HWND, and level');

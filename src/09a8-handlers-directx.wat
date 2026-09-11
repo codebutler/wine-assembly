@@ -7,10 +7,10 @@
   ;; 4096 entries × 32 bytes at 0x07F60000 (high memory, safe from guest writes)
   ;; +0  type: 0=free,1=DDraw,2=DDSurface,3=DDPalette,4=DSound,5=DSBuffer,6=DInput,7=DIDev,26=DPlay3,27=DPlayLobby2,28=DAView,29=DAStatics,30=IMalloc,31=DABehavior/node
   ;; +4  refcount
-  ;; +8  misc0 (DDraw: hwnd, DSBuffer: wave_handle, DIDev: device_type 1=kbd 2=mouse)
+  ;; +8  misc0 (DDraw/DSound: hwnd, DSBuffer: wave_handle, DIDev: device_type 1=kbd 2=mouse)
   ;; +12 width (u16) | height (u16); DIDev: DIPROP_BUFFERSIZE
   ;; +16 bpp (u16) | pitch (u16); DIDev: parent DirectInput version
-  ;; +20 misc1 (DDSurface: dib_ptr, WASM addr of pixel data, 0 if none)
+  ;; +20 misc1 (DDSurface: dib_ptr, DSound: DSSCL level, 0 before SetCooperativeLevel)
   ;; +24 misc2 (DDSurface: color key low / surface byte size)
   ;; +28 flags (surface type: 1=primary,2=backbuf,4=offscreen; 0x100=has_colorkey)
   ;; D3D9 surface arm: 0x40000000 = guest CPU ownership (not compositor binding).
@@ -117,7 +117,8 @@
   ;; several live instances and must not see surfaces belonging to another.
   (global $DX_SURF_OWNER i32 (region.addr $DX_SURF_OWNER 0))
   (global $DX_SURF_OWNER_SIZE i32 (region.size $DX_SURF_OWNER))
-  ;; CPU-write epochs and reversible-copy provenance for DirectDraw surfaces.
+  ;; Per-object auxiliary records. For DirectDraw surfaces these hold CPU-write
+  ;; epochs and reversible-copy provenance:
   ;; 4096 entries x 32 bytes in 0x07F36000..0x07F55FFF:
   ;;   +0  CPU-write epoch (advanced by Unlock)
   ;;   +4  source slot + 1 of the last small <- large plain Blt, or 0
@@ -129,6 +130,10 @@
   ;; the large surface was CPU-redrawn after the save, replaying those pixels
   ;; would stamp stale terrain over the new frame (AoE I/II). Exact inverse
   ;; rectangle matching keeps ordinary small-surface blits untouched.
+  ;;
+  ;; DirectSound buffers use the same per-slot storage as a disjoint union:
+  ;;   +0 owner DirectSound slot + 1, +4 creation DSBCAPS, +8 current DSSCL.
+  ;; $dx_create_com_obj clears the full record before either type publishes it.
   (global $DX_SURF_STATE i32 (region.addr $DX_SURF_STATE 0))
   (global $DX_SURF_STATE_SIZE i32 (region.size $DX_SURF_STATE))
   ;; Per-destination cache for the 32x32 keyed software cursor used by MCM.
@@ -5865,16 +5870,120 @@
       (i32.const 0x200021A5) (i32.const 0x60E50BAF)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
+  ;; Validate the fixed PCM WAVEFORMATEX fields understood by the browser
+  ;; voice bridge and return the translated address. NULL_SENTINEL means the
+  ;; caller supplied an unreadable or internally inconsistent format.
+  (func $ds_pcm_format_wa (param $format_guest i32) (result i32)
+    (local $wa i32) (local $channels i32) (local $rate i32)
+    (local $average i32) (local $align i32) (local $bits i32)
+    (if (i32.eqz (local.get $format_guest))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.set $wa
+      (call $g2w_affine_span (local.get $format_guest) (i32.const 18)))
+    (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.set $channels (i32.load16_u offset=2 (local.get $wa)))
+    (local.set $rate (i32.load offset=4 (local.get $wa)))
+    (local.set $average (i32.load offset=8 (local.get $wa)))
+    (local.set $align (i32.load16_u offset=12 (local.get $wa)))
+    (local.set $bits (i32.load16_u offset=14 (local.get $wa)))
+    (if (i32.or
+          (i32.ne (i32.load16_u (local.get $wa)) (i32.const 1)) ;; PCM
+          (i32.or
+            (i32.or (i32.eqz (local.get $channels))
+                    (i32.gt_u (local.get $channels) (i32.const 2)))
+            (i32.or
+              (i32.eqz (local.get $rate))
+              (i32.and (i32.ne (local.get $bits) (i32.const 8))
+                       (i32.ne (local.get $bits) (i32.const 16))))))
+      (then (return (global.get $NULL_SENTINEL))))
+    (if (i32.or
+          (i32.ne (local.get $align)
+            (i32.div_u (i32.mul (local.get $channels) (local.get $bits))
+                       (i32.const 8)))
+          (i32.ne (local.get $average)
+            (i32.mul (local.get $rate) (local.get $align))))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.get $wa))
+
 
 
   ;; CreateSoundBuffer(this, lpDSBufferDesc, lplpDirectSoundBuffer, pUnkOuter)
   (func $handle_IDirectSound_CreateSoundBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $desc_wa i32) (local $flags i32) (local $buf_size i32)
-    (local $fmt_wa i32) (local $obj i32) (local $entry i32) (local $buf_guest i32) (local $buf_wa i32)
-    (local.set $desc_wa (call $g2w (local.get $arg1)))
+    (local $root i32) (local $desc_wa i32) (local $desc_size i32)
+    (local $flags i32) (local $buf_size i32) (local $fmt_guest i32)
+    (local $fmt_wa i32) (local $obj i32) (local $entry i32)
+    (local $state i32) (local $buf_guest i32) (local $buf_wa i32)
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (call $gs32 (local.get $arg2) (i32.const 0))
+    (if (i32.ne (local.get $arg3) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80040110)) ;; DSERR_NOAGGREGATION
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $desc_wa
+      (call $g2w_affine_span (local.get $arg1) (i32.const 20)))
+    (if (i32.eq (local.get $desc_wa) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $desc_size (i32.load (local.get $desc_wa)))
+    ;; Win98-era callers use DSBUFFERDESC1 (20 bytes) or the DirectX 7
+    ;; DSBUFFERDESC with guid3DAlgorithm (36 bytes).
+    (if (i32.and
+          (i32.ne (local.get $desc_size) (i32.const 20))
+          (i32.ne (local.get $desc_size) (i32.const 36)))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
     ;; DSBUFFERDESC: +4 dwFlags, +8 dwBufferBytes, +12 dwReserved, +16 lpwfxFormat
     (local.set $flags (i32.load (i32.add (local.get $desc_wa) (i32.const 4))))
     (local.set $buf_size (i32.load (i32.add (local.get $desc_wa) (i32.const 8))))
+    (local.set $fmt_guest (i32.load (i32.add (local.get $desc_wa) (i32.const 16))))
+    (if (i32.ne (i32.load offset=12 (local.get $desc_wa)) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    ;; The primary ring is device-owned: callers must not prescribe its size
+    ;; or format in the descriptor. SetFormat changes it after creation.
+    (if (i32.and
+          (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+          (i32.or (i32.ne (local.get $buf_size) (i32.const 0))
+                  (i32.ne (local.get $fmt_guest) (i32.const 0))))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.eq (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+      (then
+        ;; Secondary buffers are born with immutable storage and format.
+        ;; SetFormat is a primary-buffer operation, so neither field can be
+        ;; deferred until after creation.
+        (if (i32.or (i32.eqz (local.get $buf_size))
+                    (i32.eqz (local.get $fmt_guest)))
+          (then
+            (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (local.set $fmt_wa (call $ds_pcm_format_wa (local.get $fmt_guest)))
+        (if (i32.eq (local.get $fmt_wa) (global.get $NULL_SENTINEL))
+          (then
+            (global.set $eax (i32.const 0x88780064)) ;; DSERR_BADFORMAT
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))))
     ;; Create DSBuffer COM object
     (local.set $obj (call $dx_create_com_obj (i32.const 5) (global.get $DX_VTBL_DSBUF)))
     (if (i32.eqz (local.get $obj))
@@ -5883,6 +5992,12 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (i32.store (local.get $state)
+      (i32.add (call $dx_slot_of (local.get $root)) (i32.const 1)))
+    (i32.store offset=4 (local.get $state) (local.get $flags))
+    (i32.store offset=8 (local.get $state)
+      (load.field DxObject misc1 (local.get $root)))
     ;; DSBCAPS_PRIMARYBUFFER = 1
     (if (i32.and (local.get $flags) (i32.const 1))
       (then
@@ -5893,15 +6008,30 @@
         ;; Model a common Win9x-era 64 KiB hardware ring in guest memory.
         (local.set $buf_size (i32.const 0x10000))
         (local.set $buf_guest (call $heap_alloc (local.get $buf_size)))
+        (if (i32.eqz (local.get $buf_guest))
+          (then
+            (call $dx_free (local.get $entry))
+            (global.set $eax (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
         (local.set $buf_wa (call $g2w (local.get $buf_guest)))
         (call $zero_memory (local.get $buf_wa) (local.get $buf_size))
         (store.field DxObject misc1 (local.get $entry) (local.get $buf_wa))
         (i32.store (i32.add (local.get $entry) (i32.const 12)) (local.get $buf_size))
-        (store.field DxObject flags (local.get $entry) (i32.const 1)))
+        ;; Playback flags begin stopped. Primary identity lives in the
+        ;; auxiliary creation-capability field, not DSBSTATUS_PLAYING bit 0.
+        (store.field DxObject flags (local.get $entry) (i32.const 0)))
       (else
         ;; Secondary buffer — allocate guest memory for sound data
         (if (i32.gt_u (local.get $buf_size) (i32.const 0)) (then
-          (local.set $buf_guest (call $heap_alloc (local.get $buf_size))) (local.set $buf_wa (call $g2w (local.get $buf_guest)))
+          (local.set $buf_guest (call $heap_alloc (local.get $buf_size)))
+          (if (i32.eqz (local.get $buf_guest))
+            (then
+              (call $dx_free (local.get $entry))
+              (global.set $eax (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
+              (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+              (return)))
+          (local.set $buf_wa (call $g2w (local.get $buf_guest)))
           (call $zero_memory (local.get $buf_wa) (local.get $buf_size))
           (store.field DxObject misc1 (local.get $entry) (local.get $buf_wa))))
         ;; Store buffer size in w/h fields
@@ -5911,9 +6041,7 @@
         ;; perfectly ordinary WASM address, so a NULL lpwfxFormat used to read
         ;; channels/rate/bits out of whatever happens to live at the bottom of
         ;; the guest image -- a format nobody asked for, played as noise.
-        (local.set $fmt_wa (i32.load (i32.add (local.get $desc_wa) (i32.const 16))))
-        (if (local.get $fmt_wa) (then
-          (local.set $fmt_wa (call $g2w (local.get $fmt_wa)))
+        (if (local.get $fmt_guest) (then
           ;; WAVEFORMATEX: +2 nChannels, +4 nSamplesPerSec, +14 wBitsPerSample
           (store.field DxObject bpp (local.get $entry) (i32.load16_u (i32.add (local.get $fmt_wa) (i32.const 2)))) ;; channels in bpp field
           (store.field DxObject pitch (local.get $entry) (i32.load16_u (i32.add (local.get $fmt_wa) (i32.const 14)))) ;; bits in pitch field
@@ -5957,13 +6085,18 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
     (local.set $dst_entry (call $dx_from_this (local.get $obj)))
+    (memory.copy
+      (call $dx_surf_state_ptr (local.get $dst_entry))
+      (call $dx_surf_state_ptr (local.get $src_entry))
+      (i32.const 32))
     ;; Copy format info from source: bufsize(+12), channels(+16), bits(+18), sampleRate(+24)
     (local.set $buf_size (i32.load (i32.add (local.get $src_entry) (i32.const 12))))
     (i32.store (i32.add (local.get $dst_entry) (i32.const 12)) (local.get $buf_size))
     (store.field DxObject bpp (local.get $dst_entry) (load.field DxObject bpp (local.get $src_entry)))
     (store.field DxObject pitch (local.get $dst_entry) (load.field DxObject pitch (local.get $src_entry)))
     (store.field DxObject misc2 (local.get $dst_entry) (load.field DxObject misc2 (local.get $src_entry)))
-    (store.field DxObject flags (local.get $dst_entry) (load.field DxObject flags (local.get $src_entry)))
+    ;; A duplicate starts stopped even if its source is currently playing.
+    (store.field DxObject flags (local.get $dst_entry) (i32.const 0))
     ;; Allocate new buffer and copy data
     (if (i32.gt_u (local.get $buf_size) (i32.const 0)) (then
       (local.set $buf_guest (call $heap_alloc (local.get $buf_size))) (local.set $buf_wa (call $g2w (local.get $buf_guest)))
@@ -5977,14 +6110,63 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; SetCooperativeLevel — no-op
+  ;; SetCooperativeLevel(this, hwnd, level). DirectSound requires a live
+  ;; top-level application window and one exact DSSCL_* value (1..4). Keep the
+  ;; device state and refresh already-created buffers so SetFormat observes a
+  ;; later promotion from NORMAL to PRIORITY, as native DirectSound does.
   (func $handle_IDirectSound_SetCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $root i32) (local $owner i32) (local $i i32)
+    (local $candidate i32) (local $state i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.or
+          (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+          (i32.or
+            (i32.eqz (call $window_handle_valid (local.get $arg1)))
+            (i32.ne
+              (i32.and (call $wnd_get_style (local.get $arg1))
+                       (i32.const 0x40000000))
+              (i32.const 0))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.or (i32.lt_u (local.get $arg2) (i32.const 1))
+                (i32.gt_u (local.get $arg2) (i32.const 4)))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (store.field DxObject misc0 (local.get $root) (local.get $arg1))
+    (store.field DxObject misc1 (local.get $root) (local.get $arg2))
+    (local.set $owner
+      (i32.add (call $dx_slot_of (local.get $root)) (i32.const 1)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DX_MAX)))
+      (local.set $candidate
+        (i32.add (global.get $DX_OBJECTS) (i32.shl (local.get $i) (i32.const 5))))
+      (if (i32.eq (load.field DxObject type (local.get $candidate)) (i32.const 5))
+        (then
+          (local.set $state (call $dx_surf_state_ptr (local.get $candidate)))
+          (if (i32.eq (i32.load (local.get $state)) (local.get $owner))
+            (then (i32.store offset=8 (local.get $state) (local.get $arg2))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; Compact — no-op
+  ;; Compact requires PRIORITY, EXCLUSIVE or WRITEPRIMARY. The browser has no
+  ;; fragmented hardware heap to compact once that privilege check succeeds.
   (func $handle_IDirectSound_Compact (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $root i32) (local $level i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then (global.set $eax (i32.const 0x80070057)))
+      (else
+        (local.set $level (load.field DxObject misc1 (local.get $root)))
+        (global.set $eax
+          (select (i32.const 0) (i32.const 0x88780046)
+            (i32.and (i32.ge_u (local.get $level) (i32.const 2))
+                     (i32.le_u (local.get $level) (i32.const 4)))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; GetSpeakerConfig
@@ -6123,13 +6305,16 @@
 
   ;; GetCaps(this, lpDSBCaps)
   (func $handle_IDirectSoundBuffer_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $wa i32)
+    (local $entry i32) (local $wa i32) (local $state i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (call $zero_memory (local.get $wa) (i32.const 20))
     (i32.store (local.get $wa) (i32.const 20)) ;; dwSize
-    ;; dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN | DSBCAPS_CTRLFREQUENCY
-    (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0xE0))
+    ;; dwFlags reports the capabilities requested at creation. Playback status
+    ;; is a separate field and must never leak into this value.
+    (i32.store (i32.add (local.get $wa) (i32.const 4))
+      (i32.load offset=4 (local.get $state)))
     ;; dwBufferBytes
     (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.load (i32.add (local.get $entry) (i32.const 12))))
     (global.set $eax (i32.const 0))
@@ -6360,18 +6545,75 @@
   ;; SetFormat(this, pcfxFormat) — primary buffers are born without a format.
   ;; Keep the canonical PCM fields in the DS buffer entry so GetFormat,
   ;; SetFrequency and the eventual host voice all observe the same values.
+  ;; Native DirectSound exposes this only on primary buffers and only after
+  ;; DSSCL_PRIORITY (or stronger) has been established on their parent device.
   (func $handle_IDirectSoundBuffer_SetFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $wa i32)
+    (local $entry i32) (local $state i32) (local $wa i32)
+    (local $level i32) (local $status i32) (local $handle i32)
+    (local $dib_wa i32) (local $buf_size i32) (local $loop i32)
     (if (i32.eqz (local.get $arg1))
       (then
         (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (local.set $wa (call $g2w (local.get $arg1)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 5))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (if (i32.eqz (i32.and (i32.load offset=4 (local.get $state)) (i32.const 1)))
+      (then
+        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $level (i32.load offset=8 (local.get $state)))
+    (if (i32.or (i32.lt_u (local.get $level) (i32.const 2))
+                (i32.gt_u (local.get $level) (i32.const 4)))
+      (then
+        (global.set $eax (i32.const 0x88780046)) ;; DSERR_PRIOLEVELNEEDED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $status (load.field DxObject flags (local.get $entry)))
+    ;; WRITEPRIMARY grants direct access, so the caller must stop its primary
+    ;; buffer before changing format. PRIORITY/EXCLUSIVE perform the native
+    ;; implicit stop/change/restart behavior below.
+    (if (i32.and
+          (i32.eq (local.get $level) (i32.const 4))
+          (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0)))
+      (then
+        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $wa (call $ds_pcm_format_wa (local.get $arg1)))
+    (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x88780064)) ;; DSERR_BADFORMAT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $handle (load.field DxObject misc0 (local.get $entry)))
+    (if (i32.ne (local.get $handle) (i32.const 0))
+      (then
+        (drop (call $host_voice_close (local.get $handle)))
+        (store.field DxObject misc0 (local.get $entry) (i32.const 0))))
     (store.field DxObject bpp (local.get $entry) (i32.load16_u (i32.add (local.get $wa) (i32.const 2)))) ;; nChannels
     (store.field DxObject pitch (local.get $entry) (i32.load16_u (i32.add (local.get $wa) (i32.const 14)))) ;; wBitsPerSample
     (store.field DxObject misc2 (local.get $entry) (i32.load (i32.add (local.get $wa) (i32.const 4)))) ;; nSamplesPerSec
+    (if (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0))
+      (then
+        (local.set $handle (call $dsbuf_ensure_voice (local.get $entry)))
+        (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
+        (local.set $buf_size (i32.load offset=12 (local.get $entry)))
+        (local.set $loop
+          (i32.ne (i32.and (local.get $status) (i32.const 4)) (i32.const 0)))
+        (if (i32.and
+              (i32.ne (local.get $dib_wa) (i32.const 0))
+              (i32.ne (local.get $buf_size) (i32.const 0)))
+          (then
+            (drop (call $host_voice_play_ring
+              (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
+              (i32.const 0) (local.get $loop)))))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
