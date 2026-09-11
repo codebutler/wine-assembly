@@ -281,3 +281,10 @@ the runtime does not expose out-of-process marshaled connections.
 IUnknown before releasing the former object, while CoGetState returns an
 independently AddRefed pointer. Both paths preserve the same ownership rules
 for emulator-local and DLL-private guest implementations.
+
+2026-09-11: 344 -> 343. SetThreadAffinityMask now validates pseudo and durable
+thread handles through the existing process thread authority and accepts only
+bit zero, the sole processor in the browser Win98 machine. Empty and
+out-of-process masks fail with ERROR_INVALID_PARAMETER instead of returning a
+fabricated previous mask. GetProcessAffinityMask likewise rejects process
+handles outside the one modeled guest process before publishing its 0x1 masks.
