@@ -973,6 +973,34 @@
       (local.get $notify_g)))
     (call $heap_free (local.get $notify_g)))
 
+  ;; TVN_DELETEITEMA. Win98 sends one notification for every removed item,
+  ;; children before their parent, with hItem and the application-owned lParam
+  ;; still valid in itemOld.
+  (func $tv_notify_delete_item (param $hwnd i32) (param $hItem i32)
+    (local $parent i32) (local $slot i32) (local $base i32)
+    (local $notify_g i32) (local $notify_w i32)
+    (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+    (if (i32.eqz (local.get $parent)) (then (return)))
+    (local.set $slot (call $tv_find_slot (local.get $hItem)))
+    (if (i32.eq (local.get $slot) (i32.const -1)) (then (return)))
+    (local.set $base
+      (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+    (local.set $notify_g (call $heap_alloc (i32.const 104)))
+    (if (i32.eqz (local.get $notify_g)) (then (return)))
+    (local.set $notify_w (call $g2w (local.get $notify_g)))
+    (call $zero_memory (local.get $notify_w) (i32.const 104))
+    (i32.store          (local.get $notify_w) (local.get $hwnd))
+    (i32.store offset=4 (local.get $notify_w) (call $ctrl_table_get_id (local.get $hwnd)))
+    (i32.store offset=8 (local.get $notify_w) (i32.const -409)) ;; TVN_DELETEITEMA
+    (i32.store offset=16 (local.get $notify_w) (i32.const 0x14)) ;; TVIF_HANDLE|TVIF_PARAM
+    (i32.store offset=20 (local.get $notify_w) (local.get $hItem))
+    (i32.store offset=52 (local.get $notify_w) (i32.load offset=24 (local.get $base)))
+    (drop (call $wnd_send_message
+      (local.get $parent) (i32.const 0x004E)
+      (call $ctrl_table_get_id (local.get $hwnd))
+      (local.get $notify_g)))
+    (call $heap_free (local.get $notify_g)))
+
   (func $tv_notify_item_expand (param $hwnd i32) (param $hItem i32) (param $action i32) (param $code i32) (result i32)
     (local $parent i32) (local $notify_g i32) (local $notify_w i32)
     (local $slot i32) (local $base i32) (local $ret i32)
@@ -1291,6 +1319,167 @@
       (local.get $hwnd) (local.get $hItem) (local.get $notify_action) (i32.const -406)))
     (i32.const 1))
 
+  ;; Clear one item record after its children have already been removed.
+  (func $tv_delete_branch (param $hwnd i32) (param $hItem i32) (param $depth i32) (result i32)
+    (local $slot i32) (local $base i32) (local $child i32)
+    (local $child_slot i32) (local $child_base i32) (local $next_child i32)
+    (local $text i32) (local $guard i32)
+    (if (i32.ge_u (local.get $depth) (call $tv_slot_limit))
+      (then (return (i32.const 0))))
+    (local.set $slot (call $tv_find_slot (local.get $hItem)))
+    (if (i32.or
+          (i32.eq (local.get $slot) (i32.const -1))
+          (i32.eqz (call $tv_slot_in_view (local.get $slot))))
+      (then (return (i32.const 0))))
+    (local.set $base
+      (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+    (local.set $child (i32.load offset=8 (local.get $base)))
+    (block $children_done (loop $children
+      (br_if $children_done (i32.eqz (local.get $child)))
+      (br_if $children_done (i32.ge_u (local.get $guard) (call $tv_slot_limit)))
+      (local.set $child_slot (call $tv_find_slot (local.get $child)))
+      (br_if $children_done (i32.eq (local.get $child_slot) (i32.const -1)))
+      (local.set $child_base
+        (i32.add (global.get $TV_TABLE)
+          (i32.mul (local.get $child_slot) (i32.const 32))))
+      (local.set $next_child (i32.load offset=12 (local.get $child_base)))
+      (drop (call $tv_delete_branch
+        (local.get $hwnd) (local.get $child)
+        (i32.add (local.get $depth) (i32.const 1))))
+      (local.set $child (local.get $next_child))
+      (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+      (br $children)))
+    (call $tv_notify_delete_item (local.get $hwnd) (local.get $hItem))
+    (local.set $text (i32.load offset=28 (local.get $base)))
+    (if (local.get $text) (then (call $heap_free (local.get $text))))
+    (call $zero_memory (local.get $base) (i32.const 32))
+    (i32.store (call $tv_owner_cell (local.get $slot)) (i32.const 0))
+    (i32.store (call $tv_image_record (local.get $slot)) (i32.const -1))
+    (i32.store offset=4 (call $tv_image_record (local.get $slot)) (i32.const -1))
+    (if (global.get $tv_count)
+      (then (global.set $tv_count (i32.sub (global.get $tv_count) (i32.const 1)))))
+    (i32.const 1))
+
+  (func $tv_unlink_item (param $base i32)
+    (local $parent i32) (local $prev i32) (local $next i32) (local $slot i32)
+    (local.set $parent (i32.load offset=4 (local.get $base)))
+    (local.set $prev (i32.load offset=16 (local.get $base)))
+    (local.set $next (i32.load offset=12 (local.get $base)))
+    (if (local.get $prev)
+      (then
+        (local.set $slot (call $tv_find_slot (local.get $prev)))
+        (if (i32.ne (local.get $slot) (i32.const -1))
+          (then
+            (i32.store offset=12
+              (i32.add (global.get $TV_TABLE)
+                (i32.mul (local.get $slot) (i32.const 32)))
+              (local.get $next)))))
+      (else
+        (if (local.get $parent)
+          (then
+            (local.set $slot (call $tv_find_slot (local.get $parent)))
+            (if (i32.ne (local.get $slot) (i32.const -1))
+              (then
+                (i32.store offset=8
+                  (i32.add (global.get $TV_TABLE)
+                    (i32.mul (local.get $slot) (i32.const 32)))
+                  (local.get $next))))))))
+    (if (local.get $next)
+      (then
+        (local.set $slot (call $tv_find_slot (local.get $next)))
+        (if (i32.ne (local.get $slot) (i32.const -1))
+          (then
+            (i32.store offset=16
+              (i32.add (global.get $TV_TABLE)
+                (i32.mul (local.get $slot) (i32.const 32)))
+              (local.get $prev)))))))
+
+  (func $tv_caret_in_branch (param $hItem i32) (result i32)
+    (local $caret i32) (local $slot i32) (local $base i32)
+    (local.set $caret (call $tv_view_sel))
+    (if (i32.eqz (local.get $caret)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $caret) (local.get $hItem))
+      (then (return (i32.const 1))))
+    (local.set $slot (call $tv_find_slot (local.get $caret)))
+    (if (i32.eq (local.get $slot) (i32.const -1))
+      (then (return (i32.const 0))))
+    (local.set $base
+      (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+    (call $tv_item_is_descendant_of (local.get $base) (local.get $hItem)))
+
+  (func $tv_delete_all_items (param $hwnd i32) (result i32)
+    (local $root i32) (local $slot i32) (local $base i32) (local $next i32)
+    (local $i i32) (local $sz i32) (local $h i32)
+    ;; Win98 does not emit TVN_SELCHANGING/CHANGED for DeleteAllItems.
+    (call $tv_view_set_sel (i32.const 0))
+    (local.set $root (call $tv_get_next (i32.const 0) (i32.const 0)))
+    (block $roots_done (loop $roots
+      (br_if $roots_done (i32.eqz (local.get $root)))
+      (local.set $slot (call $tv_find_slot (local.get $root)))
+      (br_if $roots_done (i32.eq (local.get $slot) (i32.const -1)))
+      (local.set $base
+        (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+      (local.set $next (i32.load offset=12 (local.get $base)))
+      (drop (call $tv_delete_branch (local.get $hwnd) (local.get $root) (i32.const 0)))
+      (local.set $root (local.get $next))
+      (br $roots)))
+    ;; Remove any malformed/orphaned records too: delete-all must leave this
+    ;; control empty even if an earlier application message supplied bad links.
+    (block $orphans_done (loop $orphans
+      (br_if $orphans_done (i32.ge_u (local.get $i) (call $tv_slot_limit)))
+      (local.set $base
+        (i32.add (global.get $TV_TABLE) (i32.mul (local.get $i) (i32.const 32))))
+      (if (i32.and
+            (i32.ne (i32.load (local.get $base)) (i32.const 0))
+            (call $tv_slot_in_view (local.get $i)))
+        (then
+          (drop (call $tv_delete_branch
+            (local.get $hwnd) (i32.load (local.get $base)) (i32.const 0)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $orphans)))
+    (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+    (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
+    (drop (call $tv_scroll_to_for_h
+      (local.get $hwnd) (local.get $h) (i32.const 0)))
+    (call $paint_flag_set_inv (local.get $hwnd))
+    (call $treeview_paint_wat (local.get $hwnd))
+    (i32.const 1))
+
+  (func $tv_delete_item (param $hwnd i32) (param $hItem i32) (result i32)
+    (local $slot i32) (local $base i32) (local $replacement i32)
+    (local $sz i32) (local $h i32)
+    (if (i32.or
+          (i32.eqz (local.get $hItem))
+          (i32.eq (local.get $hItem) (i32.const 0xFFFF0000)))
+      (then (return (call $tv_delete_all_items (local.get $hwnd)))))
+    (local.set $slot (call $tv_find_slot (local.get $hItem)))
+    (if (i32.or
+          (i32.eq (local.get $slot) (i32.const -1))
+          (i32.eqz (call $tv_slot_in_view (local.get $slot))))
+      (then (return (i32.const 0))))
+    (local.set $base
+      (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
+    ;; Win98 prefers the next sibling/root, then the parent, then the previous
+    ;; sibling when deletion removes the caret or one of its ancestors.
+    (local.set $replacement (i32.load offset=12 (local.get $base)))
+    (if (i32.eqz (local.get $replacement))
+      (then (local.set $replacement (i32.load offset=4 (local.get $base)))))
+    (if (i32.eqz (local.get $replacement))
+      (then (local.set $replacement (i32.load offset=16 (local.get $base)))))
+    (if (call $tv_caret_in_branch (local.get $hItem))
+      (then
+        (drop (call $tv_select_caret
+          (local.get $hwnd) (local.get $replacement) (i32.const 0)))))
+    (call $tv_unlink_item (local.get $base))
+    (drop (call $tv_delete_branch (local.get $hwnd) (local.get $hItem) (i32.const 0)))
+    (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
+    (local.set $h (i32.shr_u (local.get $sz) (i32.const 16)))
+    (drop (call $tv_scroll_to_for_h
+      (local.get $hwnd) (local.get $h) (call $tv_view_row)))
+    (call $paint_flag_set_inv (local.get $hwnd))
+    (call $treeview_paint_wat (local.get $hwnd))
+    (i32.const 1))
+
   (func $treeview_handle_mouse (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $x i32) (local $y i32) (local $row i32)
     (local $hItem i32) (local $slot i32) (local $base i32)
@@ -1450,21 +1639,9 @@
           (local.get $hwnd) (call $g2w (local.get $lParam))))
         (call $treeview_paint_wat (local.get $hwnd))
         (return (local.get $ret))))
-    ;; TVM_DELETEITEM (0x1101) — simplified: just clear the slot
+    ;; TVM_DELETEITEM (0x1101)
     (if (i32.eq (local.get $msg) (i32.const 0x1101))
-      (then
-        (local.set $ret (call $tv_find_slot (local.get $lParam)))
-        (if (i32.ne (local.get $ret) (i32.const -1))
-          (then
-            (if (i32.eq (call $tv_view_sel) (local.get $lParam))
-              (then (call $tv_view_set_sel (i32.const 0))))
-            (i32.store (i32.add (global.get $TV_TABLE)
-              (i32.mul (local.get $ret) (i32.const 32))) (i32.const 0))
-            (i32.store (call $tv_owner_cell (local.get $ret)) (i32.const 0))
-            (i32.store (call $tv_image_record (local.get $ret)) (i32.const -1))
-            (i32.store offset=4 (call $tv_image_record (local.get $ret)) (i32.const -1))
-            (global.set $tv_count (i32.sub (global.get $tv_count) (i32.const 1)))))
-        (return (i32.const 1))))
+      (then (return (call $tv_delete_item (local.get $hwnd) (local.get $lParam)))))
     ;; TVM_EXPAND (0x1102)
     (if (i32.eq (local.get $msg) (i32.const 0x1102))
       (then

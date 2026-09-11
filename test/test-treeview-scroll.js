@@ -17,6 +17,7 @@ const ROOT = path.join(__dirname, '..');
 const SRC_DIR = path.join(ROOT, 'src');
 
 const TVM_INSERTITEMA = 0x1100;
+const TVM_DELETEITEM = 0x1101;
 const TVM_EXPAND = 0x1102;
 const TVM_GETCOUNT = 0x1105;
 const TVM_GETNEXTITEM = 0x110A;
@@ -35,6 +36,7 @@ const TVIS_SELECTED = 0x0002;
 const TVIS_DROPHILITED = 0x0008;
 const TVIS_EXPANDED = 0x0020;
 const TVIS_EXPANDEDONCE = 0x0040;
+const TVI_ROOT = 0xFFFF0000;
 const TVN_ITEMEXPANDEDA = -406;
 const WM_VSCROLL = 0x0115;
 const WM_LBUTTONDOWN = 0x0201;
@@ -368,6 +370,53 @@ async function main() {
   e.send_message(tv, WM_LBUTTONDBLCLK, 1, makeLParam(32, 4));
   check('double-click on row text expands the item',
     e.treeview_get_visible_count() === hoverCollapsedCount + 1);
+
+  // Native TVM_DELETEITEM removes a whole branch in post-order, unlinks the
+  // surviving siblings, invalidates every removed handle and moves a caret
+  // inside that branch to the next sibling when one exists.
+  const deleteGrandchild = insertItem('Delete grandchild', childA);
+  const beforeBranchDelete = e.send_message(tv, TVM_GETCOUNT, 0, 0);
+  e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, deleteGrandchild);
+  check('TVM_DELETEITEM recursively removes a selected branch',
+    e.send_message(tv, TVM_DELETEITEM, 0, childA) === 1 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === beforeBranchDelete - 2 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, 4, parent) >>> 0) === childB &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === childB &&
+      getItemState(childA).ret === 0 &&
+      getItemState(deleteGrandchild).ret === 0);
+  check('TVM_DELETEITEM rejects an invalidated handle',
+    e.send_message(tv, TVM_DELETEITEM, 0, childA) === 0);
+  const beforeSelectedLeafDelete = e.send_message(tv, TVM_GETCOUNT, 0, 0);
+  check('deleting a selected leaf relinks to the next sibling',
+    e.send_message(tv, TVM_DELETEITEM, 0, childB) === 1 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === beforeSelectedLeafDelete - 1 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, 4, parent) >>> 0) === childC &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === childC);
+  const beforeParentDelete = e.send_message(tv, TVM_GETCOUNT, 0, 0);
+  check('deleting a parent removes its remaining descendants and selects next root',
+    e.send_message(tv, TVM_DELETEITEM, 0, parent) === 1 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === beforeParentDelete - 2 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === laterRoot &&
+      getItemState(parent).ret === 0 &&
+      getItemState(childC).ret === 0);
+
+  check('TVI_ROOT deletes every item and resets the viewport',
+    e.send_message(tv, TVM_DELETEITEM, 0, TVI_ROOT) === 1 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === 0 &&
+      e.send_message(tv, TVM_GETNEXTITEM, 0, 0) === 0 &&
+      e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) === 0 &&
+      e.treeview_get_visible_count() === 0 &&
+      e.treeview_get_first_visible_row() === 0);
+  const reinsertedRoot = insertItem('Reinserted root');
+  const reinsertedChild = insertItem('Reinserted child', reinsertedRoot);
+  check('TreeView slots and links remain reusable after delete-all',
+    reinsertedRoot !== 0 && reinsertedChild !== 0 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === 2 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, 0, 0) >>> 0) === reinsertedRoot);
+  check('NULL lParam is the second documented delete-all form',
+    e.send_message(tv, TVM_DELETEITEM, 0, 0) === 1 &&
+      e.send_message(tv, TVM_GETCOUNT, 0, 0) === 0 &&
+      e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) === 0);
 
   if (e.wnd_destroy_tree) e.wnd_destroy_tree(tv - 1);
   check('slot count returns to baseline after destroy', e.wnd_count_used() === baselineSlots);
