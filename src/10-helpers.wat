@@ -447,12 +447,16 @@
     (local $count i32) (local $backing_ptr i32) (local $guest_end i32)
     (local $i i32) (local $rec i32) (local $base i32) (local $map_size i32)
     (local $backing i32) (local $map_end i32) (local $backing_end i32)
-    (local $extended i32)
+    (local $extended i32) (local $high_water i32)
+    (if (i32.gt_u (local.get $size) (global.get $VIRTUAL_BACKING_BASE_SIZE))
+      (then (return (i32.const 0))))
     (local.set $guest_end (i32.add (local.get $guest) (local.get $size)))
+    (if (i32.lt_u (local.get $guest_end) (local.get $guest)) (then (return (i32.const 0))))
     (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (local.set $backing_ptr (i32.load (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))))
     (if (i32.eqz (local.get $backing_ptr))
       (then (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))))
+    (local.set $high_water (local.get $backing_ptr))
 
     (local.set $i (i32.const 0))
     (block $scan_done (loop $scan
@@ -487,13 +491,11 @@
           (return (select (local.get $guest) (i32.const 0)
             (i32.ne (local.get $extended) (i32.const 0))))))
       (if (i32.and
-            (i32.eq (local.get $guest) (local.get $map_end))
-            (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
+            (i32.and (i32.eq (local.get $guest) (local.get $map_end))
+              (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
+            (i32.le_u (i32.add (local.get $backing_ptr) (local.get $size))
+              (region.end $VIRTUAL_BACKING_BASE)))
         (then
-          (if (i32.gt_u
-                (i32.add (local.get $backing_ptr) (local.get $size))
-                (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
-            (then (return (i32.const 0))))
           (call $zero_memory (local.get $backing_ptr) (local.get $size))
           ;; Publish translations before the larger record size. A reader can
           ;; therefore never see a committed byte whose PTE names no backing.
@@ -517,7 +519,26 @@
     (if (i32.gt_u
           (i32.add (local.get $backing_ptr) (local.get $size))
           (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
-      (then (return (i32.const 0))))
+      (then
+        ;; Released non-top extents are holes in the live map, not reusable
+        ;; bump space. Only on exhaustion, find a gap without moving any live
+        ;; backing or changing g2w's affine records. A collision advances the
+        ;; candidate and restarts the unsorted scan.
+        (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))
+        (local.set $i (i32.const 0))
+        (block $gap_found (loop $gap
+          (if (i32.gt_u (local.get $size)
+                (i32.sub (region.end $VIRTUAL_BACKING_BASE) (local.get $backing_ptr)))
+            (then (return (i32.const 0))))
+          (br_if $gap_found (i32.ge_u (local.get $i) (local.get $count)))
+          (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
+          (local.set $backing (i32.load offset=8 (local.get $rec)))
+          (local.set $backing_end (i32.add (local.get $backing) (i32.load offset=4 (local.get $rec))))
+          (if (i32.and (i32.lt_u (local.get $backing_ptr) (local.get $backing_end))
+                (i32.gt_u (i32.add (local.get $backing_ptr) (local.get $size)) (local.get $backing)))
+            (then (local.set $backing_ptr (local.get $backing_end)) (local.set $i (i32.const 0)))
+            (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+          (br $gap)))))
     (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $count) (i32.const 4))))
     (i32.store (local.get $rec) (local.get $guest))
     (i32.store (i32.add (local.get $rec) (i32.const 4)) (local.get $size))
@@ -535,7 +556,8 @@
     ;; avoids: $g2w would map a guest address onto a record still being filled.
     (i32.atomic.store (global.get $VIRTUAL_MAP_STATE) (i32.add (local.get $count) (i32.const 1)))
     (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
-      (i32.add (local.get $backing_ptr) (local.get $size)))
+      (select (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size))
+        (i32.gt_u (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size)))))
     (call $virtual_shared_top_observe (local.get $guest))
     (global.set $virtual_alloc_top (local.get $guest))
     (local.get $guest))
@@ -689,11 +711,18 @@
     (local.get $cursor))
 
   ;; Remove an exact sparse mapping on VirtualFree(..., MEM_RELEASE). Compact
-  ;; the live metadata prefix so MAX_VIRTUAL_MAPS retains its bound. Backing is
-  ;; a bump arena, therefore only the
-  ;; most recently committed extent can be reclaimed without a free list; all
-  ;; other releases still recover their map-table slot immediately.
+  ;; the live prefix so g2w's linear scan and MAX_VIRTUAL_MAPS bound keep their
+  ;; existing representation. A top release rewinds the bump cursor. Other
+  ;; releases recover their map slot immediately and leave a physical gap;
+  ;; virtual_map_commit_locked can reuse that gap on bump exhaustion.
   (func $virtual_map_release (param $guest i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $result (call $virtual_map_release_locked (local.get $guest)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $result))
+
+  (func $virtual_map_release_locked (param $guest i32) (result i32)
     (local $count i32) (local $i i32) (local $rec i32) (local $last i32)
     (local $last_rec i32) (local $size i32) (local $backing i32)
     (local $backing_ptr i32)

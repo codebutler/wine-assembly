@@ -215,8 +215,16 @@ const digest = crypto.createHash('sha256')
 // a shared guard. Their old non-recording stubs are NOT claimed implemented.
 // 2026-09-09: 411 -> 410. SetGammaRamp retains the per-device API ramp;
 // unsupported display gamma remains unadvertised. Get/default/copy tested.
-const EXPECTED_COUNT = 405;
-const EXPECTED_SHA256 = '0d9e8f43b3d441426b6418018dfbc607ffeba2de52cd666bb502f27307485e3c';
+// 2026-09-10: 405 -> 404. GetNPatchMode returns the disabled-only backend's
+// FLOAT through x87 ST(0), not an unrelated EAX zero. Nonzero setters reject.
+// 2026-09-10: 404 -> 403. SetDepthStencilSurface now validates a same-device
+// surface, retains its binding, switches persistent depth identity, and retires
+// the previous binding; NULL disables depth. Reset remains separately pending.
+// 2026-09-10: 403 -> 401. Reset now preflights resource ownership and creates
+// replacement state/targets transactionally across the render fence;
+// TestCooperativeLevel reports native Reset-failure/recovery state.
+const EXPECTED_COUNT = 401;
+const EXPECTED_SHA256 = '8f00f606d19e53f7a184bb5e2ecb2a57ae08d586054d8814ea5e1d5e0f8b6600';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

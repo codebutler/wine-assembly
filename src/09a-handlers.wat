@@ -1239,8 +1239,46 @@
       (then (global.set $freelib_last_handle (i32.const 0)))))
 
   ;; 12: LoadLibraryA
+  (global $loadlib_normalized_name (mut i32) (i32.const 0))
+  ;; Per-instance scratch survives the async load yield. Only the basename
+  ;; determines the default extension; a trailing dot suppresses appending.
+  (func $loadlib_normalize_name (param $name i32) (result i32)
+    (local $length i32) (local $dot i32) (local $ch i32) (local $dst i32)
+    (if (i32.eqz (local.get $name)) (then (return (i32.const 0))))
+    (block $end (loop $scan
+      (if (i32.ge_u (local.get $length) (i32.const 260)) (then (return (i32.const 0))))
+      (local.set $ch (call $gl8 (i32.add (local.get $name) (local.get $length))))
+      (br_if $end (i32.eqz (local.get $ch)))
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 92))
+            (i32.eq (local.get $ch) (i32.const 47)))
+        (then (local.set $dot (i32.const 0))))
+      (if (i32.eq (local.get $ch) (i32.const 46))
+        (then (local.set $dot (i32.add (local.get $length) (i32.const 1)))))
+      (local.set $length (i32.add (local.get $length) (i32.const 1))) (br $scan)))
+    (if (i32.eqz (local.get $length)) (then (return (i32.const 0))))
+    (if (i32.and (i32.ne (local.get $dot) (i32.const 0))
+          (i32.ne (local.get $dot) (local.get $length)))
+      (then (return (local.get $name))))
+    (if (i32.and (i32.eqz (local.get $dot)) (i32.gt_u (local.get $length) (i32.const 255)))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (global.get $loadlib_normalized_name))
+      (then (global.set $loadlib_normalized_name (call $heap_alloc (i32.const 260)))))
+    (if (i32.eqz (global.get $loadlib_normalized_name)) (then (return (i32.const 0))))
+    (local.set $dst (call $g2w (global.get $loadlib_normalized_name)))
+    (memory.copy (local.get $dst) (call $g2w (local.get $name)) (local.get $length))
+    (if (local.get $dot)
+      (then (i32.store8 (i32.add (local.get $dst) (i32.sub (local.get $length) (i32.const 1))) (i32.const 0)))
+      (else
+        (i32.store (i32.add (local.get $dst) (local.get $length)) (i32.const 0x6c6c642e))
+        (i32.store8 (i32.add (local.get $dst) (i32.add (local.get $length) (i32.const 4))) (i32.const 0))))
+    (global.get $loadlib_normalized_name))
+
   (func $handle_LoadLibraryA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $src i32) (local $dst i32) (local $ch i32) (local $name_wa i32)
+    (local.set $arg0 (call $loadlib_normalize_name (local.get $arg0)))
+    (if (i32.eqz (local.get $arg0))
+      (then (global.set $eax (i32.const 0)) (global.set $last_error (i32.const 126))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
     (local.set $tmp (call $find_loaded_dll (local.get $arg0)))
     (if (i32.ge_s (local.get $tmp) (i32.const 0))
       (then
@@ -12055,6 +12093,15 @@ HookEx — no next hook in chain, return 0
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
   )
 
+  ;; Convert the user/system default aliases; concrete/invariant/unknown LCIDs
+  ;; pass through unchanged. This is not the caller's SetThreadLocale setting.
+  (func $handle_ConvertDefaultLocale (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.or (i32.eq (local.get $arg0) (i32.const 0x0400))
+                (i32.eq (local.get $arg0) (i32.const 0x0800)))
+      (then (global.set $eax (i32.const 0x0409)))
+      (else (global.set $eax (local.get $arg0))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
   ;; GetSystemDefaultLCID() -> LCID. RichEdit asks during DLL init.
   (func $handle_GetSystemDefaultLCID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0x0409))
@@ -12082,6 +12129,18 @@ HookEx — no next hook in chain, return 0
   ;; already solved. The scratch SYSTEMTIME is ours alone, so it comes from
   ;; the heap once and is reused.
   (global $dosdate_scratch (mut i32) (i32.const 0))
+  ;; Microsoft OLE32 4.71.2900, export23, VA7ff8b556: validate the input
+  ;; FILETIME and both WORD outputs, then delegate to the Win32 conversion.
+  (func $handle_CoFileTimeToDosDateTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.or (call $ptr_range_bad (local.get $arg0) (i32.const 8))
+          (i32.or (call $ptr_range_bad (local.get $arg1) (i32.const 2))
+                  (call $ptr_range_bad (local.get $arg2) (i32.const 2))))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+    (call $handle_FileTimeToDosDateTime (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
   (func $handle_FileTimeToDosDateTime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $st i32) (local $year i32)
     (if (i32.eqz (global.get $dosdate_scratch))

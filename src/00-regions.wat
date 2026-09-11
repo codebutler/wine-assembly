@@ -519,6 +519,8 @@
     (owner "04-cache.wat:$sib_consumer_hist_record"))
   (region.declare $D3DIM_AUX (size 0x00001000) (align 0x00001000)
     (owner "09ab-handlers-d3dim-core.wat:$D3DIM_AUX"))
+  (region.declare $D3D9_DEPTH_SERIAL (size 0x4) (align 0x4)
+    (owner "09ak-d3d-depth.wat:$d3d9_depth_next_serial"))
   (region.declare $D3DIM_MATRICES (size 0x00004000) (align 0x00001000)
     (stride 0x40 (count $D3DIM_MATRIX_MAX))
     (owner "09a8-handlers-directx.wat:$D3DIM_MATRICES"))
