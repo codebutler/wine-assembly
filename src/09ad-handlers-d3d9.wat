@@ -1075,7 +1075,8 @@
 
   ;; IDirect3DDevice9_ColorFill — 4 args (incl. this)
   (func $handle_IDirect3DDevice9_ColorFill (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_color_fill (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
+    (if (global.get $d3d_render_token) (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; IDirect3DDevice9_CreateOffscreenPlainSurface — 7 args (incl. this)

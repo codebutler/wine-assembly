@@ -28,8 +28,8 @@ function fixture(options={}) {
 (async()=>{
   const routed=[],imports=require('../lib/host-imports').createHostImports({getMemory:()=>new ArrayBuffer(65536),
     d3d9Bridge:{call:(...args)=>{routed.push(args);return 91;}}}).host;
-  for(let opcode=0x30001;opcode<=0x30013;opcode++)assert.strictEqual(imports.gpu_gl_call(opcode,123,456),91);
-  assert.deepStrictEqual(routed,Array.from({length:19},(_,i)=>[0x30001+i,123,456]),
+  for(let opcode=0x30001;opcode<=0x30014;opcode++)assert.strictEqual(imports.gpu_gl_call(opcode,123,456),91);
+  assert.deepStrictEqual(routed,Array.from({length:20},(_,i)=>[0x30001+i,123,456]),
     'production import routes depth/reset/query/color private commands, not just the original draw subset');
   const lit=fixture(),write=(p,n)=>lit.v.setUint32(p,n,true),lightNode=50000;
   for(const [id,value] of [[137,1],[139,0xff102030],[141,1],[145,1],[146,2],[147,0],[148,2]])write(256+id*4,value);

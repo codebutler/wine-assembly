@@ -99,6 +99,53 @@
   (call $gs32 (local.get $out) (local.get $surface))
   (global.set $eax (i32.const 0)))
 
+;; ColorFill names its destination independently of the bound render target.
+;; The existing descriptor's draw-only fields carry a copied rectangle/color;
+;; the host snapshots these into an ordinary ordered CLEAR command.
+(func $d3d9_color_fill (param $device i32) (param $surface i32) (param $rect i32) (param $color i32)
+  (local $storage i32) (local $wa i32) (local $rt i32) (local $width i32) (local $height i32)
+  (local $rw i32) (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+  (local $desc i32) (local $result i32)
+  (global.set $eax (i32.const 0x8876086c))
+  (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
+  (local.set $storage (call $d3d9_color_storage (local.get $surface)))
+  (if (local.get $storage) (then
+    (local.set $wa (call $g2w (local.get $storage)))
+    (if (i32.ne (i32.load offset=8 (local.get $wa)) (local.get $device)) (then (return)))
+    (if (i32.or (i32.load offset=60 (local.get $wa)) (i32.load offset=56 (local.get $wa))) (then (return)))
+    (local.set $width (i32.load offset=20 (local.get $wa)))
+    (local.set $height (i32.load offset=24 (local.get $wa))))
+  (else
+    (local.set $rt (call $d3ddev_rt_entry (local.get $device)))
+    (if (i32.ne (local.get $surface) (call $dx_get_wrapper_for_vtbl
+      (call $dx_slot_of (local.get $rt)) (global.get $DX_VTBL_D3DSURF9))) (then (return)))
+    (if (i32.eqz (local.get $surface)) (then (return)))
+    (local.set $width (load.field DxObject width (local.get $rt)))
+    (local.set $height (load.field DxObject height (local.get $rt)))))
+  (local.set $right (local.get $width)) (local.set $bottom (local.get $height))
+  (if (local.get $rect) (then
+    (local.set $rw (call $d3d9_state_bytes (local.get $rect) (i32.const 16)))
+    (if (i32.eqz (local.get $rw)) (then (return)))
+    (local.set $left (i32.load (local.get $rw))) (local.set $top (i32.load offset=4 (local.get $rw)))
+    (local.set $right (i32.load offset=8 (local.get $rw))) (local.set $bottom (i32.load offset=12 (local.get $rw)))
+    (if (i32.or (i32.ge_u (local.get $left) (local.get $right))
+      (i32.ge_u (local.get $top) (local.get $bottom))) (then (return)))
+    (if (i32.or (i32.gt_u (local.get $right) (local.get $width))
+      (i32.gt_u (local.get $bottom) (local.get $height))) (then (return)))))
+  (local.set $result (if (result i32) (global.get $d3d_render_token)
+    (then (call $d3d_render_poll))
+    (else
+      (local.set $desc (call $d3d9_gpu_descriptor (local.get $device)))
+      (i32.store offset=24 (local.get $desc) (local.get $storage))
+      (i32.store offset=28 (local.get $desc) (local.get $color))
+      (i32.store offset=32 (local.get $desc) (local.get $left))
+      (i32.store offset=36 (local.get $desc) (local.get $top))
+      (i32.store offset=44 (local.get $desc) (local.get $right))
+      (i32.store offset=48 (local.get $desc) (local.get $bottom))
+      (call $host_gpu_gl_call (i32.const 0x30014) (local.get $desc) (i32.const 0)))))
+  (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
+  (if (i32.eq (local.get $result) (i32.const 1)) (then (global.set $eax (i32.const 0)))))
+
 ;; Dimensions of bound RT0; presentation always retains the implicit slot.
 (func $d3d9_color_extent (param $device i32) (param $height i32) (result i32)
   (local $state i32) (local $surface i32) (local $rt i32)

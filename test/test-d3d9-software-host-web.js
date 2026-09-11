@@ -140,7 +140,7 @@ const backend=process.argv.includes('--webgl')?'webgl':'software';
       await call('IDirect3DTexture9_GetSurfaceLevel',['texture',0,'out']);
       await page.evaluate(()=>{const w=runningApps[0].wine;w.d3dProbe.textureSurface=w.instance.exports.guest_read32(w.d3dProbe.out)>>>0;});
       await call('IDirect3DDevice9_SetRenderTarget',['device',0,'textureSurface']);
-      await call('IDirect3DDevice9_Clear',['device',0,0,1,0xff2468ac,0,0]);
+      await call('IDirect3DDevice9_ColorFill',['device','textureSurface',0,0xff2468ac]);
       await call('IDirect3DDevice9_SetRenderTarget',['device',0,'color']);
       await call('IDirect3DDevice9_SetTexture',['device',0,'texture']);
       await call('IDirect3DDevice9_SetFVF',['device',0x144]);

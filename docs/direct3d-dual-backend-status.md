@@ -1302,3 +1302,24 @@ Coverage again includes dependent/matrix/cube instructions, PS1.2, PS1.3 depth,
 the private PS1.4 lowering subset, and manual mip-atlas/native comparisons on
 both GL versions. Shader unit tests and diff checks also pass. This does not
 enable or prove a complete public PS1.4 profile.
+
+ColorFill checkpoint (2026-09-10): native ColorFill now fills supported21/22
+default-pool offscreen surfaces, render targets, render-target texture views and
+the implicit backbuffer. The [Microsoft contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-colorfill)
+defines the destination pool/types and NULL-as-full-surface rectangle. Native
+validation rejects wrong devices/pools, locked targets, invalid pointers and
+nonpositive/out-of-bounds explicit rectangles. Other formats remain gated by
+resource creation. No new caps are exposed.
+
+Private command30014 snapshots a destination/color/rectangle into the existing
+ordered CLEAR command, with depth disabled and no dependence on current native
+viewport/scissor or target binding. Both executors reuse their existing fill and
+resource-revision behavior; no CPU readback fallback was added. Native20100
+passes direct/worker backend bootstrap, implicit/texture/cube/offscreen targets,
+subrect pixels, X8 alpha, binding/scissor preservation, validation and explicit
+pending/completed stdcall-stack assertions. Browser95903 passes actual-x86
+WebGL in both guest modes. Software browser38731 exposed a missing async stack
+guard; the fix passes browser78448 in both guest modes. Full build6715 passes
+canonical1151946/compat1152414 with no overlaps; fragment/logical-AND and20-opcode
+production routing regressions pass. This does not complete other copy/resolve
+operations, formats, or native-reference characterization of degenerate rects.

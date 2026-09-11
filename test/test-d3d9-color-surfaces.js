@@ -10,7 +10,7 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
 (async()=>{
   let bridge,productionImport;
   const api={Device9:['SetRenderTarget','GetRenderTarget','GetBackBuffer','SetViewport','GetViewport',
-    'SetScissorRect','GetScissorRect','GetRenderTargetData','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
+    'SetScissorRect','GetScissorRect','GetRenderTargetData','ColorFill','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
     Texture9:['GetSurfaceLevel','LockRect','Release'],
     CubeTexture9:['GetCubeMapSurface','Release'],
     Surface9:['GetDesc','AddRef','Release','GetDevice','LockRect','UnlockRect']};
@@ -132,10 +132,23 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     createSoftwareWorker:()=>new WorkerConsumer(new Worker(path.join(__dirname,'../lib/d3d-render-worker.js')),
       {module,memory,sigs,imageBase:e.get_image_base()>>>0,reclaimHeap:h=>e.d3d_render_adopt_free_list(h)})});
   const invoke=async(fn,...args)=>{let value=fn(...args);while(e.get_d3d_render_token()){
-    await bridge.wait(e.get_d3d_render_token());value=fn(...args);}return value>>>0;};
+    if(fn===e.Device9_ColorFill)assert.strictEqual(e.get_esp()>>>0,0x074ff000,'pending ColorFill preserves stdcall stack');
+    await bridge.wait(e.get_d3d_render_token());value=fn(...args);}
+    if(fn===e.Device9_ColorFill)assert.strictEqual(e.get_esp()>>>0,0x074ff014,'completed ColorFill pops arguments once');
+    return value>>>0;};
   const aliases=async()=>{
     ok(e.create_device(pp,out),'alias device');const ad=read(out);
     ok(e.Device9_GetRenderTarget(ad,0,out),'alias backbuffer');let ab=read(out);
+    ok(await invoke(e.Device9_ColorFill,ad,ab,0,0xff102030),'ColorFill bootstraps backend and fills implicit target');
+    ok(await invoke(e.Device9_Present,ad),'filled backbuffer Present');
+    assert.strictEqual(new Uint32Array(memory.buffer,e.back_bits(ad),64)[0],0xff102030);
+    ok(e.offscreen(ad,3,2,0,out,22),'default offscreen fill');const fillSurface=read(out);
+    ok(await invoke(e.Device9_ColorFill,ad,fillSurface,0,0x12345678),'ColorFill unbound default offscreen');
+    ok(await invoke(e.Surface9_LockRect,fillSurface,lock,0,16),'filled offscreen readback');
+    assert.strictEqual(read(read(lock+4)),0xff345678,'X8 fill forces opaque alpha');
+    bad(await invoke(e.Device9_ColorFill,ad,fillSurface,0,0));
+    ok(await invoke(e.Surface9_UnlockRect,fillSurface),'unlock filled surface');
+    e.Surface9_Release(fillSurface);
     for(const cube of[0,1]){
       ok(e.rt_texture(ad,cube,out),'create render texture');const texture=read(out),base=read(texture+56);
       const count=cube?18:3,ids=new Set();
@@ -159,9 +172,21 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       ok(await invoke(e.clear,ad,0xff123456),'render texture mip');
       ok(e.Device9_SetRenderTarget(ad,0,other),'bind other mip');
       ok(await invoke(e.clear,ad,0xffabcdef),'render other mip');
+      write(rect,[0,0,1,1]);ok(e.Device9_SetScissorRect(ad,rect),'small scissor');
+      ok(e.Device9_SetRenderState(ad,174,1),'enable scissor');
+      ok(await invoke(e.Device9_ColorFill,ad,s,0,0xff123456),'ColorFill ignores bound target and scissor');
+      write(rect,[1,1,2,2]);
+      ok(await invoke(e.Device9_ColorFill,ad,s,rect,0xff987654),'ColorFill subrect outside current scissor');
+      ok(e.Device9_GetRenderTarget(ad,0,out),'ColorFill preserves target binding');assert.strictEqual(read(out),other);e.Surface9_Release(other);
+      ok(e.Device9_GetScissorRect(ad,out),'ColorFill preserves scissor');assert.deepStrictEqual([0,1,2,3].map(i=>read(out+i*4)),[0,0,1,1]);
+      ok(e.Device9_SetRenderState(ad,174,0),'disable test scissor');
+      write(rect,[0,0,3,2]);bad(await invoke(e.Device9_ColorFill,ad,s,rect,0));
+      bad(await invoke(e.Device9_ColorFill,ad,s,0xffffffff,0));
       ok(e.offscreen(ad,2,2,2,out,21),'alias readback destination');const copy=read(out);
+      bad(await invoke(e.Device9_ColorFill,ad,copy,0,0));
       ok(await invoke(e.Device9_GetRenderTargetData,ad,s,copy),'read rendered texture surface');
-      assert.strictEqual(pixels(copy).value,0xff123456,'mip contents independent');
+      const copied=pixels(copy);assert.strictEqual(copied.value,0xff123456,'mip contents independent');
+      assert.strictEqual(read(copied.p+12),0xff987654,'filled subrect writes exact destination');
       if(!cube){
         const top=surface(0);
         ok(e.Device9_SetRenderTarget(ad,0,top),'bind sampled mip');
@@ -227,5 +252,5 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     assert.strictEqual(await invoke(e.Surface9_Release,sys),0,'last child drives ordered final device release');
     assert.strictEqual(bridge.devices.size,0);
   }finally{await bridge.close();}
-  console.log('PASS native D3D9 color surfaces: direct/worker texture mip/cube aliases, rendered-texture sampling and feedback rejection, Clear/Lock/upload/readback, implicit Present, Reset and lifetime');
+  console.log('PASS native D3D9 color surfaces: direct/worker ColorFill targets/subrects/validation, texture mip/cube aliases, rendered-texture sampling and feedback rejection, Clear/Lock/upload/readback, implicit Present, Reset and lifetime');
 })().catch(error=>{console.error(error);process.exitCode=1;});
