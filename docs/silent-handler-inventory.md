@@ -369,3 +369,11 @@ target, and an event-time keyboard snapshot; GetMessage/PeekMessage therefore
 apply the existing thread routing, WM_HOTKEY matching, and WH_KEYBOARD chain.
 Alt and F10 select WM_SYSKEYDOWN/UP, and lParam carries context, previous-state,
 and transition bits with the same queue ordering used by browser input.
+
+2026-09-11: 331 -> 330. OpenSemaphoreA now resolves named semaphores created
+through either CreateSemaphoreA or CreateSemaphoreW instead of always reporting
+not found. Duplicate creation returns the same counted object, ignores the new
+initial/maximum values, and reports ERROR_ALREADY_EXISTS; opens and creates own
+references until the last CloseHandle destroys the name. Events, mutexes, and
+semaphores now also share one case-sensitive process namespace, so a cross-type
+name collision fails with ERROR_INVALID_HANDLE instead of creating two objects.

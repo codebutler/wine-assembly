@@ -3386,7 +3386,14 @@ async function main() {
     : threadManager.waitMultiple(nCount, handlesWA, bWaitAll, timeout, win32ThreadId());
   // The critical-section face of the same problem: see pumpThreadsOnce().
   h.cs_pump = () => threadManager.pumpThreadsOnce();
-  h.create_semaphore = (initialCount, maxCount) => threadManager.createSemaphore(initialCount, maxCount);
+  h.create_semaphore = (initialCount, maxCount, nameWa, wide) => {
+    const name = readSyncObjectName(memory, nameWa, wide);
+    return threadManager.createSemaphore(initialCount, maxCount, name);
+  };
+  h.open_semaphore = (nameWa, wide) => {
+    const name = readSyncObjectName(memory, nameWa, wide);
+    return threadManager.openSemaphore(name);
+  };
   h.release_semaphore = (handle, releaseCount, lpPrevCountWA) => threadManager.releaseSemaphore(handle, releaseCount, lpPrevCountWA);
   // Check if a DLL file exists in VFS or host filesystem
   h.has_dll_file = (nameWA) => {

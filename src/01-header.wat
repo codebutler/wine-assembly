@@ -834,7 +834,8 @@
   (import "host" "reset_event" (func $host_reset_event (param i32) (result i32)))
   (import "host" "wait_single" (func $host_wait_single (param i32 i32) (result i32)))
   (import "host" "wait_multiple" (func $host_wait_multiple (param i32 i32 i32 i32) (result i32)))
-  (import "host" "create_semaphore" (func $host_create_semaphore (param i32 i32) (result i32)))
+  (import "host" "create_semaphore" (func $host_create_semaphore (param i32 i32 i32 i32) (result i32)))
+  (import "host" "open_semaphore" (func $host_open_semaphore (param i32 i32) (result i32)))
   (import "host" "release_semaphore" (func $host_release_semaphore (param i32 i32 i32) (result i32)))
 
   ;; ---- Memory: imported from host, 8192 pages = 512MB initial ----

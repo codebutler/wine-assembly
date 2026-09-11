@@ -2944,23 +2944,65 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
+  ;; Synchronization-object create imports reserve bit 31 for private result
+  ;; metadata. A set bit with handle bits means ERROR_ALREADY_EXISTS; the bare
+  ;; bit means another synchronization-object type already owns the name.
+  (func $sync_created_handle (param $raw i32) (param $failure_error i32) (result i32)
+    (local $handle i32)
+    (if (i32.eq (local.get $raw) (i32.const 0x80000000))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (return (i32.const 0))))
+    (local.set $handle (i32.and (local.get $raw) (i32.const 0x7fffffff)))
+    (if (i32.eqz (local.get $handle))
+      (then (global.set $last_error (local.get $failure_error)))
+      (else
+        (global.set $last_error
+          (if (result i32) (i32.lt_s (local.get $raw) (i32.const 0))
+            (then (i32.const 183)) ;; ERROR_ALREADY_EXISTS
+            (else (i32.const 0))))))
+    (local.get $handle))
+
+  ;; Open imports use the same bare-bit sentinel for a cross-type name.
+  (func $sync_opened_handle (param $raw i32) (result i32)
+    (if (i32.eq (local.get $raw) (i32.const 0x80000000))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (return (i32.const 0))))
+    (global.set $last_error
+      (if (result i32) (local.get $raw)
+        (then (i32.const 0))
+        (else (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
+    (local.get $raw))
+
+  (func $create_event_core
+      (param $manual_reset i32) (param $initial_state i32)
+      (param $name i32) (param $wide i32) (result i32)
+    (local $name_wa i32) (local $existing i32)
+    (if (local.get $name)
+      (then (local.set $name_wa (call $g2w (local.get $name)))))
+    ;; Resolve an existing event explicitly so CreateEvent's return path keeps
+    ;; the same host ABI as OpenEvent. A cross-type sentinel remains distinct.
+    (if (local.get $name_wa)
+      (then
+        (local.set $existing
+          (call $host_open_event (local.get $name_wa) (local.get $wide)))
+        (if (local.get $existing)
+          (then
+            (if (i32.eq (local.get $existing) (i32.const 0x80000000))
+              (then (return (call $sync_opened_handle (local.get $existing)))))
+            (global.set $last_error (i32.const 183)) ;; ERROR_ALREADY_EXISTS
+            (return (local.get $existing))))))
+    (call $sync_created_handle
+      (call $host_create_event
+        (local.get $manual_reset) (local.get $initial_state)
+        (local.get $name_wa) (local.get $wide))
+      (i32.const 8))) ;; ERROR_NOT_ENOUGH_MEMORY
+
   ;; 27: CreateEventA(lpAttr, bManualReset, bInitialState, lpName) — 4 args stdcall
   (func $handle_CreateEventA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $name_wa i32) (local $existing i32)
-    (if (local.get $arg3)
-      (then (local.set $name_wa (call $g2w (local.get $arg3)))))
-    ;; CreateEvent opens an existing same-name event and reports
-    ;; ERROR_ALREADY_EXISTS; otherwise it creates the shared object.
-    (if (local.get $name_wa)
-      (then (local.set $existing (call $host_open_event (local.get $name_wa) (i32.const 0)))))
-    (if (local.get $existing)
-      (then
-        (global.set $eax (local.get $existing))
-        (global.set $last_error (i32.const 183)))
-      (else
-        (global.set $eax (call $host_create_event
-          (local.get $arg1) (local.get $arg2) (local.get $name_wa) (i32.const 0)))
-        (global.set $last_error (i32.const 0))))
+    (global.set $eax (call $create_event_core
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
@@ -2968,11 +3010,10 @@
   ;; Access masks and inheritance do not change the cooperative process-local
   ;; object, but the name lookup and reference lifetime match Win32.
   (func $handle_OpenEventA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (if (result i32) (local.get $arg2)
-      (then (call $host_open_event (call $g2w (local.get $arg2)) (i32.const 0)))
-      (else (i32.const 0))))
-    (if (i32.eqz (global.get $eax))
-      (then (global.set $last_error (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
+    (global.set $eax (call $sync_opened_handle
+      (if (result i32) (local.get $arg2)
+        (then (call $host_open_event (call $g2w (local.get $arg2)) (i32.const 0)))
+        (else (i32.const 0)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
@@ -15460,9 +15501,40 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
       (global.get $current_thread_id)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
 
-  ;; 522: CreateSemaphoreW(lpAttr, lInit, lMax, lpName) → real counted semaphore via host.
+  (func $create_semaphore_core
+      (param $initial i32) (param $maximum i32)
+      (param $name i32) (param $wide i32) (result i32)
+    (local $name_wa i32) (local $failure_error i32)
+    (if (local.get $name)
+      (then (local.set $name_wa (call $g2w (local.get $name)))))
+    (local.set $failure_error
+      (if (result i32)
+          (i32.or
+            (i32.le_s (local.get $maximum) (i32.const 0))
+            (i32.or
+              (i32.lt_s (local.get $initial) (i32.const 0))
+              (i32.gt_s (local.get $initial) (local.get $maximum))))
+        (then (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (else (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
+    ;; The host resolves a same-name existing object before validating the new
+    ;; counts, because Win32 explicitly ignores those counts on reopen.
+    (call $sync_created_handle
+      (call $host_create_semaphore
+        (local.get $initial) (local.get $maximum)
+        (local.get $name_wa) (local.get $wide))
+      (local.get $failure_error)))
+
+  (func $open_semaphore_core (param $name i32) (param $wide i32) (result i32)
+    (call $sync_opened_handle
+      (if (result i32) (local.get $name)
+        (then (call $host_open_semaphore
+          (call $g2w (local.get $name)) (local.get $wide)))
+        (else (i32.const 0)))))
+
+  ;; 522: CreateSemaphoreW(lpAttr, lInit, lMax, lpName) → counted named semaphore.
   (func $handle_CreateSemaphoreW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_create_semaphore (local.get $arg1) (local.get $arg2)))
+    (global.set $eax (call $create_semaphore_core
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; 523: ReleaseSemaphore(hSem, lReleaseCount, lpPrevCount) → host increments and writes back prior count.
@@ -15474,37 +15546,24 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; Mutexes reuse the shared event host ABI with private kind bits in `wide`:
-  ;; bit 0 selects A/W string decoding and bit 1 selects mutex semantics.  The
-  ;; host tags an existing named mutex in bit 31; issued handles never use it.
+  ;; bit 0 selects A/W string decoding and bit 1 selects mutex semantics.
   (func $create_mutex_core (param $initial_owner i32) (param $name i32) (param $wide i32) (result i32)
-    (local $name_wa i32) (local $raw i32) (local $handle i32)
+    (local $name_wa i32)
     (if (local.get $name)
       (then (local.set $name_wa (call $g2w (local.get $name)))))
-    (local.set $raw (call $host_create_event
-      (i32.const 0) (local.get $initial_owner) (local.get $name_wa)
-      (i32.or (local.get $wide) (i32.const 2))))
-    (local.set $handle (i32.and (local.get $raw) (i32.const 0x7fffffff)))
-    (if (i32.eqz (local.get $handle))
-      (then (global.set $last_error (i32.const 8))) ;; ERROR_NOT_ENOUGH_MEMORY
-      (else
-        (global.set $last_error
-          (if (result i32) (i32.lt_s (local.get $raw) (i32.const 0))
-            (then (i32.const 183)) ;; ERROR_ALREADY_EXISTS
-            (else (i32.const 0))))))
-    (local.get $handle))
+    (call $sync_created_handle
+      (call $host_create_event
+        (i32.const 0) (local.get $initial_owner) (local.get $name_wa)
+        (i32.or (local.get $wide) (i32.const 2)))
+      (i32.const 8))) ;; ERROR_NOT_ENOUGH_MEMORY
 
   (func $open_mutex_core (param $name i32) (param $wide i32) (result i32)
-    (local $handle i32)
-    (if (local.get $name)
-      (then
-        (local.set $handle (call $host_open_event
+    (call $sync_opened_handle
+      (if (result i32) (local.get $name)
+        (then (call $host_open_event
           (call $g2w (local.get $name))
-          (i32.or (local.get $wide) (i32.const 2))))))
-    (global.set $last_error
-      (if (result i32) (local.get $handle)
-        (then (i32.const 0))
-        (else (i32.const 2)))) ;; ERROR_FILE_NOT_FOUND
-    (local.get $handle))
+          (i32.or (local.get $wide) (i32.const 2))))
+        (else (i32.const 0)))))
 
   ;; 524: CreateMutexW(lpMutexAttributes, bInitialOwner, lpName) → HANDLE
   (func $handle_CreateMutexW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -15544,36 +15603,22 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (global.set $eax (call $create_mutex_core (local.get $arg1) (local.get $arg2) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; CreateSemaphoreA(lpAttr, lInit, lMax, lpName) → real counted semaphore via host.
+  ;; CreateSemaphoreA(lpAttr, lInit, lMax, lpName) → counted named semaphore.
   (func $handle_CreateSemaphoreA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_create_semaphore (local.get $arg1) (local.get $arg2)))
+    (global.set $eax (call $create_semaphore_core
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
-  ;; OpenSemaphoreA(dwDesiredAccess, bInheritHandle, lpName). Named kernel
-  ;; objects are process-local in the current host model, so a new emulator
-  ;; process has no pre-existing semaphore to open. Return the documented
-  ;; not-found result; callers such as DX-Ball then create their instance
-  ;; semaphore through CreateSemaphoreA.
+  ;; OpenSemaphoreA(dwDesiredAccess, bInheritHandle, lpName). Access masks and
+  ;; inheritance are not yet represented, but lookup and reference lifetime are.
   (func $handle_OpenSemaphoreA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $last_error (i32.const 2)) ;; ERROR_FILE_NOT_FOUND
+    (global.set $eax (call $open_semaphore_core (local.get $arg2) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; 526: CreateEventW(lpAttr, bManualReset, bInitialState, lpName) — 4 args stdcall
   (func $handle_CreateEventW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $name_wa i32) (local $existing i32)
-    (if (local.get $arg3)
-      (then (local.set $name_wa (call $g2w (local.get $arg3)))))
-    (if (local.get $name_wa)
-      (then (local.set $existing (call $host_open_event (local.get $name_wa) (i32.const 1)))))
-    (if (local.get $existing)
-      (then
-        (global.set $eax (local.get $existing))
-        (global.set $last_error (i32.const 183)))
-      (else
-        (global.set $eax (call $host_create_event
-          (local.get $arg1) (local.get $arg2) (local.get $name_wa) (i32.const 1)))
-        (global.set $last_error (i32.const 0))))
+    (global.set $eax (call $create_event_core
+      (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 

@@ -255,8 +255,8 @@ const digest = crypto.createHash('sha256')
 // 2026-09-11: 332 -> 331. keybd_event now synchronously enters the ordinary
 // hardware-input FIFO with Win98 keyboard-message state instead of succeeding
 // without generating input.
-const EXPECTED_COUNT = 331;
-const EXPECTED_SHA256 = '200d5a9b28f554d127be601b500c71c999ce4171095c7a930dbc30a3ed8f5ab8';
+const EXPECTED_COUNT = 330;
+const EXPECTED_SHA256 = 'caacb5b939894b5be34a4cbcb19cac4025ba8704bd8dc55fe665347c879c4aa0';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

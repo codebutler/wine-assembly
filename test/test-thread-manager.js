@@ -250,8 +250,11 @@ assert.strictEqual(namedEventTm.openEvent('starcraftsetupevent'), 0,
   'named kernel objects use case-sensitive names');
 assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), namedEvent,
   'OpenEvent finds the existing named event');
-assert.strictEqual(namedEventTm.createEvent(true, true, 'StarcraftSetupEvent'), namedEvent,
-  'CreateEvent returns the existing object when its name already exists');
+assert.strictEqual(
+  namedEventTm.createEvent(true, true, 'StarcraftSetupEvent') >>> 0,
+  (namedEvent | 0x80000000) >>> 0,
+  'CreateEvent tags the existing object so the WAT API can report ERROR_ALREADY_EXISTS'
+);
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true,
   'closing one named-event reference succeeds');
 assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), namedEvent,
@@ -259,6 +262,49 @@ assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), namedEvent,
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true);
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true);
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true);
+
+const namedSemaphoreTm = makeThreadManager();
+assert.strictEqual(namedSemaphoreTm.openSemaphore('DXBallInstanceSemaphore'), 0,
+  'OpenSemaphore reports a missing process-local name');
+const namedSemaphore = namedSemaphoreTm.createSemaphore(1, 2, 'DXBallInstanceSemaphore');
+assert(namedSemaphore, 'CreateSemaphore allocates a named semaphore');
+assert.strictEqual(
+  namedSemaphoreTm.createSemaphore(-1, 0, 'DXBallInstanceSemaphore') >>> 0,
+  (namedSemaphore | 0x80000000) >>> 0,
+  'an existing same-name semaphore is opened before replacement counts are validated'
+);
+assert.strictEqual(namedSemaphoreTm.openSemaphore('dxballinstancesemaphore'), 0,
+  'named semaphore lookup is case-sensitive');
+assert.strictEqual(namedSemaphoreTm.openSemaphore('DXBallInstanceSemaphore'), namedSemaphore,
+  'OpenSemaphore returns the shared object');
+assert.strictEqual(namedSemaphoreTm.waitSingle(namedSemaphore, 0), 0);
+assert.strictEqual(namedSemaphoreTm.waitSingle(namedSemaphore, 0), 0x102,
+  'all named handles observe the same count');
+assert.strictEqual(namedSemaphoreTm.releaseSemaphore(namedSemaphore, 2, 0), 1,
+  'the original maximum count survives a duplicate CreateSemaphore');
+assert.strictEqual(namedSemaphoreTm.releaseSemaphore(namedSemaphore, 1, 0), 0,
+  'the retained maximum rejects an overflowing release');
+assert.strictEqual(namedSemaphoreTm.closeSyncHandle(namedSemaphore), true);
+assert.strictEqual(namedSemaphoreTm.closeSyncHandle(namedSemaphore), true);
+assert.strictEqual(namedSemaphoreTm.closeSyncHandle(namedSemaphore), true);
+assert.strictEqual(namedSemaphoreTm.openSemaphore('DXBallInstanceSemaphore'), 0,
+  'the name disappears with the final reference');
+
+const sharedNamespaceTm = makeThreadManager();
+const sharedEvent = sharedNamespaceTm.createEvent(false, false, 'SharedKernelName');
+assert(sharedEvent);
+assert.strictEqual(
+  sharedNamespaceTm.createSemaphore(0, 1, 'SharedKernelName') >>> 0,
+  0x80000000,
+  'a bare private tag reports an event/semaphore name collision'
+);
+assert.strictEqual(sharedNamespaceTm.openSemaphore('SharedKernelName') >>> 0, 0x80000000,
+  'opening a name owned by another synchronization type is distinguished from not-found');
+assert.strictEqual(sharedNamespaceTm.closeSyncHandle(sharedEvent), true);
+const sharedSemaphore = sharedNamespaceTm.createSemaphore(0, 1, 'SharedKernelName');
+assert(sharedSemaphore);
+assert.strictEqual(sharedNamespaceTm.createMutex(false, 'SharedKernelName') >>> 0, 0x80000000,
+  'mutexes and semaphores use the same named-object namespace');
 assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), 0,
   'the name disappears after the final reference closes');
 
