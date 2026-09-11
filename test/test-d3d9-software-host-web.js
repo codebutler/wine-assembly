@@ -168,6 +168,12 @@ const backend=process.argv.includes('--webgl')?'webgl':'software';
       await call('IDirect3DDevice9_SetTexture',['device',0,0]);
       await call('IDirect3DDevice9_GetBackBuffer',['device',0,0,0,'out']);
       await page.evaluate(()=>{const w=runningApps[0].wine;w.d3dProbe.backSurface=w.instance.exports.guest_read32(w.d3dProbe.out)>>>0;});
+      await call('IDirect3DDevice9_AddRef',['device'],true);
+      const deviceRefsBeforeGetDevice=await call('IDirect3DDevice9_Release',['device'],true);
+      await call('IDirect3DSurface9_GetDevice',['backSurface','out']);
+      assert(await page.evaluate(()=>{const w=runningApps[0].wine;return (w.instance.exports.guest_read32(w.d3dProbe.out)>>>0)===w.d3dProbe.device;}),
+        'backbuffer GetDevice returns its owning device');
+      assert.strictEqual(await call('IDirect3DDevice9_Release',['device'],true),deviceRefsBeforeGetDevice,'release GetDevice reference');
       await call('IDirect3DDevice9_CreateOffscreenPlainSurface',['device',1,1,22,2,'out',0]);
       await page.evaluate(()=>{const w=runningApps[0].wine;w.d3dProbe.upload=w.instance.exports.guest_read32(w.d3dProbe.out)>>>0;});
       await call('IDirect3DSurface9_LockRect',['upload','pp',0,0]);

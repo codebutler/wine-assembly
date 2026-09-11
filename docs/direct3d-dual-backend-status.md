@@ -1429,3 +1429,20 @@ Browser61376 software and11089 WebGL pass actual x86 CreateDevice with Flags1
 and the GDI roundtrip in both guest modes. This does not implement implicit
 backbuffer LockRect, broader creation-parameter validation, or the remaining
 surface/DC formats and ownership rules.
+
+Implicit Surface9.GetDevice now validates the output, resolves its live owner,
+and returns the canonical Device9 interface with one added reference rather than
+trapping. Native72381 verifies identity, null-output rejection, stdcall cleanup,
+balanced reference ownership and replacement-backbuffer identity after Reset,
+in direct/worker modes. Browser19382 software and17109 WebGL verify actual x86
+GetDevice and balanced device references in both guest modes; fullbuild48428
+passes1154554/1155022 bytes. Earlier browser33467/32939 failures were a fixture
+assuming refcount1 despite live resources; the check now measures its baseline.
+
+Independent review confirms a separate lifetime blocker: implicit surface
+external references do not yet retain their device. Thus GetDevice after the
+caller's final device Release is not supported correctly. Fix acquisition at
+GetBackBuffer, swap-chain GetBackBuffer, implicit GetRenderTarget, AddRef and QI
+with cycle-free external ownership; final surface release must stage and poll
+asynchronous parent teardown without double-decrementing on reentry or retiring
+storage after a failed handoff. GetDevice alone does not resolve that blocker.

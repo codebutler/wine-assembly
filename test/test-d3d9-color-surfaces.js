@@ -156,6 +156,11 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     e.guest_write32(pp+44,0);
     ok(e.create_device(pp,out),'alias device');const ad=read(out);
     ok(e.Device9_GetRenderTarget(ad,0,out),'alias backbuffer');let ab=read(out);
+    bad(e.Surface9_GetDevice(ab,0));
+    ok(e.Surface9_GetDevice(ab,out),'implicit surface GetDevice');
+    assert.strictEqual(read(out),ad,'implicit surface returns canonical device');
+    assert.strictEqual(e.get_esp()>>>0,0x074ff00c,'GetDevice stdcall');
+    assert.strictEqual(await invoke(e.Device9_Release,read(out)),1,'GetDevice owns one device reference');
     bad(await invoke(e.Surface9_GetDC,ab,out));assert.strictEqual(read(out),0,'nonlockable backbuffer exposes no DC');
     e.guest_write32(pp+44,1);
     bad(await invoke(e.Device9_Reset,ad,pp)); // external reference prevents transition
@@ -163,6 +168,8 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     e.Surface9_Release(ab);e.guest_write32(pp+44,1);
     ok(await invoke(e.Device9_Reset,ad,pp),'Reset enables lockable backbuffer');
     ok(e.Device9_GetRenderTarget(ad,0,out));ab=read(out);
+    ok(e.Surface9_GetDevice(ab,out),'replacement backbuffer GetDevice');
+    assert.strictEqual(read(out),ad);assert.strictEqual(await invoke(e.Device9_Release,read(out)),1);
     for(const format of[62,0x31545844,0x35545844]){
       ok(e.raw_texture(ad,2,format,out),'raw system texture');const st=read(out);
       ok(e.raw_texture(ad,0,format,out),'raw default texture');const dt=read(out);

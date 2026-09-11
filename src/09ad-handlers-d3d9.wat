@@ -1920,7 +1920,16 @@
       (call $handle_IDirect3DShader9_GetDevice
         (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (local.get $arg1)
         (i32.const 0) (i32.const 0) (i32.const 0) (local.get $name_ptr)) (return)))
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (i32.const 0x8876086c))
+    (if (call $d3d9_state_bytes (local.get $arg1) (i32.const 4)) (then
+      (call $gs32 (local.get $arg1) (i32.const 0))
+      (local.set $device (call $d3d9_backbuffer_owner (local.get $arg0)))
+      (if (local.get $device) (then
+        (local.set $entry (call $dx_from_this (local.get $device)))
+        (store.field DxObject refcount (local.get $entry)
+          (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
+        (call $gs32 (local.get $arg1) (local.get $device))
+        (global.set $eax (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DSurface9_SetPrivateData — 5 args (incl. this)
