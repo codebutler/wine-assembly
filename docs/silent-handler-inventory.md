@@ -295,3 +295,10 @@ association instead of fabricating the process main window. Reserved flags,
 invalid windows and null output pointers fail without changing retained state.
 Generating and consuming the window's changing visible clip region remains a
 separate DirectDraw task.
+
+2026-09-11: 342 -> 340. IDirectDrawSurface::SetClipper now owns one COM
+reference to its attached clipper, replaces or detaches it without leaks, and
+automatically releases it with the surface. GetClipper returns an independently
+AddRefed interface and reports a missing attachment. Windowed presentation now
+uses the HWND retained by that clipper instead of assuming the cooperative
+window; arbitrary SetClipList regions and occlusion snapshots remain separate.
