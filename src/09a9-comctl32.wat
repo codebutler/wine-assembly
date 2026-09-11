@@ -1444,17 +1444,107 @@
     (if (i32.or
           (i32.or (i32.lt_u (local.get $size) (i32.const 40))
                   (i32.gt_u (local.get $size) (i32.const 0x1000)))
-          (i32.or
-            (i32.gt_u (local.get $size)
-              (i32.sub (local.get $block_size) (i32.const 12)))
-            (i32.ne (i32.load offset=8 (local.get $raw_w)) (local.get $size))))
+          (i32.gt_u (local.get $size)
+            (i32.sub (local.get $block_size) (i32.const 12))))
       (then (return (i32.const 0))))
     (local.get $raw_w))
 
+  ;; Invoke a page callback as the real three-argument stdcall. This mirrors the
+  ;; bounded synchronous guest-call path used by EDITSTREAM and SendMessage:
+  ;; preserve every interrupted x86 register, enter through the existing sync
+  ;; return thunk, and restore the caller after the callback reaches it.
+  (func $propsheet_page_callback
+      (param $page i32) (param $psp_w i32) (param $message i32) (result i32)
+    (local $callback i32) (local $result i32) (local $rounds i32)
+    (local $old_eip i32) (local $old_esp i32) (local $old_eax i32)
+    (local $old_ecx i32) (local $old_edx i32) (local $old_ebx i32)
+    (local $old_esi i32) (local $old_edi i32) (local $old_ebp i32)
+    (local $old_handler_set_eip i32) (local $old_steps i32)
+    (local $old_yield_reason i32) (local $old_yield_flag i32)
+    (if (i32.eqz
+          (i32.and (i32.load offset=4 (local.get $psp_w)) (i32.const 0x80)))
+      (then (return (i32.const 1))))
+    (local.set $callback (i32.load offset=32 (local.get $psp_w)))
+    (if (i32.eqz (local.get $callback)) (then (return (i32.const 1))))
+    (local.set $old_eip (global.get $eip))
+    (local.set $old_esp (global.get $esp))
+    (local.set $old_eax (global.get $eax))
+    (local.set $old_ecx (global.get $ecx))
+    (local.set $old_edx (global.get $edx))
+    (local.set $old_ebx (global.get $ebx))
+    (local.set $old_esi (global.get $esi))
+    (local.set $old_edi (global.get $edi))
+    (local.set $old_ebp (global.get $ebp))
+    (local.set $old_handler_set_eip (global.get $handler_set_eip))
+    (local.set $old_steps (global.get $steps))
+    (local.set $old_yield_reason (global.get $yield_reason))
+    (local.set $old_yield_flag (global.get $yield_flag))
+    ;; Push right-to-left: ppsp, PSPCB_*, NULL hwnd, return thunk.
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $page))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $message))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (i32.const 0))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (global.get $sync_msg_ret_thunk))
+    (global.set $eip (local.get $callback))
+    (global.set $steps (i32.const 0))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $sync_msg_depth
+      (i32.add (global.get $sync_msg_depth) (i32.const 1)))
+    (block $done (loop $run_callback
+      (call $run (i32.const 1000000))
+      (br_if $done (i32.eqz (global.get $eip)))
+      (local.set $rounds (i32.add (local.get $rounds) (i32.const 1)))
+      (br_if $done (i32.ge_u (local.get $rounds) (i32.const 64)))
+      (br $run_callback)))
+    (global.set $sync_msg_depth
+      (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+    ;; A callback that fails to reach the return thunk cannot safely approve a
+    ;; page. PSPCB_RELEASE ignores the result, but uses the same bounded call.
+    (local.set $result
+      (select (global.get $eax) (i32.const 0) (i32.eqz (global.get $eip))))
+    (global.set $eip (local.get $old_eip))
+    (global.set $esp (local.get $old_esp))
+    (global.set $eax (local.get $old_eax))
+    (global.set $ecx (local.get $old_ecx))
+    (global.set $edx (local.get $old_edx))
+    (global.set $ebx (local.get $old_ebx))
+    (global.set $esi (local.get $old_esi))
+    (global.set $edi (local.get $old_edi))
+    (global.set $ebp (local.get $old_ebp))
+    (global.set $handler_set_eip (local.get $old_handler_set_eip))
+    (global.set $steps (local.get $old_steps))
+    (global.set $yield_reason (local.get $old_yield_reason))
+    (global.set $yield_flag (local.get $old_yield_flag))
+    (local.get $result))
+
+  (func $propsheet_page_ref_change
+      (param $psp_w i32) (param $delta i32)
+    (local $ref_g i32) (local $ref_w i32)
+    (if (i32.eqz
+          (i32.and (i32.load offset=4 (local.get $psp_w)) (i32.const 0x40)))
+      (then (return)))
+    (local.set $ref_g (i32.load offset=36 (local.get $psp_w)))
+    (if (i32.eqz (local.get $ref_g)) (then (return)))
+    (local.set $ref_w (call $g2w (local.get $ref_g)))
+    (i32.store (local.get $ref_w)
+      (i32.add (i32.load (local.get $ref_w)) (local.get $delta))))
+
   (func $propsheet_page_destroy_owned (param $page i32) (result i32)
-    (local $raw_w i32)
+    (local $raw_w i32) (local $psp_w i32)
     (local.set $raw_w (call $propsheet_page_record (local.get $page)))
     (if (i32.eqz (local.get $raw_w)) (then (return (i32.const 0))))
+    ;; Retire the handle before PSPCB_RELEASE so a callback that recursively
+    ;; calls DestroyPropertySheetPage cannot enter itself or double-free.
+    (i32.store (local.get $raw_w) (i32.const 0x52475050)) ;; "PPGR"
+    (local.set $psp_w (i32.add (local.get $raw_w) (i32.const 8)))
+    (drop (call $propsheet_page_callback
+      (local.get $page) (local.get $psp_w) (i32.const 1))) ;; PSPCB_RELEASE
+    ;; Win98 delivers RELEASE first, then balances PSP_USEREFPARENT.
+    (call $propsheet_page_ref_change (local.get $psp_w) (i32.const -1))
     (i32.store (local.get $raw_w) (i32.const 0))
     (i32.store offset=4 (local.get $raw_w) (i32.const 0))
     (call $heap_free (i32.sub (local.get $page) (i32.const 8)))
@@ -1462,9 +1552,9 @@
 
   ;; CreatePropertySheetPageA(lppsp) — 1 arg, returns HPROPSHEETPAGE.
   ;; Win98 accepts 40..4096-byte structures and rejects flag bits above bit 15.
-  ;; PSP_USECALLBACK needs a synchronous guest PSPCB_CREATE/RELEASE pair. Until
-  ;; that continuation exists, fail explicitly instead of returning a handle
-  ;; whose documented lifetime callbacks would silently never run.
+  ;; On the Win98 path, structures newer than the 40-byte base receive the
+  ;; return-ignored PSPCB_ADDREF here. PSPCB_CREATE belongs to page-dialog
+  ;; materialization, and PSPCB_RELEASE is delivered exactly once on teardown.
   (func $handle_CreatePropertySheetPageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $src_w i32) (local $size i32) (local $flags i32)
     (local $raw i32) (local $raw_w i32)
@@ -1479,9 +1569,7 @@
     (if (i32.or
           (i32.or (i32.lt_u (local.get $size) (i32.const 40))
                   (i32.gt_u (local.get $size) (i32.const 0x1000)))
-          (i32.or
-            (i32.ne (i32.and (local.get $flags) (i32.const 0xFFFF0000)) (i32.const 0))
-            (i32.ne (i32.and (local.get $flags) (i32.const 0x00000080)) (i32.const 0))))
+          (i32.ne (i32.and (local.get $flags) (i32.const 0xFFFF0000)) (i32.const 0)))
       (then
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
@@ -1497,7 +1585,21 @@
     (i32.store offset=4 (local.get $raw_w) (local.get $size))
     (memory.copy (i32.add (local.get $raw_w) (i32.const 8))
       (local.get $src_w) (local.get $size))
-    (global.set $eax (i32.add (local.get $raw) (i32.const 8)))
+    (local.set $arg0 (i32.add (local.get $raw) (i32.const 8)))
+    ;; Match Win98's ordering by incrementing the optional parent reference
+    ;; after allocation succeeds and before the optional ADDREF callback.
+    (call $propsheet_page_ref_change
+      (i32.add (local.get $raw_w) (i32.const 8)) (i32.const 1))
+    ;; Win98 sends PSPCB_ADDREF only for records larger than its 40-byte base.
+    (if (i32.gt_u (local.get $size) (i32.const 40))
+      (then
+        (drop (call $propsheet_page_callback
+          (local.get $arg0) (i32.add (local.get $raw_w) (i32.const 8))
+          (i32.const 0))))) ;; PSPCB_ADDREF
+    ;; A reentrant callback may have destroyed the handle itself.
+    (if (i32.eqz (call $propsheet_page_record (local.get $arg0)))
+      (then (local.set $arg0 (i32.const 0))))
+    (global.set $eax (local.get $arg0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; DestroyPropertySheetPage(hPSPage) — 1 arg, returns BOOL.

@@ -17690,7 +17690,7 @@
     ;; handle array. Retire those copied page objects with the frame, matching
     ;; the lifetime transfer documented for PropertySheet.
     (if (i32.eq (local.get $class) (i32.const 32))
-      (then (call $propsheet_release_page_handles)))
+      (then (call $propsheet_release_pages)))
     (global.set $modal_result (local.get $result))
     (call $cd_modal_writeback (local.get $result))
     (local.set $owner (call $wnd_get_owner (local.get $hwnd)))
@@ -17756,18 +17756,55 @@
       (then (return (i32.const 0))))
     (local.get $psp_g))
 
-  (func $propsheet_release_page_handles
-    (local $pages_w i32) (local $i i32) (local $page i32)
-    (if (i32.eqz (global.get $propsheet_owns_page_handles)) (then (return)))
-    (local.set $pages_w (call $g2w (global.get $propsheet_pages)))
+  (func $propsheet_prepare_inline_pages (result i32)
+    (local $i i32) (local $page i32) (local $page_w i32) (local $size i32)
+    (global.set $propsheet_inline_pages_initialized (i32.const 0))
     (block $done (loop $pages
       (br_if $done (i32.ge_u (local.get $i) (global.get $propsheet_page_count)))
-      (local.set $page (i32.load (i32.add (local.get $pages_w)
-        (i32.shl (local.get $i) (i32.const 2)))))
-      (drop (call $propsheet_page_destroy_owned (local.get $page)))
+      (local.set $page (call $propsheet_resolve_page (local.get $i)))
+      (if (i32.eqz (local.get $page)) (then (return (i32.const 0))))
+      (local.set $page_w (call $g2w (local.get $page)))
+      (local.set $size (i32.load (local.get $page_w)))
+      (call $propsheet_page_ref_change (local.get $page_w) (i32.const 1))
+      (if (i32.gt_u (local.get $size) (i32.const 40))
+        (then
+          (drop (call $propsheet_page_callback
+            (local.get $page) (local.get $page_w) (i32.const 0))))) ;; PSPCB_ADDREF
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (global.set $propsheet_inline_pages_initialized (local.get $i))
       (br $pages)))
-    (global.set $propsheet_owns_page_handles (i32.const 0)))
+    (i32.const 1))
+
+  (func $propsheet_release_pages
+    (local $pages_w i32) (local $i i32) (local $page i32) (local $page_w i32)
+    (local.set $pages_w (call $g2w (global.get $propsheet_pages)))
+    (if (global.get $propsheet_owns_page_handles)
+      (then
+        (block $handles_done (loop $handles
+          (br_if $handles_done
+            (i32.ge_u (local.get $i) (global.get $propsheet_page_count)))
+          (local.set $page (i32.load (i32.add (local.get $pages_w)
+            (i32.shl (local.get $i) (i32.const 2)))))
+          (drop (call $propsheet_page_destroy_owned (local.get $page)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $handles)))
+        (global.set $propsheet_owns_page_handles (i32.const 0))
+        (return)))
+    ;; PSH_PROPSHEETPAGE creates its inline records implicitly. Release every
+    ;; initialized record, including a page whose dialog was never selected.
+    (block $inline_done (loop $inline
+      (br_if $inline_done
+        (i32.ge_u (local.get $i) (global.get $propsheet_inline_pages_initialized)))
+      (local.set $page (call $propsheet_resolve_page (local.get $i)))
+      (if (local.get $page)
+        (then
+          (local.set $page_w (call $g2w (local.get $page)))
+          (drop (call $propsheet_page_callback
+            (local.get $page) (local.get $page_w) (i32.const 1))) ;; PSPCB_RELEASE
+          (call $propsheet_page_ref_change (local.get $page_w) (i32.const -1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $inline)))
+    (global.set $propsheet_inline_pages_initialized (i32.const 0)))
   (func $propsheet_notify (param $page i32) (param $code i32) (result i32)
     (local $nm_g i32) (local $nm_w i32) (local $ret i32)
     (if (i32.eqz (local.get $page)) (then (return (i32.const 0))))
@@ -17828,6 +17865,11 @@
     (if (i32.eqz (local.get $psp_g)) (then (return (i32.const 0))))
     (local.set $psp_w (call $g2w (local.get $psp_g)))
     (local.set $size (i32.load (local.get $psp_w)))
+    ;; PSPCB_CREATE belongs to dialog materialization, not handle allocation.
+    ;; Its zero return vetoes this page before any HWND or resource is created.
+    (if (i32.eqz (call $propsheet_page_callback
+          (local.get $psp_g) (local.get $psp_w) (i32.const 2)))
+      (then (return (i32.const 0))))
     (local.set $hinst (i32.load offset=8 (local.get $psp_w)))
     (local.set $template (i32.load offset=12 (local.get $psp_w)))
     (local.set $proc (i32.load offset=24 (local.get $psp_w)))
@@ -17927,11 +17969,20 @@
     (global.set $propsheet_pages_are_handles
       (i32.eqz (i32.and (local.get $flags) (i32.const 0x00000008))))
     (global.set $propsheet_owns_page_handles (i32.const 0))
+    (global.set $propsheet_inline_pages_initialized (i32.const 0))
     (if (i32.or (i32.eqz (global.get $propsheet_page_count))
                 (i32.or
                   (i32.gt_u (global.get $propsheet_page_count) (i32.const 100))
                   (i32.eqz (global.get $propsheet_pages))))
       (then (return (i32.const 0))))
+    (global.set $propsheet_owns_page_handles
+      (global.get $propsheet_pages_are_handles))
+    (if (i32.and
+          (i32.eqz (global.get $propsheet_pages_are_handles))
+          (i32.eqz (call $propsheet_prepare_inline_pages)))
+      (then
+        (call $propsheet_release_pages)
+        (return (i32.const 0))))
     (local.set $owner (i32.load offset=8 (local.get $header_w)))
     (local.set $caption_g (i32.load offset=20 (local.get $header_w)))
     (local.set $caption_w (select (call $g2w (local.get $caption_g)) (i32.const 0) (local.get $caption_g)))
@@ -17969,9 +18020,8 @@
         (call $wnd_destroy_tree (local.get $dlg))
         (call $host_destroy_window (local.get $dlg))
         (global.set $propsheet_frame_hwnd (i32.const 0))
+        (call $propsheet_release_pages)
         (return (i32.const 0))))
-    (global.set $propsheet_owns_page_handles
-      (global.get $propsheet_pages_are_handles))
     (global.set $main_hwnd (local.get $dlg))
     (local.get $dlg))
 

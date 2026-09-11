@@ -36,6 +36,14 @@ const extraWat = String.raw`
 
   (func (export "test_psp_is_live") (param $page i32) (result i32)
     (i32.ne (call $propsheet_page_record (local.get $page)) (i32.const 0)))
+  (func (export "test_psp_callback")
+      (param $page i32) (param $message i32) (result i32)
+    (local $raw_w i32)
+    (local.set $raw_w (call $propsheet_page_record (local.get $page)))
+    (if (i32.eqz (local.get $raw_w)) (then (return (i32.const 0))))
+    (call $propsheet_page_callback
+      (local.get $page) (i32.add (local.get $raw_w) (i32.const 8))
+      (local.get $message)))
 
   (func (export "test_psp_use_handle_array") (param $pages i32) (param $count i32)
     (global.set $propsheet_pages (local.get $pages))
@@ -54,11 +62,16 @@ const extraWat = String.raw`
 
   (func (export "test_psp_transfer_and_release")
     (global.set $propsheet_owns_page_handles (i32.const 1))
-    (call $propsheet_release_page_handles))
+    (call $propsheet_release_pages))
+  (func (export "test_psp_prepare_inline") (result i32)
+    (call $propsheet_prepare_inline_pages))
+  (func (export "test_psp_release_pages")
+    (call $propsheet_release_pages))
 `;
 
 (async () => {
-  const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const bytes = new Uint8Array(memory.buffer);
   e.init_thread(0, 0, 0, 0, 0, 0, 0, 0x1000);
 
   const allocPage = (size = 40, flags = 0) => {
@@ -74,6 +87,7 @@ const extraWat = String.raw`
     e.guest_write32(page + 8, 0x00400000);
     e.guest_write32(page + 12, 101);
     e.guest_write32(page + 24, 0x00401234);
+    e.guest_write32(page + 32, 0);
     return page;
   };
 
@@ -88,8 +102,73 @@ const extraWat = String.raw`
   }
   assert.strictEqual(e.test_create_property_sheet_page(allocPage(40, 0x10000)), 0,
     'Win98 rejects page flag bits above bit 15');
-  assert.strictEqual(e.test_create_property_sheet_page(allocPage(40, 0x80)), 0,
-    'callback pages fail explicitly until PSPCB_CREATE/RELEASE is modeled');
+  const nullCallbackPage = e.test_create_property_sheet_page(allocPage(40, 0x80)) >>> 0;
+  assert(nullCallbackPage,
+    'Win98 tolerates PSP_USECALLBACK with a NULL callback pointer');
+  assert.strictEqual(e.test_destroy_property_sheet_page(nullCallbackPage), 1);
+
+  const makeCallback = result => {
+    const capture = e.guest_alloc(8) >>> 0;
+    const code = e.guest_alloc(32) >>> 0;
+    const le32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
+      .map(byte => byte & 0xFF);
+    bytes.set([
+      0x8B, 0x44, 0x24, 0x08,             // mov eax,[esp+8]  (uMsg)
+      0xA3, ...le32(capture),              // mov [capture],eax
+      0x8B, 0x44, 0x24, 0x0C,             // mov eax,[esp+12] (ppsp)
+      0xA3, ...le32(capture + 4),          // mov [capture+4],eax
+      0xB8, ...le32(result),               // mov eax,result
+      0xC2, 0x0C, 0x00,                    // ret 12
+    ], e.guest_to_wasm(code) >>> 0);
+    return { capture, code };
+  };
+
+  const accepting = makeCallback(1);
+  const parentRef = e.guest_alloc(4) >>> 0;
+  e.guest_write32(parentRef, 7);
+  const callbackSource = allocPage(48, 0x80 | 0x40);
+  e.guest_write32(callbackSource + 32, accepting.code);
+  e.guest_write32(callbackSource + 36, parentRef);
+  const callbackPage = e.test_create_property_sheet_page(callbackSource) >>> 0;
+  assert(callbackPage, 'a callback can approve page creation');
+  assert.strictEqual(e.guest_read32(accepting.capture), 0,
+    'a newer-sized Win98 page receives return-ignored PSPCB_ADDREF at allocation');
+  assert.strictEqual(e.guest_read32(accepting.capture + 4) >>> 0, callbackPage,
+    'PSPCB_ADDREF receives the owned copy, not caller storage');
+  assert.strictEqual(e.guest_read32(parentRef), 8,
+    'PSP_USEREFPARENT increments before PSPCB_ADDREF');
+  assert.strictEqual(e.test_psp_callback(callbackPage, 2), 1,
+    'PSPCB_CREATE can approve page-dialog materialization');
+  assert.strictEqual(e.guest_read32(accepting.capture), 2,
+    'PSPCB_CREATE is delivered at page-dialog creation, not handle allocation');
+  assert.strictEqual(e.test_destroy_property_sheet_page(callbackPage), 1);
+  assert.strictEqual(e.guest_read32(accepting.capture), 1,
+    'DestroyPropertySheetPage delivers PSPCB_RELEASE');
+  assert.strictEqual(e.guest_read32(accepting.capture + 4) >>> 0, callbackPage,
+    'PSPCB_RELEASE identifies the same page copy');
+  assert.strictEqual(e.guest_read32(parentRef), 7,
+    'release balances the optional parent reference after the callback');
+  assert.strictEqual(e.test_destroy_property_sheet_page(callbackPage), 0,
+    'release callback and storage retirement happen only once');
+
+  const vetoing = makeCallback(0);
+  const vetoSource = allocPage(48, 0x80 | 0x40);
+  e.guest_write32(vetoSource + 32, vetoing.code);
+  e.guest_write32(vetoSource + 36, parentRef);
+  const vetoPage = e.test_create_property_sheet_page(vetoSource) >>> 0;
+  assert(vetoPage,
+    'PSPCB_ADDREF return value does not veto handle allocation');
+  assert.strictEqual(e.test_psp_callback(vetoPage, 2), 0,
+    'zero from PSPCB_CREATE vetoes page-dialog materialization');
+  assert.strictEqual(e.guest_read32(vetoing.capture), 2,
+    'the vetoing callback receives PSPCB_CREATE');
+  assert.strictEqual(e.guest_read32(parentRef), 8,
+    'the allocated page owns its parent reference even when dialog creation is vetoed');
+  assert.strictEqual(e.test_destroy_property_sheet_page(vetoPage), 1);
+  assert.strictEqual(e.guest_read32(vetoing.capture), 1,
+    'a vetoed page still receives its eventual PSPCB_RELEASE');
+  assert.strictEqual(e.guest_read32(parentRef), 7,
+    'destroying the vetoed page balances its parent reference');
 
   const source = allocPage(48);
   e.guest_write32(source + 28, 0x12345678);
@@ -153,13 +232,34 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_psp_resolve(1), 0,
     'a malformed inline array member is rejected');
 
+  const inlineCallback = makeCallback(1);
+  const inlineRef = e.guest_alloc(4) >>> 0;
+  e.guest_write32(inlineRef, 3);
+  const implicit = allocPage(48, 0x80 | 0x40);
+  e.guest_write32(implicit + 32, inlineCallback.code);
+  e.guest_write32(implicit + 36, inlineRef);
+  e.test_psp_use_inline_array(implicit, 1);
+  assert.strictEqual(e.test_psp_prepare_inline(), 1,
+    'PropertySheet can initialize an implicit inline page');
+  assert.strictEqual(e.guest_read32(inlineCallback.capture), 0,
+    'implicit newer-sized pages receive PSPCB_ADDREF');
+  assert.strictEqual(e.guest_read32(inlineCallback.capture + 4) >>> 0, implicit,
+    'the inline callback receives the caller-owned page structure');
+  assert.strictEqual(e.guest_read32(inlineRef), 4,
+    'implicit creation increments PSP_USEREFPARENT');
+  e.test_psp_release_pages();
+  assert.strictEqual(e.guest_read32(inlineCallback.capture), 1,
+    'sheet teardown sends PSPCB_RELEASE for an implicit unshown page');
+  assert.strictEqual(e.guest_read32(inlineRef), 3,
+    'implicit sheet teardown balances PSP_USEREFPARENT');
+
   const apiTable = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'src', 'api_table.json'), 'utf8'));
   const destroyApi = apiTable.find(api => api.name === 'DestroyPropertySheetPage');
   assert(destroyApi && destroyApi.nargs === 1,
     'DestroyPropertySheetPage is registered as a one-argument API');
 
-  console.log('PASS  property-sheet pages are copied, validated, consumed, and destroyed');
+  console.log('PASS  property-sheet pages honor Win98 copy, callback, reference, and ownership lifetimes');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
