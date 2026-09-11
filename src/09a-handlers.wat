@@ -17353,11 +17353,11 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; live with the OLE continuation bridge in 09a7b-ole.wat. Browser-originated
   ;; drop delivery can now use that retained target without inventing lifetime.
   (func $handle_RegisterDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $ole_register_drag_drop (local.get $arg0) (local.get $arg1))
+    (call $com_register_drag_drop (local.get $arg0) (local.get $arg1))
   )
 
   (func $handle_RevokeDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $ole_revoke_drag_drop (local.get $arg0))
+    (call $com_revoke_drag_drop (local.get $arg0))
   )
 
   ;; CoLockObjectExternal(pUnk, fLock, fLastUnlockReleases) — return S_OK.

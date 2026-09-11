@@ -53,7 +53,7 @@
 
   ;; RegisterDragDrop owns one reference on the supplied IDropTarget. Commit
   ;; the registration only after a DLL-private target's guest AddRef returns.
-  (func $ole_register_drag_drop (param $hwnd i32) (param $target i32)
+  (func $com_register_drag_drop (param $hwnd i32) (param $target i32)
     (local $entry i32) (local $owned i32) (local $ret i32) (local $ctx i32)
     (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
       (then
@@ -115,7 +115,7 @@
   ;; Revoke first makes the HWND undiscoverable, then releases the retained
   ;; target. That ordering keeps a reentrant guest Release from finding stale
   ;; registration state.
-  (func $ole_revoke_drag_drop (param $hwnd i32)
+  (func $com_revoke_drag_drop (param $hwnd i32)
     (local $entry i32) (local $target i32) (local $owned i32)
     (local $ret i32) (local $ctx i32)
     (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
