@@ -204,6 +204,17 @@ const backend=process.argv.includes('--webgl')?'webgl':'software';
       await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
       assert.strictEqual(await page.evaluate(()=>{const w=runningApps[0].wine;return new Uint32Array(w.memory.buffer,w.d3dProbe.target,64)[0];}),0xffabcdef,
         'implicit UnlockRect uploads canonical bytes');
+      await call('IDirect3DDevice9_SetRenderTarget',['device',0,'backSurface']);
+      await call('IDirect3DDevice9_Clear',['device',0,0,1,0x40123456,0x3f800000,0]);
+      await page.evaluate(()=>{const w=runningApps[0].wine,e=w.instance.exports,p=w.d3dProbe;
+        p.lockRect=e.guest_alloc(16)>>>0;[1,1,2,2].forEach((v,i)=>e.guest_write32(p.lockRect+i*4,v));});
+      await call('IDirect3DSurface9_LockRect',['backSurface','pp','lockRect',0]);
+      await page.evaluate(()=>{const w=runningApps[0].wine,e=w.instance.exports,p=w.d3dProbe;
+        e.guest_write32(e.guest_read32(p.pp+4),0x11556677);[0,0,8,8].forEach((v,i)=>e.guest_write32(p.lockRect+i*4,v));});
+      await call('IDirect3DSurface9_UnlockRect',['backSurface']);
+      await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
+      assert.deepStrictEqual(await page.evaluate(()=>{const w=runningApps[0].wine,pixels=new Uint32Array(w.memory.buffer,w.d3dProbe.target,64);
+        return [pixels[0],pixels[9],pixels[10]];}),[0x40123456,0xff556677,0x40123456],'rect upload preserves outside alpha and snapshots bounds');
       await call('IDirect3DSurface9_Release',['upload']);
       await call('IDirect3DSurface9_Release',['textureSurface']);
       await call('IDirect3DTexture9_Release',['texture']);

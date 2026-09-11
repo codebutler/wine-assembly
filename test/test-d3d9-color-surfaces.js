@@ -275,6 +275,24 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     ok(await invoke(e.Surface9_GetDC,ab,out));const dcAfterLock=read(out);
     bad(await invoke(e.Surface9_LockRect,ab,lock,0,0));bad(await invoke(e.Surface9_UnlockRect,ab));
     ok(await invoke(e.Surface9_ReleaseDC,ab,dcAfterLock));
+    ok(await invoke(e.clear,ad,0x40123456),'nonopaque executor contents before partial lock');
+    write(rect,[1,1,2,2]);write(lock,[0xdeadbeef,0xdeadbeef]);
+    let snapshotLock=e.Surface9_LockRect(ab,lock,rect,0);
+    if(e.get_d3d_render_token()){
+      assert.strictEqual(read(lock+4),0xdeadbeef,'parked lock publishes no pointer');
+      write(rect,[-1,-1,999999,999999]);
+      snapshotLock=await invoke(e.Surface9_LockRect,ab,lock,rect,0);
+    }
+    ok(snapshotLock,'lock resumes with captured rectangle');
+    assert.strictEqual(wa(read(lock+4)),e.back_bits(ad)+backWidth*4+4);
+    e.guest_write32(read(lock+4),0x11223344);
+    write(rect,[0,0,backWidth,backHeight]); // guest RECT no longer authoritative
+    bad(await invoke(e.Surface9_LockRect,ab,lock,rect,0));
+    ok(await invoke(e.Surface9_UnlockRect,ab),'unlock uses immutable original subrect');
+    ok(await invoke(e.Surface9_LockRect,ab,lock,0,16));
+    assert.strictEqual(read(read(lock+4)),0x40123456,'outside alpha survives rectangular upload');
+    assert.strictEqual(read(read(lock+4)+backWidth*4+4),0xff223344,'only locked pixel normalizes X8 alpha');
+    ok(await invoke(e.Surface9_UnlockRect,ab));
     bad(await invoke(e.Device9_UpdateSurface,ad,fillSurface,0,uploadSource,0));
     bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,0,fillSurface,0));
     write(destPoint,[-1,0]);bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint));

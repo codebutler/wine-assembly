@@ -1497,3 +1497,21 @@ accepted. Unlock currently uploads the fully synchronized X8 buffer, preserving
 surrounding RGB but normalizing X8 alpha; dirty-rectangle upload optimization,
 pending argument-mutation/multi-producer tests and broader surface formats remain
 open. This does not complete the resource/locking profile.
+
+The next lock checkpoint replaces whole-buffer upload with immutable rectangular
+uploads. Five per-device snapshot words capture output WA and x/y/w/h before
+parking; pending acquisition no longer rereads mutable guest rectangle/flags.
+Rejected nested locks cannot replace the active snapshot. Unlock uses captured
+source offset/full pitch and destination bounds, preserving outside RGB and
+alpha while normalizing only uploaded X8 pixels. DC release remains full-surface.
+Program allocation/zeroing grows from22024 to22044 bytes; independent audit found
+no separate allocation-size mirrors, and Reset allocates fresh zeroed snapshots.
+
+Native32862 passes direct/worker invalidated-rectangle reentry, unchanged pending
+output, nested-lock snapshot preservation and outside-alpha checks. Browser24426
+software and64983 WebGL pass actual x86 partial LockRect/UnlockRect/Present,
+mutated guest RECT and exact inside/outside alpha in both guest modes. Shared
+fullbuild95791 reached the silent-handler inventory gate then stopped during
+concurrent monitor-handler work (353 versus356 baseline); its owner was notified.
+That full-build result is not a pass; browser compilation and focused tests are
+the current evidence for this checkpoint.

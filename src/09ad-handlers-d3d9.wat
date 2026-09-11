@@ -45,9 +45,10 @@
     ;; +21928 D3DMATERIAL9 (68 bytes, all-zero default), +21996 light-list head.
     ;; +22000 scissor RECT16,+22016 explicit rectangle flag (zero = full target).
     ;; +22020 independently bound color surface; zero selects the backbuffer.
-    (local.set $state (call $heap_alloc (i32.const 22024)))
+    ;; +22024 lock output WA; +22028/32/36/40 immutable backbuffer lock x/y/w/h.
+    (local.set $state (call $heap_alloc (i32.const 22044)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22024))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22044))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
