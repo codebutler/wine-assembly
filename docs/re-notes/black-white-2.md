@@ -964,3 +964,23 @@ matching return), rather than stop at the first use of the shared call site.
 The terminal stack again contains destination0/count00a58780 at the copy call.
 No new CPU opcode defect is demonstrated, and the exact allocation-pressure
 cause remains open. Do not restart the old session handle21705; it has exited.
+
+### Targeted post-compaction reproduction10715
+
+`tools/black-white-software-probe.js --allocation-probe` now installs a reusable
+observer that remains armed through earlier allocations and captures only
+EDI00a58780 at009a81c9. Capture is logged synchronously and the exports property
+and breakpoint are restored afterwards, including observation/logging failures.
+The focused observer test verifies filtering, exactly one guest invocation per
+call, unchanged return values/errors, cancellation, serialization and cleanup.
+
+New run10715 is live on the frozen full-build41098 artifact:
+/private/tmp/bw-compacted-repro.kyBDAg/wine.wasm,1158838 bytes,
+SHA2567dee27a0cace008de26aa1cc5d4a1ec4d88ba7228ce589190182b5e30f655183.
+This includes heap-tail reclamation, context compaction and the private VS2
+foundation, but predates the later DirectInput lifecycle commit and matrix work.
+Artifacts: /var/folders/dz/1fqkk_jd4350qkm91pm9_q3c0000gp/T/bw-software-probe-LJrjIm.
+Launch uses --seconds=14400 --capture-every=60 --control-stdin --allocation-probe
+and the frozen --wasm path. Observer installation returned armedtrue with
+address10125769/request10848128. Startup samples through28.95s have no renderer
+failures; neither gameplay nor the target allocation has yet been reached.
