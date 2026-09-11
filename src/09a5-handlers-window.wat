@@ -603,6 +603,11 @@
     ;; WM_NCCREATE -> WM_CREATE via the continuation thunks.
     (if (global.get $cbt_hook_proc)
     (then
+    ;; Preserve an outer hook dispatch across re-entrant window creation.
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (global.get $hook_active_node))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (i32.const 0x31544243)) ;; "CBT1"
     ;; Build CBT_CREATEWND at image_base+0x140 = { lpcs=&CREATESTRUCT, hwndInsertAfter=0 }
     (call $gs32 (i32.add (global.get $image_base) (i32.const 0x140)) (i32.add (global.get $image_base) (i32.const 0x100)))  ;; lpcs
     (call $gs32 (i32.add (global.get $image_base) (i32.const 0x144)) (i32.const 0))         ;; hwndInsertAfter = HWND_TOP
@@ -616,8 +621,8 @@
     ;; Push CBT hook continuation thunk as return address
     (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
     (call $gs32 (global.get $esp) (global.get $cbt_hook_ret_thunk))
-    ;; Jump to CBT hook proc
-    (global.set $eip (global.get $cbt_hook_proc))
+    ;; Jump to the newest CBT hook and establish the active chain node.
+    (global.set $eip (call $hook_dispatch_enter (i32.const 5)))
     )
     (else
     ;; No CBT hook — dispatch WM_NCCREATE first. Guest frameworks (including
@@ -761,6 +766,11 @@
     (call $gs32 (i32.add (global.get $image_base) (i32.const 0x140)) (i32.add (global.get $image_base) (i32.const 0x100)))
     (call $gs32 (i32.add (global.get $image_base) (i32.const 0x144)) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 52)))
+    ;; Preserve an outer hook dispatch across re-entrant child creation.
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (global.get $hook_active_node))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (i32.const 0x31544243)) ;; "CBT1"
     ;; Push stdcall hook args: lParam, wParam, nCode
     (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
     (call $gs32 (global.get $esp) (i32.add (global.get $image_base) (i32.const 0x140)))  ;; lParam = &CBT_CREATEWND
@@ -772,7 +782,7 @@
     (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
     (call $gs32 (global.get $esp) (global.get $child_cbt_ret_thunk))
     (global.set $eax (local.get $hwnd))
-    (global.set $eip (global.get $cbt_hook_proc))
+    (global.set $eip (call $hook_dispatch_enter (i32.const 5)))
     (global.set $steps (i32.const 0))
     (return)))
     ;; No CBT hook and not a native control: dispatch custom child WM_NCCREATE
@@ -1068,6 +1078,11 @@
         ;; Pop CreateDialogParamA frame (ret + 5 args = 24 bytes), then
         ;; call the hook. CACA0028 resumes into WM_INITDIALOG or returns.
         (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        ;; Preserve an outer hook dispatch across re-entrant dialog creation.
+        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+        (call $gs32 (global.get $esp) (global.get $hook_active_node))
+        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+        (call $gs32 (global.get $esp) (i32.const 0x31544243)) ;; "CBT1"
         (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
         (call $gs32 (global.get $esp) (i32.add (global.get $image_base) (i32.const 0x140)))
         (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
@@ -1077,7 +1092,7 @@
         (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
         (call $gs32 (global.get $esp) (global.get $dialog_cbt_ret_thunk))
         (global.set $eax (local.get $hwnd))
-        (global.set $eip (global.get $cbt_hook_proc))
+        (global.set $eip (call $hook_dispatch_enter (i32.const 5)))
         (global.set $steps (i32.const 0))
         (return)))
     ;; If dlgProc is provided, dispatch WM_INITDIALOG
@@ -1569,7 +1584,10 @@
   ;; caller and its BOOL result after the callback pops those three arguments.
   (func $keyboard_hook_begin
       (param $ret i32) (param $ncode i32) (param $vkey i32) (param $lparam i32)
-    ;; Context below the callback frame: magic, saved USER caller EIP.
+    ;; Context below the callback frame: magic, saved USER caller EIP, and
+    ;; the outer active hook node for re-entrant input dispatch.
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (global.get $hook_active_node))
     (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
     (call $gs32 (global.get $esp) (local.get $ret))
     (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
@@ -1583,7 +1601,7 @@
     (call $gs32 (global.get $esp) (local.get $ncode))
     (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
     (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
-    (global.set $eip (global.get $keyboard_hook_proc))
+    (global.set $eip (call $hook_dispatch_enter (i32.const 2)))
     (global.set $steps (i32.const 0)))
 
   ;; 73: GetMessageA

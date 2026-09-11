@@ -61,6 +61,15 @@
     (field x i32)    ;; +0
     (field y i32))   ;; +4  ends at +8 == sizeof(POINT)
 
+  ;; Emulator-private heap record backing the opaque HHOOK values returned by
+  ;; SetWindowsHook[Ex]. Unlike RECT/POINT this is not a guest ABI: USER owns
+  ;; every byte and can retire or extend the representation internally.
+  (layout HookNode
+    (field magic        i32)  ;; +0  "HOK1" while linked
+    (field proc         i32)  ;; +4  guest HookProc
+    (field next         i32)  ;; +8  older hook in this class
+    (field retired_next i32)) ;; +12 deferred-free list
+
   ;; WHY THIS LAYOUT IS SMALL, and it is a finding about the tree and not
   ;; about POINT: almost every guest POINT in this emulator is touched through
   ;; the $gs32/$gl32 guest accessors, which take a GUEST address and are calls,
@@ -11263,69 +11272,204 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
   )
 
-HookEx — no next hook in chain, return 0
+  ;; Heap-backed USER hook node layout (guest pointer returned as HHOOK):
+  ;;   magic "HOK1" while live, proc, next, retired-list link
+  ;; Removed nodes stay allocated while any hook callback is active. A hook
+  ;; can unhook itself (or an older active hook) and still return safely.
+  (func $hook_head_get (param $id_hook i32) (result i32)
+    (if (i32.eq (local.get $id_hook) (i32.const 2))
+      (then (return (global.get $keyboard_hook_head))))
+    (if (i32.eq (local.get $id_hook) (i32.const 5))
+      (then (return (global.get $cbt_hook_head))))
+    (i32.const 0))
+
+  (func $hook_node_proc (param $node i32) (result i32)
+    (if (i32.eqz (local.get $node)) (then (return (i32.const 0))))
+    (load.field.memarg HookNode proc (call $g2w (local.get $node))))
+
+  (func $hook_head_set (param $id_hook i32) (param $node i32)
+    (local $proc i32)
+    (local.set $proc (call $hook_node_proc (local.get $node)))
+    (if (i32.eq (local.get $id_hook) (i32.const 2))
+      (then
+        (global.set $keyboard_hook_head (local.get $node))
+        (global.set $keyboard_hook_proc (local.get $proc))
+        (return)))
+    (if (i32.eq (local.get $id_hook) (i32.const 5))
+      (then
+        (global.set $cbt_hook_head (local.get $node))
+        (global.set $cbt_hook_proc (local.get $proc)))))
+
+  (func $hook_next_live (param $node i32) (result i32)
+    (local $wa i32)
+    (if (local.get $node)
+      (then
+        (local.set $node
+          (load.field.memarg HookNode next (call $g2w (local.get $node))))))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $wa (call $g2w (local.get $node)))
+      (br_if $done
+        (i32.eq (load.field HookNode magic (local.get $wa))
+          (i32.const 0x314B4F48)))
+      (local.set $node (load.field.memarg HookNode next (local.get $wa)))
+      (br $scan)))
+    (local.get $node))
+
+  (func $hook_reap_retired
+    (local $node i32) (local $next i32)
+    (if (global.get $hook_dispatch_depth) (then (return)))
+    (local.set $node (global.get $hook_retired_head))
+    (global.set $hook_retired_head (i32.const 0))
+    (block $done (loop $reap
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $next
+        (load.field.memarg HookNode retired_next
+          (call $g2w (local.get $node))))
+      (call $heap_free (local.get $node))
+      (local.set $node (local.get $next))
+      (br $reap))))
+
+  (func $hook_retire (param $node i32)
+    (local $wa i32)
+    (local.set $wa (call $g2w (local.get $node)))
+    (store.field HookNode magic (local.get $wa) (i32.const 0))
+    (if (global.get $hook_dispatch_depth)
+      (then
+        (store.field.memarg HookNode retired_next (local.get $wa)
+          (global.get $hook_retired_head))
+        (global.set $hook_retired_head (local.get $node)))
+      (else (call $heap_free (local.get $node)))))
+
+  (func $hook_dispatch_enter (param $id_hook i32) (result i32)
+    (local $node i32)
+    (local.set $node (call $hook_head_get (local.get $id_hook)))
+    (if (i32.eqz (local.get $node)) (then (return (i32.const 0))))
+    (global.set $hook_active_node (local.get $node))
+    (global.set $hook_dispatch_depth
+      (i32.add (global.get $hook_dispatch_depth) (i32.const 1)))
+    (call $hook_node_proc (local.get $node)))
+
+  (func $hook_dispatch_leave (param $previous i32)
+    (global.set $hook_active_node (local.get $previous))
+    (if (global.get $hook_dispatch_depth)
+      (then
+        (global.set $hook_dispatch_depth
+          (i32.sub (global.get $hook_dispatch_depth) (i32.const 1)))))
+    (call $hook_reap_retired))
+
+  (func $hook_remove_handle_from
+      (param $id_hook i32) (param $handle i32) (result i32)
+    (local $prev i32) (local $node i32) (local $next i32) (local $wa i32)
+    (local.set $node (call $hook_head_get (local.get $id_hook)))
+    (block $missing (loop $scan
+      (br_if $missing (i32.eqz (local.get $node)))
+      (local.set $wa (call $g2w (local.get $node)))
+      (local.set $next (load.field.memarg HookNode next (local.get $wa)))
+      (if (i32.eq (local.get $node) (local.get $handle))
+        (then
+          (if (local.get $prev)
+            (then
+              (store.field.memarg HookNode next (call $g2w (local.get $prev))
+                (local.get $next)))
+            (else
+              (call $hook_head_set (local.get $id_hook) (local.get $next))))
+          (call $hook_retire (local.get $node))
+          (return (i32.const 1))))
+      (local.set $prev (local.get $node))
+      (local.set $node (local.get $next))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $hook_remove_proc
+      (param $id_hook i32) (param $proc i32) (result i32)
+    (local $node i32)
+    (local.set $node (call $hook_head_get (local.get $id_hook)))
+    (block $missing (loop $scan
+      (br_if $missing (i32.eqz (local.get $node)))
+      (if (i32.eq (call $hook_node_proc (local.get $node)) (local.get $proc))
+        (then
+          (return
+            (call $hook_remove_handle_from
+              (local.get $id_hook) (local.get $node)))))
+      (local.set $node
+        (load.field.memarg HookNode next (call $g2w (local.get $node))))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; CallNextHookEx ignores hhk and enters the next live procedure in the
+  ;; currently executing chain. HKN1 leaves EAX untouched so the exact next
+  ;; hook LRESULT reaches the suspended caller.
   (func $handle_CallNextHookEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $next i32) (local $ret i32)
     ;; CallNextHookEx(hhk, nCode, wParam, lParam) — 4 args stdcall
-    (global.set $eax (i32.const 0))
+    (local.set $next (call $hook_next_live (global.get $hook_active_node)))
+    (if (i32.eqz (local.get $next))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $ret (call $gl32 (global.get $esp)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    ;; Context below the next HookProc frame: magic, CallNext caller, current.
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (global.get $hook_active_node))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $ret))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (i32.const 0x314E4B48)) ;; "HKN1"
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $arg3))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $arg2))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $arg1))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+    (global.set $hook_active_node (local.get $next))
+    (global.set $eip (call $hook_node_proc (local.get $next)))
+    (global.set $steps (i32.const 0))
   )
 
-  ;; USER currently dispatches one process-local hook for each of the two
-  ;; classes below. Keep installation behind one helper so SetWindowsHook and
-  ;; SetWindowsHookEx cannot drift. Distinct opaque handles let the Ex remover
-  ;; identify the slot instead of clearing an unrelated hook.
+  ;; USER models process-local WH_KEYBOARD and WH_CBT chains. New hooks are
+  ;; prepended, matching SetWindowsHookEx ordering; the node pointer is HHOOK.
   (func $install_supported_hook (param $id_hook i32) (param $proc i32) (result i32)
+    (local $node i32) (local $wa i32)
     (if (i32.eqz (local.get $proc))
       (then (return (i32.const 0))))
-    (if (i32.eq (local.get $id_hook) (i32.const 2)) ;; WH_KEYBOARD
-      (then
-        (global.set $keyboard_hook_proc (local.get $proc))
-        (return (i32.const 0xBEEF0002))))
-    (if (i32.eq (local.get $id_hook) (i32.const 5)) ;; WH_CBT
-      (then
-        (global.set $cbt_hook_proc (local.get $proc))
-        (return (i32.const 0xBEEF0005))))
-    (i32.const 0)
+    (if (i32.and
+          (i32.ne (local.get $id_hook) (i32.const 2))
+          (i32.ne (local.get $id_hook) (i32.const 5)))
+      (then (return (i32.const 0))))
+    (local.set $node (call $heap_alloc (size-of HookNode)))
+    (if (i32.eqz (local.get $node)) (then (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $node)))
+    (store.field HookNode magic (local.get $wa)
+      (i32.const 0x314B4F48)) ;; "HOK1"
+    (store.field.memarg HookNode proc (local.get $wa) (local.get $proc))
+    (store.field.memarg HookNode next (local.get $wa)
+      (call $hook_head_get (local.get $id_hook)))
+    (store.field.memarg HookNode retired_next (local.get $wa) (i32.const 0))
+    (call $hook_head_set (local.get $id_hook) (local.get $node))
+    (local.get $node)
   )
 
   ;; 380: UnhookWindowsHookEx(hhk) → BOOL
   (func $handle_UnhookWindowsHookEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $removed i32)
-    (if (i32.and
-          (i32.eq (local.get $arg0) (i32.const 0xBEEF0002))
-          (i32.ne (global.get $keyboard_hook_proc) (i32.const 0)))
+    (local.set $removed
+      (call $hook_remove_handle_from (i32.const 2) (local.get $arg0)))
+    (if (i32.eqz (local.get $removed))
       (then
-        (global.set $keyboard_hook_proc (i32.const 0))
-        (local.set $removed (i32.const 1))))
-    (if (i32.and
-          (i32.eq (local.get $arg0) (i32.const 0xBEEF0005))
-          (i32.ne (global.get $cbt_hook_proc) (i32.const 0)))
-      (then
-        (global.set $cbt_hook_proc (i32.const 0))
-        (local.set $removed (i32.const 1))))
+        (local.set $removed
+          (call $hook_remove_handle_from (i32.const 5) (local.get $arg0)))))
     (global.set $eax (local.get $removed))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; 854: UnhookWindowsHook(nCode, pfnFilterProc) → BOOL — legacy version
   (func $handle_UnhookWindowsHook (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $removed i32)
-    (if (i32.and
-          (i32.eq (local.get $arg0) (i32.const 2))
-          (i32.and
-            (i32.ne (global.get $keyboard_hook_proc) (i32.const 0))
-            (i32.eq (global.get $keyboard_hook_proc) (local.get $arg1))))
-      (then
-        (global.set $keyboard_hook_proc (i32.const 0))
-        (local.set $removed (i32.const 1))))
-    (if (i32.and
-          (i32.eq (local.get $arg0) (i32.const 5))
-          (i32.and
-            (i32.ne (global.get $cbt_hook_proc) (i32.const 0))
-            (i32.eq (global.get $cbt_hook_proc) (local.get $arg1))))
-      (then
-        (global.set $cbt_hook_proc (i32.const 0))
-        (local.set $removed (i32.const 1))))
-    (global.set $eax (local.get $removed))
+    (global.set $eax
+      (call $hook_remove_proc (local.get $arg0) (local.get $arg1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; 381: SetWindowsHookExW — same class-specific handle as the A path.

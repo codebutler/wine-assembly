@@ -339,3 +339,8 @@ metadata, and fixes zero-length NULL ranges. IsBadStringPtrA/W now scan through
 the first NUL or caller maximum without crashing, while the write probe rejects
 read-only sparse pages. These cold API checks do not add permission branches to
 the emulator's hot guest load/store path.
+
+2026-09-11: 334 -> 333. CallNextHookEx now resumes the next live procedure in
+the active WH_KEYBOARD/WH_CBT chain and returns its exact LRESULT. Hook installs
+prepend distinct heap-backed handles, while legacy and Ex unhook operations
+unlink only the named procedure and defer storage retirement across callbacks.

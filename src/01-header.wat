@@ -2820,8 +2820,16 @@
   (global $wndclass_bg_brush (mut i32) (i32.const 0)) ;; hbrBackground from first RegisterClass
   (global $wndclass_style (mut i32) (i32.const 0))    ;; class style from first RegisterClass
   ;; (removed: $window_dc_hwnd — hwnd is now encoded in DC handle)
-  (global $cbt_hook_proc (mut i32) (i32.const 0))     ;; CBT hook proc address (from SetWindowsHookExA WH_CBT)
-  (global $keyboard_hook_proc (mut i32) (i32.const 0)) ;; thread WH_KEYBOARD proc; called as queued key messages are retrieved
+  ;; USER hook chains. The *_proc globals mirror each live head for the many
+  ;; cheap "is a hook installed?" tests in window dispatch; the node globals
+  ;; are opaque guest HHOOK values. Nodes are heap-backed HookNode records.
+  (global $cbt_hook_proc (mut i32) (i32.const 0))
+  (global $keyboard_hook_proc (mut i32) (i32.const 0))
+  (global $cbt_hook_head (mut i32) (i32.const 0))
+  (global $keyboard_hook_head (mut i32) (i32.const 0))
+  (global $hook_active_node (mut i32) (i32.const 0))
+  (global $hook_dispatch_depth (mut i32) (i32.const 0))
+  (global $hook_retired_head (mut i32) (i32.const 0))
   (global $capture_hwnd (mut i32) (i32.const 0))      ;; hwnd that has mouse capture (SetCapture/ReleaseCapture)
   (global $cursor_count (mut i32) (i32.const 0))      ;; ShowCursor display count (>=0 = visible)
   (global $current_cursor (mut i32) (i32.const 0x67F00)) ;; HCURSOR last set by SetCursor (default IDC_ARROW)

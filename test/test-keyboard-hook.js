@@ -11,6 +11,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const ROOT = path.join(__dirname, '..');
 const VK_ESCAPE = 0x1b;
@@ -85,6 +86,17 @@ const extraWat = String.raw`
 
   (func (export "test_keyboard_hook_thunk") (result i32)
     (global.get $font_enum_ret_thunk))
+
+  (func (export "test_make_api_thunk") (param $api_id i32) (result i32)
+    (local $addr i32)
+    (local.set $addr (i32.add (global.get $THUNK_BASE)
+      (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $addr) (i32.const 0))
+    (i32.store offset=4 (local.get $addr) (local.get $api_id))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (i32.add (i32.sub (local.get $addr) (global.get $GUEST_BASE))
+             (global.get $image_base)))
 `;
 
 function u32(value) {
@@ -120,13 +132,23 @@ function u32(value) {
   const toWasm = guest => (guest - imageBase + guestBase) >>> 0;
   const bytes = new Uint8Array(memory.buffer);
   const view = new DataView(memory.buffer);
-  const observed = e.guest_alloc(12) >>> 0;
-  const hook = e.guest_alloc(64) >>> 0;
+  const observed = e.guest_alloc(20) >>> 0;
+  const olderHook = e.guest_alloc(64) >>> 0;
+  const newerHook = e.guest_alloc(96) >>> 0;
+  const selfRemovingHook = e.guest_alloc(96) >>> 0;
   const msg = e.guest_alloc(28) >>> 0;
+  const callNextApi = apiTable.find(entry => entry.name === 'CallNextHookEx');
+  const unhookExApi = apiTable.find(entry => entry.name === 'UnhookWindowsHookEx');
+  assert(callNextApi, 'CallNextHookEx is registered');
+  assert(unhookExApi, 'UnhookWindowsHookEx is registered');
+  const callNextThunk = e.test_make_api_thunk(callNextApi.id) >>> 0;
+  const unhookExThunk = e.test_make_api_thunk(unhookExApi.id) >>> 0;
 
-  // KeyboardProc: save nCode/wParam/lParam, deliberately return 0x7f, ret 12.
-  // The non-BOOL value proves the continuation restores PeekMessage's TRUE
-  // result instead of leaking the hook callback's EAX back to the caller.
+  // The older KeyboardProc records the forwarded tuple and returns a
+  // distinctive LRESULT. The newer proc calls CallNextHookEx with a bogus
+  // HHOOK (the parameter is documented as ignored), records that exact
+  // result, then returns another value. The USER continuation must still
+  // restore PeekMessage's BOOL result.
   bytes.set(Uint8Array.from([
     0x8b, 0x44, 0x24, 0x04,             // mov eax,[esp+4]  (nCode)
     0xa3, ...u32(observed),              // mov [observed],eax
@@ -134,22 +156,42 @@ function u32(value) {
     0xa3, ...u32(observed + 4),
     0x8b, 0x44, 0x24, 0x0c,             // mov eax,[esp+12] (lParam)
     0xa3, ...u32(observed + 8),
-    0xb8, 0x7f, 0x00, 0x00, 0x00,
+    0xb8, ...u32(0x2468ace0),
     0xc2, 0x0c, 0x00,
-  ]), toWasm(hook));
+  ]), toWasm(olderHook));
 
-  const legacyHandle = e.test_install_keyboard_hook(hook) >>> 0;
-  assert.strictEqual(legacyHandle, 0xbeef0002,
-    'SetWindowsHookA(WH_KEYBOARD) returns the keyboard hook handle');
-  assert.strictEqual(e.test_hook_proc(2) >>> 0, hook,
-    'SetWindowsHookA retains the guest KeyboardProc');
+  bytes.set(Uint8Array.from([
+    0x8b, 0x44, 0x24, 0x04,             // mov eax,[esp+4]  (nCode)
+    0x8b, 0x4c, 0x24, 0x08,             // mov ecx,[esp+8]  (wParam)
+    0x8b, 0x54, 0x24, 0x0c,             // mov edx,[esp+12] (lParam)
+    0x52,                               // push edx
+    0x51,                               // push ecx
+    0x50,                               // push eax
+    0x68, ...u32(0xdeadbeef),            // ignored hhk
+    0xb8, ...u32(callNextThunk),         // mov eax,CallNextHookEx thunk
+    0xff, 0xd0,                         // call eax
+    0xa3, ...u32(observed + 12),         // record next hook's LRESULT
+    0x83, 0xc0, 0x07,                   // return a different value
+    0xc2, 0x0c, 0x00,
+  ]), toWasm(newerHook));
+
+  const olderHandle = e.test_install_keyboard_hook(olderHook) >>> 0;
+  const newerHandle = e.test_install_ex_hook(2, newerHook) >>> 0;
+  assert.notStrictEqual(olderHandle, 0,
+    'SetWindowsHookA(WH_KEYBOARD) returns an opaque hook handle');
+  assert.notStrictEqual(newerHandle, 0,
+    'SetWindowsHookExA(WH_KEYBOARD) returns an opaque hook handle');
+  assert.notStrictEqual(newerHandle, olderHandle,
+    'each installed hook has a distinct handle');
+  assert.strictEqual(e.test_hook_proc(2) >>> 0, newerHook,
+    'the newest KeyboardProc is at the beginning of the chain');
   assert.notStrictEqual(e.test_keyboard_hook_thunk() >>> 0, 0,
     'generic callback continuation is initialized');
-  assert.strictEqual(e.test_begin_keyboard_peek(msg, 1) >>> 0, hook,
-    'PM_REMOVE enters KeyboardProc before PeekMessage returns');
+  assert.strictEqual(e.test_begin_keyboard_peek(msg, 1) >>> 0, newerHook,
+    'PM_REMOVE enters the newest KeyboardProc before PeekMessage returns');
   assert.strictEqual(e.guest_read32(e.get_esp()) >>> 0,
     e.test_keyboard_hook_thunk() >>> 0,
-    'KeyboardProc stack returns through the generic callback thunk');
+    'the head KeyboardProc returns through the generic callback thunk');
 
   for (let i = 0; i < 20 && e.get_eip(); i++) e.run(5000);
   assert.strictEqual(e.get_eip() >>> 0, 0,
@@ -161,7 +203,9 @@ function u32(value) {
     view.getUint32(toWasm(observed + 4), true),
     view.getUint32(toWasm(observed + 8), true),
   ], [0, VK_ESCAPE, KEY_LPARAM],
-  'KeyboardProc receives HC_ACTION, VK_ESCAPE, and the original key lParam');
+  'CallNextHookEx forwards HC_ACTION, VK_ESCAPE, and the original key lParam');
+  assert.strictEqual(view.getUint32(toWasm(observed + 12), true), 0x2468ace0,
+    'CallNextHookEx returns the older hook procedure\'s exact LRESULT');
   assert.strictEqual(view.getUint32(toWasm(msg + 4), true), WM_KEYDOWN,
     'PeekMessage still returns WM_KEYDOWN in MSG');
   assert.strictEqual(view.getUint32(toWasm(msg + 8), true), VK_ESCAPE,
@@ -169,42 +213,93 @@ function u32(value) {
   assert.strictEqual(view.getUint32(toWasm(msg + 12), true), KEY_LPARAM,
     'PeekMessage preserves the hardware key flags in MSG.lParam');
 
-  assert.strictEqual(e.test_uninstall_legacy_hook(2, hook + 4), 0,
+  assert.strictEqual(e.test_uninstall_legacy_hook(2, olderHook + 4), 0,
     'UnhookWindowsHook rejects a different procedure');
-  assert.strictEqual(e.test_hook_proc(2) >>> 0, hook,
-    'a failed legacy unhook leaves the KeyboardProc installed');
-  assert.strictEqual(e.test_uninstall_legacy_hook(2, hook), 1,
-    'UnhookWindowsHook removes the matching KeyboardProc');
-  assert.strictEqual(e.test_hook_proc(2), 0,
-    'the removed KeyboardProc is no longer dispatchable');
-  assert.strictEqual(e.test_uninstall_legacy_hook(2, hook), 0,
+  assert.strictEqual(e.test_hook_proc(2) >>> 0, newerHook,
+    'a failed legacy unhook leaves the chain head installed');
+  assert.strictEqual(e.test_uninstall_legacy_hook(2, olderHook), 1,
+    'UnhookWindowsHook removes a matching non-head procedure');
+  assert.strictEqual(e.test_hook_proc(2) >>> 0, newerHook,
+    'removing an older hook preserves the newer chain head');
+  assert.strictEqual(e.test_uninstall_legacy_hook(2, olderHook), 0,
     'UnhookWindowsHook rejects an already-removed procedure');
 
-  assert.strictEqual(e.test_install_wide_hook(5, hook) >>> 0, 0xbeef0005,
-    'SetWindowsHookW shares the CBT installation path');
-  assert.strictEqual(e.test_hook_proc(5) >>> 0, hook,
-    'SetWindowsHookW retains the guest CBTProc');
-  assert.strictEqual(e.test_uninstall_legacy_hook(5, hook), 1,
-    'the legacy remover clears the matching CBTProc');
+  pending = true;
+  view.setUint32(toWasm(observed + 12), 0xffffffff, true);
+  assert.strictEqual(e.test_begin_keyboard_peek(msg, 1) >>> 0, newerHook,
+    'the remaining head still dispatches after a middle unlink');
+  for (let i = 0; i < 20 && e.get_eip(); i++) e.run(5000);
+  assert.strictEqual(e.get_eip() >>> 0, 0,
+    'a no-next CallNextHookEx path resumes the current hook synchronously');
+  assert.strictEqual(view.getUint32(toWasm(observed + 12), true), 0,
+    'CallNextHookEx returns zero when no next procedure remains');
+  assert.strictEqual(e.test_uninstall_ex_hook(olderHandle), 0,
+    'a stale opaque hook handle cannot remove another chain member');
+  assert.strictEqual(e.test_uninstall_ex_hook(newerHandle), 1,
+    'UnhookWindowsHookEx removes the exact remaining hook handle');
+  assert.strictEqual(e.test_hook_proc(2), 0,
+    'the empty keyboard chain is no longer dispatchable');
+
+  // A procedure may remove itself while it is being called. USER unlinks it
+  // immediately but cannot release the backing chain state until the outer
+  // dispatch returns: CallNextHookEx must still find the older procedure.
+  const selfOlderHandle = e.test_install_keyboard_hook(olderHook) >>> 0;
+  const selfHandle = e.test_install_ex_hook(2, selfRemovingHook) >>> 0;
+  bytes.set(Uint8Array.from([
+    0x68, ...u32(selfHandle),             // push self HHOOK
+    0xb8, ...u32(unhookExThunk),
+    0xff, 0xd0,                          // UnhookWindowsHookEx(self)
+    0xa3, ...u32(observed + 16),          // record BOOL
+    0x8b, 0x44, 0x24, 0x04,
+    0x8b, 0x4c, 0x24, 0x08,
+    0x8b, 0x54, 0x24, 0x0c,
+    0x52, 0x51, 0x50,
+    0x6a, 0x00,                          // hhk=NULL is also ignored
+    0xb8, ...u32(callNextThunk),
+    0xff, 0xd0,
+    0xa3, ...u32(observed + 12),
+    0xc2, 0x0c, 0x00,
+  ]), toWasm(selfRemovingHook));
+  pending = true;
+  view.setUint32(toWasm(observed + 12), 0xffffffff, true);
+  view.setUint32(toWasm(observed + 16), 0, true);
+  assert.strictEqual(e.test_begin_keyboard_peek(msg, 1) >>> 0, selfRemovingHook,
+    'the self-removing hook begins as the newest chain member');
+  for (let i = 0; i < 20 && e.get_eip(); i++) e.run(5000);
+  assert.strictEqual(e.get_eip() >>> 0, 0,
+    'self-unhook plus nested CallNextHookEx unwinds safely');
+  assert.strictEqual(view.getUint32(toWasm(observed + 16), true), 1,
+    'an active hook can unlink its own opaque handle');
+  assert.strictEqual(view.getUint32(toWasm(observed + 12), true), 0x2468ace0,
+    'a self-unlinked hook can still delegate to the retained older node');
+  assert.strictEqual(e.test_hook_proc(2) >>> 0, olderHook,
+    'the unlinked active hook is gone when the dispatch completes');
+  assert.strictEqual(e.test_uninstall_ex_hook(selfHandle), 0,
+    'the self-unlinked handle is stale after callback retirement');
+  assert.strictEqual(e.test_uninstall_ex_hook(selfOlderHandle), 1,
+    'the older procedure remains independently removable');
+
+  const wideCbtHandle = e.test_install_wide_hook(5, olderHook) >>> 0;
+  const exCbtHandle = e.test_install_ex_hook(5, newerHook) >>> 0;
+  assert.notStrictEqual(wideCbtHandle, 0,
+    'SetWindowsHookW shares the CBT chain installation path');
+  assert.notStrictEqual(exCbtHandle, wideCbtHandle,
+    'multiple CBT hooks receive distinct handles');
+  assert.strictEqual(e.test_hook_proc(5) >>> 0, newerHook,
+    'the newest CBTProc is at the beginning of its independent chain');
+  assert.strictEqual(e.test_uninstall_ex_hook(wideCbtHandle), 1,
+    'UnhookWindowsHookEx removes an older CBT hook by exact handle');
+  assert.strictEqual(e.test_hook_proc(5) >>> 0, newerHook,
+    'removing the older CBT hook preserves its chain head');
+  assert.strictEqual(e.test_uninstall_legacy_hook(5, newerHook), 1,
+    'the legacy remover clears the remaining matching CBTProc');
 
   assert.strictEqual(e.test_install_keyboard_hook(0), 0,
     'a null legacy hook procedure fails instead of returning a fake handle');
-  assert.strictEqual(e.test_install_wide_hook(3, hook), 0,
+  assert.strictEqual(e.test_install_wide_hook(3, olderHook), 0,
     'an unsupported legacy hook class fails instead of returning a fake handle');
 
-  const exHandle = e.test_install_ex_hook(5, hook) >>> 0;
-  assert.strictEqual(exHandle, 0xbeef0005,
-    'SetWindowsHookExA returns the class-specific CBT handle');
-  assert.strictEqual(e.test_uninstall_ex_hook(0xbeef0002), 0,
-    'UnhookWindowsHookEx rejects a handle for a different empty slot');
-  assert.strictEqual(e.test_hook_proc(5) >>> 0, hook,
-    'a failed Ex unhook leaves the CBTProc installed');
-  assert.strictEqual(e.test_uninstall_ex_hook(exHandle), 1,
-    'UnhookWindowsHookEx removes the hook named by its returned handle');
-  assert.strictEqual(e.test_hook_proc(5), 0,
-    'the Ex-removed CBTProc is no longer dispatchable');
-
-  console.log('PASS  legacy and Ex keyboard/CBT hooks install, dispatch, and unhook');
+  console.log('PASS  legacy and Ex keyboard/CBT hook chains install, delegate, and unhook');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

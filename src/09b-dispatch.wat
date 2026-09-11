@@ -408,6 +408,13 @@
     ;; attach. CACA0027 pops saved state and returns the hwnd to the caller.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0026))
       (then
+        ;; Pop the typed outer-active-node frame saved below HookProc. The
+        ;; marker keeps direct continuation tests and old saved frames valid.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         ;; Clear pending_child_create — the full create chain is now synchronous.
         ;; (pending_child_size is kept; it flows through the message loop.)
         (global.set $pending_child_create (i32.const 0))
@@ -579,6 +586,11 @@
     ;; direct path, but lets MFC's WH_CBT hook attach m_hWnd first.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0028))
       (then
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         (if (global.get $dialog_cbt_saved_proc)
           (then
             (local.set $arg0 (call $dialog_first_init_tabstop
@@ -614,6 +626,11 @@
     ;; CACA0029 continuation follows with WM_CREATE using the same CREATESTRUCT.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0002))
       (then
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         ;; Push saved_hwnd and saved_ret below WndProc args (for CACA0001 to pop)
         (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
         (call $gs32 (global.get $esp) (global.get $createwnd_saved_hwnd))
@@ -1140,6 +1157,17 @@
     ;; enumerators retain the original saved-return-address form.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0011))
       (then
+        ;; A nested HookProc returned from CallNextHookEx. Restore the calling
+        ;; hook as the active chain node and resume immediately after the API
+        ;; call, preserving the nested hook's exact LRESULT in EAX.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x314E4B48))
+          (then
+            (global.set $eip
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $hook_active_node
+              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))
         ;; DirectPlay player/group enumeration leaves its reentrant DPEN frame
         ;; at ESP after the five-argument callback returns.
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x4E455044))
@@ -1173,8 +1201,10 @@
         ;; result. (Hook suppression on nonzero return is not modeled yet.)
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x314B484B))
           (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
             (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
             (global.set $eax (i32.const 1))
             (return)))
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x434E5446))
