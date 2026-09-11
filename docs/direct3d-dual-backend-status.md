@@ -1575,3 +1575,16 @@ varying/depth, clipping, helper, lifetime and cancellation cases. Inspection and
 these tests found no concrete software clipper defect; no WAT change was made.
 Arbitrary subpixel rounding and GPU hardware tie-rule equivalence remain open;
 this evidence does not assert universal Windows hardware conformance.
+
+B&W run24571 has now activated New Game via ordinary mouse input. The game had
+recorded earlier clicks at native(0,0), unlike the host's absolute pointer.
+Separate relative movement, verified native cursor(194,556), down287458 and
+up288497 lead to a controls/tutorial Continue screen in settled capture290202.
+The diagnostic trace range is restored and the mouse released. See the RE notes
+for native dispatch/coordinate evidence; no guest-state patch or restart was
+used. This advances menu-to-game acceptance but does not yet prove changing
+in-world gameplay, current-build rendering, or parity with WebGL.
+Continue down293970/up294751 subsequently reaches a trap at batch294774,
+EIP00925197; run24571 has exited1. Runtime instruction bytes differ from the
+supplied executable inside a buffer-copy routine, so corruption/copy arguments
+are the next investigation, not an assumed unsupported shader or x86 opcode.

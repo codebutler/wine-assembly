@@ -841,3 +841,33 @@ A mistaken two-argument call enabled broad streaming trace and slowed batches.
 The correct restoration `(1,0x526d93,0x526d97)` was queued after mouse-up; do not
 infer completion of that control from its submission. Preserve the healthy
 process while its current batch drains; no restart was used for this diagnosis.
+
+The correct trace restoration is now acknowledged, followed by a confirmation
+with host mask0/queue0. The native coordinate snapshot found all current/down/up
+coordinates at(0,0), while the host pointer was(193,556). Sensitivity is1.0,
+insets+100/+104 are0, and remapping+108 is1. A normal mousemove to(0,0) at
+batch281124 moved the game's coordinates to(-1,-1); a later move to(156,446)
+at285501 moved them to(194,556), verified before pressing. Down287458 and
+up288497 at(156,446) recorded both guest edges at(194,556). The settled capture
+at290202, `/private/tmp/bw-native-new-game-settled.png`, shows the four-panel
+controls/tutorial screen with Continue. New Game activation is therefore
+verified; changing in-world gameplay remains outstanding. No guest memory or
+instruction stream was patched, and the frozen process was preserved.
+
+Buffered-input sequencing matters here: motion is accumulated into+cc/+d0
+during the FIFO loop and applied to current+c4/+c8 after that loop. A button
+record encountered in the same poll snapshots the old current position. Move,
+allow an actual input update, then press; absolute host pointer fields alone
+are not sufficient evidence of the game's hit-test coordinates.
+
+Continue was then targeted with mousemove(321,451) at292616; a separate native
+read verified(400,562), followed by down293970/up294751. Run24571 is now
+authoritatively terminal, exit1: batch294774 traps at00925197 decoding0f d0.
+This is not yet evidence of a missing SSE instruction: the supplied EXE has
+`mov eax,3` at00925195, so00925197 is inside its immediate and its runtime bytes
+differ from disk. The enclosing00925120 reader copies from a virtual-method
+buffer using `rep movsd` at00925178 / `rep movsb` at0092517f. Crash registers
+include EBP=EDI=00a58780, ESI=00a5877f, EBX=33078b10; saved caller chain includes
+009208a6,00920dca,009a81da. Investigate the copy arguments/corruption origin
+before adding an opcode implementation. Last sampled renderer failures remain0.
+All synthetic buttons were released before the trap. Gameplay remains unverified.
