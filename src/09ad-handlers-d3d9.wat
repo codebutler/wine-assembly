@@ -757,7 +757,7 @@
           (return)))
         (if (load.field DxObject misc1 (local.get $entry)) (then
           (call $d3d9_lights_free (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21996))))
-          (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 22020))))
+          (call $d3d9_color_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 22020))))
           (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21752))))
           (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21756))))
           (local.set $parent (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 20628))))
@@ -1103,6 +1103,10 @@
       (i32.and (i32.eqz (local.get $arg1)) (i32.ne (call $d3d9_state_bytes (local.get $arg2) (i32.const 4)) (i32.const 0)))) (then
       (local.set $surface (call $gl32 (i32.add (local.get $state) (i32.const 22020))))
       (if (local.get $surface) (then
+        (if (call $gl32 (i32.add (local.get $surface) (i32.const 72))) (then
+          (call $d3d9_texture_surface (call $gl32 (i32.add (local.get $surface) (i32.const 72)))
+            (call $gl32 (i32.add (local.get $surface) (i32.const 76))) (local.get $arg2))
+          (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
         (drop (call $d3d9_depth_addref (local.get $surface)))
         (call $gs32 (local.get $arg2) (local.get $surface)) (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))))

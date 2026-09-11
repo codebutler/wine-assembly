@@ -7,6 +7,61 @@
   (if (i32.eqz (local.get $surface)) (then (return (i32.const 0))))
   (i32.eq (call $gl32 (i32.add (local.get $surface) (i32.const 12))) (i32.const 0xd3d90006)))
 
+;; Embedded storage descriptors are not COM objects. The existing 20-byte
+;; surface view owns the external reference; bindings retain its parent texture.
+;; +72 parent texture and +76 face-major mip index distinguish these records.
+(func $d3d9_texture_colors_init (param $texture i32) (param $count i32) (result i32)
+  (local $wa i32) (local $base i32) (local $record i32) (local $mip i32)
+  (local $i i32) (local $serial i32)
+  (local.set $wa (call $g2w (local.get $texture)))
+  (local.set $base (i32.add (local.get $texture)
+    (i32.add (i32.const 64) (i32.mul (local.get $count) (i32.const 32)))))
+  (loop $levels
+    (local.set $serial (call $d3d9_depth_next_serial))
+    (if (i32.eqz (local.get $serial)) (then (return (i32.const 0))))
+    (local.set $record (call $g2w (i32.add (local.get $base) (i32.mul (local.get $i) (i32.const 80)))))
+    (local.set $mip (call $d3d9_texture_mip (local.get $texture) (local.get $i)))
+    (i32.store offset=8 (local.get $record) (i32.load offset=8 (local.get $wa)))
+    (i32.store offset=12 (local.get $record) (i32.const 0xd3d90006))
+    (i32.store offset=20 (local.get $record) (i32.load (local.get $mip)))
+    (i32.store offset=24 (local.get $record) (i32.load offset=4 (local.get $mip)))
+    (i32.store offset=28 (local.get $record) (i32.load offset=36 (local.get $wa)))
+    (i32.store offset=36 (local.get $record) (local.get $serial))
+    (i32.store offset=40 (local.get $record) (i32.load offset=16 (local.get $mip)))
+    (i32.store offset=48 (local.get $record) (i32.load offset=8 (local.get $mip)))
+    (i32.store offset=52 (local.get $record) (i32.load offset=12 (local.get $mip)))
+    (i32.store offset=64 (local.get $record) (i32.const 1))
+    (i32.store offset=72 (local.get $record) (local.get $texture))
+    (i32.store offset=76 (local.get $record) (local.get $i))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br_if $levels (i32.lt_u (local.get $i) (local.get $count))))
+  ;; Publish only after all identities have been allocated successfully.
+  (i32.store offset=56 (local.get $wa) (local.get $base))
+  (i32.const 1))
+
+(func $d3d9_color_storage (param $surface i32) (result i32)
+  (local $parent i32) (local $index i32) (local $base i32)
+  (if (call $d3d9_is_color_surface (local.get $surface)) (then (return (local.get $surface))))
+  (if (i32.eqz (local.get $surface)) (then (return (i32.const 0))))
+  (if (i32.ne (call $gl32 (i32.add (local.get $surface) (i32.const 12)))
+    (i32.const 0xd3d90001)) (then (return (i32.const 0))))
+  (local.set $parent (call $gl32 (i32.add (local.get $surface) (i32.const 8))))
+  (local.set $index (call $gl32 (i32.add (local.get $surface) (i32.const 16))))
+  (if (i32.eqz (call $d3d9_texture_mip (local.get $parent) (local.get $index))) (then (return (i32.const 0))))
+  (local.set $base (call $gl32 (i32.add (local.get $parent) (i32.const 56))))
+  (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
+  (i32.add (local.get $base) (i32.mul (local.get $index) (i32.const 80))))
+
+(func $d3d9_color_unbind (param $surface i32)
+  (local $wa i32) (local $parent i32)
+  (if (i32.eqz (local.get $surface)) (then (return)))
+  (local.set $wa (call $g2w (local.get $surface)))
+  (local.set $parent (i32.load offset=72 (local.get $wa)))
+  (if (i32.eqz (local.get $parent)) (then (call $d3d9_depth_unbind (local.get $surface)) (return)))
+  (if (i32.eqz (i32.load offset=16 (local.get $wa))) (then (return)))
+  (i32.store offset=16 (local.get $wa) (i32.sub (i32.load offset=16 (local.get $wa)) (i32.const 1)))
+  (call $d3d9_shader_unbind (local.get $parent)))
+
 (func $d3d9_color_create (param $device i32) (param $width i32) (param $height i32)
   (param $format i32) (param $pool i32) (param $usage i32) (param $lockable i32) (param $out i32)
   (local $surface i32) (local $wa i32) (local $bytes i32) (local $serial i32)
@@ -56,14 +111,16 @@
   (select (load.field DxObject height (local.get $rt)) (load.field DxObject width (local.get $rt)) (local.get $height)))
 
 (func $d3d9_color_binding (param $device i32) (param $index i32) (param $surface i32)
-  (local $state i32) (local $old i32) (local $wa i32) (local $rt i32)
+  (local $state i32) (local $old i32) (local $wa i32) (local $rt i32) (local $storage i32) (local $parent i32)
   (global.set $eax (i32.const 0x8876086c))
   (if (i32.or (local.get $index) (i32.eqz (local.get $surface))) (then (return)))
   (local.set $state (call $d3d9_program_state (local.get $device)))
   (if (i32.eqz (local.get $state)) (then (return)))
   (local.set $state (call $g2w (local.get $state)))
   (local.set $old (i32.load offset=22020 (local.get $state)))
-  (if (call $d3d9_is_color_surface (local.get $surface)) (then
+  (local.set $storage (call $d3d9_color_storage (local.get $surface)))
+  (if (local.get $storage) (then
+    (local.set $surface (local.get $storage))
     (local.set $wa (call $g2w (local.get $surface)))
     (if (i32.or (i32.ne (i32.load offset=8 (local.get $wa)) (local.get $device))
       (i32.or (i32.ne (i32.load offset=64 (local.get $wa)) (i32.const 1))
@@ -75,13 +132,18 @@
     (local.set $surface (i32.const 0))))
   (if (i32.and (i32.ne (local.get $old) (i32.const 0)) (i32.ne (local.get $old) (local.get $surface))) (then
     (local.set $wa (call $g2w (local.get $old)))
-    (if (i32.and (i32.eqz (i32.load offset=4 (local.get $wa))) (i32.eq (i32.load offset=16 (local.get $wa)) (i32.const 1))) (then
+    (if (i32.and (i32.eqz (i32.load offset=72 (local.get $wa)))
+      (i32.and (i32.eqz (i32.load offset=4 (local.get $wa))) (i32.eq (i32.load offset=16 (local.get $wa)) (i32.const 1)))) (then
       (if (i32.eqz (call $d3d9_depth_retire (local.get $old))) (then (return)))))))
   (if (local.get $surface) (then
     (local.set $wa (call $g2w (local.get $surface)))
+    (local.set $parent (i32.load offset=72 (local.get $wa)))
+    (if (local.get $parent) (then
+      (call $gs32 (i32.add (local.get $parent) (i32.const 20))
+        (i32.add (call $gl32 (i32.add (local.get $parent) (i32.const 20))) (i32.const 1)))))
     (i32.store offset=16 (local.get $wa) (i32.add (i32.load offset=16 (local.get $wa)) (i32.const 1)))))
   (i32.store offset=22020 (local.get $state) (local.get $surface))
-  (call $d3d9_depth_unbind (local.get $old))
+  (call $d3d9_color_unbind (local.get $old))
   (memory.fill (i32.add (local.get $state) (i32.const 21728)) (i32.const 0) (i32.const 24))
   (memory.fill (i32.add (local.get $state) (i32.const 22000)) (i32.const 0) (i32.const 20))
   (global.set $eax (i32.const 0)))
@@ -157,6 +219,8 @@
   (if (i32.ne (i32.load offset=8 (local.get $dst)) (local.get $device)) (then (return)))
   (if (i32.ne (i32.load offset=60 (local.get $dst)) (i32.const 2)) (then (return)))
   (if (i32.load offset=56 (local.get $dst)) (then (return)))
+  (local.set $src (call $d3d9_color_storage (local.get $source)))
+  (if (local.get $src) (then (local.set $source (local.get $src))))
   (if (i32.eqz (call $d3d9_is_color_surface (local.get $source))) (then
     (local.set $rt (call $d3ddev_rt_entry (local.get $device)))
     (if (i32.ne (local.get $source) (call $dx_get_wrapper_for_vtbl

@@ -880,6 +880,12 @@
   (func $d3d9_resource_free (param $obj i32)
     (local $wa i32) (local $stage i32)
     (local.set $wa (call $g2w (local.get $obj)))
+    (if (i32.or (i32.eq (i32.load offset=12 (local.get $wa)) (i32.const 3))
+      (i32.eq (i32.load offset=12 (local.get $wa)) (i32.const 5))) (then
+      (if (i32.load offset=56 (local.get $wa)) (then
+        ;; The broker copies all IDs into one ordered retirement command.
+        ;; Its executor storage is independent of this canonical allocation.
+        (drop (call $host_gpu_gl_call (i32.const 0x30013) (local.get $wa) (i32.load offset=8 (local.get $wa))))))))
     (if (i32.eq (i32.load offset=12 (local.get $wa)) (i32.const 0xd3d90003)) (then
       (call $d3d9_lights_free (i32.load offset=22312 (local.get $wa)))
       (call $d3d9_shader_unbind (i32.load offset=22052 (local.get $wa)))
@@ -1304,9 +1310,14 @@
     (if (call $d3d9_texture_block_bytes (local.get $format)) (then
       (if (i32.and (i32.or (local.get $width) (local.get $height)) (i32.const 3)) (then (return)))))
     (if (i32.gt_u (local.get $pool) (i32.const 3)) (then (return)))
-    ;; Only normal sampled/dynamic resources; render targets/autogen have
-    ;; different lock and synchronization semantics and remain unavailable.
-    (if (i32.and (local.get $usage) (i32.const -513)) (then (return)))
+    ;; Render-target textures share native storage identities with their surface
+    ;; views. Autogen/depth textures and dynamic render targets remain gated.
+    (if (i32.and (local.get $usage) (i32.const -514)) (then (return)))
+    (if (i32.and (local.get $usage) (i32.const 1)) (then
+      (if (local.get $pool) (then (return)))
+      (if (i32.ne (local.get $usage) (i32.const 1)) (then (return)))
+      (if (i32.and (i32.ne (local.get $format) (i32.const 21))
+        (i32.ne (local.get $format) (i32.const 22))) (then (return)))))
     (local.set $w (local.get $width)) (local.set $h (local.get $height))
     (local.set $max (i32.const 1))
     (block $counted (loop $count
@@ -1319,6 +1330,8 @@
     (local.set $faces (select (i32.const 6) (i32.const 1) (i32.eq (local.get $kind) (i32.const 5))))
     (local.set $count (i32.mul (local.get $levels) (local.get $faces)))
     (local.set $offset (i32.add (i32.const 64) (i32.mul (local.get $count) (i32.const 32))))
+    (if (i32.and (local.get $usage) (i32.const 1)) (then
+      (local.set $offset (i32.add (local.get $offset) (i32.mul (local.get $count) (i32.const 80))))))
     (local.set $bytes (local.get $offset))
     (local.set $w (local.get $width)) (local.set $h (local.get $height))
     (local.set $i (i32.const 0))
@@ -1370,6 +1383,9 @@
       (if (i32.eqz (i32.rem_u (local.get $i) (local.get $levels))) (then
         (local.set $w (local.get $width)) (local.set $h (local.get $height))))
       (br_if $init (i32.lt_u (local.get $i) (local.get $count))))
+    (if (i32.and (local.get $usage) (i32.const 1)) (then
+      (if (i32.eqz (call $d3d9_texture_colors_init (local.get $obj) (local.get $count))) (then
+        (call $heap_free (local.get $obj)) (global.set $eax (i32.const 0x8007000E)) (return)))))
     (call $d3d9_reset_resource (local.get $wa) (i32.const 1))
     (drop (call $d3d9_device_addref (local.get $device)))
     (call $gs32 (local.get $out) (local.get $obj))
@@ -1405,6 +1421,7 @@
     (call $gs32 (i32.add (local.get $out) (i32.const 4)) (i32.const 0))
     (local.set $mip (call $d3d9_texture_mip (local.get $texture) (local.get $level)))
     (if (i32.eqz (local.get $mip)) (then (return)))
+    (if (i32.and (call $gl32 (i32.add (local.get $texture) (i32.const 40))) (i32.const 1)) (then (return)))
     (if (i32.load offset=20 (local.get $mip)) (then (return)))
     (if (i32.and (local.get $flags) (i32.const -43025)) (then (return))) ;; READONLY|NOSYSLOCK|DISCARD|NO_DIRTY_UPDATE
     (local.set $right (i32.load (local.get $mip))) (local.set $bottom (i32.load offset=4 (local.get $mip)))

@@ -1216,3 +1216,76 @@ parity/order/parent-memory/readback/retirement regression passes; focused worker
 cleanup verifies actual exit before native heap adoption. Generic GPU unit tests
 also pass. Texture-surface alias sampling and versioned CPU/GPU synchronization
 remain required next work; independent color storage alone does not complete them.
+
+Render-target texture frontend checkpoint (2026-09-10): native
+CreateTexture/CreateCubeTexture accepts default-pool, non-dynamic color targets
+in formats21/22. Each face/mip owns a monotonic color identity and shares the
+texture's canonical byte allocation; existing COM surface views retain their
+parent, and target bindings retain that parent internally. GetRenderTarget
+returns the public view, not the private storage descriptor. Texture locks
+reject render-target usage; GetRenderTargetData fences the selected subresource.
+Draw snapshots name color identities instead of uploading stale CPU pixels.
+Final parent destruction publishes one ordered color-set retirement command.
+
+Native61003 passes direct/software-worker mip/cube identity, independent rendered
+mips, readback, view recreation, parent lifetime, feedback rejection and a real
+DrawPrimitiveUP sampling previously rendered texture pixels. Browser78209 passes
+actual x86 CreateTexture/surface bind/Clear/sample/LockRect and color-set retirement
+through both cooperative-main and guest-main Worker production routes, with
+render-worker allocation cleanup. Full build82702 passes canonical1151595 and
+compat1152063; the async protocol test covers all19 private production opcodes.
+Native81793 additionally verifies Reset rejection while an external backbuffer
+is held, followed by successful Reset retiring an internally bound cube parent.
+Existing Reset82330, viewport/scissor1293, texture34052 and cube35791 regressions
+pass. The initial added Reset fixture18505 incorrectly held that backbuffer;
+its failure was expected ownership validation, not a renderer failure.
+Production browser81357 (`node test/test-d3d9-software-host-web.js --webgl`)
+also passes the actual-x86 target/texture sampling and retirement sequence on
+WebGL in both guest modes, using a real guest-created window. Software51264
+passes the same revised fixture. Focused accelerated mip/cube/cache alias
+verification is recorded below. General CPU dirty/version leases, migration and
+complete texture formats/pools remain open, as does Black & White gameplay
+acceptance.
+
+Additional raster discrepancy measured by actual-x86 WebGL fixture21997:
+a clip-space triangle (-1,1), (1,1), (-1,-1), rendered into a4x3 target using
+the current half-pixel conversion, fills the top row in software but leaves it
+clear in WebGL. Interior pixels agree. This exact horizontal-edge ownership
+case remains an unverified/native-reference raster-conformance requirement;
+no epsilon workaround or blanket parity claim has been introduced. Resource
+alias tests use interior samples to isolate storage from edge coverage.
+
+Mip-atlas shader fix (2026-09-10): `withMipSampling` now recognizes compact and
+whitespace-varied GLSL main declarations, including fixed-function output.
+Previously it rewrote texture calls without inserting their helper declarations
+when main used `void main(){`. Shader unit regressions pass; focused alias
+GPU34064 verifies real WebGL1/2 compilation and pixels after this fix. Agent
+native19805 passes21 direct and21 worker alias checks, with heap adoption after
+actual worker exit; final cache/retirement evidence is recorded below.
+
+Adjacent shader-web80127 is **not** a passing regression: initial VS/PS1.1, LIT
+and dependent-texture blocks pass, then its staged PS1.4 browser fixture sends
+JSON-serialized `nativeBytes` rather than a Uint8Array and is rejected by the
+retained native-IR contract. That fixture also predates the explicit PS1.4
+production-profile gate. This failure precedes mip-atlas lowering; production
+validation was not weakened to accept the obsolete diagnostic handoff.
+
+Executor alias coverage: native97715 passes 30 shared pixel/lifetime cases in
+both direct and production Worker execution, followed by confirmed Worker exit
+and native heap adoption. GPU79741 passes 31 cases in each forced WebGL1/2
+context plus Reset cache retirement. Coverage includes fixed and programmed
+sampling, asymmetric top/bottom orientation, mixed CPU/resource mips and cube
+faces, hardware mip selection and MAXMIPLEVEL atlas copies, Draw/Clear/upload
+invalidation, repeated-resource cache reuse, feedback rejection without source
+mutation, and release invalidation. GPU draw tests make `readPixels` throw: alias
+assembly uses GPU copies, not a CPU readback fallback. Native sampling references
+owned BGRA allocations directly; GPU assemblies use executor-local revisions,
+not optional producer upload versions. Mixed CPU/resource assemblies are rebuilt
+because CPU snapshots currently lack stable content identity. GPU scratch and
+assembly copies remain an explicit storage/throughput cost, not zero-copy parity.
+
+Final frontend rerun90202 passes the native direct/worker alias, sampling,
+readback and Reset sequence. Full build7818 passes canonical1151612 and
+compat1152080 with layout9c6027bce1d500a1 and no data-segment overlaps. The
+recorded edge-coverage and staged shader-fixture issues remain open; this is a
+resource checkpoint, not complete raster/profile or gameplay acceptance.

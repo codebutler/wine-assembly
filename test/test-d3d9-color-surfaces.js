@@ -10,7 +10,9 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
 (async()=>{
   let bridge,productionImport;
   const api={Device9:['SetRenderTarget','GetRenderTarget','GetBackBuffer','SetViewport','GetViewport',
-    'SetScissorRect','GetScissorRect','GetRenderTargetData','SetFVF','SetRenderState','DrawPrimitiveUP','Present','Reset','Release'],
+    'SetScissorRect','GetScissorRect','GetRenderTargetData','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
+    Texture9:['GetSurfaceLevel','LockRect','Release'],
+    CubeTexture9:['GetCubeMapSurface','Release'],
     Surface9:['GetDesc','AddRef','Release','GetDevice','LockRect','UnlockRect']};
   const {exports:e,memory,module}=await bootRenderHarness({fonts:'none',
     extraHostOverrides:{gpu_gl_call:(op,p,a)=>productionImport(op,p,a)},extraWat:`
@@ -24,6 +26,22 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $pp))
       (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
       (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0))
+      (global.get $eax))
+    (func (export "rt_texture") (param $d i32) (param $cube i32) (param $out i32) (result i32)
+      (global.set $esp (i32.const 0x074ff000))
+      (if (local.get $cube) (then
+        (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (i32.const 0))
+        (call $handle_IDirect3DDevice9_CreateCubeTexture (local.get $d) (i32.const 4) (i32.const 3)
+          (i32.const 1) (i32.const 21) (i32.const 0)))
+      (else
+        (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 21))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 0))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (local.get $out))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 36)) (i32.const 0))
+        (call $handle_IDirect3DDevice9_CreateTexture (local.get $d) (i32.const 4) (i32.const 4)
+          (i32.const 3) (i32.const 1) (i32.const 0))))
       (global.get $eax))
     (func (export "color") (param $d i32) (param $w i32) (param $h i32) (param $fmt i32) (param $lock i32) (param $out i32) (result i32)
       (global.set $esp (i32.const 0x074ff000))
@@ -110,12 +128,83 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
   assert.strictEqual(e.blockers(d),0);e.Surface9_Release(back);
   assert.strictEqual(e.Device9_Release(d),0);assert.strictEqual(bridge.devices.size,0);
   await bridge.close();
-  bridge=new Bridge({backend:'software',enableProgrammable:true,getExports:()=>e,getMemory:()=>memory.buffer,guestToWasm:wa,
+  const makeWorker=()=>new Bridge({backend:'software',enableProgrammable:true,getExports:()=>e,getMemory:()=>memory.buffer,guestToWasm:wa,
     createSoftwareWorker:()=>new WorkerConsumer(new Worker(path.join(__dirname,'../lib/d3d-render-worker.js')),
       {module,memory,sigs,imageBase:e.get_image_base()>>>0,reclaimHeap:h=>e.d3d_render_adopt_free_list(h)})});
   const invoke=async(fn,...args)=>{let value=fn(...args);while(e.get_d3d_render_token()){
     await bridge.wait(e.get_d3d_render_token());value=fn(...args);}return value>>>0;};
+  const aliases=async()=>{
+    ok(e.create_device(pp,out),'alias device');const ad=read(out);
+    ok(e.Device9_GetRenderTarget(ad,0,out),'alias backbuffer');let ab=read(out);
+    for(const cube of[0,1]){
+      ok(e.rt_texture(ad,cube,out),'create render texture');const texture=read(out),base=read(texture+56);
+      const count=cube?18:3,ids=new Set();
+      for(let i=0;i<count;i++){
+        const mip=texture+64+i*32,storage=base+i*80;
+        assert.strictEqual(read(storage+40),read(mip+16),'shared native pixels');
+        assert.strictEqual(read(storage+72),texture);assert.strictEqual(read(storage+76),i);
+        ids.add(read(storage+36));
+      }
+      assert.strictEqual(ids.size,count,'distinct subresource identities');
+      const surface=level=>{
+        ok(cube?e.CubeTexture9_GetCubeMapSurface(texture,4,level,out):e.Texture9_GetSurfaceLevel(texture,level,out),'surface view');
+        return read(out);
+      };
+      const s=surface(1),other=surface(2);
+      ok(e.Device9_SetRenderTarget(ad,0,s),'bind texture surface');
+      ok(e.Device9_GetRenderTarget(ad,0,out),'get same COM surface');assert.strictEqual(read(out),s);
+      e.Surface9_Release(s);
+      bad(e.Surface9_LockRect(s,lock,0,0));
+      if(!cube)bad(e.Texture9_LockRect(texture,1,lock,0,0));
+      ok(await invoke(e.clear,ad,0xff123456),'render texture mip');
+      ok(e.Device9_SetRenderTarget(ad,0,other),'bind other mip');
+      ok(await invoke(e.clear,ad,0xffabcdef),'render other mip');
+      ok(e.offscreen(ad,2,2,2,out,21),'alias readback destination');const copy=read(out);
+      ok(await invoke(e.Device9_GetRenderTargetData,ad,s,copy),'read rendered texture surface');
+      assert.strictEqual(pixels(copy).value,0xff123456,'mip contents independent');
+      if(!cube){
+        const top=surface(0);
+        ok(e.Device9_SetRenderTarget(ad,0,top),'bind sampled mip');
+        ok(await invoke(e.clear,ad,0xff2468ac),'produce sampled pixels');
+        ok(e.Device9_SetFVF(ad,0x144),'textured POSITIONT diffuse');
+        ok(e.Device9_SetRenderState(ad,137,0),'alias unlit');
+        ok(e.Device9_SetRenderState(ad,22,1),'alias no culling');
+        ok(e.Device9_SetTexture(ad,0,texture),'bind rendered texture');
+        const tri=alloc(96),data=new DataView(memory.buffer,wa(tri),96);
+        [[0,0],[8,0],[0,8]].forEach(([x,y],i)=>{
+          const p=i*32;data.setFloat32(p,x,true);data.setFloat32(p+4,y,true);
+          data.setFloat32(p+8,.5,true);data.setFloat32(p+12,1,true);data.setUint32(p+16,0xffffffff,true);
+          data.setFloat32(p+20,.25,true);data.setFloat32(p+24,.25,true);
+        });
+        bad(await invoke(e.Device9_DrawPrimitiveUP,ad,4,1,tri,32));
+        ok(e.Device9_SetRenderTarget(ad,0,ab),'sample into backbuffer');
+        ok(await invoke(e.Device9_DrawPrimitiveUP,ad,4,1,tri,32),'sample rendered texture through native draw');
+        ok(await invoke(e.Device9_Present,ad),'present sampled result');
+        assert.strictEqual(new Uint32Array(memory.buffer,e.back_bits(ad),64)[0],0xff2468ac,'sample backend pixels, not stale native zero bytes');
+        ok(e.Device9_SetTexture(ad,0,0),'unbind sampled texture');
+        e.Surface9_Release(top);
+        ok(e.Device9_SetRenderTarget(ad,0,other),'restore lifetime fixture binding');
+      }
+      e.Surface9_Release(copy);e.Surface9_Release(s);e.Surface9_Release(other);
+      assert.strictEqual((cube?e.CubeTexture9_Release:e.Texture9_Release)(texture),0,'only binding retains parent');
+      ok(e.Device9_GetRenderTarget(ad,0,out),'recreate externally released view');const recovered=read(out);
+      assert.strictEqual(read(recovered+8),texture,'view retains original parent');e.Surface9_Release(recovered);
+      if(cube){
+        bad(await invoke(e.Device9_Reset,ad,pp)); // external backbuffer must be released first
+        e.Surface9_Release(ab);
+        ok(await invoke(e.Device9_Reset,ad,pp),'Reset releases internally retained cube parent');
+        ok(e.Device9_GetRenderTarget(ad,0,out),'new implicit target after Reset');ab=read(out);
+      }
+      else ok(e.Device9_SetRenderTarget(ad,0,ab),'unbind releases parent');
+      for(const id of ids)assert(!bridge.devices.get(ad).colors.has(id),'all instantiated mip IDs retired');
+    }
+    e.Surface9_Release(ab);assert.strictEqual(await invoke(e.Device9_Release,ad),0);
+  };
+  bridge=new Bridge({backend:'software',enableProgrammable:true,getExports:()=>e,getMemory:()=>memory.buffer,guestToWasm:wa});
+  try{await aliases();}finally{await bridge.close();}
+  bridge=makeWorker();
   try{
+    await aliases();
     ok(e.create_device(pp,out),'worker device');const wd=read(out);
     ok(e.color(wd,3,2,21,1,out),'worker target');const target=read(out);
     ok(e.Device9_SetRenderTarget(wd,0,target),'worker bind');
@@ -138,5 +227,5 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     assert.strictEqual(await invoke(e.Surface9_Release,sys),0,'last child drives ordered final device release');
     assert.strictEqual(bridge.devices.size,0);
   }finally{await bridge.close();}
-  console.log('PASS native D3D9 color surfaces: direct/worker Clear/Lock/upload/readback, implicit Present, validation, Reset and last-child lifetime');
+  console.log('PASS native D3D9 color surfaces: direct/worker texture mip/cube aliases, rendered-texture sampling and feedback rejection, Clear/Lock/upload/readback, implicit Present, Reset and lifetime');
 })().catch(error=>{console.error(error);process.exitCode=1;});
