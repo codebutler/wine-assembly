@@ -15,7 +15,90 @@ node test/test-icewind-dale-demo.js
 
 ## Original installer investigation
 
-### Latest Lobby3A checkpoint: character generation reached
+### Latest acceptance: original-installed gameplay and quicksave
+
+The local FindFirstFile correction below passes a fresh launch of the clean
+`/private/tmp/iwd-profile-fixed-installed-vfs`, not the diagnostic cache
+export or legacy extracted fixture. Original EXE, INI, KEY, CD2 files, and
+override resources were retained. No guest memory patch or host-expanded
+archive was used. The game recreated its own cache during this run.
+
+The single low-priority headless process used `--no-build --no-threads`,
+`--control-stdin --frozen`, `--batch-size=200000`, `--time-scale=10`,
+`--repaint-every=10`, and the internal `--max-seconds=900` guard. The game
+was advanced in short stdio steps and explicitly quit at batch 1996, exit 0.
+This is a functional result, not a performance measurement.
+
+Inspected checkpoints:
+
+- Batch 695: `/private/tmp/iwd-find-fixed-party.png`, created `codex` fighter.
+- Batch 1095: `/private/tmp/iwd-find-fixed-load-1095.png`, native Prologue
+  after guest expansion of the four area archives, no WED assertion.
+- Done at (400,435) leaves the chapter and reaches the tavern. Hrothgar's
+  opening conversation advances through Continue; Farewell closes it.
+- Batch 1885: `/private/tmp/iwd-original-walk-after.png`, selected character
+  beside the table at approximately (318,200). The preceding floor target
+  at (400,260) was blocked by furniture and is not movement acceptance.
+- Click (500,300), step 40: `/private/tmp/iwd-original-walk-confirmed.png`,
+  the same character now at the destination with the camera unchanged.
+- Q down at 1925, Q up at 1926, then 70 total batches:
+  `/private/tmp/iwd-original-after-quicksave.png` at 1996 shows the tavern
+  again and the game's **Quick-save successful** message.
+
+The native `mpsave/000000001-quick-save` contains `icewind.gam` (3520 bytes,
+`GAMEV1.1`, contains `codex`), `icewind.sav` (1670, `SAV V1.0`),
+`worldmap.wmp` (8072, `WMAPV1.0`), `icewind.bmp` (23462), and
+`portrt0.bmp` (1678). All five were exported and checked under
+`/private/tmp/iwd-original-native-saves/program files/black isle/icewind dale demo/mpsave`.
+The default session also contains `codex` in its 2416-byte GAM. This
+supersedes the older claim that the numbered quicksave path was unavailable.
+
+Remaining limits: save reload and browser acceptance of this original VFS
+are not tested here. The Prologue narration body is still blank. Shutdown
+diagnostics report one abandoned parked EnterCriticalSection and one held
+main-thread critical section; successful gameplay does not prove that
+scheduler issue fixed. The legacy acceptance script below still mounts its
+modified fixture and must not be cited as the original-install regression.
+
+### Original first-area load: false local file matches
+
+On the Lobby3A build, the clean original-installed VFS completes character
+creation through Sound and Name. The inspected
+`/private/tmp/iwd-original-party-ready.png` at batch 695 shows the created
+`codex` fighter. Accepting the party enters Starting Game, then the guest
+itself expands the four original area CBFs into `cache/data`:
+
+| Archive | Expanded Bytes | SHA-256 of Guest Output |
+| --- | ---: | --- |
+| AR100A | 6613876 | `4134c41a68425cb9a6c98fb5cbb146d6be9aa883aa76e626acb1c7a22ca330a6` |
+| AR100B | 8898048 | `1e06cd252940e44040b55c48feae9ed72c0ca52491f71a2c723fbbf8ae269328` |
+| AR100C | 6199168 | `87b4f35baba9403c1a5a0efb8f80fe2ed2b43efd604766522533609b5cbd05a1` |
+| AR100D | 5072154 | `5bc21fcd750516e2e3f1d97bca9bb7fb9382c3de8fd24736ac6af4020926a648` |
+
+A read-only, in-memory zlib comparison found every byte equal to the original
+CBF payload's expansion. No reference output was mounted or substituted.
+This rules out decompression corruption for these four files.
+
+The run subsequently asserted at `Infinity.cpp:1763`, "Demand for WED file
+failed"; the inspected screenshot is
+`/private/tmp/iwd-original-first-load-1245.png`. The guest stack returns to
+`0x006559cb`; resource object `0x4ff6c1d0` has locator `0x03600004`.
+The original KEY resolves that locator to `AR1006.WED` in BIF 54,
+`data/AR100B.bif`. Its expanded file contains the valid `WED V1.3` resource
+at offset 23108, length 6586. The failing BIF object's stored path instead
+names the nonexistent `override/data/ar100b.bif`.
+
+`VirtualFS.findFirstFile` was allowing exact C-drive probes in absent
+directories to match the same basename anywhere in the VFS, including the
+real cache file. `createFile` already disallowed that fallback on C:, so
+the two APIs disagreed about the existence of the override path. The new
+regression fails before the correction; both APIs now reject missing local
+paths while retaining exact cache access and the existing non-C media
+fallback. VFS (30), lazy-entry (34), overlay (19), and ANSI/OEM filename
+tests pass. This is a general path-lookup correction, not a game-specific
+resource substitution.
+
+### Earlier Lobby3A checkpoint: character generation reached
 
 The targeted trace after the DP4 fix identified a second rejected interface:
 `IDirectPlayLobby2_QueryInterface` at return address `0x008d3796` requested
