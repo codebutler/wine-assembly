@@ -19,6 +19,8 @@ const PAGE_TABLE = RegionMap.BASE.GUEST_PAGE_TABLE;
 const VIRTUAL_BACKING = RegionMap.BASE.VIRTUAL_BACKING_BASE;
 
 const extraWat = String.raw`
+  (func (export "test_backing_size") (result i32)
+    (global.get $VIRTUAL_BACKING_BASE_SIZE))
   (func (export "test_virtual_reset")
     (call $zero_memory (global.get $VIRTUAL_MAP_STATE)
       (i32.add (global.get $VIRTUAL_MAP_STATE_SIZE)
@@ -279,6 +281,39 @@ async function main() {
     'released sparse mappings must recover their table slots');
   assert.strictEqual(state.getUint32(MAP_STATE + 4, true), RegionMap.BASE.VIRTUAL_BACKING_BASE,
     'LIFO sparse releases must recover their topmost backing extent');
+
+  // Reuse the smallest released hole before consuming wilderness. Neither
+  // allocator may relocate a surviving mapping: native callers retain WASM pointers.
+  main.test_virtual_reset();
+  const unit = 65536;
+  const filler = main.test_virtual_alloc_commit(main.test_backing_size() - 16 * unit) >>> 0;
+  const holeA = main.test_virtual_alloc_commit(4 * unit) >>> 0;
+  const guardA = main.test_virtual_alloc_commit(unit) >>> 0;
+  const holeB = main.test_virtual_alloc_commit(2 * unit) >>> 0;
+  const guardB = main.test_virtual_alloc_commit(unit) >>> 0;
+  for (const p of [filler, holeA, guardA, holeB, guardB]) assert(p);
+  const guarded = [filler, guardA, guardB].map((p, i) => {
+    main.test_virtual_write32(p, 0x12340000 + i);
+    return [p, main.guest_to_wasm(p) >>> 0, 0x12340000 + i];
+  });
+  const holePhysical = main.guest_to_wasm(holeB) >>> 0;
+  main.test_virtual_write32(holeB, 0x76543210);
+  assert.strictEqual(main.test_virtual_free(holeA), 1);
+  assert.strictEqual(main.test_virtual_free(holeB), 1);
+  assert.strictEqual(worker.guest_to_wasm(holeB) >>> 0, 0xf0);
+  const reused = main.test_virtual_alloc_commit(2 * unit) >>> 0;
+  assert.strictEqual(main.guest_to_wasm(reused) >>> 0, holePhysical,
+    'best-fit must reuse the two-unit hole before virgin wilderness or four-unit hole');
+  assert.strictEqual(worker.test_virtual_read32(reused), 0, 'reused backing must be zeroed');
+  assert(main.test_virtual_alloc_commit(7 * unit), 'preserved wilderness must admit seven units');
+  for (const [p, physical, value] of guarded) {
+    assert.strictEqual(worker.guest_to_wasm(p) >>> 0, physical, 'live physical lease unchanged');
+    assert.strictEqual(worker.test_virtual_read32(p) >>> 0, value);
+  }
+  const beforeFailure = Array.from(new Uint8Array(memory.buffer, MAP_STATE, 8));
+  assert.strictEqual(main.test_virtual_alloc_commit(9 * unit), 0);
+  assert.deepStrictEqual(Array.from(new Uint8Array(memory.buffer, MAP_STATE, 8)), beforeFailure,
+    'failed placement must not change map count or backing cursor');
 
   // MSVBVM60 reserves once, then commits the same base with successively
   // larger sizes while generating event-dispatch thunks into the range.

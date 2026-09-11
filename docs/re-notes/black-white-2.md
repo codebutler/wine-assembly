@@ -1069,3 +1069,31 @@ and host views can retain physical WASM addresses. Next allocator work must
 preserve those leases or avoid their fragmentation at allocation time, with a
 bounded reproduction before another hour-long game run. No shader/CPU-opcode fix
 or gameplay success is demonstrated by this result.
+
+### Preventive best-fit backing reuse (2026-09-11)
+
+`virtual_map_commit_locked` now prefers the smallest fitting released extent
+below the backing high-water mark before consuming untouched backing space.
+The contiguous guest/physical extension fast path remains first. The bounded
+unsorted-table scan allocates no scratch storage under the map lock and never
+moves a live mapping, preserving renderer-held physical pointers. Zeroing,
+protection, PTE publication and mapping-count publication order are unchanged.
+
+Cross-instance fixture78684 first failed because bump-first consumed untouched
+space instead of an available exact-size hole;18477 passes after the change.
+The fixture leaves16 units, allocates4/guard1/2/guard1, releases the4 and2 holes,
+then requests2 followed by7. Best-fit uses the2 hole and preserves the8-unit tail
+for7. It checks released PTE invalidation, recycled-byte zeroing, unchanged live
+physical addresses/guard data in the second instance, and failed-placement
+count/cursor atomicity. Heap-tail11, partition6 and free-block validation71342
+also pass; structural gates96114 pass. This prevents avoidable fragmentation;
+it does not recover arbitrary already-fragmented maps or prove B&W gameplay.
+
+Full build24371 passes1173262 canonical/1173730 compat bytes, layout
+9c6027bce1d500a1 and233 nonoverlapping segments. The fresh comparison artifact is
+`/private/tmp/bw-bestfit-repro.03hYhl/wine.wasm`, SHA256
+`9fe637d0df8117dc9c85633f8fe7623c5ceac0397db5f1055a92cd7a95285b16`.
+Unlike89033, this includes the intervening typed-constant and resumable-setup
+checkpoint20d77477 as well as best-fit backing allocation; a gameplay difference
+alone cannot isolate allocator effects from every intervening change. The
+focused allocation fixture above is the controlled evidence for placement.

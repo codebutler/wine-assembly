@@ -448,6 +448,8 @@
     (local $i i32) (local $rec i32) (local $base i32) (local $map_size i32)
     (local $backing i32) (local $map_end i32) (local $backing_end i32)
     (local $extended i32) (local $high_water i32)
+    (local $candidate i32) (local $gap_end i32) (local $best i32)
+    (local $best_size i32) (local $j i32) (local $covered i32)
     (if (i32.gt_u (local.get $size) (global.get $VIRTUAL_BACKING_BASE_SIZE))
       (then (return (i32.const 0))))
     (local.set $guest_end (i32.add (local.get $guest) (local.get $size)))
@@ -516,6 +518,52 @@
 
     (if (i32.ge_u (local.get $count) (global.get $MAX_VIRTUAL_MAPS))
       (then (return (i32.const 0))))
+    ;; Prefer the smallest released extent below the high-water mark. Keeping
+    ;; the untouched wilderness contiguous prevents short-lived allocations
+    ;; from needlessly destroying a later large fit. No live backing moves.
+    ;; Candidate boundaries are the pool base and each live map end; the
+    ;; table is unsorted, so inspect all records for each boundary (bounded
+    ;; by MAX_VIRTUAL_MAPS). Existing contiguous extension above wins first.
+    (local.set $best_size (i32.const -1))
+    (local.set $i (i32.const 0))
+    (block $candidates_done (loop $candidates
+      (br_if $candidates_done (i32.gt_u (local.get $i) (local.get $count)))
+      (local.set $candidate (global.get $VIRTUAL_BACKING_BASE))
+      (if (local.get $i)
+        (then
+          (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+            (i32.shl (i32.sub (local.get $i) (i32.const 1)) (i32.const 4))))
+          (local.set $candidate (i32.add (i32.load offset=8 (local.get $rec))
+            (i32.load offset=4 (local.get $rec))))))
+      (if (i32.lt_u (local.get $candidate) (local.get $high_water))
+        (then
+          (local.set $gap_end (local.get $high_water))
+          (local.set $covered (i32.const 0))
+          (local.set $j (i32.const 0))
+          (block $boundary_done (loop $boundary
+            (br_if $boundary_done (i32.ge_u (local.get $j) (local.get $count)))
+            (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+              (i32.shl (local.get $j) (i32.const 4))))
+            (local.set $backing (i32.load offset=8 (local.get $rec)))
+            (local.set $backing_end (i32.add (local.get $backing)
+              (i32.load offset=4 (local.get $rec))))
+            (if (i32.and (i32.le_u (local.get $backing) (local.get $candidate))
+                  (i32.lt_u (local.get $candidate) (local.get $backing_end)))
+              (then (local.set $covered (i32.const 1)) (br $boundary_done)))
+            (if (i32.and (i32.gt_u (local.get $backing) (local.get $candidate))
+                  (i32.lt_u (local.get $backing) (local.get $gap_end)))
+              (then (local.set $gap_end (local.get $backing))))
+            (local.set $j (i32.add (local.get $j) (i32.const 1)))
+            (br $boundary)))
+          (if (i32.and (i32.eqz (local.get $covered))
+                (i32.and (i32.ge_u (i32.sub (local.get $gap_end) (local.get $candidate)) (local.get $size))
+                  (i32.lt_u (i32.sub (local.get $gap_end) (local.get $candidate)) (local.get $best_size))))
+            (then
+              (local.set $best (local.get $candidate))
+              (local.set $best_size (i32.sub (local.get $gap_end) (local.get $candidate)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $candidates)))
+    (if (local.get $best) (then (local.set $backing_ptr (local.get $best))))
     (if (i32.gt_u
           (i32.add (local.get $backing_ptr) (local.get $size))
           (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
@@ -744,7 +792,7 @@
   ;; the live prefix so g2w's linear scan and MAX_VIRTUAL_MAPS bound keep their
   ;; existing representation. A top release rewinds the bump cursor. Other
   ;; releases recover their map slot immediately and leave a physical gap;
-  ;; virtual_map_commit_locked can reuse that gap on bump exhaustion.
+  ;; virtual_map_commit_locked prefers the smallest fitting released gap.
   (func $virtual_map_release (param $guest i32) (result i32)
     (local $result i32)
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
