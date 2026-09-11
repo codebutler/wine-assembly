@@ -1,6 +1,6 @@
 {
   "generated_from": "src/01-header.wat",
-  "count": 239,
+  "count": 240,
   "sigs": {
     "log": {
       "params": [
@@ -305,6 +305,18 @@
     },
     "check_input_hwnd": {
       "params": [],
+      "results": [
+        "i32"
+      ]
+    },
+    "queue_keyboard_input": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
       "results": [
         "i32"
       ]

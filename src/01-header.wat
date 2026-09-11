@@ -105,6 +105,10 @@
   ;; check_input_wparam() → full wParam of last event (packed check_input keeps only 16 bits)
   (import "host" "check_input_hwnd" (func $host_check_input_hwnd (result i32)))
   ;; check_input_hwnd() → hwnd of last check_input event (0 = use main_hwnd)
+  (import "host" "queue_keyboard_input" (func $host_queue_keyboard_input (param i32 i32 i32 i32 i32) (result i32)))
+  ;; queue_keyboard_input(vk, scan, flags, extraInfo, hwnd) → accepted. The
+  ;; result makes Worker brokerage synchronous so an immediate PeekMessage
+  ;; cannot outrun the synthesized input event.
   (import "host" "get_mouse_position" (func $host_get_mouse_position (result i32)))
   ;; get_mouse_position() → packed x | (y << 16), in renderer/source coords
   (import "host" "set_mouse_position" (func $host_set_mouse_position (param i32 i32)))

@@ -361,3 +361,11 @@ no longer returns the Win98 GetVersion encoding for every possible PID.
 machine model: because ImmGetContext cannot issue a HIMC, neither NULL nor a
 fabricated numeric handle can be released successfully. The audit count is
 unchanged because the corrected deterministic failure remains a quiet handler.
+
+2026-09-11: 332 -> 331. keybd_event now synchronously enqueues real system
+keyboard input instead of returning without an event. Synthesized keys retain
+the caller's scan code, extended/up flags, extra-info value, focused-window
+target, and an event-time keyboard snapshot; GetMessage/PeekMessage therefore
+apply the existing thread routing, WM_HOTKEY matching, and WH_KEYBOARD chain.
+Alt and F10 select WM_SYSKEYDOWN/UP, and lParam carries context, previous-state,
+and transition bits with the same queue ordering used by browser input.

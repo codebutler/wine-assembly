@@ -9913,8 +9913,14 @@
   )
 
   (func $handle_keybd_event (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Legacy input synthesis. Browser input injection stays host-owned; this
-    ;; compatibility shim satisfies libraries that only probe the entry point.
+    ;; keybd_event synthesizes system keyboard input. Feed the host FIFO used
+    ;; by real browser keys rather than the posted-message queue: Get/PeekMessage
+    ;; will then apply normal thread routing, hot-key matching and WH_KEYBOARD
+    ;; callbacks. Prefer the focused child as the system-input target.
+    (drop (call $host_queue_keyboard_input
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (select (global.get $focus_hwnd) (global.get $main_hwnd)
+        (i32.ne (global.get $focus_hwnd) (i32.const 0)))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )

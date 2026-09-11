@@ -252,8 +252,11 @@ const digest = crypto.createHash('sha256')
 // 2026-09-11: 346 -> 345. CoLockObjectExternal now retains one strong COM
 // reference per lock and releases exactly one per balanced unlock, including
 // DLL-private objects reached through the guest callback continuation.
-const EXPECTED_COUNT = 332;
-const EXPECTED_SHA256 = '9f73c4f81144960c0df957bc258f892a3f14f06028bb28215cf38022c2667be8';
+// 2026-09-11: 332 -> 331. keybd_event now synchronously enters the ordinary
+// hardware-input FIFO with Win98 keyboard-message state instead of succeeding
+// without generating input.
+const EXPECTED_COUNT = 331;
+const EXPECTED_SHA256 = '200d5a9b28f554d127be601b500c71c999ce4171095c7a930dbc30a3ed8f5ab8';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
