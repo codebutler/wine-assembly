@@ -242,3 +242,10 @@ recipient queues and signals their events, validates sender ownership and
 unsupported modes, and rolls back partial multicast allocation failure.
 The reviewed inventory diff removes only Send, with no added or modified
 quiet entries. Network transport and asynchronous sending are not implemented.
+
+2026-09-10: 356 -> 353. MonitorFromPoint, MonitorFromRect, and
+MonitorFromWindow now test the one browser monitor's actual rectangle and
+honor MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, and
+MONITOR_DEFAULTTONEAREST instead of always returning the primary handle.
+The same slice validates GetMonitorInfoA and makes its work area agree with
+SPI_GETWORKAREA and the browser desktop's existing 28-pixel Win98 taskbar.
