@@ -1498,6 +1498,41 @@ surrounding RGB but normalizing X8 alpha; dirty-rectangle upload optimization,
 pending argument-mutation/multi-producer tests and broader surface formats remain
 open. This does not complete the resource/locking profile.
 
+Programmed vertex pixel-center conversion (2026-09-10): the solid GPU path now
+applies the same `(1,-1)*clipW/viewportExtent` displacement as the fixed vertex
+path, including nonzero viewport origins. Previously programmed VS coordinates
+were left at GL half-integer centers while native/fixed paths used D3D integer
+centers. This is a viewport conversion, not an epsilon-based edge fix. Native
+triangle masks21686 pass20 cases; GPU58160 passes20 fixed/programmed equivalence
+checks across forced GL1/2. Shader regressions88630 (GL2) and54316 (GL1) pass,
+including mip/LOD and TEXKILL helper checks; their UV input offsets were adjusted
+to preserve the same independently specified native sample coordinates.
+Extended native91685 and GPU27844 gates pass34 cases/comparisons each, including
+constant W2, varying W(.5,2,4), fractional coverage, and repeated viewport
+extent/origin changes on one device. The accelerated reuse case checks exact
+fractional masks and one cached program throughout the viewport changes.
+
+Integration build40591 passes after the concurrent monitor gate update:
+canonical1155969 / compat1156437 bytes, layout9c6027bce1d500a1, no data overlaps.
+Test manifest and whitespace gates also pass. This supersedes the earlier
+monitor-inventory/PaintRect build interruptions; it does not close the remaining
+renderer profile or gameplay gates.
+
+Full triangle edge parity is still open. The coverage fixture reports exact
+horizontal-edge differences and supports `--require-parity` to turn those into
+a failing gate. Microsoft specifies integer centers and top-left ownership in
+[D3D9 rasterization rules](https://learn.microsoft.com/en-us/windows/win32/direct3d9/rasterization-rules).
+Khronos [ARB_clip_control issue9](https://registry.khronos.org/OpenGL/extensions/ARB/ARB_clip_control.txt)
+leaves exact shared-edge ownership implementation-defined: neither an epsilon
+nor a global Y flip proves conformance. The proposed GPU2 exact path must retain
+homogeneous clipping, original culling, per-pixel top-left edge tests, perspective
+varyings, original raster depth, helper execution before coverage suppression,
+and depth/stencil/blend/query ordering. Transform-feedback output can be copied
+GPU-to-texture through a pixel-unpack buffer to avoid tripling attribute/varying
+requirements; that coverage implementation is not yet present. GL1 remains an
+explicit hardware tie-rule subset. Binary-exact test coordinates isolate edge
+rules; arbitrary transform/subpixel-rounding parity is a separate open issue.
+
 The next lock checkpoint replaces whole-buffer upload with immutable rectangular
 uploads. Five per-device snapshot words capture output WA and x/y/w/h before
 parking; pending acquisition no longer rereads mutable guest rectangle/flags.
