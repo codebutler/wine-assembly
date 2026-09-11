@@ -360,6 +360,12 @@ The same path now validates `PROPSHEETHEADERA` at its Win98 boundary: only the
 reserved, and the native 99-page ceiling is enforced before the sheet takes
 ownership of page handles.
 
+Property-page dialogs now follow the documented lazy Win98 lifetime as well:
+the first selection creates the dialog and delivers `WM_INITDIALOG` /
+`PSPCB_CREATE`, later selections hide and show the same retained HWND, and the
+sheet releases the bounded per-page cache at teardown. Control/dialog state no
+longer disappears merely because the user switches away and back.
+
 ---
 
 # Pass 4 — 2026-08-31

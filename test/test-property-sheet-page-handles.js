@@ -70,6 +70,27 @@ const extraWat = String.raw`
     (call $propsheet_prepare_inline_pages))
   (func (export "test_psp_release_pages")
     (call $propsheet_release_pages))
+  (func (export "test_psp_page_hwnds_alloc") (result i32)
+    (call $propsheet_page_hwnds_alloc))
+  (func (export "test_psp_page_hwnds_release")
+    (call $propsheet_page_hwnds_release))
+  (func (export "test_psp_page_hwnd_get") (param $index i32) (result i32)
+    (call $propsheet_page_hwnd_get (local.get $index)))
+  (func (export "test_psp_show_page")
+      (param $index i32) (param $frame i32) (result i32)
+    (global.set $propsheet_frame_hwnd (local.get $frame))
+    (call $propsheet_show_page (local.get $index)))
+  (func (export "test_psp_hide_page")
+    (call $propsheet_hide_page))
+  (func (export "test_psp_window_live") (param $hwnd i32) (result i32)
+    (i32.ne (call $wnd_table_find (local.get $hwnd)) (i32.const -1)))
+  (func (export "test_psp_window_style") (param $hwnd i32) (result i32)
+    (call $wnd_get_style (local.get $hwnd)))
+  (func (export "test_psp_dialog_extra_set")
+      (param $hwnd i32) (param $value i32) (result i32)
+    (call $dialog_extra_set (local.get $hwnd) (i32.const 8) (local.get $value)))
+  (func (export "test_psp_dialog_extra_get") (param $hwnd i32) (result i32)
+    (call $dialog_extra_get (local.get $hwnd) (i32.const 8)))
 `;
 
 (async () => {
@@ -292,13 +313,77 @@ const extraWat = String.raw`
   assert.strictEqual(e.guest_read32(inlineRef), 3,
     'implicit sheet teardown balances PSP_USEREFPARENT');
 
+  // Property pages are modeless child dialogs. Win98 creates a normal page
+  // lazily the first time it is selected, then retains and hides that same
+  // HWND so its dialog/control state survives later selections.
+  const dlgProc = e.guest_alloc(16) >>> 0;
+  bytes.set([
+    0xB8, 0x01, 0x00, 0x00, 0x00,       // mov eax,1
+    0xC2, 0x10, 0x00,                   // ret 16
+  ], e.guest_to_wasm(dlgProc) >>> 0);
+  const retainedCallback = makeCallback(1);
+  const retainedPages = e.guest_alloc(96) >>> 0;
+  for (let i = 0; i < 2; i++) {
+    const page = retainedPages + i * 48;
+    for (let offset = 0; offset < 48; offset += 4) {
+      e.guest_write32(page + offset, 0);
+    }
+    e.guest_write32(page, 48);
+    e.guest_write32(page + 4, 0x80);    // PSP_USECALLBACK
+    e.guest_write32(page + 12, 101 + i);
+    e.guest_write32(page + 24, dlgProc);
+    e.guest_write32(page + 32, retainedCallback.code);
+  }
+  e.test_psp_use_inline_array(retainedPages, 2);
+  assert.strictEqual(e.test_psp_prepare_inline(), 1);
+  assert.strictEqual(e.test_psp_page_hwnds_alloc(), 1,
+    'sheet allocates one zeroed retained-HWND slot per page');
+  assert.strictEqual(e.test_psp_page_hwnd_get(0), 0);
+  assert.strictEqual(e.test_psp_page_hwnd_get(1), 0);
+  assert.strictEqual(e.test_psp_page_hwnd_get(2), 0,
+    'retained page lookup is bounded by nPages');
+
+  const frame = 0x0001F000;
+  const firstHwnd = e.test_psp_show_page(0, frame) >>> 0;
+  assert(firstHwnd, 'first selection lazily creates the first page dialog');
+  assert.strictEqual(e.test_psp_page_hwnd_get(0) >>> 0, firstHwnd,
+    'the first page HWND is retained by its page index');
+  assert(e.test_psp_window_style(firstHwnd) & 0x10000000,
+    'the active page carries WS_VISIBLE');
+  assert.strictEqual(e.guest_read32(retainedCallback.capture), 2,
+    'first selection delivers PSPCB_CREATE');
+  e.test_psp_dialog_extra_set(firstHwnd, 0x12345678);
+
+  e.test_psp_hide_page();
+  assert.strictEqual(e.test_psp_window_live(firstHwnd), 1,
+    'deactivation hides but does not destroy the first page dialog');
+  assert.strictEqual(e.test_psp_window_style(firstHwnd) & 0x10000000, 0,
+    'an inactive retained page loses WS_VISIBLE');
+  const secondHwnd = e.test_psp_show_page(1, frame) >>> 0;
+  assert(secondHwnd && secondHwnd !== firstHwnd,
+    'the second page is independently created on first selection');
+  e.test_psp_hide_page();
+
+  e.guest_write32(retainedCallback.capture, 0x7FFFFFFF);
+  const revisitedHwnd = e.test_psp_show_page(0, frame) >>> 0;
+  assert.strictEqual(revisitedHwnd, firstHwnd,
+    'revisiting a page shows its original HWND');
+  assert.strictEqual(e.guest_read32(retainedCallback.capture), 0x7FFFFFFF,
+    'revisiting does not repeat PSPCB_CREATE');
+  assert.strictEqual(e.test_psp_dialog_extra_get(firstHwnd) >>> 0, 0x12345678,
+    'application-owned dialog state survives page switches');
+  assert(e.test_psp_window_style(firstHwnd) & 0x10000000,
+    'the revisited page regains WS_VISIBLE');
+  e.test_psp_page_hwnds_release();
+  e.test_psp_release_pages();
+
   const apiTable = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'src', 'api_table.json'), 'utf8'));
   const destroyApi = apiTable.find(api => api.name === 'DestroyPropertySheetPage');
   assert(destroyApi && destroyApi.nargs === 1,
     'DestroyPropertySheetPage is registered as a one-argument API');
 
-  console.log('PASS  property-sheet pages honor Win98 copy, callback, reference, and ownership lifetimes');
+  console.log('PASS  property-sheet pages honor Win98 copy, callback, ownership, and retained-dialog lifetimes');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

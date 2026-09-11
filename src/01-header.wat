@@ -3333,6 +3333,10 @@
   (global $propsheet_inline_pages_initialized (mut i32) (i32.const 0))
   (global $propsheet_page_index (mut i32) (i32.const 0))
   (global $propsheet_page_hwnd (mut i32) (i32.const 0))
+  ;; Guest-heap array of one retained dialog HWND per page. Win98 creates a
+  ;; normal page lazily on its first activation, then hides/shows that same
+  ;; dialog so its controls and application-owned state survive tab switches.
+  (global $propsheet_page_hwnds (mut i32) (i32.const 0))
   (global $propsheet_frame_hwnd (mut i32) (i32.const 0))
   (global $propsheet_finish_page (mut i32) (i32.const 0))
   (global $propsheet_finish_nmhdr (mut i32) (i32.const 0))

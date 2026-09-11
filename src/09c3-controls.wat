@@ -17690,7 +17690,9 @@
     ;; handle array. Retire those copied page objects with the frame, matching
     ;; the lifetime transfer documented for PropertySheet.
     (if (i32.eq (local.get $class) (i32.const 32))
-      (then (call $propsheet_release_pages)))
+      (then
+        (call $propsheet_release_pages)
+        (call $propsheet_page_hwnds_release)))
     (global.set $modal_result (local.get $result))
     (call $cd_modal_writeback (local.get $result))
     (local.set $owner (call $wnd_get_owner (local.get $hwnd)))
@@ -17820,13 +17822,57 @@
     (call $heap_free (local.get $nm_g))
     (local.get $ret))
 
-  (func $propsheet_destroy_page
+  (func $propsheet_page_hwnds_release
+    (if (global.get $propsheet_page_hwnds)
+      (then
+        (call $heap_free (global.get $propsheet_page_hwnds))
+        (global.set $propsheet_page_hwnds (i32.const 0)))))
+
+  (func $propsheet_page_hwnds_alloc (result i32)
+    (local $bytes i32) (local $page_hwnds_w i32)
+    (call $propsheet_page_hwnds_release)
+    (local.set $bytes
+      (i32.shl (global.get $propsheet_page_count) (i32.const 2)))
+    (global.set $propsheet_page_hwnds (call $heap_alloc (local.get $bytes)))
+    (if (i32.eqz (global.get $propsheet_page_hwnds))
+      (then (return (i32.const 0))))
+    (local.set $page_hwnds_w (call $g2w (global.get $propsheet_page_hwnds)))
+    (memory.fill (local.get $page_hwnds_w) (i32.const 0) (local.get $bytes))
+    (i32.const 1))
+
+  (func $propsheet_page_hwnd_get (param $index i32) (result i32)
+    (if (i32.or
+          (i32.eqz (global.get $propsheet_page_hwnds))
+          (i32.ge_u (local.get $index) (global.get $propsheet_page_count)))
+      (then (return (i32.const 0))))
+    (i32.load (i32.add
+      (call $g2w (global.get $propsheet_page_hwnds))
+      (i32.shl (local.get $index) (i32.const 2)))))
+
+  (func $propsheet_page_hwnd_set (param $index i32) (param $page i32)
+    (if (i32.or
+          (i32.eqz (global.get $propsheet_page_hwnds))
+          (i32.ge_u (local.get $index) (global.get $propsheet_page_count)))
+      (then (return)))
+    (i32.store (i32.add
+      (call $g2w (global.get $propsheet_page_hwnds))
+      (i32.shl (local.get $index) (i32.const 2)))
+      (local.get $page)))
+
+  ;; Inactive property pages remain live children. Mirror ShowWindow's
+  ;; visibility bookkeeping so hidden descendants neither paint nor receive
+  ;; mouse input, while their HWND/control records remain untouched.
+  (func $propsheet_hide_page
     (local $page i32)
     (local.set $page (global.get $propsheet_page_hwnd))
     (if (local.get $page)
       (then
-        (call $wnd_destroy_tree (local.get $page))
-        (call $host_destroy_window (local.get $page))
+        (drop (call $host_show_window (local.get $page) (i32.const 0)))
+        (call $wnd_uncover_parent (local.get $page))
+        (drop (call $wnd_set_style (local.get $page)
+          (i32.and (call $wnd_get_style (local.get $page))
+            (i32.const 0xEFFFFFFF))))
+        (call $paint_clear_subtree (local.get $page))
         (global.set $propsheet_page_hwnd (i32.const 0)))))
 
   ;; PSN_WIZFINISH is allowed to perform the complete install before it
@@ -17865,6 +17911,25 @@
     (if (i32.eqz (local.get $psp_g)) (then (return (i32.const 0))))
     (local.set $psp_w (call $g2w (local.get $psp_g)))
     (local.set $size (i32.load (local.get $psp_w)))
+    ;; A page already visited owns a live dialog. Show that exact HWND again;
+    ;; do not repeat PSPCB_CREATE, WM_INITDIALOG, resource loading, or control
+    ;; construction, because Win98 preserves the page between activations.
+    (local.set $page (call $propsheet_page_hwnd_get (local.get $index)))
+    (if (local.get $page)
+      (then
+        (drop (call $host_show_window (local.get $page) (i32.const 5)))
+        (drop (call $wnd_set_style (local.get $page)
+          (i32.or (call $wnd_get_style (local.get $page))
+            (i32.const 0x10000000))))
+        (global.set $propsheet_page_index (local.get $index))
+        (global.set $propsheet_page_hwnd (local.get $page))
+        (global.set $dlg_hwnd (local.get $page))
+        (drop (call $propsheet_notify
+          (local.get $page) (i32.const -200))) ;; PSN_SETACTIVE
+        (call $dlg_seed_focus (local.get $page))
+        (call $dlg_fill_bkgnd (local.get $page))
+        (call $paint_flag_set_inv (local.get $page))
+        (return (local.get $page))))
     ;; PSPCB_CREATE belongs to dialog materialization, not handle allocation.
     ;; Its zero return vetoes this page before any HWND or resource is created.
     (if (i32.eqz (call $propsheet_page_callback
@@ -17897,6 +17962,7 @@
     (call $host_move_window (local.get $page)
       (i32.const 10) (i32.const 10) (i32.const 420) (i32.const 228) (i32.const 1))
     (call $host_show_window (local.get $page) (i32.const 5))
+    (call $propsheet_page_hwnd_set (local.get $index) (local.get $page))
     (global.set $propsheet_page_index (local.get $index))
     (global.set $propsheet_page_hwnd (local.get $page))
     (global.set $dlg_hwnd (local.get $page))
@@ -17909,8 +17975,10 @@
     (local.get $page))
 
   (func $propsheet_change_page (param $delta i32)
-    (local $old i32) (local $next i32) (local $notify i32) (local $ret i32)
+    (local $old i32) (local $old_index i32) (local $next i32)
+    (local $notify i32) (local $ret i32)
     (local.set $old (global.get $propsheet_page_hwnd))
+    (local.set $old_index (global.get $propsheet_page_index))
     (if (i32.eqz (local.get $old)) (then (return)))
     (local.set $notify (select (i32.const -207) (i32.const -206) (i32.gt_s (local.get $delta) (i32.const 0))))
     (local.set $ret (call $propsheet_notify (local.get $old) (local.get $notify)))
@@ -17924,8 +17992,11 @@
         (call $propsheet_begin_finish (local.get $old))
         (return)))
     (drop (call $propsheet_notify (local.get $old) (i32.const -201))) ;; PSN_KILLACTIVE
-    (call $propsheet_destroy_page)
-    (drop (call $propsheet_show_page (local.get $next))))
+    (call $propsheet_hide_page)
+    ;; If a lazy target cannot be materialized, restore the previous live page
+    ;; instead of leaving a blank sheet after PSN_KILLACTIVE.
+    (if (i32.eqz (call $propsheet_show_page (local.get $next)))
+      (then (drop (call $propsheet_show_page (local.get $old_index))))))
 
   (func $propsheet_wndproc
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
@@ -18005,6 +18076,10 @@
       (then
         (call $propsheet_release_pages)
         (return (i32.const 0))))
+    (if (i32.eqz (call $propsheet_page_hwnds_alloc))
+      (then
+        (call $propsheet_release_pages)
+        (return (i32.const 0))))
     (local.set $owner (i32.load offset=8 (local.get $header_w)))
     (local.set $caption_g (i32.load offset=20 (local.get $header_w)))
     (local.set $caption_w (select (call $g2w (local.get $caption_g)) (i32.const 0) (local.get $caption_g)))
@@ -18042,6 +18117,7 @@
         (call $wnd_destroy_tree (local.get $dlg))
         (call $host_destroy_window (local.get $dlg))
         (global.set $propsheet_frame_hwnd (i32.const 0))
+        (call $propsheet_page_hwnds_release)
         (call $propsheet_release_pages)
         (return (i32.const 0))))
     (global.set $main_hwnd (local.get $dlg))
