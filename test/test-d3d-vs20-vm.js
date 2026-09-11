@@ -45,6 +45,32 @@ const { bootRenderHarness } = require('./render-helper');
   }
   function release(...pointers) { pointers.forEach(p => e.d3d_shader_vm_free(p)); }
   assert.strictEqual(e.d3d_shader_vm_context_bytes(), 73760);
+  for (const opcode of [33, 36]) for (let mask = 1; mask < (opcode === 33 ? 8 : 16); mask++)
+  for (const lanes of [15, 5]) for (const negate of [0, 1])
+  for (const swizzle of opcode === 33 ? [228] : [228, 27, 0, 85, 170, 255]) {
+    const a = [[3,0,-0,1],[4,0,0,2],[0,0,-0,2],[10,1,-1,3]];
+    const b = [[0,1,2,3],[0,2,1,4],[1,3,4,5],[99,99,99,99]];
+    const sources = [operand(0, 0, swizzle, negate)];
+    if (opcode === 33) sources.push(source(2));
+    const program = compile([ins(opcode, dst(1, mask), ...sources)]);
+    const ctx = e.d3d_shader_vm_context(program, lanes); assert(ctx);
+    f.set(a.flat(), register(ctx, 0, 0)); f.set(b.flat(), register(ctx, 0, 2));
+    f.fill(77, register(ctx, 0, 1), register(ctx, 0, 1) + 16);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    for (let component = 0; component < 4; component++) for (let lane = 0; lane < 4; lane++) {
+      const av = a.map((_, c) => {
+        const value = a[(swizzle >>> (c * 2)) & 3][lane]; return negate ? -value : value;
+      });
+      const j = (component + 1) % 3, k = (component + 2) % 3;
+      const squared = Math.fround(Math.fround(Math.fround(av[0]*av[0]) + Math.fround(av[1]*av[1])) + Math.fround(av[2]*av[2]));
+      const factor = squared === 0 ? Math.fround(3.4028234663852886e38) : Math.fround(1 / Math.fround(Math.sqrt(squared)));
+      let expected = opcode === 33 ? Math.fround(Math.fround(av[j]*b[k][lane]) - Math.fround(av[k]*b[j][lane])) : Math.fround(av[component]*factor);
+      if (!(mask & (1 << component)) || !(lanes & (1 << lane))) expected = 77;
+      assert.strictEqual(f[register(ctx, 0, 1) + component * 4 + lane], expected,
+        `vector opcode=${opcode} mask=${mask} lanes=${lanes} negate=${negate} swizzle=${swizzle} component=${component} lane=${lane}`);
+    }
+    release(ctx, program); cases++;
+  }
   {
     // The documented difference form must not overflow an intermediate product
     // when both endpoints are identical finite large values.
@@ -169,6 +195,10 @@ const { bootRenderHarness } = require('./render-helper');
     ins(1, dst(0), operand(0, 0, 0xe4, 256)), ins(1, dst(0), operand(2, 0, 0xe4, 512)),
     ins(20, dst(0), source(0), constant(0)), ins(35, dst(0), operand(0, 0, 0xe4, 2)),
     ...[14, 15, 78, 79].map(opcode => ins(opcode, dst(0), source(1))),
+    ins(33, dst(0, 7), source(0), source(1)), ins(33, dst(0, 7), source(1), source(0)),
+    ins(33, dst(0, 8), source(1), source(2)), ins(33, dst(0, 7), operand(0, 1, 27), source(2)),
+    ins(33, operand(5, 0, 7), source(1), source(2)),
+    ins(36, dst(0), source(0)), ins(36, operand(5, 0, 15), source(1)),
     ins(1, operand(4, 1, 15), source(0)), ins(46, operand(3, 0, 1, 1), source(0))]) {
     const p = ir([bad]); assert.strictEqual(e.d3d_shader_vm_compile_vs20(p), 0, 'private unsupported/malformed IR rejected');
     release(p); cases++;

@@ -124,6 +124,60 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     result.pixels.forEach((actual,i)=>assert(Math.abs(actual-expected[i%4])<=1,JSON.stringify({result,expected,i,actual})));
    }
   }
-  console.log('Private VS2 GLSL PASS '+results.length+' real WebGL1/2 rounding/constant cases; LOG signed-zero PASS8 current/old pixel oracles; EXPP profiles PASS8 pixel cases; LRP finite endpoints PASS2 pixel cases');
+  const vectorResults=await page.evaluate(()=>{
+   const results=[];
+   const fixtures=[
+    {name:'crs right hand and W',op:33,mask:7,input:[1,0,0,0],matrix:[0,1,0,0],expected:[.5,.5,1,.8]},
+    {name:'crs partial mask',op:33,mask:1,input:[0,1,0,0],matrix:[0,0,1,0],expected:[1,.65,.7,.8]},
+    {name:'crs negate',op:33,mask:7,input:[1,0,0,0],matrix:[0,1,0,0],negate:true,expected:[.5,.5,0,.8]},
+    {name:'nrm XYZ length scales W',op:36,input:[3,4,0,10],bias:0,expected:[.15,.2,0,.5]},
+    {name:'nrm swizzle and negate',op:36,input:[0,3,4,10],swizzle:201,negate:true,bias:.5,expected:[.35,.3,.5,0]},
+    {name:'nrm zero XYZ finite W',op:36,input:[0,0,0,1],zero:true,expected:[0,0,0,Math.fround(Math.fround(3.4028234663852886e38*Math.fround(1e-37)))*.025]},
+   ];
+   for(const version of[1,2])for(const fixture of fixtures){
+    const instructions=[{opcode:1,offset:1,args:[0xc00f0000,0x90e40000]}];
+    const src=(0x90000001|((fixture.swizzle??228)<<16)|(fixture.negate?0x01000000:0))>>>0;
+    if(fixture.op===33){
+     instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
+      {opcode:33,offset:3,args:[0x80000000|(fixture.mask<<16),src,0xa0e40003]},
+      {opcode:5,offset:4,args:[0x800f0001,0x80e40000,0xa0e40000]},
+      {opcode:2,offset:5,args:[0xd00f0000,0x80e40001,0xa0e40001]});
+    }else{
+     instructions.push({opcode:36,offset:2,args:[0x800f0000,src]});
+     if(fixture.zero)instructions.push({opcode:5,offset:3,args:[0xd00f0000,0x80e40000,0xa0e40000]});
+     else instructions.push({opcode:5,offset:3,args:[0x800f0001,0x80e40000,0xa0e40000]},
+      {opcode:2,offset:4,args:[0xd00f0000,0x80e40001,0xa0e40001]});
+    }
+    let vs=D3D9Shader.compileIR({stage:'vertex',version:0xfffe0200,instructions},{experimentalVS20:true}).source;
+    let ps='precision highp float; varying vec4 d3d_color0; void main(){gl_FragColor=d3d_color0;}';
+    // Keep the second scale across the raster interface: a driver can legally
+    // reassociate two VS products into a subnormal multiplier and flush it.
+    if(fixture.zero)ps=ps.replace('gl_FragColor=d3d_color0','gl_FragColor=d3d_color0/40.0');
+    if(version===2){vs='#version 300 es\n'+vs.replaceAll('attribute ','in ').replaceAll('varying ','out ');
+     ps='#version 300 es\n'+ps.replace('varying ','in ').replace('void main()','out vec4 outputColor; void main()').replace('gl_FragColor','outputColor');}
+    const canvas=document.createElement('canvas');canvas.width=canvas.height=4;
+    const gl=canvas.getContext(version===2?'webgl2':'webgl');if(!gl)throw Error('missing vector GL'+version);
+    const compile=(type,source)=>{const sh=gl.createShader(type);gl.shaderSource(sh,source);gl.compileShader(sh);
+     if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh;};
+    const v=compile(gl.VERTEX_SHADER,vs),f=compile(gl.FRAGMENT_SHADER,ps),p=gl.createProgram();
+    gl.attachShader(p,v);gl.attachShader(p,f);gl.linkProgram(p);
+    if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));gl.useProgram(p);
+    const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+    gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,0,1,3,-1,0,1,-1,3,0,1]),gl.STATIC_DRAW);
+    const position=gl.getAttribLocation(p,'d3d_v0');gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,4,gl.FLOAT,false,0,0);
+    const input=gl.getAttribLocation(p,'d3d_v1');gl.disableVertexAttribArray(input);gl.vertexAttrib4f(input,...fixture.input);
+    const scalar=(n,x)=>gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c'+n),x,x,x,x);
+    scalar(0,fixture.op===33?.5:fixture.zero?1e-37:.25);
+    scalar(1,fixture.op===33?.5:fixture.zero?.025:fixture.bias);
+    gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c2'),.2,.3,.4,.6);
+    if(fixture.matrix)gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),...fixture.matrix);
+    gl.drawArrays(gl.TRIANGLES,0,3);const pixels=new Uint8Array(64);gl.readPixels(0,0,4,4,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+    results.push({version,name:fixture.name,expected:fixture.expected.map(x=>Math.round(x*255)),pixels:Array.from(pixels),error:gl.getError()});
+    gl.deleteBuffer(buffer);gl.deleteProgram(p);gl.deleteShader(v);gl.deleteShader(f);gl.getExtension('WEBGL_lose_context')?.loseContext();
+   }return results;
+  });
+  for(const result of vectorResults){assert.strictEqual(result.error,0);result.pixels.forEach((actual,i)=>
+   assert(Math.abs(actual-result.expected[i%4])<=1,JSON.stringify({result,i,actual})));}
+  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' CRS/NRM actual WebGL1/2 pixel cases');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

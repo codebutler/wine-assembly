@@ -1760,3 +1760,31 @@ Full build5124 passes canonical1162212 / compat1162680 with unchanged region
 layout and no data overlaps. Flow control,
 remaining arithmetic instructions and complete VS2 capability admission remain
 open; this is not a full-profile or Black & White gameplay result.
+
+Private CRS/NRM follow-up: new packets55/56 perform SIMD cross product and XYZ
+normalization with the existing source fetch and masked-write machinery. NRM
+scales W too; zero squared length selects finite FLT_MAX before multiplication.
+GLSL uses explicit XYZ length and zero handling, not `normalize(vec4)`. Native
+evaluation uses ordinary f32 multiply/add/sqrt/divide, with no claim of matching
+every GPU's subnormal/overflow behavior. CRS leaves unwritten W untouched.
+
+Token validation requires temporary destinations and rejects source aliases;
+CRS permits masks1..7 and identity swizzles only, with precise per-component
+dependencies. NRM allows masks/swizzles with XYZ plus selected-W dependency.
+Costs are CRS2/NRM3. Native42687 was RED;20088 passes164 new IR cases. Existing
+private84/matrix165/arithmetic195/legacyIR pass82368/67813/79583/26029.
+
+VM71586 was RED before admission;95966 passes502 private VM cases, covering all
+vector masks, active/inactive lanes, NEG, six NRM swizzles, signed zero, finite
+zero-length W and malformed operands. Legacy5503 passes263; logical34455 and
+diff checks pass. GPU39118 passes52 cases including12 CRS/NRM cases in GL1/2.
+The zero-length-W oracle keeps its second scale in the fragment shader to avoid
+combining two vertex scales into a subnormal; no production bug is claimed from
+that initial test failure. Same-IR39570 passes106 GPU frames against53 native
+frames; its initial failure47567 was a duplicate NRM case identifier that paired
+the zero-vector output with the nonzero-vector expectation. IDs now include the
+input vector. Full build11204 passes canonical1162831 / compat1163299, unchanged
+region layout and no data overlaps. Software pipeline71393 passes351 cases.
+Independent read-only review found no concrete packet/validation/masking defect;
+this adds no claim of Windows-driver numeric equivalence. Public profile gates
+remain closed.
