@@ -302,3 +302,13 @@ automatically releases it with the surface. GetClipper returns an independently
 AddRefed interface and reports a missing attachment. Windowed presentation now
 uses the HWND retained by that clipper instead of assuming the cooperative
 window; arbitrary SetClipList regions and occlusion snapshots remain separate.
+
+2026-09-11: 340 -> 338. IDirectDrawClipper::SetClipList now validates and owns
+a canonical RGNDATA copy, supports deletion and HWND/list exclusivity, and
+drives actual clipped Blt copies, stretches, color keys, and fills without
+slowing the no-list path. GetClipList implements size negotiation, bounded
+copies, optional rectangle intersection, and live HWND client-region snapshots;
+IsClipListChanged detects and latches window geometry changes until that list is
+copied. Final Release frees retained region storage, and BltFast now rejects any
+attached clipper as documented. Browser composition supplies HWND occlusion;
+explicit RGNDATA rectangles are enforced in the DirectDraw framebuffer.

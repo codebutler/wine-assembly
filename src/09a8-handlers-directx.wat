@@ -763,6 +763,98 @@
   (func $dx_surface_clipper_get (param $entry_wa i32) (result i32)
     (i32.load (call $dx_surface_clipper_ptr (local.get $entry_wa))))
 
+  ;; Type-10 (IDirectDrawClipper) uses its otherwise-free union arm as:
+  ;;   +8  associated HWND, or zero for an explicit clip list
+  ;;   +12/+16/+20/+24 last observed HWND client RECT in screen coordinates
+  ;;   +20 explicit RGNDATA guest pointer when +8 is zero
+  ;;   +24 explicit RGNDATA byte size when +8 is zero
+  ;;   +28 bit 0 = HWND snapshot valid, bit 1 = snapshot changed
+  ;; Explicit lists are canonical private copies, so the application can free
+  ;; or mutate its input immediately after SetClipList returns.
+  (func $dx_clipper_release_explicit (param $entry_wa i32)
+    (local $list i32)
+    (if (i32.eqz (local.get $entry_wa)) (then (return)))
+    (if (i32.ne (load.field DxObject misc0 (local.get $entry_wa)) (i32.const 0))
+      (then (return)))
+    (local.set $list (load.field DxObject misc1 (local.get $entry_wa)))
+    (if (local.get $list) (then (call $heap_free (local.get $list))))
+    (store.field DxObject misc1 (local.get $entry_wa) (i32.const 0))
+    (store.field DxObject misc2 (local.get $entry_wa) (i32.const 0)))
+
+  ;; Refresh the single rectangular client-region approximation used by the
+  ;; browser compositor. Occluding sibling windows are clipped by composition;
+  ;; DirectDraw still observes movement/resizing through IsClipListChanged and
+  ;; GetClipList in the same screen-coordinate space as Win98 primary surfaces.
+  (func $dx_clipper_refresh_hwnd (param $entry_wa i32)
+    (local $hwnd i32) (local $l i32) (local $t i32)
+    (local $r i32) (local $b i32) (local $flags i32)
+    (local.set $hwnd (load.field DxObject misc0 (local.get $entry_wa)))
+    (if (i32.eqz (local.get $hwnd)) (then (return)))
+    (local.set $l (call $wnd_client_screen_x (local.get $hwnd)))
+    (local.set $t (call $wnd_client_screen_y (local.get $hwnd)))
+    (if (call $wnd_is_effectively_visible (local.get $hwnd))
+      (then
+        (local.set $r (i32.add (local.get $l)
+          (call $wnd_client_w_for_clip (local.get $hwnd))))
+        (local.set $b (i32.add (local.get $t)
+          (call $wnd_client_h_for_clip (local.get $hwnd)))))
+      (else
+        (local.set $r (local.get $l))
+        (local.set $b (local.get $t))))
+    (local.set $flags (load.field DxObject flags (local.get $entry_wa)))
+    (if (i32.and (local.get $flags) (i32.const 1))
+      (then
+        (if (i32.or
+              (i32.or
+                (i32.ne (i32.load offset=12 (local.get $entry_wa)) (local.get $l))
+                (i32.ne (i32.load offset=16 (local.get $entry_wa)) (local.get $t)))
+              (i32.or
+                (i32.ne (load.field DxObject misc1 (local.get $entry_wa)) (local.get $r))
+                (i32.ne (load.field DxObject misc2 (local.get $entry_wa)) (local.get $b))))
+          (then (local.set $flags (i32.or (local.get $flags) (i32.const 2)))))))
+    (i32.store offset=12 (local.get $entry_wa) (local.get $l))
+    (i32.store offset=16 (local.get $entry_wa) (local.get $t))
+    (store.field DxObject misc1 (local.get $entry_wa) (local.get $r))
+    (store.field DxObject misc2 (local.get $entry_wa) (local.get $b))
+    (store.field DxObject flags (local.get $entry_wa)
+      (i32.or (local.get $flags) (i32.const 1))))
+
+  ;; Test one destination point against a prepared clipper. For an explicit
+  ;; list, data_wa is the translated canonical RGNDATA copy. HWND-backed lists
+  ;; use the cached client RECT and never enter this loop on the ordinary Blt
+  ;; path: the compositor already clips that common path at window granularity.
+  (func $dx_clipper_contains (param $entry_wa i32) (param $data_wa i32)
+      (param $x i32) (param $y i32) (result i32)
+    (local $i i32) (local $count i32) (local $rect i32)
+    (if (i32.eqz (local.get $entry_wa)) (then (return (i32.const 1))))
+    (if (load.field DxObject misc0 (local.get $entry_wa))
+      (then
+        (return
+          (i32.and
+            (i32.and
+              (i32.ge_s (local.get $x) (i32.load offset=12 (local.get $entry_wa)))
+              (i32.ge_s (local.get $y) (i32.load offset=16 (local.get $entry_wa))))
+            (i32.and
+              (i32.lt_s (local.get $x) (load.field DxObject misc1 (local.get $entry_wa)))
+              (i32.lt_s (local.get $y) (load.field DxObject misc2 (local.get $entry_wa))))))))
+    (if (i32.eqz (local.get $data_wa)) (then (return (i32.const 1))))
+    (local.set $count (i32.load offset=8 (local.get $data_wa)))
+    (block $miss (loop $scan
+      (br_if $miss (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rect (i32.add (local.get $data_wa)
+        (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+      (if (i32.and
+            (i32.and
+              (i32.ge_s (local.get $x) (i32.load (local.get $rect)))
+              (i32.ge_s (local.get $y) (i32.load offset=4 (local.get $rect))))
+            (i32.and
+              (i32.lt_s (local.get $x) (i32.load offset=8 (local.get $rect)))
+              (i32.lt_s (local.get $y) (i32.load offset=12 (local.get $rect)))))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   ;; A windowed primary presents to the clipper's associated HWND. Fall back
   ;; to the cooperative-level target for old applications that never attach a
   ;; clipper, and for clippers that have not yet received SetHWnd.
@@ -3711,6 +3803,7 @@
     (local $bpp i32) (local $bps i32) (local $row i32)
     (local $ckey i32) (local $col i32)
     (local $drblt_flags i32) (local $src_keyed i32)
+    (local $clipper i32) (local $clip_entry i32) (local $clip_data i32)
     (local.set $dst_entry (call $dx_from_this (local.get $arg0)))
     (call $host_dx_trace (i32.const 12) (call $dx_slot_of (local.get $dst_entry))
       (if (result i32) (local.get $arg2)
@@ -3731,6 +3824,22 @@
     (local.set $bpp (load.field DxObject bpp (local.get $dst_entry)))
     (local.set $bps (i32.div_u (local.get $bpp) (i32.const 8)))
     (local.set $drblt_flags (local.get $arg4))
+    ;; HWND-backed clipping is enforced by the window compositor and stays on
+    ;; the bulk-copy path. Only an attached explicit RGNDATA list needs
+    ;; per-pixel membership checks inside the private surface framebuffer.
+    (local.set $clipper (call $dx_surface_clipper_get (local.get $dst_entry)))
+    (if (local.get $clipper)
+      (then
+        (local.set $clip_entry (call $dx_from_this (local.get $clipper)))
+        (if (i32.or
+              (i32.ne (load.field DxObject type (local.get $clip_entry)) (i32.const 10))
+              (i32.ne (load.field DxObject misc0 (local.get $clip_entry)) (i32.const 0)))
+          (then (local.set $clip_entry (i32.const 0)))
+          (else
+            (if (load.field DxObject misc1 (local.get $clip_entry))
+              (then (local.set $clip_data
+                (call $g2w (load.field DxObject misc1 (local.get $clip_entry)))))
+              (else (local.set $clip_entry (i32.const 0))))))))
     ;; Parse dest rect
     (if (local.get $arg1)
       (then
@@ -3757,7 +3866,9 @@
         ;; path (including MW3's reversed-Z clear).  Let bulk memory.fill handle
         ;; it instead of running one interpreted store and branch per pixel.
         (if (i32.and
-              (i32.ne (local.get $dst_dib) (i32.const 0))
+              (i32.and
+                (i32.ne (local.get $dst_dib) (i32.const 0))
+                (i32.eqz (local.get $clip_entry)))
               (i32.and
                 (i32.and (i32.eqz (local.get $row)) (i32.eqz (local.get $dx)))
                 (i32.and
@@ -3776,23 +3887,28 @@
             (local.set $sx (i32.const 0))
             (loop $fill_col
               (if (i32.lt_u (local.get $sx) (local.get $dw)) (then
-                (if (i32.eq (local.get $bps) (i32.const 1))
+                (if (call $dx_clipper_contains
+                      (local.get $clip_entry) (local.get $clip_data)
+                      (i32.add (local.get $dx) (local.get $sx))
+                      (i32.add (local.get $dy) (local.get $sy)))
                   (then
-                    (i32.store8 (i32.add (local.get $dst_dib)
-                      (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
-                               (i32.add (local.get $dx) (local.get $sx))))
-                      (local.get $row)))
-                  (else (if (i32.eq (local.get $bps) (i32.const 2))
-                    (then
-                      (i32.store16 (i32.add (local.get $dst_dib)
-                        (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
-                                 (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 2))))
-                        (local.get $row)))
-                    (else
-                      (i32.store (i32.add (local.get $dst_dib)
-                        (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
-                                 (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 4))))
-                        (local.get $row))))))
+                    (if (i32.eq (local.get $bps) (i32.const 1))
+                      (then
+                        (i32.store8 (i32.add (local.get $dst_dib)
+                          (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
+                                   (i32.add (local.get $dx) (local.get $sx))))
+                          (local.get $row)))
+                      (else (if (i32.eq (local.get $bps) (i32.const 2))
+                        (then
+                          (i32.store16 (i32.add (local.get $dst_dib)
+                            (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
+                                     (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 2))))
+                            (local.get $row)))
+                        (else
+                          (i32.store (i32.add (local.get $dst_dib)
+                            (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
+                                     (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 4))))
+                            (local.get $row))))))))
                 (local.set $sx (i32.add (local.get $sx) (i32.const 1)))
                 (br $fill_col))))
             (local.set $sy (i32.add (local.get $sy) (i32.const 1)))
@@ -3927,8 +4043,8 @@
     (if (i32.and (i32.eq (local.get $dw) (local.get $sw))
                  (i32.eq (local.get $dh) (local.get $sh)))
       (then
-        ;; Blt is clipped by the destination's clipper. We do not model
-        ;; arbitrary clip regions yet, but the surface bounds are mandatory:
+        ;; Blt is clipped by the destination's clipper below, but surface
+        ;; bounds are mandatory before either the bulk or region-list path:
         ;; LF2 copies its 794x548 logical frame to a 640x480 primary at 23,43.
         ;; Keep source and destination origins paired while trimming so the
         ;; equal-size fast path cannot wrap an over-wide row into later rows.
@@ -3996,7 +4112,12 @@
                       (i32.add (local.get $src_dib)
                         (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                  (i32.add (local.get $sx) (local.get $src_w))))))
-                    (if (i32.ne (local.get $col) (local.get $ckey))
+                    (if (i32.and
+                          (i32.ne (local.get $col) (local.get $ckey))
+                          (call $dx_clipper_contains
+                            (local.get $clip_entry) (local.get $clip_data)
+                            (i32.add (local.get $dx) (local.get $src_w))
+                            (i32.add (local.get $dy) (local.get $row))))
                       (then (i32.store8
                         (i32.add (local.get $dst_dib)
                           (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4008,7 +4129,12 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                    (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 2))))))
-                      (if (i32.ne (local.get $col) (local.get $ckey))
+                      (if (i32.and
+                            (i32.ne (local.get $col) (local.get $ckey))
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row))))
                         (then (i32.store16
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4019,7 +4145,12 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                    (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 4))))))
-                      (if (i32.ne (local.get $col) (local.get $ckey))
+                      (if (i32.and
+                            (i32.ne (local.get $col) (local.get $ckey))
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row))))
                         (then (i32.store
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4039,19 +4170,75 @@
             (global.set $eax (i32.const 0))
             (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
             (return)))
-        (local.set $row (i32.const 0))
-        (block $blit_done (loop $blit_row
-          (br_if $blit_done (i32.ge_u (local.get $row) (local.get $dh)))
-          (call $memcpy
-            (i32.add (local.get $dst_dib)
-              (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
-                       (i32.mul (local.get $dx) (local.get $bps))))
-            (i32.add (local.get $src_dib)
-              (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
-                       (i32.mul (local.get $sx) (local.get $bps))))
-            (i32.mul (local.get $dw) (local.get $bps)))
-          (local.set $row (i32.add (local.get $row) (i32.const 1)))
-          (br $blit_row))))
+        (if (local.get $clip_entry)
+          (then
+            ;; Explicit region lists can be disjoint. Keep the ordinary row
+            ;; memcpy above/below completely untouched unless such a list is
+            ;; actually attached.
+            (local.set $row (i32.const 0))
+            (block $clip_blit_done (loop $clip_blit_row
+              (br_if $clip_blit_done (i32.ge_u (local.get $row) (local.get $dh)))
+              (local.set $src_w (i32.const 0))
+              (block $clip_blit_col_done (loop $clip_blit_col
+                (br_if $clip_blit_col_done (i32.ge_u (local.get $src_w) (local.get $dw)))
+                (if (call $dx_clipper_contains
+                      (local.get $clip_entry) (local.get $clip_data)
+                      (i32.add (local.get $dx) (local.get $src_w))
+                      (i32.add (local.get $dy) (local.get $row)))
+                  (then
+                    (if (i32.eq (local.get $bps) (i32.const 1))
+                      (then
+                        (i32.store8
+                          (i32.add (local.get $dst_dib)
+                            (i32.add
+                              (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                              (i32.add (local.get $dx) (local.get $src_w))))
+                          (i32.load8_u
+                            (i32.add (local.get $src_dib)
+                              (i32.add
+                                (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                                (i32.add (local.get $sx) (local.get $src_w)))))))
+                      (else (if (i32.eq (local.get $bps) (i32.const 2))
+                        (then
+                          (i32.store16
+                            (i32.add (local.get $dst_dib)
+                              (i32.add
+                                (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                                (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 2))))
+                            (i32.load16_u
+                              (i32.add (local.get $src_dib)
+                                (i32.add
+                                  (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                                  (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 2)))))))
+                        (else
+                          (i32.store
+                            (i32.add (local.get $dst_dib)
+                              (i32.add
+                                (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                                (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 4))))
+                            (i32.load
+                              (i32.add (local.get $src_dib)
+                                (i32.add
+                                  (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                                  (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 4))))))))))))
+                (local.set $src_w (i32.add (local.get $src_w) (i32.const 1)))
+                (br $clip_blit_col)))
+              (local.set $row (i32.add (local.get $row) (i32.const 1)))
+              (br $clip_blit_row))))
+          (else
+            (local.set $row (i32.const 0))
+            (block $blit_done (loop $blit_row
+              (br_if $blit_done (i32.ge_u (local.get $row) (local.get $dh)))
+              (call $memcpy
+                (i32.add (local.get $dst_dib)
+                  (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                           (i32.mul (local.get $dx) (local.get $bps))))
+                (i32.add (local.get $src_dib)
+                  (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                           (i32.mul (local.get $sx) (local.get $bps))))
+                (i32.mul (local.get $dw) (local.get $bps)))
+              (local.set $row (i32.add (local.get $row) (i32.const 1)))
+              (br $blit_row))))))
       (else
         ;; Nearest-neighbor stretch. Reuses $row as dst-row; uses $src_w/$src_h as scratch
         ;; dst-col / src-col / src-row. Guard against zero dims.
@@ -4082,8 +4269,13 @@
                       (i32.add (local.get $src_dib)
                         (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                  (local.get $bpp)))))
-                    (if (i32.or (i32.eqz (local.get $src_keyed))
-                                (i32.ne (local.get $col) (local.get $ckey)))
+                    (if (i32.and
+                          (call $dx_clipper_contains
+                            (local.get $clip_entry) (local.get $clip_data)
+                            (i32.add (local.get $dx) (local.get $src_w))
+                            (i32.add (local.get $dy) (local.get $row)))
+                          (i32.or (i32.eqz (local.get $src_keyed))
+                                  (i32.ne (local.get $col) (local.get $ckey))))
                       (then (i32.store8
                         (i32.add (local.get $dst_dib)
                           (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4095,8 +4287,13 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                    (i32.mul (local.get $bpp) (i32.const 2))))))
-                      (if (i32.or (i32.eqz (local.get $src_keyed))
-                                  (i32.ne (local.get $col) (local.get $ckey)))
+                      (if (i32.and
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row)))
+                            (i32.or (i32.eqz (local.get $src_keyed))
+                                    (i32.ne (local.get $col) (local.get $ckey))))
                         (then (i32.store16
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4107,8 +4304,13 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                    (i32.mul (local.get $bpp) (i32.const 4))))))
-                      (if (i32.or (i32.eqz (local.get $src_keyed))
-                                  (i32.ne (local.get $col) (local.get $ckey)))
+                      (if (i32.and
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row)))
+                            (i32.or (i32.eqz (local.get $src_keyed))
+                                    (i32.ne (local.get $col) (local.get $ckey))))
                         (then (i32.store
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4144,6 +4346,14 @@
     (local $ckey i32) (local $col i32) (local $x i32)
     (call $d3dim_worker_fence)
     (local.set $dst_entry (call $dx_from_this (local.get $arg0)))
+    ;; Microsoft explicitly excludes clipping from BltFast. The receiver is
+    ;; the destination surface, so any attached clipper makes this call fail;
+    ;; callers that need clipping must use Blt.
+    (if (call $dx_surface_clipper_get (local.get $dst_entry))
+      (then
+        (global.set $eax (i32.const 0x80004001)) ;; DDERR_UNSUPPORTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
     (local.set $dst_dib (load.field DxObject misc1 (local.get $dst_entry)))
     (local.set $dst_w (load.field DxObject width (local.get $dst_entry)))
     (local.set $dst_h (load.field DxObject height (local.get $dst_entry)))
@@ -5303,13 +5513,154 @@
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
     (if (i32.le_s (local.get $rc) (i32.const 0))
-      (then (call $dx_free (local.get $entry))))
+      (then
+        (call $dx_clipper_release_explicit (local.get $entry))
+        (call $dx_free (local.get $entry))))
     (global.set $eax (local.get $rc))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; GetClipList(this, lpRect, lpClipList, lpdwSize) — stub, return DDERR_NOCLIPLIST
+  ;; GetClipList(this, lpRect, lpClipList, lpdwSize). Build a canonical
+  ;; RGNDATA result, intersecting each retained rectangle with lpRect when one
+  ;; is supplied. This preserves DirectDraw's two-call size negotiation and
+  ;; reports the exact required size on DDERR_REGIONTOOSMALL.
   (func $handle_IDirectDrawClipper_GetClipList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x887600CD)) ;; DDERR_NOCLIPLIST
+    (local $entry i32) (local $hwnd i32) (local $data_guest i32) (local $data_wa i32)
+    (local $source_count i32) (local $i i32) (local $rect i32)
+    (local $l i32) (local $t i32) (local $r i32) (local $b i32)
+    (local $fl i32) (local $ft i32) (local $fr i32) (local $fb i32)
+    (local $count i32) (local $required i32) (local $capacity i32)
+    (local $bl i32) (local $bt i32) (local $br i32) (local $bb i32)
+    (local $out i32) (local $out_index i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.eqz (local.get $arg3))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $capacity (call $gl32 (local.get $arg3)))
+    (local.set $hwnd (load.field DxObject misc0 (local.get $entry)))
+    (if (local.get $hwnd)
+      (then
+        (call $dx_clipper_refresh_hwnd (local.get $entry))
+        (local.set $source_count (i32.const 1)))
+      (else
+        (local.set $data_guest (load.field DxObject misc1 (local.get $entry)))
+        (if (i32.eqz (local.get $data_guest))
+          (then
+            (global.set $eax (i32.const 0x887600CD)) ;; DDERR_NOCLIPLIST
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (local.set $data_wa (call $g2w (local.get $data_guest)))
+        (local.set $source_count (i32.load offset=8 (local.get $data_wa)))))
+    (if (local.get $arg1)
+      (then
+        (local.set $fl (call $gl32 (local.get $arg1)))
+        (local.set $ft (call $gl32 (i32.add (local.get $arg1) (i32.const 4))))
+        (local.set $fr (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
+        (local.set $fb (call $gl32 (i32.add (local.get $arg1) (i32.const 12))))))
+    ;; First pass: count non-empty intersections and derive their bound.
+    (block $count_done (loop $count_rects
+      (br_if $count_done (i32.ge_u (local.get $i) (local.get $source_count)))
+      (if (local.get $hwnd)
+        (then
+          (local.set $l (i32.load offset=12 (local.get $entry)))
+          (local.set $t (i32.load offset=16 (local.get $entry)))
+          (local.set $r (load.field DxObject misc1 (local.get $entry)))
+          (local.set $b (load.field DxObject misc2 (local.get $entry))))
+        (else
+          (local.set $rect (i32.add (local.get $data_wa)
+            (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+          (local.set $l (i32.load (local.get $rect)))
+          (local.set $t (i32.load offset=4 (local.get $rect)))
+          (local.set $r (i32.load offset=8 (local.get $rect)))
+          (local.set $b (i32.load offset=12 (local.get $rect)))))
+      (if (local.get $arg1)
+        (then
+          (if (i32.lt_s (local.get $l) (local.get $fl)) (then (local.set $l (local.get $fl))))
+          (if (i32.lt_s (local.get $t) (local.get $ft)) (then (local.set $t (local.get $ft))))
+          (if (i32.gt_s (local.get $r) (local.get $fr)) (then (local.set $r (local.get $fr))))
+          (if (i32.gt_s (local.get $b) (local.get $fb)) (then (local.set $b (local.get $fb))))))
+      (if (i32.and (i32.lt_s (local.get $l) (local.get $r))
+                   (i32.lt_s (local.get $t) (local.get $b)))
+        (then
+          (if (i32.eqz (local.get $count))
+            (then
+              (local.set $bl (local.get $l)) (local.set $bt (local.get $t))
+              (local.set $br (local.get $r)) (local.set $bb (local.get $b)))
+            (else
+              (if (i32.lt_s (local.get $l) (local.get $bl)) (then (local.set $bl (local.get $l))))
+              (if (i32.lt_s (local.get $t) (local.get $bt)) (then (local.set $bt (local.get $t))))
+              (if (i32.gt_s (local.get $r) (local.get $br)) (then (local.set $br (local.get $r))))
+              (if (i32.gt_s (local.get $b) (local.get $bb)) (then (local.set $bb (local.get $b))))))
+          (local.set $count (i32.add (local.get $count) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $count_rects)))
+    (local.set $required (i32.add (i32.const 32) (i32.shl (local.get $count) (i32.const 4))))
+    (call $gs32 (local.get $arg3) (local.get $required))
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.lt_u (local.get $capacity) (local.get $required))
+      (then
+        (global.set $eax (i32.const 0x88760236)) ;; DDERR_REGIONTOOSMALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    ;; RGNDATAHEADER: sizeof, RDH_RECTANGLES, count, rectangle bytes, bound.
+    (call $gs32 (local.get $arg2) (i32.const 32))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 4)) (i32.const 1))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 8)) (local.get $count))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 12))
+      (i32.shl (local.get $count) (i32.const 4)))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 16)) (local.get $bl))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 20)) (local.get $bt))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 24)) (local.get $br))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 28)) (local.get $bb))
+    ;; Second pass: publish the same intersections.
+    (local.set $i (i32.const 0))
+    (block $copy_done (loop $copy_rects
+      (br_if $copy_done (i32.ge_u (local.get $i) (local.get $source_count)))
+      (if (local.get $hwnd)
+        (then
+          (local.set $l (i32.load offset=12 (local.get $entry)))
+          (local.set $t (i32.load offset=16 (local.get $entry)))
+          (local.set $r (load.field DxObject misc1 (local.get $entry)))
+          (local.set $b (load.field DxObject misc2 (local.get $entry))))
+        (else
+          (local.set $rect (i32.add (local.get $data_wa)
+            (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+          (local.set $l (i32.load (local.get $rect)))
+          (local.set $t (i32.load offset=4 (local.get $rect)))
+          (local.set $r (i32.load offset=8 (local.get $rect)))
+          (local.set $b (i32.load offset=12 (local.get $rect)))))
+      (if (local.get $arg1)
+        (then
+          (if (i32.lt_s (local.get $l) (local.get $fl)) (then (local.set $l (local.get $fl))))
+          (if (i32.lt_s (local.get $t) (local.get $ft)) (then (local.set $t (local.get $ft))))
+          (if (i32.gt_s (local.get $r) (local.get $fr)) (then (local.set $r (local.get $fr))))
+          (if (i32.gt_s (local.get $b) (local.get $fb)) (then (local.set $b (local.get $fb))))))
+      (if (i32.and (i32.lt_s (local.get $l) (local.get $r))
+                   (i32.lt_s (local.get $t) (local.get $b)))
+        (then
+          (local.set $out (i32.add (local.get $arg2)
+            (i32.add (i32.const 32) (i32.shl (local.get $out_index) (i32.const 4)))))
+          (call $gs32 (local.get $out) (local.get $l))
+          (call $gs32 (i32.add (local.get $out) (i32.const 4)) (local.get $t))
+          (call $gs32 (i32.add (local.get $out) (i32.const 8)) (local.get $r))
+          (call $gs32 (i32.add (local.get $out) (i32.const 12)) (local.get $b))
+          (local.set $out_index (i32.add (local.get $out_index) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy_rects)))
+    (if (local.get $hwnd)
+      (then (store.field DxObject flags (local.get $entry)
+        (i32.and (load.field DxObject flags (local.get $entry)) (i32.const -3)))))
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; GetHWnd(this, lphWnd)
@@ -5335,22 +5686,143 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; IsClipListChanged(this, lpbChanged) — always return FALSE
+  ;; IsClipListChanged is meaningful for an HWND-backed clipper. Keep the
+  ;; change latched until GetClipList successfully copies the new list.
   (func $handle_IDirectDrawClipper_IsClipListChanged (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (i32.const 0))))
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (load.field DxObject misc0 (local.get $entry))
+      (then (call $dx_clipper_refresh_hwnd (local.get $entry))))
+    (call $gs32 (local.get $arg1)
+      (select (i32.const 1) (i32.const 0)
+        (i32.ne (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 2))
+                (i32.const 0))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; SetClipList(this, lpClipList, dwFlags) — no-op
+  ;; SetClipList(this, lpClipList, dwFlags). Validate and canonicalize the
+  ;; caller's rectangles before replacing the prior private copy.
   (func $handle_IDirectDrawClipper_SetClipList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $source i32) (local $count i32) (local $bytes i32)
+    (local $i i32) (local $rect i32) (local $l i32) (local $t i32)
+    (local $r i32) (local $b i32) (local $bl i32) (local $bt i32)
+    (local $br i32) (local $bb i32) (local $copy i32) (local $copy_wa i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.ne (local.get $arg2) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (load.field DxObject misc0 (local.get $entry))
+      (then
+        (global.set $eax (i32.const 0x88760237)) ;; DDERR_CLIPPERISUSINGHWND
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (call $dx_clipper_release_explicit (local.get $entry))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    ;; RGNDATAHEADER is 32 bytes and DirectDraw accepts only RDH_RECTANGLES.
+    (if (i32.or
+          (i32.ne (call $gl32 (local.get $arg1)) (i32.const 32))
+          (i32.ne (call $gl32 (i32.add (local.get $arg1) (i32.const 4))) (i32.const 1)))
+      (then
+        (global.set $eax (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $count (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
+    (if (i32.gt_u (local.get $count) (i32.const 4096))
+      (then
+        (global.set $eax (i32.const 0x8876006E))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $bytes (i32.shl (local.get $count) (i32.const 4)))
+    (if (i32.and
+          (i32.ne (call $gl32 (i32.add (local.get $arg1) (i32.const 12))) (i32.const 0))
+          (i32.lt_u (call $gl32 (i32.add (local.get $arg1) (i32.const 12)))
+                    (local.get $bytes)))
+      (then
+        (global.set $eax (i32.const 0x8876006E))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $source (call $g2w_affine_span (local.get $arg1)
+      (i32.add (i32.const 32) (local.get $bytes))))
+    (if (i32.eq (local.get $source) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x8876006E))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    ;; Validate every RECT and recompute rcBound instead of trusting it.
+    (block $validate_done (loop $validate
+      (br_if $validate_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rect (i32.add (local.get $source)
+        (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+      (local.set $l (i32.load (local.get $rect)))
+      (local.set $t (i32.load offset=4 (local.get $rect)))
+      (local.set $r (i32.load offset=8 (local.get $rect)))
+      (local.set $b (i32.load offset=12 (local.get $rect)))
+      (if (i32.or (i32.ge_s (local.get $l) (local.get $r))
+                  (i32.ge_s (local.get $t) (local.get $b)))
+        (then
+          (global.set $eax (i32.const 0x8876006E))
+          (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+          (return)))
+      (if (i32.eqz (local.get $i))
+        (then
+          (local.set $bl (local.get $l)) (local.set $bt (local.get $t))
+          (local.set $br (local.get $r)) (local.set $bb (local.get $b)))
+        (else
+          (if (i32.lt_s (local.get $l) (local.get $bl)) (then (local.set $bl (local.get $l))))
+          (if (i32.lt_s (local.get $t) (local.get $bt)) (then (local.set $bt (local.get $t))))
+          (if (i32.gt_s (local.get $r) (local.get $br)) (then (local.set $br (local.get $r))))
+          (if (i32.gt_s (local.get $b) (local.get $bb)) (then (local.set $bb (local.get $b))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $validate)))
+    (local.set $copy (call $heap_alloc (i32.add (i32.const 32) (local.get $bytes))))
+    (if (i32.eqz (local.get $copy))
+      (then
+        (global.set $eax (i32.const 0x8007000E)) ;; DDERR_OUTOFMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $copy_wa (call $g2w (local.get $copy)))
+    (i32.store (local.get $copy_wa) (i32.const 32))
+    (i32.store offset=4 (local.get $copy_wa) (i32.const 1))
+    (i32.store offset=8 (local.get $copy_wa) (local.get $count))
+    (i32.store offset=12 (local.get $copy_wa) (local.get $bytes))
+    (i32.store offset=16 (local.get $copy_wa) (local.get $bl))
+    (i32.store offset=20 (local.get $copy_wa) (local.get $bt))
+    (i32.store offset=24 (local.get $copy_wa) (local.get $br))
+    (i32.store offset=28 (local.get $copy_wa) (local.get $bb))
+    (call $memcpy (i32.add (local.get $copy_wa) (i32.const 32))
+      (i32.add (local.get $source) (i32.const 32)) (local.get $bytes))
+    (call $dx_clipper_release_explicit (local.get $entry))
+    (store.field DxObject misc1 (local.get $entry) (local.get $copy))
+    (store.field DxObject misc2 (local.get $entry)
+      (i32.add (i32.const 32) (local.get $bytes)))
+    (store.field DxObject flags (local.get $entry) (i32.const 0))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; SetHWnd(this, dwFlags, hWnd) — retain the window whose visible client
-  ;; region defines this clipper. Window-derived region snapshots remain a
-  ;; separate concern, but GetHWnd and later surface attachment must share the
-  ;; caller's actual association rather than the process's main window.
+  ;; region defines this clipper. GetClipList snapshots that live client region,
+  ;; while surface presentation and browser composition enforce it onscreen.
   (func $handle_IDirectDrawClipper_SetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
@@ -5359,7 +5831,8 @@
         (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
-    ;; Microsoft documents dwFlags as reserved and required to be zero.
+    ;; Microsoft documents dwFlags as reserved and required to be zero. An
+    ;; explicit list and an HWND-derived list are mutually exclusive.
     (if (i32.or
           (i32.ne (local.get $arg1) (i32.const 0))
           (i32.eqz (call $window_handle_valid (local.get $arg2))))
@@ -5367,7 +5840,16 @@
         (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
+    (if (i32.and
+          (i32.eqz (load.field DxObject misc0 (local.get $entry)))
+          (i32.ne (load.field DxObject misc1 (local.get $entry)) (i32.const 0)))
+      (then
+        (global.set $eax (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (store.field DxObject misc0 (local.get $entry) (local.get $arg2))
+    (store.field DxObject flags (local.get $entry) (i32.const 0))
+    (call $dx_clipper_refresh_hwnd (local.get $entry))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
