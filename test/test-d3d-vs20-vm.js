@@ -77,6 +77,73 @@ const { bootRenderHarness } = require('./render-helper');
     release(fresh,ctx,program);cases++;
   }
   assert.strictEqual(e.d3d_shader_vm_context_bytes(), 74080);
+  for(const outer of [0,1,0x80000000]) for(const inner of [0,1]) for(const lanes of [15,5]) {
+    const program=compile([
+      ins(40,operand(14,0)),ins(40,operand(14,1)),ins(1,dst(0),constant(1)),
+      ins(42),ins(1,dst(0),constant(2)),ins(43),
+      ins(42),ins(1,dst(0),constant(3)),ins(43),
+      // Late local definitions are hoisted outside both branches.
+      ins(47,operand(14,0,15),operand(255,outer,0,0)),
+      ins(47,operand(14,1,15),operand(255,inner,0,0))
+    ]);
+    const ctx=e.d3d_shader_vm_context(program,lanes);seedConstants(ctx);
+    f.fill(77,register(ctx,0,0),register(ctx,0,0)+16);
+    let result=1,ticks=0;
+    while(result===1){result=e.d3d_shader_vm_run(ctx,1);assert(++ticks<=11);}
+    assert.strictEqual(result,0);
+    for(let component=0;component<4;component++)for(let lane=0;lane<4;lane++)
+      assert.strictEqual(f[register(ctx,0,0)+component*4+lane],lanes&(1<<lane)?(outer?(inner?1:2):3)+component/4:77);
+    assert.strictEqual(u[(ctx+20)/4],ticks,'only visited packets retire');
+    release(ctx,program);cases++;
+  }
+  for(const condition of [0,2]) {
+    const program=compile([ins(40,operand(14,15)),ins(1,dst(0),constant(1)),ins(43)]);
+    const ctx=e.d3d_shader_vm_context(program,15);seedConstants(ctx);
+    u[(ctx+74016)/4+15]=condition;
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),condition?1:0);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,10),0);
+    assert.strictEqual(x(ctx,0,0)[0],condition?1:0);
+    release(ctx,program);cases++;
+  }
+  {
+    const program=compile([
+      ...Array.from({length:16},(_,index)=>ins(40,operand(14,index))),
+      ins(1,dst(0),constant(1)),...Array.from({length:16},()=>ins(43))
+    ]);
+    for(let falseIndex=-1;falseIndex<16;falseIndex++) {
+      const ctx=e.d3d_shader_vm_context(program,15);seedConstants(ctx);
+      u.fill(1,(ctx+74016)/4,(ctx+74080)/4);
+      if(falseIndex>=0)u[(ctx+74016)/4+falseIndex]=0;
+      assert.strictEqual(e.d3d_shader_vm_run(ctx,100),0);
+      assert.strictEqual(x(ctx,0,0)[0],falseIndex<0?1:0);
+      release(ctx);cases++;
+    }
+    const cancelled=e.d3d_shader_vm_context(program,15);
+    u.fill(1,(cancelled+74016)/4,(cancelled+74080)/4);
+    assert.strictEqual(e.d3d_shader_vm_run(cancelled,1),1);
+    const pc=u[(cancelled+8)/4];e.d3d_shader_vm_cancel(cancelled);
+    assert.strictEqual(e.d3d_shader_vm_run(cancelled,100),-2);
+    assert.strictEqual(u[(cancelled+8)/4],pc);
+    release(cancelled,program);cases++;
+  }
+  for(const target of [0,4,0xffffffff]) {
+    const program=compile([ins(40,operand(14,0)),ins(1,dst(0),constant(1)),ins(43)]);
+    u[(program+16+8)/4]=target;
+    const ctx=e.d3d_shader_vm_context(program,15);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),-1);
+    assert.strictEqual(u[(ctx+20)/4],0);release(ctx,program);cases++;
+  }
+  for(const instructions of [
+    [ins(42)],[ins(43)],[ins(40,operand(14,0))],
+    [ins(40,operand(14,0)),ins(42),ins(42),ins(43)],
+    [ins(40,operand(2,0)),ins(43)],
+    [ins(40,operand(14,16)),ins(43)],
+    [ins(40,operand(14,0,0)),ins(43)],
+    [ins(40,operand(14,0,228,1)),ins(43)],
+    Array.from({length:17},()=>[ins(40,operand(14,0)),ins(43)]).flat()
+  ]) {
+    const p=ir(instructions);assert.strictEqual(e.d3d_shader_vm_compile_vs20(p),0);release(p);cases++;
+  }
   for(const opcode of [47,48]) {
     const bank=opcode===47?14:7;
     const definition=()=>ins(opcode,operand(bank,0,15),...Array.from({length:opcode===47?1:4},()=>operand(255,0xffffffff,0,0)));

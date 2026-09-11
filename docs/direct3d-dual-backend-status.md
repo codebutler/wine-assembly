@@ -1900,3 +1900,40 @@ fields (legacy DEF unchanged); RED missing-exception ->35637 PASS typed100 plus
 raw-reader rejection fixtures. Same-IR regression86702 PASS138 actual GL1/2
 frames versus69 native frames; these are the existing arithmetic/raster cases,
 not typed control-flow acceptance.
+
+Private static Boolean flow follow-up: IF40/ELSE42/ENDIF43 now work through the
+native decoder, packet compiler/executor and GLSL. The canonical private IF
+source is b0..15 with identity selector228 and no modifier; other Boolean source
+encodings remain unclaimed. The [Microsoft nesting limits](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-instructions-flow-control)
+limit VS2 IF+ELSE static flow count to16. The profile-specific
+[instruction table](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-instructions-vs-2-0)
+lists IF as three slots while its individual page says one; this private
+validator conservatively uses three, with ELSE/ENDIF one each. This discrepancy
+is explicit policy pending stronger native evidence, not a conformance claim.
+
+Decoder validation rejects orphan/duplicate/unterminated blocks and intersects
+temporary-component, address-register and position initialization at joins.
+The absent-ELSE path uses entry state. A bounded640-byte temporary validation
+stack is freed on every normal success/error return; repeated malformed-input
+tests check actual heap allocation reuse, not only IR-byte accounting.
+Software packets62/63/64 resolve forward targets after stable DEFx hoisting.
+Uniform Boolean conditions select whole invocation batches without a divergent
+runtime stack. Skipped instructions do not retire; visited packets share the
+existing budget, resumption and cancellation mechanism. Malformed backward or
+out-of-range targets fail before retirement. GLSL emits structured branches and
+Boolean uniforms for inputs without DEFB; actual COM constant uploads remain
+future work, while tests explicitly bind uniforms or verify their zero default.
+
+Evidence: native RED30559 ->76705 PASS1591 ->93453 PASS1612, including sixteen
+nested IFs, each possible false level, high-bit Boolean values, late definitions,
+inactive lanes, no-ELSE behavior, cancellation and corrupted target rejection.
+Legacy VM263 and software pipeline64510 PASS351 remain green. Decoder44479
+PASS151 structure/merge/lifetime cases. Actual WebGL20651 PASS110 includes16 new
+flow cases; same-native-IR84551 PASS150 GL1/2 frames against75 native frames,
+including six new exact-position/pixel branch cases. That parity fixture also
+corrects the earlier Taylor-derived SINCOS coefficient from -1/16 to -1/8;
+coefficient values remain a valid-program contract, not measured SDK expansion.
+Independent branch-link/runtime review found no concrete defect. Full47981
+PASS canonical1166216 / compat1166684, unchanged region layout and no data
+overlaps. Loop/REP/call/dynamic flow, full profiles, frontend typed constant
+binding and changing B&W gameplay remain open; public VS2 admission is unchanged.

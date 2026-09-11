@@ -10,6 +10,10 @@
 ;; PS1.2 TEXREG2RGB42,TEXDP3TEX43,TEXDP3=44,TEXM3x3=45,CMP46;
 ;; PS1.3 TEXM3x2DEPTH47 publishes separate depth, not a mutable t register.
 ;; Private VS2 CRS55 and NRM56 use independent SIMD vectors, not texture state.
+;; Private typed DEFB60/DEFI61 carry uniform index+4 and raw words+16.
+;; Static IF62 carries Boolean index+4 and false target packet index+8;
+;; ELSE63 carries its unconditional target+8; ENDIF64 is a no-op boundary.
+;; Branches have no destination mask/flags and all targets are forward.
 ;; DP4 reuses handler6. Native IR enforces profile slots and CMP restrictions.
 ;; flags (bit0 saturation, bit1 a0 floor, bit2 coissued SECOND packet,
 ;; bit4 private VS2 MOVA nearest-even, bit5 private ABS,
@@ -200,6 +204,8 @@
 ;; remain decoder-owned. This boundary rejects malformed operands before packet
 ;; lowering can alias constants with a0, outputs, or sampler metadata.
 (func $d3d_shader_vm_arity20 (param $op i32) (result i32)
+  (if (i32.eq (local.get $op) (i32.const 40)) (then (return (i32.const 1))))
+  (if (i32.or (i32.eq (local.get $op) (i32.const 42)) (i32.eq (local.get $op) (i32.const 43))) (then (return (i32.const 0))))
   (if (i32.eq (local.get $op) (i32.const 47)) (then (return (i32.const 2))))
   (if (i32.eq (local.get $op) (i32.const 48)) (then (return (i32.const 5))))
   (if (i32.eq (local.get $op) (i32.const 34)) (then (return (i32.const 4))))
@@ -217,9 +223,11 @@
   (if (i32.eqz (i32.or (i32.le_u (local.get $op) (i32.const 18))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 19)) (i32.le_u (local.get $op) (i32.const 24)))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 31)) (i32.le_u (local.get $op) (i32.const 34)))
+    (i32.or (i32.or (i32.eq (local.get $op) (i32.const 40))
+      (i32.or (i32.eq (local.get $op) (i32.const 42)) (i32.eq (local.get $op) (i32.const 43))))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 35)) (i32.le_u (local.get $op) (i32.const 37)))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 46)) (i32.le_u (local.get $op) (i32.const 48)))
-      (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79))) (i32.eq (local.get $op) (i32.const 81))))))))) (then (return (i32.const 0))))
+      (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79))) (i32.eq (local.get $op) (i32.const 81)))))))))) (then (return (i32.const 0))))
   (local.set $arity (call $d3d_shader_vm_arity20 (local.get $op)))
   (if (i32.or (i32.ne (i32.load offset=8 (local.get $ins)) (local.get $arity))
     (i32.load offset=12 (local.get $ins))) (then (return (i32.const 0))))
@@ -248,6 +256,11 @@
     (local.set $bank (i32.load (local.get $p))) (local.set $index (i32.load offset=4 (local.get $p)))
     (local.set $selector (i32.load offset=8 (local.get $p))) (local.set $mod (i32.load offset=12 (local.get $p)))
     (block $valid
+      (if (i32.eq (local.get $op) (i32.const 40)) (then
+        (if (i32.or (i32.ne (local.get $bank) (i32.const 14))
+          (i32.or (i32.ge_u (local.get $index) (i32.const 16))
+            (i32.or (i32.ne (local.get $selector) (i32.const 228)) (local.get $mod)))) (then (return (i32.const 0))))
+        (br $valid)))
       (if (i32.or (i32.eq (local.get $op) (i32.const 47)) (i32.eq (local.get $op) (i32.const 48))) (then
         (if (i32.eqz (local.get $j))
           (then (if (i32.or (i32.ne (local.get $bank)
@@ -338,6 +351,7 @@
   (local $arity i32) (local $operand i32) (local $out i32) (local $pkt i32)
   (local $op i32) (local $mod i32) (local $shift i32) (local $previous i32) (local $haspair i32) (local $pad i32) (local $pass i32) (local $emitted i32)
   (local $padnext i32) (local $ps14 i32)
+  (local $depth i32) (local $elsebits i32) (local $flowcount i32) (local $scanop i32)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $ir) (i32.const 32))) (then (return (i32.const 0))))
   (if (i32.or (i32.ne (i32.load (local.get $ir)) (i32.const 0x44534952))
     (i32.ne (i32.load offset=4 (local.get $ir)) (i32.const 1))) (then (return (i32.const 0))))
@@ -365,6 +379,21 @@
     (block $instruction_validated
     (if (local.get $vs20) (then
       (if (i32.eqz (call $d3d_shader_vm_validate20 (local.get $ins))) (then (return (i32.const 0))))
+      ;; Static IF and ELSE each consume one of sixteen flow-control entries.
+      ;; The bit stack tracks ELSE uniqueness without allocating scratch memory.
+      (if (i32.or (i32.eq (local.get $op) (i32.const 40)) (i32.eq (local.get $op) (i32.const 42))) (then
+        (local.set $flowcount (i32.add (local.get $flowcount) (i32.const 1)))
+        (if (i32.gt_u (local.get $flowcount) (i32.const 16)) (then (return (i32.const 0))))))
+      (if (i32.eq (local.get $op) (i32.const 40)) (then
+        (local.set $elsebits (i32.shl (local.get $elsebits) (i32.const 1)))
+        (local.set $depth (i32.add (local.get $depth) (i32.const 1)))))
+      (if (i32.eq (local.get $op) (i32.const 42)) (then
+        (if (i32.or (i32.eqz (local.get $depth)) (i32.and (local.get $elsebits) (i32.const 1))) (then (return (i32.const 0))))
+        (local.set $elsebits (i32.or (local.get $elsebits) (i32.const 1)))))
+      (if (i32.eq (local.get $op) (i32.const 43)) (then
+        (if (i32.eqz (local.get $depth)) (then (return (i32.const 0))))
+        (local.set $depth (i32.sub (local.get $depth) (i32.const 1)))
+        (local.set $elsebits (i32.shr_u (local.get $elsebits) (i32.const 1)))))
       (br $instruction_validated)))
     (if (local.get $ps14) (then
       (if (i32.eqz (call $d3d_shader_vm_validate14 (local.get $ins))) (then (return (i32.const 0))))
@@ -498,6 +527,7 @@
       (br $operands))))
     (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $validate)))
   (if (local.get $pad) (then (return (i32.const 0))))
+  (if (local.get $depth) (then (return (i32.const 0))))
   (if (i32.ne (local.get $haspair) (i32.and (i32.load offset=28 (local.get $ir)) (i32.const 2))) (then (return (i32.const 0))))
   (local.set $out (call $heap_alloc (i32.add (i32.const 16) (i32.shl (local.get $n) (i32.const 6)))))
   (if (i32.eqz (local.get $out)) (then (return (i32.const 0))))
@@ -522,6 +552,13 @@
         (i32.or (i32.eq (local.get $op) (i32.const 47)) (i32.eq (local.get $op) (i32.const 48))))) (i32.eqz (local.get $pass))))
     (local.set $pkt (i32.add (i32.add (local.get $out) (i32.const 16)) (i32.shl (local.get $emitted) (i32.const 6))))
     (local.set $emitted (i32.add (local.get $emitted) (i32.const 1)))
+    (if (i32.and (i32.ne (local.get $vs20) (i32.const 0))
+      (i32.or (i32.eq (local.get $op) (i32.const 40))
+        (i32.or (i32.eq (local.get $op) (i32.const 42)) (i32.eq (local.get $op) (i32.const 43))))) (then
+      (i32.store (local.get $pkt) (select (i32.const 62) (i32.add (local.get $op) (i32.const 21)) (i32.eq (local.get $op) (i32.const 40))))
+      (if (i32.eq (local.get $op) (i32.const 40)) (then
+        (i32.store offset=4 (local.get $pkt) (i32.load offset=20 (local.get $ins)))))
+      (br $skip_emit)))
     ;; Typed definitions carry a uniform index and raw words, not float slots.
     ;; Stable hoisting preserves last-definition precedence.
     (if (i32.and (i32.ne (local.get $vs20) (i32.const 0))
@@ -634,6 +671,26 @@
     (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $emit)))
     (local.set $pass (i32.add (local.get $pass) (i32.const 1)))
     (local.set $i (i32.const 0)) (br_if $passes (i32.lt_u (local.get $pass) (i32.const 2))))
+  ;; Resolve static branches in final packet order, after all DEFx hoisting.
+  ;; At most sixteen IF/ELSE scans, each bounded by the validated packet count.
+  (local.set $i (i32.const 0))
+  (block $linked (loop $link
+    (br_if $linked (i32.ge_u (local.get $i) (local.get $n)))
+    (local.set $pkt (i32.add (local.get $out) (i32.add (i32.const 16) (i32.shl (local.get $i) (i32.const 6)))))
+    (local.set $op (i32.load (local.get $pkt)))
+    (if (i32.or (i32.eq (local.get $op) (i32.const 62)) (i32.eq (local.get $op) (i32.const 63))) (then
+      (local.set $j (i32.add (local.get $i) (i32.const 1))) (local.set $depth (i32.const 0))
+      (block $target (loop $search
+        (br_if $target (i32.ge_u (local.get $j) (local.get $n)))
+        (local.set $scanop (i32.load (i32.add (local.get $out) (i32.add (i32.const 16) (i32.shl (local.get $j) (i32.const 6))))))
+        (if (i32.and (i32.eqz (local.get $depth))
+          (i32.or (i32.eq (local.get $scanop) (i32.const 64))
+            (i32.and (i32.eq (local.get $op) (i32.const 62)) (i32.eq (local.get $scanop) (i32.const 63))))) (then
+          (i32.store offset=8 (local.get $pkt) (i32.add (local.get $j) (i32.const 1))) (br $target)))
+        (if (i32.eq (local.get $scanop) (i32.const 62)) (then (local.set $depth (i32.add (local.get $depth) (i32.const 1)))))
+        (if (i32.eq (local.get $scanop) (i32.const 64)) (then (local.set $depth (i32.sub (local.get $depth) (i32.const 1)))))
+        (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $search)))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $link)))
   (local.get $out))
 
 (func $d3d_shader_vm_context (export "d3d_shader_vm_context") (param $program i32) (param $mask i32) (result i32)
@@ -1583,6 +1640,7 @@
   (local $program i32) (local $n i32) (local $pc i32) (local $pkt i32) (local $regs i32)
   (local $dst i32) (local $bits i32) (local $mask v128)
   (local $op i32) (local $desc i32) (local $partner i32) (local $step i32) (local $j i32)
+  (local $nextpc i32)
   (local $x2 v128) (local $y2 v128) (local $z2 v128) (local $w2 v128)
   (local $x v128) (local $y v128) (local $z v128) (local $w v128)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $ctx) (call $d3d_shader_vm_context_bytes))) (then (return (i32.const -1))))
@@ -1621,7 +1679,23 @@
         (local.set $partner (i32.add (local.get $pkt) (i32.const 64))) (local.set $step (i32.const 2))))))
     (if (i32.lt_s (local.get $budget) (local.get $step))
       (then (return (call $d3d_shader_vm_status (local.get $ctx) (i32.const 1)))))
+    (local.set $nextpc (i32.add (local.get $pc) (local.get $step)))
     (block $execute
+    (if (i32.and (i32.ge_u (local.get $op) (i32.const 62)) (i32.le_u (local.get $op) (i32.const 64))) (then
+      (if (local.get $partner) (then (return (call $d3d_shader_vm_status (local.get $ctx) (i32.const -1)))))
+      (if (i32.eq (local.get $op) (i32.const 64)) (then (br $execute)))
+      (local.set $j (i32.load offset=8 (local.get $pkt)))
+      (if (i32.or (i32.le_u (local.get $j) (local.get $pc)) (i32.gt_u (local.get $j) (local.get $n)))
+        (then (return (call $d3d_shader_vm_status (local.get $ctx) (i32.const -1)))))
+      (if (i32.eq (local.get $op) (i32.const 63))
+        (then (local.set $nextpc (local.get $j)))
+        (else
+          (if (i32.ge_u (i32.load offset=4 (local.get $pkt)) (i32.const 16))
+            (then (return (call $d3d_shader_vm_status (local.get $ctx) (i32.const -1)))))
+          (if (i32.eqz (i32.load (i32.add (local.get $ctx) (i32.add (i32.const 74016)
+            (i32.shl (i32.load offset=4 (local.get $pkt)) (i32.const 2))))))
+            (then (local.set $nextpc (local.get $j))))))
+      (br $execute)))
     (if (i32.or (i32.eq (local.get $op) (i32.const 60)) (i32.eq (local.get $op) (i32.const 61))) (then
       (local.set $j (i32.load offset=4 (local.get $pkt)))
       (if (i32.or (i32.ge_u (local.get $j) (i32.const 16)) (local.get $partner))
@@ -1711,7 +1785,7 @@
     (if (local.get $partner) (then
       (call $d3d_shader_vm_commit (local.get $regs) (local.get $partner) (local.get $x2) (local.get $y2) (local.get $z2) (local.get $w2) (local.get $mask))))
     ) ;; $execute: typed prologue shares bounded retirement and resumption.
-    (local.set $pc (i32.add (local.get $pc) (local.get $step)))
+    (local.set $pc (local.get $nextpc))
     (i32.store offset=8 (local.get $ctx) (local.get $pc))
     (i32.store offset=20 (local.get $ctx) (i32.add (i32.load offset=20 (local.get $ctx)) (local.get $step)))
     (local.set $budget (i32.sub (local.get $budget) (local.get $step)))

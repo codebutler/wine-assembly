@@ -96,9 +96,10 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
  // color map avoids UNORM half ties at the zero/quarter-turn boundaries.
  // Signed Taylor coefficients inferred from Microsoft's SINCOS Instruction
  // Format source-register formulas (its later pseudocode has conflicting
- // signs). Official SDK macro links are unavailable. Mathematical lowering
+ // signs and a -1/16 term conflicting with the half-angle Taylor -1/8).
+ // Official SDK macro links are unavailable. Mathematical lowering
  // does not consume them: this is NOT coefficient-expansion conformance.
- const sincosCoefficients=[[-1/(5040*128),-1/(720*64),1/(24*16),1/(120*32)],[-1/(6*8),-1/(2*8),1,.5]];
+ const sincosCoefficients=[[-1/(5040*128),-1/(720*64),1/(24*16),1/(120*32)],[-1/(6*8),-1/(2*4),1,.5]];
  for(const angle of[0,Math.fround(Math.PI/2),Math.fround(-Math.PI/2)])for(const mask of[1,2,3]){
   const key=`sincos37/${angle}/${mask}`;assert(!sources.has(key));
   const vector=[9,angle,9,9],expected=[mask&1?Math.cos(angle)*.25+.625:.625,mask&2?Math.sin(angle)*.25+.625:.625,.25,.75];
@@ -111,6 +112,27 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
    ...ins(1,D(0,0,7^mask),S(2,253)),
    ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
   sources.set(key,tokens);positionTolerances.set(key,2e-6);cases.push([0,key,expected,vector]);
+ }
+ // Branches consume the exact same retained native IR on both backends.
+ // Definitions intentionally follow the executable branches they control.
+ const branchColors=[[.25,.375,.625,.75],[.75,.625,.375,.25],[.125,.25,.75,.875]];
+ for(const [name,condition,nested,noElse,chosen]of[
+  ['late-true',2,false,false,0],['late-false',0,false,false,1],
+  ['nested-inner-false',1,true,false,2],['nested-outer-false',0,true,false,1],
+  ['no-else-true',1,false,true,0],['no-else-false',0,false,true,1],
+ ]){
+  const key=`if40/${name}`,body=[];
+  const emit=(op,...args)=>body.push(...ins(op,...args));
+  if(noElse)emit(1,D(0),S(2,253));
+  emit(40,0xe0e40800);
+  if(nested){emit(40,0xe0e40801);emit(1,D(0),S(2,252));emit(42);emit(1,D(0),S(2,254));emit(43);}
+  else emit(1,D(0),S(2,252));
+  if(!noElse){emit(42);emit(1,D(0),S(2,253));}emit(43);
+  emit(2,D(4),S(1),S(0));emit(1,D(5),S(0));
+  emit(47,0xe00f0800,condition);if(nested)emit(47,0xe00f0801,0);
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),
+   ...branchColors.flatMap((values,i)=>ins(81,D(2,252+i),...values.map(fbits))),...body,65535];
+  sources.set(key,tokens);cases.push([0,key,branchColors[chosen]]);
  }
  const programs=new Map(),frames=[];
  const psTokens=[0xffff0101,1,D(0),S(1),65535],psIR=e.d3d_shader_ir_compile(put(psTokens),psTokens.length);

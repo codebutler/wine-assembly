@@ -10,6 +10,22 @@ const make=base=>({stage:'vertex',version:0xfffe0200,irVersion:1,length:12,instr
  {opcode:1,offset:7,args:[d(5),s(2,base)|0x2000]},
 ]});
 const shader=make(0);
+const flow=(body)=>({stage:'vertex',version:0xfffe0200,instructions:[
+ {opcode:1,args:[d(4),s(1)]},...body.map(([opcode,...args])=>({opcode,args}))
+].map((ins,i)=>({...ins,offset:i+1}))});
+const ifSource=0xe0e40800;
+const branch=flow([[40,ifSource],[42],[43]]);
+assert.throws(()=>Shader.compileIR(branch),/invalid D3D shader IR/);
+const branchGL=Shader.compileIR(branch,{experimentalVS20:true});
+assert(branchGL.source.includes('uniform bool d3d_vs_b0;'));assert(branchGL.uniforms.includes('d3d_vs_b0'));
+assert(Shader.compileIR(flow([...Array.from({length:16},()=>[40,ifSource]),...Array.from({length:16},()=>[43])]),{experimentalVS20:true}));
+for(const body of[[[42]],[[43]],[[40,ifSource]],[[40,ifSource],[42],[42],[43]],
+ [...Array.from({length:17},()=>[40,ifSource]),...Array.from({length:17},()=>[43])],
+ ...[0xe0000800,0xe1e40800,0xe0e42800,0xe0e40810,0x90e40000].map(s=>[[40,s],[43]])])
+ assert.throws(()=>Shader.compileIR(flow(body),{experimentalVS20:true}),/IF|ELSE|ENDIF|flow/);
+const projection=new Uint32Array(40);projection.set([IR.MAGIC,1,0,0xfffe0200,1,3,160,0]);
+projection.set([40,1,1,0,14,0,228,0],8);
+assert.strictEqual(IR.read(projection.buffer,0,{experimentalVS20:true}).instructions[0].args[0],ifSource);
 assert.throws(()=>Shader.compileIR(shader),/invalid D3D shader IR/);
 assert.throws(()=>Shader.compile(new Uint32Array([0xfffe0200,65535])),/unsupported shader version/);
 const lowered=Shader.compileIR(shader,{experimentalVS20:true});
@@ -192,11 +208,29 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     {name:'sincos W swizzle and NEG',op:37,mask:3,swizzle:255,negate:true,input:[9,9,9,Math.PI/2],expected:[.5,0,.7,.8]},
     {name:'typed definitions false and signed integers',op:47,boolean:0,ints:[-3,2,0,1],expected:[0,1,1,1]},
     {name:'typed definitions noncanonical true and signed integers',op:47,boolean:0x80000000,ints:[3,-2,0,-1],expected:[1,1,1,1]},
+    {name:'IF late false definition',op:40,boolDef:0,expected:[.8,.7,.6,.4]},
+    {name:'IF late nonzero true definition',op:40,boolDef:2,expected:[.2,.3,.4,.6]},
+    {name:'IF nested inner false',op:40,boolDef:1,nested:true,expected:[.1,.2,.3,.4]},
+    {name:'IF false skips nested branch',op:40,boolDef:0,nested:true,expected:[.8,.7,.6,.4]},
+    {name:'IF unbound Boolean defaults false',op:40,expected:[.8,.7,.6,.4]},
+    {name:'IF supplied Boolean uniform true',op:40,boolUniform:1,expected:[.2,.3,.4,.6]},
+    {name:'IF no ELSE false preserves prior output',op:40,boolDef:0,noElse:true,expected:[.8,.7,.6,.4]},
+    {name:'IF no ELSE true updates output',op:40,boolDef:1,noElse:true,expected:[.2,.3,.4,.6]},
    ];
    for(const version of[1,2])for(const fixture of fixtures){
     const instructions=[{opcode:1,offset:1,args:[0xc00f0000,0x90e40000]}];
     const src=(0x90000001|((fixture.swizzle??([32,37].includes(fixture.op)?0:228))<<16)|(fixture.negate?0x01000000:0))>>>0;
-    if(fixture.op===47){
+    if(fixture.op===40){
+     const emit=(opcode,...args)=>instructions.push({opcode,args,offset:instructions.length+1});
+     if(fixture.noElse)emit(1,0xd00f0000,0xa0e40003);
+     emit(40,0xe0e40800);
+     if(fixture.nested){emit(40,0xe0e40801);emit(1,0xd00f0000,0xa0e40002);emit(42);emit(1,0xd00f0000,0xa0e40004);emit(43);}
+     else emit(1,0xd00f0000,0xa0e40002);
+     if(!fixture.noElse){emit(42);emit(1,0xd00f0000,0xa0e40003);}emit(43);
+     // Hoisting includes definitions after the branch they control.
+     if(fixture.boolDef!==undefined)emit(47,0xe00f0800,fixture.boolDef);
+     if(fixture.nested)emit(47,0xe00f0801,0);
+    }else if(fixture.op===47){
      instructions.push({opcode:1,offset:2,args:[0xd00f0000,0x90e40001]},
       {opcode:47,offset:3,args:[0xe00f080f,fixture.boolean?0:1]},
       {opcode:48,offset:4,args:[0xf00f000f,0,0,0,0]},
@@ -263,6 +297,11 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c2'),.2,.3,.4,.6);
     if(fixture.matrix)gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),...fixture.matrix);
     if(fixture.op===32)scalar(3,fixture.exponent);
+    if(fixture.op===40){
+     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),.8,.7,.6,.4);
+     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c4'),.1,.2,.3,.4);
+     if(fixture.boolUniform!==undefined)gl.uniform1i(gl.getUniformLocation(p,'d3d_vs_b0'),fixture.boolUniform);
+    }
     if(fixture.op===37){
      // Signed half-angle Taylor coefficients derived from the DDI's
      // mathematical expansion, NOT independently verified SDK macro bytes.
@@ -277,6 +316,6 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
   });
   for(const result of vectorResults){assert.strictEqual(result.error,0);result.pixels.forEach((actual,i)=>
    assert(Math.abs(actual-result.expected[i%4])<=1,JSON.stringify({result,i,actual})));}
-  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' vector/typed-definition actual WebGL1/2 pixel cases');
+  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' vector/typed-definition/flow actual WebGL1/2 pixel cases');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
