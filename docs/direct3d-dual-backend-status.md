@@ -1354,3 +1354,15 @@ readback in cooperative-main and guest-main Worker modes. The21-opcode bridge
 routing regression passes. Implicit swapchain destinations, other packed/DXT
 formats and outstanding-DC handling remain missing UpdateSurface coverage;
 this is not full API/format completion and does not expand advertised caps.
+
+UpdateSurface now also copies the other currently creatable texture formats:
+X8L8V8U8 and DXT1/DXT5. Native row addressing uses the existing block-byte,
+pitch and mip-row helpers, preserving compressed bits without decode/re-encode.
+Compressed origins must be block aligned; partial trailing blocks are accepted
+only at both source and destination mip edges. Direct/worker regression85321
+passes raw-byte whole and subrectangle copies, distinct row pitches, 2x2/1x1
+mip padding, invalid alignment rejection and no destination mutation on error.
+The existing21/22 color/alias/readback/lifetime suite passes in the same run.
+These fixtures establish implementation behavior, not a native-driver oracle
+for unusual compressed edge rectangles; that characterization remains open.
+No new formats are advertised, and implicit swapchain destinations remain open.

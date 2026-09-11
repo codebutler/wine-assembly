@@ -188,6 +188,7 @@
   (local $allocation i32) (local $s i32) (local $d i32) (local $p i32) (local $desc i32)
   (local $x i32) (local $y i32) (local $w i32) (local $h i32) (local $dx i32) (local $dy i32)
   (local $row i32) (local $bits i32) (local $result i32) (local $format i32)
+  (local $block i32) (local $rowbytes i32)
   (global.set $eax (i32.const 0x8876086c))
   (if (global.get $d3d_render_token) (then
     (local.set $result (call $d3d_render_poll))
@@ -203,9 +204,10 @@
     (br_if $done (i32.eqz (call $d3d9_update_view (local.get $dest) (local.get $device) (i32.const 0) (local.get $d))))
     (local.set $format (i32.load offset=8 (local.get $s)))
     (br_if $done (i32.ne (local.get $format) (i32.load offset=8 (local.get $d))))
-    ;; Additional packed/compressed formats and implicit swapchain targets are
-    ;; still pending; do not reinterpret their rows as four-byte pixels.
-    (br_if $done (i32.and (i32.ne (local.get $format) (i32.const 21)) (i32.ne (local.get $format) (i32.const 22))))
+    (local.set $block (call $d3d9_texture_block_bytes (local.get $format)))
+    (br_if $done (i32.and (i32.eqz (local.get $block))
+      (i32.and (i32.ne (local.get $format) (i32.const 62))
+        (i32.and (i32.ne (local.get $format) (i32.const 21)) (i32.ne (local.get $format) (i32.const 22))))))
     (local.set $w (i32.load (local.get $s))) (local.set $h (i32.load offset=4 (local.get $s)))
     (if (local.get $rect) (then
       (local.set $p (call $d3d9_state_bytes (local.get $rect) (i32.const 16))) (br_if $done (i32.eqz (local.get $p)))
@@ -223,6 +225,16 @@
       (i32.gt_u (local.get $dy) (i32.load offset=4 (local.get $d)))))
     (br_if $done (i32.or (i32.gt_u (local.get $w) (i32.sub (i32.load (local.get $d)) (local.get $dx)))
       (i32.gt_u (local.get $h) (i32.sub (i32.load offset=4 (local.get $d)) (local.get $dy)))))
+    (if (local.get $block) (then
+      ;; Blocks may include padding at a mip edge, never unrelated texels.
+      (br_if $done (i32.and (i32.or (i32.or (local.get $x) (local.get $y))
+        (i32.or (local.get $dx) (local.get $dy))) (i32.const 3)))
+      (if (i32.and (local.get $w) (i32.const 3)) (then
+        (br_if $done (i32.or (i32.ne (i32.add (local.get $x) (local.get $w)) (i32.load (local.get $s)))
+          (i32.ne (i32.add (local.get $dx) (local.get $w)) (i32.load (local.get $d)))))))
+      (if (i32.and (local.get $h) (i32.const 3)) (then
+        (br_if $done (i32.or (i32.ne (i32.add (local.get $y) (local.get $h)) (i32.load offset=4 (local.get $s)))
+          (i32.ne (i32.add (local.get $dy) (local.get $h)) (i32.load offset=4 (local.get $d)))))))))
     (local.set $bits (i32.add (i32.load offset=12 (local.get $s))
       (i32.add (i32.mul (local.get $y) (i32.load offset=16 (local.get $s))) (i32.mul (local.get $x) (i32.const 4)))))
     (if (i32.load offset=20 (local.get $d)) (then
@@ -237,10 +249,20 @@
       (i32.store offset=56 (local.get $desc) (local.get $format))
       (local.set $result (call $host_gpu_gl_call (i32.const 0x30015) (local.get $desc) (i32.const 0))))
     (else
+      (local.set $rowbytes (i32.mul (local.get $w) (i32.const 4)))
+      (local.set $dx (i32.mul (local.get $dx) (i32.const 4)))
+      (if (local.get $block) (then
+        (local.set $rowbytes (call $d3d9_texture_pitch (local.get $w) (local.get $format)))
+        (local.set $h (call $d3d9_texture_rows (local.get $h) (local.get $format)))
+        (local.set $dx (i32.mul (i32.shr_u (local.get $dx) (i32.const 4)) (local.get $block)))
+        (local.set $dy (i32.shr_u (local.get $dy) (i32.const 2)))
+        (local.set $bits (i32.add (i32.load offset=12 (local.get $s))
+          (i32.add (i32.mul (i32.shr_u (local.get $y) (i32.const 2)) (i32.load offset=16 (local.get $s)))
+            (i32.mul (i32.shr_u (local.get $x) (i32.const 2)) (local.get $block)))))))
       (loop $rows
         (memory.copy (i32.add (i32.load offset=12 (local.get $d))
-          (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (i32.load offset=16 (local.get $d))) (i32.mul (local.get $dx) (i32.const 4))))
-          (i32.add (local.get $bits) (i32.mul (local.get $row) (i32.load offset=16 (local.get $s)))) (i32.mul (local.get $w) (i32.const 4)))
+          (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (i32.load offset=16 (local.get $d))) (local.get $dx)))
+          (i32.add (local.get $bits) (i32.mul (local.get $row) (i32.load offset=16 (local.get $s)))) (local.get $rowbytes))
         (local.set $row (i32.add (local.get $row) (i32.const 1))) (br_if $rows (i32.lt_u (local.get $row) (local.get $h))))
       (local.set $p (i32.load offset=24 (local.get $d)))
       (i32.store (local.get $p) (i32.add (i32.load (local.get $p)) (i32.const 1)))

@@ -27,6 +27,10 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
       (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0))
       (global.get $eax))
+    (func (export "raw_texture") (param $d i32) (param $pool i32) (param $fmt i32) (param $out i32) (result i32)
+      (call $d3d9_texture_create (local.get $d) (i32.const 8) (i32.const 8) (i32.const 4)
+        (i32.const 0) (local.get $fmt) (local.get $pool) (local.get $out))
+      (global.get $eax))
     (func (export "cpu_texture") (param $d i32) (param $pool i32) (param $out i32) (result i32)
       (call $d3d9_texture_create (local.get $d) (i32.const 4) (i32.const 4) (i32.const 3)
         (i32.const 0) (i32.const 21) (local.get $pool) (local.get $out))
@@ -143,6 +147,40 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
   const aliases=async()=>{
     ok(e.create_device(pp,out),'alias device');const ad=read(out);
     ok(e.Device9_GetRenderTarget(ad,0,out),'alias backbuffer');let ab=read(out);
+    for(const format of[62,0x31545844,0x35545844]){
+      ok(e.raw_texture(ad,2,format,out),'raw system texture');const st=read(out);
+      ok(e.raw_texture(ad,0,format,out),'raw default texture');const dt=read(out);
+      const point=alloc(8);
+      for(const level of[0,2,3]){
+        ok(e.Texture9_GetSurfaceLevel(st,level,out),'raw source level');const ss=read(out);
+        ok(e.Texture9_GetSurfaceLevel(dt,level,out),'raw dest level');const ds=read(out);
+        const sr=st+64+level*32,dr=dt+64+level*32,bytes=read(sr+12),sp=read(sr+16),dp=read(dr+16);
+        ok(await invoke(e.Surface9_LockRect,ss,lock,0,0),'raw lock');
+        const source=new Uint8Array(memory.buffer,wa(sp),bytes);source.forEach((_,i)=>source[i]=(i*13+7)&255);
+        const want=source.slice();ok(await invoke(e.Surface9_UnlockRect,ss),'raw unlock');
+        ok(await invoke(e.Device9_UpdateSurface,ad,ss,0,ds,0),'raw whole level upload');
+        assert.deepStrictEqual(new Uint8Array(memory.buffer,wa(dp),bytes),want,'raw bytes and small mip padding preserved');
+        if(level===0){
+          // Upper-right source block/region -> lower-left destination.
+          write(rect,[4,0,8,4]);write(point,[0,4]);
+          ok(await invoke(e.Device9_UpdateSurface,ad,ss,rect,ds,point),'raw subrectangle');
+          const expected=want.slice(),pitch=read(sr+8),unit=format===62?4:format===0x31545844?8:16;
+          const rows=format===62?4:1,rowBytes=format===62?16:unit;
+          for(let y=0;y<rows;y++)expected.set(want.subarray(y*pitch+(format===62?16:unit),y*pitch+(format===62?16:unit)+rowBytes),
+            (y+(format===62?4:1))*pitch);
+          assert.deepStrictEqual(new Uint8Array(memory.buffer,wa(dp),bytes),expected,'raw pitched subrectangle preserves other blocks');
+          if(format!==62){
+            for(const invalidRect of[[1,0,5,4],[0,1,4,5],[0,0,3,4],[0,0,4,3]]){
+              write(rect,invalidRect);bad(await invoke(e.Device9_UpdateSurface,ad,ss,rect,ds,0));
+            }
+            write(rect,[0,0,4,4]);write(point,[1,0]);bad(await invoke(e.Device9_UpdateSurface,ad,ss,rect,ds,point));
+            assert.deepStrictEqual(new Uint8Array(memory.buffer,wa(dp),bytes),expected,'rejected misaligned copy is atomic');
+          }
+        }
+        e.Surface9_Release(ss);e.Surface9_Release(ds);
+      }
+      e.guest_free(point);e.Texture9_Release(st);e.Texture9_Release(dt);
+    }
     ok(await invoke(e.Device9_ColorFill,ad,ab,0,0xff102030),'ColorFill bootstraps backend and fills implicit target');
     ok(await invoke(e.Device9_Present,ad),'filled backbuffer Present');
     assert.strictEqual(new Uint32Array(memory.buffer,e.back_bits(ad),64)[0],0xff102030);
