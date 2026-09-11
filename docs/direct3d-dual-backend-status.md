@@ -1634,3 +1634,37 @@ passes real-WAT parity, ordering and cleanup. Full build22476 passes
 canonical1156377 / compat1156845 with no data overlaps; test-tier gates pass.
 These establish bounded-context improvements, not resolution of the separate
 B&W guest allocation failure or complete gameplay/backend parity.
+
+Private VS2.0 foundation (2026-09-11, integration still in progress): a
+length-aware native decoder now accepts a bounded straight-line ALU subset,
+DCL/DEF, ABS and scalar MOVA, with explicit a0.x relative operand tokens and
+c0..c255. Public compilation/version gates remain closed. Native validation
+26688 passes84 legality, initialization, malformed-length, lifetime and IR
+budget exhaustion/recovery cases. Flow, matrices and remaining mandatory
+instructions are not covered by this private subset.
+
+The private SIMD compiler preserves the legacy register/sampler layout and
+appends8192 bytes for c128..255, increasing context bytes to73760. MOVA uses
+nearest-even; VS1.1 MOV-a0 retains its existing floor policy. Microsoft's
+[MOVA contract](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/mova---vs)
+specifies nearest rounding; the tie rule here is an explicit adapter policy,
+not a claim that every historical native driver used it. Native73562 passes22
+cases including high DEF constants, cross-boundary relative gathers, inactive
+lanes and out-of-range/nonfinite indices. Legacy VM61145 passes231 and software
+pipeline47259 passes351. Production worker18054 and compaction18592 also pass.
+
+Private JS IR projection and GLSL lowering require experimentalVS20 explicitly;
+the production native-IR handoff and guest token parser still reject VS2.
+Browser34907 passes22 real WebGL1/2 cases for signed nearest-even conversion
+and constant selection across c95/c127/c255. That fixture constructs normalized
+IR independently. Follow-up44235 passes26 WebGL1/2 frames against13 native
+raster frames using the same detached, native-validated IR and immutable DEF
+constants, including signed/tie/out-of-range MOVA and actual vertex positions.
+This still does not exercise production upload of256 runtime constants; that
+frontend binding remains96-gated. Review also found and fixed GLSL's private
+high-DEF bound and point-size saturation rejection to match admitted native IR.
+No VS2 capability, full shader profile, or real-game acceptance is claimed.
+Full build41098 passes canonical1158838 / compat1159306, unchanged region
+layout and no data overlaps. The earlier build32355 caught an instruction
+control-bit literal in the test that coincided with a region boundary; the
+fixture now constructs that bit from its index without weakening the ratchet.

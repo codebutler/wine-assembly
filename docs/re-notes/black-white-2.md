@@ -908,3 +908,59 @@ remain pressure hypotheses. Ordinary Escape down22658/up23081 did not skip the
 intro; the live run has no held key. Current source now reclaims replaced-arena
 tails and rejects oversized low-heap reservations correctly;21705 predates that
 change and must not be described as post-fix acceptance.
+
+### Allocation-return diagnostic prepared on live run21705
+
+Use breakpoint009a81c9, the aligned allocator's return block, rather than
+009a81d5 inside that block. The native debugger checks dispatch boundaries;
+the later unchecked-argument push is not itself a reliable breakpoint target.
+At c9, EAX is the allocation result, EDI the requested byte count, ESI the
+owning object and EBP the input stream. This allows inspection before the
+subsequent copy corrupts instructions when EAX is zero.
+
+The live CLI now has a one-shot, return-preserving run wrapper installed by
+the ordinary eval channel. It shadows the instance's inherited exports getter
+with a configurable property, invokes the original run exactly once, and on
+the matching debug return copies registers, stack words and allocator cursors
+into ctx.bwAllocCapture. It then clears the breakpoint and restores the original
+property descriptor even if observation fails. ctx.bwAllocRestore cancels the
+hook before a hit. Installation rejected a preexisting breakpoint; a tiny
+independent Wasm test verified that shadowing/restoration is supported.
+No guest instructions, registers or allocation state are patched.
+
+The first oversized terminal input did not execute: canonical terminal input
+overflowed, producing bell characters. Ctrl-U cleared the pending line;
+allocation_capture_check2 confirmed breakpoint0 and no hook. Three short
+hook_part commands then assembled the observer text, and hook_install returned
+true. Keep future relayed commands short. At the last preceding sample the
+intro had reached frame1098, completion95.2, and zero renderer failures. The
+allocation has not yet been observed; this is diagnostic readiness, not proof
+of either allocation failure or success on this preserved pre-fix build.
+
+Run21705 subsequently completed the intro (frame1787, finishFrame1786) and
+reached profile creation. Short Return694309/up694325 left the dialog visible;
+held Return696323/up697061 closed it, with Player at the main menu in
+/private/tmp/bw-profile-settled.png (batch697412). Normal movement698105 to0,0
+then698149 to156,446 settled at native195,557. Down698787/up699231 reaches the
+tutorial Continue screen in /private/tmp/bw-newgame-current.png (batch700341).
+Move701673 to321,451 settled at native401,563; Continue down703542/up704168
+reproduced the copy trap at batch704171, EIP00925197. All inputs were released.
+The probe is terminal exit1, not a live wait. This was the pre-tail/pre-compaction
+frozen build, not current-source acceptance.
+
+The observer worked but matched an earlier call to the same allocation site:
+batch704170, EAX844933376 (nonzero), EDI231184, ESI856098960, EBP856040276.
+At that point the free list had9972 blocks totaling5389088 bytes, largest22368,
+with no detected cycle/bad header/truncation. Low cursor/end71990848/71991296;
+sparse cursor/end845164640/845676544; virtual top856096768. The full registers,
+24 stack words and32 stream words are durable in run.log at BW-ALLOC-CAPTURE.
+The setter logged synchronously before returning to guest execution, so this
+evidence survives the subsequent crash. It proves fragmentation at this earlier
+successful call, not the allocator's full state at the later10.3MiB failure.
+
+The one-shot observer cleared itself after that successful call. Next use must
+retain the breakpoint until EDI equals00a58780 (or explicitly capture every
+matching return), rather than stop at the first use of the shared call site.
+The terminal stack again contains destination0/count00a58780 at the copy call.
+No new CPU opcode defect is demonstrated, and the exact allocation-pressure
+cause remains open. Do not restart the old session handle21705; it has exited.
