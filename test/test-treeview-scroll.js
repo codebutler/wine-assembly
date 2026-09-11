@@ -37,6 +37,8 @@ const TVIS_DROPHILITED = 0x0008;
 const TVIS_EXPANDED = 0x0020;
 const TVIS_EXPANDEDONCE = 0x0040;
 const TVI_ROOT = 0xFFFF0000;
+const TVN_SELCHANGINGA = -401;
+const TVN_SELCHANGEDA = -402;
 const TVN_ITEMEXPANDEDA = -406;
 const WM_VSCROLL = 0x0115;
 const WM_LBUTTONDOWN = 0x0201;
@@ -135,6 +137,63 @@ async function main() {
     dv.setUint32(p + 8, state, true);
     dv.setUint32(p + 12, stateMask, true);
     return e.send_message(tv, TVM_SETITEMA, 0, item) | 0;
+  }
+  function installSelectionNotifyParent() {
+    const capture = e.guest_alloc(48) >>> 0;
+    const veto = e.guest_alloc(4) >>> 0;
+    const proc = e.guest_alloc(192) >>> 0;
+    const code = [];
+    const labels = new Map();
+    const jumps = [];
+    const emit = (...values) => code.push(...values.map(value => value & 0xFF));
+    const le32 = value => [value, value >>> 8, value >>> 16, value >>> 24];
+    const label = name => labels.set(name, code.length);
+    const j32 = (condition, name) => {
+      emit(0x0F, condition, 0, 0, 0, 0);
+      jumps.push({ displacement: code.length - 4, name });
+    };
+    const storeEdx = address => emit(0x89, 0x15, ...le32(address));
+    const increment = address => emit(0xFF, 0x05, ...le32(address));
+
+    emit(0x8B, 0x44, 0x24, 0x08);                  // mov eax,[esp+8] (msg)
+    emit(0x3D, 0x4E, 0x00, 0x00, 0x00);            // cmp eax,WM_NOTIFY
+    j32(0x85, 'zero');                              // jne zero
+    emit(0x8B, 0x44, 0x24, 0x10);                  // mov eax,[esp+16] (lParam)
+    emit(0x85, 0xC0);                               // test eax,eax
+    j32(0x84, 'zero');                              // jz zero
+    emit(0x8B, 0x48, 0x08);                        // mov ecx,[eax+8] (code)
+    emit(0x81, 0xF9, ...le32(TVN_SELCHANGINGA));    // cmp ecx,TVN_SELCHANGINGA
+    j32(0x85, 'changed');                           // jne changed
+    increment(capture);
+    emit(0x8B, 0x50, 0x18); storeEdx(capture + 8);  // itemOld.state
+    emit(0x8B, 0x50, 0x40); storeEdx(capture + 12); // itemNew.state
+    emit(0x8B, 0x50, 0x14); storeEdx(capture + 24); // itemOld.hItem
+    emit(0x8B, 0x50, 0x3C); storeEdx(capture + 28); // itemNew.hItem
+    emit(0x8B, 0x50, 0x0C); storeEdx(capture + 40); // action
+    emit(0xA1, ...le32(veto));                      // mov eax,[veto]
+    emit(0xC2, 0x10, 0x00);                        // ret 16
+    label('changed');
+    emit(0x81, 0xF9, ...le32(TVN_SELCHANGEDA));     // cmp ecx,TVN_SELCHANGEDA
+    j32(0x85, 'zero');                              // jne zero
+    increment(capture + 4);
+    emit(0x8B, 0x50, 0x18); storeEdx(capture + 16); // itemOld.state
+    emit(0x8B, 0x50, 0x40); storeEdx(capture + 20); // itemNew.state
+    emit(0x8B, 0x50, 0x14); storeEdx(capture + 32); // itemOld.hItem
+    emit(0x8B, 0x50, 0x3C); storeEdx(capture + 36); // itemNew.hItem
+    label('zero');
+    emit(0x31, 0xC0, 0xC2, 0x10, 0x00);            // xor eax,eax; ret 16
+    for (const jump of jumps) {
+      const delta = labels.get(jump.name) - (jump.displacement + 4);
+      code.splice(jump.displacement, 4, ...le32(delta));
+    }
+    u8.fill(0, wa(capture), wa(capture) + 48);
+    u8.set(code, wa(proc));
+    e.test_wnd_table_set(tv - 1, proc);
+    return {
+      clear() { u8.fill(0, wa(capture), wa(capture) + 48); },
+      setVeto(value) { dv.setUint32(wa(veto), value, true); },
+      get(offset) { return dv.getUint32(wa(capture) + offset, true); },
+    };
   }
 
   const baselineSlots = e.wnd_count_used();
@@ -345,6 +404,44 @@ async function main() {
   check('TVM_SELECTITEM rejects an unknown mode',
     e.send_message(tv, TVM_SELECTITEM, 0x7FFF, parent) === 0);
 
+  // A real x86 parent wndproc observes the pre/post state carried by Win98's
+  // two selection notifications and can veto during TVN_SELCHANGINGA.
+  const notifyParent = installSelectionNotifyParent();
+  notifyParent.setVeto(1);
+  notifyParent.clear();
+  const vetoResult = e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, childB) | 0;
+  const vetoObserved = Array.from({ length: 11 }, (_, index) => notifyParent.get(index * 4));
+  check('TVN_SELCHANGINGA veto rejects a caret change before mutation',
+    vetoResult === 0 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === parent &&
+      (getItemState(parent).state & TVIS_SELECTED) === TVIS_SELECTED &&
+      (getItemState(childB).state & TVIS_SELECTED) === 0 &&
+      notifyParent.get(0) === 1 && notifyParent.get(4) === 0 &&
+      (notifyParent.get(8) & TVIS_SELECTED) === TVIS_SELECTED &&
+      (notifyParent.get(12) & TVIS_SELECTED) === 0 &&
+      notifyParent.get(24) === parent && notifyParent.get(28) === childB &&
+      notifyParent.get(40) === 0,
+    `ret=${vetoResult} capture=${vetoObserved.map(value => `0x${value.toString(16)}`).join(',')}`);
+  notifyParent.setVeto(0);
+  notifyParent.clear();
+  const acceptResult = e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, childB) | 0;
+  const acceptObserved = Array.from({ length: 11 }, (_, index) => notifyParent.get(index * 4));
+  check('accepted caret change notifies before and after Win98 state transition',
+    acceptResult === 1 &&
+      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === childB &&
+      notifyParent.get(0) === 1 && notifyParent.get(4) === 1 &&
+      (notifyParent.get(8) & TVIS_SELECTED) === TVIS_SELECTED &&
+      (notifyParent.get(12) & TVIS_SELECTED) === 0 &&
+      (notifyParent.get(16) & TVIS_SELECTED) === 0 &&
+      (notifyParent.get(20) & TVIS_SELECTED) === TVIS_SELECTED &&
+      notifyParent.get(24) === parent && notifyParent.get(28) === childB &&
+      notifyParent.get(32) === parent && notifyParent.get(36) === childB,
+    `ret=${acceptResult} capture=${acceptObserved.map(value => `0x${value.toString(16)}`).join(',')}`);
+  notifyParent.clear();
+  check('selecting the current caret succeeds without redundant notifications',
+    e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, childB) === 1 &&
+      notifyParent.get(0) === 0 && notifyParent.get(4) === 0);
+
   // RegEdit depends on standard TreeView mouse semantics: merely crossing a
   // plus box must not expand it or move the caret. Expansion belongs to an
   // explicit plus-box click or a row double-click.
@@ -387,11 +484,16 @@ async function main() {
   check('TVM_DELETEITEM rejects an invalidated handle',
     e.send_message(tv, TVM_DELETEITEM, 0, childA) === 0);
   const beforeSelectedLeafDelete = e.send_message(tv, TVM_GETCOUNT, 0, 0);
-  check('deleting a selected leaf relinks to the next sibling',
+  notifyParent.setVeto(1);
+  notifyParent.clear();
+  check('selection veto does not cancel deletion and leaves no stale caret',
     e.send_message(tv, TVM_DELETEITEM, 0, childB) === 1 &&
       e.send_message(tv, TVM_GETCOUNT, 0, 0) === beforeSelectedLeafDelete - 1 &&
       (e.send_message(tv, TVM_GETNEXTITEM, 4, parent) >>> 0) === childC &&
-      (e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) >>> 0) === childC);
+      e.send_message(tv, TVM_GETNEXTITEM, TVGN_CARET, 0) === 0 &&
+      notifyParent.get(0) === 1 && notifyParent.get(4) === 0);
+  notifyParent.setVeto(0);
+  e.send_message(tv, TVM_SELECTITEM, TVGN_CARET, childC);
   const beforeParentDelete = e.send_message(tv, TVM_GETCOUNT, 0, 0);
   check('deleting a parent removes its remaining descendants and selects next root',
     e.send_message(tv, TVM_DELETEITEM, 0, parent) === 1 &&

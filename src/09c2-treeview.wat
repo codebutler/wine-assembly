@@ -900,62 +900,66 @@
       (then (return (call $tv_next_visible_from_slot (local.get $slot)))))
     (i32.const 0))
 
-  ;; Send the parent dialog a minimal NM_TREEVIEWA/TVN_SELCHANGEDA after the
-  ;; caret item changes. Winamp populates the preferences page from this
-  ;; notification; without it the tree paints but the page area remains blank.
-  (func $tv_notify_sel_changed (param $hwnd i32) (param $old_handle i32) (param $new_handle i32) (param $action i32)
+  ;; Send one NM_TREEVIEWA selection notification and return the parent's
+  ;; result. Win98 sends TVN_SELCHANGINGA against the old state, permits a
+  ;; nonzero result to veto the change, then sends TVN_SELCHANGEDA only after
+  ;; the caret/state update. Winamp populates its preferences page from the
+  ;; accepted notification rather than a follow-up TVM_GETITEM call.
+  (func $tv_notify_selection
+    (param $hwnd i32) (param $old_handle i32) (param $new_handle i32)
+    (param $action i32) (param $code i32) (result i32)
     (local $parent i32) (local $notify_g i32) (local $notify_w i32)
-    (local $slot i32) (local $base i32)
+    (local $slot i32) (local $base i32) (local $ret i32)
     (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
-    (if (i32.eqz (local.get $parent)) (then (return)))
+    (if (i32.eqz (local.get $parent)) (then (return (i32.const 0))))
     (local.set $notify_g (call $heap_alloc (i32.const 104)))
-    (if (i32.eqz (local.get $notify_g)) (then (return)))
+    (if (i32.eqz (local.get $notify_g)) (then (return (i32.const 0))))
     (local.set $notify_w (call $g2w (local.get $notify_g)))
     (call $zero_memory (local.get $notify_w) (i32.const 104))
-    ;; NMHDR: hwndFrom, idFrom, code. Send both changing and changed below;
-    ;; older Winamp handlers consult the notification rather than relying on
-    ;; a follow-up TVM_GETITEM call.
+    ;; NMHDR: hwndFrom, idFrom, code; action follows at +12.
     (i32.store          (local.get $notify_w) (local.get $hwnd))
     (i32.store offset=4 (local.get $notify_w) (call $ctrl_table_get_id (local.get $hwnd)))
-    (i32.store offset=8 (local.get $notify_w) (i32.const -401))
+    (i32.store offset=8 (local.get $notify_w) (local.get $code))
     (i32.store offset=12 (local.get $notify_w) (local.get $action))
 
-    ;; itemOld at +16, itemNew at +56. Fill mask, hItem, selected state
-    ;; for itemNew, and lParam so Winamp can map the tree node to a page.
+    ;; itemOld at +16, itemNew at +56. Win98 advertises HANDLE|STATE|PARAM
+    ;; for both records, including a NULL endpoint. The state is sampled when
+    ;; each notification is built, so CHANGING sees the old selection and
+    ;; CHANGED sees the committed selection.
+    (i32.store offset=16 (local.get $notify_w) (i32.const 0x1C))
+    (i32.store offset=20 (local.get $notify_w) (local.get $old_handle))
     (if (local.get $old_handle)
       (then
         (local.set $slot (call $tv_find_slot (local.get $old_handle)))
-        (if (i32.ne (local.get $slot) (i32.const -1))
+        (if (i32.and
+              (i32.ne (local.get $slot) (i32.const -1))
+              (call $tv_slot_in_view (local.get $slot)))
           (then
             (local.set $base (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
-            (i32.store offset=16 (local.get $notify_w) (i32.const 0x14))
-            (i32.store offset=20 (local.get $notify_w) (local.get $old_handle))
+            (i32.store offset=24 (local.get $notify_w) (i32.load offset=20 (local.get $base)))
             (i32.store offset=48 (local.get $notify_w)
               (call $tv_item_has_children (local.get $base)))
             (i32.store offset=52 (local.get $notify_w) (i32.load offset=24 (local.get $base)))))))
+    (i32.store offset=56 (local.get $notify_w) (i32.const 0x1C))
+    (i32.store offset=60 (local.get $notify_w) (local.get $new_handle))
     (if (local.get $new_handle)
       (then
         (local.set $slot (call $tv_find_slot (local.get $new_handle)))
-        (if (i32.ne (local.get $slot) (i32.const -1))
+        (if (i32.and
+              (i32.ne (local.get $slot) (i32.const -1))
+              (call $tv_slot_in_view (local.get $slot)))
           (then
             (local.set $base (i32.add (global.get $TV_TABLE) (i32.mul (local.get $slot) (i32.const 32))))
-            (i32.store offset=56 (local.get $notify_w) (i32.const 0x1C))
-            (i32.store offset=60 (local.get $notify_w) (local.get $new_handle))
-            (i32.store offset=64 (local.get $notify_w) (i32.const 0x0002))
-            (i32.store offset=68 (local.get $notify_w) (i32.const 0x0002))
+            (i32.store offset=64 (local.get $notify_w) (i32.load offset=20 (local.get $base)))
             (i32.store offset=88 (local.get $notify_w)
               (call $tv_item_has_children (local.get $base)))
             (i32.store offset=92 (local.get $notify_w) (i32.load offset=24 (local.get $base)))))))
-    (drop (call $wnd_send_message
+    (local.set $ret (call $wnd_send_message
       (local.get $parent) (i32.const 0x004E)
       (call $ctrl_table_get_id (local.get $hwnd))
       (local.get $notify_g)))
-    (i32.store offset=8 (local.get $notify_w) (i32.const -402))
-    (drop (call $wnd_send_message
-      (local.get $parent) (i32.const 0x004E)
-      (call $ctrl_table_get_id (local.get $hwnd))
-      (local.get $notify_g)))
-    (call $heap_free (local.get $notify_g)))
+    (call $heap_free (local.get $notify_g))
+    (local.get $ret))
 
   (func $tv_notify_simple (param $hwnd i32) (param $code i32)
     (local $parent i32) (local $notify_g i32) (local $notify_w i32)
@@ -1157,16 +1161,25 @@
   (func $tv_select_caret (param $hwnd i32) (param $hItem i32) (param $action i32) (result i32)
     (local $old_sel i32) (local $slot i32) (local $base i32)
     (local $i i32) (local $scan_base i32)
-    (if (i32.and
-          (i32.ne (local.get $hItem) (i32.const 0))
-          (i32.eq (call $tv_find_slot (local.get $hItem)) (i32.const -1)))
+    (if (local.get $hItem)
+      (then
+        (local.set $slot (call $tv_find_slot (local.get $hItem)))
+        (if (i32.or
+              (i32.eq (local.get $slot) (i32.const -1))
+              (i32.eqz (call $tv_slot_in_view (local.get $slot))))
+          (then (return (i32.const 0))))))
+    (local.set $old_sel (call $tv_view_sel))
+    (if (i32.eq (local.get $old_sel) (local.get $hItem))
+      (then (return (i32.const 1))))
+    (if (call $tv_notify_selection
+          (local.get $hwnd) (local.get $old_sel) (local.get $hItem)
+          (local.get $action) (i32.const -401))
       (then (return (i32.const 0))))
     (if (local.get $hItem)
       (then
         (if (i32.eqz (call $tv_reveal_item
               (local.get $hwnd) (local.get $hItem) (i32.const 0)))
           (then (return (i32.const 0))))))
-    (local.set $old_sel (call $tv_view_sel))
     (if (local.get $old_sel)
       (then
         (local.set $slot (call $tv_find_slot (local.get $old_sel)))
@@ -1198,9 +1211,9 @@
             (i32.store offset=20 (local.get $base)
               (i32.or (i32.load offset=20 (local.get $base)) (i32.const 0x0002)))))))
     (call $tv_view_set_sel (local.get $hItem))
-    (if (i32.ne (local.get $old_sel) (local.get $hItem))
-      (then (call $tv_notify_sel_changed
-        (local.get $hwnd) (local.get $old_sel) (local.get $hItem) (local.get $action))))
+    (drop (call $tv_notify_selection
+      (local.get $hwnd) (local.get $old_sel) (local.get $hItem)
+      (local.get $action) (i32.const -402)))
     (call $paint_flag_set_inv (local.get $hwnd))
     (call $treeview_paint_wat (local.get $hwnd))
     (i32.const 1))
@@ -1468,8 +1481,12 @@
       (then (local.set $replacement (i32.load offset=16 (local.get $base)))))
     (if (call $tv_caret_in_branch (local.get $hItem))
       (then
-        (drop (call $tv_select_caret
-          (local.get $hwnd) (local.get $replacement) (i32.const 0)))))
+        ;; Deletion itself is not vetoable. Win98 still removes the selected
+        ;; branch when the parent rejects its replacement caret; in that case
+        ;; it leaves the TreeView with no caret and sends no SELCHANGED.
+        (if (i32.eqz (call $tv_select_caret
+              (local.get $hwnd) (local.get $replacement) (i32.const 0)))
+          (then (call $tv_view_set_sel (i32.const 0))))))
     (call $tv_unlink_item (local.get $base))
     (drop (call $tv_delete_branch (local.get $hwnd) (local.get $hItem) (i32.const 0)))
     (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
