@@ -22,6 +22,41 @@ and [interval semantics](https://learn.microsoft.com/en-us/windows/win32/direct3
 
 ## Current integration checkpoint
 
+Independent color-target checkpoint: native standalone color surfaces
+own canonical pixels and separate external/internal references; the bound RT0
+does not replace the implicit backbuffer. Implemented APIs include bounded
+A8R8G8B8/X8R8G8B8 CreateRenderTarget/CreateOffscreenPlainSurface, RT0 Set/Get,
+GetDesc/GetDevice, lockable-surface LockRect/UnlockRect with subrect addressing,
+and matching-format GetRenderTargetData to a system-memory surface. Binding
+resets viewport/scissor dimensions; externally held default-pool surfaces block
+Reset, while internally bound surfaces retire with Reset/device destruction.
+Unsupported multisampling, formats and lock flags fail explicitly.
+
+Native direct/worker86852 PASS: independent Clear and actual DrawPrimitiveUP,
+Lock readback/Unlock upload, A/B content preservation, implicit backbuffer
+Present and GetRenderTargetData even with B bound, validation, reference recovery,
+Reset and final-child device release. The fixture uses the production host
+import route; routing now includes previously omitted depth/Reset/query commands
+and the new color operations. Async protocol verifies all18 private opcodes.
+Existing COM21353, Reset39222, viewport94591, WebGL Present11654 and depth99511
+pass. Full build65981 passes1150963/1151431 bytes. Browser52209 passes actual
+x86 CreateRenderTarget/SetRenderTarget/Draw/Clear/Lock/Unlock/Present/Release in
+cooperative and guest-main Worker modes, with canonical pixels and native heap
+retirement. Initial browser57496 exposed the second stale routing boundary in
+the guest-worker broker (LockRect trapped as unknown GL opcode196624); extending
+that broker through30012 resolves it. Executor24083 passes22 cases in both
+direct and production-worker software; GPU67695 passes22 cases per WebGL version
+plus forced allocation-failure cleanup/retry. The detailed executor entry below
+records storage/copy costs. These fixtures do not establish native-driver
+raster/format conformance or complete resource-profile coverage.
+
+This is not full render-target/resource completion. Texture-level/cube-face
+render-target binding and sampling aliases, resource-version leases for those
+aliases, MRT/MSAA, remaining formats/lock flags, GetDC and copy/resolve operations
+remain open. The executor currently synchronizes standalone color surfaces at
+explicit lock/readback/upload boundaries; no CPU shadow is claimed current while
+backend work is pending. Shader-profile and capability claims are unchanged.
+
 Scissor executor checkpoint: native51017 and independent73298 PASS15
 point/wire/solid cases, depth/stencil/query exclusion, copied rectangle ownership,
 invalid-bind preservation and late-bind rejection. WebGL2504 and independent6215
@@ -48,8 +83,9 @@ guest-main Worker modes through the render Worker, including canonical pixels
 and allocation retirement. Full build69313 passes1148824/1149292 bytes.
 These semantics follow Microsoft's
 [scissor-test contract](https://learn.microsoft.com/en-us/windows/win32/direct3d9/scissor-test).
-Full SetRenderTarget binding and its viewport/scissor reset side effects remain
-an existing open API/resource gate, not completed by this scissor slice.
+SetRenderTarget was still an open API/resource gate at this scissor checkpoint;
+the newer standalone-color slice above implements its RT0 reset side effects,
+with texture aliases and wider target support still incomplete.
 
 Viewport state-block prerequisite95990 PASS: `SetViewport` now records owned
 24-byte values without changing live state; repeated writes retain the last
@@ -1160,3 +1196,23 @@ cases; fragment and logical-AND gates pass. This is packet compilation reuse,
 not the final constant-binding architecture: descriptor-to-IR validation/lowering
 still executes on each draw, and each draw allocates a private packet copy.
 No throughput improvement or elimination of those costs has been measured.
+
+Independent color executor checkpoint (2026-09-10): software24083 passes22
+direct and22 production-worker checks; GPU67695 passes22 checks on each forced
+WebGL1/2 path plus failed-FBO allocation cleanup/retry. Color formats21/22 own
+separate bounded storage and preserve A/B contents across draws, clears, uploads
+and readback with differing dimensions. X8 storage initializes/clears alpha255
+and masks alpha writes. Shared depth identity survives color switching; pixels
+outside the smaller target retain their prior depth. Present/readColor(null)
+always select the implicit backbuffer, never the last offscreen color target.
+
+GPU color resources use an authoritative color texture and per-depth-sized
+staging framebuffers, sharing depth renderbuffers by identity. GPU-only load/store
+copies preserve color across staging changes and handle oversized depth storage
+on WebGL1 as well as2. This costs extra storage and copies; no zero-copy or
+throughput claim. Failed framebuffer construction retires newly allocated color
+and depth storage while retaining existing shared depth. Worker31475 adjacent
+parity/order/parent-memory/readback/retirement regression passes; focused worker
+cleanup verifies actual exit before native heap adoption. Generic GPU unit tests
+also pass. Texture-surface alias sampling and versioned CPU/GPU synchronization
+remain required next work; independent color storage alone does not complete them.

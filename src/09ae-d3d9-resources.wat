@@ -115,8 +115,8 @@
     (if (i32.eqz (local.get $wa)) (then (return)))
     (local.set $rt (call $d3ddev_rt_entry (local.get $device)))
     (if (i32.eqz (local.get $rt)) (then (return)))
-    (local.set $w (load.field DxObject width (local.get $rt)))
-    (local.set $h (load.field DxObject height (local.get $rt)))
+    (local.set $w (call $d3d9_color_extent (local.get $device) (i32.const 0)))
+    (local.set $h (call $d3d9_color_extent (local.get $device) (i32.const 1)))
     (if (local.get $get) (then
       (if (i32.load offset=8 (local.get $state)) (then
         (memory.copy (local.get $wa) (local.get $state) (i32.const 24)))
@@ -730,15 +730,15 @@
         (then (memory.copy (local.get $wa) (local.get $slot) (i32.const 16)))
         (else
           (i64.store (local.get $wa) (i64.const 0))
-          (i32.store offset=8 (local.get $wa) (load.field DxObject width (local.get $rt)))
-          (i32.store offset=12 (local.get $wa) (load.field DxObject height (local.get $rt)))))
+          (i32.store offset=8 (local.get $wa) (call $d3d9_color_extent (local.get $device) (i32.const 0)))
+          (i32.store offset=12 (local.get $wa) (call $d3d9_color_extent (local.get $device) (i32.const 1)))))
       (global.set $eax (i32.const 0)) (return)))
     (local.set $l (i32.load (local.get $wa))) (local.set $t (i32.load offset=4 (local.get $wa)))
     (local.set $r (i32.load offset=8 (local.get $wa))) (local.set $b (i32.load offset=12 (local.get $wa)))
     (if (i32.or (i32.lt_s (local.get $l) (i32.const 0)) (i32.lt_s (local.get $t) (i32.const 0))) (then (return)))
     (if (i32.or (i32.lt_s (local.get $r) (local.get $l)) (i32.lt_s (local.get $b) (local.get $t))) (then (return)))
-    (if (i32.or (i32.gt_u (local.get $r) (load.field DxObject width (local.get $rt)))
-      (i32.gt_u (local.get $b) (load.field DxObject height (local.get $rt)))) (then (return)))
+    (if (i32.or (i32.gt_u (local.get $r) (call $d3d9_color_extent (local.get $device) (i32.const 0)))
+      (i32.gt_u (local.get $b) (call $d3d9_color_extent (local.get $device) (i32.const 1)))) (then (return)))
     (local.set $block (i32.load offset=1740 (local.get $state)))
     (if (local.get $block) (then
       (local.set $block (call $g2w (local.get $block)))

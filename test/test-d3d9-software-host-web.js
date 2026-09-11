@@ -23,7 +23,7 @@ const root=path.join(__dirname,'..');
     for(const threaded of [false,true]){
       const page=await browser.newPage();const errors=[],consoleErrors=[];
       page.on('pageerror',error=>errors.push(String(error)));
-      page.on('console',message=>{if(message.type()==='error')consoleErrors.push(message.text());});
+      page.on('console',message=>{if(message.type()==='error'||/crash|trap|fatal|exception/i.test(message.text()))consoleErrors.push(message.text());});
       await page.goto(`http://127.0.0.1:${server.address().port}/index.html?debug&frozen&d3d9-renderer=software`,
         {waitUntil:'domcontentloaded',timeout:60000});
       await page.waitForFunction('typeof launchApp === "function"');
@@ -70,7 +70,8 @@ const root=path.join(__dirname,'..');
         const deadline=Date.now()+60000;
         while(Date.now()<deadline){
           await page.evaluate(()=>runningApps[0].wine.stepFrozen(4));
-          const result=await page.evaluate(()=>{const w=runningApps[0].wine;return w.instance.exports.guest_read32(w.d3dProbe.marker)>>>0;});
+          const result=await page.evaluate(()=>{const w=runningApps[0]?.wine;return w?w.instance.exports.guest_read32(w.d3dProbe.marker)>>>0:null;});
+          if(result===null)throw Error(`${name}: guest exited; ${errors.concat(consoleErrors).join('\n')}`);
           if(result!==0xdeadbeef){
             const reason=await page.evaluate(()=>{const w=runningApps[0].wine,b=w.hostCtx.d3d9Bridge;return JSON.stringify({
               error:String(b.lastError),backend:b.backend,async:b.asyncSoftware,enabled:b.options.enableProgrammable,calls:w.d3dProbe.calls});});
@@ -107,6 +108,21 @@ const root=path.join(__dirname,'..');
       await call('IDirect3DDevice9_Clear',['device',0,0,1,0xff00ff00,0,0]);
       await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
       assert.deepStrictEqual(await scissorPixels(),[0xff00ff00,0xff0000ff,0xff0000ff]);
+      await call('IDirect3DDevice9_CreateRenderTarget',['device',4,3,21,0,0,1,'out',0]);
+      await page.evaluate(()=>{const w=runningApps[0].wine;w.d3dProbe.color=w.instance.exports.guest_read32(w.d3dProbe.out)>>>0;});
+      await call('IDirect3DDevice9_SetRenderTarget',['device',0,'color']);
+      await call('IDirect3DDevice9_SetRenderState',['device',174,0]);
+      await call('IDirect3DDevice9_Clear',['device',0,0,1,0xff223344,0,0]);
+      await call('IDirect3DDevice9_DrawPrimitiveUP',['device',4,1,'vertices',16]);
+      await call('IDirect3DSurface9_LockRect',['color','pp',0,16]);
+      const colorPixels=await page.evaluate(()=>{const w=runningApps[0].wine,e=w.instance.exports,p=w.d3dProbe;
+        const pitch=e.guest_read32(p.pp),bits=e.guest_read32(p.pp+4)>>>0;return {pitch,first:e.guest_read32(bits)>>>0,last:e.guest_read32(bits+44)>>>0};});
+      assert.deepStrictEqual(colorPixels,{pitch:16,first:0xffff0000,last:0xff223344});
+      await call('IDirect3DSurface9_UnlockRect',['color']);
+      await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
+      assert.deepStrictEqual(await scissorPixels(),[0xff00ff00,0xff0000ff,0xff0000ff],
+        'Present uses implicit backbuffer while independent color target remains bound');
+      await call('IDirect3DSurface9_Release',['color']);
       await call('IDirect3DDevice9_Release',['device']);
       const retired=await page.evaluate(async()=>{
         const w=runningApps[0].wine,b=w.hostCtx.d3d9Bridge;
@@ -115,7 +131,7 @@ const root=path.join(__dirname,'..');
       assert.strictEqual(retired.allocatedBytes,0);assert(retired.heapAdopted>=0);
       assert.deepStrictEqual(errors,[]);
       await page.close();
-      console.log(`PASS browser ${threaded?'guest-main Worker':'cooperative main'} -> software render Worker -> canonical draw/scissored Draw+Clear and native retirement`);
+      console.log(`PASS browser ${threaded?'guest-main Worker':'cooperative main'} -> software render Worker -> scissor/independent target Draw+Clear+Lock, implicit Present and native retirement`);
     }
   } finally {await browser.close();await closeServer(server);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

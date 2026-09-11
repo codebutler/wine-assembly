@@ -44,9 +44,10 @@
     ;; +21788 desktop dimensions; +21792 textures4/5; +21800 samplers4/5.
     ;; +21928 D3DMATERIAL9 (68 bytes, all-zero default), +21996 light-list head.
     ;; +22000 scissor RECT16,+22016 explicit rectangle flag (zero = full target).
-    (local.set $state (call $heap_alloc (i32.const 22020)))
+    ;; +22020 independently bound color surface; zero selects the backbuffer.
+    (local.set $state (call $heap_alloc (i32.const 22024)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22020))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22024))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
@@ -756,6 +757,7 @@
           (return)))
         (if (load.field DxObject misc1 (local.get $entry)) (then
           (call $d3d9_lights_free (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21996))))
+          (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 22020))))
           (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21752))))
           (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21756))))
           (local.set $parent (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 20628))))
@@ -1015,7 +1017,17 @@
 
   ;; IDirect3DDevice9_CreateRenderTarget — 9 args (incl. this)
   (func $handle_IDirect3DDevice9_CreateRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $out i32)
+    (global.set $eax (i32.const 0x8876086c))
+    (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 32))))
+    (if (call $d3d9_state_bytes (local.get $out) (i32.const 4)) (then
+      (call $gs32 (local.get $out) (i32.const 0))
+      (if (i32.eqz (i32.or (local.get $arg4)
+        (i32.or (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+          (call $gl32 (i32.add (global.get $esp) (i32.const 36)))))) (then
+        (call $d3d9_color_create (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (i32.const 0) (i32.const 1)
+          (i32.ne (call $gl32 (i32.add (global.get $esp) (i32.const 28))) (i32.const 0)) (local.get $out))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 40))))
 
   ;; IDirect3DDevice9_CreateDepthStencilSurface — 9 args (incl. this)
@@ -1047,7 +1059,8 @@
 
   ;; IDirect3DDevice9_GetRenderTargetData — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_GetRenderTargetData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_color_copy (local.get $arg0) (local.get $arg1) (local.get $arg2))
+    (if (global.get $d3d_render_token) (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_GetFrontBufferData — 3 args (incl. this)
@@ -1067,18 +1080,32 @@
 
   ;; IDirect3DDevice9_CreateOffscreenPlainSurface — 7 args (incl. this)
   (func $handle_IDirect3DDevice9_CreateOffscreenPlainSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (i32.const 0x8876086c))
+    (if (i32.eqz (call $gl32 (i32.add (global.get $esp) (i32.const 28)))) (then
+      (call $d3d9_color_create (local.get $arg0) (local.get $arg1) (local.get $arg2)
+        (local.get $arg3) (local.get $arg4) (i32.const 0) (i32.const 1)
+        (call $gl32 (i32.add (global.get $esp) (i32.const 24))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
   ;; IDirect3DDevice9_SetRenderTarget — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_SetRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (call $d3d9_color_binding (local.get $arg0) (local.get $arg1) (local.get $arg2))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_GetRenderTarget — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_GetRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $rt i32) (local $surface i32)
+    (local $rt i32) (local $surface i32) (local $state i32)
     (global.set $eax (i32.const 0x8876086c))
+    (local.set $state (call $d3d9_program_state (local.get $arg0)))
+    (if (i32.or (i32.eqz (local.get $state)) (i32.eqz (call $d3d9_state_bytes (local.get $arg2) (i32.const 4)))) (then
+      (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+    (if (i32.and (i32.ne (local.get $state) (i32.const 0))
+      (i32.and (i32.eqz (local.get $arg1)) (i32.ne (call $d3d9_state_bytes (local.get $arg2) (i32.const 4)) (i32.const 0)))) (then
+      (local.set $surface (call $gl32 (i32.add (local.get $state) (i32.const 22020))))
+      (if (local.get $surface) (then
+        (drop (call $d3d9_depth_addref (local.get $surface)))
+        (call $gs32 (local.get $arg2) (local.get $surface)) (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))))
     (if (i32.and (i32.eqz (local.get $arg1)) (i32.ne (local.get $arg2) (i32.const 0))) (then
       (call $gs32 (local.get $arg2) (i32.const 0))
       (local.set $rt (call $d3ddev_rt_entry (local.get $arg0)))
@@ -1149,6 +1176,8 @@
       (i32.or (local.get $arg1) (local.get $arg2)))
       (then (global.set $eax (i32.const 0x8876086C)) (return)))
     (if (local.get $program) (then
+      (if (call $gl32 (i32.add (local.get $program) (i32.const 22020)))
+        (then (global.set $eax (i32.const 0x8876086C)) (return))) ;; independent targets require the shared backend
       (if (call $gl32 (i32.add (call $d3ddev_state (local.get $arg0)) (i32.const 952)))
         (then (global.set $eax (i32.const 0x8876086C)) (return))) ;; RS174 scissor needs a real backend
       (if (call $gl32 (i32.add (local.get $program) (i32.const 21736)))
@@ -1828,7 +1857,7 @@
   ;; IDirect3DSurface9_AddRef — 1 args (incl. this)
   (func $handle_IDirect3DSurface9_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
-    (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
+    (if (i32.or (call $d3d9_is_depth_surface (local.get $arg0)) (call $d3d9_is_color_surface (local.get $arg0))) (then
       (global.set $eax (call $d3d9_depth_addref (local.get $arg0)))
       (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
     (if (call $d3d9_is_texture_surface (local.get $arg0)) (then
@@ -1845,7 +1874,7 @@
   ;; IDirect3DSurface9_Release — 1 args (incl. this)
   (func $handle_IDirect3DSurface9_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $depth_refs i32)
-    (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
+    (if (i32.or (call $d3d9_is_depth_surface (local.get $arg0)) (call $d3d9_is_color_surface (local.get $arg0))) (then
       (local.set $depth_refs (call $d3d9_depth_release (local.get $arg0)))
       (if (i32.lt_s (local.get $depth_refs) (i32.const 0)) (then (return)))
       (global.set $eax (local.get $depth_refs))
@@ -1861,7 +1890,7 @@
   ;; IDirect3DSurface9_GetDevice — 2 args (incl. this)
   (func $handle_IDirect3DSurface9_GetDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $device i32) (local $entry i32)
-    (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
+    (if (i32.or (call $d3d9_is_depth_surface (local.get $arg0)) (call $d3d9_is_color_surface (local.get $arg0))) (then
       (global.set $eax (i32.const 0x8876086c))
       (if (local.get $arg1) (then
         (local.set $device (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
@@ -1913,7 +1942,7 @@
 
   ;; IDirect3DSurface9_GetContainer — 3 args (incl. this)
   (func $handle_IDirect3DSurface9_GetContainer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
+    (if (i32.or (call $d3d9_is_depth_surface (local.get $arg0)) (call $d3d9_is_color_surface (local.get $arg0))) (then
       (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
       (global.set $eax (i32.const 0x80004002))
       (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
@@ -1926,6 +1955,9 @@
   ;; IDirect3DSurface9_GetDesc — 2 args (incl. this)
   (func $handle_IDirect3DSurface9_GetDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $out i32) (local $depth_surface i32)
+    (if (call $d3d9_is_color_surface (local.get $arg0)) (then
+      (call $d3d9_color_desc (local.get $arg0) (local.get $arg1))
+      (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)))
     (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
       (global.set $eax (i32.const 0x8876086c))
       (if (local.get $arg1) (then
@@ -1957,6 +1989,10 @@
 
   ;; IDirect3DSurface9_LockRect — 4 args (incl. this)
   (func $handle_IDirect3DSurface9_LockRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $d3d9_is_color_surface (local.get $arg0)) (then
+      (call $d3d9_color_lock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
+      (if (global.get $d3d_render_token) (then (return)))
+      (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
     (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
       (global.set $eax (i32.const 0x8876086c))
       (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
@@ -1968,6 +2004,10 @@
 
   ;; IDirect3DSurface9_UnlockRect — 1 args (incl. this)
   (func $handle_IDirect3DSurface9_UnlockRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $d3d9_is_color_surface (local.get $arg0)) (then
+      (call $d3d9_color_unlock (local.get $arg0))
+      (if (global.get $d3d_render_token) (then (return)))
+      (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
     (if (call $d3d9_is_depth_surface (local.get $arg0)) (then
       (global.set $eax (i32.const 0x8876086c))
       (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
@@ -1981,7 +2021,7 @@
   (func $handle_IDirect3DSurface9_GetDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $hdc i32)
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-    (if (call $d3d9_is_depth_surface (local.get $arg0)) (then (global.set $eax (i32.const 0x8876086c)) (return)))
+    (if (i32.or (call $d3d9_is_depth_surface (local.get $arg0)) (call $d3d9_is_color_surface (local.get $arg0))) (then (global.set $eax (i32.const 0x8876086c)) (return)))
     (if (call $d3d9_is_texture_surface (local.get $arg0)) (then
       (global.set $eax (i32.const 0x8876086C)) (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
