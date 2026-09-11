@@ -862,6 +862,8 @@
   ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sincos---vs
   ;; https://learn.microsoft.com/en-us/windows-hardware/drivers/display/sincos-instruction
   (func $d3d_ir_arity20 (param $op i32) (result i32)
+    (if (i32.eq (local.get $op) (i32.const 47)) (then (return (i32.const 2))))
+    (if (i32.eq (local.get $op) (i32.const 48)) (then (return (i32.const 5))))
     (if (i32.eq (local.get $op) (i32.const 37)) (then (return (i32.const 4))))
     (if (i32.eq (local.get $op) (i32.const 34)) (then (return (i32.const 4))))
     (if (i32.eq (local.get $op) (i32.const 32)) (then (return (i32.const 3))))
@@ -900,6 +902,7 @@
     (local $firstconst i32) (local $firstinput i32) (local $constantreads i32) (local $key i32) (local $temps i64)
     (local $rows i32) (local $row i32) (local $vectorbank i32) (local $rowindex i32)
     (local $scratch1 i32) (local $scratch2 i32)
+    (local $definition i32)
     (global.set $d3d_ir_flags (i32.const 0))
     (local.set $at (i32.const 1))
     (block $done (loop $instructions
@@ -918,6 +921,8 @@
         (then (return (call $d3d_ir_fail (i32.const 3) (local.get $start)))))
       (local.set $arity (call $d3d_ir_arity20 (local.get $op)))
       (if (i32.lt_s (local.get $arity) (i32.const 0)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
+      (local.set $definition (i32.or (i32.eq (local.get $op) (i32.const 81))
+        (i32.or (i32.eq (local.get $op) (i32.const 47)) (i32.eq (local.get $op) (i32.const 48)))))
       (local.set $rows (i32.const 0))
       (if (i32.and (i32.ge_u (local.get $op) (i32.const 20)) (i32.le_u (local.get $op) (i32.const 24))) (then
         (local.set $rows (select (i32.const 4) (select (i32.const 2) (i32.const 3) (i32.eq (local.get $op) (i32.const 24)))
@@ -928,7 +933,7 @@
         (then (return (call $d3d_ir_fail (i32.const 4) (local.get $start)))))
       (if (i32.eq (local.get $op) (i32.const 31)) (then
         (if (local.get $executable) (then (return (call $d3d_ir_fail (i32.const 13) (local.get $start))))))
-        (else (if (i32.ne (local.get $op) (i32.const 81)) (then (local.set $executable (i32.const 1))))))
+        (else (if (i32.eqz (local.get $definition)) (then (local.set $executable (i32.const 1))))))
       (if (local.get $out) (then
         (if (i32.ge_u (local.get $n) (i32.load offset=16 (local.get $out)))
           (then (return (call $d3d_ir_fail (i32.const 11) (local.get $start)))))))
@@ -947,7 +952,7 @@
         (local.set $sel (i32.and (i32.shr_u (local.get $arg) (i32.const 16)) (i32.const 255)))
         (local.set $mod (i32.and (i32.shr_u (local.get $arg) (i32.const 24)) (i32.const 15)))
         (block $normalized
-          (if (i32.and (i32.eq (local.get $op) (i32.const 81)) (i32.ne (local.get $i) (i32.const 0))) (then
+          (if (i32.and (local.get $definition) (i32.ne (local.get $i) (i32.const 0))) (then
             (local.set $bank (i32.const 255)) (local.set $index (local.get $arg)) (local.set $sel (i32.const 0)) (local.set $mod (i32.const 0)) (br $normalized)))
           (if (i32.or (i32.ge_s (local.get $arg) (i32.const 0)) (i32.ne (i32.and (local.get $arg) (i32.const 0xc000)) (i32.const 0)))
             (then (return (call $d3d_ir_fail (i32.const 5) (i32.sub (local.get $at) (i32.const 1))))))
@@ -984,6 +989,16 @@
             (if (i32.eq (local.get $op) (i32.const 81)) (then
               (if (i32.or (i32.ne (local.get $bank) (i32.const 2)) (i32.or (i32.ge_u (local.get $index) (i32.const 256)) (i32.or (i32.ne (local.get $sel) (i32.const 15)) (local.get $mod))))
                 (then (return (call $d3d_ir_fail (i32.const 14) (local.get $start))))) (br $normalized)))
+            ;; Canonical full-mask typed definitions. Immediate raw words are
+            ;; never interpreted as parameter tokens or floating-point values.
+            ;; DEFB accepts any nonzero DWORD as TRUE; execution normalizes it.
+            (if (i32.or (i32.eq (local.get $op) (i32.const 47)) (i32.eq (local.get $op) (i32.const 48))) (then
+              (if (i32.or (i32.ne (local.get $bank)
+                    (select (i32.const 14) (i32.const 7) (i32.eq (local.get $op) (i32.const 47))))
+                  (i32.or (i32.ge_u (local.get $index) (i32.const 16))
+                    (i32.or (i32.ne (local.get $sel) (i32.const 15)) (local.get $mod))))
+                (then (return (call $d3d_ir_fail (i32.const 14) (local.get $start)))))
+              (br $normalized)))
             (if (i32.eq (local.get $op) (i32.const 46)) (then
               (if (i32.ne (local.get $arg) (i32.const 0xb0010000)) (then (return (call $d3d_ir_fail (i32.const 8) (local.get $start))))))
             (else
@@ -1119,7 +1134,7 @@
         (if (i32.and (i32.eq (local.get $dstbank) (i32.const 4)) (i32.eqz (local.get $dstindex)))
           (then (local.set $position (i32.or (local.get $position) (local.get $mask)))))
         (if (i32.eq (local.get $op) (i32.const 46)) (then (local.set $address (i32.const 1))))))
-      (if (i32.and (i32.ne (local.get $op) (i32.const 31)) (i32.ne (local.get $op) (i32.const 81))) (then
+      (if (i32.and (i32.ne (local.get $op) (i32.const 31)) (i32.eqz (local.get $definition))) (then
         (local.set $slots (i32.add (local.get $slots)
           (select (i32.const 8) (select (i32.const 3) (select (i32.const 2)
             (select (local.get $rows) (i32.const 1) (i32.ne (local.get $rows) (i32.const 0)))

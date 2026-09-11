@@ -28,6 +28,34 @@ const sign={stage:'vertex',version:0xfffe0200,instructions:[
 assert.throws(()=>Shader.compileIR(sign),/invalid D3D shader IR/);
 const signSource=Shader.compileIR(sign,{experimentalVS20:true}).source;
 assert(!/\br[23]\b/.test(signSource),'SGN scratch operands must not become GLSL value reads');
+const typed={stage:'vertex',version:0xfffe0200,instructions:[
+ {opcode:1,offset:1,args:[d(4),s(1)]},
+ {opcode:47,offset:2,args:[0xe00f080f,0]},
+ {opcode:48,offset:3,args:[0xf00f000f,0x80000000,0x7fffffff,0xffffffff,0]},
+ {opcode:47,offset:4,args:[0xe00f080f,0x80000000]},
+]};
+assert.throws(()=>Shader.compileIR(typed),/invalid D3D shader IR/);
+const typedSource=Shader.compileIR(typed,{experimentalVS20:true}).source;
+assert(typedSource.includes('const bool d3d_vs_b15 = true;'));
+assert(typedSource.includes('const highp ivec4 d3d_vs_i15 = ivec4((-2147483647 - 1), 2147483647, -1, 0);'));
+assert.strictEqual((typedSource.match(/const bool d3d_vs_b15/g)||[]).length,1,'last definition wins');
+assert(typedSource.indexOf('const bool')<typedSource.indexOf('void main()'),'definitions are hoisted');
+for(const value of[-1,.5,0x100000000,NaN]){
+ const malformed={...typed,instructions:[typed.instructions[0],{opcode:48,offset:2,args:[0xf00f0000,value,0,0,0]}]};
+ assert.throws(()=>Shader.compileIR(malformed,{experimentalVS20:true}),/invalid DEFI/);
+}
+for(const source of[0xe0e40800,0xf0e40000]){
+ const ordinary={...typed,instructions:[typed.instructions[0],{opcode:1,offset:2,args:[d(0),source]}]};
+ assert.throws(()=>Shader.compileIR(ordinary,{experimentalVS20:true}),/register/,'typed constants are not float arithmetic sources');
+}
+for(const token of[0xe00f0810,0xe0010800,0xe01f0800,0x800f0000]){
+ const bad={...typed,instructions:[typed.instructions[0],{opcode:47,offset:2,args:[token,1]}]};
+ assert.throws(()=>Shader.compileIR(bad,{experimentalVS20:true}),/invalid DEFB/);
+}
+for(const token of[0xf00f0010,0xf0010000,0xf01f0000,0xa00f0000]){
+ const bad={...typed,instructions:[typed.instructions[0],{opcode:48,offset:2,args:[token,0,0,0,0]}]};
+ assert.throws(()=>Shader.compileIR(bad,{experimentalVS20:true}),/invalid DEFI/);
+}
 // The projection option is explicit and does not open the production handoff.
 const bytes=new Uint32Array(8);bytes.set([0x44534952,1,0,0xfffe0200,0,2,32,0]);
 assert.throws(()=>IR.read(bytes.buffer,0),/layout bounds/);
@@ -162,11 +190,20 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     {name:'sincos positive half pi X',op:37,mask:1,input:[Math.PI/2,0,0,0],expected:[.5,.65,.7,.8]},
     {name:'sincos negative half pi Y',op:37,mask:2,input:[-Math.PI/2,0,0,0],expected:[.6,0,.7,.8]},
     {name:'sincos W swizzle and NEG',op:37,mask:3,swizzle:255,negate:true,input:[9,9,9,Math.PI/2],expected:[.5,0,.7,.8]},
+    {name:'typed definitions false and signed integers',op:47,boolean:0,ints:[-3,2,0,1],expected:[0,1,1,1]},
+    {name:'typed definitions noncanonical true and signed integers',op:47,boolean:0x80000000,ints:[3,-2,0,-1],expected:[1,1,1,1]},
    ];
    for(const version of[1,2])for(const fixture of fixtures){
     const instructions=[{opcode:1,offset:1,args:[0xc00f0000,0x90e40000]}];
     const src=(0x90000001|((fixture.swizzle??([32,37].includes(fixture.op)?0:228))<<16)|(fixture.negate?0x01000000:0))>>>0;
-    if(fixture.op===32){
+    if(fixture.op===47){
+     instructions.push({opcode:1,offset:2,args:[0xd00f0000,0x90e40001]},
+      {opcode:47,offset:3,args:[0xe00f080f,fixture.boolean?0:1]},
+      {opcode:48,offset:4,args:[0xf00f000f,0,0,0,0]},
+      // Definitions following executable instructions still hoist; last wins.
+      {opcode:47,offset:5,args:[0xe00f080f,fixture.boolean]},
+      {opcode:48,offset:6,args:[0xf00f000f,...fixture.ints.map(v=>v>>>0)]});
+    }else if(fixture.op===32){
      instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
       {opcode:32,offset:3,args:[0x80000000|((fixture.mask??15)<<16),src,(0xa0ff0003|(fixture.exponentNegate?0x01000000:0))>>>0]},
       fixture.infinite?{opcode:12,offset:4,args:[0xd00f0000,0xa0e40000,0x80e40000]}:
@@ -197,6 +234,12 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
       {opcode:2,offset:4,args:[0xd00f0000,0x80e40001,0xa0e40001]});
     }
     let vs=D3D9Shader.compileIR({stage:'vertex',version:0xfffe0200,instructions},{experimentalVS20:true}).source;
+    if(fixture.op===47){
+     // Test-only consumer until real flow instructions are admitted. Compare
+     // small exact integers as integers, not through a float conversion.
+     const witness=`d3d_color0 = vec4(d3d_vs_b15 ? 1.0 : 0.0, d3d_vs_i15.x == ${fixture.ints[0]} ? 1.0 : 0.0, d3d_vs_i15.y == ${fixture.ints[1]} ? 1.0 : 0.0, all(equal(d3d_vs_i15.zw, ivec2(${fixture.ints[2]}, ${fixture.ints[3]}))) ? 1.0 : 0.0);`;
+     vs=vs.replace(/\}\s*$/,witness+'\n}');
+    }
     let ps='precision highp float; varying vec4 d3d_color0; void main(){gl_FragColor=d3d_color0;}';
     // Keep the second scale across the raster interface: a driver can legally
     // reassociate two VS products into a subnormal multiplier and flush it.
@@ -213,7 +256,7 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
     gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,0,1,3,-1,0,1,-1,3,0,1]),gl.STATIC_DRAW);
     const position=gl.getAttribLocation(p,'d3d_v0');gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,4,gl.FLOAT,false,0,0);
-    const input=gl.getAttribLocation(p,'d3d_v1');gl.disableVertexAttribArray(input);gl.vertexAttrib4f(input,...fixture.input);
+    const input=gl.getAttribLocation(p,'d3d_v1');if(input>=0){gl.disableVertexAttribArray(input);gl.vertexAttrib4f(input,...(fixture.input||[0,0,0,0]));}
     const scalar=(n,x)=>gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c'+n),x,x,x,x);
     scalar(0,fixture.op===32?(fixture.infinite?3.4028234663852886e38:fixture.scale??1):[33,34,37].includes(fixture.op)?.5:fixture.zero?1e-37:.25);
     scalar(1,[33,34,37].includes(fixture.op)?.5:fixture.zero?.025:fixture.bias);
@@ -234,6 +277,6 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
   });
   for(const result of vectorResults){assert.strictEqual(result.error,0);result.pixels.forEach((actual,i)=>
    assert(Math.abs(actual-result.expected[i%4])<=1,JSON.stringify({result,i,actual})));}
-  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' CRS/NRM/POW/SGN/SINCOS actual WebGL1/2 pixel cases');
+  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' vector/typed-definition actual WebGL1/2 pixel cases');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

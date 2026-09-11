@@ -52,7 +52,42 @@ const { bootRenderHarness } = require('./render-helper');
     coefficients.forEach((values,index)=>values.forEach((value,component)=>
       f.fill(value,register(ctx,2,254+index)+component*4,register(ctx,2,254+index)+component*4+4)));
   }
-  assert.strictEqual(e.d3d_shader_vm_context_bytes(), 73760);
+  for (const lanes of [15,5]) for(let index=0;index<16;index++) {
+    const words=[0x80000000,0x7fffffff,0x7fc00000,0xffffffff];
+    const raw=word=>operand(255,word,0,0);
+    const program=compile([
+      ins(1,dst(0),constant(0)),
+      ins(47,operand(14,index,15),raw(0)),
+      ins(48,operand(7,index,15),...words.map(raw)),
+      ins(47,operand(14,index,15),raw(index%2?0x80000000:0))
+    ]);
+    const ctx=e.d3d_shader_vm_context(program,lanes);assert(ctx);
+    assert.strictEqual(e.d3d_shader_vm_context_bytes(),74080);
+    assert(u.slice((ctx+73760)/4,(ctx+74080)/4).every(v=>v===0));
+    assert.deepStrictEqual(Array.from({length:4},(_,i)=>u[(program+16+i*64)/4]),[60,61,60,0]);
+    u.fill(123,(ctx+73760)/4,(ctx+74080)/4);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),1);
+    assert.strictEqual(u[(ctx+74016)/4+index],0);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),1);
+    assert.deepStrictEqual(Array.from(u.slice((ctx+73760)/4+index*4,(ctx+73760)/4+index*4+4)),words);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,2),0);
+    assert.strictEqual(u[(ctx+74016)/4+index],index%2);
+    const fresh=e.d3d_shader_vm_context(program,lanes);assert(fresh);
+    assert(u.slice((fresh+73760)/4,(fresh+74080)/4).every(v=>v===0));
+    release(fresh,ctx,program);cases++;
+  }
+  assert.strictEqual(e.d3d_shader_vm_context_bytes(), 74080);
+  for(const opcode of [47,48]) {
+    const bank=opcode===47?14:7;
+    const definition=()=>ins(opcode,operand(bank,0,15),...Array.from({length:opcode===47?1:4},()=>operand(255,0xffffffff,0,0)));
+    for(const [arg,field,value] of [[0,0,2],[0,1,16],[0,2,1],[0,3,1],[1,0,2],[1,2,1],[1,3,1]]) {
+      const item=definition();item.operands[arg][field]=value;
+      const p=ir([item]);assert.strictEqual(e.d3d_shader_vm_compile_vs20(p),0);
+      release(p);cases++;
+    }
+    const p=ir([definition()],0xfffe0101);
+    assert.strictEqual(e.d3d_shader_vm_compile(p),0);release(p);cases++;
+  }
   for (const mask of [1,2,3]) for (const lanes of [15,5])
   for (const selector of [0,85,170,255]) for (const negate of [0,1]) {
     const destination = 1;

@@ -1866,3 +1866,37 @@ Same-IR69392 PASS138 GL1/2 frames against69 native frames. Nine new cases cover
 comparisons use the explicit2e-6 arithmetic tolerance. Every older position
 check remains exact. VM68401 repeats1520 PASS with Taylor-derived coefficient
 vectors seeded. Full profiles, flow control and changing gameplay remain open.
+
+Private typed-definition follow-up: DEFB47 and DEFI48 now retain raw DWORD
+immediates in the shared IR and lower to software packets60/61 or GLSL typed
+constants. Definitions are stably hoisted with last-definition precedence and
+consume zero guest instruction slots. The private canonical subset requires
+full destination selector15, no modifier, and b0..15/i0..15; this is not a claim
+that every other native DEFB mask encoding is invalid. Boolean execution maps
+any nonzero DWORD to TRUE; integer definitions preserve signed32 bits, including
+INT_MIN and words that would be NaNs if interpreted as floating point.
+
+The software context appends320 uniform bytes (i registers at73760, b at74016,
+total74080), leaving all previous offsets unchanged. Definitions execute through
+the same bounded packet retirement/cancellation loop; inactive invocation lanes
+do not partially initialize uniform constants. New contexts default to zero.
+GLSL uses const bool/highp ivec4 and a safe INT_MIN literal expression. API
+integer/boolean constant uploads and control-flow consumers remain unfinished;
+the rendered tests use explicit test-only witnesses, not newly admitted typed
+arithmetic. WebGL1 full32 integer execution precision is not established.
+
+Evidence: native RED95562 rejected the missing opcode;36355 PASS1568 including
+all16 indices, exact raw words, malformed operands, late/duplicate definitions,
+one-packet resumption, context isolation and legacy rejection. Legacy VM263 and
+software pipeline76330 PASS351 remain green. Decoder23564 PASS84 baseline and
+100 typed cases; adjacent arithmetic/matrix/vector/POW/SGN/SINCOS suites pass.
+Actual GL1/2 run41089 PASS94 includes four new typed-definition witnesses.
+Independent native review found no concrete defect. Full12282 PASS canonical
+1165086 / compat1165554 with unchanged layout9c6027bce1d500a1 and no data
+overlaps. Public VS2 admission, full profile coverage and gameplay remain open.
+Reader review additionally found that projection discarded noncanonical typed
+immediate selector/modifier fields. The private typed reader now rejects those
+fields (legacy DEF unchanged); RED missing-exception ->35637 PASS typed100 plus
+raw-reader rejection fixtures. Same-IR regression86702 PASS138 actual GL1/2
+frames versus69 native frames; these are the existing arithmetic/raster cases,
+not typed control-flow acceptance.
