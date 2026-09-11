@@ -114,6 +114,13 @@ const ENV_WASM = process.env.WINE_ASSEMBLY_WASM || '';
 const NO_BUILD = hasFlag('no-build') || !!ENV_WASM; // --no-build: skip auto-build
 const NO_CLOSE = hasFlag('no-close');      // --no-close: don't inject WM_CLOSE
 const NO_RENDERER = hasFlag('no-renderer'); // --no-renderer: skip CLI canvas/renderer (guest-state diagnostics)
+// Experimental programmable D3D9 software path; no DOM or GL provider needed.
+// Keep capability opt-in separate: the implementation is not a full SM profile.
+const D3D9_RENDERER = getArg('d3d9-renderer', null);
+const D3D9_PROGRAMMABLE = hasFlag('d3d9-programmable');
+if (D3D9_RENDERER !== null && D3D9_RENDERER !== 'software') {
+  throw new Error('CLI --d3d9-renderer currently supports software only; WebGL requires a browser/provider');
+}
 const NO_MMX = hasFlag('no-mmx');          // --no-mmx: report a 486DX from CPUID so guests take scalar paths
 const DUMP_GDI = getArg('dump-gdi', null); // --dump-gdi=DIR: dump GDI bitmaps as PNGs
 const DUMP_DDRAW = getArg('dump-ddraw-surfaces', null); // --dump-ddraw-surfaces=DIR: dump DirectDraw surface DIBs as PNGs
@@ -251,6 +258,32 @@ const NO_CASE_CHAIN = hasFlag('no-case-chain');
 const NO_RLE_RUN = hasFlag('no-rle-run');
 // --loopmatch-stats: print the self-loop/match counts at exit.
 const LOOPMATCH_STATS = hasFlag('loopmatch-stats');
+// --tree-fold: the general decode-time integer-expression fold, H448.
+// docs/tree-fold-design-a.md. OFF by default, so this is the only way to turn
+// it on -- and, like every other decode-time gate, it has to reach every
+// per-thread instance or the A/B measures two different decoders.
+// --tree-fold-min-ops=N lowers or raises the interior-op floor (default 4).
+// --tree-fold-max-ops=N lowers or raises the ceiling (default 160, clamped in
+// WAT to the structural limit; see $TREE_FOLD_UOPS_LIMIT). The default is not
+// a throughput guess -- tools/bench-loops.js tree_len8..tree_len160 found no
+// crossover at any length -- so this exists to A/B a SHORTER cap, e.g. to ask
+// what one app's long bodies are actually contributing.
+const TREE_FOLD = hasFlag('tree-fold');
+// --trace-tree-fold: dump every lowered TREE_FOLD block's classified micro-op
+// list (entry EIP, terminator, per-uop kind/dst/src/imm/handler/b) through the
+// decode-time log_i32 channel. Consumed by tools/tree-shape-census.js, which
+// joins it against a --hot-block-dump to weight each shape by hit count.
+// Implies --tree-fold, since only a lowered block writes the descriptor.
+const TRACE_TREE_FOLD = hasFlag('trace-tree-fold');
+if (TRACE_TREE_FOLD) process.env.DBG_INV = '1';
+const TREE_FOLD_MIN_OPS = (() => {
+  const v = getArg('tree-fold-min-ops', null);
+  return v === null ? null : (parseInt(v, 10) | 0);
+})();
+const TREE_FOLD_MAX_OPS = (() => {
+  const v = getArg('tree-fold-max-ops', null);
+  return v === null ? null : (parseInt(v, 10) | 0);
+})();
 const TRACE_GDI = hasFlag('trace-gdi');   // --trace-gdi: log GDI calls (CreateBitmap, BitBlt, etc.)
 const GDI_STATS = hasFlag('gdi-stats');   // --gdi-stats: print software-raster span/pixel totals at exit
 const LATENCY_STATS = hasFlag('latency-stats'); // --latency-stats: measure injected input -> next surface blit
@@ -800,6 +833,7 @@ const RPC_CENSUS = hasFlag('rpc-census'); // --rpc-census: with --threads, per-t
 // node alive, so a run that ends — cleanly or by throwing — would otherwise hang
 // instead of reporting.
 let workerThreadHost = null;
+let closeD3DRender = null;
 // --wait-slices=N: worker slices per batch while the MAIN thread is parked in a
 // blocking wait a worker has to satisfy. Nothing else can run then, so this is
 // much larger than THREAD_SLICES; set it to THREAD_SLICES to turn the boost off.
@@ -1963,6 +1997,16 @@ async function main() {
   const apiByName = new Map(apiTable.map(e => [e.name, e]));
   const ctx = {
     getMemory: () => ctx._memory ? ctx._memory.buffer : null,
+    d3d9Backend: D3D9_RENDERER || 'webgl',
+    d3d9Programmable: D3D9_PROGRAMMABLE || APP_ENTRY?.d3d9Programmable === true,
+    createD3DRenderWorker: () => {
+      const {Worker} = require('worker_threads');
+      const {WorkerConsumer} = require('../lib/d3d-command-stream');
+      const sigs = JSON.parse(fs.readFileSync(path.join(ROOT,'lib','host-import-sigs.generated.json'),'utf8')).sigs;
+      return new WorkerConsumer(new Worker(path.join(ROOT,'lib','d3d-render-worker.js')),
+        {module:wasmModule,memory,sigs,imageBase:instance.exports.get_image_base() >>> 0,
+          reclaimHeap:head=>instance.exports.d3d_render_adopt_free_list(head)});
+    },
     renderer,
     processId: 1000,
     apiTable,
@@ -2044,6 +2088,7 @@ async function main() {
     },
   };
   const base = createHostImports(ctx);
+  closeD3DRender = () => ctx.closeD3DRender();
   if (ctx.vfs) {
     ctx.vfs.dirs.add('c:\\windows');
     ctx.vfs.dirs.add('c:\\windows\\system');
@@ -3155,7 +3200,7 @@ async function main() {
   // before this line but only ever fires during the batch loop, long after it.
   DX_LOCK_PAUSE.clock = batchClock;
   VBLANK.clock = batchClock;
-  ctx.sharedAudio.audioClockMs = () => (tickState.batch * TICK_MS_PER_BATCH) | 0;
+  ctx.sharedAudio.audioClockMs = () => batchClock.batchTicks();
   // --real-ticks hands the guest the wall clock instead. Two emulator
   // processes in one room CANNOT share a batch-driven clock: a batch is not a
   // unit of time and each process runs them at its own rate, so an idle Hearts
@@ -3627,6 +3672,7 @@ async function main() {
     // audio device, the GDI handles — comes from one shared list, so the two
     // hosts cannot quietly disagree about what a thread inherits.
     const workerCtx = Object.assign(processSharedCtx(ctx), {
+      d3d9Bridge: ctx.d3d9Bridge,
       getMemory: () => memory.buffer,
       renderer,
       onExit: () => {},
@@ -3910,6 +3956,13 @@ async function main() {
   if (NO_RECT_RUN) inheritWasm('set_rect_run', 0);
   if (NO_CASE_CHAIN) inheritWasm('set_case_chain', 0);
   if (NO_RLE_RUN) inheritWasm('set_rle_run', 0);
+  if (TREE_FOLD || TRACE_TREE_FOLD) inheritWasm('set_tree_fold', 1);
+  if (TRACE_TREE_FOLD) inheritWasm('set_tree_trace', 1);
+  // The thresholds too: a guest thread decodes in its own instance, so a cap
+  // set only on the main instance leaves the workers folding by a different
+  // rule and the --threads arm of an A/B compares two decoders.
+  if (TREE_FOLD_MIN_OPS !== null) inheritWasm('set_tree_fold_min_ops', TREE_FOLD_MIN_OPS);
+  if (TREE_FOLD_MAX_OPS !== null) inheritWasm('set_tree_fold_max_ops', TREE_FOLD_MAX_OPS);
 
   threadManager = new ThreadManager(wasmModule, memory, instance, makeWorkerImports, {
     workerBackend: guestThreadHost,
@@ -3929,6 +3982,7 @@ async function main() {
     // read synchronously, so this mostly matters to tests that mount an
     // async provider to mimic the browser's File-backed ISO reads.
     getVfs: () => ctx.vfs || null,
+    onRenderWait: token => ctx.waitD3DRender(token),
     hasMessage: () => !!(
       inputEvent ||
       (crossThreadMsgs && crossThreadMsgs.length) ||
@@ -4802,6 +4856,21 @@ async function main() {
   if (NO_RLE_RUN && instance.exports.set_rle_run) {
     instance.exports.set_rle_run(0);
   }
+  if ((TREE_FOLD || TRACE_TREE_FOLD) && instance.exports.set_tree_fold) {
+    instance.exports.set_tree_fold(1);
+  }
+  if (TRACE_TREE_FOLD && instance.exports.set_tree_trace) {
+    instance.exports.set_tree_trace(1);
+  }
+  // The floor applies whether or not the fold is armed: with it off, the
+  // matcher still counts what it WOULD have taken, and that census is only
+  // meaningful if both arms use the same threshold.
+  if (TREE_FOLD_MIN_OPS !== null && instance.exports.set_tree_fold_min_ops) {
+    instance.exports.set_tree_fold_min_ops(TREE_FOLD_MIN_OPS);
+  }
+  if (TREE_FOLD_MAX_OPS !== null && instance.exports.set_tree_fold_max_ops) {
+    instance.exports.set_tree_fold_max_ops(TREE_FOLD_MAX_OPS);
+  }
   if (TRACE_FPU && instance.exports.set_fpu_trace) {
     instance.exports.set_fpu_trace(1);
   }
@@ -4980,9 +5049,24 @@ async function main() {
   // callback: Heroes II hung ten batches after its main menu this way. host.js
   // has always made this exemption (_isMainExecutionSuspended); the CLI has to
   // agree or the browser and the harness run different schedulers.
+  let mainRenderWait = null;
   const mainExecutionSuspended = () => {
-    if (!threadManager.isMainThreadSuspended()) return false;
     const ex = instance.exports;
+    if (ex.get_yield_reason() === 16) {
+      const token = ex.get_d3d_render_token() | 0;
+      if (!mainRenderWait || mainRenderWait.token !== token) {
+        const wait = {token,done:false}; mainRenderWait = wait;
+        wait.promise = Promise.resolve().then(() => ctx.waitD3DRender(token))
+          .catch(error => console.error('[render]',error))
+          .then(() => { wait.done = true; });
+      }
+      if (!mainRenderWait.done) return true;
+      mainRenderWait = null; ex.clear_yield();
+    }
+    if (threadManager._renderSendTargets.has(ex)) return true;
+    if (ex.get_yield_reason() === 10 && (threadManager.backend === 'worker' ||
+        !threadManager.resolveCooperativeThreadSend(ex))) return true;
+    if (!threadManager.isMainThreadSuspended()) return false;
     return !(ex.is_mm_timer_callback_active && (ex.is_mm_timer_callback_active() | 0));
   };
 
@@ -5217,7 +5301,7 @@ async function main() {
         ? { w: renderer.canvas.width | 0, h: renderer.canvas.height | 0 } : null,
       frozen: {
         frozen: controlFrozen,
-        tickMs: TICK_MS_PER_BATCH,
+        tickMs: batchClock.getTickMsPerBatch(),
         credits: controlRunCredits,
         recording: !!videoRecorder,
       },
@@ -5297,15 +5381,25 @@ async function main() {
         }
         wakeControlLoop();
       }
-      return { frozen: controlFrozen, batch: tickState.batch | 0, tickMs: TICK_MS_PER_BATCH };
+      return { frozen: controlFrozen, batch: tickState.batch | 0,
+        tickMs: batchClock.getTickMsPerBatch() };
+    }
+    if (cmd.action === 'tick') {
+      if (!controlFrozen) throw new Error('tick requires frozen mode');
+      if (videoRecorder) throw new Error('cannot change tick cadence while recording');
+      const ms = Number(cmd.ms);
+      if (!Number.isFinite(ms) || ms <= 0) throw new Error('tick needs a positive finite ms value');
+      batchClock.setTickMsPerBatch(ms);
+      return { batch: tickState.batch | 0, tickMs: batchClock.getTickMsPerBatch(),
+        guestMs: batchClock.batchTicks() };
     }
     if (cmd.action === 'step') {
       if (!controlFrozen) throw new Error('step requires frozen mode (launch with --frozen or send frozen on)');
       if (controlStepWaiter) throw new Error('another step command is still running');
       const n = cmd.n === undefined ? 1 : Number(cmd.n);
       if (!Number.isInteger(n) || n < 1) throw new Error('step needs a positive integer n');
-      if (cmd.ms !== undefined && Number(cmd.ms) !== TICK_MS_PER_BATCH) {
-        throw new Error(`CLI tick size is fixed at launch (${TICK_MS_PER_BATCH}ms); use --tick-ms-per-batch=${Number(cmd.ms)}`);
+      if (cmd.ms !== undefined && Number(cmd.ms) !== batchClock.getTickMsPerBatch()) {
+        throw new Error(`CLI tick size is ${batchClock.getTickMsPerBatch()}ms; requested ${Number(cmd.ms)}ms`);
       }
       controlRunCredits += n;
       wakeControlLoop();
@@ -5339,17 +5433,18 @@ async function main() {
       const out = hasVideoExt ? path.resolve(rawName) : path.resolve('recordings', `${safeName}.mp4`);
       videoEvery = every;
       videoStartBatch = tickState.batch | 0;
-      const derivedFps = TICK_MS_PER_BATCH > 0 ? 1000 / (TICK_MS_PER_BATCH * every) : VIDEO_FPS;
+      const tickMs = batchClock.getTickMsPerBatch();
+      const derivedFps = tickMs > 0 ? 1000 / (tickMs * every) : VIDEO_FPS;
       videoRecorder = new CliVideoRecorder(renderer.canvas, {
         path: out,
         fps: derivedFps,
         ffmpeg: FFMPEG_PATH,
-        startGuestMs: (tickState.batch | 0) * TICK_MS_PER_BATCH,
+        startGuestMs: batchClock.batchTicks(),
       });
       return { recording: true, ...videoRecorder.summary(), everyNSteps: videoEvery };
     }
     const entry = String(cmd.cmd || '');
-    if (!entry) throw new Error('need {cmd:"action:args"} or action: ping|snapshot|eval|png|input-message|frozen|step|record|quit');
+    if (!entry) throw new Error('need {cmd:"action:args"} or action: ping|snapshot|eval|png|input-message|frozen|tick|step|record|quit');
     // A frozen CLI is already at a coherent between-batches boundary. Capture
     // there instead of queueing a png action that cannot execute until a
     // later `step` (ctl.js checks that the file exists before it returns).
@@ -5418,6 +5513,7 @@ async function main() {
     return { close() { if (server) server.close(); } };
   })() : null;
 
+  const executionStartedAt = performance.now();
   for (let batch = 0; batch < MAX_BATCHES && !stopped; batch++) {
     if (deadlineMs && Date.now() >= deadlineMs) {
       console.log(`[max-seconds] stopping after ${MAX_SECONDS}s at batch ${batch}`);
@@ -7660,7 +7756,13 @@ async function main() {
           : ((renderer._mouseButtonsMask || 0) & ~mask);
         if (!renderer._asyncPressedKeys) renderer._asyncPressedKeys = Object.create(null);
         if (down) renderer._asyncPressedKeys[vk] = true;
-        if (wasDown !== down && renderer._queueDirectInputMouseButton) {
+        // A frozen control command is queued until the next step, while eval
+        // and recovery commands run immediately at the parked boundary. If
+        // one of those clears the host mask before this mouse-up executes,
+        // wasDown is already false even though the guest DirectInput device
+        // still holds the preceding press. Always forward synthetic releases:
+        // an extra up record is harmless, but omitting it leaves games firing.
+        if ((!down || wasDown !== down) && renderer._queueDirectInputMouseButton) {
           renderer._queueDirectInputMouseButton(
             renderer._pointerInputMemory || renderer.wasmMemory, mask, down);
         }
@@ -8244,6 +8346,11 @@ async function main() {
         && ((batch - videoStartBatch) % videoEvery) === 0) {
       for (const pump of audioTapPumps) { try { pump(); } catch (_) {} }
       presentDxIfDirty(0);   // a recorded frame is a capture, not a live view
+      // DirectDraw presents schedule the desktop composite. A sparse
+      // --repaint-every value must not make the recorder repeatedly sample the
+      // previous screen canvas while the guest's surface advances underneath.
+      // Frozen PNG capture uses this same forced publication boundary.
+      if (renderer && typeof renderer.repaint === 'function') renderer.repaint();
       await videoRecorder.capture(renderer.canvas);
     }
     if (TRACE_BATCH_TIMING) {
@@ -8415,6 +8522,7 @@ async function main() {
       }
       instance.exports.clear_yield();
     }
+    if (instance.exports.get_yield_reason() === 16) mainExecutionSuspended();
 
     // Handle the vertical-blank yield (yield_reason=13). A DirectDraw call
     // parked with its stdcall frame intact and EIP on the thunk, so advancing
@@ -8466,7 +8574,7 @@ async function main() {
         const deadline = (spinYield === 14 && instance.exports.get_spin_deadline_ms)
           ? instance.exports.get_spin_deadline_ms() >>> 0 : 0;
         let owed = 0;
-        if (spinYield === 14 && TICK_MS_PER_BATCH <= 0) {
+        if (spinYield === 14 && batchClock.getTickMsPerBatch() <= 0) {
           owed = ((deadline + 1) - batchClock.batchTicks()) | 0;
           if (owed > 0) tickState.pausedMs += owed; else owed = 0;
         }
@@ -8574,7 +8682,7 @@ async function main() {
       // worker reads them out of its control block without a round trip, and this
       // is the only thread that knows them.
       guestThreadHost.broker.publish({
-        tickMs: tickState.batch * 200,
+        tickMs: batchClock.batchTicks(),
         inputPending: (inputQueue ? inputQueue.length : 0)
           + (renderer && renderer.inputQueue ? renderer.inputQueue.length : 0),
       });
@@ -8600,7 +8708,7 @@ async function main() {
         // --threads-serial means nothing runs beside a guest thread, main
         // included, or the switch would not answer the question it exists for.
         if (THREADS_SERIAL) await workerSlices;
-        else if (s < THREAD_SLICES - 1 && !stopped) {
+        else if (s < THREAD_SLICES - 1 && !stopped && !mainExecutionSuspended()) {
           // Main keeps running WHILE they do — the CLI's version of host.js
           // awaiting the main slice and the thread slices together.
           try { instance.exports.run(BATCH_SIZE); } catch (e) { /* reported below */ }
@@ -8681,6 +8789,10 @@ async function main() {
         await new Promise(resolve => setImmediate(resolve));
       }
     }
+    // Render worker replies also require a real event-loop turn; Promise-only
+    // CLI batches starve message delivery even though their guest is parked.
+    if (ctx.d3d9Bridge && ctx.d3d9Bridge.requests.size)
+      await new Promise(resolve => setImmediate(resolve));
     // A parked socket call is not the only way to be waiting on the wire. An
     // app using WSAAsyncSelect never blocks in winsock at all: it sits in its
     // message pump expecting to be told, so nothing above would ever yield and
@@ -8774,6 +8886,12 @@ if (VERBOSE) {
         prevApiCount = apiCount;
         prevRegFp = regFp;
         stuckCount = 0;
+      } else if (ex.get_yield_reason() === 16 && ctx.d3d9Bridge &&
+          ctx.d3d9Bridge.requests.has(ex.get_d3d_render_token() | 0)) {
+        // The render worker owns a live continuation. An unchanged guest CPU
+        // while it runs is intentional; normal wall deadlines still apply.
+        // Do not exempt an orphaned yield with no corresponding request.
+        stuckCount = 0;
       } else if (ex.win16_pump_parked && ex.win16_pump_parked()) {
         // A 16-bit modal dialog or message box with no message to handle waits
         // on a continuation slot with every register unchanged. That is the
@@ -8820,6 +8938,7 @@ if (VERBOSE) {
       }
     }
   }
+  const executionElapsedSeconds = Math.max(0, (performance.now() - executionStartedAt) / 1000);
   // The control server would otherwise hold the process open; unref lets a
   // reply resolved in the final batch still flush while the exit path prints.
   if (control) control.close();
@@ -8992,6 +9111,30 @@ if (VERBOSE) {
           e.get_loop_lut16_matches(), 'runs', e.get_loop_lut16_runs(),
           'pixels', String(e.get_loop_lut16_bytes()));
       }
+      if (e.get_tree_fold_runs) {
+        // `matches` is blocks the predicate accepted, counted even with the
+        // gate off; `runs` is entries into the super-op; `iters` is guest
+        // iterations executed inside it; `ops` is the guest ops those
+        // iterations stand for -- that last one is the number to compare
+        // against a --handler-hist total to get the share of work caught.
+        console.log(`loopmatch: ${label} TREE_FOLD blocks`,
+          e.get_tree_fold_matches(), 'armed', e.get_tree_fold() ? 'yes' : 'no',
+          'runs', e.get_tree_fold_runs(),
+          'iters', String(e.get_tree_fold_iters()),
+          'ops', String(e.get_tree_fold_ops()),
+          // Micro-ops whose $set_flags_* call the dead-flag pass removed,
+          // summed over every lowering. Decode-time, so it says how much of
+          // the folded CODE was flag-dead, not how hot that code was.
+          'deadflag', e.get_tree_fold_dead_flag_ops
+            ? e.get_tree_fold_dead_flag_ops() : 0);
+        // The decline split. A match rate alone cannot say what to widen; this
+        // names the barrier, and `lastFn` names one handler that hit it.
+        console.log(`loopmatch: ${label} TREE_FOLD declines short`,
+          e.get_tree_decl_short(), 'long', e.get_tree_decl_long(),
+          'terminator', e.get_tree_decl_term(),
+          'unfoldable-op', e.get_tree_decl_uop(),
+          'lastFn', e.get_tree_decl_uop_fn());
+      }
       if (e.get_lut_span_runs) {
         console.log(`loopmatch: ${label} fixed LUT spans`,
           e.get_lut_span_matches(), 'runs', e.get_lut_span_runs(),
@@ -9098,7 +9241,7 @@ if (VERBOSE) {
   }
 
   console.log(`\nStats: ${apiCount} API calls, ${batchesRun} batches`
-    + (MAX_SECONDS ? ` in ${MAX_SECONDS}s (${(batchesRun / MAX_SECONDS).toFixed(0)} batches/s)` : ''));
+    + ` in ${executionElapsedSeconds.toFixed(3)}s (${(batchesRun / Math.max(executionElapsedSeconds,0.001)).toFixed(0)} batches/s)`);
   reportMmx();
   reportGuestPageStats();
 
@@ -9933,11 +10076,15 @@ if (VERBOSE) {
   }
 
   if (workerThreadHost) workerThreadHost.stop();
+  if (closeD3DRender) await closeD3DRender();
 }
 
-main().catch(e => {
+main().catch(async e => {
   console.error(e);
   // Exit code deliberately unchanged; the threads have to be stopped either way
   // or node waits on them forever and the error above never gets read.
   if (workerThreadHost) workerThreadHost.stop();
+  if (closeD3DRender) {
+    try { await closeD3DRender(); } catch (error) { console.error('[render] retirement failed:',error); }
+  }
 });

@@ -105,6 +105,10 @@
   ;; check_input_wparam() → full wParam of last event (packed check_input keeps only 16 bits)
   (import "host" "check_input_hwnd" (func $host_check_input_hwnd (result i32)))
   ;; check_input_hwnd() → hwnd of last check_input event (0 = use main_hwnd)
+  (import "host" "queue_keyboard_input" (func $host_queue_keyboard_input (param i32 i32 i32 i32 i32) (result i32)))
+  ;; queue_keyboard_input(vk, scan, flags, extraInfo, hwnd) → accepted. The
+  ;; result makes Worker brokerage synchronous so an immediate PeekMessage
+  ;; cannot outrun the synthesized input event.
   (import "host" "get_mouse_position" (func $host_get_mouse_position (result i32)))
   ;; get_mouse_position() → packed x | (y << 16), in renderer/source coords
   (import "host" "set_mouse_position" (func $host_set_mouse_position (param i32 i32)))
@@ -696,6 +700,8 @@
   ;; ini_get_int(appNameWA, keyNameWA, nDefault, fileNameWA, isWide) → int value
   (import "host" "ini_write_string" (func $host_ini_write_string (param i32 i32 i32 i32 i32) (result i32)))
   ;; ini_write_string(appNameWA, keyNameWA, valueWA, fileNameWA, isWide) → BOOL
+  (import "host" "ini_write_section" (func $host_ini_write_section (param i32 i32 i32 i32) (result i32)))
+  ;; ini_write_section(appNameWA, stringsWA, fileNameWA, isWide) -> Win32 error
 
   (import "host" "get_window_client_size" (func $host_get_window_client_size (param i32) (result i32)))
   ;; get_window_client_size(hwnd) → (clientW | (clientH << 16))
@@ -2818,8 +2824,16 @@
   (global $wndclass_bg_brush (mut i32) (i32.const 0)) ;; hbrBackground from first RegisterClass
   (global $wndclass_style (mut i32) (i32.const 0))    ;; class style from first RegisterClass
   ;; (removed: $window_dc_hwnd — hwnd is now encoded in DC handle)
-  (global $cbt_hook_proc (mut i32) (i32.const 0))     ;; CBT hook proc address (from SetWindowsHookExA WH_CBT)
-  (global $keyboard_hook_proc (mut i32) (i32.const 0)) ;; thread WH_KEYBOARD proc; called as queued key messages are retrieved
+  ;; USER hook chains. The *_proc globals mirror each live head for the many
+  ;; cheap "is a hook installed?" tests in window dispatch; the node globals
+  ;; are opaque guest HHOOK values. Nodes are heap-backed HookNode records.
+  (global $cbt_hook_proc (mut i32) (i32.const 0))
+  (global $keyboard_hook_proc (mut i32) (i32.const 0))
+  (global $cbt_hook_head (mut i32) (i32.const 0))
+  (global $keyboard_hook_head (mut i32) (i32.const 0))
+  (global $hook_active_node (mut i32) (i32.const 0))
+  (global $hook_dispatch_depth (mut i32) (i32.const 0))
+  (global $hook_retired_head (mut i32) (i32.const 0))
   (global $capture_hwnd (mut i32) (i32.const 0))      ;; hwnd that has mouse capture (SetCapture/ReleaseCapture)
   (global $cursor_count (mut i32) (i32.const 0))      ;; ShowCursor display count (>=0 = visible)
   (global $current_cursor (mut i32) (i32.const 0x67F00)) ;; HCURSOR last set by SetCursor (default IDC_ARROW)
@@ -3197,7 +3211,9 @@
   (global $com_unk_outer (mut i32) (i32.const 0))   ;; pUnkOuter
   (global $com_cls_ctx   (mut i32) (i32.const 0))   ;; dwClsContext
   (global $com_dll_name  (mut i32) (i32.const 0))   ;; WASM addr of DLL name string (from registry)
-  (global $com_state_unknown (mut i32) (i32.const 0)) ;; CoSetState/CoGetState single-thread placeholder
+  ;; Current instance/thread COM state; CoSetState owns this IUnknown and
+  ;; CoGetState returns an independently AddRefed pointer.
+  (global $com_state_unknown (mut i32) (i32.const 0))
   ;; Process-local Running Object Table. Entries are retained independently of
   ;; the short-lived IRunningObjectTable interface wrappers returned to callers.
   (global $ole_rot_entries (mut i32) (i32.const 0))
@@ -3326,8 +3342,15 @@
   (global $propsheet_header (mut i32) (i32.const 0))
   (global $propsheet_pages (mut i32) (i32.const 0))
   (global $propsheet_page_count (mut i32) (i32.const 0))
+  (global $propsheet_pages_are_handles (mut i32) (i32.const 0))
+  (global $propsheet_owns_page_handles (mut i32) (i32.const 0))
+  (global $propsheet_inline_pages_initialized (mut i32) (i32.const 0))
   (global $propsheet_page_index (mut i32) (i32.const 0))
   (global $propsheet_page_hwnd (mut i32) (i32.const 0))
+  ;; Guest-heap array of one retained dialog HWND per page. Win98 creates a
+  ;; normal page lazily on its first activation, then hides/shows that same
+  ;; dialog so its controls and application-owned state survive tab switches.
+  (global $propsheet_page_hwnds (mut i32) (i32.const 0))
   (global $propsheet_frame_hwnd (mut i32) (i32.const 0))
   (global $propsheet_finish_page (mut i32) (i32.const 0))
   (global $propsheet_finish_nmhdr (mut i32) (i32.const 0))
@@ -3816,7 +3839,16 @@
   (global $console_cp (mut i32) (i32.const 437))  ;; input code page
   (global $console_output_cp (mut i32) (i32.const 437))  ;; output code page
 
-  ;; x87 FPU state — registers stored at WASM memory 0x200 (8 × f64 = 64 bytes)
+  ;; x87 physical values belong to the instance, like TOP/tags and MMX below.
+  ;; A shared linear-memory bank lets sibling guest threads corrupt each other.
+  (global $fpu_value0 (mut f64) (f64.const 0))
+  (global $fpu_value1 (mut f64) (f64.const 0))
+  (global $fpu_value2 (mut f64) (f64.const 0))
+  (global $fpu_value3 (mut f64) (f64.const 0))
+  (global $fpu_value4 (mut f64) (f64.const 0))
+  (global $fpu_value5 (mut f64) (f64.const 0))
+  (global $fpu_value6 (mut f64) (f64.const 0))
+  (global $fpu_value7 (mut f64) (f64.const 0))
   (global $fpu_top (mut i32) (i32.const 0))   ;; TOP of FPU stack (0-7)
   (global $fpu_cw  (mut i32) (i32.const 0x037F)) ;; Control word (default: all exceptions masked)
   (global $fpu_sw  (mut i32) (i32.const 0))   ;; Status word

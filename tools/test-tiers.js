@@ -53,6 +53,8 @@ const E2E_EXCEPTIONS = Object.freeze([
   'test-combobox-pinball.js',
   'test-cruel-maximized-launch-layout.js',
   'test-cs-owndc-stats-font.js',
+  'test-d3d-vs20-loop-glsl.js',
+  'test-d3d9-typed-gpu.js',
   'test-deus-ex-demo.js',
   'test-diablo-shareware-art.js',
   'test-dos-corpus-live-page.js',

@@ -1161,6 +1161,9 @@ const SAFE_CALLS = [
   // guest ip -> arena address and holds no guest register.
   [/^(slice_exit|jlook|rpush|rpop)$/, []],
   [/^(port_in|port_out)$/, []],                      // leave to the host, take no register
+  // REP widening's guards and its decline counter. Two queries over a linear
+  // span and one statistic; none of the three reads or writes a guest register.
+  [/^(rep_decl|rep_span_ok|code_clear)$/, []],
   // The stack helpers move SP themselves and address through SS. Neither may
   // be promoted while one of these is in the body; everything else still can.
   [/^(push|pop)(16|32)$/, ['sp', 'ssb']],
@@ -1169,6 +1172,22 @@ const SAFE_CALLS = [
   // A segment load. The index can be dynamic, so every segment base is out.
   [/^sset$/, SEG_BASES],
 ];
+
+// The divide-error trap, which is deliberately NOT on that list and is added to
+// it only for a caller that says it can take one. It reads no general register
+// -- it pushes FLAGS, CS and IP through SP and SS -- but it HALTS, and
+// everything downstream of a halt reads globals. So promoting across one is
+// safe exactly when the caller writes the promoted registers back before the
+// call, which tree-fold's `buildTree` does by splicing the epilogue in front of
+// it.
+//
+// Gated rather than unconditional because region-jit.js lowers through this
+// same pass and does NOT splice: today a region containing a `div` declines
+// promotion outright on this very call, and that refusal is what keeps it
+// correct. An unconditional entry here would quietly take that away and leave a
+// fault inside a region halting the machine with six registers stale in wasm
+// locals -- a regression in a different file, caused by a list in this one.
+const FAULT_CALL = [/^fault0$/, []];
 
 // The four counter helpers, written out as expressions over the same globals
 // they call. These are the bodies in emit.js verbatim, with the trailing
@@ -1211,11 +1230,12 @@ function inlineCounters(body) {
   return { out, changed };
 }
 
-function promoteRegs(bodies, regs) {
+function promoteRegs(bodies, regs, allowFault = false) {
   const joined = bodies.join('\n');
   const banned = new Set();
+  const safe = allowFault ? SAFE_CALLS.concat([FAULT_CALL]) : SAFE_CALLS;
   for (const m of joined.matchAll(/\(call \$([a-z0-9_]+)/gi)) {
-    const hit = SAFE_CALLS.find(([re]) => re.test(m[1]));
+    const hit = safe.find(([re]) => re.test(m[1]));
     if (!hit) return { declined: `$${m[1]} may touch a register` };
     for (const r of hit[1]) banned.add(r);
   }
@@ -1350,7 +1370,11 @@ function emitTier3(ops, passes) {
   });
   const p = passes.promote === false
     ? { declined: 'promotion turned off' }
-    : promoteRegs(bodies, isa.REG16.concat(isa.SEG.map(s => `${s}b`)));
+    // `passes.allowFault` is tree-fold's straight-line lowering saying it will
+    // flush the promoted registers before the divide-error trap. Nothing else
+    // passes it, so nothing else promotes across one.
+    : promoteRegs(bodies, isa.REG16.concat(isa.SEG.map(s => `${s}b`)),
+      passes.allowFault === true);
   return {
     ...t2, eaFolded, eaA32, eaDynamic, segFolded, segDynamic, arith, folded, inlined,
     promoted: p.declined ? null : p.used,

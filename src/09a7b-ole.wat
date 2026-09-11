@@ -7,6 +7,289 @@
   ;; Split out of 09a7-handlers-dispatch.wat, which was 81% this and 1% dispatch.
   ;; ============================================================
 
+  ;; Process-local OLE drop-target registrations. A node is 16 bytes:
+  ;; hwnd, IDropTarget, ownership kind (1 local / 2 DLL-private guest), next.
+  ;; The mutation guard covers the suspended AddRef/Release interval, where a
+  ;; reentrant guest callback must not observe a half-owned list entry.
+  (global $ole_drop_targets (mut i32) (i32.const 0))
+  (global $ole_drop_target_mutating (mut i32) (i32.const 0))
+  ;; One 12-byte node per balanced CoLockObjectExternal(TRUE) call:
+  ;; IUnknown, ownership kind (1 local / 2 DLL-private guest), next. Keeping
+  ;; duplicate calls as duplicate nodes makes the required lock count exact.
+  (global $ole_external_locks (mut i32) (i32.const 0))
+  (global $ole_external_lock_mutating (mut i32) (i32.const 0))
+  ;; CoSetState may suspend while retaining a DLL-private replacement and
+  ;; releasing the former thread-state object. Reject a reentrant replacement
+  ;; while that ownership transfer is incomplete.
+  (global $ole_com_state_mutating (mut i32) (i32.const 0))
+
+  (func $ole_drop_target_find (param $hwnd i32) (result i32)
+    (local $entry i32) (local $guard i32)
+    (local.set $entry (global.get $ole_drop_targets))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $entry)))
+      (if (i32.eq (call $gl32 (local.get $entry)) (local.get $hwnd))
+        (then (return (local.get $entry))))
+      (local.set $entry (call $gl32 (i32.add (local.get $entry) (i32.const 12))))
+      (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+      (br_if $done (i32.ge_u (local.get $guard) (global.get $MAX_WINDOWS)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $ole_drop_target_commit (param $entry i32)
+    (call $gs32 (i32.add (local.get $entry) (i32.const 12))
+      (global.get $ole_drop_targets))
+    (global.set $ole_drop_targets (local.get $entry))
+    (global.set $ole_drop_target_mutating (i32.const 0)))
+
+  (func $ole_drop_target_unlink (param $entry i32)
+    (local $current i32) (local $previous i32) (local $next i32)
+    (local.set $current (global.get $ole_drop_targets))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $current)))
+      (local.set $next (call $gl32 (i32.add (local.get $current) (i32.const 12))))
+      (if (i32.eq (local.get $current) (local.get $entry))
+        (then
+          (if (local.get $previous)
+            (then (call $gs32 (i32.add (local.get $previous) (i32.const 12))
+              (local.get $next)))
+            (else (global.set $ole_drop_targets (local.get $next))))
+          (call $gs32 (i32.add (local.get $current) (i32.const 12)) (i32.const 0))
+          (return)))
+      (local.set $previous (local.get $current))
+      (local.set $current (local.get $next))
+      (br $scan))))
+
+  ;; RegisterDragDrop owns one reference on the supplied IDropTarget. Commit
+  ;; the registration only after a DLL-private target's guest AddRef returns.
+  (func $com_register_drag_drop (param $hwnd i32) (param $target i32)
+    (local $entry i32) (local $owned i32) (local $ret i32) (local $ctx i32)
+    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80040102)) ;; DRAGDROP_E_INVALIDHWND
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $target))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (call $ole_drop_target_find (local.get $hwnd))
+      (then
+        (global.set $eax (i32.const 0x80040101)) ;; DRAGDROP_E_ALREADYREGISTERED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (global.get $ole_drop_target_mutating)
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED (reentrant mutation)
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $owned (select (i32.const 1) (i32.const 2)
+      (call $ole_interface_is_local (local.get $target))))
+    (if (i32.and
+          (i32.eq (local.get $owned) (i32.const 2))
+          (i32.or
+            (i32.eqz (call $ole_guest_method_addr (local.get $target) (i32.const 1)))
+            (i32.eqz (call $ole_guest_method_addr (local.get $target) (i32.const 2)))))
+      (then
+        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $entry (call $heap_alloc (i32.const 16)))
+    (if (i32.eqz (local.get $entry))
+      (then
+        (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (call $gs32 (local.get $entry) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $entry) (i32.const 4)) (local.get $target))
+    (call $gs32 (i32.add (local.get $entry) (i32.const 8)) (local.get $owned))
+    (call $gs32 (i32.add (local.get $entry) (i32.const 12)) (i32.const 0))
+    (if (i32.eq (local.get $owned) (i32.const 1))
+      (then
+        (drop (call $ole_addref_local_interface (local.get $target)))
+        (call $ole_drop_target_commit (local.get $entry))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (global.set $ole_drop_target_mutating (i32.const 1))
+    (local.set $ret (call $gl32 (global.get $esp)))
+    (local.set $ctx (call $ole_guest_callback_context
+      (i32.const 30) (i32.const 0) (local.get $ret)
+      (i32.add (global.get $esp) (i32.const 12))
+      (i32.const 0) (local.get $entry) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (drop (call $ole_guest_callback_invoke1
+      (local.get $ctx) (local.get $target) (i32.const 1))))
+
+  ;; Revoke first makes the HWND undiscoverable, then releases the retained
+  ;; target. That ordering keeps a reentrant guest Release from finding stale
+  ;; registration state.
+  (func $com_revoke_drag_drop (param $hwnd i32)
+    (local $entry i32) (local $target i32) (local $owned i32)
+    (local $ret i32) (local $ctx i32)
+    (if (i32.lt_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80040102)) ;; DRAGDROP_E_INVALIDHWND
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $entry (call $ole_drop_target_find (local.get $hwnd)))
+    (if (i32.eqz (local.get $entry))
+      (then
+        (global.set $eax (i32.const 0x80040100)) ;; DRAGDROP_E_NOTREGISTERED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (global.get $ole_drop_target_mutating)
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED (reentrant mutation)
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $target (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
+    (local.set $owned (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
+    (call $ole_drop_target_unlink (local.get $entry))
+    (if (i32.eq (local.get $owned) (i32.const 1))
+      (then
+        (drop (call $ole_release_local_interface (local.get $target)))
+        (call $heap_free (local.get $entry))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (global.set $ole_drop_target_mutating (i32.const 1))
+    (local.set $ret (call $gl32 (global.get $esp)))
+    (local.set $ctx (call $ole_guest_callback_context
+      (i32.const 31) (i32.const 0) (local.get $ret)
+      (i32.add (global.get $esp) (i32.const 8))
+      (i32.const 0) (local.get $entry) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (drop (call $ole_guest_callback_invoke1
+      (local.get $ctx) (local.get $target) (i32.const 2))))
+
+  (func $ole_external_lock_find (param $object i32) (result i32)
+    (local $entry i32) (local $guard i32)
+    (local.set $entry (global.get $ole_external_locks))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $entry)))
+      (if (i32.eq (call $gl32 (local.get $entry)) (local.get $object))
+        (then (return (local.get $entry))))
+      (local.set $entry (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
+      (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+      (br_if $done (i32.ge_u (local.get $guard) (i32.const 65536)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $ole_external_lock_commit (param $entry i32)
+    (call $gs32 (i32.add (local.get $entry) (i32.const 8))
+      (global.get $ole_external_locks))
+    (global.set $ole_external_locks (local.get $entry))
+    (global.set $ole_external_lock_mutating (i32.const 0)))
+
+  (func $ole_external_lock_unlink (param $entry i32)
+    (local $current i32) (local $previous i32) (local $next i32)
+    (local.set $current (global.get $ole_external_locks))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $current)))
+      (local.set $next (call $gl32 (i32.add (local.get $current) (i32.const 8))))
+      (if (i32.eq (local.get $current) (local.get $entry))
+        (then
+          (if (local.get $previous)
+            (then (call $gs32 (i32.add (local.get $previous) (i32.const 8))
+              (local.get $next)))
+            (else (global.set $ole_external_locks (local.get $next))))
+          (call $gs32 (i32.add (local.get $current) (i32.const 8)) (i32.const 0))
+          (return)))
+      (local.set $previous (local.get $current))
+      (local.set $current (local.get $next))
+      (br $scan))))
+
+  ;; CoLockObjectExternal implements a strong lock by retaining one IUnknown
+  ;; reference per TRUE call and releasing exactly one per FALSE call. The
+  ;; third argument controls external proxy disconnection on the last unlock;
+  ;; this runtime has only in-process objects, so the balanced Release is its
+  ;; complete observable effect here.
+  (func $com_lock_object_external
+      (param $object i32) (param $lock i32) (param $last_unlock_releases i32)
+    (local $entry i32) (local $owned i32) (local $ret i32) (local $ctx i32)
+    (if (i32.eqz (local.get $object))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (global.get $ole_external_lock_mutating)
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $owned (select (i32.const 1) (i32.const 2)
+      (call $ole_interface_is_local (local.get $object))))
+    (if (local.get $lock)
+      (then
+        ;; Preflight both ownership operations before accepting a DLL-private
+        ;; lock, so its later matching unlock cannot be born malformed.
+        (if (i32.and
+              (i32.eq (local.get $owned) (i32.const 2))
+              (i32.or
+                (i32.eqz (call $ole_guest_method_addr (local.get $object) (i32.const 1)))
+                (i32.eqz (call $ole_guest_method_addr (local.get $object) (i32.const 2)))))
+          (then
+            (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
+        (local.set $entry (call $heap_alloc (i32.const 12)))
+        (if (i32.eqz (local.get $entry))
+          (then
+            (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
+        (call $gs32 (local.get $entry) (local.get $object))
+        (call $gs32 (i32.add (local.get $entry) (i32.const 4)) (local.get $owned))
+        (call $gs32 (i32.add (local.get $entry) (i32.const 8)) (i32.const 0))
+        (if (i32.eq (local.get $owned) (i32.const 1))
+          (then
+            (drop (call $ole_addref_local_interface (local.get $object)))
+            (call $ole_external_lock_commit (local.get $entry))
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
+        (global.set $ole_external_lock_mutating (i32.const 1))
+        (local.set $ret (call $gl32 (global.get $esp)))
+        (local.set $ctx (call $ole_guest_callback_context
+          (i32.const 32) (i32.const 0) (local.get $ret)
+          (i32.add (global.get $esp) (i32.const 16))
+          (i32.const 0) (local.get $entry) (i32.const 0) (i32.const 0) (i32.const 0)))
+        (drop (call $ole_guest_callback_invoke1
+          (local.get $ctx) (local.get $object) (i32.const 1)))
+        (return)))
+    (local.set $entry (call $ole_external_lock_find (local.get $object)))
+    (if (i32.eqz (local.get $entry))
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED: unbalanced unlock
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $owned (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
+    (if (i32.and
+          (i32.eq (local.get $owned) (i32.const 2))
+          (i32.eqz (call $ole_guest_method_addr (local.get $object) (i32.const 2))))
+      (then
+        ;; Preserve the live strong lock when the guest Release target has
+        ;; become malformed; the caller may repair it and retry.
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (call $ole_external_lock_unlink (local.get $entry))
+    (if (i32.eq (local.get $owned) (i32.const 1))
+      (then
+        (drop (call $ole_release_local_interface (local.get $object)))
+        (call $heap_free (local.get $entry))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (global.set $ole_external_lock_mutating (i32.const 1))
+    (local.set $ret (call $gl32 (global.get $esp)))
+    (local.set $ctx (call $ole_guest_callback_context
+      (i32.const 33) (i32.const 0) (local.get $ret)
+      (i32.add (global.get $esp) (i32.const 16))
+      (i32.const 0) (local.get $entry) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (drop (call $ole_guest_callback_invoke1
+      (local.get $ctx) (local.get $object) (i32.const 2))))
+
   ;; One current-thread entry point for COM and OLE. CoInitialize and
   ;; OleInitialize are STA requests; CoInitializeEx supplies its own model.
   (func $com_initialize_current (param $reserved i32) (param $flags i32) (result i32)
@@ -60,23 +343,116 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-  ;; CoSetState/CoGetState — single-thread COM state placeholder used by
-  ;; oleaut32 during Automation startup.
+  ;; CoSetState/CoGetState own the current thread's state pointer with normal
+  ;; COM reference counting. A replacement is retained before the former
+  ;; object is released, including when both pointers name the same object.
+  ;; Each worker thread has its own WASM globals, so this remains thread-local
+  ;; in the real browser Worker path rather than becoming process-global.
   (func $handle_CoSetState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $old i32) (local $new_owned i32) (local $old_owned i32)
+    (local $ret i32) (local $ctx i32)
+    (if (global.get $ole_com_state_mutating)
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $old (global.get $com_state_unknown))
+    (if (local.get $arg0)
+      (then
+        (local.set $new_owned (select (i32.const 1) (i32.const 2)
+          (call $ole_interface_is_local (local.get $arg0))))
+        ;; A stored DLL-private state must support both sides of the lifetime
+        ;; contract before AddRef is allowed to make the mutation observable.
+        (if (i32.and
+              (i32.eq (local.get $new_owned) (i32.const 2))
+              (i32.or
+                (i32.eqz (call $ole_guest_method_addr (local.get $arg0) (i32.const 1)))
+                (i32.eqz (call $ole_guest_method_addr (local.get $arg0) (i32.const 2)))))
+          (then
+            (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (return)))))
+    (if (local.get $old)
+      (then
+        (local.set $old_owned (select (i32.const 1) (i32.const 2)
+          (call $ole_interface_is_local (local.get $old))))
+        (if (i32.and
+              (i32.eq (local.get $old_owned) (i32.const 2))
+              (i32.eqz (call $ole_guest_method_addr (local.get $old) (i32.const 2))))
+          (then
+            ;; Preserve the current state, and do not retain the replacement,
+            ;; when the reference we already own cannot yet be retired.
+            (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (return)))))
+    (if (i32.eq (local.get $new_owned) (i32.const 2))
+      (then
+        (global.set $ole_com_state_mutating (i32.const 1))
+        (local.set $ret (call $gl32 (global.get $esp)))
+        (local.set $ctx (call $ole_guest_callback_context
+          (i32.const 34) (i32.const 0) (local.get $ret)
+          (i32.add (global.get $esp) (i32.const 8))
+          (local.get $old) (local.get $arg0) (local.get $old_owned)
+          (i32.const 0) (i32.const 0)))
+        (drop (call $ole_guest_callback_invoke1
+          (local.get $ctx) (local.get $arg0) (i32.const 1)))
+        (return)))
+    (if (i32.eq (local.get $new_owned) (i32.const 1))
+      (then (drop (call $ole_addref_local_interface (local.get $arg0)))))
     (global.set $com_state_unknown (local.get $arg0))
+    (if (i32.eq (local.get $old_owned) (i32.const 1))
+      (then (drop (call $ole_release_local_interface (local.get $old)))))
+    (if (i32.eq (local.get $old_owned) (i32.const 2))
+      (then
+        (global.set $ole_com_state_mutating (i32.const 1))
+        (local.set $ret (call $gl32 (global.get $esp)))
+        (local.set $ctx (call $ole_guest_callback_context
+          (i32.const 34) (i32.const 1) (local.get $ret)
+          (i32.add (global.get $esp) (i32.const 8))
+          (local.get $old) (local.get $arg0) (local.get $old_owned)
+          (i32.const 0) (i32.const 0)))
+        (drop (call $ole_guest_callback_invoke1
+          (local.get $ctx) (local.get $old) (i32.const 2)))
+        (return)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
   (func $handle_CoGetState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $state i32) (local $ret i32) (local $ctx i32)
     (if (i32.eqz (local.get $arg0))
       (then
         (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
         (return)))
-    (call $gs32 (local.get $arg0) (global.get $com_state_unknown))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (call $gs32 (local.get $arg0) (i32.const 0))
+    (local.set $state (global.get $com_state_unknown))
+    (if (i32.eqz (local.get $state))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (call $ole_interface_is_local (local.get $state))
+      (then
+        (drop (call $ole_addref_local_interface (local.get $state)))
+        (call $gs32 (local.get $arg0) (local.get $state))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (i32.eqz (call $ole_guest_method_addr (local.get $state) (i32.const 1)))
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $ret (call $gl32 (global.get $esp)))
+    (local.set $ctx (call $ole_guest_callback_context
+      (i32.const 35) (i32.const 0) (local.get $ret)
+      (i32.add (global.get $esp) (i32.const 8))
+      (local.get $state) (local.get $arg0) (i32.const 0)
+      (i32.const 0) (i32.const 0)))
+    (drop (call $ole_guest_callback_invoke1
+      (local.get $ctx) (local.get $state) (i32.const 1)))
+    (return)
   )
 
   ;; 760: CoUninitialize() — balance one successful initialization.
@@ -1052,9 +1428,6 @@
         (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  (func $handle_IMoniker_IsDirty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1)) ;; S_FALSE: immutable value
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   (func $handle_IMoniker_Load (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $state i32) (local $ret i32) (local $ctx i32)
@@ -1364,10 +1737,6 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; StgIsStorageFile(pwcsName) — report "not a structured storage file".
-  (func $handle_StgIsStorageFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x800300FB)) ;; STG_E_INVALIDHEADER
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-  )
 
   ;; StgOpenStorage(pwcsName, pstgPriority, grfMode, snbExclude, reserved, ppstgOpen)
   ;; Structured storage is not implemented; zero the out pointer and fail
@@ -2363,9 +2732,6 @@
   ;; SetRatio scales logical to himetric units. The emulator renders at a
   ;; fixed 96 dpi with no logical mapping, so the ratio changes nothing;
   ;; accepting it keeps callers that always set it from failing.
-  (func $handle_IFont_SetRatio (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_IFont_QueryTextMetrics (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $h i32) (local $ave i32)
@@ -2398,19 +2764,10 @@
   ;; AddRefHfont/ReleaseHfont let a caller pin a realized HFONT. The object
   ;; owns exactly one HFONT for its whole lifetime here, so the pin is
   ;; already implied and there is nothing to count.
-  (func $handle_IFont_AddRefHfont (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  (func $handle_IFont_ReleaseHfont (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; SetHdc names the DC future realizations should target. All DCs share one
   ;; 96 dpi strike set, so the choice does not affect the resulting HFONT.
-  (func $handle_IFont_SetHdc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; OleCreateFontIndirect(lpFontDesc, riid, ppvObj)
   (func $handle_OleCreateFontIndirect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4768,15 +5125,9 @@
         (global.set $eax (call $ole_stream_write (local.get $arg0) (local.get $arg3) (local.get $arg4) (local.get $written_out)))
         (call $ole_set_data_position (local.get $arg0) (local.get $old_pos))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
-  (func $handle_ILockBytes_Flush (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_ILockBytes_SetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (select (call $ole_resize_buffer (local.get $arg0) (local.get $arg1)) (i32.const 0x80030019) (i32.eqz (local.get $arg2))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_ILockBytes_LockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
-  (func $handle_ILockBytes_UnlockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_ILockBytes_Stat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $ole_fill_statstg (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
@@ -5006,8 +5357,6 @@
   (func $handle_IStorage_RenameElement (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $ole_storage_rename_element (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_IStorage_SetElementTimes (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
   (func $handle_IStorage_SetClass (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (local.get $arg1)) (then (global.set $eax (i32.const 0x80004003)))
       (else
@@ -7018,8 +7367,6 @@
     (local $out i32) (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
     (if (local.get $out) (then (call $gs32 (local.get $out) (i32.const 0))))
     (global.set $eax (i32.const 0x80040003)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
-  (func $handle_IDataObject_DUnadvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80040004)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IDataObject_EnumDAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
     (global.set $eax (i32.const 0x80040003)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
@@ -7421,7 +7768,11 @@
   ;; 23/24/25: ROT Register/Revoke/GetObject guest ownership;
   ;; 26: file-moniker BindToObject guest QueryInterface/bind ownership.
   ;; 27/28: file-moniker Save/Load through DLL-private IStream callbacks.
-  ;; 29: OLE clipboard ownership of a DLL-private IDataObject.
+  ;; 29: OLE clipboard ownership of a DLL-private IDataObject;
+  ;; 30/31: RegisterDragDrop AddRef commit / RevokeDragDrop Release teardown;
+  ;; 32/33: CoLockObjectExternal AddRef commit / Release teardown.
+  ;; 34: CoSetState AddRef/Release replacement transaction;
+  ;; 35: CoGetState returned-reference AddRef.
   (func $ole_guest_callback_continue
     (local $ctx i32) (local $operation i32) (local $stage i32)
     (local $root i32) (local $p1 i32) (local $p2 i32) (local $p3 i32) (local $p4 i32)
@@ -7798,6 +8149,54 @@
               (then (if (call $ole_guest_callback_invoke1
                           (local.get $ctx) (local.get $root) (i32.const 2))
                       (then (return)))))))
+        (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 30))
+      (then
+        (call $ole_drop_target_commit (local.get $p1))
+        (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 31))
+      (then
+        (call $heap_free (local.get $p1))
+        (global.set $ole_drop_target_mutating (i32.const 0))
+        (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 32))
+      (then
+        (call $ole_external_lock_commit (local.get $p1))
+        (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 33))
+      (then
+        (call $heap_free (local.get $p1))
+        (global.set $ole_external_lock_mutating (i32.const 0))
+        (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 34))
+      (then
+        (if (i32.eqz (local.get $stage))
+          (then
+            ;; The replacement's guest AddRef is complete. Publish it before
+            ;; retiring the former pointer so same-object replacement cannot
+            ;; transiently drop the object's last reference.
+            (global.set $com_state_unknown (local.get $p1))
+            (if (i32.eq (local.get $p2) (i32.const 1))
+              (then (drop (call $ole_release_local_interface (local.get $root)))))
+            (if (i32.eq (local.get $p2) (i32.const 2))
+              (then
+                (call $gs32 (i32.add (local.get $ctx) (i32.const 8)) (i32.const 1))
+                (if (call $ole_guest_callback_invoke1
+                      (local.get $ctx) (local.get $root) (i32.const 2))
+                  (then (return)))))))
+        (global.set $ole_com_state_mutating (i32.const 0))
+        (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $operation) (i32.const 35))
+      (then
+        ;; Do not publish a borrowed pointer: the guest AddRef has completed
+        ;; before the caller can observe this output slot.
+        (call $gs32 (local.get $p1) (local.get $root))
         (call $ole_guest_callback_finish (local.get $ctx) (i32.const 0))
         (return)))
     (if (i32.eq (local.get $operation) (i32.const 4))
@@ -8827,8 +9226,6 @@
       (i32.add (global.get $esp) (i32.const 12))
       (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 0) (i32.const 0)))
     (drop (call $ole_guest_callback_invoke1 (local.get $ctx) (local.get $site) (i32.const 3))))
-  (func $handle_IOleObject_SetMoniker (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IOleObject_GetMoniker (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
     (global.set $eax (i32.const 0x80004001)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
@@ -8904,15 +9301,9 @@
                 (call $gs32 (local.get $arg2) (local.get $data))
                 (global.set $eax (i32.const 0))))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_IOleObject_DoVerb (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80040100)) (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
   (func $handle_IOleObject_EnumVerbs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
     (global.set $eax (i32.const 0x80040180)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-  (func $handle_IOleObject_Update (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
-  (func $handle_IOleObject_IsUpToDate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IOleObject_GetUserClassID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (memory.copy (call $g2w (local.get $arg1)) (call $g2w (i32.add (local.get $arg0) (i32.const 24))) (i32.const 16))))
     (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (local.get $arg1)))
@@ -9024,8 +9415,6 @@
             (call $gs32 (local.get $arg2) (call $gl32 (i32.add (local.get $arg0) (i32.const 136))))
             (global.set $eax (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-  (func $handle_IOleObject_SetColorScheme (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   (func $handle_IPersistStorage_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $ole_static_query_interface (call $ole_static_root (local.get $arg0)) (local.get $arg1) (local.get $arg2)))
@@ -10025,8 +10414,6 @@
           (then (call $gs32 (local.get $arg1) (local.get $obj)) (global.set $eax (i32.const 0)))
           (else (global.set $eax (i32.const 0x8007000E))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-  (func $handle_IOleCache_InitCache (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IOleCache_SetData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $retired_out i32) (local $retired i32) (local $root i32) (local $data_iface i32)
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
@@ -10102,10 +10489,6 @@
   (func $handle_IViewObject_Freeze (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 1))))
     (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
-  (func $handle_IViewObject_Unfreeze (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-  (func $handle_IViewObject_SetAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
   (func $handle_IViewObject_GetAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 1))))
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
@@ -11329,9 +11712,6 @@
   ;; OleUIUpdateLinksA(lpOleUILinkContainer, hwndParent, lpszTitle, cLinks)
   ;; Static RichEdit pictures expose no updateable links. Report successful
   ;; completion without opening the optional OLEDLG user interface.
-  (func $handle_OleUIUpdateLinksA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; OleDraw(pUnknown, dwAspect, hdcDraw, lprcBounds). RichEdit uses this
   ;; helper rather than invoking IViewObject::Draw directly for cached static

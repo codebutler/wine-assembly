@@ -208,3 +208,164 @@ ownership, clear current selection, and release attachment references.
 2026-09-06: 435 -> 432. Direct3D Device 1/2/3 NextViewport now walks each
 device's retained Win9x viewport list, returns AddRef'd HEAD/TAIL/NEXT
 interfaces, and distinguishes invalid input, empty lists, and list end.
+
+2026-09-10: 370 -> 369. mixerMessage now enforces the documented
+device-id-only, MXDM_USER-or-higher contract and reports unsupported private
+driver messages instead of claiming every driver-specific request succeeded.
+
+2026-09-10: 369 -> 367. DPA_Destroy and DSA_Destroy now validate opaque live
+handles, retire them, and return both their backing arrays and handle records
+to the process heap instead of claiming success while leaking every array.
+
+2026-09-10: 367 -> 365. Comctl32_Free and Comctl32_GetSize now operate on
+validated live allocations instead of returning unconditional TRUE and 256;
+the same tracked extent also makes ReAlloc preserve only owned bytes, retire
+moved storage, and fail without destroying the original allocation.
+
+2026-09-10: 365 -> 364. MenuHelp now uses its real seven-argument stdcall ABI,
+resolves command and popup help-string resources, and drives the status bar's
+separate Win98 simple pane instead of silently doing nothing.
+
+2026-09-10: 364 -> 363. ShowHideMenuCtl now parses its documented selector
+pairs, toggles the corresponding child or whole menu, synchronizes the menu
+check, and fails for absent mappings or controls instead of always returning
+TRUE.
+
+2026-09-10: 405 -> 404. IDirectPlay3 Receive now reads its object's received
+message queue, negotiates buffer size, filters sender/recipient, and supports
+peek or consumption instead of unconditionally reporting no messages.
+The reviewed inventory diff removes only this handler; no entries were added
+or otherwise changed. Message production and DP4 activation remain separate.
+
+2026-09-10: 404 -> 403. IDirectPlay3 Send now copies messages into local
+recipient queues and signals their events, validates sender ownership and
+unsupported modes, and rolls back partial multicast allocation failure.
+The reviewed inventory diff removes only Send, with no added or modified
+quiet entries. Network transport and asynchronous sending are not implemented.
+
+2026-09-10: 356 -> 353. MonitorFromPoint, MonitorFromRect, and
+MonitorFromWindow now test the one browser monitor's actual rectangle and
+honor MONITOR_DEFAULTTONULL, MONITOR_DEFAULTTOPRIMARY, and
+MONITOR_DEFAULTTONEAREST instead of always returning the primary handle.
+The same slice validates GetMonitorInfoA and makes its work area agree with
+SPI_GETWORKAREA and the browser desktop's existing 28-pixel Win98 taskbar.
+
+2026-09-11: 353 -> 348. DirectInput device Acquire, Unacquire,
+SetDataFormat, SetCooperativeLevel, and Poll now follow the documented device
+lifecycle instead of returning unconditional success. The device retains its
+standard keyboard or mouse data format and cooperative-level HWND/flags;
+acquisition is non-reference-counted, data access requires acquisition, and
+invalid formats, windows, flag pairs, and acquired format changes return their
+documented HRESULTs. The browser still exposes only the system keyboard and
+mouse and does not yet model acquisition competition or automatic foreground
+loss.
+
+2026-09-11: 348 -> 346. RegisterDragDrop now validates a live process window,
+rejects duplicate registrations, and retains one IDropTarget reference per
+window. RevokeDragDrop distinguishes invalid and unregistered windows, unlinks
+the exact registration, and releases its retained target. DLL-private targets
+cross the existing suspended guest COM callback bridge for AddRef/Release;
+emulator-local interfaces use the synchronous path. Browser drop events are not
+yet converted into IDataObject/IDropTarget calls.
+
+2026-09-11: 346 -> 345. CoLockObjectExternal now implements its documented
+strong-reference lifetime: every lock owns one IUnknown AddRef and every
+balanced unlock performs one Release. Repeated locks remain independently
+counted, null and malformed interfaces fail before mutation, and an unbalanced
+unlock returns E_UNEXPECTED. DLL-private implementations use the suspended
+guest callback bridge; emulator-local objects complete synchronously. The
+fLastUnlockReleases proxy-disconnection distinction is not observable because
+the runtime does not expose out-of-process marshaled connections.
+
+2026-09-11: 345 -> 344. CoSetState now retains the replacement thread-state
+IUnknown before releasing the former object, while CoGetState returns an
+independently AddRefed pointer. Both paths preserve the same ownership rules
+for emulator-local and DLL-private guest implementations.
+
+2026-09-11: 344 -> 343. SetThreadAffinityMask now validates pseudo and durable
+thread handles through the existing process thread authority and accepts only
+bit zero, the sole processor in the browser Win98 machine. Empty and
+out-of-process masks fail with ERROR_INVALID_PARAMETER instead of returning a
+fabricated previous mask. GetProcessAffinityMask likewise rejects process
+handles outside the one modeled guest process before publishing its 0x1 masks.
+
+2026-09-11: 343 -> 342. IDirectDrawClipper::SetHWnd now retains the validated
+window associated with each clipper object, and GetHWnd returns that exact
+association instead of fabricating the process main window. Reserved flags,
+invalid windows and null output pointers fail without changing retained state.
+Generating and consuming the window's changing visible clip region remains a
+separate DirectDraw task.
+
+2026-09-11: 342 -> 340. IDirectDrawSurface::SetClipper now owns one COM
+reference to its attached clipper, replaces or detaches it without leaks, and
+automatically releases it with the surface. GetClipper returns an independently
+AddRefed interface and reports a missing attachment. Windowed presentation now
+uses the HWND retained by that clipper instead of assuming the cooperative
+window; arbitrary SetClipList regions and occlusion snapshots remain separate.
+
+2026-09-11: 340 -> 338. IDirectDrawClipper::SetClipList now validates and owns
+a canonical RGNDATA copy, supports deletion and HWND/list exclusivity, and
+drives actual clipped Blt copies, stretches, color keys, and fills without
+slowing the no-list path. GetClipList implements size negotiation, bounded
+copies, optional rectangle intersection, and live HWND client-region snapshots;
+IsClipListChanged detects and latches window geometry changes until that list is
+copied. Final Release frees retained region storage, and BltFast now rejects any
+attached clipper as documented. Browser composition supplies HWND occlusion;
+explicit RGNDATA rectangles are enforced in the DirectDraw framebuffer.
+
+2026-09-11: 338 -> 336. IDirectSound::SetCooperativeLevel now validates the
+live top-level application HWND and one exact Win98 DSSCL value, retains that
+device state, and propagates later level changes to its existing buffers.
+Compact requires PRIORITY or stronger instead of always succeeding. Primary
+buffer identity now lives in immutable creation state rather than colliding
+with DSBSTATUS_PLAYING; primary SetFormat requires PRIORITY, rejects secondary
+buffers, validates PCM structure fields, and observes WRITEPRIMARY's stopped-
+buffer rule. The browser has no fragmented hardware sound heap, so a permitted
+Compact remains a successful no-op after its native privilege check.
+
+2026-09-11: 336 -> 335. IDirectSoundBuffer::SetCurrentPosition now owns a
+per-secondary-buffer play-cursor origin instead of returning success without
+moving anything. Stopped buffers retain the byte used by their next Play;
+playing buffers immediately restart the browser snapshot at that byte; Stop
+freezes the live cursor; and GetCurrentPosition rebases the host-relative
+cursor onto the retained DirectSound position. Primary buffers and offsets
+outside the backing store fail rather than corrupting cursor state.
+
+2026-09-11: 335 -> 334. IsBadCodePtr now follows its documented read-access
+contract through the same mapped-range probe as IsBadReadPtr instead of
+accepting every non-NULL address. The shared probe walks every crossed page,
+honors sparse VirtualAlloc PAGE_NOACCESS, PAGE_GUARD, read-only, and writable
+metadata, and fixes zero-length NULL ranges. IsBadStringPtrA/W now scan through
+the first NUL or caller maximum without crashing, while the write probe rejects
+read-only sparse pages. These cold API checks do not add permission branches to
+the emulator's hot guest load/store path.
+
+2026-09-11: 334 -> 333. CallNextHookEx now resumes the next live procedure in
+the active WH_KEYBOARD/WH_CBT chain and returns its exact LRESULT. Hook installs
+prepend distinct heap-backed handles, while legacy and Ex unhook operations
+unlink only the named procedure and defer storage retirement across callbacks.
+
+2026-09-11: 333 -> 333. CloseServiceHandle no longer treats every fabricated
+nonzero value as a valid service handle. This Win98 personality cannot produce
+an SCM or service handle, so both NULL and nonzero inputs now fail with
+ERROR_INVALID_HANDLE. The audit count is unchanged because it intentionally
+tracks deterministic quiet failures as well as quiet successes; its identity
+hash changed with the corrected contract.
+
+2026-09-11: 333 -> 332. GetProcessVersion now accepts only PID zero or the
+runtime's one published process ID, rejects invented process IDs, and reads the
+major/minor subsystem version stamped in the mapped executable's PE header. It
+no longer returns the Win98 GetVersion encoding for every possible PID.
+
+2026-09-11: 332 -> 332. ImmReleaseContext now agrees with the explicit no-IME
+machine model: because ImmGetContext cannot issue a HIMC, neither NULL nor a
+fabricated numeric handle can be released successfully. The audit count is
+unchanged because the corrected deterministic failure remains a quiet handler.
+
+2026-09-11: 332 -> 331. keybd_event now synchronously enqueues real system
+keyboard input instead of returning without an event. Synthesized keys retain
+the caller's scan code, extended/up flags, extra-info value, focused-window
+target, and an event-time keyboard snapshot; GetMessage/PeekMessage therefore
+apply the existing thread routing, WM_HOTKEY matching, and WH_KEYBOARD chain.
+Alt and F10 select WM_SYSKEYDOWN/UP, and lParam carries context, previous-state,
+and transition bits with the same queue ordering used by browser input.

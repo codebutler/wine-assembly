@@ -6,7 +6,5 @@
     "wsprintf",
     "wvsprintf"
   ],
-  "BOTH_STUB": [
-    "IsBadStringPtr"
-  ]
+  "BOTH_STUB": []
 }

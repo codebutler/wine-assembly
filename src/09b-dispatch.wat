@@ -169,7 +169,9 @@
         (return)))
 
     ;; CreateWindowEx continuation — WndProc(WM_CREATE) returned
-    ;; Stack layout: [ESP] = saved_ret, [ESP+4] = saved_hwnd (pushed before WndProc args)
+    ;; Ordinary stack layout: [ESP] = saved_ret, [ESP+4] = saved_hwnd.
+    ;; A modeless WM_INITDIALOG return instead starts with the private DIFC
+    ;; marker, candidate, then that same saved pair.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0001))
       (then
         ;; CACA0029 puts a private marker in front of the ordinary saved frame
@@ -189,6 +191,17 @@
                 (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
                 (return)))
             (global.set $esp (i32.add (global.get $esp) (i32.const 4)))))
+        ;; CreateDialogParamA's DLGPROC just returned from WM_INITDIALOG.
+        ;; Its nonzero return accepts the candidate passed in wParam. Keep the
+        ;; marker/candidate on the guest stack so nested modeless dialogs each
+        ;; retain their own decision state.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x44494643)) ;; "DIFC"
+          (then
+            (call $dialog_apply_init_focus
+              (call $gl32 (i32.add (global.get $esp) (i32.const 12)))
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4)))
+              (global.get $eax))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         ;; If WS_VISIBLE was set on main_hwnd's style, kick off the implicit-show
         ;; activation chain (matches real Win32 CreateWindowEx behavior). Leaves
         ;; saved_ret/saved_hwnd in place at [ESP]/[ESP+4]; the chain ends by
@@ -395,6 +408,13 @@
     ;; attach. CACA0027 pops saved state and returns the hwnd to the caller.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0026))
       (then
+        ;; Pop the typed outer-active-node frame saved below HookProc. The
+        ;; marker keeps direct continuation tests and old saved frames valid.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         ;; Clear pending_child_create — the full create chain is now synchronous.
         ;; (pending_child_size is kept; it flows through the message loop.)
         (global.set $pending_child_create (i32.const 0))
@@ -566,8 +586,15 @@
     ;; direct path, but lets MFC's WH_CBT hook attach m_hWnd first.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0028))
       (then
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         (if (global.get $dialog_cbt_saved_proc)
           (then
+            (local.set $arg0 (call $dialog_first_init_tabstop
+              (global.get $dialog_cbt_saved_hwnd)))
             ;; Push saved_hwnd + saved_ret below DlgProc args; CACA0001
             ;; returns saved_hwnd in EAX after WM_INITDIALOG.
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
@@ -575,9 +602,13 @@
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
             (call $gs32 (global.get $esp) (global.get $dialog_cbt_saved_ret))
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+            (call $gs32 (global.get $esp) (local.get $arg0))
+            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+            (call $gs32 (global.get $esp) (i32.const 0x44494643)) ;; "DIFC"
+            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
             (call $gs32 (global.get $esp) (global.get $dialog_cbt_saved_lparam))
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (i32.const 0))
+            (call $gs32 (global.get $esp) (local.get $arg0))
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
             (call $gs32 (global.get $esp) (i32.const 0x110))
             (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
@@ -595,6 +626,11 @@
     ;; CACA0029 continuation follows with WM_CREATE using the same CREATESTRUCT.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0002))
       (then
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+          (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
         ;; Push saved_hwnd and saved_ret below WndProc args (for CACA0001 to pop)
         (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
         (call $gs32 (global.get $esp) (global.get $createwnd_saved_hwnd))
@@ -652,16 +688,10 @@
         ;; EM_SETSEL(0,-1), matching Win98's selected default edit text.
         (if (global.get $dlg_init_focus_hwnd)
           (then
-            (if (global.get $eax)
-              (then
-                (call $set_focus (global.get $dlg_init_focus_hwnd))
-                (if (i32.eq (call $ctrl_table_get_class (global.get $dlg_init_focus_hwnd)) (i32.const 2))
-                  (then
-                    (drop (call $wnd_send_message
-                      (global.get $dlg_init_focus_hwnd)
-                      (i32.const 0x00B1)  ;; EM_SETSEL
-                      (i32.const 0)
-                      (i32.const -1)))))))
+            (call $dialog_apply_init_focus
+              (global.get $dlg_pump_hwnd)
+              (global.get $dlg_init_focus_hwnd)
+              (global.get $eax))
             (global.set $dlg_init_focus_hwnd (i32.const 0))))
         ;; If EndDialog was called, destroy dialog and return result
         (if (global.get $dlg_ended)
@@ -1127,6 +1157,17 @@
     ;; enumerators retain the original saved-return-address form.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0011))
       (then
+        ;; A nested HookProc returned from CallNextHookEx. Restore the calling
+        ;; hook as the active chain node and resume immediately after the API
+        ;; call, preserving the nested hook's exact LRESULT in EAX.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x314E4B48))
+          (then
+            (global.set $eip
+              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+            (global.set $hook_active_node
+              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))
         ;; DirectPlay player/group enumeration leaves its reentrant DPEN frame
         ;; at ESP after the five-argument callback returns.
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x4E455044))
@@ -1160,8 +1201,10 @@
         ;; result. (Hook suppression on nonzero return is not modeled yet.)
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x314B484B))
           (then
+            (call $hook_dispatch_leave
+              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
             (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
             (global.set $eax (i32.const 1))
             (return)))
         (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x434E5446))

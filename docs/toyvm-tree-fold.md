@@ -14,6 +14,15 @@ changes *when* things happen, which on this VM is audible. Read *What it costs*
 and *What is next*: the fold is static, and a hotness gate is the change that
 would make the rest of it pay.
 
+**Since then**, two things have been added and each has its own section. *The
+hotness gate* (`--tree-fold-hot=N`) removes the flat install cost from the
+programs that were never going to earn it. *DOS-tailored: partial registers and
+flags as values* (`--tree-fold-relax=`) widens what is eligible to include the
+8/16-bit ops and the `adc`/`setcc`/`dec`-`jnz` chains 16-bit real-mode code is
+actually written in — `partial-reg` falls from 3515 to 15 on BRW and the
+`flag consumer` bucket empties entirely. The verdict above is unchanged: the
+default is still OFF.
+
 ## What it is, and what makes it different from the other two folds
 
 The VM already collapses two shapes. [Superinstructions](toyvm-superinstructions.md)
@@ -34,6 +43,12 @@ document is the implementation: what is eligible, how a run becomes a handler,
 how the clock is kept, and what it measured.
 
 ## Eligibility
+
+> **This section describes the rule set the fold shipped with, which is now
+> `--tree-fold-relax=none`.** Two of the restrictions below — the narrow-op one
+> and the flag-consumer one — are lifted by default today; see *DOS-tailored:
+> partial registers and flags as values*. Everything measured in *What it
+> measures* is the `=none` rule set.
 
 **The rule set is `expr-fold-census.js`'s `classify()`, imported, not
 reimplemented.** The census measured the population this fold exists for; a fold
@@ -168,6 +183,13 @@ ZOKDTPLN under fusion; it cannot happen here.
 
 ### Why the loop is not folded in place
 
+> **Superseded.** It is now, for a self-loop block whose whole body folds — see
+> *Folding the terminator* below. The objection in this section was right about
+> the hazard and wrong about the conclusion: the fix is not to leave the
+> terminator alone, it is to take the region JIT's boundary test with it. The
+> paragraph is kept because the hazard it names is still what the loop fold has
+> to answer for.
+
 The scope this could have had is "fold the whole self-loop and iterate inside
 the handler while the terminator's condition holds". It does not, and the reason
 is [region-live.js's DREAM row](toyvm-region-live.md): a fold that loops in place
@@ -232,9 +254,10 @@ matters, or a program that finds only three foldable blocks would never install
 any of them), and a run installs at most four times (`--tree-fold-installs=4`)
 and generates at most 256 trees (`--tree-fold-max`).
 
-`--tree-fold` and `--region-jit` are mutually exclusive: both append to the
-handler table through `opts.regions`, so whichever built last would own the
-ordinals the other's arena words were written against.
+`--tree-fold` and `--region-jit` used to be mutually exclusive: both append to
+the handler table through `opts.regions`, so whichever built last owned the
+ordinals the other's arena words were written against. They are not any more —
+see *One allocator for the handler table's tail* below.
 
 ## Gates
 
@@ -647,10 +670,669 @@ The two gate buckets are a rounding error next to `partial-reg`, `too short`,
 `terminator`, `stack` and `flag consumer` — the gate is not what is limiting
 coverage, the eligibility rules are, and the work list below is unchanged by it.
 
+## DOS-tailored: partial registers and flags as values
+
+Everything above is measured with the rule set the fold shipped with. Two of the
+three relaxations the work list asks for are now implemented, behind
+`--tree-fold-relax=`:
+
+| value | meaning |
+|---|---|
+| absent | every implemented relaxation. At the time of this section that was `partial,flags`; it is now `partial,flags,string,rep,shifts,muldiv` — see *String instructions, CL shifts and div in the tree* below. This is the default. |
+| `--tree-fold-relax=none` | the exact rules everything above was measured with. The A/B arm. |
+| `--tree-fold-relax=partial` / `=flags` / `=partial,flags` | one or both, explicitly. Any subset of the full list works the same way; the list is `RELAXATIONS` in `tree-fold.js` and the CLI validates against it, so adding a name extends the flag. |
+
+`bench-dos.js` carries the same arms as `tailcall+treefoldexact` and
+`tailcall+treefoldhotexact`, and `sweep-dos.js` takes the flag corpus-wide.
+
+### Neither one needed a new model
+
+That is the whole reason they are one change each rather than a rewrite, and it
+is worth saying why, because "8-bit writes into a 32-bit local" and "flags as
+values" both sound like new machinery.
+
+**Partial registers.** `emit.js` already spells an 8-bit register read as an
+extract and an 8-bit write as a mask-and-or insert over the full-width global
+(`$rget8`/`$rset8`, and `$rset16` for a 16-bit write inside a 32-bit block).
+`trace-jit.js`'s `foldRegisterFile`/`foldRegisterFileWide` already collapse those
+to a direct access once the register index is a constant, which it is inside a
+tree, and `promoteRegs` then rewrites that global into the run's wasm local. So
+AL *is* bits 0-7 of the promoted AX local by construction, not by a second copy
+of the register file. 8- and 16-bit loads and stores keep their `$rd8`/`$wr8`
+calls in source order like every other memory op, so they carry the same fault
+and segment semantics as the per-op handlers.
+
+**Flags.** Flags here are lazy: a producer calls `$rec_*` to record its inputs,
+a consumer calls `$get_cf`/`$cond*` to materialize the one field it wants. The
+fold keeps both calls verbatim and in source order inside the generated handler,
+and deliberately leaves the flag globals out of the register promotion set — so
+the per-FIELD last-writer state at the run's end is exactly what an unfolded
+compile would have left for the terminator and the successor blocks to read.
+
+So both are ACCEPTANCE changes. `classify()` in `expr-fold-census.js` already
+tags each declined op with the relaxation that would take it; `eligibleRuns` now
+consults a relaxation set instead of refusing outright.
+
+What stays a barrier, and why: `rol`/`ror` at any width (narrow is not on its own
+a licence); `lahf`/`sahf`/`pushf`/`popf` and the BCD group, which want the
+architectural FLAGS word including AF, which the record does not carry as a
+value; and a shift by CL, whose flag effect is undefined at count zero and so is
+not a function of the recorded operands alone. The decline histogram now splits
+the old `flag consumer` bucket into `shift by CL` and `flags word: <stem>` so
+what is left is still a work list rather than one opaque number.
+
+### Before and after, load-independent
+
+One run per program at `--dispatches=20m --tree-fold --tree-fold-hot=64
+--handler-hist=1 --pit-clock --auto-key --sound-pref=sb
+--env=ULTRASND=220,1,1,11,7`, three arms: `=none` / `=partial` /
+`=partial,flags`. Counts, so the load does not enter.
+
+| program | arm | trees / installs | subs (ops) | hot blocks | tree dispatches | `$next` removed | frame |
+|---|---|---|---|---|---|---|---|
+| BRW | none | 0 / 1 | 0 | 1 | 0 | 0.00% | ecef58f7 |
+| | partial | 3 / 2 | 8 (40) | 7 | 0 | 0.00% | ecef58f7 |
+| | **partial,flags** | 3 / 2 | 8 (43) | 7 | 0 | 0.00% | ecef58f7 |
+| ACCIDENT | none | 2 / 3 | 3 (13) | 106 | 15,535 | 0.28% | 1fceaf7a |
+| | partial | 5 / 3 | 9 (55) | 155 | 15,535 | 0.56% | 1fceaf7a |
+| | **partial,flags** | 6 / 3 | 10 (60) | 166 | 24,815 | **0.74%** | 1fceaf7a |
+| DHADREN | none | 0 / 1 | 0 | 0 | 0 | 0.00% | aa293234 |
+| | partial | 0 / 1 | 0 | 0 | 0 | 0.00% | aa293234 |
+| | **partial,flags** | 0 / 1 | 0 | 0 | 0 | 0.00% | aa293234 |
+| B-STEEL | none | 1 / 2 | 2 (10) | 1 | 0 | 0.00% | 8e8c9dc5 |
+| | partial | 1 / 2 | 2 (10) | 1 | 0 | 0.00% | 8e8c9dc5 |
+| | **partial,flags** | 1 / 2 | 2 (10) | 1 | 0 | 0.00% | 8e8c9dc5 |
+| DTM2 | none | 3 / 2 | 3 (15) | 4 | 0 | 0.00% | 38c165c5 |
+| | partial | 4 / 2 | 4 (20) | 10 | 0 | 0.00% | 38c165c5 |
+| | **partial,flags** | 4 / 2 | 4 (22) | 18 | 0 | 0.00% | 38c165c5 |
+| CYCLE | none | 0 / 1 | 0 | 4 | 0 | 0.00% | 38c165c5 |
+| | partial | 0 / 1 | 0 | 8 | 0 | 0.00% | 38c165c5 |
+| | **partial,flags** | 0 / 1 | 0 | 16 | 0 | 0.00% | 38c165c5 |
+
+**Every frame hash is identical down all three arms**, which is the contract.
+
+The two buckets the relaxations were aimed at empty out almost exactly:
+
+| bucket | arm | BRW | ACCIDENT | DHADREN | B-STEEL | DTM2 | CYCLE |
+|---|---|---|---|---|---|---|---|
+| partial-reg | none | 3515 | 1811 | 489 | 850 | 297 | 305 |
+| | partial,flags | **15** | **19** | **11** | **2** | **6** | **6** |
+| flag consumer | none | 1694 | 538 | 214 | 105 | 149 | 178 |
+| | partial,flags | **0** | **0** | **0** | **0** | **0** | **0** |
+
+`flag consumer` goes to zero everywhere because the bucket is now split: what is
+left of it shows up as `shift by CL` (BRW 25, DHADREN 68, ACCIDENT 8) and
+`flags word: cli/sti/cld/clc/stc/sh2/sh3/cmc/sahf` (BRW 141 across six stems,
+ACCIDENT 149 across nine). The residual `partial-reg` is `rol`/`ror` at 8 and 16
+bits, which is a deliberate keep-out.
+
+The `hot blocks` column is the one to read for reach, and the `$next removed`
+column for what that reach was worth *here*. DTM2's hot set goes 4 → 18 and
+CYCLE's 4 → 16 — four times the eligible population — while their removed share
+stays 0.00%, because those blocks are still not the blocks those programs
+actually spend their dispatches in. ACCIDENT is the one program where the extra
+eligibility lands on hot code: 0.28% → 0.74%, from 3 substitutions to 10.
+
+BRW is the row that does not do what the census predicted. The relaxations move
+its hottest foldable candidate from 990 entries to 200,259 — a 200x — and it
+still records **zero tree dispatches**, because the substituted blocks are not
+re-entered after the install in this configuration. Its frame is identical at
+both 20M and 60M, so this is a reach-versus-use gap and not a correctness one,
+but it is unexplained and it is why the timing row below should not be read as
+"the relaxations bought BRW 38%".
+
+### Timing, and why it is not quotable here
+
+`bench-dos.js --variants=tailcall,tailcall+treefoldhotexact,tailcall+treefoldhot
+--reps=5 --cpu-time --dispatches=20m --dispatch-drift=4096`, arms alternating
+every rep with the order rotated, minimum of five, guest CPU only. Load 11-13
+throughout.
+
+| program | plain | gated `=none` | gated (min / paired) |
+|---|---|---|---|
+| BRW | 21.50 ns/disp | 19.13 (+12.4% / +2.5%) | 15.52 (+38.5% / +31.4%) |
+| ACCIDENT | 20.66 | 22.17 (−6.8% / −11.6%) | 22.08 (−6.4% / −5.1%) |
+| DHADREN | 6.92 | 6.23 (+11.2% / +18.4%) | 6.21 (+11.3% / +2.6%) |
+| B-STEEL | 15.23 | 16.56 (−8.0% / −8.0%) | 16.19 (−5.9% / −0.9%) |
+| DTM2 | 7.90 | 7.75 (+2.0% / −7.0%) | 7.63 (+3.6% / −4.6%) |
+| CYCLE | 13.15 | 13.58 (−3.2% / −5.4%) | 13.97 (−5.9% / −10.7%) |
+
+**None of these percentages are quotable, and the table says so itself.**
+DHADREN folds nothing, installs nothing and substitutes nothing in any of the
+three arms — it is the control — and it reads **+11.3% min / +18.4% paired**.
+The per-arm spread ran 17% to 134%. A control that moves by more than the effect
+means the box, not the fold, is what got measured; this is the load-20-40
+machine the rest of the doc keeps warning about. The load-independent counts
+above are the result of this work. The timing rows are recorded so the next
+person does not re-run them expecting an answer.
+
+### Corpus and witnesses
+
+Six 80M audio witnesses, plain against `--tree-fold --tree-fold-hot=64` with the
+relaxations on, `--pit-clock --auto-key --sound-pref=sb
+--env=ULTRASND=220,1,1,11,7 --audio=FILE`:
+
+| witness | frame (both arms) | wav |
+|---|---|---|
+| DADEMO3 | 36128ac7 | **identical** |
+| RUNDEMO | 08502c5c | **identical** |
+| ACME-BIG | 362275f5 | **identical** |
+| BLIQ | a12d718a | differs |
+| CONTAGIO | 163af616 | differs |
+| CATWALK | 19cfa368 | differs |
+
+**All six frame hashes are identical between the arms and match the recorded
+values.** BLIQ and CONTAGIO were already install-schedule movers before this
+change (see the gate's own witness table above). CATWALK is new, and it has the
+same signature: at `--tree-fold-batch=1` its wav is **byte-identical to plain**
+(`9268efa36e4ed39d`), as is BLIQ's (`e1c772ec7df8ae65`, the same value the gate's
+table recorded). ACME-BIG, which the static fold moved, is identical here
+outright. A wrong value would be one stable wrong answer; this is a different
+answer per install schedule with the frame pinned, which is the audio-timing
+sensitivity documented above.
+
+### What still declines
+
+With both relaxations on, the largest buckets at N=64, 20M:
+
+BRW: too short 5438, terminator 3569, alias 2020, `cold block` 1140, muldiv 795,
+stack 698, call 348, io 282, ret 251.
+
+ACCIDENT: too short 3841, stack 3628, terminator 2939, call 1292, segment 638,
+alias 633, ret 411, `cold (<64 entries)` 348, io 311, muldiv 266.
+
+The work list has changed shape. `partial-reg` and `flag consumer` are gone from
+the top; what is left is **`too short`, `stack`, `terminator`, `alias` and
+`call`** — and `too short` is now the largest single bucket in both programs,
+which is a different kind of problem from the other four. A run that ends at
+three ops does so because something a few ops away is still a barrier, so the
+remaining buckets feed it: every `alias` pair that is proved disjoint, and every
+`stack` op that is modelled, joins two short runs into one long one rather than
+adding a run of its own. Alias disjointness (below) is therefore worth more than
+its own 2020/633 suggests.
+
+## Folding the terminator
+
+`terminator` is the second- or third-largest decline bucket in every program
+above, and it is not one barrier but two questions. The first — *may the
+terminator's own `cmp` join the run?* — is answered by the flags relaxation. The
+second is the one *Why the loop is not folded in place* declined: **may the tree
+keep iterating, so a loop costs one dispatch per LOOP instead of one per
+iteration?**
+
+It may, and it needed no new machinery — only the discipline to stop writing
+one. A self-loop block whose whole body is one eligible run is lowered by
+handing that run to **`region-jit.js`'s own `buildRegion`**, as a one-block
+closed region whose last `nexts` entry is the block's head. Nothing in
+`buildRegion` requires the block to have come from a profiling trace, and the
+looping protocol that comes with it is the protocol this doc's objection asked
+for:
+
+- **The slice boundary is the interpreter's, on every lowered edge.**
+  `region-jit.js`'s `exact` path publishes `$gip` and tests
+  `$smc || $halt || $steps < 0` at each edge, in the interpreter's order, and
+  leaves through `$out` when it holds — where the epilogue's `leave` calls
+  `$slice_exit`, exactly as `GO` would. The back edge uses the interpreter's
+  `>= 0`, not a stricter `> 0`.
+- **Steps are billed per op per iteration**, with the entry refund that gives
+  back the one step `$next` charged to dispatch in. So a loop that runs 1000
+  iterations of 5 ops charges 5000, which is what the interpreter charged.
+- **`$ip` is re-resolved on the way out** through `(call $jlook (global.get
+  $gip))`, never from a baked arena address.
+
+That last point is also what keeps *this* doc's other invariant. Because the
+exit re-resolves `$ip`, the block's trailing arena words are dead — the tree
+never steps over them and nothing else reads them — so the arena is still
+byte-for-byte the size an unfolded compile produced, and a fixup landing inside
+the block resolves harmlessly into a word nobody reads.
+
+`--no-tree-fold-loops` turns just this half off; it is the A/B partner for
+everything below.
+
+### What it reaches
+
+Of the six programs in the table above, **only BRW builds loop trees** (2 of its
+5 handlers, covering 8 guest ops at 2 sites that `--no-tree-fold-loops` leaves as
+3 handlers / 8 substitutions / 43 ops). The six witness programs are where the
+shape actually lives:
+
+One run each at 20M with `--handler-hist=1`, gated against
+`--no-tree-fold-loops`. **`handler entries` is the number to read** — it is the
+real count of trips through dispatch, and it is the only one that can price a
+loop tree at all: the `tree entries:` line reports a loop tree's *entries* on
+their own and explicitly does not count its iterations, so `$next trips removed`
+understates the loop fold by exactly the trip count it removed.
+
+| program | loop handlers | handlers (loops on / off) | handler entries (on / off) | removed | handbacks (on / off) |
+|---|---|---|---|---|---|
+| CATWALK | 3 | 19 / 16 | 2,066,468 / 2,302,303 | **−10.2%** | 7757 / 7997 |
+| DADEMO3 | 16 | 29 / 15 | 7,764,127 / 7,829,174 | −0.83% | 5570 / 7696 |
+| RUNDEMO | 2 | 19 / 17 | 7,073,141 / 7,093,637 | −0.29% | 5733 / 5754 |
+| BLIQ | 2 | 10 / 8 | 18,170,820 / 18,171,603 | −0.00% | 64311 / 64361 |
+| ACME-BIG | 0 | 4 / 2 | 13,447,316 / 13,447,316 | 0.00% | 1812 / 1812 |
+| CONTAGIO | 0 | 78 / 78 | 9,229,575 / 9,229,575 | 0.00% | 93154 / 93154 |
+
+CATWALK is what the feature is for: three loop handlers take **a tenth of every
+dispatch the program makes**, and no straight-line fold can reach them because
+the run they replace ends at the terminator. DADEMO3 builds the most loop trees
+(16) and gets the least out of them, which is the `--handler-hist` lesson again:
+count how often a shape runs, not how many of it exist. The frame hash is
+identical between the two arms in every row (the flag-off comparison for these
+six is the 80M witness table below).
+
+The decline bucket was deliberately split per stem (`loop: body breaks at
+<op>`), so it is a work list rather than a wall. The measured answer is that
+**the terminator was never the main barrier — the string group is**:
+`movsb`/`movsb32`, `lodsb`/`lodsw`/`lodsb32`, `stosb`/`stosb32`, `rep`/`repne`
+account for most declines in every program (DADEMO3: 18 `movsb32`, 5 `lodsb32`,
+1 `lodsw32`; B-STEEL: 7 `lodsw`, 2 `lodsb`, 1 `repne`), followed by `out`/`in`,
+the CL-shift stems and `div`. A DOS inner loop is usually a string loop, and a
+string op is not an expression.
+
+### The one thing it changes, and what it is not
+
+Every frame hash is identical, everywhere it was checked — all six programs at
+20M in all five arms, and all six witnesses at 80M. Interrupt counts, vector
+counts, dispatch counts and guest seconds are identical too.
+
+What moves is **DADEMO3's wav**, and unlike the movers in the table above it is
+*not* install schedule: at `--tree-fold-batch=1` it is the same moved value
+(`442a46e9`), not the flag-off one. `--no-tree-fold-loops` restores the flag-off
+wav byte for byte, so this is the loop fold and nothing else. The mechanism is
+visible in the report:
+
+| | plain | loop fold |
+|---|---|---|
+| handbacks | 46,340 | 28,209 |
+| dispatches per handback | 1726 | 2836 |
+| slice entries | `8:ad7a x5918, 8:adbc x5918, 8:adfe x5918 (jt=MISS), 8:ae40 x5918` | `8:ad7a x5034, 8:b2e9 x1880, 8:adbc x1605, 8:ae40 x1492` |
+| frame / interrupts / guest seconds | 36128ac7 / 177+645 / 7.99 | identical |
+
+The interpreter was taking a **handback** at those blocks — one of them on a
+jump-table miss — 5918 times each. The folded loop iterates through them in
+place, so those handbacks do not happen; and because `Machine.audioNow` stamps
+port writes relative to the slice start and `audioAdvance` runs per handback,
+the same sound is rendered against a different slice grid.
+
+This is the class `region-live.js` documents as "audio only": same picture, same
+interrupt count, a wav rendered against slices that started and ended elsewhere.
+It is not the `$steps` bug that class used to also contain — that one is fixed,
+by the `exact` protocol this fold inherits — it is the residue of removing a
+handback at all. `--lattice-clock`, which anchors the slice grid and the audio
+render to a quantum instead of to the last handback, is the instrument for it,
+and it is passed to both arms or to neither:
+
+| witness | plain | fold | `--lattice-clock` plain | `--lattice-clock` fold |
+|---|---|---|---|---|
+| CATWALK | 9268efa3 | e31ee7e1 | 168aac23 | **168aac23** |
+| BLIQ | e1c772ec | 9e6bdfeb | 0f735bad | **0f735bad** |
+| DADEMO3 | 84b95c3f | 442a46e9 | 95fdd202 | **7839f7fd** |
+
+**CATWALK and BLIQ are answered outright**: anchor the grid and the two arms
+render byte-identical wavs, so what moved was the grid and not a value.
+`--no-tree-fold-loops` restores the flag-off wav for all three on the shipped
+clock, so the loop fold is the whole of the effect either way.
+
+**DADEMO3 is not, and that is the failing witness.** Under the lattice clock its
+two wavs are the same length and agree byte for byte for the first 74% of the
+run, then differ in **4785 bytes of the remaining 184KB** (2.6% of that tail).
+Interrupt counts are identical (177, plus 629 host-raised vectors), as are the
+frame, the dispatch count and the guest seconds.
+
+The guest event that moves is **the host's interrupt injection point, which is
+quantized to handbacks and not to the clock**. `--lattice-clock` anchors where
+audio is *rendered*; it cannot anchor where an IRQ is *delivered*, because the
+host can only inject one between slices. Absorbing 18,228 handbacks coarsens
+that grain from 1703 to 2783 steps, DADEMO3's timer ISR is what drives its
+playback — `out_8` is its single hottest handler at 16.4% of all dispatches —
+and so its port writes are stamped a few hundred steps from where they were.
+CATWALK and BLIQ do not have that dependency, which is why the lattice clock
+finishes the job for them and not for this one.
+
+**So the honest statement is:** folding the terminator is frame-exact,
+interrupt-count-exact and `$steps`-exact, and it is *not* handback-exact,
+because absorbing a block transfer is the whole point of it. On a program whose
+audio is driven from an interrupt handler that is the last 26% of one wav. That
+is the same trade the region JIT already ships with as a page default; it is why
+`--tree-fold` stays opt-in, and why `--no-tree-fold-loops` is a documented
+switch rather than a bisector.
+
+**Superseded as of the interrupt schedule.** Handback-exactness stopped being
+something the audio depends on: interrupts are now delivered at the dispatch
+count they are due at rather than at the next handback, so absorbing a block
+transfer no longer moves an injection. DADEMO3 — the witness this section was
+written about — is byte-identical in all three arms today, and so are RUNDEMO,
+ACME-BIG, CONTAGIO and CATWALK. BLIQ is the one that still moves, and its
+interrupt *count* moves with it, which makes it the install-schedule class and
+not this one. See [toyvm-irq-schedule.md](toyvm-irq-schedule.md).
+
+## One allocator for the handler table's tail
+
+`--tree-fold` and `--region-jit` were mutually exclusive, and the reason was two
+bugs at once. Both append their generated handlers through `opts.regions`, and
+both computed their first ordinal as `HANDLERS.length` — so their ordinals
+*overlapped*, and each one's module build passed only its own list, so whichever
+built last shipped a table that did not contain the other's handlers at all. An
+arena word written against a tree ordinal would then call a region, or call
+nothing.
+
+The fix is `tools/toyvm/extras.js`: one **append-only** `Extras` allocator,
+owning the shared tail past `HANDLERS.length`, handed to both the `TreeFolder`
+and the `LiveJit` by `run-dos.js`. Both commit into it, every module build is
+handed the whole list, and an ordinal is never reused. The one hazard left is a
+straddle — the region JIT *prepares* a module (picking ordinals) at one slice
+and *installs* it at a later one, and the fold may commit in between — so the
+prepared bundle carries an `extrasEpoch` and `install()` declines and re-profiles
+if the epoch moved. Regions are named from their shared-tail ordinal
+(`region_${base + idx}`) rather than from 0, so a second install cannot emit a
+duplicate wasm function name.
+
+Measured at 20M with the gate at 64, `--tree-fold --tree-fold-hot=64
+--region-jit` against each flag alone:
+
+| program | region JIT alone | fold alone | both | frame (all arms) |
+|---|---|---|---|---|
+| BRW | installed @0x7adc | 5 trees (2 loop) | **installed @0x7adc + 5 trees (2 loop)** | ecef58f7 |
+| ACCIDENT | installed @0xb13 | 6 trees | declined (no self-loop region) + 6 trees | 1fceaf7a |
+| DHADREN | installed @0x47 | — | **installed @0x47** | aa293234 |
+| B-STEEL | declined (inconclusive) | 1 tree | declined + 1 tree | 8e8c9dc5 |
+| DTM2 | declined (no region) | 4 trees | declined + 4 trees | 38c165c5 |
+| CYCLE | installed @0xcba | — | declined (no region) | 38c165c5 |
+
+**BRW is the row that proves it**: a region installed at `0x7adc` and five tree
+handlers, two of them loops, live in one handler table in one run, and the frame
+is the flag-off frame.
+
+Two tests pin it. `test/test-toyvm-tree-fold.js` runs its `GATE_COM` case under
+both flags at once — the region JIT declines on a program that small, so what
+that one guarantees is that both allocators run in one process and the screen is
+still the flag-off screen. `test/test-toyvm-region-live.js` adds the arm that
+matters: its side-exit program, which is built to make the JIT install, run with
+`--tree-fold` as well, asserting **1 region install and 3 tree handlers in one
+table** and `bx`/`si`/`bp` and the frame identical to the interpreter's. Values
+are the assertion there and timing deliberately is not — a loop tree absorbs
+handbacks, so the wav grid is expected to move, while an ordinal collision shows
+up as arithmetic.
+
+Which program the sampler picks moves between arms (ACCIDENT and CYCLE install
+alone and decline with the fold; B-STEEL declines either way). That is expected
+and not a regression: the fold changes what the profiling arms execute, so the
+region gate sees a different program. The frame is the invariant, and it holds
+in all four arms of all six programs.
+
+### The six witnesses at 80M, with both items in
+
+`--dispatches=80m --pit-clock --auto-key --sound-pref=sb
+--env=ULTRASND=220,1,1,11,7 --audio=FILE`, plain against `--tree-fold
+--tree-fold-hot=64`:
+
+| witness | frame (both arms) | trees (loop trees) | subs (ops) | wav |
+|---|---|---|---|---|
+| DADEMO3 | 36128ac7 | 29 (**16**) | 197 (1000) | differs — *see above* |
+| RUNDEMO | 08502c5c | 19 (2) | 34 (166) | **identical** |
+| BLIQ | a12d718a | 12 (2) | 33 (135) | differs (grid) |
+| ACME-BIG | 362275f5 | 4 (2) | 6 (30) | **identical** |
+| CONTAGIO | 163af616 | 78 (0) | 514 (3093) | differs (grid) |
+| CATWALK | 19cfa368 | 10 (1) | 22 (105) | differs (grid) |
+
+**All six frame hashes are identical between the arms and match the recorded
+baselines.** BLIQ and CONTAGIO were already install-schedule movers before any of
+this work; CATWALK and BLIQ are proven grid-only by `--lattice-clock` above;
+DADEMO3 is the one witness whose wav is neither, and its mechanism is named
+above.
+
+### Timing
+
+Not measured, and deliberately so. The three-arm table above was taken at load
+11-13 and its control still moved 18%; the box was at **load 62** while these
+counts were collected. Every number in these two sections is a count or a hash,
+and counts are the same on a loaded box. `--handler-hist` entries, handbacks and
+frame hashes are what this feature should be argued about, and interleaving on
+an idle machine is what a timing claim would need.
+
+The arms for that run exist, so nobody has to reconstruct them.
+`tools/toyvm/bench-dos.js` gained two switches: **`treefoldhotnoloops`**, which
+holds the straight-line fold fixed and moves only whether a self-loop iterates
+inside its tree, and **`regionjit`**, which is now composable because the
+ordinals are. So the four-arm command is
+
+```
+node tools/toyvm/bench-dos.js PROG.EXE --reps=5 --cpu-time --dispatches=20m \
+  --dispatch-drift=4096 \
+  --variants=tailcall,tailcall+treefoldhot,tailcall+treefoldhotnoloops,tailcall+regionjit+treefoldhot
+```
+
+and it runs (checked on CATWALK). Read its control before reading its arms.
+
+### The corpus, gated, with all four items in
+
+`sweep-dos.js --dir=/tmp/demos --dispatches=8m --reps=1 --variants=tailcall`,
+once plain and once `--tree-fold --tree-fold-hot=64`, then `sweep-diff.js`:
+
+```
+191 programs
+REGRESSIONS: 0
+WENT BLANK: 0
+changed (frame and/or dispatches moved, still drawing): 0
+recovered: 1    QUARTZ.EXE (timeout -> ok; the known QUARTZ flake)
+unchanged: 190
+```
+
+**Nothing in the corpus moves.** This is a stronger result than the ungated
+sweep recorded above (42 changed, COLORS.EXE blank, ZOKDTPLN.COM two pixels),
+and the reason is the gate rather than anything about partial registers, flags,
+loops or ordinals: at `--tree-fold-hot=64` over an 8M budget, most programs
+install nothing at all, and the ones that do install late enough that the
+install-schedule sensitivity those two rows documented never gets a chance to
+fire. The ungated numbers are the ones to quote for "what does substituting a
+module into a running machine cost"; these are the ones to quote for "is the
+shipping configuration safe".
+
+One measurement error is worth recording because it is easy to repeat.
+`sweep-dos.js` takes **`--dispatches=`**, not `--budget=`; a `--budget=8m` is
+silently ignored and the run falls back to the default guest-seconds budget
+(44.06M dispatches here) and the default `--reps=3`. Comparing that against an
+8M/1-rep baseline reports three regressions, one blank and 166 changed, every
+one of which is the 5.5x budget and none of which is the fold. Check the `opts`
+object recorded in both JSONs before running `sweep-diff.js` on them — it is
+there for exactly this.
+
+## String instructions, CL shifts and div in the tree
+
+The previous section's work list ended by naming the **string group** as the
+barrier that stops a DOS inner loop folding, with `out`/`in`, CL-count shifts and
+`div` behind it. Four more relaxations close all of those but the I/O pair, which
+is deliberately left alone (host I/O quantization is a separate question):
+
+| value | what joins the eligible set |
+|---|---|
+| `string` | non-`rep` `movs`/`lods`/`stos`/`scas`/`cmps` at every width |
+| `rep` | `rep movs`/`stos` and `repne scas`/`cmps` |
+| `shifts` | `shl`/`shr`/`sar`/`rol`/`ror`/`rcl`/`rcr` by `CL`, and the rotates at any count |
+| `muldiv` | `mul`/`imul`, and `div`/`idiv` with its `#DE` trap |
+
+All four are on by default when `--tree-fold` is on, and each is nameable on its
+own through `--tree-fold-relax=`. `--tree-fold` itself stays default **OFF**.
+
+### Three of the four needed no new machinery either
+
+The same thing that was true of partial registers and flags is true here, and for
+the same reason: the fold splices the *existing* handler bodies into a run, so
+whatever a handler already does it keeps doing.
+
+**String ops.** A `stosb` handler is a `$rd`/`$wr` pair plus a `$si`/`$di` update
+whose sign is read from the live direction flag, and a segment override is
+already an operand rather than a branch. Folding it is admitting it to the set;
+DF, the override and the fault behaviour come along because the WAT does.
+
+**`rep`.** REP widening (`$rep_fast`, `$rep_span_ok`, `$code_clear`) lowers a
+`rep movs`/`stos` to a `memory.copy`/`memory.fill` under hoisted guards with a
+byte-loop fallback. Inside a tree it is the **same** primitive under the **same**
+guards with the **same** step billing — the three bookkeeping calls simply had to
+be declared safe in `trace-jit.js`'s `SAFE_CALLS` and classified as such in
+`handler-effects.js`. `repne scas`/`cmps` stays the bounded scan loop it already
+was, so count, flags and pointers land where the interpreter leaves them on each
+of its three exits.
+
+**CL shifts.** `$sh_<kind><w>` masks its count with the live `(global.get
+$shmask)` — the 8086-vs-186 setting programs probe on purpose — returns early at
+a masked count of zero *without writing any flag*, and reads the incoming carry
+through `$get_cf`. The census declined these because it could not say what the
+flags come out as. A tree does not have to say.
+
+### `div` is the first escape the fold repairs rather than refuses
+
+`div`/`idiv` carry the divide-error trap, written `(call $fault0 <ip>) (return)`
+twice per handler. That is not an unknown escape, it is a known one, so
+`buildTree` splices two statements in front of each call — and the order is the
+correctness argument:
+
+1. **the step refund.** The tree charged the run's `n` steps up front; an
+   unfolded interpreter would have charged `i+1` by the faulting op, so `n-1-i`
+   go back. `$fault` copies `$steps` straight into `$left`, which is why this
+   cannot happen after it.
+2. **the promotion epilogue.** Promoted registers out of their wasm locals and
+   back into their globals. `$fault` pushes FLAGS/CS/IP through SP and halts, and
+   everything downstream of a halt reads globals.
+
+`$ip` is deliberately not advanced — an unfolded `div` leaves it parked
+mid-operand too, and control re-enters through `$gip`/`$jlook`.
+
+Two constraints fall out of that. `div` folds in **straight-line runs only**: a
+`(return)` out of the middle of a loop tree would skip region-jit's own epilogue,
+so the loop path passes `allowFault: false` and the histogram says `div (loop
+tree)` rather than going quiet. And `$fault0` is promotable **only for a caller
+that promises to flush** — it is a gated pass option, not a new `SAFE_CALLS`
+entry, because `region-jit.js` lowers through the same `emitTier3` and does not
+splice: its refusal to promote across a `div` today is exactly what keeps it
+correct, and an unconditional entry would have silently taken that away.
+
+### Before and after
+
+Nine programs, 20M dispatches, `--tree-fold-hot=64`, four arms on **one build**
+separated by `--tree-fold-relax=` rather than by commit — same binary, same
+arena, same install schedule, so a difference cannot be anything else. `base` is
+`partial,flags`, the rule set the section above was measured with.
+
+| program | trees (loop) base → all | handler entries base → all | removed |
+|---|---|---|---|
+| RUNDEMO | 19 (2) → **25 (4)** | 7,052,573 → 6,732,950 | **−4.53%** |
+| DADEMO3 | 29 (16) → **42 (25)** | 7,765,417 → 7,551,951 | **−2.75%** |
+| ACCIDENT | 6 (0) → 5 (0) | 15,348,403 → 15,301,153 | −0.31% |
+| CYCLE | 0 → 1 (1) | 14,636,552 → 14,636,066 | −0.003% |
+| CATWALK | 10 (1) → 12 (1) | 2,071,381 → 2,071,381 | 0.00% |
+| B-STEEL | 1 (0) → 3 (1) | 12,945,634 → 12,945,634 | 0.00% |
+| BRW | 5 (2) → 6 (3) | 17,767,653 → 17,767,653 | 0.00% |
+| DTM2 | 4 (0) → 4 (0) | 4,020,375 → 4,020,375 | 0.00% |
+| DHADREN | 0 → 0 | 1,988,405 → 1,988,405 | 0.00% |
+
+Attributed per relaxation, on the two programs that move:
+
+| | RUNDEMO entries | DADEMO3 entries |
+|---|---|---|
+| base (`partial,flags`) | 7,052,573 | 7,765,417 |
+| `+string` | 6,874,397 (−2.53%) | 7,553,637 (−2.73%) |
+| `+rep` | 6,874,397 (−0.00%) | 7,553,127 (−0.01%) |
+| `+shifts,muldiv` | **6,732,950 (−2.06%)** | 7,551,951 (−0.02%) |
+
+**`string` is most of the win and `rep` is almost none of it**, which is the
+opposite of what the work list guessed. The reason is in the same logs: REP
+widening already collapses a `rep` to one dispatch however far it runs, so
+folding it removes one `$next` trip, while a *non-rep* `stosb` in a loop body is
+one dispatch per iteration and blocks the whole body from folding. `shifts` +
+`muldiv` are then worth as much again as `string` on RUNDEMO alone — it is a
+16-bit renderer whose inner loops are `sh4_r16`/`sh5_r16` shift chains.
+
+The share of dispatches the fold retires, which is the load-independent version
+of the same number:
+
+| program | base | all four |
+|---|---|---|
+| RUNDEMO | 2.66% | **3.95%** |
+| DADEMO3 | 1.29% | **1.55%** |
+| ACCIDENT | 0.77% | **1.05%** |
+
+ACCIDENT is the interesting row: its tree **count** fell 6 → 5 while its entries
+dropped, because one longer run absorbed what had been two.
+
+### What the histogram says now
+
+Every bucket these four relaxations target is **gone**, not smaller. DADEMO3's
+`string: stosb32 3933`, `stosd32 3690`, `stosw32 2472` — 10,095 declined sites —
+are absent from the after-run, as are RUNDEMO's `rcl/rcr 72`, `shift by CL 42`,
+`muldiv: div 40` and its eleven string buckets. What is left at the top:
+
+| | RUNDEMO | DADEMO3 |
+|---|---|---|
+| 1 | stack 7064 | terminator 5265 |
+| 2 | too short 5590 | too short 5056 |
+| 3 | terminator 3480 | stack 1812 |
+| 4 | segment 2185 | call 1724 |
+| 5 | call 1704 | cold block 1401 |
+| 6 | alias 865 | alias 708 |
+| 7 | ret 799 | io 585 |
+
+`push`/`pop` is now the largest single named barrier, `call`/`ret` behind it, and
+`alias` went *up* on both (729 → 865, 664 → 708) because longer runs expose more
+load-after-store pairs. Two of the three remaining leaders are control flow,
+which is Design B's territory rather than this fold's; `alias` and `stack` are
+not.
+
+### Safety
+
+**All 36 frame hashes are identical across all four arms in all nine programs.**
+
+The corpus, `sweep-dos.js --dir=/tmp/demos --dispatches=8m --reps=1
+--variants=tailcall` off against `--tree-fold --tree-fold-hot=64`, both arms run
+on this build (the pre-rebase baseline was discarded on purpose — main
+`e7a7c2e5` changed when interrupts are delivered, so every plain result moved
+and a stale diff would have credited that to this fold):
+
+```
+191 programs
+REGRESSIONS: 0
+WENT BLANK: 0
+changed (frame and/or dispatches moved, still drawing): 0
+recovered: 0
+unchanged: 191
+```
+
+**Nothing in the corpus moves at all** — a clean sweep, without even the QUARTZ
+flake the previous section's run picked up.
+
+The six 80M audio witnesses: every frame matches the plain build exactly
+(DADEMO3 `36128ac7`, RUNDEMO `fcf5e9b5`, BLIQ `dbb3c55d`, ACME-BIG `362275f5`,
+CONTAGIO `163af616`, CATWALK `19cfa368` — the post-`e7a7c2e5` values), and five
+of six wavs match byte for byte. BLIQ's wav differs, and it is **pre-existing
+install-schedule sensitivity, not these relaxations**: re-run at the `base`
+eligibility it produces the *same* divergent hash (`383ec794`), and
+`--tree-fold-batch=1` moves it again (`8a3e5522`) rather than back to plain,
+which is what a schedule effect looks like and what a wrong value does not. The
+frame is identical in every one of those arms.
+
 ## What is next
 
 The decline histogram is the work list, and the three relaxations it points at,
-in the order the corpus argues for them:
+in the order the corpus argues for them. **Two of the three are now implemented**
+— see *DOS-tailored: partial registers and flags as values* above — and are
+described here as they were originally argued for. Two further items that were
+not on this list are also in: the terminator now folds for a self-loop block
+(*Folding the terminator*), and the fold stacks on `--region-jit` (*One
+allocator for the handler table's tail*). The string group that the terminator
+work left at the top of the histogram — `movsb`/`lodsw`/`stosb`/`rep`, ahead of
+`out`/`in`, CL shifts and `div` — **is now in too**, along with the shifts and
+`div`; see *String instructions, CL shifts and div in the tree* above. The guess
+recorded here that the string group was "not expression-tree material at all"
+and belonged to `rep`-widening turned out to be right about `rep` and wrong
+about the rest: `rep` inside a tree is worth ~0.01% because widening already
+collapses it to one dispatch, while the *non-rep* string ops were worth −2.5% on
+their own. The two mechanisms do not compete so much as stack.
+
+What that leaves at the top of the histogram is **`push`/`pop`**, `call`/`ret`,
+`segment`, and `alias` — and the first of those is the one to reach for next,
+because the other three are either Design B's territory or item 1 below.
+`out`/`in` remain deliberately out of scope: host I/O quantization is a separate
+investigation.
 
 **1. Alias disjointness.** Today every load after a store in the same run is
 assumed to alias, and the run ends there. Most of those pairs are provably

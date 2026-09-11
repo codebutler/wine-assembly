@@ -7,12 +7,16 @@
   ;; 4096 entries × 32 bytes at 0x07F60000 (high memory, safe from guest writes)
   ;; +0  type: 0=free,1=DDraw,2=DDSurface,3=DDPalette,4=DSound,5=DSBuffer,6=DInput,7=DIDev,26=DPlay3,27=DPlayLobby2,28=DAView,29=DAStatics,30=IMalloc,31=DABehavior/node
   ;; +4  refcount
-  ;; +8  misc0 (DDraw: hwnd, DSBuffer: wave_handle, DIDev: device_type 1=kbd 2=mouse)
+  ;; +8  misc0 (DDraw/DSound: hwnd, DSBuffer: wave_handle, DIDev: device_type 1=kbd 2=mouse)
   ;; +12 width (u16) | height (u16); DIDev: DIPROP_BUFFERSIZE
   ;; +16 bpp (u16) | pitch (u16); DIDev: parent DirectInput version
-  ;; +20 misc1 (DDSurface: dib_ptr, WASM addr of pixel data, 0 if none)
+  ;; +20 misc1 (DDSurface: dib_ptr, DSound: DSSCL level, 0 before SetCooperativeLevel)
   ;; +24 misc2 (DDSurface: color key low / surface byte size)
   ;; +28 flags (surface type: 1=primary,2=backbuf,4=offscreen; 0x100=has_colorkey)
+  ;; D3D9 surface arm: 0x40000000 = guest CPU ownership (not compositor binding).
+  ;; 0x20000000 = acquire pending; 0x10000000 = release upload pending.
+  ;; Bit 27 = D3D9 lockable backbuffer, captured from presentation flags.
+  ;; Bit26 distinguishes LockRect from GetDC; bit25 records READONLY LockRect.
   ;;
   ;; The comment above is the SEMANTICS; the declaration below is the OFFSETS,
   ;; and after wave 4 of docs/watx-layout-migration-design.md it is the only
@@ -113,7 +117,8 @@
   ;; several live instances and must not see surfaces belonging to another.
   (global $DX_SURF_OWNER i32 (region.addr $DX_SURF_OWNER 0))
   (global $DX_SURF_OWNER_SIZE i32 (region.size $DX_SURF_OWNER))
-  ;; CPU-write epochs and reversible-copy provenance for DirectDraw surfaces.
+  ;; Per-object auxiliary records. For DirectDraw surfaces these hold CPU-write
+  ;; epochs and reversible-copy provenance:
   ;; 4096 entries x 32 bytes in 0x07F36000..0x07F55FFF:
   ;;   +0  CPU-write epoch (advanced by Unlock)
   ;;   +4  source slot + 1 of the last small <- large plain Blt, or 0
@@ -125,13 +130,21 @@
   ;; the large surface was CPU-redrawn after the save, replaying those pixels
   ;; would stamp stale terrain over the new frame (AoE I/II). Exact inverse
   ;; rectangle matching keeps ordinary small-surface blits untouched.
+  ;;
+  ;; DirectSound buffers use the same per-slot storage as a disjoint union:
+  ;;   +0 owner DirectSound slot + 1, +4 creation DSBCAPS, +8 current DSSCL,
+  ;;   +12 play-cursor base (the stopped position or live snapshot origin).
+  ;; $dx_create_com_obj clears the full record before either type publishes it.
   (global $DX_SURF_STATE i32 (region.addr $DX_SURF_STATE 0))
   (global $DX_SURF_STATE_SIZE i32 (region.size $DX_SURF_STATE))
   ;; Per-destination cache for the 32x32 keyed software cursor used by MCM.
   ;; +0 is 0 (inactive), 1 (legacy null-source frame marker seen), or a DIB-
   ;; arena record holding two physical-page identities, x/y pairs, and their
   ;; 32x32x16 backgrounds. Flip swaps DIB pointers between COM surface entries,
-  ;; so keying those two saves by physical page is essential. +4 is reserved.
+  ;; so keying those two saves by physical page is essential.
+  ;; +4 is the guest IDirectDrawClipper pointer retained by a type-2 surface.
+  ;; Keeping this in the existing parallel table avoids stealing one of the
+  ;; fully occupied per-type union fields in DxObject.
   (global $DX_CURSOR_SAVE i32 (region.addr $DX_CURSOR_SAVE 0))
   (global $DX_CURSOR_SAVE_SIZE i32 (region.size $DX_CURSOR_SAVE))
   ;; COM wrapper stubs: DX_MAX × 8 bytes in high memory (safe from guest address collision)
@@ -162,7 +175,7 @@
   ;; guest code begins. Reserve the tail of the auxiliary-wrapper region
   ;; rather than overlapping VSOCK_TABLE at 0x07FFE000.
   (global $DX_VTBL_REGISTRY i32 (region.addr $DX_VTBL_REGISTRY 0))
-  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 64))
+  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 66))
 
   ;; Vtable blocks — arrays of thunk guest-addrs, one per interface type.
   ;; Must be in guest-reachable memory (above image_base), so allocated from heap.
@@ -177,6 +190,8 @@
   (global $DX_VTBL_DINPUT     (mut i32) (i32.const 0))
   (global $DX_VTBL_DIDEV      (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAY3     (mut i32) (i32.const 0))
+  (global $DX_VTBL_DPLAY4     (mut i32) (i32.const 0))
+  (global $DX_VTBL_DPLAYLOBBY3 (mut i32) (i32.const 0))
   (global $DX_VTBL_DPLAYLOBBY2 (mut i32) (i32.const 0))
   (global $DX_VTBL_D3D        (mut i32) (i32.const 0))
   (global $DX_VTBL_D3D3       (mut i32) (i32.const 0))
@@ -335,7 +350,9 @@
     ;; retains its existing cross-thread offset.
     (global.set $DX_VTBL_DDSURF3 (i32.load offset=248 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_D3DSWAP9 (i32.load offset=252 (global.get $DX_VTBL_REGISTRY)))
-    (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY))))
+    (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_DPLAY4 (i32.load offset=260 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_DPLAYLOBBY3 (i32.load offset=264 (global.get $DX_VTBL_REGISTRY))))
 
   (func $dx_sync_thread_vtables_if_needed
     (if (i32.eqz (global.get $DX_VTBL_DDRAW))
@@ -745,6 +762,119 @@
   (func $dx_cursor_state_ptr (param $entry_wa i32) (result i32)
     (i32.add (global.get $DX_CURSOR_SAVE)
       (i32.shl (call $dx_slot_of (local.get $entry_wa)) (i32.const 3))))
+
+  (func $dx_surface_clipper_ptr (param $entry_wa i32) (result i32)
+    (i32.add (call $dx_cursor_state_ptr (local.get $entry_wa)) (i32.const 4)))
+
+  (func $dx_surface_clipper_get (param $entry_wa i32) (result i32)
+    (i32.load (call $dx_surface_clipper_ptr (local.get $entry_wa))))
+
+  ;; Type-10 (IDirectDrawClipper) uses its otherwise-free union arm as:
+  ;;   +8  associated HWND, or zero for an explicit clip list
+  ;;   +12/+16/+20/+24 last observed HWND client RECT in screen coordinates
+  ;;   +20 explicit RGNDATA guest pointer when +8 is zero
+  ;;   +24 explicit RGNDATA byte size when +8 is zero
+  ;;   +28 bit 0 = HWND snapshot valid, bit 1 = snapshot changed
+  ;; Explicit lists are canonical private copies, so the application can free
+  ;; or mutate its input immediately after SetClipList returns.
+  (func $dx_clipper_release_explicit (param $entry_wa i32)
+    (local $list i32)
+    (if (i32.eqz (local.get $entry_wa)) (then (return)))
+    (if (i32.ne (load.field DxObject misc0 (local.get $entry_wa)) (i32.const 0))
+      (then (return)))
+    (local.set $list (load.field DxObject misc1 (local.get $entry_wa)))
+    (if (local.get $list) (then (call $heap_free (local.get $list))))
+    (store.field DxObject misc1 (local.get $entry_wa) (i32.const 0))
+    (store.field DxObject misc2 (local.get $entry_wa) (i32.const 0)))
+
+  ;; Refresh the single rectangular client-region approximation used by the
+  ;; browser compositor. Occluding sibling windows are clipped by composition;
+  ;; DirectDraw still observes movement/resizing through IsClipListChanged and
+  ;; GetClipList in the same screen-coordinate space as Win98 primary surfaces.
+  (func $dx_clipper_refresh_hwnd (param $entry_wa i32)
+    (local $hwnd i32) (local $l i32) (local $t i32)
+    (local $r i32) (local $b i32) (local $flags i32)
+    (local.set $hwnd (load.field DxObject misc0 (local.get $entry_wa)))
+    (if (i32.eqz (local.get $hwnd)) (then (return)))
+    (local.set $l (call $wnd_client_screen_x (local.get $hwnd)))
+    (local.set $t (call $wnd_client_screen_y (local.get $hwnd)))
+    (if (call $wnd_is_effectively_visible (local.get $hwnd))
+      (then
+        (local.set $r (i32.add (local.get $l)
+          (call $wnd_client_w_for_clip (local.get $hwnd))))
+        (local.set $b (i32.add (local.get $t)
+          (call $wnd_client_h_for_clip (local.get $hwnd)))))
+      (else
+        (local.set $r (local.get $l))
+        (local.set $b (local.get $t))))
+    (local.set $flags (load.field DxObject flags (local.get $entry_wa)))
+    (if (i32.and (local.get $flags) (i32.const 1))
+      (then
+        (if (i32.or
+              (i32.or
+                (i32.ne (i32.load offset=12 (local.get $entry_wa)) (local.get $l))
+                (i32.ne (i32.load offset=16 (local.get $entry_wa)) (local.get $t)))
+              (i32.or
+                (i32.ne (load.field DxObject misc1 (local.get $entry_wa)) (local.get $r))
+                (i32.ne (load.field DxObject misc2 (local.get $entry_wa)) (local.get $b))))
+          (then (local.set $flags (i32.or (local.get $flags) (i32.const 2)))))))
+    (i32.store offset=12 (local.get $entry_wa) (local.get $l))
+    (i32.store offset=16 (local.get $entry_wa) (local.get $t))
+    (store.field DxObject misc1 (local.get $entry_wa) (local.get $r))
+    (store.field DxObject misc2 (local.get $entry_wa) (local.get $b))
+    (store.field DxObject flags (local.get $entry_wa)
+      (i32.or (local.get $flags) (i32.const 1))))
+
+  ;; Test one destination point against a prepared clipper. For an explicit
+  ;; list, data_wa is the translated canonical RGNDATA copy. HWND-backed lists
+  ;; use the cached client RECT and never enter this loop on the ordinary Blt
+  ;; path: the compositor already clips that common path at window granularity.
+  (func $dx_clipper_contains (param $entry_wa i32) (param $data_wa i32)
+      (param $x i32) (param $y i32) (result i32)
+    (local $i i32) (local $count i32) (local $rect i32)
+    (if (i32.eqz (local.get $entry_wa)) (then (return (i32.const 1))))
+    (if (load.field DxObject misc0 (local.get $entry_wa))
+      (then
+        (return
+          (i32.and
+            (i32.and
+              (i32.ge_s (local.get $x) (i32.load offset=12 (local.get $entry_wa)))
+              (i32.ge_s (local.get $y) (i32.load offset=16 (local.get $entry_wa))))
+            (i32.and
+              (i32.lt_s (local.get $x) (load.field DxObject misc1 (local.get $entry_wa)))
+              (i32.lt_s (local.get $y) (load.field DxObject misc2 (local.get $entry_wa))))))))
+    (if (i32.eqz (local.get $data_wa)) (then (return (i32.const 1))))
+    (local.set $count (i32.load offset=8 (local.get $data_wa)))
+    (block $miss (loop $scan
+      (br_if $miss (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rect (i32.add (local.get $data_wa)
+        (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+      (if (i32.and
+            (i32.and
+              (i32.ge_s (local.get $x) (i32.load (local.get $rect)))
+              (i32.ge_s (local.get $y) (i32.load offset=4 (local.get $rect))))
+            (i32.and
+              (i32.lt_s (local.get $x) (i32.load offset=8 (local.get $rect)))
+              (i32.lt_s (local.get $y) (i32.load offset=12 (local.get $rect)))))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; A windowed primary presents to the clipper's associated HWND. Fall back
+  ;; to the cooperative-level target for old applications that never attach a
+  ;; clipper, and for clippers that have not yet received SetHWnd.
+  (func $dx_surface_target_hwnd (param $entry_wa i32) (result i32)
+    (local $clipper i32) (local $clip_entry i32) (local $hwnd i32)
+    (local.set $clipper (call $dx_surface_clipper_get (local.get $entry_wa)))
+    (if (local.get $clipper)
+      (then
+        (local.set $clip_entry (call $dx_from_this (local.get $clipper)))
+        (if (i32.eq (load.field DxObject type (local.get $clip_entry)) (i32.const 10))
+          (then
+            (local.set $hwnd (load.field DxObject misc0 (local.get $clip_entry)))
+            (if (local.get $hwnd) (then (return (local.get $hwnd))))))))
+    (call $dx_target_hwnd))
 
   (func $dx_cursor_reset (param $entry_wa i32)
     (local $state i32) (local $saved i32)
@@ -3612,6 +3742,7 @@
   ;; render-target reference directly.
   (func $dx_surface_release (param $this i32) (result i32)
     (local $entry i32) (local $rc i32) (local $surf_bytes i32) (local $dib_wa i32)
+    (local $clipper i32)
     (call $d3dim_worker_fence)
     (local.set $entry (call $dx_from_this (local.get $this)))
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
@@ -3623,6 +3754,14 @@
         (global.set $dx_vidmem_used (i32.sub (global.get $dx_vidmem_used) (local.get $surf_bytes)))
         (if (i32.eq (local.get $entry) (global.get $dx_primary_wa))
           (then (global.set $dx_primary_wa (i32.const 0))))
+        ;; SetClipper owns one reference until explicit detachment or this
+        ;; surface's final release. Clear first so teardown cannot observe a
+        ;; stale attachment if the clipper's own reference reaches zero.
+        (local.set $clipper (call $dx_surface_clipper_get (local.get $entry)))
+        (if (local.get $clipper)
+          (then
+            (i32.store (call $dx_surface_clipper_ptr (local.get $entry)) (i32.const 0))
+            (drop (call $dx_com_release_basic (local.get $clipper)))))
         (call $dx_cursor_reset (local.get $entry))
         (if (i32.eqz (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0x200)))
           (then (call $dib_free_wasm (local.get $dib_wa))))
@@ -3670,6 +3809,7 @@
     (local $bpp i32) (local $bps i32) (local $row i32)
     (local $ckey i32) (local $col i32)
     (local $drblt_flags i32) (local $src_keyed i32)
+    (local $clipper i32) (local $clip_entry i32) (local $clip_data i32)
     (local.set $dst_entry (call $dx_from_this (local.get $arg0)))
     (call $host_dx_trace (i32.const 12) (call $dx_slot_of (local.get $dst_entry))
       (if (result i32) (local.get $arg2)
@@ -3690,6 +3830,22 @@
     (local.set $bpp (load.field DxObject bpp (local.get $dst_entry)))
     (local.set $bps (i32.div_u (local.get $bpp) (i32.const 8)))
     (local.set $drblt_flags (local.get $arg4))
+    ;; HWND-backed clipping is enforced by the window compositor and stays on
+    ;; the bulk-copy path. Only an attached explicit RGNDATA list needs
+    ;; per-pixel membership checks inside the private surface framebuffer.
+    (local.set $clipper (call $dx_surface_clipper_get (local.get $dst_entry)))
+    (if (local.get $clipper)
+      (then
+        (local.set $clip_entry (call $dx_from_this (local.get $clipper)))
+        (if (i32.or
+              (i32.ne (load.field DxObject type (local.get $clip_entry)) (i32.const 10))
+              (i32.ne (load.field DxObject misc0 (local.get $clip_entry)) (i32.const 0)))
+          (then (local.set $clip_entry (i32.const 0)))
+          (else
+            (if (load.field DxObject misc1 (local.get $clip_entry))
+              (then (local.set $clip_data
+                (call $g2w (load.field DxObject misc1 (local.get $clip_entry)))))
+              (else (local.set $clip_entry (i32.const 0))))))))
     ;; Parse dest rect
     (if (local.get $arg1)
       (then
@@ -3716,7 +3872,9 @@
         ;; path (including MW3's reversed-Z clear).  Let bulk memory.fill handle
         ;; it instead of running one interpreted store and branch per pixel.
         (if (i32.and
-              (i32.ne (local.get $dst_dib) (i32.const 0))
+              (i32.and
+                (i32.ne (local.get $dst_dib) (i32.const 0))
+                (i32.eqz (local.get $clip_entry)))
               (i32.and
                 (i32.and (i32.eqz (local.get $row)) (i32.eqz (local.get $dx)))
                 (i32.and
@@ -3735,23 +3893,28 @@
             (local.set $sx (i32.const 0))
             (loop $fill_col
               (if (i32.lt_u (local.get $sx) (local.get $dw)) (then
-                (if (i32.eq (local.get $bps) (i32.const 1))
+                (if (call $dx_clipper_contains
+                      (local.get $clip_entry) (local.get $clip_data)
+                      (i32.add (local.get $dx) (local.get $sx))
+                      (i32.add (local.get $dy) (local.get $sy)))
                   (then
-                    (i32.store8 (i32.add (local.get $dst_dib)
-                      (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
-                               (i32.add (local.get $dx) (local.get $sx))))
-                      (local.get $row)))
-                  (else (if (i32.eq (local.get $bps) (i32.const 2))
-                    (then
-                      (i32.store16 (i32.add (local.get $dst_dib)
-                        (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
-                                 (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 2))))
-                        (local.get $row)))
-                    (else
-                      (i32.store (i32.add (local.get $dst_dib)
-                        (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
-                                 (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 4))))
-                        (local.get $row))))))
+                    (if (i32.eq (local.get $bps) (i32.const 1))
+                      (then
+                        (i32.store8 (i32.add (local.get $dst_dib)
+                          (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
+                                   (i32.add (local.get $dx) (local.get $sx))))
+                          (local.get $row)))
+                      (else (if (i32.eq (local.get $bps) (i32.const 2))
+                        (then
+                          (i32.store16 (i32.add (local.get $dst_dib)
+                            (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
+                                     (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 2))))
+                            (local.get $row)))
+                        (else
+                          (i32.store (i32.add (local.get $dst_dib)
+                            (i32.add (i32.mul (i32.add (local.get $dy) (local.get $sy)) (local.get $dst_pitch))
+                                     (i32.mul (i32.add (local.get $dx) (local.get $sx)) (i32.const 4))))
+                            (local.get $row))))))))
                 (local.set $sx (i32.add (local.get $sx) (i32.const 1)))
                 (br $fill_col))))
             (local.set $sy (i32.add (local.get $sy) (i32.const 1)))
@@ -3886,8 +4049,8 @@
     (if (i32.and (i32.eq (local.get $dw) (local.get $sw))
                  (i32.eq (local.get $dh) (local.get $sh)))
       (then
-        ;; Blt is clipped by the destination's clipper. We do not model
-        ;; arbitrary clip regions yet, but the surface bounds are mandatory:
+        ;; Blt is clipped by the destination's clipper below, but surface
+        ;; bounds are mandatory before either the bulk or region-list path:
         ;; LF2 copies its 794x548 logical frame to a 640x480 primary at 23,43.
         ;; Keep source and destination origins paired while trimming so the
         ;; equal-size fast path cannot wrap an over-wide row into later rows.
@@ -3955,7 +4118,12 @@
                       (i32.add (local.get $src_dib)
                         (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                  (i32.add (local.get $sx) (local.get $src_w))))))
-                    (if (i32.ne (local.get $col) (local.get $ckey))
+                    (if (i32.and
+                          (i32.ne (local.get $col) (local.get $ckey))
+                          (call $dx_clipper_contains
+                            (local.get $clip_entry) (local.get $clip_data)
+                            (i32.add (local.get $dx) (local.get $src_w))
+                            (i32.add (local.get $dy) (local.get $row))))
                       (then (i32.store8
                         (i32.add (local.get $dst_dib)
                           (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -3967,7 +4135,12 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                    (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 2))))))
-                      (if (i32.ne (local.get $col) (local.get $ckey))
+                      (if (i32.and
+                            (i32.ne (local.get $col) (local.get $ckey))
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row))))
                         (then (i32.store16
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -3978,7 +4151,12 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                    (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 4))))))
-                      (if (i32.ne (local.get $col) (local.get $ckey))
+                      (if (i32.and
+                            (i32.ne (local.get $col) (local.get $ckey))
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row))))
                         (then (i32.store
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -3998,19 +4176,75 @@
             (global.set $eax (i32.const 0))
             (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
             (return)))
-        (local.set $row (i32.const 0))
-        (block $blit_done (loop $blit_row
-          (br_if $blit_done (i32.ge_u (local.get $row) (local.get $dh)))
-          (call $memcpy
-            (i32.add (local.get $dst_dib)
-              (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
-                       (i32.mul (local.get $dx) (local.get $bps))))
-            (i32.add (local.get $src_dib)
-              (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
-                       (i32.mul (local.get $sx) (local.get $bps))))
-            (i32.mul (local.get $dw) (local.get $bps)))
-          (local.set $row (i32.add (local.get $row) (i32.const 1)))
-          (br $blit_row))))
+        (if (local.get $clip_entry)
+          (then
+            ;; Explicit region lists can be disjoint. Keep the ordinary row
+            ;; memcpy above/below completely untouched unless such a list is
+            ;; actually attached.
+            (local.set $row (i32.const 0))
+            (block $clip_blit_done (loop $clip_blit_row
+              (br_if $clip_blit_done (i32.ge_u (local.get $row) (local.get $dh)))
+              (local.set $src_w (i32.const 0))
+              (block $clip_blit_col_done (loop $clip_blit_col
+                (br_if $clip_blit_col_done (i32.ge_u (local.get $src_w) (local.get $dw)))
+                (if (call $dx_clipper_contains
+                      (local.get $clip_entry) (local.get $clip_data)
+                      (i32.add (local.get $dx) (local.get $src_w))
+                      (i32.add (local.get $dy) (local.get $row)))
+                  (then
+                    (if (i32.eq (local.get $bps) (i32.const 1))
+                      (then
+                        (i32.store8
+                          (i32.add (local.get $dst_dib)
+                            (i32.add
+                              (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                              (i32.add (local.get $dx) (local.get $src_w))))
+                          (i32.load8_u
+                            (i32.add (local.get $src_dib)
+                              (i32.add
+                                (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                                (i32.add (local.get $sx) (local.get $src_w)))))))
+                      (else (if (i32.eq (local.get $bps) (i32.const 2))
+                        (then
+                          (i32.store16
+                            (i32.add (local.get $dst_dib)
+                              (i32.add
+                                (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                                (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 2))))
+                            (i32.load16_u
+                              (i32.add (local.get $src_dib)
+                                (i32.add
+                                  (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                                  (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 2)))))))
+                        (else
+                          (i32.store
+                            (i32.add (local.get $dst_dib)
+                              (i32.add
+                                (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                                (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 4))))
+                            (i32.load
+                              (i32.add (local.get $src_dib)
+                                (i32.add
+                                  (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                                  (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 4))))))))))))
+                (local.set $src_w (i32.add (local.get $src_w) (i32.const 1)))
+                (br $clip_blit_col)))
+              (local.set $row (i32.add (local.get $row) (i32.const 1)))
+              (br $clip_blit_row))))
+          (else
+            (local.set $row (i32.const 0))
+            (block $blit_done (loop $blit_row
+              (br_if $blit_done (i32.ge_u (local.get $row) (local.get $dh)))
+              (call $memcpy
+                (i32.add (local.get $dst_dib)
+                  (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
+                           (i32.mul (local.get $dx) (local.get $bps))))
+                (i32.add (local.get $src_dib)
+                  (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
+                           (i32.mul (local.get $sx) (local.get $bps))))
+                (i32.mul (local.get $dw) (local.get $bps)))
+              (local.set $row (i32.add (local.get $row) (i32.const 1)))
+              (br $blit_row))))))
       (else
         ;; Nearest-neighbor stretch. Reuses $row as dst-row; uses $src_w/$src_h as scratch
         ;; dst-col / src-col / src-row. Guard against zero dims.
@@ -4041,8 +4275,13 @@
                       (i32.add (local.get $src_dib)
                         (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                  (local.get $bpp)))))
-                    (if (i32.or (i32.eqz (local.get $src_keyed))
-                                (i32.ne (local.get $col) (local.get $ckey)))
+                    (if (i32.and
+                          (call $dx_clipper_contains
+                            (local.get $clip_entry) (local.get $clip_data)
+                            (i32.add (local.get $dx) (local.get $src_w))
+                            (i32.add (local.get $dy) (local.get $row)))
+                          (i32.or (i32.eqz (local.get $src_keyed))
+                                  (i32.ne (local.get $col) (local.get $ckey))))
                       (then (i32.store8
                         (i32.add (local.get $dst_dib)
                           (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4054,8 +4293,13 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                    (i32.mul (local.get $bpp) (i32.const 2))))))
-                      (if (i32.or (i32.eqz (local.get $src_keyed))
-                                  (i32.ne (local.get $col) (local.get $ckey)))
+                      (if (i32.and
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row)))
+                            (i32.or (i32.eqz (local.get $src_keyed))
+                                    (i32.ne (local.get $col) (local.get $ckey))))
                         (then (i32.store16
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4066,8 +4310,13 @@
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                    (i32.mul (local.get $bpp) (i32.const 4))))))
-                      (if (i32.or (i32.eqz (local.get $src_keyed))
-                                  (i32.ne (local.get $col) (local.get $ckey)))
+                      (if (i32.and
+                            (call $dx_clipper_contains
+                              (local.get $clip_entry) (local.get $clip_data)
+                              (i32.add (local.get $dx) (local.get $src_w))
+                              (i32.add (local.get $dy) (local.get $row)))
+                            (i32.or (i32.eqz (local.get $src_keyed))
+                                    (i32.ne (local.get $col) (local.get $ckey))))
                         (then (i32.store
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
@@ -4103,6 +4352,14 @@
     (local $ckey i32) (local $col i32) (local $x i32)
     (call $d3dim_worker_fence)
     (local.set $dst_entry (call $dx_from_this (local.get $arg0)))
+    ;; Microsoft explicitly excludes clipping from BltFast. The receiver is
+    ;; the destination surface, so any attached clipper makes this call fail;
+    ;; callers that need clipping must use Blt.
+    (if (call $dx_surface_clipper_get (local.get $dst_entry))
+      (then
+        (global.set $eax (i32.const 0x80004001)) ;; DDERR_UNSUPPORTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
     (local.set $dst_dib (load.field DxObject misc1 (local.get $dst_entry)))
     (local.set $dst_w (load.field DxObject width (local.get $dst_entry)))
     (local.set $dst_h (load.field DxObject height (local.get $dst_entry)))
@@ -4417,9 +4674,31 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; GetClipper — not supported
+  ;; GetClipper(this, lplpDDClipper) — return an independently owned COM
+  ;; reference to the surface's current clipper.
   (func $handle_IDirectDrawSurface_GetClipper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x887600FF))
+    (local $entry i32) (local $clipper i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 2))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (call $gs32 (local.get $arg1) (i32.const 0))
+    (local.set $clipper (call $dx_surface_clipper_get (local.get $entry)))
+    (if (i32.eqz (local.get $clipper))
+      (then
+        (global.set $eax (i32.const 0x887600FF)) ;; DDERR_NOCLIPPERATTACHED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (drop (call $dx_com_addref (local.get $clipper)))
+    (call $gs32 (local.get $arg1) (local.get $clipper))
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; GetColorKey(this, dwFlags, lpDDColorKey)
@@ -4662,8 +4941,49 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; SetClipper — no-op
+  ;; SetClipper(this, lpDDClipper) — the surface owns one clipper reference.
+  ;; Repeating the same underlying object is neutral; replacement retains the
+  ;; new object before releasing the old, and NULL detaches the current one.
   (func $handle_IDirectDrawSurface_SetClipper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $clipper_entry i32)
+    (local $old_clipper i32) (local $old_entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 2))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $old_clipper (call $dx_surface_clipper_get (local.get $entry)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (if (i32.eqz (local.get $old_clipper))
+          (then
+            (global.set $eax (i32.const 0x887600FF)) ;; DDERR_NOCLIPPERATTACHED
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))
+        (i32.store (call $dx_surface_clipper_ptr (local.get $entry)) (i32.const 0))
+        (drop (call $dx_com_release_basic (local.get $old_clipper)))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $clipper_entry (call $dx_from_this (local.get $arg1)))
+    (if (i32.ne (load.field DxObject type (local.get $clipper_entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (local.get $old_clipper)
+      (then
+        (local.set $old_entry (call $dx_from_this (local.get $old_clipper)))
+        (if (i32.eq (local.get $old_entry) (local.get $clipper_entry))
+          (then
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))))
+    (drop (call $dx_com_addref (local.get $arg1)))
+    (i32.store (call $dx_surface_clipper_ptr (local.get $entry)) (local.get $arg1))
+    (if (local.get $old_clipper)
+      (then (drop (call $dx_com_release_basic (local.get $old_clipper)))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
@@ -4997,7 +5317,7 @@
     ;; a second WAT window surface for every scanline of old-school fades.
     (local.set $surface_id
       (i32.add (i32.const 0x00200000) (call $dx_slot_of (local.get $entry_wa))))
-    (local.set $target_hwnd (call $dx_target_hwnd))
+    (local.set $target_hwnd (call $dx_surface_target_hwnd (local.get $entry_wa)))
     ;; ...but only while DirectDraw is the sole owner of the window. A window
     ;; that also has ordinary GDI children has a WAT window surface, and both
     ;; surfaces attach to the same hwnd, so whichever attaches last becomes
@@ -5200,19 +5520,171 @@
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
     (if (i32.le_s (local.get $rc) (i32.const 0))
-      (then (call $dx_free (local.get $entry))))
+      (then
+        (call $dx_clipper_release_explicit (local.get $entry))
+        (call $dx_free (local.get $entry))))
     (global.set $eax (local.get $rc))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; GetClipList(this, lpRect, lpClipList, lpdwSize) — stub, return DDERR_NOCLIPLIST
+  ;; GetClipList(this, lpRect, lpClipList, lpdwSize). Build a canonical
+  ;; RGNDATA result, intersecting each retained rectangle with lpRect when one
+  ;; is supplied. This preserves DirectDraw's two-call size negotiation and
+  ;; reports the exact required size on DDERR_REGIONTOOSMALL.
   (func $handle_IDirectDrawClipper_GetClipList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x887600CD)) ;; DDERR_NOCLIPLIST
+    (local $entry i32) (local $hwnd i32) (local $data_guest i32) (local $data_wa i32)
+    (local $source_count i32) (local $i i32) (local $rect i32)
+    (local $l i32) (local $t i32) (local $r i32) (local $b i32)
+    (local $fl i32) (local $ft i32) (local $fr i32) (local $fb i32)
+    (local $count i32) (local $required i32) (local $capacity i32)
+    (local $bl i32) (local $bt i32) (local $br i32) (local $bb i32)
+    (local $out i32) (local $out_index i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.eqz (local.get $arg3))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $capacity (call $gl32 (local.get $arg3)))
+    (local.set $hwnd (load.field DxObject misc0 (local.get $entry)))
+    (if (local.get $hwnd)
+      (then
+        (call $dx_clipper_refresh_hwnd (local.get $entry))
+        (local.set $source_count (i32.const 1)))
+      (else
+        (local.set $data_guest (load.field DxObject misc1 (local.get $entry)))
+        (if (i32.eqz (local.get $data_guest))
+          (then
+            (global.set $eax (i32.const 0x887600CD)) ;; DDERR_NOCLIPLIST
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (local.set $data_wa (call $g2w (local.get $data_guest)))
+        (local.set $source_count (i32.load offset=8 (local.get $data_wa)))))
+    (if (local.get $arg1)
+      (then
+        (local.set $fl (call $gl32 (local.get $arg1)))
+        (local.set $ft (call $gl32 (i32.add (local.get $arg1) (i32.const 4))))
+        (local.set $fr (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
+        (local.set $fb (call $gl32 (i32.add (local.get $arg1) (i32.const 12))))))
+    ;; First pass: count non-empty intersections and derive their bound.
+    (block $count_done (loop $count_rects
+      (br_if $count_done (i32.ge_u (local.get $i) (local.get $source_count)))
+      (if (local.get $hwnd)
+        (then
+          (local.set $l (i32.load offset=12 (local.get $entry)))
+          (local.set $t (i32.load offset=16 (local.get $entry)))
+          (local.set $r (load.field DxObject misc1 (local.get $entry)))
+          (local.set $b (load.field DxObject misc2 (local.get $entry))))
+        (else
+          (local.set $rect (i32.add (local.get $data_wa)
+            (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+          (local.set $l (i32.load (local.get $rect)))
+          (local.set $t (i32.load offset=4 (local.get $rect)))
+          (local.set $r (i32.load offset=8 (local.get $rect)))
+          (local.set $b (i32.load offset=12 (local.get $rect)))))
+      (if (local.get $arg1)
+        (then
+          (if (i32.lt_s (local.get $l) (local.get $fl)) (then (local.set $l (local.get $fl))))
+          (if (i32.lt_s (local.get $t) (local.get $ft)) (then (local.set $t (local.get $ft))))
+          (if (i32.gt_s (local.get $r) (local.get $fr)) (then (local.set $r (local.get $fr))))
+          (if (i32.gt_s (local.get $b) (local.get $fb)) (then (local.set $b (local.get $fb))))))
+      (if (i32.and (i32.lt_s (local.get $l) (local.get $r))
+                   (i32.lt_s (local.get $t) (local.get $b)))
+        (then
+          (if (i32.eqz (local.get $count))
+            (then
+              (local.set $bl (local.get $l)) (local.set $bt (local.get $t))
+              (local.set $br (local.get $r)) (local.set $bb (local.get $b)))
+            (else
+              (if (i32.lt_s (local.get $l) (local.get $bl)) (then (local.set $bl (local.get $l))))
+              (if (i32.lt_s (local.get $t) (local.get $bt)) (then (local.set $bt (local.get $t))))
+              (if (i32.gt_s (local.get $r) (local.get $br)) (then (local.set $br (local.get $r))))
+              (if (i32.gt_s (local.get $b) (local.get $bb)) (then (local.set $bb (local.get $b))))))
+          (local.set $count (i32.add (local.get $count) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $count_rects)))
+    (local.set $required (i32.add (i32.const 32) (i32.shl (local.get $count) (i32.const 4))))
+    (call $gs32 (local.get $arg3) (local.get $required))
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.lt_u (local.get $capacity) (local.get $required))
+      (then
+        (global.set $eax (i32.const 0x88760236)) ;; DDERR_REGIONTOOSMALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    ;; RGNDATAHEADER: sizeof, RDH_RECTANGLES, count, rectangle bytes, bound.
+    (call $gs32 (local.get $arg2) (i32.const 32))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 4)) (i32.const 1))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 8)) (local.get $count))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 12))
+      (i32.shl (local.get $count) (i32.const 4)))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 16)) (local.get $bl))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 20)) (local.get $bt))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 24)) (local.get $br))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 28)) (local.get $bb))
+    ;; Second pass: publish the same intersections.
+    (local.set $i (i32.const 0))
+    (block $copy_done (loop $copy_rects
+      (br_if $copy_done (i32.ge_u (local.get $i) (local.get $source_count)))
+      (if (local.get $hwnd)
+        (then
+          (local.set $l (i32.load offset=12 (local.get $entry)))
+          (local.set $t (i32.load offset=16 (local.get $entry)))
+          (local.set $r (load.field DxObject misc1 (local.get $entry)))
+          (local.set $b (load.field DxObject misc2 (local.get $entry))))
+        (else
+          (local.set $rect (i32.add (local.get $data_wa)
+            (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+          (local.set $l (i32.load (local.get $rect)))
+          (local.set $t (i32.load offset=4 (local.get $rect)))
+          (local.set $r (i32.load offset=8 (local.get $rect)))
+          (local.set $b (i32.load offset=12 (local.get $rect)))))
+      (if (local.get $arg1)
+        (then
+          (if (i32.lt_s (local.get $l) (local.get $fl)) (then (local.set $l (local.get $fl))))
+          (if (i32.lt_s (local.get $t) (local.get $ft)) (then (local.set $t (local.get $ft))))
+          (if (i32.gt_s (local.get $r) (local.get $fr)) (then (local.set $r (local.get $fr))))
+          (if (i32.gt_s (local.get $b) (local.get $fb)) (then (local.set $b (local.get $fb))))))
+      (if (i32.and (i32.lt_s (local.get $l) (local.get $r))
+                   (i32.lt_s (local.get $t) (local.get $b)))
+        (then
+          (local.set $out (i32.add (local.get $arg2)
+            (i32.add (i32.const 32) (i32.shl (local.get $out_index) (i32.const 4)))))
+          (call $gs32 (local.get $out) (local.get $l))
+          (call $gs32 (i32.add (local.get $out) (i32.const 4)) (local.get $t))
+          (call $gs32 (i32.add (local.get $out) (i32.const 8)) (local.get $r))
+          (call $gs32 (i32.add (local.get $out) (i32.const 12)) (local.get $b))
+          (local.set $out_index (i32.add (local.get $out_index) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy_rects)))
+    (if (local.get $hwnd)
+      (then (store.field DxObject flags (local.get $entry)
+        (i32.and (load.field DxObject flags (local.get $entry)) (i32.const -3)))))
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; GetHWnd(this, lphWnd)
   (func $handle_IDirectDrawClipper_GetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (global.get $main_hwnd))))
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (call $gs32 (local.get $arg1) (load.field DxObject misc0 (local.get $entry)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
@@ -5221,20 +5693,170 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; IsClipListChanged(this, lpbChanged) — always return FALSE
+  ;; IsClipListChanged is meaningful for an HWND-backed clipper. Keep the
+  ;; change latched until GetClipList successfully copies the new list.
   (func $handle_IDirectDrawClipper_IsClipListChanged (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (i32.const 0))))
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (load.field DxObject misc0 (local.get $entry))
+      (then (call $dx_clipper_refresh_hwnd (local.get $entry))))
+    (call $gs32 (local.get $arg1)
+      (select (i32.const 1) (i32.const 0)
+        (i32.ne (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 2))
+                (i32.const 0))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; SetClipList(this, lpClipList, dwFlags) — no-op
+  ;; SetClipList(this, lpClipList, dwFlags). Validate and canonicalize the
+  ;; caller's rectangles before replacing the prior private copy.
   (func $handle_IDirectDrawClipper_SetClipList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $source i32) (local $count i32) (local $bytes i32)
+    (local $i i32) (local $rect i32) (local $l i32) (local $t i32)
+    (local $r i32) (local $b i32) (local $bl i32) (local $bt i32)
+    (local $br i32) (local $bb i32) (local $copy i32) (local $copy_wa i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.ne (local.get $arg2) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (load.field DxObject misc0 (local.get $entry))
+      (then
+        (global.set $eax (i32.const 0x88760237)) ;; DDERR_CLIPPERISUSINGHWND
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (call $dx_clipper_release_explicit (local.get $entry))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    ;; RGNDATAHEADER is 32 bytes and DirectDraw accepts only RDH_RECTANGLES.
+    (if (i32.or
+          (i32.ne (call $gl32 (local.get $arg1)) (i32.const 32))
+          (i32.ne (call $gl32 (i32.add (local.get $arg1) (i32.const 4))) (i32.const 1)))
+      (then
+        (global.set $eax (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $count (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
+    (if (i32.gt_u (local.get $count) (i32.const 4096))
+      (then
+        (global.set $eax (i32.const 0x8876006E))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $bytes (i32.shl (local.get $count) (i32.const 4)))
+    (if (i32.and
+          (i32.ne (call $gl32 (i32.add (local.get $arg1) (i32.const 12))) (i32.const 0))
+          (i32.lt_u (call $gl32 (i32.add (local.get $arg1) (i32.const 12)))
+                    (local.get $bytes)))
+      (then
+        (global.set $eax (i32.const 0x8876006E))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $source (call $g2w_affine_span (local.get $arg1)
+      (i32.add (i32.const 32) (local.get $bytes))))
+    (if (i32.eq (local.get $source) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x8876006E))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    ;; Validate every RECT and recompute rcBound instead of trusting it.
+    (block $validate_done (loop $validate
+      (br_if $validate_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rect (i32.add (local.get $source)
+        (i32.add (i32.const 32) (i32.shl (local.get $i) (i32.const 4)))))
+      (local.set $l (i32.load (local.get $rect)))
+      (local.set $t (i32.load offset=4 (local.get $rect)))
+      (local.set $r (i32.load offset=8 (local.get $rect)))
+      (local.set $b (i32.load offset=12 (local.get $rect)))
+      (if (i32.or (i32.ge_s (local.get $l) (local.get $r))
+                  (i32.ge_s (local.get $t) (local.get $b)))
+        (then
+          (global.set $eax (i32.const 0x8876006E))
+          (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+          (return)))
+      (if (i32.eqz (local.get $i))
+        (then
+          (local.set $bl (local.get $l)) (local.set $bt (local.get $t))
+          (local.set $br (local.get $r)) (local.set $bb (local.get $b)))
+        (else
+          (if (i32.lt_s (local.get $l) (local.get $bl)) (then (local.set $bl (local.get $l))))
+          (if (i32.lt_s (local.get $t) (local.get $bt)) (then (local.set $bt (local.get $t))))
+          (if (i32.gt_s (local.get $r) (local.get $br)) (then (local.set $br (local.get $r))))
+          (if (i32.gt_s (local.get $b) (local.get $bb)) (then (local.set $bb (local.get $b))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $validate)))
+    (local.set $copy (call $heap_alloc (i32.add (i32.const 32) (local.get $bytes))))
+    (if (i32.eqz (local.get $copy))
+      (then
+        (global.set $eax (i32.const 0x8007000E)) ;; DDERR_OUTOFMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $copy_wa (call $g2w (local.get $copy)))
+    (i32.store (local.get $copy_wa) (i32.const 32))
+    (i32.store offset=4 (local.get $copy_wa) (i32.const 1))
+    (i32.store offset=8 (local.get $copy_wa) (local.get $count))
+    (i32.store offset=12 (local.get $copy_wa) (local.get $bytes))
+    (i32.store offset=16 (local.get $copy_wa) (local.get $bl))
+    (i32.store offset=20 (local.get $copy_wa) (local.get $bt))
+    (i32.store offset=24 (local.get $copy_wa) (local.get $br))
+    (i32.store offset=28 (local.get $copy_wa) (local.get $bb))
+    (call $memcpy (i32.add (local.get $copy_wa) (i32.const 32))
+      (i32.add (local.get $source) (i32.const 32)) (local.get $bytes))
+    (call $dx_clipper_release_explicit (local.get $entry))
+    (store.field DxObject misc1 (local.get $entry) (local.get $copy))
+    (store.field DxObject misc2 (local.get $entry)
+      (i32.add (i32.const 32) (local.get $bytes)))
+    (store.field DxObject flags (local.get $entry) (i32.const 0))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; SetHWnd(this, dwFlags, hWnd) — no-op
+  ;; SetHWnd(this, dwFlags, hWnd) — retain the window whose visible client
+  ;; region defines this clipper. GetClipList snapshots that live client region,
+  ;; while surface presentation and browser composition enforce it onscreen.
   (func $handle_IDirectDrawClipper_SetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    ;; Microsoft documents dwFlags as reserved and required to be zero. An
+    ;; explicit list and an HWND-derived list are mutually exclusive.
+    (if (i32.or
+          (i32.ne (local.get $arg1) (i32.const 0))
+          (i32.eqz (call $window_handle_valid (local.get $arg2))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.and
+          (i32.eqz (load.field DxObject misc0 (local.get $entry)))
+          (i32.ne (load.field DxObject misc1 (local.get $entry)) (i32.const 0)))
+      (then
+        (global.set $eax (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (store.field DxObject misc0 (local.get $entry) (local.get $arg2))
+    (store.field DxObject flags (local.get $entry) (i32.const 0))
+    (call $dx_clipper_refresh_hwnd (local.get $entry))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
@@ -5250,16 +5872,120 @@
       (i32.const 0x200021A5) (i32.const 0x60E50BAF)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
+  ;; Validate the fixed PCM WAVEFORMATEX fields understood by the browser
+  ;; voice bridge and return the translated address. NULL_SENTINEL means the
+  ;; caller supplied an unreadable or internally inconsistent format.
+  (func $ds_pcm_format_wa (param $format_guest i32) (result i32)
+    (local $wa i32) (local $channels i32) (local $rate i32)
+    (local $average i32) (local $align i32) (local $bits i32)
+    (if (i32.eqz (local.get $format_guest))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.set $wa
+      (call $g2w_affine_span (local.get $format_guest) (i32.const 18)))
+    (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.set $channels (i32.load16_u offset=2 (local.get $wa)))
+    (local.set $rate (i32.load offset=4 (local.get $wa)))
+    (local.set $average (i32.load offset=8 (local.get $wa)))
+    (local.set $align (i32.load16_u offset=12 (local.get $wa)))
+    (local.set $bits (i32.load16_u offset=14 (local.get $wa)))
+    (if (i32.or
+          (i32.ne (i32.load16_u (local.get $wa)) (i32.const 1)) ;; PCM
+          (i32.or
+            (i32.or (i32.eqz (local.get $channels))
+                    (i32.gt_u (local.get $channels) (i32.const 2)))
+            (i32.or
+              (i32.eqz (local.get $rate))
+              (i32.and (i32.ne (local.get $bits) (i32.const 8))
+                       (i32.ne (local.get $bits) (i32.const 16))))))
+      (then (return (global.get $NULL_SENTINEL))))
+    (if (i32.or
+          (i32.ne (local.get $align)
+            (i32.div_u (i32.mul (local.get $channels) (local.get $bits))
+                       (i32.const 8)))
+          (i32.ne (local.get $average)
+            (i32.mul (local.get $rate) (local.get $align))))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.get $wa))
+
 
 
   ;; CreateSoundBuffer(this, lpDSBufferDesc, lplpDirectSoundBuffer, pUnkOuter)
   (func $handle_IDirectSound_CreateSoundBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $desc_wa i32) (local $flags i32) (local $buf_size i32)
-    (local $fmt_wa i32) (local $obj i32) (local $entry i32) (local $buf_guest i32) (local $buf_wa i32)
-    (local.set $desc_wa (call $g2w (local.get $arg1)))
+    (local $root i32) (local $desc_wa i32) (local $desc_size i32)
+    (local $flags i32) (local $buf_size i32) (local $fmt_guest i32)
+    (local $fmt_wa i32) (local $obj i32) (local $entry i32)
+    (local $state i32) (local $buf_guest i32) (local $buf_wa i32)
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (call $gs32 (local.get $arg2) (i32.const 0))
+    (if (i32.ne (local.get $arg3) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80040110)) ;; DSERR_NOAGGREGATION
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $desc_wa
+      (call $g2w_affine_span (local.get $arg1) (i32.const 20)))
+    (if (i32.eq (local.get $desc_wa) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $desc_size (i32.load (local.get $desc_wa)))
+    ;; Win98-era callers use DSBUFFERDESC1 (20 bytes) or the DirectX 7
+    ;; DSBUFFERDESC with guid3DAlgorithm (36 bytes).
+    (if (i32.and
+          (i32.ne (local.get $desc_size) (i32.const 20))
+          (i32.ne (local.get $desc_size) (i32.const 36)))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
     ;; DSBUFFERDESC: +4 dwFlags, +8 dwBufferBytes, +12 dwReserved, +16 lpwfxFormat
     (local.set $flags (i32.load (i32.add (local.get $desc_wa) (i32.const 4))))
     (local.set $buf_size (i32.load (i32.add (local.get $desc_wa) (i32.const 8))))
+    (local.set $fmt_guest (i32.load (i32.add (local.get $desc_wa) (i32.const 16))))
+    (if (i32.ne (i32.load offset=12 (local.get $desc_wa)) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    ;; The primary ring is device-owned: callers must not prescribe its size
+    ;; or format in the descriptor. SetFormat changes it after creation.
+    (if (i32.and
+          (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+          (i32.or (i32.ne (local.get $buf_size) (i32.const 0))
+                  (i32.ne (local.get $fmt_guest) (i32.const 0))))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.eq (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+      (then
+        ;; Secondary buffers are born with immutable storage and format.
+        ;; SetFormat is a primary-buffer operation, so neither field can be
+        ;; deferred until after creation.
+        (if (i32.or (i32.eqz (local.get $buf_size))
+                    (i32.eqz (local.get $fmt_guest)))
+          (then
+            (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (local.set $fmt_wa (call $ds_pcm_format_wa (local.get $fmt_guest)))
+        (if (i32.eq (local.get $fmt_wa) (global.get $NULL_SENTINEL))
+          (then
+            (global.set $eax (i32.const 0x88780064)) ;; DSERR_BADFORMAT
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))))
     ;; Create DSBuffer COM object
     (local.set $obj (call $dx_create_com_obj (i32.const 5) (global.get $DX_VTBL_DSBUF)))
     (if (i32.eqz (local.get $obj))
@@ -5268,6 +5994,12 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (i32.store (local.get $state)
+      (i32.add (call $dx_slot_of (local.get $root)) (i32.const 1)))
+    (i32.store offset=4 (local.get $state) (local.get $flags))
+    (i32.store offset=8 (local.get $state)
+      (load.field DxObject misc1 (local.get $root)))
     ;; DSBCAPS_PRIMARYBUFFER = 1
     (if (i32.and (local.get $flags) (i32.const 1))
       (then
@@ -5278,15 +6010,30 @@
         ;; Model a common Win9x-era 64 KiB hardware ring in guest memory.
         (local.set $buf_size (i32.const 0x10000))
         (local.set $buf_guest (call $heap_alloc (local.get $buf_size)))
+        (if (i32.eqz (local.get $buf_guest))
+          (then
+            (call $dx_free (local.get $entry))
+            (global.set $eax (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
         (local.set $buf_wa (call $g2w (local.get $buf_guest)))
         (call $zero_memory (local.get $buf_wa) (local.get $buf_size))
         (store.field DxObject misc1 (local.get $entry) (local.get $buf_wa))
         (i32.store (i32.add (local.get $entry) (i32.const 12)) (local.get $buf_size))
-        (store.field DxObject flags (local.get $entry) (i32.const 1)))
+        ;; Playback flags begin stopped. Primary identity lives in the
+        ;; auxiliary creation-capability field, not DSBSTATUS_PLAYING bit 0.
+        (store.field DxObject flags (local.get $entry) (i32.const 0)))
       (else
         ;; Secondary buffer — allocate guest memory for sound data
         (if (i32.gt_u (local.get $buf_size) (i32.const 0)) (then
-          (local.set $buf_guest (call $heap_alloc (local.get $buf_size))) (local.set $buf_wa (call $g2w (local.get $buf_guest)))
+          (local.set $buf_guest (call $heap_alloc (local.get $buf_size)))
+          (if (i32.eqz (local.get $buf_guest))
+            (then
+              (call $dx_free (local.get $entry))
+              (global.set $eax (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
+              (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+              (return)))
+          (local.set $buf_wa (call $g2w (local.get $buf_guest)))
           (call $zero_memory (local.get $buf_wa) (local.get $buf_size))
           (store.field DxObject misc1 (local.get $entry) (local.get $buf_wa))))
         ;; Store buffer size in w/h fields
@@ -5296,9 +6043,7 @@
         ;; perfectly ordinary WASM address, so a NULL lpwfxFormat used to read
         ;; channels/rate/bits out of whatever happens to live at the bottom of
         ;; the guest image -- a format nobody asked for, played as noise.
-        (local.set $fmt_wa (i32.load (i32.add (local.get $desc_wa) (i32.const 16))))
-        (if (local.get $fmt_wa) (then
-          (local.set $fmt_wa (call $g2w (local.get $fmt_wa)))
+        (if (local.get $fmt_guest) (then
           ;; WAVEFORMATEX: +2 nChannels, +4 nSamplesPerSec, +14 wBitsPerSample
           (store.field DxObject bpp (local.get $entry) (i32.load16_u (i32.add (local.get $fmt_wa) (i32.const 2)))) ;; channels in bpp field
           (store.field DxObject pitch (local.get $entry) (i32.load16_u (i32.add (local.get $fmt_wa) (i32.const 14)))) ;; bits in pitch field
@@ -5342,13 +6087,22 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
     (local.set $dst_entry (call $dx_from_this (local.get $obj)))
+    (memory.copy
+      (call $dx_surf_state_ptr (local.get $dst_entry))
+      (call $dx_surf_state_ptr (local.get $src_entry))
+      (i32.const 32))
+    ;; DuplicateSoundBuffer copies the sample data and controls, but the new
+    ;; object is stopped at the beginning of its own playback timeline.
+    (i32.store offset=12 (call $dx_surf_state_ptr (local.get $dst_entry))
+      (i32.const 0))
     ;; Copy format info from source: bufsize(+12), channels(+16), bits(+18), sampleRate(+24)
     (local.set $buf_size (i32.load (i32.add (local.get $src_entry) (i32.const 12))))
     (i32.store (i32.add (local.get $dst_entry) (i32.const 12)) (local.get $buf_size))
     (store.field DxObject bpp (local.get $dst_entry) (load.field DxObject bpp (local.get $src_entry)))
     (store.field DxObject pitch (local.get $dst_entry) (load.field DxObject pitch (local.get $src_entry)))
     (store.field DxObject misc2 (local.get $dst_entry) (load.field DxObject misc2 (local.get $src_entry)))
-    (store.field DxObject flags (local.get $dst_entry) (load.field DxObject flags (local.get $src_entry)))
+    ;; A duplicate starts stopped even if its source is currently playing.
+    (store.field DxObject flags (local.get $dst_entry) (i32.const 0))
     ;; Allocate new buffer and copy data
     (if (i32.gt_u (local.get $buf_size) (i32.const 0)) (then
       (local.set $buf_guest (call $heap_alloc (local.get $buf_size))) (local.set $buf_wa (call $g2w (local.get $buf_guest)))
@@ -5362,14 +6116,63 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; SetCooperativeLevel — no-op
+  ;; SetCooperativeLevel(this, hwnd, level). DirectSound requires a live
+  ;; top-level application window and one exact DSSCL_* value (1..4). Keep the
+  ;; device state and refresh already-created buffers so SetFormat observes a
+  ;; later promotion from NORMAL to PRIORITY, as native DirectSound does.
   (func $handle_IDirectSound_SetCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $root i32) (local $owner i32) (local $i i32)
+    (local $candidate i32) (local $state i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.or
+          (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+          (i32.or
+            (i32.eqz (call $window_handle_valid (local.get $arg1)))
+            (i32.ne
+              (i32.and (call $wnd_get_style (local.get $arg1))
+                       (i32.const 0x40000000))
+              (i32.const 0))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.or (i32.lt_u (local.get $arg2) (i32.const 1))
+                (i32.gt_u (local.get $arg2) (i32.const 4)))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (store.field DxObject misc0 (local.get $root) (local.get $arg1))
+    (store.field DxObject misc1 (local.get $root) (local.get $arg2))
+    (local.set $owner
+      (i32.add (call $dx_slot_of (local.get $root)) (i32.const 1)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DX_MAX)))
+      (local.set $candidate
+        (i32.add (global.get $DX_OBJECTS) (i32.shl (local.get $i) (i32.const 5))))
+      (if (i32.eq (load.field DxObject type (local.get $candidate)) (i32.const 5))
+        (then
+          (local.set $state (call $dx_surf_state_ptr (local.get $candidate)))
+          (if (i32.eq (i32.load (local.get $state)) (local.get $owner))
+            (then (i32.store offset=8 (local.get $state) (local.get $arg2))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; Compact — no-op
+  ;; Compact requires PRIORITY, EXCLUSIVE or WRITEPRIMARY. The browser has no
+  ;; fragmented hardware heap to compact once that privilege check succeeds.
   (func $handle_IDirectSound_Compact (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $root i32) (local $level i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then (global.set $eax (i32.const 0x80070057)))
+      (else
+        (local.set $level (load.field DxObject misc1 (local.get $root)))
+        (global.set $eax
+          (select (i32.const 0) (i32.const 0x88780046)
+            (i32.and (i32.ge_u (local.get $level) (i32.const 2))
+                     (i32.le_u (local.get $level) (i32.const 4)))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; GetSpeakerConfig
@@ -5508,13 +6311,16 @@
 
   ;; GetCaps(this, lpDSBCaps)
   (func $handle_IDirectSoundBuffer_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $wa i32)
+    (local $entry i32) (local $wa i32) (local $state i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (call $zero_memory (local.get $wa) (i32.const 20))
     (i32.store (local.get $wa) (i32.const 20)) ;; dwSize
-    ;; dwFlags = DSBCAPS_CTRLVOLUME | DSBCAPS_CTRLPAN | DSBCAPS_CTRLFREQUENCY
-    (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0xE0))
+    ;; dwFlags reports the capabilities requested at creation. Playback status
+    ;; is a separate field and must never leak into this value.
+    (i32.store (i32.add (local.get $wa) (i32.const 4))
+      (i32.load offset=4 (local.get $state)))
     ;; dwBufferBytes
     (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.load (i32.add (local.get $entry) (i32.const 12))))
     (global.set $eax (i32.const 0))
@@ -5522,13 +6328,25 @@
 
   ;; GetCurrentPosition(this, lpdwCurrentPlayCursor, lpdwCurrentWriteCursor)
   (func $handle_IDirectSoundBuffer_GetCurrentPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $handle i32) (local $pos i32)
+    (local $entry i32) (local $state i32) (local $handle i32) (local $pos i32)
     (local $size i32) (local $align i32) (local $lead i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (local.set $size (i32.load offset=12 (local.get $entry)))
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
-    (if (local.get $handle)
+    ;; The host cursor is relative to the current snapshot. Add the position
+    ;; at which that snapshot began; while stopped, the stored base itself is
+    ;; the exact cursor that the next Play must use.
+    (if (i32.and
+          (i32.ne (i32.and (load.field DxObject flags (local.get $entry))
+            (i32.const 1)) (i32.const 0))
+          (i32.ne (local.get $handle) (i32.const 0)))
       (then (local.set $pos (call $host_voice_get_pos (local.get $handle))))
       (else (local.set $pos (i32.const 0))))
+    (local.set $pos
+      (i32.add (i32.load offset=12 (local.get $state)) (local.get $pos)))
+    (if (i32.ne (local.get $size) (i32.const 0))
+      (then (local.set $pos (i32.rem_u (local.get $pos) (local.get $size)))))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (local.get $pos))))
     ;; The write cursor is not the play cursor. DirectSound guarantees it leads
     ;; by whatever the driver has already committed to the DMA -- on Win98
@@ -5538,7 +6356,6 @@
     ;; write cursor was told that region was free.
     (if (local.get $arg2)
       (then
-        (local.set $size (i32.load (i32.add (local.get $entry) (i32.const 12))))
         ;; 15ms of this buffer's own format, truncated to a whole sample frame
         ;; so the lead never lands mid-sample.
         (local.set $align (i32.div_u
@@ -5710,8 +6527,10 @@
   ;; each other the way the old single-waveOut routing did.
   (func $handle_IDirectSoundBuffer_Play (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $handle i32) (local $dib_wa i32) (local $buf_size i32)
-    (local $channels i32) (local $bits i32) (local $rate i32) (local $loop i32)
+    (local $state i32) (local $channels i32) (local $bits i32)
+    (local $rate i32) (local $loop i32) (local $start i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
     (local.set $buf_size (i32.load (i32.add (local.get $entry) (i32.const 12))))
     (local.set $channels (load.field DxObject bpp (local.get $entry)))
@@ -5726,37 +6545,134 @@
       (store.field DxObject misc0 (local.get $entry) (local.get $handle))))
     ;; DSBPLAY_LOOPING = 1
     (local.set $loop (i32.and (local.get $arg3) (i32.const 1)))
+    (local.set $start (i32.load offset=12 (local.get $state)))
     ;; Bitwise i32.and on (ptr, size) silently drops the play call whenever
     ;; their bits don't happen to overlap. Coerce both to 0/1 for logical AND.
     (if (i32.and (i32.ne (local.get $dib_wa) (i32.const 0))
                  (i32.ne (local.get $buf_size) (i32.const 0))) (then
       (drop (call $host_voice_play_ring
         (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
-        (i32.const 0) (local.get $loop)))))
+        (local.get $start) (local.get $loop)))))
     (store.field DxObject flags (local.get $entry) (i32.or (i32.const 1) (i32.shl (local.get $loop) (i32.const 2))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
-  ;; SetCurrentPosition — no-op (can't seek waveOut)
+  ;; SetCurrentPosition(this, dwNewPosition). This is a DirectSound secondary-
+  ;; buffer operation: a stopped buffer remembers where its next Play starts;
+  ;; a live buffer immediately replaces its browser snapshot at that byte.
   (func $handle_IDirectSoundBuffer_SetCurrentPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $state i32) (local $size i32)
+    (local $status i32) (local $handle i32) (local $loop i32)
+    (local $dib_wa i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 5))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (if (i32.ne
+          (i32.and (i32.load offset=4 (local.get $state)) (i32.const 1))
+          (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $size (i32.load offset=12 (local.get $entry)))
+    (if (i32.or (i32.eqz (local.get $size))
+                (i32.ge_u (local.get $arg1) (local.get $size)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (i32.store offset=12 (local.get $state) (local.get $arg1))
+    (local.set $status (load.field DxObject flags (local.get $entry)))
+    (local.set $handle (load.field DxObject misc0 (local.get $entry)))
+    (if (i32.and
+          (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0))
+          (i32.ne (local.get $handle) (i32.const 0)))
+      (then
+        (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
+        (local.set $loop
+          (i32.ne (i32.and (local.get $status) (i32.const 4)) (i32.const 0)))
+        (drop (call $host_voice_play_ring
+          (local.get $handle) (local.get $dib_wa) (local.get $size)
+          (local.get $arg1) (local.get $loop)))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; SetFormat(this, pcfxFormat) — primary buffers are born without a format.
   ;; Keep the canonical PCM fields in the DS buffer entry so GetFormat,
   ;; SetFrequency and the eventual host voice all observe the same values.
+  ;; Native DirectSound exposes this only on primary buffers and only after
+  ;; DSSCL_PRIORITY (or stronger) has been established on their parent device.
   (func $handle_IDirectSoundBuffer_SetFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $wa i32)
+    (local $entry i32) (local $state i32) (local $wa i32)
+    (local $level i32) (local $status i32) (local $handle i32)
+    (local $dib_wa i32) (local $buf_size i32) (local $loop i32)
     (if (i32.eqz (local.get $arg1))
       (then
         (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (local.set $wa (call $g2w (local.get $arg1)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 5))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
+    (if (i32.eqz (i32.and (i32.load offset=4 (local.get $state)) (i32.const 1)))
+      (then
+        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $level (i32.load offset=8 (local.get $state)))
+    (if (i32.or (i32.lt_u (local.get $level) (i32.const 2))
+                (i32.gt_u (local.get $level) (i32.const 4)))
+      (then
+        (global.set $eax (i32.const 0x88780046)) ;; DSERR_PRIOLEVELNEEDED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $status (load.field DxObject flags (local.get $entry)))
+    ;; WRITEPRIMARY grants direct access, so the caller must stop its primary
+    ;; buffer before changing format. PRIORITY/EXCLUSIVE perform the native
+    ;; implicit stop/change/restart behavior below.
+    (if (i32.and
+          (i32.eq (local.get $level) (i32.const 4))
+          (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0)))
+      (then
+        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $wa (call $ds_pcm_format_wa (local.get $arg1)))
+    (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x88780064)) ;; DSERR_BADFORMAT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $handle (load.field DxObject misc0 (local.get $entry)))
+    (if (i32.ne (local.get $handle) (i32.const 0))
+      (then
+        (drop (call $host_voice_close (local.get $handle)))
+        (store.field DxObject misc0 (local.get $entry) (i32.const 0))))
     (store.field DxObject bpp (local.get $entry) (i32.load16_u (i32.add (local.get $wa) (i32.const 2)))) ;; nChannels
     (store.field DxObject pitch (local.get $entry) (i32.load16_u (i32.add (local.get $wa) (i32.const 14)))) ;; wBitsPerSample
     (store.field DxObject misc2 (local.get $entry) (i32.load (i32.add (local.get $wa) (i32.const 4)))) ;; nSamplesPerSec
+    (if (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0))
+      (then
+        (local.set $handle (call $dsbuf_ensure_voice (local.get $entry)))
+        (local.set $dib_wa (load.field DxObject misc1 (local.get $entry)))
+        (local.set $buf_size (i32.load offset=12 (local.get $entry)))
+        (local.set $loop
+          (i32.ne (i32.and (local.get $status) (i32.const 4)) (i32.const 0)))
+        (if (i32.and
+              (i32.ne (local.get $dib_wa) (i32.const 0))
+              (i32.ne (local.get $buf_size) (i32.const 0)))
+          (then
+            (drop (call $host_voice_play_ring
+              (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
+              (i32.const 0) (local.get $loop)))))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
@@ -5792,9 +6708,27 @@
 
   ;; Stop(this) — stop playback but keep the voice; Play() may be called again
   (func $handle_IDirectSoundBuffer_Stop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32) (local $handle i32)
+    (local $entry i32) (local $state i32) (local $handle i32)
+    (local $size i32) (local $position i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
+    ;; Stop freezes the live cursor. Leaving only the snapshot origin here
+    ;; would make a subsequent Play jump backwards to its previous start.
+    (if (i32.and
+          (i32.ne (i32.and (load.field DxObject flags (local.get $entry))
+            (i32.const 1)) (i32.const 0))
+          (i32.ne (local.get $handle) (i32.const 0)))
+      (then
+        (local.set $size (i32.load offset=12 (local.get $entry)))
+        (local.set $position
+          (i32.add (i32.load offset=12 (local.get $state))
+                   (call $host_voice_get_pos (local.get $handle))))
+        (if (i32.ne (local.get $size) (i32.const 0))
+          (then
+            (local.set $position
+              (i32.rem_u (local.get $position) (local.get $size)))))
+        (i32.store offset=12 (local.get $state) (local.get $position))))
     (if (local.get $handle) (then
       (drop (call $host_voice_stop (local.get $handle)))))
     (store.field DxObject flags (local.get $entry) (i32.const 0))
@@ -6895,13 +7829,131 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; Acquire / Unacquire — no-op
+  ;; DirectInput device lifecycle bits in the DIDev arm of DxObject.flags.
+  ;; The low five bits retain DISCL_* from SetCooperativeLevel; these bits are
+  ;; emulator-owned and never escape to the guest.
+  (global $DIDEV_FORMAT_SET i32 (i32.const 0x00000100))
+  (global $DIDEV_COOP_SET i32 (i32.const 0x00000200))
+  (global $DIDEV_ACQUIRED i32 (i32.const 0x00000400))
+
+  (func $di_device_is_acquired (param $entry i32) (result i32)
+    (i32.ne
+      (i32.and (load.field DxObject flags (local.get $entry))
+               (global.get $DIDEV_ACQUIRED))
+      (i32.const 0)))
+
+  ;; Validate the standard formats that the browser implementation can return
+  ;; faithfully. Applications pass their own copy of DIDATAFORMAT, so pointer
+  ;; identity is meaningless: check its complete header and the object offsets
+  ;; and kinds. Return dwDataSize on success, zero on failure.
+  (func $di_standard_data_format_size
+      (param $entry i32) (param $format_guest i32) (result i32)
+    (local $format i32) (local $objects i32) (local $object i32)
+    (local $kind i32) (local $data_size i32) (local $count i32)
+    (local $i i32) (local $expected_offset i32) (local $expected_type i32)
+    (if (i32.eqz (local.get $format_guest))
+      (then (return (i32.const 0))))
+    (local.set $format
+      (call $g2w_affine_span (local.get $format_guest) (i32.const 24)))
+    (if (i32.eq (local.get $format) (global.get $NULL_SENTINEL))
+      (then (return (i32.const 0))))
+    ;; DIDATAFORMAT: dwSize, dwObjSize, dwFlags, dwDataSize, dwNumObjs, rgodf.
+    (if (i32.or
+          (i32.ne (i32.load (local.get $format)) (i32.const 24))
+          (i32.or
+            (i32.ne (i32.load offset=4 (local.get $format)) (i32.const 16))
+            (i32.ne (i32.load offset=8 (local.get $format)) (i32.const 2))))
+      (then (return (i32.const 0)))) ;; DIDF_RELAXIS
+    (local.set $data_size (i32.load offset=12 (local.get $format)))
+    (local.set $count (i32.load offset=16 (local.get $format)))
+    (local.set $kind (load.field DxObject misc0 (local.get $entry)))
+    (if (i32.eq (local.get $kind) (i32.const 1))
+      (then
+        (if (i32.or
+              (i32.ne (local.get $data_size) (i32.const 256))
+              (i32.ne (local.get $count) (i32.const 256)))
+          (then (return (i32.const 0)))))
+      (else
+        (if (i32.ne (local.get $kind) (i32.const 2))
+          (then (return (i32.const 0))))
+        (if (i32.and
+              (i32.or (i32.ne (local.get $data_size) (i32.const 16))
+                      (i32.ne (local.get $count) (i32.const 7)))
+              (i32.or (i32.ne (local.get $data_size) (i32.const 20))
+                      (i32.ne (local.get $count) (i32.const 11))))
+          (then (return (i32.const 0))))))
+    (local.set $objects
+      (call $g2w_affine_span
+        (i32.load offset=20 (local.get $format))
+        (i32.shl (local.get $count) (i32.const 4))))
+    (if (i32.eq (local.get $objects) (global.get $NULL_SENTINEL))
+      (then (return (i32.const 0))))
+    (block $done (loop $objects_loop
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $object
+        (i32.add (local.get $objects) (i32.shl (local.get $i) (i32.const 4))))
+      (if (i32.eq (local.get $kind) (i32.const 1))
+        (then
+          (local.set $expected_offset (local.get $i))
+          (local.set $expected_type (i32.const 0x0C))) ;; DIDFT_BUTTON
+        (else
+          (if (i32.lt_u (local.get $i) (i32.const 3))
+            (then
+              (local.set $expected_offset (i32.shl (local.get $i) (i32.const 2)))
+              (local.set $expected_type (i32.const 0x03))) ;; DIDFT_AXIS
+            (else
+              (local.set $expected_offset (i32.add (local.get $i) (i32.const 9)))
+              (local.set $expected_type (i32.const 0x0C))))))
+      (if (i32.or
+            (i32.ne (i32.load offset=4 (local.get $object))
+                    (local.get $expected_offset))
+            (i32.ne
+              (i32.and (i32.load offset=8 (local.get $object)) (i32.const 0xFF))
+              (local.get $expected_type)))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $objects_loop)))
+    (local.get $data_size))
+
+  ;; Acquire is deliberately not reference-counted. A second call succeeds
+  ;; with S_FALSE, and one Unacquire releases the device, matching DirectInput.
   (func $handle_IDirectInputDevice_Acquire (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $entry i32) (local $flags i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $flags (load.field DxObject flags (local.get $entry)))
+    (if (i32.ne
+          (i32.and (local.get $flags) (global.get $DIDEV_ACQUIRED))
+          (i32.const 0))
+      (then
+        (global.set $eax (i32.const 1)) ;; S_FALSE: already acquired
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (i32.ne
+          (i32.and (local.get $flags)
+            (i32.or (global.get $DIDEV_FORMAT_SET) (global.get $DIDEV_COOP_SET)))
+          (i32.or (global.get $DIDEV_FORMAT_SET) (global.get $DIDEV_COOP_SET)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (store.field DxObject flags (local.get $entry)
+      (i32.or (local.get $flags) (global.get $DIDEV_ACQUIRED)))
+    (global.set $eax (i32.const 0)) ;; DI_OK
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   (func $handle_IDirectInputDevice_Unacquire (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $entry i32) (local $flags i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $flags (load.field DxObject flags (local.get $entry)))
+    (if (i32.eqz
+          (i32.and (local.get $flags) (global.get $DIDEV_ACQUIRED)))
+      (then
+        (global.set $eax (i32.const 1)) ;; DI_NOEFFECT / S_FALSE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (store.field DxObject flags (local.get $entry)
+      (i32.and (local.get $flags) (i32.const 0xFFFFFBFF)))
+    (global.set $eax (i32.const 0)) ;; DI_OK
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; DIK scan code -> Win32 VK, one byte per scan code. 0 means the scan code
@@ -7051,8 +8103,27 @@
     (local $entry i32) (local $dev_type i32) (local $wa i32) (local $i i32) (local $vk i32)
     (local $dx i32) (local $dy i32) (local $buttons i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.eqz (call $di_device_is_acquired (local.get $entry)))
+      (then
+        (global.set $eax (i32.const 0x8007000C)) ;; DIERR_NOTACQUIRED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.or
+          (i32.eqz (local.get $arg2))
+          (i32.ne (local.get $arg1)
+                  (load.field DxObject misc1 (local.get $entry))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (local.set $dev_type (load.field DxObject misc0 (local.get $entry)))
-    (local.set $wa (call $g2w (local.get $arg2)))
+    (local.set $wa
+      (call $g2w_affine_span (local.get $arg2) (local.get $arg1)))
+    (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x80070057))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (call $zero_memory (local.get $wa) (local.get $arg1))
     (if (i32.eq (local.get $dev_type) (i32.const 1))
       (then
@@ -7132,6 +8203,18 @@
     (local $delivered i32) (local $commit i32)
     (local $queued i32) (local $button_index i32) (local $event i32) (local $event_type i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.eqz (call $di_device_is_acquired (local.get $entry)))
+      (then
+        (global.set $eax (i32.const 0x8007000C)) ;; DIERR_NOTACQUIRED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (if (i32.or
+          (i32.eqz (local.get $arg3))
+          (i32.lt_u (local.get $arg1) (i32.const 16)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
     (local.set $dev_type (load.field DxObject misc0 (local.get $entry)))
     (local.set $capacity (i32.load offset=12 (local.get $entry)))
     (if (i32.eq (local.get $dev_type) (i32.const 1))
@@ -7290,8 +8373,28 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
-  ;; SetDataFormat — no-op
+  ;; SetDataFormat accepts the standard keyboard, DIMOUSESTATE and
+  ;; DIMOUSESTATE2 layouts that the browser can reproduce. The format may be
+  ;; replaced while unacquired, but DirectInput rejects changes while acquired.
   (func $handle_IDirectInputDevice_SetDataFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $data_size i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (call $di_device_is_acquired (local.get $entry))
+      (then
+        (global.set $eax (i32.const 0x800700AA)) ;; DIERR_ACQUIRED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $data_size
+      (call $di_standard_data_format_size (local.get $entry) (local.get $arg1)))
+    (if (i32.eqz (local.get $data_size))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (store.field DxObject misc1 (local.get $entry) (local.get $data_size))
+    (store.field DxObject flags (local.get $entry)
+      (i32.or (load.field DxObject flags (local.get $entry))
+              (global.get $DIDEV_FORMAT_SET)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
@@ -7305,8 +8408,37 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; SetCooperativeLevel — no-op
+  ;; SetCooperativeLevel requires a process-owned top-level HWND and exactly
+  ;; one foreground/background plus one exclusive/nonexclusive choice.
   (func $handle_IDirectInputDevice_SetCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32) (local $flags i32)
+    (if (i32.or
+          (i32.eqz (call $window_handle_valid (local.get $arg1)))
+          (i32.ne (call $wnd_top_level (local.get $arg1)) (local.get $arg1)))
+      (then
+        (global.set $eax (i32.const 0x80070006)) ;; E_HANDLE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.or
+          (i32.ne (i32.and (local.get $arg2) (i32.const 0xFFFFFFE0)) (i32.const 0))
+          (i32.or
+            (i32.eq
+              (i32.ne (i32.and (local.get $arg2) (i32.const 1)) (i32.const 0))
+              (i32.ne (i32.and (local.get $arg2) (i32.const 2)) (i32.const 0)))
+            (i32.eq
+              (i32.ne (i32.and (local.get $arg2) (i32.const 4)) (i32.const 0))
+              (i32.ne (i32.and (local.get $arg2) (i32.const 8)) (i32.const 0)))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (local.set $flags (load.field DxObject flags (local.get $entry)))
+    (store.field DxObject misc2 (local.get $entry) (local.get $arg1))
+    (store.field DxObject flags (local.get $entry)
+      (i32.or
+        (i32.and (local.get $flags) (i32.const 0xFFFFFFE0))
+        (i32.or (local.get $arg2) (global.get $DIDEV_COOP_SET))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
@@ -7444,10 +8576,14 @@
     (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; Poll(this) — keyboard and mouse deliver their state without polling, so
-  ;; there is nothing to do and the call succeeds.
+  ;; Poll(this) — keyboard and mouse do not require polling, but DirectInput
+  ;; still requires acquisition before answering DI_NOEFFECT.
   (func $handle_IDirectInputDevice2_Poll (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (global.set $eax
+      (select (i32.const 1) (i32.const 0x8007000C)
+        (call $di_device_is_acquired (local.get $entry)))) ;; DI_NOEFFECT / DIERR_NOTACQUIRED
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; SendDeviceData(this, cbObjectData, rgdod, pdwInOut, fl) — output devices
@@ -7461,15 +8597,205 @@
   ;; is real state: IDs are unique, DPNAMEs are copied, membership survives
   ;; until removal, and enumeration calls back for every matching live entity.
   ;;
-  ;; Entity entry (guest heap, 32 entries x 40 bytes):
+  ;; Entity entry (guest heap, 32 entries x 44 bytes):
   ;;   +0 id, +4 type (0 group, 1 player), +8 copied DPNAME,
   ;;   +12 create flags, +16 group-membership bitset, +20 live,
   ;;   +24 remote/shared data pointer, +28 remote size,
-  ;;   +32 local-only data pointer, +36 local size.
+  ;;   +32 local-only data pointer, +36 local size,
+  ;;   +40 explicitly assigned owner player ID (-1 if not assigned).
   (global $DP_ENTITY_MAX i32 (i32.const 32))
-  (global $DP_ENTITY_STRIDE i32 (i32.const 40))
+  (global $DP_ENTITY_STRIDE i32 (i32.const 52))
   (global $dp_entity_table (mut i32) (i32.const 0))
   (global $dp_entity_next_id (mut i32) (i32.const 0x100))
+
+  ;; Internal DP4 queue storage; transport and public flag/error contracts are
+  ;; separate. Slots contain id/owner/from/to/payload/size/priority/kind.
+  ;; kind 0 is pending send, kind 1 is received. IDs never recycle.
+  (global $DP_MESSAGE_MAX i32 (i32.const 64))
+  (global $DP_MESSAGE_STRIDE i32 (i32.const 32))
+  (global $dp_message_table (mut i32) (i32.const 0))
+  (global $dp_message_next_id (mut i32) (i32.const 1))
+  (global $dp_message_bytes (mut i32) (i32.const 0))
+
+  (func $dp_message_enqueue (param $owner i32) (param $from i32) (param $to i32)
+      (param $data i32) (param $size i32) (param $priority i32) (param $kind i32) (result i32)
+    (local $i i32) (local $entry i32) (local $payload i32) (local $id i32)
+    (if (i32.eqz (local.get $owner)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $kind) (i32.const 1)) (then (return (i32.const 0))))
+    (if (i32.eqz (global.get $dp_message_next_id)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $size) (i32.const 1048576)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $size)
+          (i32.sub (i32.const 4194304) (global.get $dp_message_bytes)))
+      (then (return (i32.const 0))))
+    (if (local.get $size)
+      (then (if (i32.eqz (local.get $data)) (then (return (i32.const 0))))))
+    (if (i32.eqz (global.get $dp_message_table))
+      (then
+        (global.set $dp_message_table (call $heap_alloc
+          (i32.mul (global.get $DP_MESSAGE_MAX) (global.get $DP_MESSAGE_STRIDE))))
+        (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+        (call $zero_memory (call $g2w (global.get $dp_message_table))
+          (i32.mul (global.get $DP_MESSAGE_MAX) (global.get $DP_MESSAGE_STRIDE)))))
+    (block $full (loop $scan
+      (br_if $full (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (if (i32.eqz (call $gl32 (local.get $entry)))
+        (then
+          (if (local.get $size)
+            (then
+              (local.set $payload (call $heap_alloc (local.get $size)))
+              (if (i32.eqz (local.get $payload)) (then (return (i32.const 0))))
+              (call $guest_memmove (local.get $payload) (local.get $data)
+                (local.get $size))))
+          (local.set $id (global.get $dp_message_next_id))
+          (global.set $dp_message_next_id (i32.add (local.get $id) (i32.const 1)))
+          (call $gs32 (local.get $entry) (local.get $id))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 4)) (local.get $owner))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 8)) (local.get $from))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 12)) (local.get $to))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 16)) (local.get $payload))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 20)) (local.get $size))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 24)) (local.get $priority))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 28)) (local.get $kind))
+          (global.set $dp_message_bytes (i32.add (global.get $dp_message_bytes) (local.get $size)))
+          (return (local.get $id))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $dp_message_find (param $owner i32) (param $id i32) (result i32)
+    (local $i i32) (local $entry i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $id)) (then (return (i32.const 0))))
+    (block $missing (loop $scan
+      (br_if $missing (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (if (i32.and (i32.eq (call $gl32 (local.get $entry)) (local.get $id))
+            (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (local.get $owner)))
+        (then (return (local.get $entry))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $dp_message_remove (param $owner i32) (param $id i32) (result i32)
+    (local $entry i32) (local $payload i32)
+    (local.set $entry (call $dp_message_find (local.get $owner) (local.get $id)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (local.set $payload (call $gl32 (i32.add (local.get $entry) (i32.const 16))))
+    (if (local.get $payload) (then (call $heap_free (local.get $payload))))
+    (global.set $dp_message_bytes (i32.sub (global.get $dp_message_bytes)
+      (call $gl32 (i32.add (local.get $entry) (i32.const 20)))))
+    (call $zero_memory (call $g2w (local.get $entry)) (global.get $DP_MESSAGE_STRIDE))
+    (i32.const 1))
+
+  ;; Query mode: 0 message count, 1 bytes, 2 oldest matching entry. Sender and
+  ;; recipient zero are wildcards. Slot order is not FIFO after a cancellation.
+  (func $dp_message_query (param $owner i32) (param $kind i32)
+      (param $from i32) (param $to i32) (param $mode i32) (result i32)
+    (call $dp_message_query_filtered (local.get $owner) (local.get $kind)
+      (local.get $from) (local.get $to) (local.get $mode)
+      (i32.or
+        (i32.shl (i32.ne (local.get $from) (i32.const 0)) (i32.const 2))
+        (i32.shl (i32.ne (local.get $to) (i32.const 0)) (i32.const 1)))))
+
+  ;; Receive has explicit filter bits: FROMPLAYER must match even sender zero
+  ;; (DPID_SYSMSG), unlike GetMessageQueue's zero-as-wildcard parameters.
+  (func $dp_message_query_filtered (param $owner i32) (param $kind i32)
+      (param $from i32) (param $to i32) (param $mode i32) (param $filters i32) (result i32)
+    (local $i i32) (local $entry i32) (local $id i32) (local $result i32)
+    (local $oldest i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $mode) (i32.const 2)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (local.set $id (call $gl32 (local.get $entry)))
+      (if (i32.and (i32.ne (local.get $id) (i32.const 0))
+            (i32.and
+              (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (local.get $owner))
+                (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (local.get $kind)))
+              (i32.and
+                (i32.or (i32.eqz (i32.and (local.get $filters) (i32.const 4)))
+                  (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 8))) (local.get $from)))
+                (i32.or (i32.eqz (i32.and (local.get $filters) (i32.const 2)))
+                  (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 12))) (local.get $to))))))
+        (then
+          (if (i32.eq (local.get $mode) (i32.const 2))
+            (then
+              (if (i32.or (i32.eqz (local.get $oldest)) (i32.lt_u (local.get $id) (local.get $oldest)))
+                (then (local.set $oldest (local.get $id)) (local.set $result (local.get $entry)))))
+            (else (local.set $result (i32.add (local.get $result)
+              (select (call $gl32 (i32.add (local.get $entry) (i32.const 20))) (i32.const 1)
+                (local.get $mode))))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $result))
+
+  (func $dp_message_cancel_range (param $owner i32) (param $kind i32)
+      (param $low i32) (param $high i32) (result i32)
+    (local $i i32) (local $entry i32) (local $priority i32) (local $count i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (local.set $priority (call $gl32 (i32.add (local.get $entry) (i32.const 24))))
+      (if (i32.and
+            (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (local.get $owner))
+              (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (local.get $kind)))
+            (i32.and (i32.ge_u (local.get $priority) (local.get $low))
+              (i32.le_u (local.get $priority) (local.get $high))))
+        (then (local.set $count (i32.add (local.get $count)
+          (call $dp_message_remove (local.get $owner) (call $gl32 (local.get $entry)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $count))
+
+  (func $dp_messages_clear
+    (local $i i32) (local $entry i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (drop (call $dp_message_remove
+        (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (call $gl32 (local.get $entry))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  (func $dp_messages_clear_owner (param $owner i32)
+    (drop (call $dp_message_cancel_range (local.get $owner) (i32.const 0)
+      (i32.const 0) (i32.const -1)))
+    (drop (call $dp_message_cancel_range (local.get $owner) (i32.const 1)
+      (i32.const 0) (i32.const -1))))
+
+  (func $dp_receive (param $owner i32) (param $from_ptr i32) (param $to_ptr i32)
+      (param $flags i32) (param $data i32) (param $size_ptr i32) (result i32)
+    (local $entry i32) (local $size i32) (local $capacity i32)
+    (if (i32.or (i32.eqz (local.get $from_ptr))
+          (i32.or (i32.eqz (local.get $to_ptr)) (i32.eqz (local.get $size_ptr))))
+      (then (return (i32.const 0x80070057))))
+    (if (i32.and (local.get $flags) (i32.const -16))
+      (then (return (i32.const 0x88770078)))) ;; DPERR_INVALIDFLAGS
+    (local.set $entry (call $dp_message_query_filtered (local.get $owner) (i32.const 1)
+      (call $gl32 (local.get $from_ptr)) (call $gl32 (local.get $to_ptr))
+      (i32.const 2) (local.get $flags)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0x887700BE))))
+    (local.set $size (call $gl32 (i32.add (local.get $entry) (i32.const 20))))
+    (local.set $capacity (call $gl32 (local.get $size_ptr)))
+    (call $gs32 (local.get $size_ptr) (local.get $size))
+    (if (i32.or (i32.eqz (local.get $data)) (i32.lt_u (local.get $capacity) (local.get $size)))
+      (then (return (i32.const 0x8877001E)))) ;; DPERR_BUFFERTOOSMALL; retain message
+    (call $guest_memmove (local.get $data)
+      (call $gl32 (i32.add (local.get $entry) (i32.const 16))) (local.get $size))
+    (call $gs32 (local.get $from_ptr) (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
+    (call $gs32 (local.get $to_ptr) (call $gl32 (i32.add (local.get $entry) (i32.const 12))))
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 8)))
+      (then (drop (call $dp_message_remove (local.get $owner) (call $gl32 (local.get $entry))))))
+    (i32.const 0))
 
   (func $dp_ensure_entities (result i32)
     (if (i32.eqz (global.get $dp_entity_table))
@@ -7557,10 +8883,30 @@
             (i32.or (local.get $flags) (i32.const 0x00000008)))
           (call $gs32 (i32.add (local.get $entry) (i32.const 16)) (i32.const 0))
           (call $gs32 (i32.add (local.get $entry) (i32.const 20)) (i32.const 1))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 40)) (i32.const -1))
+          (call $gs32 (i32.add (local.get $entry) (i32.const 44)) (i32.const 0)) ;; creator COM object
+          (call $gs32 (i32.add (local.get $entry) (i32.const 48)) (i32.const 0)) ;; borrowed receive event
           (return (local.get $entry))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const 0))
+
+  ;; Internal storage primitives. Public DP4 ownership policy and notification
+  ;; delivery are separate from assigning an already-validated local identity.
+  (func $dp_assign_group_owner (param $group_id i32) (param $player_id i32) (result i32)
+    (local $group i32)
+    (local.set $group (call $dp_find_entity (local.get $group_id) (i32.const 0)))
+    (if (i32.eqz (local.get $group)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $dp_find_entity (local.get $player_id) (i32.const 1)))
+      (then (return (i32.const 0))))
+    (call $gs32 (i32.add (local.get $group) (i32.const 40)) (local.get $player_id))
+    (i32.const 1))
+
+  (func $dp_group_owner (param $group_id i32) (result i32)
+    (local $group i32)
+    (local.set $group (call $dp_find_entity (local.get $group_id) (i32.const 0)))
+    (if (i32.eqz (local.get $group)) (then (return (i32.const -1))))
+    (call $gl32 (i32.add (local.get $group) (i32.const 40))))
 
   (func $dp_replace_data
       (param $entry i32) (param $data i32) (param $size i32) (param $local_only i32)
@@ -7620,6 +8966,138 @@
         (i32.sub (local.get $group) (global.get $dp_entity_table))
         (global.get $DP_ENTITY_STRIDE))))
 
+  (func $dp_bind_entity (param $id i32) (param $owner i32) (param $event i32)
+    (local $entry i32)
+    (local.set $entry (call $dp_find_entity (local.get $id) (i32.const -1)))
+    (if (local.get $entry)
+      (then
+        (call $gs32 (i32.add (local.get $entry) (i32.const 44)) (local.get $owner))
+        (call $gs32 (i32.add (local.get $entry) (i32.const 48)) (local.get $event)))))
+
+  ;; A local send publishes all recipient copies before signaling any event.
+  ;; The temporary ID list lets allocation failure undo only this send.
+  (func $dp_send_local (param $owner i32) (param $from i32) (param $to i32)
+      (param $flags i32) (param $data i32) (param $size i32) (result i32)
+    (call $dp_send_local_priority (local.get $owner) (local.get $from) (local.get $to)
+      (local.get $flags) (local.get $data) (local.get $size)
+      (select (i32.const 65535) (i32.const 0) (i32.and (local.get $flags) (i32.const 2)))))
+
+  (func $dp_send_local_priority (param $owner i32) (param $from i32) (param $to i32)
+      (param $flags i32) (param $data i32) (param $size i32) (param $priority i32) (result i32)
+    (local $entry i32) (local $target i32) (local $group_bit i32)
+    (local $i i32) (local $recipients i32) (local $ids i32) (local $count i32)
+    (local $id i32) (local $event i32)
+    (if (i32.eqz (local.get $owner)) (then (return (i32.const 0x88770082))))
+    (if (i32.and (local.get $flags) (i32.const 0xFFFFF904))
+      (then (return (i32.const 0x88770078)))) ;; unknown DPSEND flags
+    (if (i32.and (local.get $flags) (i32.const -4))
+      (then (return (i32.const 0x80004001)))) ;; streams/security/async are not implemented
+    (if (i32.gt_u (local.get $size) (i32.const 1048576))
+      (then (return (i32.const 0x887700E6)))) ;; DPERR_SENDTOOBIG
+    (if (i32.and (i32.ne (local.get $size) (i32.const 0)) (i32.eqz (local.get $data)))
+      (then (return (i32.const 0x80070057))))
+    (local.set $entry (call $dp_find_entity (local.get $from) (i32.const 1)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0x88770096))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))
+      (then (return (i32.const 0x88770096))))
+    (if (local.get $to)
+      (then
+        (local.set $target (call $dp_find_entity (local.get $to) (i32.const -1)))
+        (if (i32.eqz (local.get $target)) (then (return (i32.const 0x88770096))))
+        ;; Do not silently connect unrelated COM objects before session joining exists.
+        (if (i32.ne (call $gl32 (i32.add (local.get $target) (i32.const 44))) (local.get $owner))
+          (then (return (i32.const 0x887700AA)))) ;; DPERR_NOCONNECTION
+        (if (i32.eqz (call $gl32 (i32.add (local.get $target) (i32.const 4))))
+          (then (local.set $group_bit (call $dp_group_bit (local.get $target)))))))
+    (block $selected (loop $select
+      (br_if $selected (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (local.set $entry (i32.add (global.get $dp_entity_table)
+        (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+      (if (i32.and
+            (i32.and (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 20))) (i32.const 0))
+              (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))
+            (i32.and
+              (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))
+                (i32.ne (call $gl32 (local.get $entry)) (local.get $from)))
+              (i32.or (i32.eqz (local.get $to))
+                (i32.or (i32.eq (local.get $entry) (local.get $target))
+                  (i32.ne (i32.and (call $gl32 (i32.add (local.get $entry) (i32.const 16)))
+                    (local.get $group_bit)) (i32.const 0))))))
+        (then (local.set $recipients (i32.or (local.get $recipients)
+          (i32.shl (i32.const 1) (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $select)))
+    (if (i32.eqz (local.get $recipients)) (then (return (i32.const 0))))
+    (local.set $ids (call $heap_alloc (i32.mul (global.get $DP_ENTITY_MAX) (i32.const 4))))
+    (if (i32.eqz (local.get $ids)) (then (return (i32.const 0x8007000E))))
+    (local.set $i (i32.const 0))
+    (block $queued (loop $enqueue
+      (br_if $queued (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (if (i32.and (local.get $recipients) (i32.shl (i32.const 1) (local.get $i)))
+        (then
+          (local.set $entry (i32.add (global.get $dp_entity_table)
+            (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+          (local.set $id (call $dp_message_enqueue (local.get $owner) (local.get $from)
+            (call $gl32 (local.get $entry)) (local.get $data) (local.get $size)
+            (local.get $priority)
+            (i32.const 1)))
+          (if (i32.eqz (local.get $id))
+            (then
+              (block $rolled_back (loop $rollback
+                (br_if $rolled_back (i32.eqz (local.get $count)))
+                (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+                (drop (call $dp_message_remove (local.get $owner)
+                  (call $gl32 (i32.add (local.get $ids) (i32.shl (local.get $count) (i32.const 2))))))
+                (br $rollback)))
+              (call $heap_free (local.get $ids))
+              (return (i32.const 0x8007000E))))
+          (call $gs32 (i32.add (local.get $ids) (i32.shl (local.get $count) (i32.const 2))) (local.get $id))
+          (local.set $count (i32.add (local.get $count) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $enqueue)))
+    (call $heap_free (local.get $ids))
+    (local.set $i (i32.const 0))
+    (block $notified (loop $notify
+      (br_if $notified (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (if (i32.and (local.get $recipients) (i32.shl (i32.const 1) (local.get $i)))
+        (then
+          (local.set $entry (i32.add (global.get $dp_entity_table)
+            (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+          (local.set $event (call $gl32 (i32.add (local.get $entry) (i32.const 48))))
+          (if (local.get $event) (then (drop (call $host_set_event (local.get $event)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $notify)))
+    (i32.const 0))
+
+  (func $dp_discard_player_messages (param $player i32)
+    (local $i i32) (local $entry i32)
+    (if (i32.eqz (global.get $dp_message_table)) (then (return)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_MESSAGE_MAX)))
+      (local.set $entry (i32.add (global.get $dp_message_table)
+        (i32.mul (local.get $i) (global.get $DP_MESSAGE_STRIDE))))
+      (if (i32.and (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (i32.const 1))
+            (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 12))) (local.get $player)))
+        (then (drop (call $dp_message_remove
+          (call $gl32 (i32.add (local.get $entry) (i32.const 4))) (call $gl32 (local.get $entry))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  (func $dp_close_owner (param $owner i32)
+    (local $i i32) (local $entry i32)
+    (call $dp_messages_clear_owner (local.get $owner))
+    (if (i32.eqz (global.get $dp_entity_table)) (then (return)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+      (local.set $entry (i32.add (global.get $dp_entity_table)
+        (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+      (if (i32.and (i32.ne (call $gl32 (i32.add (local.get $entry) (i32.const 20))) (i32.const 0))
+            (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner)))
+        (then (drop (call $dp_destroy_entity (call $gl32 (local.get $entry))
+          (call $gl32 (i32.add (local.get $entry) (i32.const 4)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
   (func $dp_set_membership
       (param $member_id i32) (param $group_id i32) (param $add i32) (result i32)
     (local $member i32) (local $group i32) (local $bits i32) (local $bit i32)
@@ -7642,6 +9120,8 @@
     (local $entry i32) (local $i i32) (local $scan i32) (local $bit i32)
     (local.set $entry (call $dp_find_entity (local.get $id) (local.get $type)))
     (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $type) (i32.const 1))
+      (then (call $dp_discard_player_messages (local.get $id))))
     (if (i32.eq (local.get $type) (i32.const 0))
       (then
         (local.set $bit (call $dp_group_bit (local.get $entry)))
@@ -7654,7 +9134,19 @@
             (i32.and (call $gl32 (i32.add (local.get $scan) (i32.const 16)))
               (i32.xor (local.get $bit) (i32.const -1))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br $clear_members)))))
+          (br $clear_members))))
+      (else
+        (block $owners_done (loop $clear_owners
+          (br_if $owners_done (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
+          (local.set $scan
+            (i32.add (global.get $dp_entity_table)
+              (i32.mul (local.get $i) (global.get $DP_ENTITY_STRIDE))))
+          (if (i32.eq
+                (call $gl32 (i32.add (local.get $scan) (i32.const 40)))
+                (local.get $id))
+            (then (call $gs32 (i32.add (local.get $scan) (i32.const 40)) (i32.const -1))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $clear_owners)))))
     (call $dp_free_name (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
     (if (call $gl32 (i32.add (local.get $entry) (i32.const 24)))
       (then (call $heap_free
@@ -7791,6 +9283,7 @@
 
   (func $dp_clear_entities
     (local $i i32) (local $entry i32)
+    (call $dp_messages_clear)
     (if (i32.eqz (global.get $dp_entity_table)) (then (return)))
     (block $done (loop $clear
       (br_if $done (i32.ge_u (local.get $i) (global.get $DP_ENTITY_MAX)))
@@ -7912,8 +9405,8 @@
     (call $dp_enum_continue))
 
   ;; Query the two bounded ANSI DirectPlay families that this runtime exposes.
-  ;; family 0: IDirectPlay2A/3A (47-slot vtable); family 1:
-  ;; IDirectPlayLobbyA/Lobby2A (15-slot vtable). Unicode and later generations
+  ;; family 0: IDirectPlay2A/3A/4A (upgraded to 53 slots for 4A); family 1:
+  ;; IDirectPlayLobbyA/Lobby2A/Lobby3A (15/19 slots). Unicode and later generations
   ;; need different string semantics or additional slots, so fail honestly.
   (func $dplay_query_interface_wa (param $obj i32) (param $iid_wa i32)
         (param $out i32) (param $family i32) (result i32)
@@ -7928,6 +9421,13 @@
             (i32.const 0x000000C0) (i32.const 0x46000000)))
         (if (i32.eqz (local.get $family))
           (then
+            ;; Upgrade the same COM identity, preserving all 47 inherited slots.
+            (if (call $guid_words_equal (local.get $iid_wa)
+                  (i32.const 0x0AB1C531) (i32.const 0x11D14745)
+                  (i32.const 0x0000A1A7) (i32.const 0xFCAB03F8))
+              (then
+                (call $gs32 (local.get $obj) (global.get $DX_VTBL_DPLAY4))
+                (local.set $supported (i32.const 1))))
             ;; IID_IDirectPlay2A {9D460580-A822-11CF-960C-0080C7534E82}.
             (local.set $supported (i32.or (local.get $supported)
               (call $guid_words_equal (local.get $iid_wa)
@@ -7939,6 +9439,12 @@
                 (i32.const 0x133EFE41) (i32.const 0x11D032DC)
                 (i32.const 0xA000FB9C) (i32.const 0xCB430AC9)))))
           (else
+            (if (call $guid_words_equal (local.get $iid_wa)
+                  (i32.const 0x2DB72491) (i32.const 0x11D1652C)
+                  (i32.const 0x0000A8A7) (i32.const 0xFCAB03F8))
+              (then
+                (call $gs32 (local.get $obj) (global.get $DX_VTBL_DPLAYLOBBY3))
+                (local.set $supported (i32.const 1))))
             ;; IID_IDirectPlayLobbyA {26C66A70-B367-11CF-A024-00AA006157AC}.
             (local.set $supported (i32.or (local.get $supported)
               (call $guid_words_equal (local.get $iid_wa)
@@ -7967,6 +9473,85 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
+  (func $dp_owned_entity (param $owner i32) (param $id i32) (param $type i32) (result i32)
+    (local $entry i32)
+    (local.set $entry (call $dp_find_entity (local.get $id) (local.get $type)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (select (local.get $entry) (i32.const 0)
+      (i32.eq (call $gl32 (i32.add (local.get $entry) (i32.const 44))) (local.get $owner))))
+
+  ;; Ownership notifications/migration are not yet implemented. Keep output
+  ;; buffers untouched and fail explicitly instead of publishing guessed policy.
+  (func $handle_IDirectPlay4_GetGroupOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x80004001))
+    (if (i32.eqz (local.get $arg2)) (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 0)))
+      (then (global.set $eax (i32.const 0x8877009B)))))
+
+  (func $handle_IDirectPlay4_SetGroupOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x80004001))
+    (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 0)))
+      (then (global.set $eax (i32.const 0x8877009B)) (return)))
+    (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg2) (i32.const 1)))
+      (then (global.set $eax (i32.const 0x88770096)))))
+
+  (func $handle_IDirectPlay4_SendEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $size i32) (local $priority i32)
+    (local.set $size (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $priority (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 44)))
+    (if (i32.gt_u (local.get $priority) (i32.const 65535))
+      (then (global.set $eax (i32.const 0x88770186)) (return)))
+    ;; Synchronous delivery has no pending-send ID or completion context.
+    (global.set $eax (call $dp_send_local_priority (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $size) (local.get $priority))))
+
+  (func $handle_IDirectPlay4_GetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $bytes i32) (local $kind i32)
+    (local.set $bytes (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (if (i32.gt_u (local.get $arg3) (i32.const 2))
+      (then (global.set $eax (i32.const 0x88770078)) (return)))
+    (if (local.get $arg1)
+      (then (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 1)))
+        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+    (if (local.get $arg2)
+      (then (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg2) (i32.const 1)))
+        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+    (local.set $kind (i32.eq (local.get $arg3) (i32.const 2)))
+    (if (local.get $arg4) (then (call $gs32 (local.get $arg4)
+      (call $dp_message_query (local.get $arg0) (local.get $kind) (local.get $arg1) (local.get $arg2) (i32.const 0)))))
+    (if (local.get $bytes) (then (call $gs32 (local.get $bytes)
+      (call $dp_message_query (local.get $arg0) (local.get $kind) (local.get $arg1) (local.get $arg2) (i32.const 1)))))
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_IDirectPlay4_CancelMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x88770078))
+    (if (local.get $arg2) (then (return)))
+    (global.set $eax (i32.const 0))
+    (if (i32.eqz (local.get $arg1))
+      (then (drop (call $dp_message_cancel_range (local.get $arg0) (i32.const 0) (i32.const 0) (i32.const -1))) (return)))
+    (global.set $eax (i32.const 0x8877017C))
+    (local.set $entry (call $dp_message_find (local.get $arg0) (local.get $arg1)))
+    (if (i32.eqz (local.get $entry)) (then (return)))
+    (if (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (then (return)))
+    (drop (call $dp_message_remove (local.get $arg0) (local.get $arg1)))
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_IDirectPlay4_CancelPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (global.set $eax (i32.const 0x88770078))
+    (if (local.get $arg3) (then (return)))
+    (global.set $eax (i32.const 0x88770186))
+    (if (i32.gt_u (local.get $arg1) (local.get $arg2)) (then (return)))
+    (if (i32.gt_u (local.get $arg2) (i32.const 65535)) (then (return)))
+    (drop (call $dp_message_cancel_range (local.get $arg0) (i32.const 0) (local.get $arg1) (local.get $arg2)))
+    (global.set $eax (i32.const 0)))
+
   (func $handle_IDirectPlay3_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
@@ -7975,12 +9560,40 @@
     (global.set $eax (local.get $rc))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
+  ;; The Lobby3 ABI is callable, but application registration and external
+  ;; lobby launch/settings handoff are not implemented. Never invent a connection.
+  (func $handle_IDirectPlayLobby3_ConnectEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (global.set $eax (i32.const 0x80070057))
+    (if (i32.eqz (local.get $arg3)) (then (return)))
+    (call $gs32 (local.get $arg3) (i32.const 0))
+    (if (i32.eqz (local.get $arg2)) (then (return)))
+    (global.set $eax (i32.const 0x80040110))
+    (if (local.get $arg4) (then (return)))
+    (global.set $eax (i32.const 0x80004001)))
+
+  (func $handle_dplobby3_application_unsupported (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (global.set $eax (i32.const 0x88770078))
+    (if (local.get $arg1) (then (return)))
+    (global.set $eax (i32.const 0x80070057))
+    (if (i32.eqz (local.get $arg2)) (then (return)))
+    (global.set $eax (i32.const 0x80004001)))
+
+  (func $handle_IDirectPlayLobby3_WaitForConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (global.set $eax (i32.const 0x80004001))
+    (if (i32.and (local.get $arg1) (i32.const -2))
+      (then (global.set $eax (i32.const 0x88770078)))))
+
   (func $handle_IDirectPlay3_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (if (i32.le_s (local.get $rc) (i32.const 0))
-      (then (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))
+      (then
+        (call $dp_close_owner (local.get $arg0))
+        (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))
       (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (global.set $eax (local.get $rc))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
@@ -7990,7 +9603,7 @@
         (call $dp_set_membership (local.get $arg2) (local.get $arg1) (i32.const 1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IDirectPlay3_Close (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $dp_clear_entities)
+    (call $dp_close_owner (local.get $arg0))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IDirectPlay3_CreateGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -8000,6 +9613,8 @@
       (call $dp_create_entity
         (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
         (local.get $flags) (i32.const 0)))
+    (if (i32.eqz (global.get $eax))
+      (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_IDirectPlay3_CreatePlayer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32) (local $flags i32)
@@ -8009,6 +9624,8 @@
       (call $dp_create_entity
         (local.get $arg1) (local.get $arg2) (local.get $arg4) (local.get $size)
         (local.get $flags) (i32.const 1)))
+    (if (i32.eqz (global.get $eax))
+      (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (local.get $arg3))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
   (func $handle_IDirectPlay3_DeletePlayerFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
@@ -8119,8 +9736,14 @@
         (local.get $arg1) (i32.const 0) (local.get $arg2) (local.get $arg3)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
   (func $handle_IDirectPlay3_GetMessageCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (if (i32.eqz (local.get $arg2)) (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (if (local.get $arg1)
+      (then (if (i32.eqz (call $dp_find_entity (local.get $arg1) (i32.const 1)))
+        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+    (call $gs32 (local.get $arg2) (call $dp_message_query (local.get $arg0) (i32.const 1)
+      (i32.const 0) (local.get $arg1) (i32.const 0)))
+    (global.set $eax (i32.const 0)))
   (func $handle_IDirectPlay3_GetPlayerAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
     (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
@@ -8146,9 +9769,14 @@
   (func $handle_IDirectPlay3_Open (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IDirectPlay3_Receive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x887700BE)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $eax (call $dp_receive (local.get $arg0) (local.get $arg1)
+      (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_IDirectPlay3_Send (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $eax (call $dp_send_local (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
   (func $handle_IDirectPlay3_SetGroupData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
       (call $dp_set_data
@@ -8194,6 +9822,7 @@
     (if (i32.eqz (local.get $hr))
       (then
         (local.set $id (call $gl32 (local.get $arg2)))
+        (call $dp_bind_entity (local.get $id) (local.get $arg0) (i32.const 0))
         (if (i32.eqz
               (call $dp_set_membership (local.get $id) (local.get $arg1) (i32.const 1)))
           (then
