@@ -2300,3 +2300,36 @@ region gate is resolved by its owner. Exact-commit f09d1629 isolation separately
 passed all seven constant/async/pipeline/record tests, but that historical
 snapshot's full build failed the then-committed host-window gate; do not rewrite
 that historical failure as a successful clean build.
+
+### Typed state-block creation (2026-09-11)
+
+CreateStateBlock now creates ALL, PIXELSTATE and VERTEXSTATE blocks using the
+existing selective snapshot/transfer machinery. Creation captures immediately;
+allocation remains unpublished until success. Shader/constants, declaration,
+render/sampler/stage masks are selected by type. ALL additionally captures the
+represented texture/stream/index bindings, matrices, material and rectangles.
+VERTEX/ALL freeze the existing light index set so later Capture cannot add new
+lights. Retained resources follow existing block ownership, not caller lifetime.
+
+Membership follows Microsoft's detailed
+[vertex](https://learn.microsoft.com/en-us/windows/win32/direct3d9/saving-vertex-states-with-a-stateblock),
+[pixel](https://learn.microsoft.com/en-us/windows/win32/direct3d9/saving-pixel-states-with-a-stateblock)
+and [all-state](https://learn.microsoft.com/en-us/windows/win32/direct3d9/saving-all-device-states-with-a-stateblock)
+lists. The enum's overlap summary conflicts with those tables. The implementation
+records the detailed-table policy explicitly: LOCALVIEWER/material sources are
+shared; omitted FOGENABLE/NORMALIZENORMALS and TSS CONSTANT are currently ALL-only.
+Those disputed choices still require a native reference and are not asserted as
+conformance-complete. Absent clip-plane/palette/vertex-texture/stream-frequency
+state remains a full-adapter delivery gap; storing/capturing a render state does
+not imply that either renderer implements it. NPatch0 is an immutable invariant.
+
+Actual-handler RED19501 traps before implementation; final8995 passes81 cases,
+including inclusion and exclusion, high/typed constants, immediate capture,
+rectangles, texture references, frozen light membership and invalid requests.
+Four injected allocation failures (block and each of three copied light nodes)
+leave no live test allocations, unchanged device state/reference count, null
+output and a working retry. Existing selective blocks/float52/typed92 regressions
+65905 pass. Structural gates34898 pass; no public profile caps changed.
+Parent8170 repeats81 cases successfully. Shared-worktree full45196 passes
+canonical1188129/compat1188598 bytes, unchanged layout and233 segments; it also
+includes concurrent native clipper work and is not an isolated state-block build.

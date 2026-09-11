@@ -1323,7 +1323,7 @@
 
   ;; IDirect3DDevice9_CreateStateBlock — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_CreateStateBlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_stateblock_create (local.get $arg0) (local.get $arg1) (local.get $arg2))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_BeginStateBlock — 1 args (incl. this)
