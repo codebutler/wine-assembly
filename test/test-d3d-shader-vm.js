@@ -58,6 +58,23 @@ const { bootRenderHarness } = require('./render-helper');
   const b = [[2,3,4,5],[3,4,5,6],[4,5,6,7],[5,6,7,8]];
   const c = [[0.25,0.5,0.75,1],[1,2,3,4],[2,3,4,5],[3,4,5,6]];
   let cases = 0;
+  // LOG and LOGP use a finite negative sentinel for both signs of zero.
+  // Keep log2's internal -Infinity policy separate (texture LOD relies on it).
+  for (const opcode of [15, 79]) for (let scalar = 0; scalar < 4; scalar++)
+  for (const mask of [15, 5]) for (const lanes of [15, 5]) {
+    const program = compile([ins(opcode, d(0, mask), s(1, scalar * 85))]);
+    const ctx = e.d3d_shader_vm_context(program, lanes);
+    const input = Array.from({length:4}, () => [9,9,9,9]);
+    input[scalar] = [0, -0, 1, 2];
+    register(ctx, 1, input); register(ctx, 0, a);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    const result = [-Math.fround(3.4028234663852886e38), -Math.fround(3.4028234663852886e38), 0, 1];
+    const expected = a.map((row, component) => row.map((old, lane) =>
+      (mask & (1 << component)) && (lanes & (1 << lane)) ? result[lane] : old));
+    assert.deepStrictEqual(register(ctx, 0), expected.flat(),
+      `opcode ${opcode}: scalar ${scalar}, mask ${mask}, lanes ${lanes}: finite zero sentinel and untouched inactive components`);
+    e.d3d_shader_vm_free(ctx); e.d3d_shader_vm_free(program); cases++;
+  }
   e.shader_test_seed_cpu();
   function compile14(instructions){
     const p=ir(instructions);u32[p/4+2]=1;u32[p/4+3]=0xffff0104;
@@ -841,7 +858,7 @@ const { bootRenderHarness } = require('./render-helper');
     [14,[-149,-150,127,128],[2**-149,0,2**127,Infinity]],
     [14,[-Infinity,Infinity,NaN,1],[0,Infinity,NaN,2]],
     [15,[1,2,.5,-8],[0,1,-1,3]],
-    [15,[0,2**-149,Infinity,NaN],[-Infinity,-149,Infinity,NaN]],
+    [15,[0,2**-149,Infinity,NaN],[-Math.fround(3.4028234663852886e38),-149,Infinity,NaN]],
     [79,[0,2,.5,-8],[-Math.fround(3.4028234663852886e38),1,-1,3]],
   ]) {
     const program=bytecode([0xfffe0101,op,dstToken(4),srcToken(1,0,0),65535]);

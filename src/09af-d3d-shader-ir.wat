@@ -855,6 +855,8 @@
   ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/mova---vs
   (func $d3d_ir_arity20 (param $op i32) (result i32)
     (if (i32.or (i32.eq (local.get $op) (i32.const 46)) (i32.eq (local.get $op) (i32.const 35))) (then (return (i32.const 2))))
+    (if (i32.and (i32.ge_u (local.get $op) (i32.const 20)) (i32.le_u (local.get $op) (i32.const 24)))
+      (then (return (call $d3d_ir_arity (local.get $op)))))
     (if (i32.or (i32.le_u (local.get $op) (i32.const 13))
       (i32.or (i32.eq (local.get $op) (i32.const 19))
       (i32.or (i32.eq (local.get $op) (i32.const 31)) (i32.eq (local.get $op) (i32.const 81)))))
@@ -867,6 +869,7 @@
     (local $dstbank i32) (local $dstindex i32) (local $mask i32) (local $needed i32)
     (local $declared i32) (local $address i32) (local $position i32) (local $slots i32) (local $executable i32)
     (local $firstconst i32) (local $firstinput i32) (local $constantreads i32) (local $key i32) (local $temps i64)
+    (local $rows i32) (local $row i32) (local $vectorbank i32) (local $rowindex i32)
     (global.set $d3d_ir_flags (i32.const 0))
     (local.set $at (i32.const 1))
     (block $done (loop $instructions
@@ -885,6 +888,10 @@
         (then (return (call $d3d_ir_fail (i32.const 3) (local.get $start)))))
       (local.set $arity (call $d3d_ir_arity20 (local.get $op)))
       (if (i32.lt_s (local.get $arity) (i32.const 0)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
+      (local.set $rows (i32.const 0))
+      (if (i32.and (i32.ge_u (local.get $op) (i32.const 20)) (i32.le_u (local.get $op) (i32.const 24))) (then
+        (local.set $rows (select (i32.const 4) (select (i32.const 2) (i32.const 3) (i32.eq (local.get $op) (i32.const 24)))
+          (i32.or (i32.eq (local.get $op) (i32.const 20)) (i32.eq (local.get $op) (i32.const 22)))))))
       (local.set $length (i32.and (i32.shr_u (local.get $token) (i32.const 24)) (i32.const 15)))
       (local.set $end (i32.add (local.get $at) (local.get $length)))
       (if (i32.or (i32.gt_u (local.get $end) (local.get $count)) (i32.lt_u (local.get $length) (local.get $arity)))
@@ -932,6 +939,9 @@
             (if (i32.or (i32.eqz (local.get $sel)) (i32.ne (i32.and (local.get $arg) (i32.const 0x0fe0e000)) (i32.const 0)))
               (then (return (call $d3d_ir_fail (i32.const 7) (local.get $start)))))
             (local.set $mod (i32.and (i32.shr_u (local.get $arg) (i32.const 20)) (i32.const 1)))
+            (if (i32.ne (local.get $rows) (i32.const 0)) (then
+              (if (i32.ne (local.get $sel) (i32.sub (i32.shl (i32.const 1) (local.get $rows)) (i32.const 1)))
+                (then (return (call $d3d_ir_fail (i32.const 15) (local.get $start)))))))
             (if (i32.eq (local.get $op) (i32.const 81)) (then
               (if (i32.or (i32.ne (local.get $bank) (i32.const 2)) (i32.or (i32.ge_u (local.get $index) (i32.const 256)) (i32.or (i32.ne (local.get $sel) (i32.const 15)) (local.get $mod))))
                 (then (return (call $d3d_ir_fail (i32.const 14) (local.get $start))))) (br $normalized)))
@@ -945,6 +955,10 @@
                 (if (i32.ne (local.get $sel) (i32.const 1)) (then (return (call $d3d_ir_fail (i32.const 7) (local.get $start)))))))))
             (local.set $dstbank (local.get $bank)) (local.set $dstindex (local.get $index)) (local.set $mask (local.get $sel)) (br $normalized)))
           (if (i32.gt_u (local.get $mod) (i32.const 1)) (then (return (call $d3d_ir_fail (i32.const 7) (local.get $start)))))
+          (if (i32.and (i32.ne (local.get $rows) (i32.const 0)) (i32.eq (local.get $i) (i32.const 1))) (then
+            (local.set $vectorbank (local.get $bank))
+            (if (i32.and (i32.eq (local.get $bank) (local.get $dstbank)) (i32.eq (local.get $index) (local.get $dstindex)))
+              (then (return (call $d3d_ir_fail (i32.const 15) (local.get $start)))))))
           (local.set $relative (i32.ne (i32.and (local.get $arg) (i32.const 8192)) (i32.const 0)))
           (if (local.get $relative) (then
             (if (i32.or (i32.ne (local.get $bank) (i32.const 2)) (i32.or (i32.eqz (local.get $address)) (i32.ge_u (local.get $at) (local.get $end))))
@@ -953,6 +967,33 @@
               (then (return (call $d3d_ir_fail (i32.const 8) (local.get $at)))))
             (local.set $at (i32.add (local.get $at) (i32.const 1)))
             (local.set $mod (i32.or (local.get $mod) (i32.const 256))) (global.set $d3d_ir_flags (i32.const 1))))
+          ;; Matrix macros consume consecutive registers as separate DP rows.
+          ;; Validate every row before publishing any destination initialization.
+          ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/m3x2---vs
+          (if (i32.and (i32.ne (local.get $rows) (i32.const 0)) (i32.eq (local.get $i) (i32.const 2))) (then
+            (if (i32.or (i32.ne (local.get $sel) (i32.const 228)) (i32.ne (i32.and (local.get $mod) (i32.const 255)) (i32.const 0)))
+              (then (return (call $d3d_ir_fail (i32.const 15) (local.get $start)))))
+            (if (i32.and (i32.eq (local.get $bank) (local.get $vectorbank))
+              (i32.or (i32.eq (local.get $bank) (i32.const 1)) (i32.eq (local.get $bank) (i32.const 2))))
+              (then (return (call $d3d_ir_fail (i32.const 18) (local.get $start)))))
+            (local.set $row (i32.const 0))
+            (loop $matrix_rows
+              (local.set $rowindex (i32.add (local.get $index) (local.get $row)))
+              (if (i32.eq (local.get $bank) (i32.const 2)) (then
+                (if (i32.ge_u (local.get $rowindex) (i32.const 256)) (then (return (call $d3d_ir_fail (i32.const 15) (local.get $start))))))
+              (else (if (i32.eqz (call $d3d_ir_reg_ok (i32.const 0) (local.get $bank) (local.get $rowindex) (i32.const 0)))
+                (then (return (call $d3d_ir_fail (i32.const 15) (local.get $start)))))))
+              (if (i32.and (i32.eq (local.get $bank) (local.get $dstbank)) (i32.eq (local.get $rowindex) (local.get $dstindex)))
+                (then (return (call $d3d_ir_fail (i32.const 15) (local.get $start)))))
+              (if (i32.eq (local.get $bank) (i32.const 1)) (then
+                (if (i32.eqz (i32.and (local.get $declared) (i32.shl (i32.const 1) (local.get $rowindex))))
+                  (then (return (call $d3d_ir_fail (i32.const 13) (local.get $start)))))))
+              (if (i32.eqz (local.get $bank)) (then
+                (local.set $needed (call $d3d_ir_read_mask (local.get $op) (local.get $i) (local.get $mask)))
+                (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (local.get $temps) (i64.extend_i32_u (i32.shl (local.get $rowindex) (i32.const 2))))) (local.get $needed)) (local.get $needed))
+                  (then (return (call $d3d_ir_fail (i32.const 17) (local.get $start)))))))
+              (local.set $row (i32.add (local.get $row) (i32.const 1)))
+              (br_if $matrix_rows (i32.lt_u (local.get $row) (local.get $rows))))))
           (if (i32.eq (local.get $bank) (i32.const 2)) (then
             (if (i32.ge_u (local.get $index) (i32.const 256)) (then (return (call $d3d_ir_fail (i32.const 6) (local.get $start)))))
             (local.set $key (i32.or (local.get $index) (i32.shl (local.get $relative) (i32.const 16))))
@@ -987,7 +1028,7 @@
           (then (local.set $position (i32.or (local.get $position) (local.get $mask)))))
         (if (i32.eq (local.get $op) (i32.const 46)) (then (local.set $address (i32.const 1))))))
       (if (i32.and (i32.ne (local.get $op) (i32.const 31)) (i32.ne (local.get $op) (i32.const 81))) (then
-        (local.set $slots (i32.add (local.get $slots) (i32.const 1)))
+        (local.set $slots (i32.add (local.get $slots) (select (local.get $rows) (i32.const 1) (i32.ne (local.get $rows) (i32.const 0)))))
         (if (i32.gt_u (local.get $slots) (i32.const 256)) (then (return (call $d3d_ir_fail (i32.const 19) (local.get $start)))))))
       (local.set $n (i32.add (local.get $n) (i32.const 1)))
       (if (i32.gt_u (local.get $n) (i32.const 4096)) (then (return (call $d3d_ir_fail (i32.const 11) (local.get $start)))))

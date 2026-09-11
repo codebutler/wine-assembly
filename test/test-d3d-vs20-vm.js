@@ -46,6 +46,70 @@ const { bootRenderHarness } = require('./render-helper');
   function release(...pointers) { pointers.forEach(p => e.d3d_shader_vm_free(p)); }
   assert.strictEqual(e.d3d_shader_vm_context_bytes(), 73760);
   {
+    // The documented difference form must not overflow an intermediate product
+    // when both endpoints are identical finite large values.
+    const program = compile([ins(18, dst(1), source(0), constant(255), constant(255))]);
+    const ctx = e.d3d_shader_vm_context(program, 15); assert(ctx);
+    f.fill(2, register(ctx, 0, 0), register(ctx, 0, 0) + 16);
+    const endpoint = Math.fround(2e38);
+    f.fill(endpoint, register(ctx, 2, 255), register(ctx, 2, 255) + 16);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    assert.deepStrictEqual(Array.from(f.slice(register(ctx, 0, 1), register(ctx, 0, 1) + 16)),
+      Array(16).fill(endpoint), 'VS2 LRP preserves identical finite endpoints despite extrapolation');
+    release(ctx, program); cases++;
+  }
+  // Independent mathematical expectations for the reuse-first VS2 arithmetic
+  // slice. Each component is a vector of four independent invocations.
+  for (const opcode of [14, 15, 16, 17, 18, 79])
+  for (const mask of [15, 1, 6, 8]) for (const lanes of [15, 5]) {
+    const scalar = [14, 15, 79].includes(opcode);
+    const sources = [operand(0, 0, scalar ? 0 : 228)];
+    if (opcode === 17 || opcode === 18) sources.push(source(2));
+    if (opcode === 18) sources.push(source(3));
+    const program = compile([ins(opcode, dst(1, mask), ...sources)]);
+    const ctx = e.d3d_shader_vm_context(program, lanes); assert(ctx);
+    const a = [[0, -0, -2, 4], [2, 1, 4, 9], [.25, .5, .75, 1], [2, 3, .5, 1]];
+    const b = [[1, 2, 3, 4], [4, 3, 2, 1], [5, 6, 7, 8], [8, 7, 6, 5]];
+    const c = [[-1, -2, -3, -4], [1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6]];
+    f.set(a.flat(), register(ctx, 0, 0)); f.set(b.flat(), register(ctx, 0, 2));
+    f.set(c.flat(), register(ctx, 0, 3)); f.fill(77, register(ctx, 0, 1), register(ctx, 0, 1) + 16);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    for (let component = 0; component < 4; component++) for (let lane = 0; lane < 4; lane++) {
+      const x = a[0][lane], av = a[component][lane], bv = b[component][lane], cv = c[component][lane];
+      let expected = opcode === 14 ? 2 ** x : opcode === 15 || opcode === 79 ?
+        x === 0 ? -Math.fround(3.4028234663852886e38) : Math.log2(Math.abs(x)) :
+        opcode === 16 ? [1, Math.max(x, 0), x > 0 && a[1][lane] > 0 ? a[1][lane] ** a[3][lane] : 0, 1][component] :
+        opcode === 17 ? [1, a[1][lane] * b[1][lane], a[2][lane], b[3][lane]][component] :
+        av * (bv - cv) + cv;
+      if (!(mask & (1 << component)) || !(lanes & (1 << lane))) expected = 77;
+      const actual = f[register(ctx, 0, 1) + component * 4 + lane];
+      assert(Math.abs(actual - expected) <= Math.max(1, Math.abs(expected)) * 1e-6,
+        `VS2 opcode=${opcode} mask=${mask} lanes=${lanes} component=${component} lane=${lane}: ${actual} vs ${expected}`);
+    }
+    release(ctx, program); cases++;
+  }
+  // EXPP changes semantics between VS1 and VS2: the latter replicates exp2,
+  // including .w, instead of the VS1 floor/fraction/exp2/one vector.
+  for (const legacy of [false, true]) for (const mask of [15, 8])
+  for (const lanes of [15, 5]) for (let scalar = 0; scalar < 4; scalar++) {
+    const program = compile([ins(78, dst(1, mask), operand(0, 0, scalar * 85))], legacy);
+    const ctx = e.d3d_shader_vm_context(program, lanes); assert(ctx);
+    f.fill(9, register(ctx, 0, 0), register(ctx, 0, 0) + 16);
+    const values = [-1.5, -.5, .5, 1.5];
+    f.set(values, register(ctx, 0, 0) + scalar * 4);
+    f.fill(77, register(ctx, 0, 1), register(ctx, 0, 1) + 16);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    for (let component = 0; component < 4; component++) for (let lane = 0; lane < 4; lane++) {
+      const v = values[lane], power = Math.fround(2 ** v);
+      const expected = !(mask & (1 << component)) || !(lanes & (1 << lane)) ? 77 :
+        legacy ? [2 ** Math.floor(v), v - Math.floor(v), power, 1][component] : power;
+      const actual = f[register(ctx, 0, 1) + component * 4 + lane];
+      assert(Math.abs(actual - expected) <= Math.abs(expected) * 1e-6,
+        `EXPP legacy=${legacy} mask=${mask} lanes=${lanes} scalar=${scalar}: ${actual} vs ${expected}`);
+    }
+    release(ctx, program); cases++;
+  }
+  {
     const program = compile([ins(46, addr, source(0)), ins(1, dst(1), constant(128, true)),
       ins(1, dst(2), constant(255)), ins(1, dst(3), constant(127)), ins(1, dst(4), constant(128)),
       ins(35, dst(5), source(0))]);
@@ -104,6 +168,7 @@ const { bootRenderHarness } = require('./render-helper');
     ins(1, addr, source(0)), ins(1, dst(0), constant(256)), ins(1, dst(0), operand(3, 0)),
     ins(1, dst(0), operand(0, 0, 0xe4, 256)), ins(1, dst(0), operand(2, 0, 0xe4, 512)),
     ins(20, dst(0), source(0), constant(0)), ins(35, dst(0), operand(0, 0, 0xe4, 2)),
+    ...[14, 15, 78, 79].map(opcode => ins(opcode, dst(0), source(1))),
     ins(1, operand(4, 1, 15), source(0)), ins(46, operand(3, 0, 1, 1), source(0))]) {
     const p = ir([bad]); assert.strictEqual(e.d3d_shader_vm_compile_vs20(p), 0, 'private unsupported/malformed IR rejected');
     release(p); cases++;

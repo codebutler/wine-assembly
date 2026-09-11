@@ -1668,3 +1668,78 @@ Full build41098 passes canonical1158838 / compat1159306, unchanged region
 layout and no data overlaps. The earlier build32355 caught an instruction
 control-bit literal in the test that coincided with a region boundary; the
 fixture now constructs that bit from its index without weakening the ratchet.
+
+Private VS2 matrix follow-up: M4x4/M4x3/M3x4/M3x3/M3x2 now enter the same
+existing SIMD and GLSL matrix lowering. Native decoding validates exact result
+masks, consecutive row extents, every temporary row's initialized components,
+input declarations/read ports, destination/source aliases and expanded slot
+cost. Static rows must fit their register bank; dynamic a0 offsets retain the
+bounded gather's zero result outside c0..c255. High-constant row addition occurs
+before physical c128 remapping, with no new context layout or matrix kernel.
+
+Native IR45821 passes165 matrix cases; VM70172 passes85 including real decoder
+integration, all five shapes, high constants, relative bounds and TEMP/INPUT
+matrix rows. Legacy VM25394 passes231; private foundation87403 passes22;
+private decoder94950 passes84. Full build90152 passes canonical1160325 /
+compat1160793 with no data overlaps and unchanged region layout. Final34566
+passes86 WebGL1/2 frames against43 native frames: both basis and fractional
+nonzero-W vectors, all five shapes, independent dot products and exact oPos.
+Public VS2 admission
+remains closed; these tests do not establish the remaining mandatory profile.
+
+LOG zero conformance correction: a new signed-zero SIMD regression first failed
+with negative infinity in every output component (94114). LOG now returns
+finite -FLT_MAX for either sign of zero, as specified by Microsoft's
+[LOG reference](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/log---vs),
+in both the native handler and GLSL expression. The internal log2 helper remains
+unchanged because texture LOD relies on its negative-infinity zero result.
+An older transcendental fixture incorrectly expected infinity and was corrected;
+native VM84880 passes233 cases, including both LOG and LOGP signed zeros.
+Follow-up25349 passes263 cases, covering all four scalar replicate swizzles,
+partial destination masks and inactive SIMD lanes without changing their bits.
+The logical-operand gate2460 and diff check pass; software pipeline18418 passes
+351 cases. Full build55260 passes canonical1161350 / compat1161818 with no data
+overlaps and unchanged region layout. Actual WebGL64112 passes8 LOG signed-zero
+pixel controls (current white, old unguarded expression black), in GL1 and GL2; this
+does not admit another profile.
+
+Private EXPP lowering follow-up: opcode78 selects the existing replicated EXP
+packet for VS2, retaining the VS1 mixed-vector packet. GLSL makes the same
+profile distinction. Microsoft's
+[EXPP reference](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/expp---vs)
+specifies the different results. Native67825 first rejected the new private
+fixture; after lowering, VM17805 passes54 cases, including32 VS1/VS2 comparisons
+across all replicate swizzles, .w-only/full writes and active/inactive lanes.
+Follow-up56591 passes55 with a malformed nonscalar selector rejected; legacy
+VM90197 still passes263. The private VM requires replicate swizzles for EXPP.
+Decoder admission is still
+pending: it must also require the selected scalar to be initialized for .w-only
+writes (the shared VS1 read-mask rule correctly omits that read). Public token
+and VM profile gates remain closed. Full build63947 passes canonical1161403 /
+compat1161871 with unchanged region layout and no data overlaps. Actual GPU64112
+passes8 EXPP profile cases in GL1/2 at +/-1.5, preserving mixed VS1 results and
+replicating VS2 results. Its22 earlier MOVA/constant cases also pass.
+
+Reuse-first private arithmetic follow-up adds EXP/LOG/LIT/DST/LRP/LOGP to the
+private VM/GLSL admission lists, reusing the existing SIMD handlers and GLSL
+expressions. Scalar EXP/LOG/EXPP/LOGP operands require replicate swizzles in the
+private packet validator. Native85060 first rejected the new fixture; 81896
+passes106 cases including48 independent mathematical/mask/lane cases and
+malformed nonscalar sources. Native token admission remains pending (including
+LIT/LRP expanded slot costs); this is backend groundwork, not a profile claim.
+Legacy VM89462 passes263 and software pipeline99290 passes351. Full build75560
+passes canonical1161429 / compat1161897, unchanged region layout and no data
+overlaps. The first matrix GPU run31245 passes56 frames; strengthened34566
+passes86. GPU64112 passes38 baseline/LOG/EXPP cases. Remaining arithmetic GPU
+conformance and native token admission are subsequent work, not established by
+these fixtures. Real Black & White gameplay and full profiles remain open.
+
+Review caught an LRP numerical counterexample before checkpoint: with weight2
+and identical finite endpoints2e38, the weighted-sum expression overflowed to
+infinity. Native29868 reproduced the failure. Private VS2 packet flag64 and
+GLSL now use the documented difference form `a*(b-c)+c`; legacy lowering is
+unchanged. VM86058 passes107 cases, including the exact finite-endpoint result,
+and legacy96710 passes263. GPU66016 passes40 cases including both GL1/2 finite
+LRP endpoint oracles. Full build52807 passes canonical1162139 / compat1162607,
+unchanged region layout and no data overlaps (includes concurrent OLE strong-lock
+work, silent baseline345). No private arithmetic token admission is claimed.
