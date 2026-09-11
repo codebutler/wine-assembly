@@ -1416,6 +1416,16 @@ Full native/build63568 passes1154420/1154888 bytes with no overlaps. Parallel
 review supplied the reservation/reentry invariants and identified the implicit
 Clear/Draw exclusion fixed here. This verifies the implicit transfer slice,
 not all [GetDC restrictions](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3dsurface9-getdc):
-lockable-backbuffer admission, non-implicit surface/texture DC support, complete
+non-implicit surface/texture DC support, complete
 surface→device lifetime retention and multi-producer fault/cancellation coverage
 remain open. Those are still blockers to full D3D/GDI interoperability.
+
+Backbuffer GetDC admission now requires the immutable lockable bit captured from
+CreateDevice presentation flags. Reset accepts LOCKABLE_BACKBUFFER and captures
+it in the staged replacement surface, preserving the old surface on failure.
+Native18915 passes direct/worker nonlockable rejection, Reset transitions both
+ways, failed transitions preserving admission, and the existing GDI roundtrip.
+Browser61376 software and11089 WebGL pass actual x86 CreateDevice with Flags1
+and the GDI roundtrip in both guest modes. This does not implement implicit
+backbuffer LockRect, broader creation-parameter validation, or the remaining
+surface/DC formats and ownership rules.

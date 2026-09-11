@@ -594,7 +594,7 @@
   (func $handle_IDirect3D9_CreateDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $pp i32) (local $ppDev i32) (local $w i32) (local $h i32)
     (local $surf i32) (local $hwnd i32) (local $windowed i32) (local $cs i32)
-    (local $program i32) (local $depth_surface i32)
+    (local $program i32) (local $depth_surface i32) (local $surface_flags i32)
     (local.set $pp (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $ppDev (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
@@ -631,7 +631,11 @@
       (if (i32.eqz (local.get $h)) (then (local.set $h (call $dx_display_h_get))))))
     ;; The device's render target is the surface we present from, so it carries
     ;; the primary flag — EndScene blits it to the window's back-canvas.
-    (local.set $surf (call $d3d9_create_surface (local.get $w) (local.get $h) (i32.const 32) (i32.const 1)))
+    (local.set $surface_flags (i32.const 1))
+    (if (local.get $pp) (then
+      (local.set $surface_flags (i32.or (local.get $surface_flags)
+        (i32.shl (i32.and (call $gl32 (i32.add (local.get $pp) (i32.const 44))) (i32.const 1)) (i32.const 27))))))
+    (local.set $surf (call $d3d9_create_surface (local.get $w) (local.get $h) (i32.const 32) (local.get $surface_flags)))
     (if (i32.eqz (local.get $surf)) (then
       (global.set $eax (i32.const 0x8876017C)) ;; D3DERR_OUTOFVIDEOMEMORY
       (return)))
@@ -2044,6 +2048,7 @@
       (br_if $done (i32.eqz (local.get $device)))
       (local.set $entry (call $dx_from_this (local.get $arg0)))
       (if (i32.eqz (global.get $d3d_render_token)) (then
+        (br_if $done (i32.eqz (i32.and (load.field DxObject flags (local.get $entry)) (i32.shl (i32.const 1) (i32.const 27)))))
         (br_if $done (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0x40000000)))
         ;; Reserve before readback, including while the guest is parked.
         (store.field DxObject flags (local.get $entry)

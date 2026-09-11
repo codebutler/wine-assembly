@@ -46,6 +46,7 @@ const backend=process.argv.includes('--webgl')?'webgl':'software';
         new Uint8Array(memory.buffer,e.guest_to_wasm(p.windowClass),8).set([83,84,65,84,73,67,0,0]);
         new Uint8Array(memory.buffer,e.guest_to_wasm(p.pp),64).fill(0);
         [8,8,21,1,0,0,1,1].forEach((v,i)=>e.guest_write32(p.pp+i*4,v));
+        e.guest_write32(p.pp+44,1); // D3DPRESENTFLAG_LOCKABLE_BACKBUFFER
         const view=new DataView(memory.buffer),wa=e.guest_to_wasm(p.vertices);
         [[-1,1,.5],[1,1,.5],[-1,-1,.5]].forEach((v,i)=>{
           v.forEach((n,j)=>view.setFloat32(wa+i*16+j*4,n,true));view.setUint32(wa+i*16+12,0xffff0000,true);

@@ -153,8 +153,16 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     if(fn===e.Surface9_GetDC||fn===e.Surface9_ReleaseDC)assert.strictEqual(e.get_esp()>>>0,0x074ff00c,'completed DC call pops once');
     return value>>>0;};
   const aliases=async()=>{
+    e.guest_write32(pp+44,0);
     ok(e.create_device(pp,out),'alias device');const ad=read(out);
     ok(e.Device9_GetRenderTarget(ad,0,out),'alias backbuffer');let ab=read(out);
+    bad(await invoke(e.Surface9_GetDC,ab,out));assert.strictEqual(read(out),0,'nonlockable backbuffer exposes no DC');
+    e.guest_write32(pp+44,1);
+    bad(await invoke(e.Device9_Reset,ad,pp)); // external reference prevents transition
+    bad(await invoke(e.Surface9_GetDC,ab,out));
+    e.Surface9_Release(ab);e.guest_write32(pp+44,1);
+    ok(await invoke(e.Device9_Reset,ad,pp),'Reset enables lockable backbuffer');
+    ok(e.Device9_GetRenderTarget(ad,0,out));ab=read(out);
     for(const format of[62,0x31545844,0x35545844]){
       ok(e.raw_texture(ad,2,format,out),'raw system texture');const st=read(out);
       ok(e.raw_texture(ad,0,format,out),'raw default texture');const dt=read(out);
@@ -326,6 +334,14 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       else ok(e.Device9_SetRenderTarget(ad,0,ab),'unbind releases parent');
       for(const id of ids)assert(!bridge.devices.get(ad).colors.has(id),'all instantiated mip IDs retired');
     }
+    e.guest_write32(pp+44,0);
+    bad(await invoke(e.Device9_Reset,ad,pp));
+    ok(await invoke(e.Surface9_GetDC,ab,out),'failed Reset preserves old lockability');
+    ok(await invoke(e.Surface9_ReleaseDC,ab,read(out)));
+    e.Surface9_Release(ab);e.guest_write32(pp+44,0);
+    ok(await invoke(e.Device9_Reset,ad,pp),'Reset removes lockability');
+    ok(e.Device9_GetRenderTarget(ad,0,out));ab=read(out);
+    bad(await invoke(e.Surface9_GetDC,ab,out));
     e.Surface9_Release(ab);assert.strictEqual(await invoke(e.Device9_Release,ad),0);
   };
   bridge=new Bridge({backend:'software',enableProgrammable:true,getExports:()=>e,getMemory:()=>memory.buffer,guestToWasm:wa});
