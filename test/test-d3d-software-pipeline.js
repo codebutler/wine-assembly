@@ -58,6 +58,19 @@ const {bootRenderHarness}=require('./render-helper');
   }
   const triangle=[vertex(-1,1),vertex(1,1),vertex(-1,-1)];
   let cases=0;
+  {const wideVS=program([0xfffe0101,1,0xc00f0000,0x90e40000,1,0xd00f0000,0x90e4000a,0xffff]);
+   const vertices=triangle.map(v=>[...v,...Array(7).fill([0,0,0,1]).flat(),...green]);
+   const options={abi:5,uvCount:11,extraMap:0xa9876543,stride:176,vs:wideVS};
+   const d=draw(vertices,options);assert(d.ctx,'ABI5 eleven inputs');d.run();assert.strictEqual(d.pixel(1,1),0xff00ff00,'highest register survives 32-bit map boundary');d.guards();e.d3d_software_free(d.ctx);cases++;
+   for(const patch of [{uvCount:0},{uvCount:2},{uvCount:12},{uvCount:0xffffffff},{extraMap:0x09876543},{uvCount:10},{stride:160}]){
+    const bad=draw(triangle,{...options,...patch});assert.strictEqual(bad.ctx,0,'ABI5 malformed count, duplicate register, unused bits or stride');bad.guards();cases++;
+   }
+   for(const [word,value] of [[8,memory.buffer.byteLength-16],[8,0xfffffff0],[9,0xffffffff],[10,0xffffffff]]){
+    u32[d.desc/4+word]=value;assert.strictEqual(e.d3d_software_create(d.desc),0,'ABI5 extent/overflow rejects before input read');d.guards();
+    u32[d.desc/4+word]=word===8?d.input:word===9?3:176;cases++;
+   }
+   e.d3d_shader_vm_free(wideVS);
+  }
   // Public VS1.1 oFog is scalar/clamped; fog blending occurs after the PS and
   // preserves alpha. Legacy descriptor layout and unfogged paths are unchanged.
   for(const value of [-1,.25,2]){

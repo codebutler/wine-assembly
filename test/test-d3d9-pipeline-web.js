@@ -373,7 +373,7 @@ const { compileSrcWasm } = require('./compile-src');
         compressedPixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4)));
       }
       calls.push(e.SetRenderState(device,28,1));
-      const unsupportedFixed=e.DrawPrimitiveUP(device,4,1,vptr,28)>>>0;
+      const fixedFog=e.DrawPrimitiveUP(device,4,1,vptr,28)>>>0;
       // Native CreateTexture/LockRect and TSS float-bit state through immutable
       // Bridge/command serialization, then real GPU TEXBEML and canonical BGRA.
       calls.push(e.SetRenderState(device,28,0),e.SetRenderState(device,7,0),e.SetRenderState(device,15,0),e.SetRenderState(device,22,1));
@@ -411,7 +411,7 @@ const { compileSrcWasm } = require('./compile-src');
       const clearDepthValue=clearGL.getParameter(clearGL.DEPTH_CLEAR_VALUE);
       const layer=renderer.windows[1]._gpuFrameLayer;
       const result={calls,caps,pixel,texturedPixel,indexedPixel,indexed32Pixel,bufferPixel,invalid,backingRequests,repaintRequests,
-        fixedPixel,alphaRejected,transformedPixel,transformedOutside,culledPixel,unsupportedFixed,untexturedPixel,singleLevelFilter,compressedPixels,
+        fixedPixel,alphaRejected,transformedPixel,transformedOutside,culledPixel,fixedFog,untexturedPixel,singleLevelFilter,compressedPixels,
         cubePixels,cubeMipPixel,restored2DPixel,mixedPixels,initialViewport,viewport,invalidViewport,viewportPixels,
         declarationPixel,declarationIdentity,declarationFVF,badBufferRange,badIndexRange,lockedDraw,
         queryFinishes,eventComplete,beforePresent,presents,hasLayer:!!layer,lastError:invalidMessage,
@@ -452,7 +452,7 @@ const { compileSrcWasm } = require('./compile-src');
     assert.deepStrictEqual(result.transformedOutside,result.fixedPixel);
     // Canonical RGBA/BGRA storage retains the POSITIONT diffuse alpha0x80.
     assert.deepStrictEqual(result.transformedPixel,[0,160,0,128]);
-    assert.strictEqual(result.unsupportedFixed,0x8876086c);
+    assert.strictEqual(result.fixedFog,0,'implemented fixed vertex fog is accepted');
     assert.deepStrictEqual(result.initialViewport,[0,0,16,16,0,0x3f800000,0x12345678]);
     assert.strictEqual(result.invalidViewport,0x8876086c);
     assert.deepStrictEqual(result.viewport,[4,2,6,4,0x3e4ccccd,0x3f4ccccd]);

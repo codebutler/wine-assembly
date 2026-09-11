@@ -1,4 +1,4 @@
-;; Programmable software triangle slice, descriptor ABI1..4 (128 bytes).
+;; Programmable software triangle slice, descriptor ABI1..5 (128 bytes).
 ;; +0 DSP1 magic, +4 ABI, +8 width,+12 height,+16 BGRA target,+20 pitch,
 ;; +24 f32 depth target,+28 depth pitch,+32 vertices,+36 count,+40 stride,
 ;; +44 optional U16 indices,+48 index count,+52 VS packet program,+56 PS program,
@@ -11,6 +11,9 @@
 ;; ABI3 extends UV count to1..6 and extra UV1..5 nibbles (eight total inputs).
 ;; ABI4 appends PSIZE float4 after those inputs; +124 bits20..23 select its
 ;; register, bits24..31 reserved. It does not change the output snapshot ABI.
+;; ABI5: +120 total float4 input count3..11; +116 maps first3 registers and
+;; +124 maps inputs3..10. Semantics are compiler-owned: all six UVs, NORMAL,
+;; SPECULAR and PSIZE can coexist. Older ABI field meanings are unchanged.
 ;; Unused mapping bits must be zero; all position/color/UV registers unique.
 ;; ABI2 input adds consecutive float4 UVs after the unchanged48-byte prefix.
 ;; Input vertex: position float4, diffuse float4, texture coordinate float4.
@@ -120,10 +123,11 @@
   (local $out i32) (local $v i32) (local $bits i32) (local $map i32) (local $x f32) (local $y f32)
   (local $z f32) (local $w f32) (local $iw f32) (local $bytes i32) (local $point_base i32) (local $point_size f32)
   (local $uvs i32) (local $used i32) (local $register i32) (local $psize i32) (local $psreg i32)
+  (local $wide i64)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $desc) (i32.const 128))) (then (return (i32.const 0))))
   (if (i32.or (i32.ne (i32.load (local.get $desc)) (i32.const 0x44535031))
     (i32.or (i32.lt_u (i32.load offset=4 (local.get $desc)) (i32.const 1))
-      (i32.gt_u (i32.load offset=4 (local.get $desc)) (i32.const 4)))) (then (return (i32.const 0))))
+      (i32.gt_u (i32.load offset=4 (local.get $desc)) (i32.const 5)))) (then (return (i32.const 0))))
   (local.set $psize (i32.eq (i32.load offset=4 (local.get $desc)) (i32.const 4)))
   (local.set $psreg (i32.and (i32.shr_u (i32.load offset=124 (local.get $desc)) (i32.const 20)) (i32.const 15)))
   (if (i32.or (i32.eqz (i32.load offset=8 (local.get $desc)))
@@ -142,20 +146,25 @@
     (i32.or (i32.lt_u (i32.load offset=112 (local.get $desc)) (i32.const 1))
       (i32.gt_u (i32.load offset=112 (local.get $desc)) (i32.const 3)))))))) (then (return (i32.const 0))))
   (local.set $uvs (i32.const 1))
-  (if (i32.eq (i32.load offset=4 (local.get $desc)) (i32.const 1))
+  (if (i32.eq (i32.load offset=4 (local.get $desc)) (i32.const 5)) (then
+    (local.set $uvs (i32.sub (i32.load offset=120 (local.get $desc)) (i32.const 2)))
+    (if (i32.or (i32.lt_u (local.get $uvs) (i32.const 1)) (i32.gt_u (local.get $uvs) (i32.const 9))) (then (return (i32.const 0))))
+    (if (i32.lt_u (local.get $uvs) (i32.const 9)) (then
+      (if (i32.shr_u (i32.load offset=124 (local.get $desc)) (i32.shl (i32.sub (local.get $uvs) (i32.const 1)) (i32.const 2))) (then (return (i32.const 0)))))))
+  (else (if (i32.eq (i32.load offset=4 (local.get $desc)) (i32.const 1))
     (then (if (i32.or (i32.load offset=120 (local.get $desc)) (i32.load offset=124 (local.get $desc))) (then (return (i32.const 0)))))
     (else
       (local.set $uvs (i32.load offset=120 (local.get $desc)))
       (if (i32.or (i32.lt_u (local.get $uvs) (i32.const 1)) (i32.gt_u (local.get $uvs)
         (select (i32.const 6) (i32.const 4) (i32.ge_u (i32.load offset=4 (local.get $desc)) (i32.const 3))))) (then (return (i32.const 0))))
       (if (i32.and (i32.ne (local.get $psize) (i32.const 0)) (i32.ne (i32.shr_u (i32.load offset=124 (local.get $desc)) (i32.const 24)) (i32.const 0))) (then (return (i32.const 0))))
-      (if (i32.shr_u (i32.and (i32.load offset=124 (local.get $desc)) (select (i32.const 1048575) (i32.const -1) (local.get $psize))) (i32.shl (i32.sub (local.get $uvs) (i32.const 1)) (i32.const 2))) (then (return (i32.const 0))))))
+      (if (i32.shr_u (i32.and (i32.load offset=124 (local.get $desc)) (select (i32.const 1048575) (i32.const -1) (local.get $psize))) (i32.shl (i32.sub (local.get $uvs) (i32.const 1)) (i32.const 2))) (then (return (i32.const 0))))))))
   (local.set $map (i32.load offset=116 (local.get $desc)))
   (if (i32.eqz (local.get $map)) (then (local.set $map (i32.const 528))))
   (if (i32.gt_u (local.get $map) (i32.const 4095)) (then (return (i32.const 0))))
-  (local.set $map (i32.or (local.get $map) (i32.shl (i32.load offset=124 (local.get $desc)) (i32.const 12))))
+  (local.set $wide (i64.or (i64.extend_i32_u (local.get $map)) (i64.shl (i64.extend_i32_u (i32.load offset=124 (local.get $desc))) (i64.const 12))))
   (loop $mapping
-    (local.set $register (i32.shl (i32.const 1) (i32.and (i32.shr_u (local.get $map) (i32.shl (local.get $j) (i32.const 2))) (i32.const 15))))
+    (local.set $register (i32.shl (i32.const 1) (i32.and (i32.wrap_i64 (i64.shr_u (local.get $wide) (i64.extend_i32_u (i32.shl (local.get $j) (i32.const 2))))) (i32.const 15))))
     (if (i32.and (local.get $used) (local.get $register)) (then (return (i32.const 0))))
     (local.set $used (i32.or (local.get $used) (local.get $register)))
     (local.set $j (i32.add (local.get $j) (i32.const 1)))
@@ -240,7 +249,7 @@
         (local.set $j (i32.const 0))
         (loop $attributes
           (f32.store (i32.add (i32.add (local.get $vm) (i32.const 8224))
-            (i32.add (i32.shl (i32.and (i32.shr_u (local.get $map) (i32.and (local.get $j) (i32.const 28))) (i32.const 15)) (i32.const 6))
+            (i32.add (i32.shl (i32.and (i32.wrap_i64 (i64.shr_u (local.get $wide) (i64.extend_i32_u (i32.and (local.get $j) (i32.const 60))))) (i32.const 15)) (i32.const 6))
               (i32.add (i32.shl (i32.and (local.get $j) (i32.const 3)) (i32.const 4)) (i32.shl (local.get $lane) (i32.const 2)))))
             (f32.load (i32.add (local.get $src) (i32.shl (local.get $j) (i32.const 2)))))
           (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $attributes (i32.lt_u (local.get $j) (i32.shl (i32.add (local.get $uvs) (i32.const 2)) (i32.const 2)))))

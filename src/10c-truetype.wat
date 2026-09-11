@@ -3441,6 +3441,25 @@
       (call $tt_face_ansi_glyph (local.get $face) (local.get $byte))
       (local.get $ppem)))
 
+  ;; ETO_GLYPH_INDEX addresses the TrueType face directly, including glyphs
+  ;; absent from the ANSI cmap. Return packed face+1 / ppem for one text call.
+  (func $tt_gdi_index_face (param $hdc i32) (result i32)
+    (local $dc i32) (local $font i32) (local $face i32) (local $ppem i32)
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
+    (local.set $font (load.field.memarg GdiDcState font (local.get $dc)))
+    (if (i32.eqz (call $gdi_object_record (local.get $font))) (then (return (i32.const 0))))
+    (local.set $face (call $tt_face_for_logfont (call $gdi_font_face (local.get $font))
+      (call $gdi_font_weight (local.get $font)) (call $gdi_font_italic (local.get $font))))
+    (if (i32.lt_s (local.get $face) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $ppem (call $tt_face_ppem (local.get $face) (call $gdi_font_height (local.get $font))))
+    (if (i32.or (i32.le_s (local.get $ppem) (i32.const 0)) (i32.gt_u (local.get $ppem) (i32.const 255))) (then (return (i32.const 0))))
+    (i32.or (i32.add (local.get $face) (i32.const 1)) (i32.shl (local.get $ppem) (i32.const 16))))
+
+  (func $tt_gdi_index_width (param $face i32) (param $ppem i32) (param $gid i32) (result i32)
+    (call $tt_advance_px (call $tt_face_data (local.get $face))
+      (call $tt_face_size (local.get $face)) (local.get $gid) (local.get $ppem)))
+
   ;; ---- face substitution ------------------------------------------------
   ;;
   ;; A LOGFONT names a Win98 face. WAT turns that into the file real GDI would

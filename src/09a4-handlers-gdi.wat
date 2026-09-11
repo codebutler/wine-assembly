@@ -2062,8 +2062,9 @@
     (if (local.get $lpDx)
       (then (local.set $dx_wa (call $g2w (local.get $lpDx)))))
     (local.set $wide (i32.const 1))
-    (local.set $packed_ansi_len
-      (call $gdi_ext_text_out_w_packed_ansi_len (local.get $text_wa) (local.get $count)))
+    (if (i32.eqz (i32.and (local.get $arg3) (i32.const 16)))
+      (then (local.set $packed_ansi_len
+        (call $gdi_ext_text_out_w_packed_ansi_len (local.get $text_wa) (local.get $count)))))
     (if (local.get $packed_ansi_len)
       (then
         (local.set $count (local.get $packed_ansi_len))

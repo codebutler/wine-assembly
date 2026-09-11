@@ -84,7 +84,7 @@ const {Bridge} = require('../lib/d3d9-host');
   `});
   assert.strictEqual(typeof document,'undefined','this is a browser-free integration gate');
   bridge=new Bridge({backend:'software',enableProgrammable:true,
-    getExports:()=>e,getMemory:()=>memory.buffer,guestToWasm:p=>e.guest_to_wasm(p)>>>0});
+    getExports:()=>({...e,d3d_shader_ir_compile(){throw Error('draw must consume retained creation IR');}}),getMemory:()=>memory.buffer,guestToWasm:p=>e.guest_to_wasm(p)>>>0});
   e.init_dx_com_thunks();
   const alloc=n=>e.guest_alloc(n)>>>0,wa=p=>e.guest_to_wasm(p)>>>0;
   const out=alloc(4),pp=alloc(64);

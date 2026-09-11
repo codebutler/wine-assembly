@@ -27,7 +27,7 @@ const IR = require('../lib/d3d-shader-ir');
     assert.ok(p, `native error ${e.d3d_shader_ir_error()} at ${e.d3d_shader_ir_error_offset()}: ${code.map(x=>x.toString(16))}`);
     const ir = IR.read(memory.buffer, p);
     const legacy = Shader.compile(Uint32Array.from(code));
-    const lowered = Shader.compileIR(ir);
+    const lowered = Shader.compileNativeIR(ir);
     assert.strictEqual(lowered.source, legacy.source, 'normalized WAT IR preserves GLSL output');
     assert.deepStrictEqual(lowered.attributes, legacy.attributes);
     assert.deepStrictEqual(lowered.uniforms, legacy.uniforms);

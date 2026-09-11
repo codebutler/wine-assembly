@@ -178,7 +178,7 @@
 
   (func $d3d9_shader_create (param $this i32) (param $code i32) (param $out i32) (param $version i32)
     (local $state i32) (local $length i32) (local $shader i32) (local $wa i32)
-    (local $ir i32) (local $words i32)
+    (local $ir i32) (local $words i32) (local $retained i32) (local $ir_bytes i32)
     (global.set $eax (i32.const 0x8876086C))
     (if (i32.eqz (local.get $out)) (then (return)))
     (call $gs32 (local.get $out) (i32.const 0))
@@ -227,7 +227,22 @@
         (then (global.set $eax (i32.const 0x8007000E))))
       (return)))
     (local.set $length (i32.shl (i32.load offset=20 (local.get $ir)) (i32.const 2)))
+    ;; Publish one allocation: unchanged header + GetFunction bytecode + IR.
+    ;; Do not retain the validator's linked-list allocation: its list belongs
+    ;; to this WASM instance, while shader final release may run on a peer.
+    (local.set $ir_bytes (i32.load offset=24 (local.get $ir)))
+    (local.set $retained (call $heap_alloc (i32.add (i32.add (local.get $length) (i32.const 24)) (local.get $ir_bytes))))
+    (if (i32.eqz (local.get $retained)) (then
+      (call $d3d_shader_ir_free (local.get $ir)) (call $heap_free (local.get $shader))
+      (global.set $eax (i32.const 0x8007000E)) (return)))
+    (memory.copy (i32.add (call $g2w (local.get $retained)) (i32.const 24))
+      (i32.add (local.get $wa) (i32.const 24)) (local.get $length))
+    (memory.copy (i32.add (i32.add (call $g2w (local.get $retained)) (i32.const 24)) (local.get $length))
+      (local.get $ir) (local.get $ir_bytes))
     (call $d3d_shader_ir_free (local.get $ir))
+    (call $heap_free (local.get $shader))
+    (local.set $shader (local.get $retained))
+    (local.set $wa (call $g2w (local.get $shader)))
     (i32.store (local.get $wa) (call $gl32 (i32.add (local.get $state) (i32.const 1680))))
     (i32.store offset=4 (local.get $wa) (i32.const 1))
     (i32.store offset=8 (local.get $wa) (local.get $this))

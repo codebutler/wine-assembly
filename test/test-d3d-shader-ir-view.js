@@ -12,6 +12,14 @@ put(p + 64, [1, 0, 0xe4, 0]);
 const view = IR.read(memory, p);
 const expected = Shader.compile(new Uint32Array([0xfffe0101, 1, 0xc00f0000, 0x90e40000, 0xffff]));
 assert.strictEqual(Shader.compileIR(view).source, expected.source);
+assert.strictEqual(Shader.compileNativeIR(view).source,expected.source);
+assert.strictEqual(Shader.compileNativeIR({...view,instructions:[],version:0xffff0104}).source,expected.source,'serialized native IR is authoritative, not redundant JS projection');
+assert.throws(()=>Shader.compileNativeIR(Shader.parse(new Uint32Array([0xfffe0101,0xffff]))),/native.*bytes/);
+for(const [offset,value]of [[12,0xffff0104],[28,4]]){
+ const bytes=view.nativeBytes.slice();new DataView(bytes.buffer).setUint32(offset,value,true);
+ if(offset===12)new DataView(bytes.buffer).setUint32(8,1,true);
+ assert.throws(()=>Shader.compileNativeIR({...view,nativeBytes:bytes}),/profile/);
+}
 assert(Object.isFrozen(view.instructions[0].args));
 assert(view.nativeBytes instanceof Uint8Array);
 assert.notStrictEqual(view.nativeBytes.buffer,memory,'native executor handoff owns bytes');
@@ -47,4 +55,11 @@ assert.throws(()=>cache.compile(256,5),/ABI/);
 assert.strictEqual(frees,5,'native allocation is freed even when projection fails');
 assert.strictEqual(cache.bytes,0);
 assert.throws(()=>cache.compile(511,5),/bounds/);
+assert.throws(()=>new IR.Compiler({getExports:()=>({}),getMemory:()=>memory}).compile(256,5),/validator unavailable/);
+v.setUint32(p+4,1,true);
+const retainedCache=new IR.Compiler({getExports:()=>{throw Error('unexpected compiler access');},getMemory:()=>memory,maxBytes:200,maxEntries:1});
+const retained=retainedCache.retained(p,5);assert.strictEqual(retainedCache.retained(p,5),retained);
+assert.throws(()=>retainedCache.retained(p,6),/extent/);
+v.setUint32(p+68,2,true);assert.notStrictEqual(retainedCache.retained(p,5),retained,'reused retained allocation invalidates cached projection');
+assert(retainedCache.bytes<=200);assert.strictEqual(retainedCache.entries.size,1);
 console.log('PASS WAT shader IR view: bounded ABI, immutable projection and GLSL parity');

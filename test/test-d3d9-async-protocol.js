@@ -86,9 +86,17 @@ function fixture(options={}) {
   await six.advance(1);await six.bridge.wait(sixToken);
   assert.strictEqual(six.bridge.call(0x30007,0,sixToken),1);await six.bridge.close();
   const both=fixture(),put=(p,n)=>both.v.setUint32(p,n,true);
+  // Synthetic retained native tails for these known MOV shaders. Real native
+  // production/legality is covered by the COM tests; drawing must not compile.
+  both.bridge.options.getExports=()=>({d3d_shader_ir_compile(){throw Error('draw reparsed shader');}});
   for(const [offset,p,tokens]of[[0,50000,[0xfffe0101,1,0xc00f0000,0x90e40000,0xffff]],
-    [4,50100,[0xffff0101,1,0x800f0000,0x90e40000,0xffff]]]){
-    put(both.program+offset,p);put(p+16,tokens.length*4);new Uint32Array(both.memory,p+24,tokens.length).set(tokens);}
+    [4,51000,[0xffff0101,1,0x800f0000,0x90e40000,0xffff]]]){
+    put(both.program+offset,p);put(p+16,tokens.length*4);new Uint32Array(both.memory,p+24,tokens.length).set(tokens);
+    const at=p+24+tokens.length*4,pixel=offset===4;
+    new Uint32Array(both.memory,at,8).set([0x44534952,1,pixel?1:0,tokens[0],1,5,160,0]);
+    new Uint32Array(both.memory,at+32,4).set([1,1,2,0]);
+    new Uint32Array(both.memory,at+48,4).set([pixel?0:4,0,15,0]);
+    new Uint32Array(both.memory,at+64,4).set([1,0,228,0]);}
   put(256+28*4,1);put(256+34*4,0xffabcdef);put(256+35*4,0);
   for(const [id,value]of[[36,.25],[37,.75],[38,.5]])both.v.setFloat32(256+id*4,value,true);
   const bothToken=both.bridge.call(0x30001,both.desc,0);assert(bothToken<=-2);
@@ -100,6 +108,12 @@ function fixture(options={}) {
   assert(bothDraw.vertexShader&&bothDraw.pixelShader);
   assert.deepStrictEqual(bothDraw.fogState,{enabled:1,color:0xffabcdef,tableMode:0,start:.25,end:.75,density:.5,depthMode:0},'raster fog survives both-programmed binding and guest mutation');
   await both.advance(1);await both.bridge.wait(bothToken);assert.strictEqual(both.bridge.call(0x30007,0,bothToken),1);await both.bridge.close();
+  const missing=fixture();missing.v.setUint32(missing.program,50000,true);missing.v.setUint32(50016,20,true);
+  new Uint32Array(missing.memory,50024,5).set([0xfffe0101,1,0xc00f0000,0x90e40000,0xffff]);
+  assert.strictEqual(missing.bridge.call(0x30001,missing.desc,0),-1,'no diagnostic token parser fallback');
+  missing.initialized.resolve();await tick();
+  assert(!missing.commands.some(c=>c.opcode===OP.DRAW),'missing validator cannot enqueue draw');
+  await missing.bridge.close();
   const f=fixture(),b=f.bridge;
   const draw=b.call(0x30001,f.desc,0);assert(draw<=-2);
   const entry=b.devices.get(7);assert.strictEqual(entry.queue.submitted,3);

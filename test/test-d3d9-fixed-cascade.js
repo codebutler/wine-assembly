@@ -373,6 +373,27 @@ const {Device}=require('../lib/d3d9-software-backend');
   run(s,[0,255,0,255],'NORMAL input packing preserves separate highest UV slot');}
  {const bad=normalDraw();bad.fixedFunction.world=new Float32Array(16);const before=d.present().pixels;
   assert.throws(()=>d.draw(bad),/native fixed/);assert.deepStrictEqual(d.present().pixels,before);assert.strictEqual(d.bytes,base);}
+ // Eleven live inputs: position/diffuse, six UVs, PSIZE, NORMAL, SPECULAR.
+ {const stages=Array.from({length:6},(_,i)=>stage({colorOp:7,colorArg1:i?1:0,colorArg2:2,alphaOp:2,alphaArg1:i?1:0,texCoordIndex:i}));
+  const s=draw(stages,Array.from({length:6},()=>texture([0,0,0,255,16,16,16,255]))),old=s.vertices;
+  s.stride=96;s.vertices=new Uint8Array(288);for(let i=0;i<3;i++)s.vertices.set(old.subarray(i*64,i*64+64),i*96);
+  s.attributes.push({register:3,usage:3,usageIndex:0,type:2,offset:64},{register:6,usage:10,usageIndex:1,type:4,offset:76},{register:4,usage:4,usageIndex:0,type:0,offset:80});
+  const bytes=new DataView(s.vertices.buffer);for(let i=0;i<3;i++){[.5,1,.25].forEach((n,c)=>bytes.setFloat32(i*96+64+c*4,n,true));s.vertices.set([1,2,3,64],i*96+76);bytes.setFloat32(i*96+80,.5,true);}
+  const tokens=[0xfffe0101,1,0xc00f0000,0x90e40000,1,0x800f0000,0x90e40005,5,0x800f0000,0x80e40000,0x90e40003,
+   5,0x80070000,0x80e40000,0x90000004,1,0xd00f0000,0x80e40000,1,0xc00f0001,0x90ff0006,1,0xc00f0002,0x90000004];
+  for(let i=0;i<6;i++)tokens.push(1,(0xe00f0000+i)>>>0,(0x90e40007+i)>>>0);tokens.push(0xffff);s.vertexShader=new Uint32Array(tokens);
+  s.fixedFunction.fog=true;s.fixedFunction.fogColor=0xff0000ff;
+  const prepared=d.prepare(s);assert.strictEqual(new Uint32Array(memory.buffer,prepared.context+4,1)[0],5);
+  assert.strictEqual(new Uint32Array(memory.buffer,prepared.context+120,1)[0],11,'all eleven input lanes retained');d.cancel();
+  run(s,[28,32,213,192],'full NORMAL/SPECULAR/PSIZE and six independent UV input packing');
+  for(let t=0;t<6;t++){for(let i=0;i<3;i++)bytes.setFloat32(i*96+16+t*8,t===0?.75:.25,true);
+   run(s,t===0?[32,36,217,192]:[24,28,209,192],'independent full-input UV'+t);
+   for(let i=0;i<3;i++)bytes.setFloat32(i*96+16+t*8,t===0?.25:.75,true);}
+  delete s.vertexShader;s.fixedFunction.fogVertexMode=0;s.fixedFunction.stages[0].texCoordIndex=0x10000;
+  run(s,[56,48,231,192],'fixed camera NORMAL plus supplied SPECULAR fog and five independent UVs');
+  for(let i=0;i<3;i++)bytes.setFloat32(i*96+64,.25,true);
+  run(s,[52,44,227,192],'fixed normal remains independent of specular and highest UV inputs');
+ }
  const fogDraw=()=>{const s=draw([stage({colorArg1:0,alphaArg1:0})]);s.fixedFunction.fog=true;
   s.fixedFunction.fogColor=0xff0000ff;s.fixedFunction.fogVertexMode=3;s.fixedFunction.fogStart=0;s.fixedFunction.fogEnd=1;return s;};
  const fogColor=factor=>[128*factor,96*factor,64*factor+255*(1-factor),192].map(Math.round);

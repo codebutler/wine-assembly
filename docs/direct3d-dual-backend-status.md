@@ -22,6 +22,18 @@ and [interval semantics](https://learn.microsoft.com/en-us/windows/win32/direct3
 
 ## Current integration checkpoint
 
+Native D3DX font integration12873 PASS on the software worker: the supplied
+Microsoft d3dx9_25.dll renders readable “Black & White 2” into the canonical
+frame (863 white pixels), versus zero text pixels on the previous build.
+Native Win98 oracle54317 establishes NULL-rectangle and ANSI WORD glyph-index
+semantics; direct TrueType indexing now uses the shared native glyph cache and
+text compositor. Glyph81042, clipping38966 and text extent87637 pass.
+Bitmap-font indexed output remains unsupported. Actual browser guest/WebGL2
+native-font integration31600 also PASS with863 white pixels and GL error0;
+the resulting text was visually verified. Fresh full-game gameplay remains
+unverified; see the B&W RE notes and `tools/d3dx-font-probe.js` /
+`tools/d3dx-font-web-probe.js` for reproduction.
+
 WebGL table fog14166 PASS on WebGL1/2: EXP/EXP2/LINEAR use
 `gl_FragCoord.z` after interpolation, supersede vertex fog, preserve alpha,
 and support fixed stages and VS1.1/PS1.1–1.3 without requiring oFog.
@@ -337,13 +349,24 @@ two local-viewer cube faces. Six simultaneous generated stages reuse native
 normal/reflection temporaries while retaining distinct texture matrices; maximum
 VS/PS IR is90/128 instructions. New cascade4 rows136 preserve the128-byte prefix
 and append NORMAL input register/state flags;48/56/128 exports remain tested.
-NORMAL bytes occupy an unused existing input slot, with an explicit gate when
-all six independent UV slots are already needed. No host matrix/shader math or
-raster ABI change was added. Singular/nonfinite inverse matrices reject before
+The original unused-UV-slot input restriction is superseded by native descriptor
+ABI5 below. No host matrix/shader math was added. Singular/nonfinite inverse matrices reject before
 target writes. Zero, underflowed or nonfinite squared vector length normalizes
 to zero through existing native selection packets; these deterministic edge
 policies are not Windows-reference conformance. PSIZE82165 and real COM55373
 regressions PASS; capabilities remain unchanged.
+
+Native input packing ABI5 (128-byte descriptor, unchanged output/cascade layouts)
+retains position, diffuse, six independent UVs, PSIZE, NORMAL and SPECULAR at once.
+Offset120 is total float4 input count3..11; offset116 maps the first three input
+registers and offset124 maps the remaining eight with four-bit register indices.
+WAT uses an i64 mapping, validates distinct registers, unused bits, count, stride
+and input extent before reads. ABI1–4 keep their original field meanings; the
+adapter selects ABI5 only for extra NORMAL/SPECULAR inputs. Cascade89924 PASS
+includes eleven live inputs, individual six-UV pixel changes, and fixed camera
+NORMAL with supplied SPECULAR fog. Raster39791 PASS351 covers high mapping bits,
+malformed descriptors and wrapping/out-of-memory extents; PSIZE55119 and real
+COM87572 PASS. No guest caps expansion or Windows-reference conformance claim.
 
 Native mixed projection86960 PASS extends the existing per-fragment sampler
 projection to fixed VS with real PS1.1/1.2/1.3 TEX at stages0–3, for COUNT3/4.
@@ -787,10 +810,37 @@ Both-backend full adapter parity    NOT COMPLETE
 
 ## Delivery gates
 
+Shader authority hardening: real CreateShader already validates in WAT. The
+production Bridge now rejects missing native validator exports instead of
+falling back to JavaScript token parsing. GPU `compileNativeIR` projects the
+serialized native IR, ignoring redundant JS instruction/profile fields; public
+PS1.4 and internal fixed-origin flags remain gated. Its checks validate transport
+structure, not the semantic legitimacy of arbitrary bytes: WAT `Compiler` is the
+trusted producer. Standalone `parse`/`compile` and legacy validation opcode remain
+diagnostic interfaces, outside the production CreateShader/draw route.
+Native corpus24963, real GPU pipeline60578, IR-view/async missing-validator
+no-DRAW tests, dependency graph and cache checks PASS.
+
+Creation now retains its privately validated IR as a contiguous tail after the
+unchanged24-byte shader header and GetFunction tokens. Finalization copies the
+IR out of the validator's instance-owned allocation and frees both temporary
+allocations; ordinary shader resource release owns the entire retained block.
+The bounded JS retained-view cache checks content on pointer reuse and never
+calls the WAT compiler. Shader-object16920 verifies GetFunction, binding/external
+references, zero temporary IR live bytes, whole-block retirement and detached
+snapshot survival. Software COM94380 passes with the exported compiler replaced
+by a throwing stub, proving draws consume the retained tail. GPU24748, real x86
+worker79619 and stateblocks45209 PASS. Isolated final-allocation fault injection
+92021 also PASS: three failures return OUT0/E_OUTOFMEMORY without changing device
+references, free both temporaries with zero IR live bytes, then permit successful
+creation/release. The test transforms only that allocation site; no production
+fault hook is added. Full canonical/compat build15499 PASS, and native D3DX
+software font85829 again renders863 white pixels after the concurrent main merges.
+
 | Design phase | Current evidence | Remaining gate |
 |---|---|---|
 | 0 inventory/queue | Direct + real Node worker replay, leases/generations/fences; delayed write/readback regressions; production WAT worker pixel parity and post-exit heap reuse; WebGL bridge uses the queue | Async guest bridge convergence, complete per-feature matrix, forced-death native ownership recovery and broad production lifetime tests |
-| 1 WAT IR | Native compiler GLSL parity, malformed streams/lifetime/budgets; strict initial VS1.1/PS1.1 stage-op, mask/modifier, register-port including combined coissue ports, per-component temporary initialization and slot rules tested; actual browser WAT-IR pixels pass | Mandatory texture macros/output banks, declaration linkage, eliminate migration parser authority, broad native references |
+| 1 WAT IR | Native compiler GLSL parity, malformed streams/lifetime/budgets; strict initial VS1.1/PS1.1 stage-op, mask/modifier, register-port including combined coissue ports, per-component temporary initialization and slot rules tested; actual browser WAT-IR pixels pass; production Bridge consumes retained creation IR | Complete profile/linkage matrix, broad native references |
 | 2 SIMD VM | 115 cases reported passing: bytecode->IR->packets, arithmetic/matrices, relative constants, SoA masks, PS1.1 sampling/discard, TEXBEM/BEML/REG2GB, bounded TEXM3x2 pairs, SIMD reciprocal/RSQ/EXP/LOG/LIT/FRC, coissue and resume/cancel | Mandatory texture operations, full profile legality/flow, native numerical references and optimized filtering |
 | 3 software draw | 154 native raster cases pass including six-plane clipping, four texture varyings, bump pixels, blending and alpha test; COM strip/fan, locked resources, unlit NULL-shader XYZ/POSITIONT and Present reach canonical BGRA; actual x86 async Bridge/production-worker pixels and retirement pass; shipped CLI and both browser main-thread modes pass focused render-worker tests | Real-game validation, complete fixed-function and broader pipeline/resource ownership |
 | 4 Black & White | WebGL intro observed earlier; software Lionhead particles/reflection now visually verified with completed draw/present counters and actual2950-triangle,11-level texture submissions | Menu-to-gameplay on both backends, replay parity, real input and changing scene |

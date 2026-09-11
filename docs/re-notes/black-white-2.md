@@ -656,3 +656,81 @@ beyond tolerance2 in just1/480000 RGBA pixels (max33, coordinate310,325).
 Both still show the unreadable panel and bright particle polygons. This makes
 the captured shared draw data/frontend path the next investigation, not a
 software-only rasterization explanation. Exact pixel parity is not claimed.
+
+Post-checkpoint investigation on the same live33057 process: the captured
+1024x1024 UI atlas (draws2/8) was decoded and personally inspected. Its baked
+promotional text is readable, and the panel rectangles are intentionally blank;
+the thin divider lines in the menu are present in the source atlas, not damaged
+glyphs. No separate glyph-texture draw appears in this captured17-draw interval.
+Artifacts `/private/tmp/bw-texture-2.png` and `bw-texture-8.png` are diagnostic
+extractions from the immutable capture, not native-Windows references.
+
+Microsoft native `d3dx9_25.dll` disassembly identifies the font constructor at
+original0042d202, vtable00401580, and DrawTextA/W entries0042f263/0042f29c.
+Both call internal0042d8f7 (runtime025558f7). Existing live EIP tracing confirms
+that internal routine executes repeatedly with font object4ed795cc; its common
+exit0042ef76 is reached with EDI0 (success). The current process has two loaded
+TrueType faces of34044 and134188 bytes. These observations do not prove glyph
+generation or successful rendering.
+
+Native global original006298d4/runtime027518d4 reads1, selecting the Uniscribe
+branch in DrawText; original006298ac/runtime027518ac reads0. Therefore the
+fallback GetCharacterPlacementA/W calls at0042e14e/0042e156 are not the first
+path to investigate. Follow the native shaping results and glyph-cache/texture
+submission boundary next. No Wine implementation source was used; the DLL
+addresses come from the supplied Microsoft binary. Temporary EIP ranges were
+restored to the original intro probe range00526d93–00526d97 afterward, without
+changing guest animation state or restarting the healthy process.
+
+The next inspection found valid shaped glyph IDs/positive advances, but the
+first six cached glyph records reached through font+0x550 all start with
+FFFFFFFF followed by zero geometry. Native D3DX0042d32c marks that sentinel
+at0042d468 when its measured glyph advance is zero. On the Win9x branch it
+uses MoveToEx, ExtTextOutA(options12hex, NULL rectangle, one WORD glyph index),
+then MoveToEx to retrieve the updated current position. Our text compositor
+rejected the NULL opaque rectangle and did not implement direct glyph indices.
+This explains the observed empty-cache path; fresh corrected game rendering
+is still required, and cached failures in the old live process are not patched.
+
+Native Win98 oracle `gdi-exttextout-glyph` now covers32 A/W, character/glyph,
+NULL/supplied rectangle and options0/2/4/6 combinations. With Arial height-16,
+GCP maps A to glyph36; every case returns1, advances CP to(11,0), and draws28
+nonblack pixels. Thus Win98 accepts NULL rectangles with OPAQUE/CLIPPED and
+renders ANSI WORD glyph indices. This differs from the current Microsoft
+[ExtTextOutA documentation](https://learn.microsoft.com/en-us/windows/win32/api/wingdi/nf-wingdi-exttextouta)
+describing ANSI glyph-index calls as a no-op; do not substitute that behavior
+for the measured Win98 contract.
+
+Reproduce with `node tools/v86-reference/capture.js --online --manifest
+tools/v86-reference/glyph-apps.json --app gdi-exttextout-glyph --serial-output
+/private/tmp/win98-exttextout-glyph.serial` (one command). Capture54317 exited0
+at2026-09-11T00:46:45.542Z using the pinned v86 Win98 image. Probe EXE SHA256:
+`d6cdcb6a24f744b80d743484f1133412932fe38ac443f43a07c744527a8c6c6c`.
+Generated metadata is `screenshots/v86-reference/generated/gdi-exttextout-glyph.json`;
+serial transcript has32 CASE lines and EXTTEXTOUT_GLYPH_DONE. Source probe and
+isolated manifest are tracked candidates; no Windows binary is added.
+Null-rectangle normalization and direct TrueType glyph-index rendering are
+implemented using the existing native cache and shared text compositor.
+The glyph regression covers A/W WORD inputs (including indices above255),
+current-position advances, PDY, clipping, path recording and invalid indices.
+Bitmap-font indexed output remains explicitly unsupported.
+
+The standalone native D3DX integration probe now verifies the complete font
+path, not just GDI: `node tools/d3dx-font-probe.js --dll=/path/to/d3dx9_25.dll
+--wasm=/path/to/wine-assembly.wasm` (one command). It executes the supplied
+Microsoft DLL's CreateFontA/DrawTextA, uploads its glyph texture, and checks the
+software worker's canonical320x160 frame. Baseline75148 exited the guest
+successfully but failed acceptance with zero white pixels and51200 blue pixels.
+Corrected run12873 passed with863 white pixels and50337 blue pixels; its PNG
+was personally inspected and shows readable white “Black & White 2” text.
+The actual browser guest/WebGL2 probe31600 also passes with863 white pixels,
+50337 blue pixels and GL error0; its PNG was personally inspected and shows
+the same readable text. Reproduce using `node tools/d3dx-font-web-probe.js
+--exe=/path/to/probe.exe --dll=/path/to/d3dx9_25.dll --wasm=/path/to/current.wasm`
+(one command; the software probe builds the fixture EXE). The harness observes
+the real backend's target at Present, before normal guest teardown. Initial
+browser attempt2860 selected Notepad due to the global launch wrapper ignoring
+arguments; corrected harness selects its explicit registry entry instead.
+Full canonical/compat build15499 and repeated software font85829 pass after
+concurrent main merges. These are focused native-DLL integration results, not
+proof of fresh full-game menu/gameplay. No guest cache was patched.
