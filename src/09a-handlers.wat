@@ -10859,11 +10859,12 @@ nW — STUB: unimplemented
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-;; Is [ptr, ptr+len) unreadable? $g2w already knows the answer: it translates
-  ;; every mapped guest region — the direct image window, DIB sections and the
-  ;; sparse VirtualAlloc mappings — and returns $NULL_SENTINEL for anything it
-  ;; cannot place. Asking it is the only test that stays true as the address
-  ;; space grows.
+;; Does [ptr, ptr+len) lack the requested access? $g2w answers whether every
+  ;; crossed page is backed. Sparse VirtualAlloc pages additionally retain the
+  ;; caller's exact PAGE_* value in their packed PTE, so these cold probe APIs
+  ;; can honor NOACCESS, GUARD and read/write distinctions without adding a
+  ;; permission branch to the emulator's hot load/store path. Direct image,
+  ;; heap and DIB pages remain permissive until they gain equivalent metadata.
   ;;
   ;; The previous test was a flat "above 0x02000000 is bad", which stopped being
   ;; true long ago: the sparse heap and VirtualAlloc arena live up near
@@ -10871,28 +10872,76 @@ nW — STUB: unimplemented
   ;; Direct3D viewer runs on one at 0x074FFxxx). A caller handing us a stack
   ;; buffer — the ordinary way to use this API — was told its own frame was
   ;; unreadable.
-  (func $ptr_range_bad (param $ptr i32) (param $len i32) (result i32)
-    (local $last i32)
-    (if (i32.eqz (local.get $ptr)) (then (return (i32.const 1))))
-    ;; A zero-length range is readable by definition; Windows says so too.
+  (func $ptr_range_access_bad
+      (param $ptr i32) (param $len i32) (param $write i32) (result i32)
+    (local $last i32) (local $cur i32) (local $pte i32) (local $protect i32)
+    ;; A zero-length range is accessible even when ptr is NULL.
     (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $ptr)) (then (return (i32.const 1))))
     (local.set $last (i32.add (local.get $ptr) (i32.sub (local.get $len) (i32.const 1))))
     (if (i32.lt_u (local.get $last) (local.get $ptr)) (then (return (i32.const 1))))
-    (if (i32.eq (call $g2w (local.get $ptr)) (global.get $NULL_SENTINEL))
-      (then (return (i32.const 1))))
-    (if (i32.eq (call $g2w (local.get $last)) (global.get $NULL_SENTINEL))
-      (then (return (i32.const 1))))
+    (local.set $cur (local.get $ptr))
+    (block $done (loop $pages
+      (if (i32.eq (call $g2w (local.get $cur)) (global.get $NULL_SENTINEL))
+        (then (return (i32.const 1))))
+      (local.set $pte
+        (i32.atomic.load
+          (i32.add (global.get $GUEST_PAGE_TABLE)
+            (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
+              (i32.const 0x003FFFFC)))))
+      (if (i32.and (local.get $pte) (global.get $GUEST_PTE_PRESENT))
+        (then
+          (local.set $protect
+            (i32.and (local.get $pte) (global.get $GUEST_PTE_PROTECT_MASK)))
+          ;; Guard pages fail a system-service probe. PAGE_NOCACHE does not
+          ;; change access. For mapped pages, WRITECOPY remains writable.
+          (if (i32.and (local.get $protect) (i32.const 0x100))
+            (then (return (i32.const 1))))
+          (local.set $protect (i32.and (local.get $protect) (i32.const 0xFF)))
+          (if (local.get $write)
+            (then
+              (if (i32.eqz (i32.or
+                    (i32.or
+                      (i32.eq (local.get $protect) (i32.const 0x04))
+                      (i32.eq (local.get $protect) (i32.const 0x08)))
+                    (i32.or
+                      (i32.eq (local.get $protect) (i32.const 0x40))
+                      (i32.eq (local.get $protect) (i32.const 0x80)))))
+                (then (return (i32.const 1)))))
+            (else
+              (if (i32.eqz (i32.or
+                    (i32.or
+                      (i32.eq (local.get $protect) (i32.const 0x02))
+                      (i32.eq (local.get $protect) (i32.const 0x04)))
+                    (i32.or
+                      (i32.or
+                        (i32.eq (local.get $protect) (i32.const 0x08))
+                        (i32.eq (local.get $protect) (i32.const 0x20)))
+                      (i32.or
+                        (i32.eq (local.get $protect) (i32.const 0x40))
+                        (i32.eq (local.get $protect) (i32.const 0x80))))))
+                (then (return (i32.const 1))))))))
+      (br_if $done
+        (i32.le_u (local.get $last) (i32.or (local.get $cur) (i32.const 0xFFF))))
+      (local.set $cur
+        (i32.add (i32.or (local.get $cur) (i32.const 0xFFF)) (i32.const 1)))
+      (br $pages)))
     (i32.const 0))
+
+  (func $ptr_range_bad (param $ptr i32) (param $len i32) (result i32)
+    (call $ptr_range_access_bad
+      (local.get $ptr) (local.get $len) (i32.const 0)))
 
   ;; 343: IsBadReadPtr(lp, ucb) → BOOL. Nonzero means the range is NOT readable.
   (func $handle_IsBadReadPtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ptr_range_bad (local.get $arg0) (local.get $arg1)))
+    (global.set $eax (call $ptr_range_access_bad
+      (local.get $arg0) (local.get $arg1) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; 344: IsBadWritePtr(lp, ucb) → BOOL. Every page we can address is writable
-  ;; here, so readability is the whole question.
+  ;; 344: IsBadWritePtr(lp, ucb) → BOOL.
   (func $handle_IsBadWritePtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $ptr_range_bad (local.get $arg0) (local.get $arg1)))
+    (global.set $eax (call $ptr_range_access_bad
+      (local.get $arg0) (local.get $arg1) (i32.const 1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
@@ -14281,11 +14330,11 @@ HookEx — no next hook in chain, return 0
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
-  ;; 468: IsBadCodePtr(lpfn) — 1 arg stdcall
-  ;; Returns 0 if the pointer is callable, nonzero otherwise. We trust the guest
-  ;; (any non-null pointer in the guest address space is treated as valid).
+  ;; 468: IsBadCodePtr(lpfn) — 1 arg stdcall. Despite its name, Windows defines
+  ;; this as a one-byte readability probe, not an execute-permission test.
   (func $handle_IsBadCodePtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.eqz (local.get $arg0)))
+    (global.set $eax (call $ptr_range_access_bad
+      (local.get $arg0) (i32.const 1) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
@@ -15940,14 +15989,49 @@ HookEx — no next hook in chain, return 0
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
-  ;; 548: IsBadStringPtrA — STUB: unimplemented
+  ;; IsBadStringPtr checks readable characters only through the first NUL or
+  ;; ucchMax, whichever comes first. A zero maximum succeeds even for NULL.
+  (func $ptr_string_bad
+      (param $ptr i32) (param $max i32) (param $wide i32) (result i32)
+    (local $i i32) (local $at i32) (local $width i32) (local $wa i32)
+    (if (i32.eqz (local.get $max)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $ptr)) (then (return (i32.const 1))))
+    (local.set $width (select (i32.const 2) (i32.const 1) (local.get $wide)))
+    (local.set $at (local.get $ptr))
+    (block $done (loop $chars
+      (br_if $done (i32.ge_u (local.get $i) (local.get $max)))
+      (if (call $ptr_range_access_bad
+            (local.get $at) (local.get $width) (i32.const 0))
+        (then (return (i32.const 1))))
+      (local.set $wa (call $g2w (local.get $at)))
+      (if (if (result i32) (local.get $wide)
+            (then
+              (i32.and
+                (i32.eqz (i32.load8_u (local.get $wa)))
+                (i32.eqz (i32.load8_u (call $g2w
+                  (i32.add (local.get $at) (i32.const 1)))))))
+            (else (i32.eqz (i32.load8_u (local.get $wa)))))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $max)))
+      (if (i32.gt_u (local.get $at) (i32.sub (i32.const -1) (local.get $width)))
+        (then (return (i32.const 1))))
+      (local.set $at (i32.add (local.get $at) (local.get $width)))
+      (br $chars)))
+    (i32.const 0))
+
+  ;; 548: IsBadStringPtrA(lpsz, ucchMax)
   (func $handle_IsBadStringPtrA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $ptr_string_bad
+      (local.get $arg0) (local.get $arg1) (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-  ;; 549: IsBadStringPtrW — STUB: unimplemented
+  ;; 549: IsBadStringPtrW(lpsz, ucchMax)
   (func $handle_IsBadStringPtrW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $ptr_string_bad
+      (local.get $arg0) (local.get $arg1) (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; 550: GlobalDeleteAtom(nAtom) — release one global reference; 0 = success.

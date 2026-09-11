@@ -330,3 +330,12 @@ playing buffers immediately restart the browser snapshot at that byte; Stop
 freezes the live cursor; and GetCurrentPosition rebases the host-relative
 cursor onto the retained DirectSound position. Primary buffers and offsets
 outside the backing store fail rather than corrupting cursor state.
+
+2026-09-11: 335 -> 334. IsBadCodePtr now follows its documented read-access
+contract through the same mapped-range probe as IsBadReadPtr instead of
+accepting every non-NULL address. The shared probe walks every crossed page,
+honors sparse VirtualAlloc PAGE_NOACCESS, PAGE_GUARD, read-only, and writable
+metadata, and fixes zero-length NULL ranges. IsBadStringPtrA/W now scan through
+the first NUL or caller maximum without crashing, while the write probe rejects
+read-only sparse pages. These cold API checks do not add permission branches to
+the emulator's hot guest load/store path.
