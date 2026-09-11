@@ -309,6 +309,12 @@ async function main() {
     (e.send_message(tv, TVM_GETNEXTITEM, 4, parent) >>> 0) === childA);
   check('TVGN_PARENT returns hierarchical parent',
     (e.send_message(tv, TVM_GETNEXTITEM, 3, childB) >>> 0) === parent);
+  const implicitParent = insertItem('Implicitly collapsed parent');
+  const implicitChild = insertItem('Implicitly hidden child', implicitParent);
+  check('an item inserted without TVIF_STATE remains collapsed after adding a child',
+    (getItemState(implicitParent).state & TVIS_EXPANDED) === 0 &&
+      e.send_message(tv, TVM_GETNEXTITEM, TVGN_NEXTVISIBLE, implicitParent) !== implicitChild);
+  e.send_message(tv, TVM_DELETEITEM, 0, implicitParent);
   const beforeExpandNotify = e.treeview_get_debug_expand_notify_count();
   check('TVM_EXPAND reveals all children',
     e.send_message(tv, TVM_EXPAND, TVE_EXPAND, parent) === 1 &&

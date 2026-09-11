@@ -340,13 +340,14 @@
       (then
         (i32.store offset=4 (local.get $image_rec)
           (i32.load (i32.add (local.get $lParam_wa) (i32.const 36))))))
-    ;; State: if mask includes TVIF_STATE (0x8), use provided state; else keep
-    ;; the old minimal-control behavior of showing descendants by default.
+    ;; State: if mask includes TVIF_STATE (0x8), use the requested state.
+    ;; Win98 otherwise inserts the item collapsed; adding children later does
+    ;; not implicitly expand their parent.
     (if (i32.and (local.get $mask) (i32.const 0x8))
       (then
         (local.set $state (i32.load (i32.add (local.get $lParam_wa) (i32.const 16)))))
       (else
-        (local.set $state (i32.const 0x20))))  ;; default: TVIS_EXPANDED
+        (local.set $state (i32.const 0))))
     (if (i32.and
           (i32.ne (i32.and (local.get $mask) (i32.const 0x40)) (i32.const 0))
           (i32.ne (i32.load (i32.add (local.get $lParam_wa) (i32.const 40))) (i32.const 0)))
