@@ -1477,3 +1477,23 @@ continuation handling, not recovery from an admitted executor retirement fault.
 Such faults may retire the shared worker; the host releasing/lost state and
 multi-producer cancellation remain distinct lifecycle gates. Test manifest and
 diff checks pass; no runtime source changed in this test-only checkpoint.
+
+Implicit lockable backbuffers now implement LockRect/UnlockRect through the
+existing canonical READBACK and immutable upload commands. CPU ownership is
+shared with DC exclusion, with distinct LockRect-kind and READONLY bits;
+acquire/release reservations prevent overlapping access while parked. Lock
+returns full pitch and a canonical DIB pointer offset to the validated subrect.
+READONLY unlock emits no upload. Failed acquire clears transient ownership;
+failed upload preserves the lock for retry. Existing implicit Clear/Draw,
+ColorFill, UpdateSurface, Present and Reset exclusions cover both access kinds.
+
+Native75402 passes direct/worker full-pitch/subrect pixels, mutual DC/Lock
+exclusion, nested/unbalanced call rejection, READONLY upload omission, and
+injected immediate transfer failures followed by retry. Browser30303 software
+and89176 WebGL pass actual x86 lock/write/unlock/Present in both guest modes.
+Fullbuild71001 passes1155326/1155794 bytes. Current lock flags are0, READONLY and
+NOSYSLOCK; DISCARD/DONOTWAIT/NO_DIRTY_UPDATE remain unimplemented, not silently
+accepted. Unlock currently uploads the fully synchronized X8 buffer, preserving
+surrounding RGB but normalizing X8 alpha; dirty-rectangle upload optimization,
+pending argument-mutation/multi-producer tests and broader surface formats remain
+open. This does not complete the resource/locking profile.

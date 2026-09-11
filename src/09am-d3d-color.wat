@@ -65,6 +65,68 @@
     (return (call $host_gpu_gl_call (i32.const 0x30015) (local.get $desc) (i32.const 0)))))
   (call $host_gpu_gl_call (i32.const 0x30016) (local.get $desc) (i32.const 0)))
 
+;; LockRect and GetDC share CPU exclusion, but remain distinct ownership kinds.
+(func $d3d9_backbuffer_lock (param $surface i32) (param $out i32) (param $rect i32) (param $flags i32)
+  (local $device i32) (local $entry i32) (local $dest i32) (local $rw i32)
+  (local $left i32) (local $top i32) (local $result i32) (local $pitch i32)
+  (global.set $eax (i32.const 0x8876086c))
+  (local.set $device (call $d3d9_backbuffer_owner (local.get $surface)))
+  (if (i32.eqz (local.get $device)) (then (return)))
+  (local.set $entry (call $dx_from_this (local.get $surface)))
+  (local.set $dest (call $d3d9_state_bytes (local.get $out) (i32.const 8)))
+  (if (i32.eqz (local.get $dest)) (then (return)))
+  (if (i32.eqz (i32.and (load.field DxObject flags (local.get $entry)) (i32.shl (i32.const 1) (i32.const 27)))) (then (return)))
+  ;; READONLY and NOSYSLOCK; unsupported nonblocking/discard modes are explicit.
+  (if (i32.and (local.get $flags) (i32.const 0xfffff7ef)) (then (return)))
+  (if (local.get $rect) (then
+    (local.set $rw (call $d3d9_state_bytes (local.get $rect) (i32.const 16)))
+    (if (i32.eqz (local.get $rw)) (then (return)))
+    (local.set $left (i32.load (local.get $rw))) (local.set $top (i32.load offset=4 (local.get $rw)))
+    (if (i32.ge_u (local.get $left) (i32.load offset=8 (local.get $rw))) (then (return)))
+    (if (i32.ge_u (local.get $top) (i32.load offset=12 (local.get $rw))) (then (return)))
+    (if (i32.gt_u (i32.load offset=8 (local.get $rw)) (load.field DxObject width (local.get $entry))) (then (return)))
+    (if (i32.gt_u (i32.load offset=12 (local.get $rw)) (load.field DxObject height (local.get $entry))) (then (return)))))
+  (if (i32.eqz (global.get $d3d_render_token)) (then
+    (if (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0x40000000)) (then (return)))
+    (store.field DxObject flags (local.get $entry)
+      (i32.or (load.field DxObject flags (local.get $entry))
+        (i32.or (i32.const 0x64000000) (i32.shl (i32.and (local.get $flags) (i32.const 16)) (i32.const 21)))))))
+  (local.set $result (call $d3d9_backbuffer_dc_sync (local.get $device) (i32.const 0)))
+  (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
+  (store.field DxObject flags (local.get $entry)
+    (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0xdfffffff)))
+  (if (i32.ne (local.get $result) (i32.const 1)) (then
+    (store.field DxObject flags (local.get $entry)
+      (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0xb9ffffff))) (return)))
+  (local.set $pitch (load.field DxObject pitch (local.get $entry)))
+  (i32.store (local.get $dest) (local.get $pitch))
+  (i32.store offset=4 (local.get $dest)
+    (i32.add (call $w2g (load.field DxObject misc1 (local.get $entry)))
+      (i32.add (i32.mul (local.get $top) (local.get $pitch)) (i32.mul (local.get $left) (i32.const 4)))))
+  (global.set $eax (i32.const 0)))
+
+(func $d3d9_backbuffer_unlock (param $surface i32)
+  (local $device i32) (local $entry i32) (local $flags i32) (local $result i32)
+  (global.set $eax (i32.const 0x8876086c))
+  (local.set $device (call $d3d9_backbuffer_owner (local.get $surface)))
+  (if (i32.eqz (local.get $device)) (then (return)))
+  (local.set $entry (call $dx_from_this (local.get $surface)))
+  (local.set $flags (load.field DxObject flags (local.get $entry)))
+  (if (i32.eqz (i32.and (local.get $flags) (i32.shl (i32.const 1) (i32.const 26)))) (then (return)))
+  (if (i32.and (local.get $flags) (i32.shl (i32.const 1) (i32.const 29))) (then (return)))
+  (if (i32.eqz (i32.and (local.get $flags) (i32.shl (i32.const 1) (i32.const 25)))) (then
+    (if (i32.eqz (global.get $d3d_render_token)) (then
+      (if (i32.and (local.get $flags) (i32.shl (i32.const 1) (i32.const 28))) (then (return)))
+      (store.field DxObject flags (local.get $entry) (i32.or (local.get $flags) (i32.shl (i32.const 1) (i32.const 28))))))
+    (local.set $result (call $d3d9_backbuffer_dc_sync (local.get $device) (i32.const 1)))
+    (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
+    (store.field DxObject flags (local.get $entry)
+      (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0xefffffff)))
+    (if (i32.ne (local.get $result) (i32.const 1)) (then (return)))))
+  (store.field DxObject flags (local.get $entry)
+    (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0xb9ffffff)))
+  (global.set $eax (i32.const 0)))
+
 ;; Embedded storage descriptors are not COM objects. The existing 20-byte
 ;; surface view owns the external reference; bindings retain its parent texture.
 ;; +72 parent texture and +76 face-major mip index distinguish these records.

@@ -2035,7 +2035,8 @@
     (if (call $d3d9_is_texture_surface (local.get $arg0))
       (then (call $d3d9_texture_lock (call $gl32 (i32.add (local.get $arg0) (i32.const 8)))
         (call $gl32 (i32.add (local.get $arg0) (i32.const 16))) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-      (else (call $crash_unimplemented (local.get $name_ptr))))
+      (else (call $d3d9_backbuffer_lock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
+        (if (global.get $d3d_render_token) (then (return)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; IDirect3DSurface9_UnlockRect — 1 args (incl. this)
@@ -2049,7 +2050,8 @@
       (global.set $esp (i32.add (global.get $esp) (i32.const 8))) (return)))
     (if (call $d3d9_is_texture_surface (local.get $arg0))
       (then (call $d3d9_texture_surface_unlock (local.get $arg0)))
-      (else (global.set $eax (i32.const 0x8876086C))))
+      (else (call $d3d9_backbuffer_unlock (local.get $arg0))
+        (if (global.get $d3d_render_token) (then (return)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; IDirect3DSurface9_GetDC(this, phdc) — same DIB-backed DC binding the
@@ -2096,6 +2098,7 @@
     (global.set $eax (i32.const 0x8876086c))
     (block $done
       (br_if $done (i32.eqz (local.get $entry)))
+      (br_if $done (i32.and (load.field DxObject flags (local.get $entry)) (i32.shl (i32.const 1) (i32.const 26))))
       (br_if $done (i32.and (load.field DxObject flags (local.get $entry)) (i32.shl (i32.const 1) (i32.const 29))))
       (br_if $done (i32.or (i32.ne (local.get $arg1) (i32.add (i32.const 0x200000) (call $dx_slot_of (local.get $entry))))
         (i32.eqz (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0x40000000)))))
