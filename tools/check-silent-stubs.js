@@ -246,8 +246,11 @@ const digest = crypto.createHash('sha256')
 // the remaining eight quiet handlers instead of blessing them as exceptions.
 // 2026-09-10 merge: 359 -> 357. DirectPlay Receive and Send now use the
 // owned local message queues; all 34 metadata compatibility stubs remain.
-const EXPECTED_COUNT = 348;
-const EXPECTED_SHA256 = 'd8b4baf34f0b3dab31d380054636497c2b35de0431808cf9c8df349906a8714e';
+// 2026-09-11: 348 -> 346. RegisterDragDrop/RevokeDragDrop now own one retained
+// IDropTarget per live HWND and report invalid, duplicate, and absent
+// registrations instead of returning unconditional success.
+const EXPECTED_COUNT = 346;
+const EXPECTED_SHA256 = 'e61929b91484077b21b28ca3cd97e3f9df99b3edc39dc26704e11d13b9e0b303';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

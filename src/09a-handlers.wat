@@ -17349,19 +17349,15 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-rDragDrop(hwnd, pDropTarget) — return S_OK.
-  ;; No real drag/drop path: there is no host OS drop source to deliver IDataObjects
-  ;; from, so tracking the IDropTarget would be pure bookkeeping. Return S_OK so
-  ;; callers proceed; any later drop events simply never arrive.
+  ;; RegisterDragDrop/RevokeDragDrop ownership and duplicate/error semantics
+  ;; live with the OLE continuation bridge in 09a7b-ole.wat. Browser-originated
+  ;; drop delivery can now use that retained target without inventing lifetime.
   (func $handle_RegisterDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (call $ole_register_drag_drop (local.get $arg0) (local.get $arg1))
   )
 
-  ;; RevokeDragDrop(hwnd) — return S_OK, matching the RegisterDragDrop no-op above.
   (func $handle_RevokeDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (call $ole_revoke_drag_drop (local.get $arg0))
   )
 
   ;; CoLockObjectExternal(pUnk, fLock, fLastUnlockReleases) — return S_OK.

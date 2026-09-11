@@ -259,3 +259,11 @@ invalid formats, windows, flag pairs, and acquired format changes return their
 documented HRESULTs. The browser still exposes only the system keyboard and
 mouse and does not yet model acquisition competition or automatic foreground
 loss.
+
+2026-09-11: 348 -> 346. RegisterDragDrop now validates a live process window,
+rejects duplicate registrations, and retains one IDropTarget reference per
+window. RevokeDragDrop distinguishes invalid and unregistered windows, unlinks
+the exact registration, and releases its retained target. DLL-private targets
+cross the existing suspended guest COM callback bridge for AddRef/Release;
+emulator-local interfaces use the synchronous path. Browser drop events are not
+yet converted into IDataObject/IDropTarget calls.
