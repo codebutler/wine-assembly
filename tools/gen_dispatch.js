@@ -375,6 +375,8 @@ comInterfaces.push({ prefix: 'IDirect3DSwapChain9', global: 'DX_VTBL_D3DSWAP9' }
 // Listener is an auxiliary view of a primary DirectSound buffer. Append it
 // after every established interface so registry offsets remain stable.
 comInterfaces.push({ prefix: 'IDirectSound3DListener', global: 'DX_VTBL_DS3DLISTENER' });
+comInterfaces.push({ prefix: 'IDirectPlay4', global: 'DX_VTBL_DPLAY4', extends: 'IDirectPlay3' });
+comInterfaces.push({ prefix: 'IDirectPlayLobby3', global: 'DX_VTBL_DPLAYLOBBY3', extends: 'IDirectPlayLobby2' });
 
 // Build a map of prefix → { startId, count } from the api_table
 const byName = new Map(apiTable.map(a => [a.name, a]));

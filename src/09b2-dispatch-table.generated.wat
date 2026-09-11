@@ -1741,7 +1741,7 @@
       (then
         (call $dispatch_api_table_page_12 (i32.sub (local.get $api_id) (i32.const 3072)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
-    (if (i32.lt_u (local.get $api_id) (i32.const 3392))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3404))
       (then
         (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
@@ -15165,8 +15165,20 @@
   )
 
   (func $dispatch_api_table_page_13 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; api ids 3328..3391
+    ;; api ids 3328..3403
     (block $fallback
+    (block $api_75
+    (block $api_74
+    (block $api_73
+    (block $api_72
+    (block $api_71
+    (block $api_70
+    (block $api_69
+    (block $api_68
+    (block $api_67
+    (block $api_66
+    (block $api_65
+    (block $api_64
     (block $api_63
     (block $api_62
     (block $api_61
@@ -15231,7 +15243,7 @@
     (block $api_2
     (block $api_1
     (block $api_0
-      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $fallback (local.get $api_id))
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $fallback (local.get $api_id))
     ) ;; 3328: DirectXSetup
       (call $handle_DirectXSetup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
@@ -15424,6 +15436,42 @@
     ) ;; 3391: DestroyPropertySheetPage
       (call $handle_DestroyPropertySheetPage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
+    ) ;; 3392: WritePrivateProfileSectionA
+      (call $handle_WritePrivateProfileSectionA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3393: WritePrivateProfileSectionW
+      (call $handle_WritePrivateProfileSectionW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3394: IDirectPlay4_GetGroupOwner
+      (call $handle_IDirectPlay4_GetGroupOwner (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3395: IDirectPlay4_SetGroupOwner
+      (call $handle_IDirectPlay4_SetGroupOwner (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3396: IDirectPlay4_SendEx
+      (call $handle_IDirectPlay4_SendEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3397: IDirectPlay4_GetMessageQueue
+      (call $handle_IDirectPlay4_GetMessageQueue (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3398: IDirectPlay4_CancelMessage
+      (call $handle_IDirectPlay4_CancelMessage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3399: IDirectPlay4_CancelPriority
+      (call $handle_IDirectPlay4_CancelPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3400: IDirectPlayLobby3_ConnectEx
+      (call $handle_IDirectPlayLobby3_ConnectEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3401: IDirectPlayLobby3_RegisterApplication
+      (call $handle_dplobby3_application_unsupported (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3402: IDirectPlayLobby3_UnregisterApplication
+      (call $handle_dplobby3_application_unsupported (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3403: IDirectPlayLobby3_WaitForConnectionSettings
+      (call $handle_IDirectPlayLobby3_WaitForConnectionSettings (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
     ) ;; fallback
     (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3328)))
   )
@@ -15596,4 +15644,10 @@
     (global.set $DX_VTBL_D3DSWAP9 (call $init_com_vtable (i32.const 3019) (i32.const 10)))
     ;; IDirectSound3DListener: 18 methods starting at api_id 3036
     (global.set $DX_VTBL_DS3DLISTENER (call $init_com_vtable (i32.const 3036) (i32.const 18)))
+    ;; IDirectPlay4: extends IDirectPlay3 (47) + 6 extra = 53 total, extra at api_id 3394
+    (global.set $DX_VTBL_DPLAY4 (call $extend_com_vtable
+      (global.get $DX_VTBL_DPLAY3) (i32.const 47) (i32.const 3394) (i32.const 53)))
+    ;; IDirectPlayLobby3: extends IDirectPlayLobby2 (15) + 4 extra = 19 total, extra at api_id 3400
+    (global.set $DX_VTBL_DPLAYLOBBY3 (call $extend_com_vtable
+      (global.get $DX_VTBL_DPLAYLOBBY2) (i32.const 15) (i32.const 3400) (i32.const 19)))
   )

@@ -3205,6 +3205,16 @@
     (block $exit (loop $decode
       (br_if $exit (local.get $done))
 
+      ;; Reuse a known suffix instead of publishing an overlapping block.
+      ;; Otherwise alternating outer/interior entries repeatedly retire each
+      ;; other even when no guest code bytes have changed.
+      (if (i32.ne (global.get $d_pc) (local.get $start_eip))
+        (then
+          (if (call $page_probe (global.get $d_pc))
+            (then
+              (call $te (i32.const 45) (global.get $d_pc))
+              (br $exit)))))
+
       ;; Storm's scalar MPQ decompressor calls this tiny helper tens of
       ;; thousands of times per rendered frame load. It is always entered at a
       ;; basic-block boundary, so recognize the whole exact helper before the

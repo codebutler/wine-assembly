@@ -28621,5 +28621,91 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3718931680
+  },
+  {
+    "id": 3392,
+    "name": "WritePrivateProfileSectionA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1477507418
+  },
+  {
+    "id": 3393,
+    "name": "WritePrivateProfileSectionW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1108399800
+  },
+  {
+    "id": 3394,
+    "name": "IDirectPlay4_GetGroupOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3797241412
+  },
+  {
+    "id": 3395,
+    "name": "IDirectPlay4_SetGroupOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 33594136
+  },
+  {
+    "id": 3396,
+    "name": "IDirectPlay4_SendEx",
+    "nargs": 10,
+    "convention": "stdcall",
+    "hash": 301568793
+  },
+  {
+    "id": 3397,
+    "name": "IDirectPlay4_GetMessageQueue",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3526839172
+  },
+  {
+    "id": 3398,
+    "name": "IDirectPlay4_CancelMessage",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1273887899
+  },
+  {
+    "id": 3399,
+    "name": "IDirectPlay4_CancelPriority",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2695000068
+  },
+  {
+    "id": 3400,
+    "name": "IDirectPlayLobby3_ConnectEx",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2892910834
+  },
+  {
+    "id": 3401,
+    "name": "IDirectPlayLobby3_RegisterApplication",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1698421876,
+    "handler": "dplobby3_application_unsupported"
+  },
+  {
+    "id": 3402,
+    "name": "IDirectPlayLobby3_UnregisterApplication",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2112391621,
+    "handler": "dplobby3_application_unsupported"
+  },
+  {
+    "id": 3403,
+    "name": "IDirectPlayLobby3_WaitForConnectionSettings",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2723015888
   }
 ]

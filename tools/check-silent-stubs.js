@@ -244,8 +244,10 @@ const digest = crypto.createHash('sha256')
 // 2026-09-10: 401 -> 359 manual. API metadata now owns 34 reviewed constant
 // compatibility stubs; mixer and common-control lifetime/behavior fixes remove
 // the remaining eight quiet handlers instead of blessing them as exceptions.
-const EXPECTED_COUNT = 359;
-const EXPECTED_SHA256 = '39405059dc49c81a46108d5b93780a9f175fa84f74815de02664f8df3be23766';
+// 2026-09-10 merge: 359 -> 357. DirectPlay Receive and Send now use the
+// owned local message queues; all 34 metadata compatibility stubs remain.
+const EXPECTED_COUNT = 357;
+const EXPECTED_SHA256 = '97b247e1420cb0e2b581fe30304709fda331609e0e42e09e44d3b899cb725bd5';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

@@ -230,3 +230,15 @@ separate Win98 simple pane instead of silently doing nothing.
 pairs, toggles the corresponding child or whole menu, synchronizes the menu
 check, and fails for absent mappings or controls instead of always returning
 TRUE.
+
+2026-09-10: 405 -> 404. IDirectPlay3 Receive now reads its object's received
+message queue, negotiates buffer size, filters sender/recipient, and supports
+peek or consumption instead of unconditionally reporting no messages.
+The reviewed inventory diff removes only this handler; no entries were added
+or otherwise changed. Message production and DP4 activation remain separate.
+
+2026-09-10: 404 -> 403. IDirectPlay3 Send now copies messages into local
+recipient queues and signals their events, validates sender ownership and
+unsupported modes, and rolls back partial multicast allocation failure.
+The reviewed inventory diff removes only Send, with no added or modified
+quiet entries. Network transport and asynchronous sending are not implemented.
