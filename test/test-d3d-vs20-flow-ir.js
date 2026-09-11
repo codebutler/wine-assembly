@@ -51,8 +51,11 @@ const assert=require('assert'),{bootRenderHarness}=require('./render-helper');
  const code=shader(IF,END);words.set(code);assert.strictEqual(e.d3d_shader_ir_compile(ptr,code.length),0);assert.strictEqual(e.d3d_shader_ir_error(),2);count++;
  for(const op of[40,42,43]){const legacy=[0xfffe0101,op,...(op===40?[S(14)]:[]),...position,65535];words.set(legacy);assert.strictEqual(e.d3d_shader_ir_compile(ptr,legacy.length),0);assert.strictEqual(e.d3d_shader_ir_error(),3);count++;}
  // Repeated malformed nesting must release the temporary stack, not only IR.
- const first=e.guest_alloc(640)>>>0;e.guest_free(first);
+ // Settle free-list coalescing left by differently sized successful IR blocks
+ // before recording an exact-address reuse witness for this allocation shape.
+ assert.strictEqual(compile(shader(IF,ELSE,ELSE)),0);
+ const first=e.guest_alloc(896)>>>0;e.guest_free(first);
  for(let i=0;i<32;i++)bad(shader(IF,ELSE,ELSE),16);
- const reused=e.guest_alloc(640)>>>0;assert.strictEqual(reused,first);e.guest_free(reused);
+ const reused=e.guest_alloc(896)>>>0;assert.strictEqual(reused,first);e.guest_free(reused);
  e.guest_free(guest);console.log('PASS private VS2 flow IR '+count+' structure/merge/lifetime cases');
 })().catch(error=>{console.error(error);process.exitCode=1;});

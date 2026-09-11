@@ -26,6 +26,21 @@ for(const body of[[[42]],[[43]],[[40,ifSource]],[[40,ifSource],[42],[42],[43]],
 const projection=new Uint32Array(40);projection.set([IR.MAGIC,1,0,0xfffe0200,1,3,160,0]);
 projection.set([40,1,1,0,14,0,228,0],8);
 assert.strictEqual(IR.read(projection.buffer,0,{experimentalVS20:true}).instructions[0].args[0],ifSource);
+const repSource=0xf0e4000f;
+const repeatGL=Shader.compileIR(flow([[38,repSource],[39]]),{experimentalVS20:true});
+assert(repeatGL.source.includes('uniform highp ivec4 d3d_vs_i15;'));
+assert.deepStrictEqual(repeatGL.integerUniformRanges,[{name:'d3d_vs_i15',component:0,min:0,max:255}]);
+for(const body of[[[39]],[[38,repSource]],[[38,repSource],[38,repSource],[39],[39]],
+ [[38,repSource],[40,ifSource],[39],[43]],[[40,ifSource],[38,repSource],[43],[39]],
+ [[38,repSource],[42],[39]],...[-1,256].map(n=>[[38,repSource],[39],[48,0xf00f000f,n>>>0,0,0,0]])])
+ assert.throws(()=>Shader.compileIR(flow(body),{experimentalVS20:true}),/REP|IF|flow/);
+assert(Shader.compileIR(flow([[48,0xf00f000f,256,0,0,0],[38,repSource],[39],[48,0xf00f000f,1,0,0,0]]),{experimentalVS20:true}));
+assert(Shader.compileIR(flow(Array.from({length:16},()=>[[38,repSource],[39]]).flat()),{experimentalVS20:true}));
+assert.throws(()=>Shader.compileIR(flow(Array.from({length:17},()=>[[38,repSource],[39]]).flat()),{experimentalVS20:true}),/flow count/);
+for(const token of[0xf000000f,0xf1e4000f,0xf0e4200f,0xf0e40010,0xe0e40800])
+ assert.throws(()=>Shader.compileIR(flow([[38,token],[39]]),{experimentalVS20:true}),/REP integer source/);
+projection.set([38,1,1,0,7,15,228,0],8);
+assert.strictEqual(IR.read(projection.buffer,0,{experimentalVS20:true}).instructions[0].args[0],repSource);
 assert.throws(()=>Shader.compileIR(shader),/invalid D3D shader IR/);
 assert.throws(()=>Shader.compile(new Uint32Array([0xfffe0200,65535])),/unsupported shader version/);
 const lowered=Shader.compileIR(shader,{experimentalVS20:true});
@@ -216,11 +231,26 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     {name:'IF supplied Boolean uniform true',op:40,boolUniform:1,expected:[.2,.3,.4,.6]},
     {name:'IF no ELSE false preserves prior output',op:40,boolDef:0,noElse:true,expected:[.8,.7,.6,.4]},
     {name:'IF no ELSE true updates output',op:40,boolDef:1,noElse:true,expected:[.2,.3,.4,.6]},
+    ...[0,1,3,255].map(count=>({name:'REP late DEFI '+count,op:38,count,expected:Array(4).fill(count/1024)})),
+    {name:'REP integer uniform count',op:38,count:3,dynamic:true,expected:Array(4).fill(3/1024)},
+    {name:'REP absent uniform zero default',op:38,count:0,dynamic:true,unbound:true,expected:[0,0,0,0]},
+    {name:'REP containing false IF',op:38,count:3,innerIf:true,expected:[0,0,0,0]},
+    {name:'REP inside false IF',op:38,count:3,outerIf:true,expected:[0,0,0,0]},
    ];
    for(const version of[1,2])for(const fixture of fixtures){
     const instructions=[{opcode:1,offset:1,args:[0xc00f0000,0x90e40000]}];
     const src=(0x90000001|((fixture.swizzle??([32,37].includes(fixture.op)?0:228))<<16)|(fixture.negate?0x01000000:0))>>>0;
-    if(fixture.op===40){
+    if(fixture.op===38){
+     const emit=(opcode,...args)=>instructions.push({opcode,args,offset:instructions.length+1});
+     emit(1,0x800f0000,0xa0e40002);
+     if(fixture.outerIf)emit(40,0xe0e40800);
+     emit(38,0xf0e4000f);if(fixture.innerIf)emit(40,0xe0e40800);
+     emit(2,0x800f0000,0x80e40000,0xa0e40003);
+     if(fixture.innerIf)emit(43);emit(39);if(fixture.outerIf)emit(43);
+     emit(1,0xd00f0000,0x80e40000);
+     if(!fixture.dynamic)emit(48,0xf00f000f,fixture.count,0x80000000,0x7fffffff,0xffffffff);
+     if(fixture.innerIf||fixture.outerIf)emit(47,0xe00f0800,0);
+    }else if(fixture.op===40){
      const emit=(opcode,...args)=>instructions.push({opcode,args,offset:instructions.length+1});
      if(fixture.noElse)emit(1,0xd00f0000,0xa0e40003);
      emit(40,0xe0e40800);
@@ -297,6 +327,10 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c2'),.2,.3,.4,.6);
     if(fixture.matrix)gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),...fixture.matrix);
     if(fixture.op===32)scalar(3,fixture.exponent);
+    if(fixture.op===38){
+     scalar(2,0);scalar(3,1/1024);
+     if(fixture.dynamic&&!fixture.unbound)gl.uniform4iv(gl.getUniformLocation(p,'d3d_vs_i15'),new Int32Array([fixture.count,-2147483648,2147483647,-1]));
+    }
     if(fixture.op===40){
      gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),.8,.7,.6,.4);
      gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c4'),.1,.2,.3,.4);

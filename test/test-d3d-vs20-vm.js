@@ -52,6 +52,77 @@ const { bootRenderHarness } = require('./render-helper');
     coefficients.forEach((values,index)=>values.forEach((value,component)=>
       f.fill(value,register(ctx,2,254+index)+component*4,register(ctx,2,254+index)+component*4+4)));
   }
+  for(const count of [0,1,2,17,255]) for(const lanes of [15,5]) {
+    const program=compile([
+      ins(1,dst(0),constant(0)),ins(38,operand(7,15)),
+      ins(2,dst(0),source(0),constant(1)),ins(39),
+      ins(48,operand(7,15,15),...[count,0xffffffff,0x80000000,0x7fc00000].map(v=>operand(255,v,0,0)))
+    ]);
+    const ctx=e.d3d_shader_vm_context(program,lanes);assert(ctx);
+    f.fill(1,register(ctx,2,1),register(ctx,2,1)+16);
+    f.fill(77,register(ctx,0,0),register(ctx,0,0)+16);
+    let status=1,ticks=0;
+    while(status===1){status=e.d3d_shader_vm_run(ctx,1);assert(++ticks<=515);}
+    assert.strictEqual(status,0);
+    assert.strictEqual(ticks,count?3+count*2:3);
+    for(let component=0;component<4;component++)for(let lane=0;lane<4;lane++)
+      assert.strictEqual(f[register(ctx,0,0)+component*4+lane],lanes&(1<<lane)?count:77);
+    assert.strictEqual(u[(ctx+73760)/4+15*4],count,'REP does not alter i.x');
+    assert.strictEqual(u[(ctx+74088)/4],0,'loop is inactive after completion');
+    release(ctx,program);cases++;
+  }
+  for(const condition of [0,1]) for(const outside of [false,true]) {
+    const body=ins(2,dst(0),source(0),constant(1));
+    const program=compile(outside?
+      [ins(40,operand(14,0)),ins(38,operand(7,0)),body,ins(39),ins(43)]:
+      [ins(38,operand(7,0)),ins(40,operand(14,0)),body,ins(42),ins(2,dst(0),source(0),constant(2)),ins(43),ins(39)]);
+    const ctx=e.d3d_shader_vm_context(program,15);seedConstants(ctx);
+    u[(ctx+73760)/4]=3;u[(ctx+74016)/4]=condition;
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,100),0);
+    assert.strictEqual(x(ctx,0,0)[0],outside?(condition?3:0):(condition?3:6));
+    release(ctx,program);cases++;
+  }
+  for(let index=0;index<16;index++) {
+    const program=compile([ins(38,operand(7,index)),ins(2,dst(0),source(0),constant(1)),ins(39)]);
+    const ctx=e.d3d_shader_vm_context(program,15);seedConstants(ctx);
+    u[(ctx+73760)/4+index*4]=3;
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),1);
+    // Loop count is sampled once on entry, not reread across scheduling slices.
+    u[(ctx+73760)/4+index*4]=255;
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,100),0);
+    assert.strictEqual(x(ctx,0,0)[0],3);
+    const cancelled=e.d3d_shader_vm_context(program,15);
+    u[(cancelled+73760)/4+index*4]=255;
+    assert.strictEqual(e.d3d_shader_vm_run(cancelled,2),1);
+    const pc=u[(cancelled+8)/4],remaining=u[(cancelled+74088)/4];
+    e.d3d_shader_vm_cancel(cancelled);assert.strictEqual(e.d3d_shader_vm_run(cancelled,100),-2);
+    assert.strictEqual(u[(cancelled+8)/4],pc);assert.strictEqual(u[(cancelled+74088)/4],remaining);
+    release(cancelled,ctx,program);cases++;
+  }
+  for(const count of [256,0xffffffff,0x80000000,0x7fffffff]) {
+    const program=compile([ins(38,operand(7,0)),ins(39)]);
+    const ctx=e.d3d_shader_vm_context(program,15);u[(ctx+73760)/4]=count;
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,100),-5);
+    assert.strictEqual(u[(ctx+20)/4],0);release(ctx,program);cases++;
+  }
+  for(const instructions of [
+    [ins(39)],[ins(38,operand(7,0))],
+    [ins(38,operand(7,0)),ins(38,operand(7,0)),ins(39),ins(39)],
+    [ins(40,operand(14,0)),ins(38,operand(7,0)),ins(43),ins(39)],
+    [ins(38,operand(7,0)),ins(40,operand(14,0)),ins(39),ins(43)],
+    [ins(40,operand(14,0)),ins(38,operand(7,0)),ins(42),ins(39),ins(43)],
+    [ins(38,operand(2,0)),ins(39)],[ins(38,operand(7,16)),ins(39)],
+    [ins(38,operand(7,0,0)),ins(39)],[ins(38,operand(7,0,228,1)),ins(39)],
+    Array.from({length:17},()=>[ins(38,operand(7,0)),ins(39)]).flat()
+  ]) {
+    const p=ir(instructions);assert.strictEqual(e.d3d_shader_vm_compile_vs20(p),0);release(p);cases++;
+  }
+  for(const [packet,target] of [[0,0],[0,1],[0,4],[1,0],[1,2]]) {
+    const program=compile([ins(38,operand(7,0)),ins(39)]);
+    u[(program+16+packet*64+8)/4]=target;
+    const ctx=e.d3d_shader_vm_context(program,15);u[(ctx+73760)/4]=1;
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,100),-1);release(ctx,program);cases++;
+  }
   for (const lanes of [15,5]) for(let index=0;index<16;index++) {
     const words=[0x80000000,0x7fffffff,0x7fc00000,0xffffffff];
     const raw=word=>operand(255,word,0,0);
@@ -62,7 +133,7 @@ const { bootRenderHarness } = require('./render-helper');
       ins(47,operand(14,index,15),raw(index%2?0x80000000:0))
     ]);
     const ctx=e.d3d_shader_vm_context(program,lanes);assert(ctx);
-    assert.strictEqual(e.d3d_shader_vm_context_bytes(),74080);
+    assert.strictEqual(e.d3d_shader_vm_context_bytes(),74096);
     assert(u.slice((ctx+73760)/4,(ctx+74080)/4).every(v=>v===0));
     assert.deepStrictEqual(Array.from({length:4},(_,i)=>u[(program+16+i*64)/4]),[60,61,60,0]);
     u.fill(123,(ctx+73760)/4,(ctx+74080)/4);
@@ -76,7 +147,7 @@ const { bootRenderHarness } = require('./render-helper');
     assert(u.slice((fresh+73760)/4,(fresh+74080)/4).every(v=>v===0));
     release(fresh,ctx,program);cases++;
   }
-  assert.strictEqual(e.d3d_shader_vm_context_bytes(), 74080);
+  assert.strictEqual(e.d3d_shader_vm_context_bytes(), 74096);
   for(const outer of [0,1,0x80000000]) for(const inner of [0,1]) for(const lanes of [15,5]) {
     const program=compile([
       ins(40,operand(14,0)),ins(40,operand(14,1)),ins(1,dst(0),constant(1)),

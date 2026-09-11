@@ -1937,3 +1937,47 @@ Independent branch-link/runtime review found no concrete defect. Full47981
 PASS canonical1166216 / compat1166684, unchanged region layout and no data
 overlaps. Loop/REP/call/dynamic flow, full profiles, frontend typed constant
 binding and changing B&W gameplay remain open; public VS2 admission is unchanged.
+
+Private REP follow-up: REP38/ENDREP39 now use integer source i0..15 with the
+same private identity/no-modifier canonical syntax. The documented
+[REP contract](https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/rep---vs)
+uses i.x counts0..255, ignores yzw, leaves the integer register unchanged and
+prohibits IF/REP straddling. The validator enforces one active REP level and
+the shared IF+ELSE+REP static count16; REP/ENDREP consume three/two slots.
+Tagged56-byte frames expand temporary validation storage to896 bytes, always
+freed. Loop-exit initialization intersects entry state because zero iterations
+are possible. Per-iteration must-write masks and entry-dependent reads also
+check the backedge: an initialized read cannot become undefined on iteration2
+through SGN/SINCOS clobbering. Inner IF joins merge must-write masks. Matrix rows
+and selected source components participate; a0 currently has no clobber operation.
+
+Native packets65/66 carry paired exit/body targets resolved after hoisting.
+The context appends16 bytes (body PC74080/end PC74084/remaining74088/reserved74092),
+total74096 with all older offsets unchanged. Positive count is captured once;
+ENDREP decrements a private counter and jumps to the body, not the REP packet.
+Zero skips the body. Paired targets, active state and indices are checked;
+invalid runtime counts fail explicitly with status-5 rather than clamping.
+Budget/cancellation checks remain at every visited packet boundary.
+
+GLSL uses a constant255 loop bound with an early break for the valid count,
+including WebGL1. Last-wins DEFI values are hoisted; known used counts outside
+0..255 are rejected. Absent DEFI produces an integer uniform plus descriptive
+integerUniformRanges metadata. **Dynamic API range validation is not yet wired**:
+invalid externally bound GL counts can diverge from the native error behavior.
+No invalid-domain parity or complete public profile is claimed; frontend typed
+binding must enforce this before public admission.
+
+Evidence: initial native test was blocked by an unrelated unbalanced DirectDraw
+edit. Read-only in-memory substitution of that fragment's committed version
+confirmed missing-opcode RED67795 without altering its owner file. Subsequent
+ordinary current-tree36411 PASS1662 covers0/1/2/17/255, all16 integer indices,
+inactive lanes, one-packet resumption, count capture, cancellation, invalid
+counts/targets/nesting and IF combinations; legacy VM263 passes. Decoder87738
+PASS144 ->89779 PASS148 adds selected-component and matrix-row backedge cases.
+Final25378 passes flow151 (896-byte reuse after a coalescing warmup), baseline84,
+typed100, SGN137, SINCOS84, matrix165 and legacy IR. Actual GL2291 PASS126 includes
+16 new cases; same-native-IR32823 PASS162 GPU frames versus81 native frames adds
+six exact-position/pixel REP cases. Pipeline28432 PASS351; full64782 PASS
+canonical1170072 / compat1170540, unchanged layout and no data overlaps.
+Independent loop-link/runtime review found no concrete defect. LOOP/ENDLOOP,
+calls, full profiles, typed frontend binding and changing gameplay remain open.

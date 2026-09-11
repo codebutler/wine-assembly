@@ -862,6 +862,8 @@
   ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/sincos---vs
   ;; https://learn.microsoft.com/en-us/windows-hardware/drivers/display/sincos-instruction
   (func $d3d_ir_arity20 (param $op i32) (result i32)
+    (if (i32.eq (local.get $op) (i32.const 38)) (then (return (i32.const 1))))
+    (if (i32.eq (local.get $op) (i32.const 39)) (then (return (i32.const 0))))
     (if (i32.eq (local.get $op) (i32.const 40)) (then (return (i32.const 1))))
     (if (i32.or (i32.eq (local.get $op) (i32.const 42)) (i32.eq (local.get $op) (i32.const 43))) (then (return (i32.const 0))))
     (if (i32.eq (local.get $op) (i32.const 47)) (then (return (i32.const 2))))
@@ -898,7 +900,7 @@
   (func $d3d_ir_scan20 (param $ptr i32) (param $count i32) (param $out i32) (result i32)
     (local $guest i32) (local $result i32)
     ;; One bounded stack per validation pass; all inner early exits return here.
-    (local.set $guest (call $heap_alloc (i32.const 640)))
+    (local.set $guest (call $heap_alloc (i32.const 896)))
     (if (i32.eqz (local.get $guest)) (then (return (call $d3d_ir_fail (i32.const 12) (i32.const 0)))))
     (local.set $result (call $d3d_ir_scan20_inner (local.get $ptr) (local.get $count) (local.get $out) (call $g2w (local.get $guest))))
     (call $heap_free (local.get $guest)) (local.get $result))
@@ -913,6 +915,7 @@
     (local $scratch1 i32) (local $scratch2 i32)
     (local $definition i32)
     (local $depth i32) (local $flow_count i32) (local $frame i32)
+    (local $rep_active i32) (local $rep_writes i64) (local $rep_reads i64)
     (global.set $d3d_ir_flags (i32.const 0))
     (local.set $at (i32.const 1))
     (block $done (loop $instructions
@@ -966,11 +969,14 @@
             (local.set $bank (i32.const 255)) (local.set $index (local.get $arg)) (local.set $sel (i32.const 0)) (local.set $mod (i32.const 0)) (br $normalized)))
           (if (i32.or (i32.ge_s (local.get $arg) (i32.const 0)) (i32.ne (i32.and (local.get $arg) (i32.const 0xc000)) (i32.const 0)))
             (then (return (call $d3d_ir_fail (i32.const 5) (i32.sub (local.get $at) (i32.const 1))))))
-          ;; IF's only operand is a Boolean source, not a destination. This
-          ;; first private slice accepts canonical identity/no-modifier syntax.
-          (if (i32.eq (local.get $op) (i32.const 40)) (then
+          ;; IF/REP have a Boolean/integer source, not a destination. This
+          ;; private slice accepts canonical identity/no-modifier syntax.
+          ;; REP count validity is a runtime contract, not a DEFI token filter.
+          ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/rep---vs
+          (if (i32.or (i32.eq (local.get $op) (i32.const 40)) (i32.eq (local.get $op) (i32.const 38))) (then
             (if (i32.or (i32.ge_u (local.get $index) (i32.const 16))
-                (i32.ne (local.get $arg) (i32.or (i32.const 0xe0e40800) (local.get $index))))
+                (i32.ne (local.get $arg) (i32.or
+                  (select (i32.const 0xe0e40800) (i32.const 0xf0e40000) (i32.eq (local.get $op) (i32.const 40))) (local.get $index))))
               (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
             (br $normalized)))
           (if (i32.eq (local.get $op) (i32.const 31)) (then
@@ -1101,6 +1107,10 @@
                   (then (return (call $d3d_ir_fail (i32.const 13) (local.get $start)))))))
               (if (i32.eqz (local.get $bank)) (then
                 (local.set $needed (call $d3d_ir_read_mask (local.get $op) (local.get $i) (local.get $mask)))
+                (if (local.get $rep_active) (then
+                  (local.set $rep_reads (i64.or (local.get $rep_reads) (i64.and
+                    (i64.shl (i64.extend_i32_u (local.get $needed)) (i64.extend_i32_u (i32.shl (local.get $rowindex) (i32.const 2))))
+                    (i64.xor (local.get $rep_writes) (i64.const -1)))))))
                 (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (local.get $temps) (i64.extend_i32_u (i32.shl (local.get $rowindex) (i32.const 2))))) (local.get $needed)) (local.get $needed))
                   (then (return (call $d3d_ir_fail (i32.const 17) (local.get $start)))))))
               (local.set $row (i32.add (local.get $row) (i32.const 1)))
@@ -1128,6 +1138,10 @@
           (if (i32.eqz (local.get $bank)) (then
             (local.set $needed (call $d3d_ir_swizzle_mask
               (call $d3d_ir_read_mask20 (local.get $op) (local.get $i) (local.get $mask)) (local.get $sel)))
+            (if (local.get $rep_active) (then
+              (local.set $rep_reads (i64.or (local.get $rep_reads) (i64.and
+                (i64.shl (i64.extend_i32_u (local.get $needed)) (i64.extend_i32_u (i32.shl (local.get $index) (i32.const 2))))
+                (i64.xor (local.get $rep_writes) (i64.const -1)))))))
             (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (local.get $temps) (i64.extend_i32_u (i32.shl (local.get $index) (i32.const 2))))) (local.get $needed)) (local.get $needed))
               (then (return (call $d3d_ir_fail (i32.const 17) (local.get $start))))))))
         (if (local.get $out) (then
@@ -1136,37 +1150,61 @@
           (i32.store offset=8 (local.get $operand) (local.get $sel)) (i32.store offset=12 (local.get $operand) (local.get $mod))))
         (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $args)))
       (if (i32.ne (local.get $at) (local.get $end)) (then (return (call $d3d_ir_fail (i32.const 4) (local.get $start)))))
-      ;; Static flow count includes every IF and ELSE; max16 also bounds
-      ;; nesting. Frame40: entry temps/address/position, then exit, else flag.
+      ;; Static flow count includes IF, ELSE, REP. Frame56: entry and then
+      ;; temps/address/position, else flag32, type36 (0IF/1REP), per-iteration
+      ;; must-write masks at40/48. REP depth is one; IFs may nest inside it.
       ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-instructions-flow-control
-      (if (i32.or (i32.eq (local.get $op) (i32.const 40)) (i32.eq (local.get $op) (i32.const 42))) (then
+      (if (i32.or (i32.eq (local.get $op) (i32.const 38))
+        (i32.or (i32.eq (local.get $op) (i32.const 40)) (i32.eq (local.get $op) (i32.const 42)))) (then
         (local.set $flow_count (i32.add (local.get $flow_count) (i32.const 1)))
         (if (i32.gt_u (local.get $flow_count) (i32.const 16)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))))
-      (if (i32.eq (local.get $op) (i32.const 40)) (then
-        (local.set $frame (i32.add (local.get $flow_stack) (i32.mul (local.get $depth) (i32.const 40))))
+      (if (i32.eq (local.get $op) (i32.const 38)) (then
+        (if (local.get $rep_active) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
+        (local.set $rep_active (i32.const 1)) (local.set $rep_writes (i64.const 0)) (local.set $rep_reads (i64.const 0))))
+      (if (i32.or (i32.eq (local.get $op) (i32.const 40)) (i32.eq (local.get $op) (i32.const 38))) (then
+        (local.set $frame (i32.add (local.get $flow_stack) (i32.mul (local.get $depth) (i32.const 56))))
         (i64.store (local.get $frame) (local.get $temps))
         (i32.store offset=8 (local.get $frame) (local.get $address))
         (i32.store offset=12 (local.get $frame) (local.get $position))
         (i32.store offset=32 (local.get $frame) (i32.const 0))
+        (i32.store offset=36 (local.get $frame) (i32.eq (local.get $op) (i32.const 38)))
+        (i64.store offset=40 (local.get $frame) (local.get $rep_writes))
         (local.set $depth (i32.add (local.get $depth) (i32.const 1)))))
       (if (i32.or (i32.eq (local.get $op) (i32.const 42)) (i32.eq (local.get $op) (i32.const 43))) (then
         (if (i32.eqz (local.get $depth)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
-        (local.set $frame (i32.add (local.get $flow_stack) (i32.mul (i32.sub (local.get $depth) (i32.const 1)) (i32.const 40))))
+        (local.set $frame (i32.add (local.get $flow_stack) (i32.mul (i32.sub (local.get $depth) (i32.const 1)) (i32.const 56))))
+        (if (i32.load offset=36 (local.get $frame)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
         (if (i32.eq (local.get $op) (i32.const 42)) (then
           (if (i32.load offset=32 (local.get $frame)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
           (i64.store offset=16 (local.get $frame) (local.get $temps))
           (i32.store offset=24 (local.get $frame) (local.get $address))
           (i32.store offset=28 (local.get $frame) (local.get $position))
           (i32.store offset=32 (local.get $frame) (i32.const 1))
+          (i64.store offset=48 (local.get $frame) (local.get $rep_writes))
+          (local.set $rep_writes (i64.load offset=40 (local.get $frame)))
           (local.set $temps (i64.load (local.get $frame)))
           (local.set $address (i32.load offset=8 (local.get $frame)))
           (local.set $position (i32.load offset=12 (local.get $frame))))
         (else
+          (local.set $rep_writes (i64.and (local.get $rep_writes)
+            (i64.load (i32.add (local.get $frame) (select (i32.const 48) (i32.const 40) (i32.load offset=32 (local.get $frame)))))))
           (if (i32.load offset=32 (local.get $frame)) (then (local.set $frame (i32.add (local.get $frame) (i32.const 16)))))
           (local.set $temps (i64.and (local.get $temps) (i64.load (local.get $frame))))
           (local.set $address (i32.and (local.get $address) (i32.load offset=8 (local.get $frame))))
           (local.set $position (i32.and (local.get $position) (i32.load offset=12 (local.get $frame))))
           (local.set $depth (i32.sub (local.get $depth) (i32.const 1)))))))
+      (if (i32.eq (local.get $op) (i32.const 39)) (then
+        (if (i32.eqz (local.get $depth)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
+        (local.set $frame (i32.add (local.get $flow_stack) (i32.mul (i32.sub (local.get $depth) (i32.const 1)) (i32.const 56))))
+        (if (i32.ne (i32.load offset=36 (local.get $frame)) (i32.const 1)) (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
+        ;; Reads relying on entry values must still be defined at the backedge.
+        ;; a0 cannot currently be clobbered, so ordinary init checks suffice.
+        (if (i64.ne (i64.and (local.get $rep_reads) (local.get $temps)) (local.get $rep_reads))
+          (then (return (call $d3d_ir_fail (i32.const 17) (local.get $start)))))
+        (local.set $temps (i64.and (local.get $temps) (i64.load (local.get $frame))))
+        (local.set $address (i32.and (local.get $address) (i32.load offset=8 (local.get $frame))))
+        (local.set $position (i32.and (local.get $position) (i32.load offset=12 (local.get $frame))))
+        (local.set $depth (i32.sub (local.get $depth) (i32.const 1))) (local.set $rep_active (i32.const 0))))
       ;; Validate the meaningful source before invalidating either scratch.
       ;; Publish destination writes afterwards, including overlapping scratch.
       (if (i32.eq (local.get $op) (i32.const 34)) (then
@@ -1177,7 +1215,11 @@
       (if (i32.eq (local.get $op) (i32.const 37)) (then
         (local.set $temps (i64.and (local.get $temps) (i64.xor (i64.const -1)
           (i64.shl (i64.const 7) (i64.extend_i32_u (i32.shl (local.get $dstindex) (i32.const 2)))))))))
+      (local.set $rep_writes (i64.and (local.get $rep_writes) (local.get $temps)))
       (if (local.get $mask) (then
+        (if (i32.eqz (local.get $dstbank)) (then
+          (local.set $rep_writes (i64.or (local.get $rep_writes)
+            (i64.shl (i64.extend_i32_u (local.get $mask)) (i64.extend_i32_u (i32.shl (local.get $dstindex) (i32.const 2))))))))
         (if (i32.eqz (local.get $dstbank)) (then (local.set $temps (i64.or (local.get $temps) (i64.shl (i64.extend_i32_u (local.get $mask)) (i64.extend_i32_u (i32.shl (local.get $dstindex) (i32.const 2))))))))
         (if (i32.and (i32.eq (local.get $dstbank) (i32.const 4)) (i32.eqz (local.get $dstindex)))
           (then (local.set $position (i32.or (local.get $position) (local.get $mask)))))
@@ -1186,6 +1228,8 @@
         ;; Conservative IF3 from the profile table; its individual page says1.
         ;; ELSE/ENDIF use one slot. Preserve this explicit discrepancy policy.
         (if (i32.eq (local.get $op) (i32.const 40)) (then (local.set $slots (i32.add (local.get $slots) (i32.const 2)))))
+        (if (i32.eq (local.get $op) (i32.const 38)) (then (local.set $slots (i32.add (local.get $slots) (i32.const 2)))))
+        (if (i32.eq (local.get $op) (i32.const 39)) (then (local.set $slots (i32.add (local.get $slots) (i32.const 1)))))
         (local.set $slots (i32.add (local.get $slots)
           (select (i32.const 8) (select (i32.const 3) (select (i32.const 2)
             (select (local.get $rows) (i32.const 1) (i32.ne (local.get $rows) (i32.const 0)))

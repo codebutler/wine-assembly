@@ -134,6 +134,23 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
    ...branchColors.flatMap((values,i)=>ins(81,D(2,252+i),...values.map(fbits))),...body,65535];
   sources.set(key,tokens);cases.push([0,key,branchColors[chosen]]);
  }
+ for(const [name,count,innerIf,outerIf]of[
+  ['zero',0,false,false],['one',1,false,false],['three',3,false,false],['maximum',255,false,false],
+  ['false-if-inside',3,true,false],['inside-false-if',3,false,true],
+ ]){
+  const key=`rep38/${name}`,body=[];const emit=(op,...args)=>body.push(...ins(op,...args));
+  emit(1,D(0),S(2,252));if(outerIf)emit(40,0xe0e40800);
+  emit(38,0xf0e4000f);if(innerIf)emit(40,0xe0e40800);
+  emit(2,D(0,0,1),S(0),S(2,253));
+  if(innerIf)emit(43);emit(39);if(outerIf)emit(43);
+  emit(2,D(4),S(1),S(0));emit(1,D(5),S(0));
+  emit(48,0xf00f000f,count,0x80000000,0x7fffffff,0xffffffff);
+  if(innerIf||outerIf)emit(47,0xe00f0800,0);
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),
+   ...ins(81,D(2,252),...[.25,.375,.625,.75].map(fbits)),
+   ...ins(81,D(2,253),...[1/1024,9,9,9].map(fbits)),...body,65535];
+  sources.set(key,tokens);cases.push([0,key,[.25+(innerIf||outerIf?0:count/1024),.375,.625,.75]]);
+ }
  const programs=new Map(),frames=[];
  const psTokens=[0xffff0101,1,D(0),S(1),65535],psIR=e.d3d_shader_ir_compile(put(psTokens),psTokens.length);
  assert(psIR);const ps=e.d3d_shader_vm_compile(psIR);assert(ps);e.d3d_shader_ir_free(psIR);
