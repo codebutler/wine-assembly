@@ -6,7 +6,7 @@ const {Bridge} = require('../lib/d3d9-host');
 (async () => {
   let bridge;
   const names=['CreateVertexShader','CreatePixelShader','SetVertexShader','SetPixelShader',
-    'SetVertexShaderConstantF','SetPixelShaderConstantF',
+    'SetVertexShaderConstantF','SetPixelShaderConstantF','SetMaterial','SetLight','LightEnable',
     'SetDepthStencilSurface','GetDepthStencilSurface',
     'Reset','TestCooperativeLevel','GetVertexShader','GetPixelShader','GetViewport','GetRenderState',
     'SetFVF','SetRenderState','SetTransform','SetViewport','SetStreamSource','SetTexture','SetSamplerState','DrawPrimitive','DrawPrimitiveUP','Present'];
@@ -547,11 +547,41 @@ const {Bridge} = require('../lib/d3d9-host');
   ok(e.Present(device,0,0,0,0),'resized Present');
   const resized=new Uint32Array(memory.buffer,e.target_bits(device)>>>0,160);
   assert.strictEqual(resized[17],0xffff0000);assert.strictEqual(resized[159],0xff000000);
+  // Real COM lighting state -> immutable queue snapshot -> native fixed VS
+  // SIMD execution -> canonical Present. No private lighting descriptor here.
+  ok(e.SetVertexShader(device,0),'lit fixed vertex stage');ok(e.SetPixelShader(device,0),'lit fixed pixel stage');
+  for(const [state,value]of[[137,1],[145,0],[139,0],[29,0],[7,0],[22,1]])
+    ok(e.SetRenderState(device,state,value),'lit state '+state);
+  ok(e.SetFVF(device,0x12),'lit XYZ+NORMAL');
+  const litVertices=alloc(72),material=alloc(68),light=alloc(104);
+  [[-1,1,.5],[1,1,.5],[-1,-1,.5]].forEach((v,i)=>
+    new Float32Array(memory.buffer,wa(litVertices)+i*24,6).set([...v,0,0,-1]));
+  const mat=new Float32Array(memory.buffer,wa(material),17);mat.fill(0);mat.set([.25,.5,.75,.5]);
+  ok(e.SetMaterial(device,material),'SetMaterial actual native state');
+  new Uint8Array(memory.buffer,wa(light),104).fill(0);e.guest_write32(light,3);
+  new Float32Array(memory.buffer,wa(light)+4,4).set([1,1,1,0]);
+  new Float32Array(memory.buffer,wa(light)+64,3).set([0,0,1]);
+  ok(e.SetLight(device,0xf1234567,light),'SetLight arbitrary DWORD index');
+  ok(e.LightEnable(device,0xf1234567,1),'LightEnable');
+  new Uint8Array(memory.buffer,wa(light),104).fill(0x77); // call-time ownership
+  const litDraw=(expected,label)=>{
+    ok(e.clear_target(device,0,0,1,0xff000000,1),label+' clear');
+    ok(e.DrawPrimitiveUP(device,4,1,litVertices,24),label+' draw');ok(e.Present(device),label+' present');
+    const pixel=resized[17],rgba=[pixel>>>16&255,pixel>>>8&255,pixel&255,pixel>>>24];
+    rgba.forEach((v,i)=>assert(Math.abs(v-expected[i])<=1,`${label}: ${rgba} != ${expected}`));
+  };
+  litDraw([64,128,191,128],'directional diffuse material');
+  ok(e.LightEnable(device,0xf1234567,0),'disable directional light');
+  litDraw([0,0,0,128],'disabled light removes diffuse RGB but preserves material alpha');
+  mat.set([.125,.25,.375,0],12);ok(e.SetMaterial(device,material),'change emissive material');
+  mat.fill(0);litDraw([32,64,96,128],'emissive without enabled lights');
+  shader([0xffff0101,1,0x800f0000,0x90e40000,0xffff],true);
+  litDraw([32,64,96,128],'lit fixed VS feeds actual PS1.1 v0');
   assert.strictEqual(entry.kind,'software');
   assert.strictEqual(entry.queue.completed,entry.queue.submitted);
   assert(entry.queue.completed>=3,'initial clear, draw and Present use one queue');
   assert.strictEqual(bridge.call(0x30006,0,device),1,'ordered EVENT');
   assert.strictEqual(bridge.call(0x30004,0,device),1,'ordered destruction');
   assert.strictEqual(bridge.devices.size,0);
-  console.log('PASS real D3D9 COM -> shared queue -> WAT software: programmable/fixed/mixed stages, independent constants and rebinding, XYZ/POSITIONT, strips/fans, alpha tests/defaults/reference snapshots, blending and canonical Present pixels, no DOM/WebGL');
+  console.log('PASS real D3D9 COM -> shared queue -> WAT software: programmable/fixed/mixed stages, independent constants and rebinding, XYZ/POSITIONT, strips/fans, alpha tests/defaults/reference snapshots, blending, directional lighting state and canonical Present pixels, no DOM/WebGL');
 })().catch(error=>{console.error(error);process.exitCode=1;});

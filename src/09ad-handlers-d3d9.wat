@@ -21,7 +21,8 @@
   ;; +1680 device-owned shader vtable; +1684 HWND; +1688 last clear color;
   ;; +1700 texture bindings[4]; +1744 synchronous 64-byte GPU descriptor;
   ;; +1808 sampler states[4][16]. Total 2064 bytes.
-  ;; Allocated with the device, never per setter and never in a JS shadow map.
+  ;; Base storage is allocated with the device, never in a JS shadow map.
+  ;; Sparse light nodes are allocated only when a previously unseen index is set.
   (func $d3d9_program_state (param $this i32) (result i32)
     (local $entry i32)
     (if (i32.eqz (local.get $this)) (then (return (i32.const 0))))
@@ -41,9 +42,10 @@
     ;; +21768 Reset plan, +21772 external reset-blocker count,
     ;; +21776 lost state, +21780 creation thread, +21784 presentation interval;
     ;; +21788 desktop dimensions; +21792 textures4/5; +21800 samplers4/5.
-    (local.set $state (call $heap_alloc (i32.const 21928)))
+    ;; +21928 D3DMATERIAL9 (68 bytes, all-zero default), +21996 light-list head.
+    (local.set $state (call $heap_alloc (i32.const 22000)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 21928))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22000))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
@@ -752,6 +754,7 @@
           (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
           (return)))
         (if (load.field DxObject misc1 (local.get $entry)) (then
+          (call $d3d9_lights_free (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21996))))
           (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21752))))
           (call $d3d9_depth_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 21756))))
           (local.set $parent (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 20628))))
@@ -1202,35 +1205,32 @@
 
   ;; IDirect3DDevice9_SetMaterial — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_SetMaterial (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
-    (global.set $eax (i32.const 0))
+    (call $d3d9_material (local.get $arg0) (local.get $arg1) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DDevice9_GetMaterial — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_GetMaterial (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_material (local.get $arg0) (local.get $arg1) (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DDevice9_SetLight — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_SetLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
-    (global.set $eax (i32.const 0))
+    (call $d3d9_light (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_GetLight — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_GetLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_light (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_LightEnable — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_LightEnable (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
-    (global.set $eax (i32.const 0))
+    (call $d3d9_light (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 2))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_GetLightEnable — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_GetLightEnable (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_light (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 3))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_SetClipPlane — 3 args (incl. this)

@@ -734,3 +734,11 @@ arguments; corrected harness selects its explicit registry entry instead.
 Full canonical/compat build15499 and repeated software font85829 pass after
 concurrent main merges. These are focused native-DLL integration results, not
 proof of fresh full-game menu/gameplay. No guest cache was patched.
+
+Fresh current-artifact game run98750 was started after checkpointad3ba44b, using
+`/private/tmp/bw-glyph-current.pohQXb/wine.wasm` (1141556 bytes). It is independent
+of the preserved old33057 process whose native glyph cache already contains
+failures. At587 seconds the new run reaches intro frame105, with785 completed
+draws and zero reported renderer failures; menu/gameplay acceptance is pending.
+Artifacts: `bw-software-probe-DLH67d` under the host temporary directory. This is
+a progression observation, not a throughput benchmark (launch loadavg39).

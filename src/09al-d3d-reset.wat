@@ -155,6 +155,7 @@
     (local.set $i (i32.add (local.get $i) (i32.const 1))) (br_if $textures (i32.lt_u (local.get $i) (i32.const 6))))
   (call $d3d9_shader_unbind (i32.load offset=1720 (local.get $old))) (call $d3d9_shader_unbind (i32.load offset=1732 (local.get $old)))
   (call $d3d9_depth_unbind (i32.load offset=21752 (local.get $old))) (call $d3d9_depth_unbind (i32.load offset=21756 (local.get $old)))
+  (call $d3d9_lights_free (i32.load offset=21996 (local.get $old)))
   (call $heap_free (local.get $state)) (call $heap_free (local.get $shared))
   (drop (call $dx_surface_release (i32.load offset=20 (local.get $wa))))
   (global.set $d3d9_windowed_hwnd (select (i32.load offset=48 (local.get $wa)) (i32.const 0) (i32.load offset=44 (local.get $wa))))

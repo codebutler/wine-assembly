@@ -22,6 +22,28 @@ and [interval semantics](https://learn.microsoft.com/en-us/windows/win32/direct3
 
 ## Current integration checkpoint
 
+Directional-lighting state checkpoint: native material/light state15817 PASS
+replaces silent-success setters and trapping getters. Device storage appends a
+68-byte material and a linked list keyed by arbitrary DWORD light indices;
+SetLight stores point/spot/directional definitions without enabling them.
+LightEnable on an unknown index creates the documented white +Z directional
+default. Material defaults to all zero, and D3D9 lighting/material-source render
+state defaults are initialized explicitly. These follow Microsoft's
+[material defaults](https://learn.microsoft.com/en-us/windows/win32/direct3d9/materials)
+and [LightEnable contract](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-lightenable).
+Selective Begin/End blocks record material, light definitions and enables
+independently; Capture/Apply and detached allocation retirement pass. The existing
+CreateStateBlock ALL/PIXEL/VERTEX entry remains fail-loud and is not claimed here.
+Reset60956 PASS on direct/worker paths: invalid Reset preserves the state and
+successful Reset frees old light nodes and restores zero material. Async command
+tests verify material, source selectors and all enabled-light fields survive
+immediate guest-memory reuse. Point/spot/specular/skinning and caps remain
+separate gates. Full build87107 PASS (canonical1145409, compat1145877).
+Real-COM software60530 PASS includes directional diffuse, light disable,
+emissive material and actual PS1.1 v0 linkage through canonical framebuffer
+pixels. Native D3DX font50352 and browser WebGL2 font43660 still render863
+white pixels with the newly initialized lighting defaults.
+
 Native D3DX font integration12873 PASS on the software worker: the supplied
 Microsoft d3dx9_25.dll renders readable “Black & White 2” into the canonical
 frame (863 white pixels), versus zero text pixels on the previous build.
@@ -1054,3 +1076,21 @@ SetLOD residency, border color, finite LOD bias and MAXMIPLEVEL; native sampler
 setters accept the corresponding metadata. Nonzero bias/MAXMIPLEVEL explicitly
 reject on the current WebGL adapter until accelerated lowering is implemented.
 No full WebGL sampling parity or real-game completion is implied by these tests.
+
+Directional-lighting lowering checkpoint (2026-09-10): software35236 passes
+21 actual pixel cases plus malformed DLT1 descriptor checks and allocation
+retirement; WebGL34697 passes44 pixel cases across forced WebGL1/2, including
+fixed VS + PS1.1 v0 reading the lit material rather than raw COLOR1. Coverage
+includes front/back/perpendicular directions, optional normal normalization,
+inverse-transpose world scaling, eight directional lights, global/per-light
+ambient, emissive, material sources/COLORVERTEX, missing-color fallback, diffuse
+alpha and zero/underflow/overflow-length direction policy. Native cascade42650
+passes the existing six-stage texture/transform/fog-adjacent lowering suite.
+The DLT1 binder appends real native VM vertex operations and replaces its owned
+VS IR/packet only after successful compilation; older cascade and vertex-input
+ABIs are unchanged. Point/spot and specular lighting remain explicit gates,
+as does lit programmed-PS secondary-color linkage pending conformance. No new
+caps or Windows reference conformance are claimed. Software fixed programs still
+recompile per draw and embed state constants: semantic specialization/cache reuse
+is an outstanding design task, not completed by this slice. Complex combinations
+remain bounded by the existing128-instruction native fixed-program budget.

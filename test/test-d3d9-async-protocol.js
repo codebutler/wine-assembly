@@ -26,6 +26,28 @@ function fixture(options={}) {
   return {bridge,memory,v,commands,gates,initialized,advance,desc,program,vertices,target,consumer};
 }
 (async()=>{
+  const lit=fixture(),write=(p,n)=>lit.v.setUint32(p,n,true),lightNode=50000;
+  for(const [id,value] of [[137,1],[139,0xff102030],[141,1],[145,1],[146,2],[147,0],[148,2]])write(256+id*4,value);
+  new Float32Array(lit.memory,lit.program+21928,17).set(Array.from({length:17},(_,i)=>i/16));
+  write(lit.program+21996,lightNode);write(lightNode+4,0xf1234567);write(lightNode+12,1);write(lightNode+16,3);
+  new Float32Array(lit.memory,lightNode+20,25).set(Array.from({length:25},(_,i)=>i/8));
+  const litToken=lit.bridge.call(0x30001,lit.desc,0);assert(litToken<=-2);
+  new Uint8Array(lit.memory,lightNode,120).fill(0x77);
+  new Uint8Array(lit.memory,lit.program+21928,72).fill(0);
+  for(const id of[137,139,141,145,146,147,148])write(256+id*4,0);
+  lit.initialized.resolve();await tick();await lit.advance(1);await lit.advance(1);
+  const lighting=lit.commands.at(-1).payload.fixedFunction;
+  assert.strictEqual(lighting.ambientColor,0xff102030);assert.strictEqual(lighting.colorVertex,1);
+  assert.deepStrictEqual([lighting.diffuseMaterialSource,lighting.specularMaterialSource,
+    lighting.ambientMaterialSource,lighting.emissiveMaterialSource],[1,2,0,2]);
+  assert.deepStrictEqual(Array.from(lighting.material.diffuse),[0,1/16,2/16,3/16]);
+  assert.deepStrictEqual(Array.from(lighting.material.emissive),[12/16,13/16,14/16,15/16]);
+  assert.strictEqual(lighting.material.power,1);
+  assert.strictEqual(lighting.lights[0].index,0xf1234567);assert.strictEqual(lighting.lights[0].type,3);
+  assert.deepStrictEqual(Array.from(lighting.lights[0].direction),[15/8,16/8,17/8]);
+  assert.strictEqual(lighting.lights[0].phi,3);
+  await lit.advance(1);await lit.bridge.wait(litToken);assert.strictEqual(lit.bridge.call(0x30007,0,litToken),1);
+  await lit.bridge.close();
   const six=fixture(),set=(p,n)=>six.v.setUint32(p,n,true);
   set(six.program+12,0x642);set(six.desc+36,64); // XYZ, diffuse, six float2 UVs
   set(256+143*4,1); // fixture state descriptor is zero; NORMALIZENORMALS
