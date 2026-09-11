@@ -17955,12 +17955,39 @@
       (then (call $modal_done (i32.const 0)) (return (i32.const 0))))
     (i32.const 0))
 
+  ;; Win98's PropertySheetA accepts only the three 32-bit header versions that
+  ;; shipped with its common-controls line.  It rejects nPages >= 100 and flag
+  ;; bits 26..31 before allocating the internal sheet.  Keep our additional
+  ;; zero-page/NULL-array guard: those inputs cannot describe a usable sheet
+  ;; and otherwise reach an unchecked page-array dereference below.
+  (func $propsheet_header_valid (param $header_w i32) (result i32)
+    (local $size i32) (local $flags i32) (local $count i32)
+    (local.set $size (i32.load (local.get $header_w)))
+    (if (i32.and
+          (i32.ne (local.get $size) (i32.const 36))
+          (i32.and
+            (i32.ne (local.get $size) (i32.const 40))
+            (i32.ne (local.get $size) (i32.const 52))))
+      (then (return (i32.const 0))))
+    (local.set $flags (i32.load offset=4 (local.get $header_w)))
+    (if (i32.ne
+          (i32.and (local.get $flags) (i32.const 0xFC000000))
+          (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $count (i32.load offset=24 (local.get $header_w)))
+    (if (i32.or
+          (i32.or (i32.eqz (local.get $count))
+                  (i32.ge_u (local.get $count) (i32.const 100)))
+          (i32.eqz (i32.load offset=32 (local.get $header_w))))
+      (then (return (i32.const 0))))
+    (i32.const 1))
+
   (func $create_property_sheet (param $header_g i32) (result i32)
     (local $header_w i32) (local $flags i32) (local $owner i32)
     (local $caption_g i32) (local $caption_w i32) (local $dlg i32)
     (local $start i32)
     (local.set $header_w (call $g2w (local.get $header_g)))
-    (if (i32.lt_u (i32.load (local.get $header_w)) (i32.const 36))
+    (if (i32.eqz (call $propsheet_header_valid (local.get $header_w)))
       (then (return (i32.const 0))))
     (local.set $flags (i32.load offset=4 (local.get $header_w)))
     (global.set $propsheet_header (local.get $header_g))
@@ -17970,11 +17997,6 @@
       (i32.eqz (i32.and (local.get $flags) (i32.const 0x00000008))))
     (global.set $propsheet_owns_page_handles (i32.const 0))
     (global.set $propsheet_inline_pages_initialized (i32.const 0))
-    (if (i32.or (i32.eqz (global.get $propsheet_page_count))
-                (i32.or
-                  (i32.gt_u (global.get $propsheet_page_count) (i32.const 100))
-                  (i32.eqz (global.get $propsheet_pages))))
-      (then (return (i32.const 0))))
     (global.set $propsheet_owns_page_handles
       (global.get $propsheet_pages_are_handles))
     (if (i32.and

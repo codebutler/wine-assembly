@@ -45,6 +45,9 @@ const extraWat = String.raw`
       (local.get $page) (i32.add (local.get $raw_w) (i32.const 8))
       (local.get $message)))
 
+  (func (export "test_propsheet_header_valid") (param $header i32) (result i32)
+    (call $propsheet_header_valid (call $g2w (local.get $header))))
+
   (func (export "test_psp_use_handle_array") (param $pages i32) (param $count i32)
     (global.set $propsheet_pages (local.get $pages))
     (global.set $propsheet_page_count (local.get $count))
@@ -90,6 +93,42 @@ const extraWat = String.raw`
     e.guest_write32(page + 32, 0);
     return page;
   };
+
+  const header = e.guest_alloc(52) >>> 0;
+  const pagesSentinel = 0x00403000;
+  const setHeader = (size, flags = 0, count = 1, pages = pagesSentinel) => {
+    for (let offset = 0; offset < 52; offset += 4) {
+      e.guest_write32(header + offset, 0);
+    }
+    e.guest_write32(header, size);
+    e.guest_write32(header + 4, flags);
+    e.guest_write32(header + 24, count);
+    e.guest_write32(header + 32, pages);
+    return e.test_propsheet_header_valid(header);
+  };
+
+  for (const size of [36, 40, 52]) {
+    assert.strictEqual(setHeader(size), 1,
+      `Win98 accepts its ${size}-byte PROPSHEETHEADERA version`);
+  }
+  for (const size of [0, 35, 37, 39, 41, 48, 53, 0xFFFFFFFF]) {
+    assert.strictEqual(setHeader(size), 0,
+      `Win98 rejects unknown ${size >>> 0}-byte PROPSHEETHEADERA versions`);
+  }
+  assert.strictEqual(setHeader(36, 0x03FFFFFF), 1,
+    'Win98 leaves header flag bits 0..25 available to its versioned parser');
+  for (const flags of [0x04000000, 0x80000000, 0xFFFFFFFF]) {
+    assert.strictEqual(setHeader(36, flags), 0,
+      `Win98 rejects reserved high header flags 0x${flags.toString(16)}`);
+  }
+  assert.strictEqual(setHeader(36, 0, 99), 1,
+    'Win98 accepts at most 99 initial property pages');
+  assert.strictEqual(setHeader(36, 0, 100), 0,
+    'Win98 rejects nPages == 100 rather than accepting an off-by-one page');
+  assert.strictEqual(setHeader(36, 0, 0), 0,
+    'an empty sheet is rejected before frame construction');
+  assert.strictEqual(setHeader(36, 0, 1, 0), 0,
+    'a NULL page array is rejected before ownership transfer');
 
   assert.strictEqual(e.test_create_property_sheet_page(0), 0,
     'NULL is rejected');

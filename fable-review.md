@@ -355,6 +355,11 @@ materialized and may veto it; teardown sends one re-entrancy-safe
 `PSPCB_RELEASE`. `PSP_USEREFPARENT` increments before ADDREF and balances after
 RELEASE, including pages that were never selected.
 
+The same path now validates `PROPSHEETHEADERA` at its Win98 boundary: only the
+36-, 40-, and 52-byte structure versions are accepted, bits 26..31 are
+reserved, and the native 99-page ceiling is enforced before the sheet takes
+ownership of page handles.
+
 ---
 
 # Pass 4 — 2026-08-31

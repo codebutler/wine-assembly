@@ -1,6 +1,6 @@
   ;; ============================================================
   ;; COMCTL32 HANDLERS
-  ;; ImageList, toolbar and status-bar creation, up-down and property-sheet stubs,
+  ;; ImageList, toolbar and status-bar creation, up-down and property sheets,
   ;; MenuHelp, and the DSA/DPA dynamic-array and pointer-array APIs.
   ;; 
   ;; This was a 680-line slab of comctl32 sitting in the middle of
