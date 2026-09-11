@@ -53,12 +53,53 @@ The native `mpsave/000000001-quick-save` contains `icewind.gam` (3520 bytes,
 The default session also contains `codex` in its 2416-byte GAM. This
 supersedes the older claim that the numbered quicksave path was unavailable.
 
-Remaining limits: save reload and browser acceptance of this original VFS
-are not tested here. The Prologue narration body is still blank. Shutdown
+Fresh-process reload is now verified as well. The same CLI command mounted
+the clean original installation first, then the full native save export with
+a second `--vfs-tree`. No cache files were carried over. At batch 330,
+`/private/tmp/iwd-reload-list.png` shows the numbered quicksave, its thumbnail,
+and the character portrait. Load at (541,102) causes the guest to expand its
+original CD2 archives again. A nearly stationary loading bar is not evidence
+of a hang: the AR100A output handle advanced from 5,004,288 to 5,410,816 bytes
+between batches 1230 and 1530, and AR100D was being written by batch 2330.
+
+Batch 2830 reaches Party Formation with `codex`. Done at (552,432), batch
+3030, restores the tavern at batch 3130, with the character at the saved
+position near (500,300): `/private/tmp/iwd-reload-tavern.png`. Clicking
+(452,330) and stepping 40 moves the character there, visibly confirmed in
+`/private/tmp/iwd-reload-move.png`. The historical red `Paused for saving
+game` log line remains visible but does not prevent this movement. The
+process explicitly quit at batch 3170, exit 0. Shutdown still reports a held
+main-thread critical section at `0x006c8f94`; this test does not establish
+that all synchronization cleanup is correct.
+
+Remaining limits: browser acceptance of this original VFS is not yet
+verified. The Prologue narration body is still blank. Earlier shutdown
 diagnostics report one abandoned parked EnterCriticalSection and one held
 main-thread critical section; successful gameplay does not prove that
 scheduler issue fixed. The legacy acceptance script below still mounts its
 modified fixture and must not be cited as the original-install regression.
+
+### Original-install browser probe: not accepted
+
+The temporary `/private/tmp/iwd-original-browser.js` serves the same original
+installation and native save export through range-backed providers. It uses
+headless Chrome, cross-origin isolation, frozen stdio stepping, and a 900s
+internal deadline. It does not mount the legacy fixture. The first harness
+attempt omitted profile preparation and stopped on `VfsPendingError` for
+`icewind.ini`. Calling the existing `mediaImport.materializeIniFiles` helper
+before launch corrects that harness omission without changing file contents.
+
+The subsequent probe still does not establish browser gameplay. After a
+relaunch without premature Escape input, it creates `JigSawedME` and opens
+the GUI archives and `data/mvefilel.bif`, but the captures at frozen steps
+450, 750, and 910 remain gray. The window has no `_dxFrameLayer` at that
+checkpoint. Main EIP is `0x008b68c5`; four cooperative secondary threads
+exist, with final EIPs `0x005b3344`, `0x00437dd3`, `0x00437d49`, and
+`0x0043d3eb`. Escape at steps 750 and 830 did not expose a menu. The last
+capture is `/private/tmp/iwd-original-browser-menu.png` (despite the filename,
+it is not a menu). The browser and its temporary server were explicitly
+closed, exit 0. Rendering, intro progress, and input routing still need to be
+distinguished before assigning a runtime cause; no browser fix is claimed.
 
 ### Original first-area load: false local file matches
 
