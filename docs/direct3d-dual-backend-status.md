@@ -1464,3 +1464,16 @@ last-surface retirement in both guest modes, including final executor cleanup.
 Fullbuild81333 passes1154735/1155203 bytes. Independent review checked the
 deferred-decrement scheme. Multi-producer races, asynchronous fault injection,
 broader swap-chain semantics and implicit LockRect remain separate open gates.
+
+Delayed final-backbuffer retirement failure now has two targeted tests.
+Native46980 executes real x86 Surface.Release calls with controlled private
+completion: multiple pending polls keep surface2/device1 and canonical pixels,
+failed completion returns2 without freeing either owner, and a new successful
+attempt submits once and returns through the original stack exactly once.
+Native40611 adds real Bridge._result/_poll tokens in direct and worker-backed
+fixtures: a controlled promise rejection before30004 admission preserves owners,
+then an ordinary production retry retires the backend. These tests prove native
+continuation handling, not recovery from an admitted executor retirement fault.
+Such faults may retire the shared worker; the host releasing/lost state and
+multi-producer cancellation remain distinct lifecycle gates. Test manifest and
+diff checks pass; no runtime source changed in this test-only checkpoint.

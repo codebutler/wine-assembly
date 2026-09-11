@@ -8,7 +8,7 @@ const path=require('path');
 const {WorkerConsumer}=require('../lib/d3d-command-stream');
 const sigs=require('../lib/host-import-sigs.generated.json').sigs;
 (async()=>{
-  let bridge,productionImport,failRetire=false;
+  let bridge,productionImport,failRetire=false,delayedRetire=null;
   const api={Device9:['SetRenderTarget','GetRenderTarget','GetBackBuffer','GetSwapChain','SetViewport','GetViewport',
     'SetScissorRect','GetScissorRect','GetRenderTargetData','ColorFill','UpdateSurface','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
     Texture9:['GetSurfaceLevel','LockRect','Release'],
@@ -16,7 +16,12 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     SwapChain9:['GetBackBuffer'],
     Surface9:['QueryInterface','GetDesc','AddRef','Release','GetDevice','LockRect','UnlockRect','GetDC','ReleaseDC']};
   const {exports:e,memory,module}=await bootRenderHarness({fonts:'none',
-    extraHostOverrides:{gpu_gl_call:(op,p,a)=>failRetire&&op===0x30004?0:productionImport(op,p,a)},extraWat:`
+    extraHostOverrides:{gpu_gl_call:(op,p,a)=>{
+      if(op===0x30004&&delayedRetire)return bridge._result(bridge.devices.get(a>>>0),delayedRetire.promise,()=>1,true);
+      return failRetire&&op===0x30004?0:productionImport(op,p,a);
+    }},extraWat:`
+    (func (export "dx_refs") (param $object i32) (result i32)
+      (load.field DxObject refcount (call $dx_from_this (local.get $object))))
     ${Object.entries(api).flatMap(([type,names])=>names.map(name=>`
       (func (export "${type}_${name}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
         (global.set $esp (i32.const 0x074ff000))
@@ -375,6 +380,18 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     failRetire=false;
     ok(e.Surface9_GetDevice(retainedBack,out),'failed retirement preserves owner');
     assert.strictEqual(await invoke(e.Device9_Release,read(out)),1);
+    let rejectRetirement;
+    delayedRetire={promise:new Promise((resolve,reject)=>{rejectRetirement=reject;})};
+    e.Surface9_Release(retainedBack);const failureToken=e.get_d3d_render_token();
+    assert(failureToken<=-2);assert.strictEqual(e.get_esp()>>>0,0x074ff000);
+    assert.strictEqual(e.dx_refs(retained),1);assert.strictEqual(e.dx_refs(retainedBack),2);
+    e.Surface9_Release(retainedBack);assert.strictEqual(e.get_d3d_render_token(),failureToken);
+    assert.strictEqual(e.get_esp()>>>0,0x074ff000,'repeated pending retirement does not pop');
+    delayedRetire=null;rejectRetirement(new Error('injected pre-admission retirement failure'));
+    await bridge.wait(failureToken);
+    assert.strictEqual(await invoke(e.Surface9_Release,retainedBack),2);
+    assert.strictEqual(e.dx_refs(retained),1);assert.strictEqual(e.dx_refs(retainedBack),2);
+    assert(bridge.devices.has(retained),'completion-boundary fault does not destroy backend');
     assert.strictEqual(await invoke(e.Surface9_Release,retainedBack),0,'last surface retires device');
     assert.strictEqual(e.get_esp()>>>0,0x074ff008,'final surface release pops once');
     assert(!bridge.devices.has(retained),'backend retired with final surface');
