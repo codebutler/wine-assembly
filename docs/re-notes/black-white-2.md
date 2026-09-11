@@ -811,3 +811,33 @@ main menu, so neither click variant proves New Game activation. No key or mouse
 button is left held by these controls. The
 live probe remains24571 with artifacts under `bw-software-probe-8o44XX` in the
 system temporary directory. No guest state or instruction stream was patched.
+
+Buffered-mouse investigation on the same frozen run24571: a temporary,
+return-value-preserving wrapper around `renderer.getMouseButtons` counted8
+polls with left held and8 after release (down237923/up238468). The wrapper was
+restored. Its caller EIP009b0920 belongs to the game's GetDeviceData call at
+009b0930 (`call [eax+28h]`, slot10), with20-byte DIDEVICEOBJECTDATA records;
+this is not a GetDeviceState caller. The game's switch accepts offsets0/4/8
+for axes and12/13/14 for buttons. `SetDataFormat` remains an implementation gap,
+but these observed offsets do not establish a custom-layout mismatch.
+
+After explicit movement155,445 ->156,445 ->155,445 and down243257, the native
+trace proves real left-down dispatch:009b0a59 tests bit0x80;009b0a5e records
+that bit set;009b0a67 passes the zero suppress/error byte at01d7a748;009b0a80
+pushes event1 and009b0a84 calls009afe60, returning to009b0a89. The receiver
+is01d733e8. A read-only snapshot also reports error byte0 and mode017792d4=1.
+Mouse-up244432 is acknowledged and the later009b0a94 ->009afe60 path delivers
+event4. Thus the native event dispatcher receives both edges; the next question
+is relative-cursor/hit-test or downstream event handling, not whether a held
+button ever reaches the guest. This does not yet prove New Game activation.
+Native event1 target009aff41 copies the receiver's current coordinate words
+at+c4/+c8 to+114/+118; event4 target009aff6f copies them to+12c/+130. These
+provide a read-only seam to compare the game's click position with the host's
+absolute pointer, without changing guest memory. Transient state is at+110,
+with another dispatch state byte at+15c.
+
+Diagnostic caution: `set_trace_eip_range` requires `(flag,lo,hi)`, three args.
+A mistaken two-argument call enabled broad streaming trace and slowed batches.
+The correct restoration `(1,0x526d93,0x526d97)` was queued after mouse-up; do not
+infer completion of that control from its submission. Preserve the healthy
+process while its current batch drains; no restart was used for this diagnosis.
