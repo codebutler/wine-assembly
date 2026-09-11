@@ -18,6 +18,18 @@
   const upload=new Uint8Array(a.height*24);for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++)upload.set([y*30,x*40,70,100],y*24+x*4);
   await api.update(a,upload,24);const frame=await api.read(a);
   for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++)check(Array.from(frame.pixels.slice((y*a.width+x)*4,(y*a.width+x+1)*4)).join()===Array.from(upload.slice(y*24+x*4,y*24+x*4+4)).join(),'upload/readback pitch and orientation');
+  // Upload a pitched subrectangle over a backend-owned draw. Outside pixels
+  // must survive; no stale CPU shadow is authoritative after rendering.
+  await api.draw(draw(a,null));
+  const patch=new Uint8Array([10,20,30,40,50,60,70,80,99,99,99,99,90,100,110,120,130,140,150,160,99,99,99,99]);
+  await api.update(a,patch,12,{x:1,y:1,width:2,height:2});
+  const patched=await api.read(a);
+  for(let y=0;y<a.height;y++)for(let x=0;x<a.width;x++){
+   const want=x>=1&&x<3&&y>=1?Array.from(patch.slice((y-1)*12+(x-1)*4,(y-1)*12+x*4)):[0,0,255,64];
+   check(Array.from(patched.pixels.slice((y*a.width+x)*4,(y*a.width+x+1)*4)).join()===want.join(),'rect upload preserves draw/orientation '+x+','+y);
+  }
+  await api.update(b,new Uint8Array([1,2,3,4]),4,{x:5,y:0,width:1,height:1});
+  check(Array.from((await api.read(b)).pixels.slice(20,24)).join()==='1,2,3,255','rect upload X8 alpha and top edge');
   await api.clear([0,0,0,1],7,1,null,depth,0,a);await api.draw(draw(a,depth,.25));
   await api.clear([0,1,0,1],1,1,null,depth,0,b);await api.draw(draw(b,depth,.75));
   const shared=await api.read(b);check(shared.pixels[1]===255&&shared.pixels[2]===0,'same depth identity rejects B behind A');

@@ -1323,3 +1323,16 @@ guard; the fix passes browser78448 in both guest modes. Full build6715 passes
 canonical1151946/compat1152414 with no overlaps; fragment/logical-AND and20-opcode
 production routing regressions pass. This does not complete other copy/resolve
 operations, formats, or native-reference characterization of degenerate rects.
+
+Rectangular color RESOURCE_UPDATE uploads now accept an optional bounded
+`{x,y,width,height}` rectangle in native top-left coordinates. The software
+executor updates only those rows in its owned native storage; WebGL converts
+only the source rectangle and uses texSubImage2D after saving pending target
+writes. Neither path reads back the destination or uploads a stale whole-surface
+CPU shadow. Uploads advance the existing WebGL color revision for alias-cache
+invalidation. Source pitch, BGRA conversion and X8 alpha rules are preserved.
+Shared fixtures pass35 checks each through direct/worker software (45249) and
+WebGL1/2 (70142), including asymmetric two-row uploads over rendered content,
+untouched destination pixels and a top-edge X8 update. This is the backend
+prerequisite for UpdateSurface, not completed guest API support; native source/
+destination validation and texture-level routing remain to implement.
