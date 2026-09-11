@@ -219,6 +219,40 @@ async function main() {
     callApi('RevokeDragDrop', dragHwndB) === 0 &&
     read(dragTarget + 4) === 1 && read(dragTarget + 12) === 3);
 
+  const externalTarget = makeGuestSite();
+  check('CoLockObjectExternal rejects a null IUnknown',
+    callApi('CoLockObjectExternal', 0, 1, 0) === 0x80070057);
+  const externalVtable = read(externalTarget);
+  const externalRelease = read(externalVtable + 8);
+  write(externalVtable + 8, 0);
+  check('CoLockObjectExternal rejects a malformed target before retaining it',
+    callApi('CoLockObjectExternal', externalTarget, 1, 0) === 0x80070057 &&
+    read(externalTarget + 4) === 1 && read(externalTarget + 8) === 0);
+  write(externalVtable + 8, externalRelease);
+  check('each external lock owns an independent guest AddRef',
+    callApi('CoLockObjectExternal', externalTarget, 1, 0) === 0 &&
+    callApi('CoLockObjectExternal', externalTarget, 1, 1) === 0 &&
+    read(externalTarget + 4) === 3 && read(externalTarget + 8) === 2);
+  write(externalVtable + 8, 0);
+  check('a malformed guest Release leaves the strong lock intact for retry',
+    callApi('CoLockObjectExternal', externalTarget, 0, 0) === 0x8000ffff &&
+    read(externalTarget + 4) === 3 && read(externalTarget + 12) === 0);
+  write(externalVtable + 8, externalRelease);
+  check('balanced external unlocks release one guest reference each',
+    callApi('CoLockObjectExternal', externalTarget, 0, 0) === 0 &&
+    callApi('CoLockObjectExternal', externalTarget, 0, 1) === 0 &&
+    read(externalTarget + 4) === 1 && read(externalTarget + 12) === 2);
+  check('an unbalanced external unlock reports E_UNEXPECTED',
+    callApi('CoLockObjectExternal', externalTarget, 0, 1) === 0x8000ffff &&
+    read(externalTarget + 4) === 1 && read(externalTarget + 12) === 2);
+  const localExternalTarget = e.test_ole_create_test_site() >>> 0;
+  check('external locks retain emulator-local objects synchronously',
+    callApi('CoLockObjectExternal', localExternalTarget, 1, 0) === 0 &&
+    read(localExternalTarget + 4) === 2);
+  check('external unlocks balance emulator-local strong references',
+    callApi('CoLockObjectExternal', localExternalTarget, 0, 1) === 0 &&
+    read(localExternalTarget + 4) === 1);
+
   const object = e.test_ole_create_static_handler(0) >>> 0;
   const siteA = makeGuestSite();
   check('SetClientSite AddRefs and owns a DLL-private guest interface',

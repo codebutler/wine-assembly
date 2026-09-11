@@ -267,3 +267,12 @@ the exact registration, and releases its retained target. DLL-private targets
 cross the existing suspended guest COM callback bridge for AddRef/Release;
 emulator-local interfaces use the synchronous path. Browser drop events are not
 yet converted into IDataObject/IDropTarget calls.
+
+2026-09-11: 346 -> 345. CoLockObjectExternal now implements its documented
+strong-reference lifetime: every lock owns one IUnknown AddRef and every
+balanced unlock performs one Release. Repeated locks remain independently
+counted, null and malformed interfaces fail before mutation, and an unbalanced
+unlock returns E_UNEXPECTED. DLL-private implementations use the suspended
+guest callback bridge; emulator-local objects complete synchronously. The
+fLastUnlockReleases proxy-disconnection distinction is not observable because
+the runtime does not expose out-of-process marshaled connections.

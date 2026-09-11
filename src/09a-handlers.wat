@@ -17360,12 +17360,12 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (call $com_revoke_drag_drop (local.get $arg0))
   )
 
-  ;; CoLockObjectExternal(pUnk, fLock, fLastUnlockReleases) — return S_OK.
-  ;; mspaint probes this via GetProcAddress at startup and bails with a fatal
-  ;; MessageBox if unresolved. No real OOP server lifetime to manage.
+  ;; CoLockObjectExternal retains balanced strong references through the OLE
+  ;; guest-callback bridge; mspaint and embedded-object servers use this to
+  ;; keep a visible object alive independently of their ordinary references.
   (func $handle_CoLockObjectExternal (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (call $com_lock_object_external
+      (local.get $arg0) (local.get $arg1) (local.get $arg2))
   )
 
 ;; 657: GetDCEx — STUB: unimplemented

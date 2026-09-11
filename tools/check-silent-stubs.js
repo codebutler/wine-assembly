@@ -249,8 +249,11 @@ const digest = crypto.createHash('sha256')
 // 2026-09-11: 348 -> 346. RegisterDragDrop/RevokeDragDrop now own one retained
 // IDropTarget per live HWND and report invalid, duplicate, and absent
 // registrations instead of returning unconditional success.
-const EXPECTED_COUNT = 346;
-const EXPECTED_SHA256 = 'e61929b91484077b21b28ca3cd97e3f9df99b3edc39dc26704e11d13b9e0b303';
+// 2026-09-11: 346 -> 345. CoLockObjectExternal now retains one strong COM
+// reference per lock and releases exactly one per balanced unlock, including
+// DLL-private objects reached through the guest callback continuation.
+const EXPECTED_COUNT = 345;
+const EXPECTED_SHA256 = 'cef18634c84af5962b04550ed2542a130334d17286a0fbac2d3b4cb846cee232';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
