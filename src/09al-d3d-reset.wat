@@ -38,6 +38,7 @@
     (if (i32.or (i32.load offset=21772 (local.get $old)) (i32.load offset=1740 (local.get $old))) (then (return)))
     (local.set $rt (call $d3ddev_rt_entry (local.get $device)))
     (if (i32.ne (load.field DxObject refcount (local.get $rt)) (i32.const 1)) (then (return)))
+    (if (i32.and (load.field DxObject flags (local.get $rt)) (i32.const 0x40000000)) (then (return)))
     (local.set $width (call $gl32 (local.get $pp))) (local.set $height (call $gl32 (i32.add (local.get $pp) (i32.const 4))))
     (local.set $format (call $gl32 (i32.add (local.get $pp) (i32.const 8))))
     (local.set $windowed (call $gl32 (i32.add (local.get $pp) (i32.const 32))))

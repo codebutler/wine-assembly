@@ -7,6 +7,47 @@
   (if (i32.eqz (local.get $surface)) (then (return (i32.const 0))))
   (i32.eq (call $gl32 (i32.add (local.get $surface) (i32.const 12))) (i32.const 0xd3d90006)))
 
+;; Existing implicit surfaces predate heap color metadata and have no owner
+;; backpointer. Resolve the live device by its retained backbuffer slot.
+(func $d3d9_backbuffer_owner (param $surface i32) (result i32)
+  (local $entry i32) (local $slot i32) (local $i i32) (local $p i32)
+  (local.set $entry (call $dx_from_this (local.get $surface)))
+  (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+  (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 2)) (then (return (i32.const 0))))
+  (local.set $slot (call $dx_slot_of (local.get $entry)))
+  (loop $devices
+    (local.set $p (i32.add (global.get $DX_OBJECTS) (i32.mul (local.get $i) (global.get $DX_ENTRY_SIZE))))
+    (if (i32.and (i32.eq (load.field DxObject type (local.get $p)) (i32.const 20))
+      (i32.and (i32.ne (load.field DxObject misc1 (local.get $p)) (i32.const 0))
+        (i32.eq (load.field DxObject misc0 (local.get $p)) (local.get $slot)))) (then
+      (return (call $dx_get_wrapper_for_vtbl (local.get $i) (global.get $DX_VTBL_D3DDEV9)))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br_if $devices (i32.lt_u (local.get $i) (global.get $DX_MAX))))
+  (i32.const 0))
+
+(func $d3d9_bound_dc_held (param $device i32) (result i32)
+  (local $state i32)
+  (local.set $state (call $d3d9_program_state (local.get $device)))
+  (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+  (if (call $gl32 (i32.add (local.get $state) (i32.const 22020))) (then (return (i32.const 0))))
+  (i32.ne (i32.and (load.field DxObject flags (call $d3ddev_rt_entry (local.get $device)))
+    (i32.const 0x40000000)) (i32.const 0)))
+
+(func $d3d9_backbuffer_dc_sync (param $device i32) (param $upload i32) (result i32)
+  (local $desc i32) (local $result i32)
+  (if (global.get $d3d_render_token) (then (return (call $d3d_render_poll))))
+  (local.set $desc (call $d3d9_gpu_descriptor (local.get $device)))
+  (if (local.get $upload) (then
+    (i32.store offset=24 (local.get $desc) (i32.const 0))
+    (i32.store offset=28 (local.get $desc) (i32.load offset=8 (local.get $desc)))
+    (i32.store offset=32 (local.get $desc) (i32.mul (i32.load offset=12 (local.get $desc)) (i32.const 4)))
+    (i32.store offset=36 (local.get $desc) (i32.const 0)) (i32.store offset=44 (local.get $desc) (i32.const 0))
+    (i32.store offset=48 (local.get $desc) (i32.load offset=12 (local.get $desc)))
+    (i32.store offset=52 (local.get $desc) (i32.load offset=16 (local.get $desc)))
+    (i32.store offset=56 (local.get $desc) (i32.const 22))
+    (return (call $host_gpu_gl_call (i32.const 0x30015) (local.get $desc) (i32.const 0)))))
+  (call $host_gpu_gl_call (i32.const 0x30016) (local.get $desc) (i32.const 0)))
+
 ;; Embedded storage descriptors are not COM objects. The existing 20-byte
 ;; surface view owns the external reference; bindings retain its parent texture.
 ;; +72 parent texture and +76 face-major mip index distinguish these records.
@@ -120,6 +161,8 @@
     (if (i32.ne (local.get $surface) (call $dx_get_wrapper_for_vtbl
       (call $dx_slot_of (local.get $rt)) (global.get $DX_VTBL_D3DSURF9))) (then (return)))
     (if (i32.eqz (local.get $surface)) (then (return)))
+    (if (i32.and (i32.eqz (global.get $d3d_render_token))
+      (i32.ne (i32.and (load.field DxObject flags (local.get $rt)) (i32.const 0x40000000)) (i32.const 0))) (then (return)))
     (local.set $width (load.field DxObject width (local.get $rt)))
     (local.set $height (load.field DxObject height (local.get $rt)))))
   (local.set $right (local.get $width)) (local.set $bottom (local.get $height))

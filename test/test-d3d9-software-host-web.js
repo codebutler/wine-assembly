@@ -176,6 +176,20 @@ const backend=process.argv.includes('--webgl')?'webgl':'software';
       await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
       assert.strictEqual(await page.evaluate(()=>{const w=runningApps[0].wine;return new Uint32Array(w.memory.buffer,w.d3dProbe.target,64)[0];}),0xff556677,
         'UpdateSurface implicit upload presents while explicit target bound');
+      await call('IDirect3DDevice9_ColorFill',['device','backSurface',0,0xffa0b0c0]);
+      await call('IDirect3DSurface9_GetDC',['backSurface','out']);
+      await page.evaluate(()=>{const w=runningApps[0].wine;w.d3dProbe.dc=w.instance.exports.guest_read32(w.d3dProbe.out)>>>0;});
+      for(const name of['GetPixel','SetPixel']){
+        const pointer=await page.evaluate(name=>{const w=runningApps[0].wine,e=w.instance.exports,p=e.guest_alloc(name.length+1)>>>0;
+          new Uint8Array(w.memory.buffer,e.guest_to_wasm(p),name.length+1).set([...name].map(c=>c.charCodeAt(0)).concat(0));return p;},name);
+        await call('GetProcAddress',[0,pointer],true);
+      }
+      assert.strictEqual(await call('GetPixel',['dc',0,0],true),0xc0b0a0,'GDI acquire fences rendering before Present');
+      assert.strictEqual(await call('SetPixel',['dc',0,0,0x112233],true),0x112233);
+      await call('IDirect3DSurface9_ReleaseDC',['backSurface','dc']);
+      await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
+      assert.strictEqual(await page.evaluate(()=>{const w=runningApps[0].wine;return new Uint32Array(w.memory.buffer,w.d3dProbe.target,64)[0];}),0xff332211,
+        'GDI release uploads pixels before Present');
       await call('IDirect3DSurface9_Release',['upload']);
       assert.strictEqual(await call('IDirect3DSurface9_Release',['backSurface'],true),1,'device retains implicit backbuffer');
       await call('IDirect3DSurface9_Release',['textureSurface']);

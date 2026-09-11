@@ -351,6 +351,7 @@
     (local.set $state (call $d3d9_program_state (local.get $device)))
     (if (i32.eqz (local.get $state)) (then (return)))
     ;; The GPU frontend validates both programmed and fixed-function stages.
+    (if (call $d3d9_bound_dc_held (local.get $device)) (then (return)))
     (if (i32.or (i32.eqz (local.get $primitive)) (i32.gt_u (local.get $primitive) (i32.const 6))) (then (return)))
     (if (i32.gt_u (local.get $primitives) (i32.const 0x100000)) (then (return)))
     (local.set $count (local.get $primitives))

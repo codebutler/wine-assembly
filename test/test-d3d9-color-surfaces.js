@@ -72,6 +72,10 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       (call $handle_IDirect3DDevice9_Clear (local.get $d) (i32.const 0) (i32.const 0) (i32.const 1) (local.get $color) (i32.const 0)) (global.get $eax))
     (func (export "update_view") (param $s i32) (param $d i32) (param $pool i32) (param $out i32) (result i32)
       (call $d3d9_update_view (local.get $s) (local.get $d) (local.get $pool) (call $g2w (local.get $out))))
+    ${['GetPixel','SetPixel'].map(name=>`(func (export "${name}") (param $dc i32) (param $x i32) (param $y i32) (param $color i32) (result i32)
+      (global.set $esp (i32.const 0x074ff000))
+      (call $handle_${name} (local.get $dc) (local.get $x) (local.get $y) (local.get $color) (i32.const 0) (i32.const 0))
+      (global.get $eax))`).join('\n')}
     (func (export "back_bits") (param $d i32) (result i32)
       (load.field DxObject misc1 (call $d3ddev_rt_entry (local.get $d))))
     (func (export "blockers") (param $d i32) (result i32)
@@ -142,9 +146,11 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     createSoftwareWorker:()=>new WorkerConsumer(new Worker(path.join(__dirname,'../lib/d3d-render-worker.js')),
       {module,memory,sigs,imageBase:e.get_image_base()>>>0,reclaimHeap:h=>e.d3d_render_adopt_free_list(h)})});
   const invoke=async(fn,...args)=>{let value=fn(...args);while(e.get_d3d_render_token()){
-    if(fn===e.Device9_ColorFill||fn===e.Device9_UpdateSurface)assert.strictEqual(e.get_esp()>>>0,0x074ff000,'pending copy/fill preserves stdcall stack');
+    if([e.Device9_ColorFill,e.Device9_UpdateSurface,e.Surface9_GetDC,e.Surface9_ReleaseDC].includes(fn))
+      assert.strictEqual(e.get_esp()>>>0,0x074ff000,'pending copy/fill/DC preserves stdcall stack');
     await bridge.wait(e.get_d3d_render_token());value=fn(...args);}
     if(fn===e.Device9_ColorFill)assert.strictEqual(e.get_esp()>>>0,0x074ff014,'completed ColorFill pops arguments once');
+    if(fn===e.Surface9_GetDC||fn===e.Surface9_ReleaseDC)assert.strictEqual(e.get_esp()>>>0,0x074ff00c,'completed DC call pops once');
     return value>>>0;};
   const aliases=async()=>{
     ok(e.create_device(pp,out),'alias device');const ad=read(out);
@@ -209,11 +215,18 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     const backFrame=new Uint32Array(memory.buffer,e.back_bits(ad),backWidth*backHeight);
     assert.deepStrictEqual([backFrame[0],backFrame[6],backFrame[7],backFrame[backWidth+6],backFrame[backWidth+7]],
       [0xff102030,0xff203045,0xff203046,0xff203049,0xff20304a]);
-    ok(e.Surface9_GetDC(ab,out),'backbuffer DC');const backDC=read(out);
-    bad(e.Surface9_GetDC(ab,out));bad(e.Surface9_ReleaseDC(ab,backDC+1));
+    ok(await invoke(e.Device9_ColorFill,ad,ab,0,0xff123456),'new rendering without Present before DC');
+    ok(await invoke(e.Surface9_GetDC,ab,out),'backbuffer DC');const backDC=read(out);
+    assert.strictEqual(e.GetPixel(backDC,0,0,0)>>>0,0x563412,'GetDC sees completed rendering without Present');
+    assert.strictEqual(e.SetPixel(backDC,0,0,0xabcdef)>>>0,0xabcdef);
+    bad(await invoke(e.Surface9_GetDC,ab,out));bad(await invoke(e.Surface9_ReleaseDC,ab,backDC+1));
     bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,ab,destPoint));
-    ok(e.Surface9_ReleaseDC(ab,backDC),'release backbuffer DC');
-    bad(e.Surface9_ReleaseDC(ab,backDC));
+    bad(await invoke(e.Device9_ColorFill,ad,ab,0,0));bad(await invoke(e.Device9_Present,ad));
+    bad(await invoke(e.clear,ad,0xff010203));
+    ok(await invoke(e.Surface9_ReleaseDC,ab,backDC),'release backbuffer DC');
+    bad(await invoke(e.Surface9_ReleaseDC,ab,backDC));
+    ok(await invoke(e.Device9_Present,ad),'GDI upload survives Present');
+    assert.strictEqual(new Uint32Array(memory.buffer,e.back_bits(ad),1)[0],0xffefcdab);
     bad(await invoke(e.Device9_UpdateSurface,ad,fillSurface,0,uploadSource,0));
     bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,0,fillSurface,0));
     write(destPoint,[-1,0]);bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint));

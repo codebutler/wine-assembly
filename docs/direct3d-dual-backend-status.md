@@ -1393,3 +1393,29 @@ ReleaseDC does not upload GDI writes. The ownership flag prevents UpdateSurface
 while acquired but does not solve those transfers. Full D3D/GDI interoperability
 requires ordered acquire/readback and release/upload; current tests deliberately
 do not establish that behavior.
+
+Implicit-backbuffer GetDC/ReleaseDC now synchronize through the same queue.
+Acquire reserves guest ownership before private30016 READBACK, publishes no HDC
+while parked, then binds GDI to the downloaded native bytes. Release snapshots
+those bytes once using30015/RESOURCE_UPDATE and polls on reentry; ownership and
+the usable DC survive a terminal upload failure. Distinct acquire/release pending
+bits exclude competing DC acquisition/release. The implicit owner is resolved
+from a live D3D9 device's retained surface slot; no second rendering queue or
+forged color metadata was introduced. New implicit Clear/Draw, ColorFill,
+UpdateSurface, Present and Reset work is excluded while the DC is held;
+already-issued calls still poll rather than abandoning completion tokens.
+
+Native63568 passes direct/worker GetPixel after an unpresented ColorFill,
+SetPixel followed by ReleaseDC/Present, held-DC rejection, wrong/double DC
+release, and pending/completed stdcall assertions. The22-opcode host-routing
+test passes. Browser42202 software and58134 WebGL pass the same actual-x86 GDI
+round trip in cooperative-main and guest-main Worker modes. Initial97907/31683
+browser failures were absent GetPixel imports in the Calc fixture; it now
+resolves GetPixel/SetPixel through real GetProcAddress before calling them.
+Full native/build63568 passes1154420/1154888 bytes with no overlaps. Parallel
+review supplied the reservation/reentry invariants and identified the implicit
+Clear/Draw exclusion fixed here. This verifies the implicit transfer slice,
+not all [GetDC restrictions](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3dsurface9-getdc):
+lockable-backbuffer admission, non-implicit surface/texture DC support, complete
+surface→device lifetime retention and multi-producer fault/cancellation coverage
+remain open. Those are still blockers to full D3D/GDI interoperability.
