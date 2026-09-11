@@ -198,6 +198,7 @@
 ;; remain decoder-owned. This boundary rejects malformed operands before packet
 ;; lowering can alias constants with a0, outputs, or sampler metadata.
 (func $d3d_shader_vm_arity20 (param $op i32) (result i32)
+  (if (i32.eq (local.get $op) (i32.const 34)) (then (return (i32.const 4))))
   (if (i32.or (i32.eq (local.get $op) (i32.const 32)) (i32.eq (local.get $op) (i32.const 33))) (then (return (i32.const 3))))
   (if (i32.or (i32.eq (local.get $op) (i32.const 36))
     (i32.or (i32.eq (local.get $op) (i32.const 35)) (i32.eq (local.get $op) (i32.const 46))))
@@ -210,7 +211,7 @@
   (local.set $op (i32.load (local.get $ins)))
   (if (i32.eqz (i32.or (i32.le_u (local.get $op) (i32.const 18))
     (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 19)) (i32.le_u (local.get $op) (i32.const 24)))
-    (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 31)) (i32.le_u (local.get $op) (i32.const 33)))
+    (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 31)) (i32.le_u (local.get $op) (i32.const 34)))
     (i32.or (i32.or (i32.eq (local.get $op) (i32.const 35)) (i32.eq (local.get $op) (i32.const 36)))
     (i32.or (i32.eq (local.get $op) (i32.const 46))
       (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79))) (i32.eq (local.get $op) (i32.const 81))))))))) (then (return (i32.const 0))))
@@ -268,6 +269,10 @@
             (i32.or (i32.and (i32.eq (local.get $bank) (i32.const 5)) (i32.lt_u (local.get $index) (i32.const 2)))
               (i32.and (i32.eq (local.get $bank) (i32.const 6)) (i32.lt_u (local.get $index) (i32.const 8))))))) (then (return (i32.const 0))))))
       ) (else
+        ;; SGN src1/src2 are distinct temporary scratch registers, not inputs.
+        (if (i32.and (i32.eq (local.get $op) (i32.const 34)) (i32.ge_u (local.get $j) (i32.const 2))) (then
+          (if (local.get $bank) (then (return (i32.const 0))))
+          (if (i64.eq (i64.load offset=48 (local.get $ins)) (i64.load offset=64 (local.get $ins))) (then (return (i32.const 0))))))
         ;; POW may overwrite its base, but never its exponent register.
         (if (i32.and (i32.eq (local.get $op) (i32.const 32)) (i32.eq (local.get $j) (i32.const 2))) (then
           (if (i64.eq (i64.load (local.get $p)) (i64.load offset=16 (local.get $ins))) (then (return (i32.const 0))))))
@@ -525,6 +530,7 @@
     (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 33))) (then (i32.store (local.get $pkt) (i32.const 55))))
     (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 36))) (then (i32.store (local.get $pkt) (i32.const 56))))
     (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 32))) (then (i32.store (local.get $pkt) (i32.const 57))))
+    (if (i32.and (local.get $vs20) (i32.eq (local.get $op) (i32.const 34))) (then (i32.store (local.get $pkt) (i32.const 58))))
     (if (i32.eq (local.get $op) (i32.const 84)) (then (i32.store (local.get $pkt) (i32.const 47))))
     (if (i32.and (i32.ge_u (local.get $op) (i32.const 6)) (i32.le_u (local.get $op) (i32.const 7)))
       (then (i32.store (local.get $pkt) (i32.add (local.get $op) (i32.const 14)))))
@@ -1279,6 +1285,14 @@
     ;; clamp, with NaN->1. Not a claim of historic native undefined behavior.
     (local.set $v (v128.bitselect (f32x4.splat (f32.const 1)) (local.get $v) (f32x4.ne (local.get $v) (local.get $v))))
     (return (f32x4.min (f32x4.max (local.get $v) (f32x4.splat (f32.const 0))) (f32x4.splat (f32.const 1))))))
+  (if (i32.eq (local.get $op) (i32.const 58)) (then
+    (local.set $v (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 16)) (local.get $comp)))
+    ;; Literal ordered comparisons: signed zero -> +0; NaN -> +1 is our
+    ;; adapter interpretation of Microsoft's pseudocode, not native evidence.
+    (return (v128.bitselect (f32x4.splat (f32.const -1))
+      (v128.bitselect (f32x4.splat (f32.const 0)) (f32x4.splat (f32.const 1))
+        (f32x4.eq (local.get $v) (f32x4.splat (f32.const 0))))
+      (f32x4.lt (local.get $v) (f32x4.splat (f32.const 0)))))))
   (if (i32.eq (local.get $op) (i32.const 57)) (then
     (local.set $v (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 16)) (i32.const 0)))
     (local.set $t (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 32)) (i32.const 0)))

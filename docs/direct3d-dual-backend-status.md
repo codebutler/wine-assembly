@@ -1811,3 +1811,27 @@ GPU33167 PASS70 includes18 new POW frames. Same-IR82549 PASS116 GPU frames vs58
 native position/raster frames, adding five POW cases. Full30028 PASS canonical
 1163611 / compat1164079, unchanged layout and no data overlaps. Remaining
 arithmetic, flow control and complete profile/gameplay acceptance remain open.
+
+Private SGN follow-up: opcode34 lowers to SIMD packet58 and ordered component
+comparisons in GLSL. Only src0 is evaluated; two distinct bounded temporary
+scratch operands are validated as clobbers rather than initialized reads.
+Decoder validation invalidates both scratch definition masks after reading src0
+and before publishing destination writes. Overlap with source/destination is
+accepted with destination-written components superseding clobbering; this is
+explicit adapter policy where the primary instruction page does not specify
+overlap. NaN-to-positive-one follows the literal ordered-comparison pseudocode,
+not measured Windows-driver evidence. Signed zero produces positive zero.
+Public VS2 and legacy opcode admission remain unchanged.
+
+Evidence: native RED52300 ->31153 PASS1205, covering every destination mask,
+four swizzles, NEG, inactive lanes, signed zero, infinities, NaN policy, aliasing
+and malformed scratch operands. Decoder RED62799 ->33698 PASS137 including
+uninitialized scratch acceptance, clobber/read rejection, reinitialization,
+selected source dependencies and three-slot accounting. Prior decoder suites
+pass98324/53764. GPU RED8708 ->33630 PASS80 (10 new SGN GL1/2 cases), with scratch
+values absent from generated GLSL. Legacy82913 PASS263; software pipeline26583
+PASS351; full88845 PASS canonical1163901 / compat1164369, unchanged region layout
+and no data overlaps. Independent read-only review found no concrete defect.
+Same-IR55356 PASS120 actual GL1/2 frames against60 native position/raster frames,
+including uninitialized scratches and reverse-swizzled/negated signs mapped to
+visible colors. SINCOS, flow and complete profile/gameplay gates remain open.

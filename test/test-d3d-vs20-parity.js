@@ -75,6 +75,21 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
    ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
   sources.set(key,tokens);cases.push([0,key,Array(4).fill(result),vector]);
  }
+ // Map signs (-1,0,+1) to exact (.25,.5,.75); negative results must
+ // influence observable pixels rather than disappear through UNORM clamping.
+ for(const [name,vector,swizzle,negate,signs]of[
+  ['signed',[-4,0,2,-0],228,false,[-1,0,1,0]],
+  ['reverse-negate',[-4,0,2,1],27,true,[-1,-1,0,1]],
+ ]){
+  const key=`sgn34/${name}`;assert(!sources.has(key));
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),...ins(31,0x80010005,D(1,2)),
+   ...ins(81,D(2,255),...Array(4).fill(.25).map(fbits)),
+   ...ins(81,D(2,254),...Array(4).fill(.5).map(fbits)),
+   ...ins(34,D(0),S(1,2,swizzle)|(negate?1<<24:0),S(0,10),S(0,11)),
+   ...ins(5,D(0),S(0),S(2,255)),...ins(2,D(0),S(0),S(2,254)),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
+  sources.set(key,tokens);cases.push([0,key,signs.map(x=>x*.25+.5),vector]);
+ }
  const programs=new Map(),frames=[];
  const psTokens=[0xffff0101,1,D(0),S(1),65535],psIR=e.d3d_shader_ir_compile(put(psTokens),psTokens.length);
  assert(psIR);const ps=e.d3d_shader_vm_compile(psIR);assert(ps);e.d3d_shader_ir_free(psIR);

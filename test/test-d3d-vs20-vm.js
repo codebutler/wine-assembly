@@ -45,6 +45,37 @@ const { bootRenderHarness } = require('./render-helper');
   }
   function release(...pointers) { pointers.forEach(p => e.d3d_shader_vm_free(p)); }
   assert.strictEqual(e.d3d_shader_vm_context_bytes(), 73760);
+  for (let mask = 1; mask < 16; mask++) for (const lanes of [15, 5])
+  for (const selector of [228, 27, 0, 255]) for (const negate of [0, 1]) {
+    const program = compile([ins(34, dst(1, mask), operand(0, 0, selector, negate), source(2), source(3))]);
+    const ctx = e.d3d_shader_vm_context(program, lanes); assert(ctx);
+    const values = [[-1,0,-0,1],[-Infinity,Infinity,NaN,-2],[3,-4,5,-6],[0,-0,1,-1]];
+    f.set(values.flat(), register(ctx, 0, 0));
+    f.fill(77, register(ctx, 0, 1), register(ctx, 0, 1)+16);
+    f.fill(NaN, register(ctx, 0, 2), register(ctx, 0, 3)+16);
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    for (let component = 0; component < 4; component++) for (let lane = 0; lane < 4; lane++) {
+      let input = values[(selector >>> (2*component)) & 3][lane];
+      if (negate) input = -input;
+      // NaN->1 follows the documented ordered-comparison pseudocode; it is
+      // an adapter policy, not a measured historic driver guarantee.
+      const expected = !(mask & (1<<component)) || !(lanes & (1<<lane)) ? 77 : input < 0 ? -1 : input === 0 ? 0 : 1;
+      assert.strictEqual(f[register(ctx,0,1)+component*4+lane], expected);
+    }
+    release(ctx, program); cases++;
+  }
+  // Overlap is not prohibited by the primary SGN page. Evaluate src0 before
+  // destination writes; undefined scratch contents are deliberately not tested.
+  for (const destination of [0, 1, 2]) for (const scratches of [[2,3],[0,3]]) {
+    const program = compile([ins(34, dst(destination, 5), operand(0,0,27), ...scratches.map(source))]);
+    const ctx = e.d3d_shader_vm_context(program, 15); assert(ctx);
+    f.fill(77, register(ctx,0,destination), register(ctx,0,destination)+16);
+    f.set([1,1,1,1,-2,-2,-2,-2,3,3,3,3,-4,-4,-4,-4], register(ctx,0,0));
+    assert.strictEqual(e.d3d_shader_vm_run(ctx,1),0);
+    for (const component of [0,2])
+      assert.deepStrictEqual(Array.from(f.slice(register(ctx,0,destination)+component*4,register(ctx,0,destination)+component*4+4)),[-1,-1,-1,-1]);
+    release(ctx,program); cases++;
+  }
   for (const [bases, powers] of [
     [[-2,.25,0,-0],[3,.5,2,-2]], [[0,-0,1,-4],[0,0,123,.5]],
     [[2,16,.5,-9],[-2,.25,2,.5]], [[.7,1.1,3.3,8.1],[.125,-.5,2.5,-3]],
@@ -243,6 +274,11 @@ const { bootRenderHarness } = require('./render-helper');
     release(ctx, program); cases++;
   }
   for (const bad of [ins(46, dst(0), source(0)), ins(46, operand(3, 0, 2), source(0)),
+    ins(34, dst(0), source(1), source(2), source(2)),
+    ins(34, dst(0), source(1), constant(2), source(3)),
+    ins(34, dst(0), source(1), source(2), operand(1, 3)),
+    ins(34, dst(0), source(1), source(12), source(3)),
+    ins(34, dst(0), source(1), operand(0, 2, 228, 256), source(3)),
     ins(1, addr, source(0)), ins(1, dst(0), constant(256)), ins(1, dst(0), operand(3, 0)),
     ins(1, dst(0), operand(0, 0, 0xe4, 256)), ins(1, dst(0), operand(2, 0, 0xe4, 512)),
     ins(20, dst(0), source(0), constant(0)), ins(35, dst(0), operand(0, 0, 0xe4, 2)),
