@@ -871,3 +871,28 @@ include EBP=EDI=00a58780, ESI=00a5877f, EBX=33078b10; saved caller chain include
 009208a6,00920dca,009a81da. Investigate the copy arguments/corruption origin
 before adding an opcode implementation. Last sampled renderer failures remain0.
 All synthetic buttons were released before the trap. Gameplay remains unverified.
+
+The saved stack identifies the immediate failure:00925120 is thiscall
+`Read(dest,count,outRead)` with ret12. Return009208a6 at074fd034 places
+dest=0 at074fd038, count=00a58780 at074fd03c, and outRead=074fd050 at074fd040.
+Caller009a81d5 forwards an unchecked NULL from aligned allocator00adbcbf,
+requested size00a58780/alignment64/offset0;00adbc2f requests00a587c3 bytes from
+underlying00ad566e and propagates NULL. Copying count bytes into address zero
+explains final EDI00a58780 and overwritten executable bytes. The reason for the
+allocation failure still requires live allocator evidence; do not assume a leak
+or enlarge memory solely from this stack. Effective source-1 is an inference
+from final ESI/count, not a verified mapping snapshot.
+
+`test/test-bw-rep-copy.js` executes the exact00925165..00925186 copy/cursor
+sequence with valid heap buffers. All16 cold/cached size cases pass on both the
+frozen failing-game WASM and current build, plus fresh source77739. It checks
+EBP/EDX preservation, ECX0, DF0, final pointers, bytes, guards and cursor update.
+No REP defect was reproduced and no instruction implementation was changed.
+Both copies of BW2Demo.exe (probe MainApp and local candidate) have SHA256
+65130510233cfc9e53758bab8480a3cfeeb6b1043de9774ab6e066191b2bb433.
+
+Fresh reproduction21705 uses frozen current-build snapshot
+`/private/tmp/bw-allocation-repro.J76xSx/wine.wasm`; artifacts are
+`bw-software-probe-WjsJYY` in the system temporary directory. It is a new run
+after confirmed exit of24571, not a replacement of a healthy process. Initial
+samples report no renderer failures; menu/gameplay progression remains pending.

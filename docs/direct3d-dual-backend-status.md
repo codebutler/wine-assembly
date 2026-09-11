@@ -1588,3 +1588,8 @@ Continue down293970/up294751 subsequently reaches a trap at batch294774,
 EIP00925197; run24571 has exited1. Runtime instruction bytes differ from the
 supplied executable inside a buffer-copy routine, so corruption/copy arguments
 are the next investigation, not an assumed unsupported shader or x86 opcode.
+The saved stack subsequently proves dest0/count00a58780 after an unchecked
+aligned-allocation failure. The exact REP/cursor sequence passes16 valid-buffer
+cases on the frozen artifact, current build and fresh source77739; no REP fix
+was warranted. Fresh current-build reproduction21705 is live for allocation
+state investigation. Neither memory-pressure cause nor gameplay is yet proved.
