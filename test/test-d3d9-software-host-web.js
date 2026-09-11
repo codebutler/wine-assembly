@@ -198,11 +198,13 @@ const backend=process.argv.includes('--webgl')?'webgl':'software';
       assert.strictEqual(await page.evaluate(()=>{const w=runningApps[0].wine;return new Uint32Array(w.memory.buffer,w.d3dProbe.target,64)[0];}),0xff332211,
         'GDI release uploads pixels before Present');
       await call('IDirect3DSurface9_Release',['upload']);
-      assert.strictEqual(await call('IDirect3DSurface9_Release',['backSurface'],true),1,'device retains implicit backbuffer');
       await call('IDirect3DSurface9_Release',['textureSurface']);
       await call('IDirect3DTexture9_Release',['texture']);
       await call('IDirect3DSurface9_Release',['color']);
-      await call('IDirect3DDevice9_Release',['device']);
+      assert.strictEqual(await call('IDirect3DDevice9_Release',['device'],true),1,'backbuffer retains device');
+      await call('IDirect3DSurface9_GetDevice',['backSurface','out']);
+      assert.strictEqual(await call('IDirect3DDevice9_Release',['device'],true),1,'GetDevice remains usable after original release');
+      await call('IDirect3DSurface9_Release',['backSurface']);
       const retired=await page.evaluate(async()=>{
         const w=runningApps[0].wine,b=w.hostCtx.d3d9Bridge;
         await w.hostCtx.closeD3DRender();const info=b.workerConsumer?.shutdownInfo||{devices:b.devices.size};w.stop();return info;

@@ -25,6 +25,23 @@
     (br_if $devices (i32.lt_u (local.get $i) (global.get $DX_MAX))))
   (i32.const 0))
 
+;; Baseline surface reference1 belongs to the device. The first external
+;; reference retains its parent; subsequent surface refs share that hold.
+(func $d3d9_backbuffer_addref (param $surface i32) (result i32)
+  (local $entry i32) (local $device i32) (local $parent i32) (local $refs i32)
+  (local.set $entry (call $dx_from_this (local.get $surface)))
+  (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+  (local.set $refs (load.field DxObject refcount (local.get $entry)))
+  (if (i32.eq (local.get $refs) (i32.const 1)) (then
+    (local.set $device (call $d3d9_backbuffer_owner (local.get $surface)))
+    (if (local.get $device) (then
+      (local.set $parent (call $dx_from_this (local.get $device)))
+      (store.field DxObject refcount (local.get $parent)
+        (i32.add (load.field DxObject refcount (local.get $parent)) (i32.const 1)))))))
+  (local.set $refs (i32.add (local.get $refs) (i32.const 1)))
+  (store.field DxObject refcount (local.get $entry) (local.get $refs))
+  (local.get $refs))
+
 (func $d3d9_bound_dc_held (param $device i32) (result i32)
   (local $state i32)
   (local.set $state (call $d3d9_program_state (local.get $device)))

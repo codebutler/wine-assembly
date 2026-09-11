@@ -1446,3 +1446,21 @@ GetBackBuffer, swap-chain GetBackBuffer, implicit GetRenderTarget, AddRef and QI
 with cycle-free external ownership; final surface release must stage and poll
 asynchronous parent teardown without double-decrementing on reentry or retiring
 storage after a failed handoff. GetDevice alone does not resolve that blocker.
+
+That implicit-parent retention gap is now implemented: shared external acquisition
+retains the parent only at baseline1→external2; all further surface references
+share that hold. Device/swap-chain GetBackBuffer, implicit GetRenderTarget and
+Surface AddRef (including QI) use it. Internal baseline teardown remains raw
+surface release, so no cycle is introduced. Last external release calls parent
+Release with both counts unchanged until completion. Pending reentry polls;
+failure preserves both owners; success then drops the external surface reference.
+The parent call and surface call share the same one-argument stdcall epilogue.
+
+Native36809 passes direct/worker mixed getter/QI references, original device
+Release followed by GetDevice and rendering, last-reference retirement,
+immediate injected retirement failure followed by successful retry, and parked/
+terminal stack cleanup. Browser54231 software and90328 WebGL pass actual x86
+last-surface retirement in both guest modes, including final executor cleanup.
+Fullbuild81333 passes1154735/1155203 bytes. Independent review checked the
+deferred-decrement scheme. Multi-producer races, asynchronous fault injection,
+broader swap-chain semantics and implicit LockRect remain separate open gates.
