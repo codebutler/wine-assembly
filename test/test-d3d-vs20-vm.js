@@ -496,7 +496,7 @@ const { bootRenderHarness } = require('./render-helper');
     assert.deepStrictEqual(x(ctx, 0, 1), [0, 94, 95, 93], 'legacy relative limit remains96');
     release(ctx, program); cases++;
   }
-  for (const bad of [ins(46, dst(0), source(0)), ins(46, operand(3, 0, 2), source(0)),
+  for (const bad of [ins(46, dst(0), source(0)), ins(46, operand(3, 0, 0), source(0)),
     ...[0,4,8,15].map(mask=>ins(37,dst(1,mask),operand(0,0,0),constant(254),constant(255))),
     ins(37,dst(0,3),operand(0,0,0),constant(254),constant(255)),
     ins(37,operand(5,0,3),operand(0,0,0),constant(254),constant(255)),

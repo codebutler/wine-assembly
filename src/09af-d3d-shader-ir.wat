@@ -849,7 +849,9 @@
       (then (return (call $d3d_ir_fail (i32.const 10) (local.get $start)))))
     (global.set $d3d_ir_length (local.get $at)) (local.get $n))
   ;; Private VS2.0 prerequisite. Same normalized IR ABI; relative bit8 means
-  ;; explicitly encoded a0.x, or aL when bit10 is also set. No public gate change.
+  ;; explicitly encoded a0 component (bits11..12), or scalar aL with bit10.
+  ;; Address-register/VS-differences pages specify vector a0 for VS2.0 despite
+  ;; MOVA remarks saying2_x. Follow the former; no public gate change.
   ;; https://learn.microsoft.com/en-us/windows-hardware/drivers/display/shader-relative-addressing
   ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/loop---vs
   ;; https://learn.microsoft.com/en-us/windows-hardware/drivers/display/instruction-token
@@ -947,7 +949,7 @@
     (local $definition i32)
     (local $depth i32) (local $flow_count i32) (local $frame i32)
     (local $rep_active i32) (local $rep_writes i64) (local $rep_reads i64)
-    (local $loop_begin i32) (local $loop_end i32) (local $relative_token i32)
+    (local $loop_begin i32) (local $loop_end i32) (local $relative_token i32) (local $relative_component i32)
     (local $call_active i32) (local $replaying i32) (local $emit i32)
     (local $routine i32) (local $body_closed i32) (local $main_position i32)
     (local $target i32) (local $resume i32) (local $call_cond i32) (local $call_depth i32)
@@ -1087,7 +1089,8 @@
                 (then (return (call $d3d_ir_fail (i32.const 14) (local.get $start)))))
               (br $normalized)))
             (if (i32.eq (local.get $op) (i32.const 46)) (then
-              (if (i32.ne (local.get $arg) (i32.const 0xb0010000)) (then (return (call $d3d_ir_fail (i32.const 8) (local.get $start))))))
+              (if (i32.ne (local.get $arg) (i32.or (i32.const 0xb0000000) (i32.shl (local.get $sel) (i32.const 16))))
+                (then (return (call $d3d_ir_fail (i32.const 8) (local.get $start))))))
             (else
               (if (i32.eq (local.get $bank) (i32.const 3)) (then (return (call $d3d_ir_fail (i32.const 8) (local.get $start)))))
               (if (i32.eqz (call $d3d_ir_reg_ok (i32.const 0) (local.get $bank) (local.get $index) (i32.const 1)))
@@ -1141,8 +1144,13 @@
                       (i32.or (i32.eqz (local.get $routine)) (local.get $replaying)))
                   (then (return (call $d3d_ir_fail (i32.const 8) (local.get $at)))))
                 (local.set $mod (i32.or (local.get $mod) (i32.const 1024))))
-              (else (if (i32.or (i32.ne (local.get $relative_token) (i32.const 0xb0000000)) (i32.eqz (local.get $address)))
-                (then (return (call $d3d_ir_fail (i32.const 8) (local.get $at)))))))
+              (else
+                (local.set $relative_component (i32.and (i32.shr_u (local.get $relative_token) (i32.const 16)) (i32.const 3)))
+                (if (i32.or (i32.ne (local.get $relative_token)
+                      (i32.or (i32.const 0xb0000000) (i32.shl (i32.mul (local.get $relative_component) (i32.const 85)) (i32.const 16))))
+                      (i32.eqz (i32.and (local.get $address) (i32.shl (i32.const 1) (local.get $relative_component)))))
+                  (then (return (call $d3d_ir_fail (i32.const 8) (local.get $at)))))
+                (local.set $mod (i32.or (local.get $mod) (i32.shl (local.get $relative_component) (i32.const 11))))))
             (local.set $at (i32.add (local.get $at) (i32.const 1)))
             (local.set $mod (i32.or (local.get $mod) (i32.const 256))) (global.set $d3d_ir_flags (i32.const 1))))
           ;; The two coefficient banks are an instruction macro contract,
@@ -1188,7 +1196,7 @@
               (br_if $matrix_rows (i32.lt_u (local.get $row) (local.get $rows))))))
           (if (i32.eq (local.get $bank) (i32.const 2)) (then
             (if (i32.ge_u (local.get $index) (i32.const 256)) (then (return (call $d3d_ir_fail (i32.const 6) (local.get $start)))))
-            (local.set $key (i32.or (local.get $index) (i32.shl (i32.and (local.get $mod) (i32.const 1280)) (i32.const 8))))
+            (local.set $key (i32.or (local.get $index) (i32.shl (i32.and (local.get $mod) (i32.const 7424)) (i32.const 8))))
             (if (i32.eq (local.get $firstconst) (i32.const -1)) (then (local.set $firstconst (local.get $key))))
             (local.set $constantreads (i32.add (local.get $constantreads) (i32.const 1)))
             (if (i32.or (i32.ne (local.get $firstconst) (local.get $key)) (i32.gt_u (local.get $constantreads) (i32.const 2)))
@@ -1302,7 +1310,7 @@
         (if (i32.eqz (local.get $dstbank)) (then (local.set $temps (i64.or (local.get $temps) (i64.shl (i64.extend_i32_u (local.get $mask)) (i64.extend_i32_u (i32.shl (local.get $dstindex) (i32.const 2))))))))
         (if (i32.and (i32.eq (local.get $dstbank) (i32.const 4)) (i32.eqz (local.get $dstindex)))
           (then (local.set $position (i32.or (local.get $position) (local.get $mask)))))
-        (if (i32.eq (local.get $op) (i32.const 46)) (then (local.set $address (i32.const 1))))))
+        (if (i32.eq (local.get $op) (i32.const 46)) (then (local.set $address (i32.or (local.get $address) (local.get $mask)))))))
       (if (i32.and (i32.eqz (local.get $replaying))
             (i32.and (i32.ne (local.get $op) (i32.const 30))
               (i32.and (i32.ne (local.get $op) (i32.const 31)) (i32.eqz (local.get $definition))))) (then
@@ -1331,7 +1339,7 @@
         (local.set $routine (i32.const 1)) (local.set $body_closed (i32.const 0))
         ;; Syntax-check unused routines with maximal incoming definitions;
         ;; every real call is additionally validated with its actual state.
-        (local.set $temps (i64.const -1)) (local.set $address (i32.const 1))
+        (local.set $temps (i64.const -1)) (local.set $address (i32.const 15))
         (local.set $position (i32.const 15)) (local.set $rep_writes (i64.const 0)) (local.set $rep_reads (i64.const 0))))
       (if (i32.eq (local.get $op) (i32.const 28)) (then
         (if (i32.ne (local.get $depth) (select (local.get $call_depth) (i32.const 0) (local.get $replaying)))

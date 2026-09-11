@@ -180,6 +180,61 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
   if(!innerIf&&!outerIf)for(let i=0;i<count;i++)red+=start+i*stride===127?1/32:1/16;
   sources.set(key,tokens);cases.push([0,key,[red,.375,.625,.75]]);
  }
+ // Component metadata must survive native IR transport independently of the
+ // value swizzle. Every nonempty MOVA mask is exercised on real GPU pixels.
+ const addressVector=[1.5,-.5,2.5,-1.5],addressOffsets=[2,0,2,-2];
+ for(let mask=1;mask<16;mask++)for(let component=0;component<4;component++)if(mask&(1<<component)){
+  const key=`vector-a0/${mask}/${component}`;
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),...ins(31,0x80010005,D(1,2)),
+   ...constants.flatMap(i=>ins(81,D(2,i),...value(i).map(fbits))),
+   ...ins(46,D(3,0,mask),S(1,2)),
+   ...ins(1,D(0),S(2,128,228,true),S(3,0,component*85)),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
+  sources.set(key,tokens);cases.push([0,key,value(128+addressOffsets[component]),addressVector]);
+ }
+ for(let component=0;component<4;component++)for(const calleeWrites of [false,true]){
+  const key=`call-vector/${component}/${calleeWrites}`,label=0xa0e41001;
+  const write=ins(46,D(3,0,1<<component),S(1,2));
+  const read=ins(1,D(0),S(2,128,228,true),S(3,0,component*85));
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),...ins(31,0x80010005,D(1,2)),
+   ...constants.flatMap(i=>ins(81,D(2,i),...value(i).map(fbits))),
+   ...(calleeWrites?[]:write),...ins(25,label),...(calleeWrites?read:[]),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),...ins(28),
+   ...ins(30,label),...(calleeWrites?write:read),...ins(28),65535];
+  sources.set(key,tokens);cases.push([0,key,value(128+addressOffsets[component]),addressVector]);
+ }
+ for(const truth of [0,0x80000000])for(const negate of [false,true]){
+  const key=`callnz/${truth}/${negate}`,label=0xa0e41001;
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),
+   ...ins(81,D(2,0),...[.25,.375,.625,.75].map(fbits)),
+   ...ins(81,D(2,1),...[.125,0,0,0].map(fbits)),...ins(47,0xe00f0800,truth),
+   ...ins(1,D(0),S(2)),...ins(26,label,negate?0xede40800:0xe0e40800),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),...ins(28),
+   ...ins(30,label),...ins(2,D(0),S(0),S(2,1)),...ins(28),65535];
+  sources.set(key,tokens);cases.push([0,key,[.25+((truth!==0)!==negate?.125:0),.375,.625,.75]]);
+ }
+ for(let component=0;component<4;component++){
+  const key=`matrix-vector-a0/${component}`;
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),...ins(31,0x80010005,D(1,2)),
+   ...constants.flatMap(i=>ins(81,D(2,i),...value(i).map(fbits))),
+   ...ins(81,D(2,3),...[1,0,0,0].map(fbits)),...ins(1,D(0,1),S(2,3)),
+   ...ins(46,D(3,0,1<<component),S(1,2)),
+   ...ins(20,D(0),S(0,1),S(2,128,228,true),S(3,0,component*85)),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
+  sources.set(key,tokens);cases.push([0,key,Array.from({length:4},(_,row)=>value(128+addressOffsets[component]+row)[0]),addressVector]);
+ }
+ for(const localLoop of [false,true]){
+  const key=`call-aL/${localLoop}`,label=0xa0e41001;
+  const loop=ins(27,0xf0e40800,0xf0e40000),end=ins(29);
+  const read=ins(1,D(0),S(2,0,228,true),0xf0000800);
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),
+   ...ins(81,D(2,127),...value(127).map(fbits)),...ins(81,D(2,128),...value(128).map(fbits)),
+   ...ins(48,0xf00f0000,2,127,1,0),...ins(1,D(0),S(2,127)),
+   ...(localLoop?[]:loop),...ins(25,label),...(localLoop?[]:end),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),...ins(28),
+   ...ins(30,label),...(localLoop?loop:[]),...read,...(localLoop?end:[]),...ins(28),65535];
+  sources.set(key,tokens);cases.push([0,key,value(128)]);
+ }
  const programs=new Map(),frames=[];
  const psTokens=[0xffff0101,1,D(0),S(1),65535],psIR=e.d3d_shader_ir_compile(put(psTokens),psTokens.length);
  assert(psIR);const ps=e.d3d_shader_vm_compile(psIR);assert(ps);e.d3d_shader_ir_free(psIR);

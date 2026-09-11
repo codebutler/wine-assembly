@@ -39,7 +39,7 @@ const assert=require('assert'),{bootRenderHarness}=require('./render-helper');
  bad(shader(I(1,D(0),S(2,256))),6);bad(shader(I(1,D(0,12),S(1))),6);
  bad(shader(relative),8);bad(shader(address,I(1,D(0),S(2,0,228,true))),8);
  for(const token of[S(3,0,85),S(3,1,0),S(3,0,0,true),S(3,0,0,false,1)])bad(shader(address,I(1,D(0),S(2,0,228,true),token)),8);
- bad(shader(I(46,D(3),S(1))),8);bad(shader(I(1,D(3,0,1),S(1))),8);
+ good(shader(I(46,D(3),S(1))));bad(shader(I(1,D(3,0,1),S(1))),8);
  bad(shader(I(1,D(0),S(1,1))),13);bad(shader(decl),13);
  bad(shader(I(1,D(0),S(0))),17);bad(shader(I(1,D(0,0,1),S(1)),I(1,D(0,1),S(0))),17);
  bad(shader(I(2,D(0),S(2,1),S(2,2))),18);bad(shader(I(4,D(0),S(2),S(2),S(2))),18);

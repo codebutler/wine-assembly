@@ -27,6 +27,7 @@
 ;; (slot, swizzle, modifier, reserved). Static handlers consume f32x4 SoA values.
 ;; Source modifier bit8 selects bounded per-lane c[a0.x + index] gather.
 ;; With private bit10 set, the gather instead uses the uniform LOOP aL.
+;; Private bits11..12 select the a0 component; aL requires selector zero.
 ;; Private bit9 marks VS2 constants (logical slots256..511); c128..255
 ;; physically append at slots1024..1151, preserving all legacy banks/samplers.
 ;; DEF14 stores four immediate IEEE words at packet+16 and is hoisted before all
@@ -323,7 +324,7 @@
           (if (i32.ne (local.get $selector) (i32.const 1)) (then (return (i32.const 0))))))
         (if (i32.eq (local.get $op) (i32.const 46))
           (then (if (i32.or (i32.ne (local.get $bank) (i32.const 3))
-            (i32.or (local.get $index) (i32.or (local.get $mod) (i32.ne (local.get $selector) (i32.const 1))))) (then (return (i32.const 0)))))
+            (i32.or (local.get $index) (local.get $mod))) (then (return (i32.const 0)))))
           (else (if (i32.eqz (i32.or
             (i32.and (i32.eqz (local.get $bank)) (i32.lt_u (local.get $index) (i32.const 12)))
             (i32.or (i32.and (i32.eq (local.get $bank) (i32.const 4)) (i32.lt_u (local.get $index) (i32.const 3)))
@@ -348,9 +349,11 @@
           (i32.or (i32.and (i32.eq (local.get $bank) (i32.const 1)) (i32.lt_u (local.get $index) (i32.const 16)))
             (i32.and (i32.eq (local.get $bank) (i32.const 2)) (i32.lt_u (local.get $index) (i32.const 256)))))) (then (return (i32.const 0))))
         (if (i32.or (i32.gt_u (local.get $selector) (i32.const 255))
-          (i32.gt_u (i32.and (local.get $mod) (i32.const -1281)) (i32.const 1))) (then (return (i32.const 0))))
-        (if (i32.and (i32.ne (i32.and (local.get $mod) (i32.const 1024)) (i32.const 0))
+          (i32.gt_u (i32.and (local.get $mod) (i32.const -7425)) (i32.const 1))) (then (return (i32.const 0))))
+        (if (i32.and (i32.ne (i32.and (local.get $mod) (i32.const 7168)) (i32.const 0))
           (i32.eqz (i32.and (local.get $mod) (i32.const 256)))) (then (return (i32.const 0))))
+        (if (i32.and (i32.ne (i32.and (local.get $mod) (i32.const 1024)) (i32.const 0))
+          (i32.ne (i32.and (local.get $mod) (i32.const 6144)) (i32.const 0))) (then (return (i32.const 0))))
         (if (i32.or (i32.and (i32.eq (local.get $op) (i32.const 37)) (i32.eq (local.get $j) (i32.const 1))) (i32.or (i32.eq (local.get $op) (i32.const 32)) (i32.or
           (i32.and (i32.ge_u (local.get $op) (i32.const 14)) (i32.le_u (local.get $op) (i32.const 15)))
           (i32.and (i32.ge_u (local.get $op) (i32.const 78)) (i32.le_u (local.get $op) (i32.const 79)))))) (then
@@ -873,15 +876,17 @@
   (i32.store offset=16 (local.get $ctx) (local.get $mask))
   (local.get $ctx))
 
-(func $d3d_shader_vm_relative (param $regs i32) (param $index i32) (param $component i32) (param $lane i32) (param $limit i32) (param $loop_address i32) (result f32)
+(func $d3d_shader_vm_relative (param $regs i32) (param $index i32) (param $component i32) (param $lane i32) (param $limit i32) (param $address_selector i32) (result f32)
   (local $address f32) (local $integer i32)
   ;; Per-lane gather is bounded before forming a register address. Out-of-range
   ;; and non-integer/non-finite dynamic indices match the current GLSL helper's
   ;; explicit zero return; they never index another register bank.
   (local.set $address (f32.add
-    (if (result f32) (local.get $loop_address)
+    (if (result f32) (i32.and (local.get $address_selector) (i32.const 1))
       (then (f32.convert_i32_s (i32.load offset=74060 (local.get $regs))))
-      (else (f32.load (i32.add (i32.add (local.get $regs) (i32.const 24576)) (i32.shl (local.get $lane) (i32.const 2))))))
+      (else (f32.load (i32.add (i32.add (local.get $regs) (i32.const 24576))
+        (i32.add (i32.shl (i32.shr_u (local.get $address_selector) (i32.const 1)) (i32.const 4))
+          (i32.shl (local.get $lane) (i32.const 2)))))))
     (f32.convert_i32_u (local.get $index))))
   (local.set $integer (i32.trunc_sat_f32_s (local.get $address)))
   (if (i32.or (i32.ge_u (local.get $integer) (local.get $limit))
@@ -903,7 +908,7 @@
       (local.set $limit (select (i32.const 256) (i32.const 96)
         (i32.and (i32.load offset=8 (local.get $src)) (i32.const 512))))
       (local.set $slot (i32.sub (local.get $slot) (i32.const 256)))
-      (local.set $mod (i32.and (i32.load offset=8 (local.get $src)) (i32.const 1024)))
+      (local.set $mod (i32.shr_u (i32.and (i32.load offset=8 (local.get $src)) (i32.const 7168)) (i32.const 10)))
       (local.set $v (f32x4.splat (call $d3d_shader_vm_relative (local.get $regs) (local.get $slot) (local.get $select) (i32.const 0) (local.get $limit) (local.get $mod))))
       (local.set $v (f32x4.replace_lane 1 (local.get $v) (call $d3d_shader_vm_relative (local.get $regs) (local.get $slot) (local.get $select) (i32.const 1) (local.get $limit) (local.get $mod))))
       (local.set $v (f32x4.replace_lane 2 (local.get $v) (call $d3d_shader_vm_relative (local.get $regs) (local.get $slot) (local.get $select) (i32.const 2) (local.get $limit) (local.get $mod))))

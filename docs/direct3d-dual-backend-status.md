@@ -2195,7 +2195,7 @@ unchanged layout and233 nonoverlapping data segments. GLSL call source and its
 browser/parity verification remain a separate pending integration; this native
 checkpoint does not claim completed accelerated subroutines.
 
-### Vector address register (2026-09-11, uncommitted WIP)
+### Vector address register (2026-09-11)
 
 Private VS2 now accepts MOVA masks1..15 and scalar-replicated relative a0
 selectors x/y/z/w. This follows the address-register and VS2-differences pages;
@@ -2222,10 +2222,9 @@ Existing VM36145 passes1662, legacy41278 passes263, pipeline15229 passes364,
 CALL52485 passes38 and LOOP14851 passes33. Full78042 passes1184557/1185026 bytes,
 unchanged layout and233 nonoverlapping data segments.
 
-Do not treat this as an integrated dual-backend checkpoint yet: GLSL must consume
-the new component metadata or explicitly reject it. Ignoring nonzero selectors
-would silently substitute a0.x. The GLSL owner has been notified; actual WebGL
-call verification and vector lowering remain pending. Public gates stay closed.
+The initial native-only WIP was held until GLSL consumed the component metadata;
+the subsequent integration evidence below closes that specific gap. Public
+profile gates stay closed.
 
 ### Full vertex float transport (2026-09-11)
 
@@ -2270,3 +2269,34 @@ counter exceeding65535. A second run cancels explicitly after that threshold.
 The existing1101/4096-record boundary checks remain green. This establishes
 native dynamic execution independently of the scheduler budget; it does not
 advertise MaxVShaderInstructionsExecuted or prove the pending WebGL equivalent.
+
+### WebGL subroutines and vector address integration (2026-09-11)
+
+GLSL emits each VS2 subroutine once, with shared register storage and a main
+wrapper that publishes outputs after guest RET. CALLNZ preserves Boolean
+nonzero/NOT semantics. Caller LOOP passes aL to the callee; a callee-local LOOP
+is supported when it does not exceed the combined nesting limit. Address
+initialization is tracked per component across branches, loops and call effects.
+Every source operand keeps its own relative component, including matrix rows;
+equal projected guest tokens do not collapse different address selectors.
+
+The previously interrupted browser launch had no returned session. After an
+escalated process check found no running CALL/parity test,94060 passes16 actual
+WebGL1/2 subroutine frames. Pure vector lowering tests pass all15 masks, joins,
+call effects and malformed metadata. Native61049 passes342 address-IR and37 VM
+cases. Baseline70498 passes84 IR,1662 private VM and263 legacy VM cases.
+
+Same-immutable-native-IR parity43383 passes274 complete WebGL1/2 frames versus
+137 native position/raster executions. New cases cover every nonempty MOVA
+mask, every selected component, caller/callee address writes and reads, Boolean
+CALLNZ and NOT, selected matrix coefficient addressing, inherited aL and
+callee-local LOOP. Existing arithmetic/matrix/IF/REP/LOOP cases remain green.
+These are private VS2 profile tests, not native Windows conformance or public
+VS2 admission; the documented numeric policies still apply.
+
+Full shared-worktree build34288 passes canonical1185553/compat1186022 bytes,
+layout9c6027bce1d500a1 and233 nonoverlapping segments. The earlier host-window
+region gate is resolved by its owner. Exact-commit f09d1629 isolation separately
+passed all seven constant/async/pipeline/record tests, but that historical
+snapshot's full build failed the then-committed host-window gate; do not rewrite
+that historical failure as a successful clean build.
