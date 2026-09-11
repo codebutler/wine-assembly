@@ -1593,3 +1593,22 @@ aligned-allocation failure. The exact REP/cursor sequence passes16 valid-buffer
 cases on the frozen artifact, current build and fresh source77739; no REP fix
 was warranted. Fresh current-build reproduction21705 is live for allocation
 state investigation. Neither memory-pressure cause nor gameplay is yet proved.
+
+Allocator pressure checkpoint: successful low/sparse arena replacement now
+publishes the old unused aligned tail (minimum16 bytes) to that instance's free
+list. Previously rollover stranded those bytes until no caller could reuse them.
+The validated helper is shared with graceful render-worker heap retirement;
+failed replacement preserves the old current arena, and low-to-sparse spill
+retains the still-current low tail rather than duplicating it on a free list.
+The failure fixture also exposed oversized low allocations admitted through
+g2w's unmapped sentinel. Bounds now compare the requested guest endpoint with
+the known low-region guest boundary before falling back to sparse allocation.
+
+Final focused46177 passes11 cases, including16/24/64-byte reuse,8-byte padding,
+peer isolation, live guards, genuine1GiB reservation rejection and retry.
+The pre-fix frozen artifact fails the first tail-publication assertion. Heap
+partition72931 and production software-worker99596 pass; earlier heap header
+validation and heap-handle tests pass. Full build97264 passes canonical1155999 /
+compat1156467, unchanged layout9c6027bce1d500a1 and no overlaps. These are real
+memory-budget fixes, not proof that B&W's10.3MiB allocation now succeeds.
+Active run21705 is deliberately preserved on its pre-tail frozen snapshot.

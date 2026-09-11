@@ -896,3 +896,15 @@ Fresh reproduction21705 uses frozen current-build snapshot
 `bw-software-probe-WjsJYY` in the system temporary directory. It is a new run
 after confirmed exit of24571, not a replacement of a healthy process. Initial
 samples report no renderer failures; menu/gameplay progression remains pending.
+
+Read-only main-instance heap snapshots at batches27089 and43976 are identical:
+9316 free blocks,7550264 total free bytes,3182896 largest block, no cycle or bad
+header; low cursor/end71990848/71991296, sparse920016632/920059904, virtual
+top1214742528. This bounds an intro interval, not the later failed allocation.
+An isolated120-draw renderer audit likewise found stable live/cache bytes and
+reuse, but renderer-private free blocks remain unavailable to the guest owner
+until graceful handoff. Eager multi-batch scratch and owner high-water retention
+remain pressure hypotheses. Ordinary Escape down22658/up23081 did not skip the
+intro; the live run has no held key. Current source now reclaims replaced-arena
+tails and rejects oversized low-heap reservations correctly;21705 predates that
+change and must not be described as post-fix acceptance.

@@ -648,6 +648,29 @@
       (br $scan)))
     (i32.const 0))
 
+  ;; Retire the unused tail of an instance-owned arena after a replacement
+  ;; arena has been successfully registered. It was reserved exclusively for
+  ;; this instance, but never published as allocated, so first give it a valid
+  ;; block header and extend the authoritative allocated extent. Normal free
+  ;; validation then transfers it to this instance's private free list.
+  ;; A sub-minimum tail cannot hold a free block and remains padding.
+  (func $heap_arena_free_tail (param $ptr i32) (param $end i32) (param $record i32)
+    (local $size i32)
+    (if (i32.or (i32.eqz (local.get $ptr)) (i32.eqz (local.get $record)))
+      (then (return)))
+    (if (i32.gt_u (local.get $ptr) (local.get $end)) (then (return)))
+    (local.set $size (i32.sub (local.get $end) (local.get $ptr)))
+    (if (i32.or (i32.lt_u (local.get $size) (i32.const 16))
+      (i32.ne (i32.and (local.get $size) (i32.const 7)) (i32.const 0))) (then (return)))
+    ;; Reject stale or already-published tuples, including repeated retirement.
+    (if (i32.or (i32.eqz (i32.atomic.load (local.get $record)))
+      (i32.lt_u (local.get $ptr) (i32.atomic.load (local.get $record)))) (then (return)))
+    (if (i32.ne (i32.atomic.load offset=8 (local.get $record)) (local.get $ptr)) (then (return)))
+    (if (i32.ne (i32.load offset=4 (local.get $record)) (local.get $end)) (then (return)))
+    (i32.store (call $g2w (local.get $ptr)) (local.get $size))
+    (i32.atomic.store offset=8 (local.get $record) (local.get $end))
+    (call $heap_free (i32.add (local.get $ptr) (i32.const 4))))
+
   ;; Reserve this instance's next private chunk of the low guest heap window.
   ;; The cursor is shared; the arena handed back is exclusively ours, so the
   ;; per-allocation fast path in $heap_alloc needs no synchronization at all.
@@ -657,6 +680,7 @@
   ;; word, one CAS, and nothing to release on the early-return paths below.
   (func $heap_low_reserve (param $need i32) (result i32)
     (local $state i32) (local $cursor i32) (local $chunk i32) (local $seed i32)
+    (local $record i32)
     (local.set $state (global.get $HEAP_SHARED))
     (block $reserved (loop $retry
       (local.set $cursor (i32.atomic.load (local.get $state)))
@@ -690,11 +714,14 @@
       ;; valid block entries into zero. The extent is declared now
       ;; (src/00-regions.wat), so the bound is the region's end and the two
       ;; cannot drift apart no matter where the allocator puts either one.
+      ;; Compare in guest space against the known low-region boundary. Resolving
+      ;; an arbitrary request endpoint with g2w can return the unmapped sentinel,
+      ;; which is numerically below this region and would admit oversized chunks.
       (if (i32.lt_u (i32.add (local.get $cursor) (local.get $chunk)) (local.get $cursor))
         (then (return (i32.const 0))))
       (if (i32.gt_u
-            (call $g2w (i32.add (local.get $cursor) (local.get $chunk)))
-            (region.end $GUEST_HEAP_BASE))
+            (i32.add (local.get $cursor) (local.get $chunk))
+            (call $w2g (region.end $GUEST_HEAP_BASE)))
         (then (return (i32.const 0))))
       ;; Claim it, or lose the race and recompute against the winner's cursor.
       (br_if $reserved
@@ -702,10 +729,13 @@
           (i32.atomic.rmw.cmpxchg (local.get $state) (local.get $cursor)
             (i32.add (local.get $cursor) (local.get $chunk)))))
       (br $retry)))
-    (global.set $heap_arena_record (call $heap_arena_register
+    (local.set $record (call $heap_arena_register
       (local.get $cursor) (i32.add (local.get $cursor) (local.get $chunk))))
-    (if (i32.eqz (global.get $heap_arena_record))
+    (if (i32.eqz (local.get $record))
       (then (return (i32.const 0))))
+    (call $heap_arena_free_tail (global.get $heap_ptr) (global.get $heap_end)
+      (global.get $heap_arena_record))
+    (global.set $heap_arena_record (local.get $record))
     (global.set $heap_ptr (local.get $cursor))
     (global.set $heap_end (i32.add (local.get $cursor) (local.get $chunk)))
     (local.get $cursor))
@@ -816,7 +846,7 @@
   ;; spills to sparse high guest chunks when that window reaches emulator-private
   ;; memory. This keeps Windows heap pointers valid without moving code caches.
   (func $heap_sparse_alloc (param $need i32) (result i32)
-    (local $chunk i32) (local $new_top i32) (local $ptr i32)
+    (local $chunk i32) (local $new_top i32) (local $ptr i32) (local $record i32)
     (if (i32.or
           (i32.eqz (global.get $heap_sparse_ptr))
           (i32.gt_u
@@ -837,10 +867,13 @@
         (if (i32.eqz (local.get $new_top)) (then (return (i32.const 0))))
         (if (i32.eqz (call $virtual_map_commit (local.get $new_top) (local.get $chunk)))
           (then (return (i32.const 0))))
-        (global.set $heap_sparse_record (call $heap_arena_register
+        (local.set $record (call $heap_arena_register
           (local.get $new_top) (i32.add (local.get $new_top) (local.get $chunk))))
-        (if (i32.eqz (global.get $heap_sparse_record))
+        (if (i32.eqz (local.get $record))
           (then (return (i32.const 0))))
+        (call $heap_arena_free_tail (global.get $heap_sparse_ptr) (global.get $heap_sparse_end)
+          (global.get $heap_sparse_record))
+        (global.set $heap_sparse_record (local.get $record))
         (global.set $heap_sparse_ptr (local.get $new_top))
         (global.set $heap_sparse_end (i32.add (local.get $new_top) (local.get $chunk)))))
     (local.set $ptr (global.get $heap_sparse_ptr))
