@@ -53,6 +53,20 @@ const IR=require('../lib/d3d-shader-ir');
     await pending;assert(ticks>8,'long REP spans multiple event-loop callbacks');
     assert.deepStrictEqual([...device.readPixels().slice(36,40)],[191,128,64,255]);
     assert.strictEqual(device.bytes,baseline,'snapshot/setup/program storage retires');
+    for(const index of [95,96,127,128,255]){
+      const source=snapshot();
+      source.vertexShader=shader([0xfffe0200,...I(31,0x80000000,D(1)),
+        ...I(1,D(4),S(1)),...I(1,D(5),S(2,index)),65535],true);
+      source.vertexConstants=new Float32Array(1024);
+      source.vertexConstants.set([.25,.5,.75,1],index*4);
+      const pending=device.drawAsync(source);
+      source.vertexConstants.fill(0);
+      while(scheduled.length)scheduled.shift()();
+      await pending;
+      assert.deepStrictEqual([...device.readPixels().slice(36,40)],[191,128,64,255],
+        `detached full256 constants preserve c${index} across deferred setup`);
+      assert.strictEqual(device.bytes,baseline,'full256 payload reclaimed after completion');
+    }
     for(const callbacks of [0,1,3]){
       const before=device.readPixels(),p=device.drawAsync(snapshot());
       for(let i=0;i<callbacks;i++)scheduled.shift()();
@@ -63,5 +77,5 @@ const IR=require('../lib/d3d-shader-ir');
     }
   }finally{device.destroy();IR.read=read;}
   assert.strictEqual(device.bytes,0);
-  console.log('PASS native async setup: long REP yields, inputs detach, setup writes no pixels, cancellation releases storage');
+  console.log('PASS native async setup: long REP yields, full256 constants detach, setup writes no pixels, cancellation releases storage');
 })().catch(error=>{console.error(error);process.exitCode=1;});

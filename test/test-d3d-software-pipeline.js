@@ -9,6 +9,7 @@ const {bootRenderHarness}=require('./render-helper');
   const extraWat=['09af-d3d-shader-ir.wat','09ag-d3d-shader-vm.wat','09ah-d3d-software.wat']
     .map(file=>manifest.includes(file)?'':fs.readFileSync(path.join(__dirname,'../src',file),'utf8')).join('\n')+`
       (export "test_compile20" (func $d3d_shader_ir_compile20))
+      (export "test_load_constants" (func $d3d_software_constants))
       (func (export "line_coverage") (param $a i32) (param $b i32) (param $x i32) (param $y i32) (param $last i32) (result i32)
         (call $d3d_software_line_inside (local.get $a) (local.get $b) (local.get $x) (local.get $y) (local.get $last)))
       (func (export "test_scan14") (param $p i32) (param $n i32) (param $out i32) (result i32)
@@ -42,8 +43,11 @@ const {bootRenderHarness}=require('./render-helper');
     const input=alloc(vertices.length*stride);vertices.forEach((v,i)=>f32.set(v,input/4+i*stride/4));
     const indices=options.indices||null,indexPtr=indices?alloc(indices.length*2):0;if(indices)u16.set(indices,indexPtr/2);
     const constants=alloc(16);f32.set(options.constant||[1,1,1,1],constants/4);
+    const vertexConstants=options.vertexConstants?alloc(options.vertexConstants.byteLength):0;
+    if(vertexConstants)f32.set(options.vertexConstants,vertexConstants/4);
     const desc=alloc(128);u32.fill(0,desc/4,desc/4+32);
     u32.set([0x44535031,options.abi||1,width,height,color,pitch,depth,pitch,input,vertices.length,stride,indexPtr,indices?indices.length:vertices.length,options.vs||vs,options.ps||ps,0,0,constants,1,options.vx||0,options.vy||0,options.vw||width,options.vh||height],desc/4);
+    u32[desc/4+15]=vertexConstants;u32[desc/4+16]=options.vertexConstants?options.vertexConstants.length/4:0;
     f32[desc/4+23]=options.minZ===undefined?0:options.minZ;f32[desc/4+24]=options.maxZ===undefined?1:options.maxZ;
     u32.set([options.flags===undefined?3:options.flags,options.depthFunc||2,options.mask===undefined?15:options.mask,options.cull||1,options.inputMap||0,options.uvCount||0,options.extraMap||0],desc/4+25);
     const ctx=options.typed===undefined?e.d3d_software_create(desc):e.d3d_software_create_typed(desc,options.typed);
@@ -59,6 +63,40 @@ const {bootRenderHarness}=require('./render-helper');
   }
   const triangle=[vertex(-1,1),vertex(1,1),vertex(-1,-1)];
   let cases=0;
+  {
+    const bytes=e.d3d_shader_vm_context_bytes(),vm=alloc(bytes),source=alloc(4096);
+    const words=[0,0x80000000,0x7f800000,0xff800000,0x7fc12345,1,0x807fffff,0x3f800000];
+    for(let i=0;i<1024;i++)u32[source/4+i]=words[i%words.length];
+    for(const count of [0,96,128,129,256]){
+      u8.fill(0xa5,vm,vm+bytes);
+      const expected=u8.slice(vm,vm+bytes),expectedWords=new Uint32Array(expected.buffer);
+      for(let i=0;i<count;i++)for(let component=0;component<4;component++)for(let lane=0;lane<4;lane++){
+        const offset=i<128?16416+i*64:65568+(i-128)*64;
+        expectedWords[(offset+component*16+lane*4)/4]=u32[source/4+i*4+component];
+      }
+      e.test_load_constants(vm,source,count);
+      assert.deepStrictEqual(u8.slice(vm,vm+bytes),expected,
+        `${count} constants preserve raw bits in all lanes without touching any other VM storage`);
+      cases++;
+    }
+    e.d3d_shader_vm_free(vm);e.d3d_shader_vm_free(source);
+  }
+  {
+    const I=(op,...args)=>[(args.length<<24)|op,...args];
+    for(const index of [95,96,127,128,255]){
+      const constants=new Float32Array(256*4);
+      for(let i=0;i<256;i++)constants.set([i/255,1-i/255,0,1],i*4);
+      const shader=program([0xfffe0200,...I(31,0x80000000,0x900f0000),
+        ...I(1,0xc00f0000,0x90e40000),...I(1,0xd00f0000,0xa0e40000|index),65535]);
+      const d=draw(triangle,{vs:shader,vertexConstants:constants});
+      assert(d.ctx,`full256 VS constants accepted for c${index}`);
+      constants.fill(0);d.run();
+      assert.strictEqual(d.pixel(1,1),(0xff000000|(index<<16)|((255-index)<<8))>>>0,`c${index} reaches real pixels`);
+      d.guards();e.d3d_software_free(d.ctx);e.d3d_shader_vm_free(shader);cases++;
+    }
+    const d=draw(triangle,{vertexConstants:new Float32Array(257*4)});
+    assert.strictEqual(d.ctx,0,'257 VS constants rejected');d.guards();cases++;
+  }
   {
     const I=(op,...args)=>[(args.length<<24)|op,...args];
     const bits=value=>new Uint32Array(new Float32Array([value]).buffer)[0];

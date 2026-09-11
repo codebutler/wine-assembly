@@ -48,9 +48,10 @@
     ;; +22024 lock output WA; +22028/32/36/40 immutable backbuffer lock x/y/w/h.
     ;; +22044 VS int[16][4], +22300 VS BOOL[16], +22364 PS int,
     ;; +22620 PS BOOL. Raw API words; execution normalizes Boolean truth.
-    (local.set $state (call $heap_alloc (i32.const 22684)))
+    ;; Append VS c96..c255 at +22684; all historical banks retain their offsets.
+    (local.set $state (call $heap_alloc (i32.const 25244)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22684))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 25244))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
@@ -126,31 +127,49 @@
   (func $d3d9_float_constants (param $this i32) (param $start i32)
     (param $data i32) (param $count i32) (param $pixel i32) (param $get i32)
     (local $state i32) (local $limit i32) (local $offset i32) (local $bytes i32) (local $block i32) (local $dest i32)
+    (local $source i32) (local $index i32) (local $n i32) (local $mask i32) (local $value i32)
     (global.set $eax (i32.const 0x8876086C))
-    (local.set $limit (select (i32.const 8) (i32.const 96) (local.get $pixel)))
+    (local.set $limit (select (i32.const 8) (i32.const 256) (local.get $pixel)))
     (if (i32.gt_u (local.get $start) (local.get $limit)) (then (return)))
     (if (i32.gt_u (local.get $count) (i32.sub (local.get $limit) (local.get $start)))
       (then (return)))
     (local.set $state (call $d3d9_program_state (local.get $this)))
     (if (i32.eqz (local.get $state)) (then (return)))
     (if (i32.eqz (local.get $count)) (then (global.set $eax (i32.const 0)) (return)))
-    (if (i32.eqz (local.get $data)) (then (return)))
-    (local.set $offset (i32.add
-      (select (i32.const 1552) (i32.const 16) (local.get $pixel))
-      (i32.mul (local.get $start) (i32.const 16))))
     (local.set $bytes (i32.mul (local.get $count) (i32.const 16)))
-    (if (local.get $get)
-      (then (memory.copy (call $g2w (local.get $data))
-        (i32.add (call $g2w (local.get $state)) (local.get $offset)) (local.get $bytes)))
-      (else
+    ;; Validate the entire guest span before changing either data or recording masks.
+    (local.set $source (call $d3d9_state_bytes (local.get $data) (local.get $bytes)))
+    (if (i32.eqz (local.get $source)) (then (return)))
+    (local.set $block (call $gl32 (i32.add (local.get $state) (i32.const 1740))))
+    (if (local.get $block) (then (local.set $block (call $g2w (local.get $block)))))
+    (loop $registers
+      (local.set $index (i32.add (local.get $start) (local.get $n)))
+      (if (local.get $pixel)
+        (then
+          (local.set $offset (i32.add (i32.const 1552) (i32.mul (local.get $index) (i32.const 16))))
+          (local.set $mask (i32.add (i32.const 19056) (local.get $index)))
+          (local.set $value (i32.add (i32.const 20600) (i32.mul (local.get $index) (i32.const 16)))))
+        (else (if (i32.lt_u (local.get $index) (i32.const 96))
+          (then
+            (local.set $offset (i32.add (i32.const 16) (i32.mul (local.get $index) (i32.const 16))))
+            (local.set $mask (i32.add (i32.const 18960) (local.get $index)))
+            (local.set $value (i32.add (i32.const 19064) (i32.mul (local.get $index) (i32.const 16)))))
+          (else
+            (local.set $index (i32.sub (local.get $index) (i32.const 96)))
+            (local.set $offset (i32.add (i32.const 22684) (i32.mul (local.get $index) (i32.const 16))))
+            (local.set $mask (i32.add (i32.const 23068) (local.get $index)))
+            (local.set $value (i32.add (i32.const 23228) (i32.mul (local.get $index) (i32.const 16))))))))
         (local.set $dest (i32.add (call $g2w (local.get $state)) (local.get $offset)))
-        (local.set $block (call $gl32 (i32.add (local.get $state) (i32.const 1740))))
-        (if (local.get $block) (then
-          (local.set $block (call $g2w (local.get $block)))
-          (memory.fill (i32.add (local.get $block) (i32.add (i32.const 18960)
-            (i32.div_u (i32.sub (local.get $offset) (i32.const 16)) (i32.const 16)))) (i32.const 1) (local.get $count))
-          (local.set $dest (i32.add (local.get $block) (i32.add (i32.const 19048) (local.get $offset))))))
-        (memory.copy (local.get $dest) (call $g2w (local.get $data)) (local.get $bytes))))
+        (if (local.get $get)
+          (then (memory.copy (local.get $source) (local.get $dest) (i32.const 16)))
+          (else
+            (if (local.get $block) (then
+              (i32.store8 (i32.add (local.get $block) (local.get $mask)) (i32.const 1))
+              (local.set $dest (i32.add (local.get $block) (local.get $value)))))
+            (memory.copy (local.get $dest) (local.get $source) (i32.const 16))))
+      (local.set $source (i32.add (local.get $source) (i32.const 16)))
+      (local.set $n (i32.add (local.get $n) (i32.const 1)))
+      (br_if $registers (i32.lt_u (local.get $n) (local.get $count))))
     (global.set $eax (i32.const 0)))
 
   ;; Shader COM object: vtable, external refs, owning device, version, byte

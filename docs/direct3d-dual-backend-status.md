@@ -2194,3 +2194,79 @@ Native checkpoint verification: full32196 passes canonical1184420/compat1184889,
 unchanged layout and233 nonoverlapping data segments. GLSL call source and its
 browser/parity verification remain a separate pending integration; this native
 checkpoint does not claim completed accelerated subroutines.
+
+### Vector address register (2026-09-11, uncommitted WIP)
+
+Private VS2 now accepts MOVA masks1..15 and scalar-replicated relative a0
+selectors x/y/z/w. This follows the address-register and VS2-differences pages;
+the contradictory MOVA2_x remark remains documented above, not presented as a
+resolved native-Windows oracle. The existing nearest-even tie policy remains.
+
+Normalized source modifier bits11..12 carry the address component, independently
+of the source-value swizzle. Bit8 still marks relative constants and bit10 aL;
+aL rejects nonzero component metadata. The reader preserves an immutable
+relativeAddressComponents array alongside relativeAddressBanks. Decoder a0
+initialization is a four-bit mask: MOVA ORs its exact write mask, and IF/LOOP/
+CALLNZ joins intersect component definitions. Unused-routine syntax validation
+starts with mask15, while each real call is checked with its incoming mask.
+
+The SIMD VM retains the existing register layout and context size. Its gather
+chooses the selected a0 component per lane before bounds checking; MOVA preserves
+unwritten components and uses existing vector rounding/masked stores. Initial
+test74678 exposed only a negative-zero oracle mismatch; after correcting that
+fixture,64647 proves missing vector compilation, then12078 passes37 mask,
+component, rounding, high-constant and out-of-range cases. Decoder61921 passes342
+plus CALL143/LOOP115/REP148/IF151. Baseline77737 passes84 after migrating full-mask
+MOVA acceptance; native malformed-MOVA mask2 becomes genuinely invalid mask0.
+Existing VM36145 passes1662, legacy41278 passes263, pipeline15229 passes364,
+CALL52485 passes38 and LOOP14851 passes33. Full78042 passes1184557/1185026 bytes,
+unchanged layout and233 nonoverlapping data segments.
+
+Do not treat this as an integrated dual-backend checkpoint yet: GLSL must consume
+the new component metadata or explicitly reject it. Ignoring nonzero selectors
+would silently substitute a0.x. The GLSL owner has been notified; actual WebGL
+call verification and vector lowering remain pending. Public gates stay closed.
+
+### Full vertex float transport (2026-09-11)
+
+The software descriptor and JS executor now accept256 vertex float4 constants;
+pixel constants remain8. Native loading maps c0..127 to the existing VM bank
+and c128..255 to its appended storage, avoiding the address/output banks that
+a linear extension would overwrite. This changes transport, not public shader
+profile admission. The device appends c96..255 at22684 (total25244); state blocks
+append160 selection bytes at23068 and2560 value bytes at23228 (total25788).
+Existing offsets remain unchanged. Set/Get validate the entire guest span before
+copying or recording; Capture/Apply use selective masks and Reset zeros the new
+storage. The host emits a detached1024-float raw-bit snapshot and charges the
+additional2560 bytes before allocation.
+
+Pipeline99048 first fails on the old96-constant descriptor limit;93041 then
+passes370 cases, including actual pixels from c95/96/127/128/255 and rejection
+of257 constants. Async72839 passes real private-VS2 deferred draws using the
+full1024-float snapshot: mutation immediately after submission does not change
+pixels, and retained bytes return to baseline after completion. Existing long
+REP scheduling and cancellation checks also pass. No public caps were raised.
+Resumable native setup59838 also passes; full shared-worktree build96381 passes
+canonical1184581/compat1185050 bytes, unchanged layout hash and233 nonoverlapping
+data segments. This is not an isolated clean-commit build or completed API path.
+Subsequent API15257 passes52 float cases,92 typed cases and existing selective
+state-block regressions. The async host protocol test passes all1024 raw words,
+including NaN payloads, after both source banks are overwritten. Full12047 stops
+on a concurrent non-D3D lib/host-window.js raw-region-literal gate; it is not a
+successful integrated build. Test-tier and manifest checks pass1086 tests.
+
+Additional software transport49279 passes375 pipeline cases. Whole-context
+canaries for0/96/128/129/256 constants verify every broadcast lane and preserve
+all nonconstant storage, including address/output, sampler and typed/control
+banks. IEEE raw words include signed zero, infinities, subnormals and a NaN
+payload; this transport test performs no shader arithmetic on those values.
+
+### Long dynamic execution (2026-09-11, native evidence)
+
+Record-budget test8194 passes an actual token-to-IR VS2 program with255 LOOP
+iterations,14 calls per iteration, and200 additions per routine. All lanes and
+components produce714000, with257-packet resumable slices and an execution
+counter exceeding65535. A second run cancels explicitly after that threshold.
+The existing1101/4096-record boundary checks remain green. This establishes
+native dynamic execution independently of the scheduler budget; it does not
+advertise MaxVShaderInstructionsExecuted or prove the pending WebGL equivalent.

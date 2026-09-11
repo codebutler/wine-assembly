@@ -37,7 +37,12 @@ function fixture(options={}) {
   write(lit.program+21996,lightNode);write(lightNode+4,0xf1234567);write(lightNode+12,1);write(lightNode+16,3);
   new Float32Array(lit.memory,lightNode+20,25).set(Array.from({length:25},(_,i)=>i/8));
   write(256+174*4,1);[0,1,2,2,1].forEach((v,i)=>write(lit.program+22000+i*4,v));
+  const floatWords=Uint32Array.from({length:1024},(_,i)=>i===1023?0x7fc01234:(0x3e800000+i)>>>0);
+  new Uint32Array(lit.memory,lit.program+16,384).set(floatWords.subarray(0,384));
+  new Uint32Array(lit.memory,lit.program+22684,640).set(floatWords.subarray(384));
   const litToken=lit.bridge.call(0x30001,lit.desc,0);assert(litToken<=-2);
+  new Uint8Array(lit.memory,lit.program+16,1536).fill(0);
+  new Uint8Array(lit.memory,lit.program+22684,2560).fill(0);
   new Uint8Array(lit.memory,lightNode,120).fill(0x77);
   new Uint8Array(lit.memory,lit.program+21928,72).fill(0);
   new Uint8Array(lit.memory,lit.program+22000,20).fill(0);
@@ -45,6 +50,10 @@ function fixture(options={}) {
   for(const id of[137,139,141,145,146,147,148])write(256+id*4,0);
   lit.initialized.resolve();await tick();await lit.advance(1);await lit.advance(1);
   const lighting=lit.commands.at(-1).payload.fixedFunction;
+  const snapConstants=lit.commands.at(-1).payload.vertexConstants;
+  assert.strictEqual(snapConstants.length,1024);
+  assert.deepStrictEqual(new Uint32Array(snapConstants.buffer,snapConstants.byteOffset,1024),floatWords,
+    'all 256 VS float constants, including NaN bits, are detached before guest reuse');
   assert.deepStrictEqual(lit.commands.at(-1).payload.scissor,
     {enabled:true,left:0,top:1,right:2,bottom:2},'scissor is immutable across guest reuse');
   assert.strictEqual(lighting.ambientColor,0xff102030);assert.strictEqual(lighting.colorVertex,1);

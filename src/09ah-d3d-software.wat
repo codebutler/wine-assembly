@@ -98,12 +98,16 @@
 
 (func $d3d_software_constants (param $vm i32) (param $src i32) (param $count i32)
   (local $i i32) (local $j i32) (local $dst i32)
-  (local.set $dst (i32.add (local.get $vm) (i32.const 16416)))
   (block $done (loop $next
     (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+    ;; c128+ live in the VM's appended bank, not over a0/output registers.
+    (local.set $dst (i32.add (local.get $vm)
+      (if (result i32) (i32.lt_u (local.get $i) (i32.const 128))
+        (then (i32.add (i32.const 16416) (i32.shl (local.get $i) (i32.const 6))))
+        (else (i32.add (i32.const 65568) (i32.shl (i32.sub (local.get $i) (i32.const 128)) (i32.const 6)))))))
     (local.set $j (i32.const 0))
     (loop $components
-      (v128.store (i32.add (local.get $dst) (i32.add (i32.shl (local.get $i) (i32.const 6)) (i32.shl (local.get $j) (i32.const 4))))
+      (v128.store (i32.add (local.get $dst) (i32.shl (local.get $j) (i32.const 4)))
         (f32x4.splat (f32.load (i32.add (local.get $src) (i32.add (i32.shl (local.get $i) (i32.const 4)) (i32.shl (local.get $j) (i32.const 2)))))))
       (local.set $j (i32.add (local.get $j) (i32.const 1)))
       (br_if $components (i32.lt_u (local.get $j) (i32.const 4))))
@@ -230,7 +234,7 @@
   (if (i32.load offset=44 (local.get $desc))
     (then (if (i32.eqz (call $d3d_shader_vm_range (i32.load offset=44 (local.get $desc)) (i32.shl (local.get $count) (i32.const 1)))) (then (return (i32.const 0)))))
     (else (if (i32.ne (local.get $n) (local.get $count)) (then (return (i32.const 0))))))
-  (if (i32.or (i32.gt_u (i32.load offset=64 (local.get $desc)) (i32.const 96))
+  (if (i32.or (i32.gt_u (i32.load offset=64 (local.get $desc)) (i32.const 256))
     (i32.gt_u (i32.load offset=72 (local.get $desc)) (i32.const 8))) (then (return (i32.const 0))))
   (if (i32.load offset=64 (local.get $desc)) (then
     (if (i32.eqz (call $d3d_shader_vm_range (i32.load offset=60 (local.get $desc)) (i32.shl (i32.load offset=64 (local.get $desc)) (i32.const 4)))) (then (return (i32.const 0))))))

@@ -690,14 +690,16 @@
     ;; +22344 scissor mask,+22348 RECT16. Explicit empty rectangles are valid.
     ;; +22364 typed constant byte masks[64], +22428 values[640].
     ;; Bank order VS I/B, PS I/B; each I is vec4, each BOOL one raw DWORD.
-    (local.set $obj (call $heap_alloc (i32.const 23068)))
+    ;; +23068 VS c96..c255 byte masks[160], +23228 float values[2560].
+    ;; Low VS and PS float masks/values retain their historical offsets.
+    (local.set $obj (call $heap_alloc (i32.const 25788)))
     (if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x8007000e)) (return)))
     (local.set $wa (call $g2w (local.get $obj)))
-    (call $zero_memory (local.get $wa) (i32.const 23068))
+    (call $zero_memory (local.get $wa) (i32.const 25788))
     (i32.store (local.get $wa) (local.get $vtbl))
     (i32.store offset=8 (local.get $wa) (local.get $device))
     (i32.store offset=12 (local.get $wa) (i32.const 0xd3d90003))
-    (i32.store offset=16 (local.get $wa) (i32.const 23068))
+    (i32.store offset=16 (local.get $wa) (i32.const 25788))
     (i32.store offset=20 (local.get $wa) (i32.const 1))
     (call $gs32 (i32.add (local.get $state) (i32.const 1740)) (local.get $obj))
     (global.set $eax (i32.const 0)))
@@ -1208,6 +1210,17 @@
           (select (local.get $values) (local.get $live) (local.get $apply)) (i32.const 16))))
       (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
       (br_if $constants (i32.lt_u (local.get $rs) (i32.const 104))))
+    (local.set $rs (i32.const 0))
+    (loop $high_vertex_constants
+      (if (i32.load8_u offset=23068 (i32.add (local.get $wa) (local.get $rs))) (then
+        (local.set $live (i32.add (call $g2w (local.get $state))
+          (i32.add (i32.const 22684) (i32.mul (local.get $rs) (i32.const 16)))))
+        (local.set $values (i32.add (local.get $wa)
+          (i32.add (i32.const 23228) (i32.mul (local.get $rs) (i32.const 16)))))
+        (memory.copy (select (local.get $live) (local.get $values) (local.get $apply))
+          (select (local.get $values) (local.get $live) (local.get $apply)) (i32.const 16))))
+      (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
+      (br_if $high_vertex_constants (i32.lt_u (local.get $rs) (i32.const 160))))
     (local.set $rs (i32.const 0))
     (loop $typed_constants
       (if (i32.load8_u offset=22364 (i32.add (local.get $wa) (local.get $rs))) (then
