@@ -58,6 +58,23 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
    ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
   sources.set(key,tokens);cases.push([0,key,expected,vector]);
  }
+ // POW keeps its exponent in a different register, while deliberately
+ // overwriting the initialized base. Exact binary results distinguish abs,
+ // both scalar selectors, reciprocal powers, and exponent-zero behavior.
+ for(const [name,vector,baseComponent,exponent,exponentComponent,result]of[
+  ['negative-base',[-.5,9,9,9],0,[9,2,9,9],1,.25],
+  ['negative-exponent',[9,9,-4,9],2,[9,9,9,-1],3,.25],
+  ['fractional-exponent',[9,.0625,9,9],1,[.5,9,9,9],0,.25],
+  ['zero-exponent',[9,9,9,-.5],3,[9,9,0,9],2,1],
+  ['zero-to-zero',[0,9,9,9],0,[0,9,9,9],0,1],
+ ]){
+  const key=`pow32/${name}`;assert(!sources.has(key));
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),...ins(31,0x80010005,D(1,2)),
+   ...ins(81,D(2,255),...exponent.map(fbits)),...ins(1,D(0),S(1,2)),
+   ...ins(32,D(0),S(0,0,baseComponent*85),S(2,255,exponentComponent*85)),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
+  sources.set(key,tokens);cases.push([0,key,Array(4).fill(result),vector]);
+ }
  const programs=new Map(),frames=[];
  const psTokens=[0xffff0101,1,D(0),S(1),65535],psIR=e.d3d_shader_ir_compile(put(psTokens),psTokens.length);
  assert(psIR);const ps=e.d3d_shader_vm_compile(psIR);assert(ps);e.d3d_shader_ir_free(psIR);

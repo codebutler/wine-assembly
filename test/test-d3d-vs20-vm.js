@@ -45,6 +45,58 @@ const { bootRenderHarness } = require('./render-helper');
   }
   function release(...pointers) { pointers.forEach(p => e.d3d_shader_vm_free(p)); }
   assert.strictEqual(e.d3d_shader_vm_context_bytes(), 73760);
+  for (const [bases, powers] of [
+    [[-2,.25,0,-0],[3,.5,2,-2]], [[0,-0,1,-4],[0,0,123,.5]],
+    [[2,16,.5,-9],[-2,.25,2,.5]], [[.7,1.1,3.3,8.1],[.125,-.5,2.5,-3]],
+  ]) for (const mask of [1, 8, 15]) for (const lanes of [15, 5])
+  for (const selector of [0,85,170,255]) for (const destination of [0,1]) {
+    const program = compile([ins(32, dst(destination, mask), operand(0, 0, selector), operand(0, 2, 255-selector))]);
+    const ctx = e.d3d_shader_vm_context(program, lanes); assert(ctx);
+    f.fill(9, register(ctx, 0, 0), register(ctx, 0, 0) + 16);
+    f.fill(7, register(ctx, 0, 2), register(ctx, 0, 2) + 16);
+    f.fill(77, register(ctx, 0, 1), register(ctx, 0, 1) + 16);
+    f.set(bases, register(ctx, 0, 0) + (selector & 3) * 4);
+    f.set(powers, register(ctx, 0, 2) + ((255-selector) & 3) * 4);
+    const previous = Array.from(f.slice(register(ctx, 0, destination), register(ctx, 0, destination) + 16));
+    assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+    for (let component=0; component<4; component++) for(let lane=0;lane<4;lane++) {
+      const active=(mask & (1<<component)) && (lanes & (1<<lane));
+      const expected=active ? Math.pow(Math.abs(Math.fround(bases[lane])), Math.fround(powers[lane])) : previous[component*4+lane];
+      const actual=f[register(ctx,0,destination)+component*4+lane];
+      if (!active || expected===0 || !Number.isFinite(expected)) assert.strictEqual(actual,expected);
+      else assert(Math.abs(actual-expected)<=Math.abs(expected)*2**-15,
+        `POW ${bases[lane]}^${powers[lane]} mask${mask} lanes${lanes} selector${selector} dst${destination}: ${actual} vs ${expected}`);
+    }
+    release(ctx,program);cases++;
+  }
+  {
+    // Composite POW accuracy, independent of the standalone LOG/EXP sweeps.
+    // Keep results normal; subnormal relative precision is a separate policy.
+    const program = compile([ins(32, dst(1), operand(0, 0, 0), operand(0, 2, 0))]);
+    let worst = 0;
+    for (let batch = 0; batch < 256; batch++) {
+      const ctx = e.d3d_shader_vm_context(program, 15); assert(ctx);
+      const expected = [];
+      for (let lane = 0; lane < 4; lane++) {
+        const n = batch * 4 + lane;
+        const base = Math.fround(2 ** (-12 + 24 * n / 1023));
+        const power = Math.fround(-8 + 16 * ((n * 317) % 1024) / 1023);
+        f[register(ctx, 0, 0) + lane] = base;
+        f[register(ctx, 0, 2) + lane] = power;
+        expected.push(Math.pow(base, power));
+      }
+      assert.strictEqual(e.d3d_shader_vm_run(ctx, 1), 0);
+      for (let lane = 0; lane < 4; lane++) {
+        const actual = f[register(ctx, 0, 1) + lane];
+        const error = Math.abs(actual / expected[lane] - 1);
+        worst = Math.max(worst, error);
+        assert(error <= 2 ** -15, `POW composite sample ${batch*4+lane}: relative error ${error}`);
+      }
+      release(ctx); cases++;
+    }
+    release(program);
+    console.log(`POW composite 1024 samples max relative error ${worst}`);
+  }
   for (const opcode of [33, 36]) for (let mask = 1; mask < (opcode === 33 ? 8 : 16); mask++)
   for (const lanes of [15, 5]) for (const negate of [0, 1])
   for (const swizzle of opcode === 33 ? [228] : [228, 27, 0, 85, 170, 255]) {
@@ -199,6 +251,10 @@ const { bootRenderHarness } = require('./render-helper');
     ins(33, dst(0, 8), source(1), source(2)), ins(33, dst(0, 7), operand(0, 1, 27), source(2)),
     ins(33, operand(5, 0, 7), source(1), source(2)),
     ins(36, dst(0), source(0)), ins(36, operand(5, 0, 15), source(1)),
+    ins(32, dst(0), operand(0, 1, 0), operand(0, 0, 255)),
+    ins(32, operand(5, 0, 15), operand(0, 1, 0), operand(0, 2, 0)),
+    ins(32, dst(0), source(1), operand(0, 2, 0)),
+    ins(32, dst(0), operand(0, 1, 0), source(2)),
     ins(1, operand(4, 1, 15), source(0)), ins(46, operand(3, 0, 1, 1), source(0))]) {
     const p = ir([bad]); assert.strictEqual(e.d3d_shader_vm_compile_vs20(p), 0, 'private unsupported/malformed IR rejected');
     release(p); cases++;

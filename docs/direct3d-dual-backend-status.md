@@ -1788,3 +1788,26 @@ region layout and no data overlaps. Software pipeline71393 passes351 cases.
 Independent read-only review found no concrete packet/validation/masking defect;
 this adds no claim of Windows-driver numeric equivalence. Public profile gates
 remain closed.
+
+Private POW follow-up: opcode32 lowers to packet57 with four-lane SIMD
+log2/multiply/exp2 and to GLSL from the same validated IR. Both scalar sources
+require replicate swizzles; the destination must be temporary and distinct from
+the exponent (base alias is legal). Decoder dependency tracking reads the
+selected scalar regardless of destination mask and charges three slots.
+Public VS2 and legacy opcode admission are unchanged.
+
+The finite-input adapter zero policy is explicitly x^0=1, 0^positive=0 and
+0^negative=+Infinity; Microsoft's POW page does not specify this zero table.
+The native path uses internal log2's negative infinity, not standalone LOG's
+finite sentinel. GLSL guards zero domains explicitly. Nonfinite/subnormal
+cross-driver equivalence is not claimed. Browser zero-base fixtures use a normal
+small exponent: the initial subnormal exponent was flushed to zero by the driver.
+
+Evidence: decoder RED53335 ->3132 PASS210; native RED28876 ->11584 PASS954,
+including a 1024-sample composite accuracy sweep over normal results with maximum
+relative error 0.000004101193076699872 (bound2^-15), masks, scalar selectors,
+active lanes, legal aliases and malformed-IR rejection. Legacy13021 PASS263.
+GPU33167 PASS70 includes18 new POW frames. Same-IR82549 PASS116 GPU frames vs58
+native position/raster frames, adding five POW cases. Full30028 PASS canonical
+1163611 / compat1164079, unchanged layout and no data overlaps. Remaining
+arithmetic, flow control and complete profile/gameplay acceptance remain open.

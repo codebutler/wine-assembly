@@ -133,11 +133,28 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     {name:'nrm XYZ length scales W',op:36,input:[3,4,0,10],bias:0,expected:[.15,.2,0,.5]},
     {name:'nrm swizzle and negate',op:36,input:[0,3,4,10],swizzle:201,negate:true,bias:.5,expected:[.35,.3,.5,0]},
     {name:'nrm zero XYZ finite W',op:36,input:[0,0,0,1],zero:true,expected:[0,0,0,Math.fround(Math.fround(3.4028234663852886e38*Math.fround(1e-37)))*.025]},
+    {name:'pow fractional exponent',op:32,input:[.25,0,0,0],exponent:.5,expected:[.5,.5,.5,.5]},
+    {name:'pow abs swizzled base and partial mask',op:32,input:[9,-.5,9,9],swizzle:85,exponent:2,mask:5,expected:[.25,.3,.25,.6]},
+    {name:'pow source negation and negative exponent',op:32,input:[.5,0,0,0],negate:true,exponent:2,exponentNegate:true,scale:.125,expected:[.5,.5,.5,.5]},
+    // Explicit finite-input adapter policy, not a native-driver zero oracle.
+    {name:'pow zero exponent',op:32,input:[0,0,0,0],exponent:0,scale:.5,expected:[.5,.5,.5,.5]},
+    {name:'pow negative zero exponent',op:32,input:[-.5,0,0,0],exponent:-0,scale:.5,expected:[.5,.5,.5,.5]},
+    // NORMAL exponent avoids a driver flushing it to zero. Amplification
+    // also distinguishes using standalone LOG's finite -FLT_MAX sentinel.
+    {name:'pow zero tiny positive exponent',op:32,input:[0,0,0,0],exponent:1e-37,scale:1e10,expected:[0,0,0,0]},
+    {name:'pow negative zero positive exponent',op:32,input:[-0,0,0,0],exponent:2,expected:[0,0,0,0]},
+    {name:'pow zero negative exponent infinity',op:32,input:[0,0,0,0],exponent:-2,infinite:true,expected:[1,1,1,1]},
+    {name:'pow negative zero negative exponent infinity',op:32,input:[-0,0,0,0],exponent:-2,infinite:true,expected:[1,1,1,1]},
    ];
    for(const version of[1,2])for(const fixture of fixtures){
     const instructions=[{opcode:1,offset:1,args:[0xc00f0000,0x90e40000]}];
-    const src=(0x90000001|((fixture.swizzle??228)<<16)|(fixture.negate?0x01000000:0))>>>0;
-    if(fixture.op===33){
+    const src=(0x90000001|((fixture.swizzle??(fixture.op===32?0:228))<<16)|(fixture.negate?0x01000000:0))>>>0;
+    if(fixture.op===32){
+     instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
+      {opcode:32,offset:3,args:[0x80000000|((fixture.mask??15)<<16),src,(0xa0ff0003|(fixture.exponentNegate?0x01000000:0))>>>0]},
+      fixture.infinite?{opcode:12,offset:4,args:[0xd00f0000,0xa0e40000,0x80e40000]}:
+       {opcode:5,offset:4,args:[0xd00f0000,0x80e40000,0xa0e40000]});
+    }else if(fixture.op===33){
      instructions.push({opcode:1,offset:2,args:[0x800f0000,0xa0e40002]},
       {opcode:33,offset:3,args:[0x80000000|(fixture.mask<<16),src,0xa0e40003]},
       {opcode:5,offset:4,args:[0x800f0001,0x80e40000,0xa0e40000]},
@@ -167,10 +184,11 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
     const position=gl.getAttribLocation(p,'d3d_v0');gl.enableVertexAttribArray(position);gl.vertexAttribPointer(position,4,gl.FLOAT,false,0,0);
     const input=gl.getAttribLocation(p,'d3d_v1');gl.disableVertexAttribArray(input);gl.vertexAttrib4f(input,...fixture.input);
     const scalar=(n,x)=>gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c'+n),x,x,x,x);
-    scalar(0,fixture.op===33?.5:fixture.zero?1e-37:.25);
+    scalar(0,fixture.op===32?(fixture.infinite?3.4028234663852886e38:fixture.scale??1):fixture.op===33?.5:fixture.zero?1e-37:.25);
     scalar(1,fixture.op===33?.5:fixture.zero?.025:fixture.bias);
     gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c2'),.2,.3,.4,.6);
     if(fixture.matrix)gl.uniform4f(gl.getUniformLocation(p,'d3d_vs_c3'),...fixture.matrix);
+    if(fixture.op===32)scalar(3,fixture.exponent);
     gl.drawArrays(gl.TRIANGLES,0,3);const pixels=new Uint8Array(64);gl.readPixels(0,0,4,4,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
     results.push({version,name:fixture.name,expected:fixture.expected.map(x=>Math.round(x*255)),pixels:Array.from(pixels),error:gl.getError()});
     gl.deleteBuffer(buffer);gl.deleteProgram(p);gl.deleteShader(v);gl.deleteShader(f);gl.getExtension('WEBGL_lose_context')?.loseContext();
@@ -178,6 +196,6 @@ assert.throws(()=>Shader.compileNativeIR({irVersion:1,nativeBytes:new Uint8Array
   });
   for(const result of vectorResults){assert.strictEqual(result.error,0);result.pixels.forEach((actual,i)=>
    assert(Math.abs(actual-result.expected[i%4])<=1,JSON.stringify({result,i,actual})));}
-  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' CRS/NRM actual WebGL1/2 pixel cases');
+  console.log('Private VS2 GLSL PASS '+results.length+' rounding/constant +8 LOG +8 EXPP +2 LRP +'+vectorResults.length+' CRS/NRM/POW actual WebGL1/2 pixel cases');
  }finally{await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
