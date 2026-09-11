@@ -1336,3 +1336,21 @@ WebGL1/2 (70142), including asymmetric two-row uploads over rendered content,
 untouched destination pixels and a top-edge X8 update. This is the backend
 prerequisite for UpdateSurface, not completed guest API support; native source/
 destination validation and texture-level routing remain to implement.
+
+The first native UpdateSurface slice now implements matching A8R8G8B8/X8R8G8B8
+system-memory sources to default-pool offscreen, independent render-target,
+render-target texture/cube and ordinary texture-level destinations. The native
+view resolver validates device ownership, pool, format, lock state, source RECT
+and destination POINT before copying. Ordinary texture levels update canonical
+bytes and dirty sequence; executor-owned color destinations submit private30015,
+which snapshots source rows into ordered rectangular RESOURCE_UPDATE commands.
+No whole-target CPU overwrite or readback is used for partial GPU uploads.
+Async reentry polls before allocation/copy; pending calls retain their stack.
+Native80316 passes direct/worker source and destination locks, bounds, offsets,
+outside-pixel preservation, ordinary texture dirty sequence, RT mip/cube data
+and stdcall checks. Production browser40847 software and20981 WebGL both pass
+actual-x86 UpdateSurface to RT texture followed by sampling, source release and
+readback in cooperative-main and guest-main Worker modes. The21-opcode bridge
+routing regression passes. Implicit swapchain destinations, other packed/DXT
+formats and outstanding-DC handling remain missing UpdateSurface coverage;
+this is not full API/format completion and does not expand advertised caps.

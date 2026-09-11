@@ -10,7 +10,7 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
 (async()=>{
   let bridge,productionImport;
   const api={Device9:['SetRenderTarget','GetRenderTarget','GetBackBuffer','SetViewport','GetViewport',
-    'SetScissorRect','GetScissorRect','GetRenderTargetData','ColorFill','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
+    'SetScissorRect','GetScissorRect','GetRenderTargetData','ColorFill','UpdateSurface','SetFVF','SetRenderState','SetTexture','DrawPrimitiveUP','Present','Reset','Release'],
     Texture9:['GetSurfaceLevel','LockRect','Release'],
     CubeTexture9:['GetCubeMapSurface','Release'],
     Surface9:['GetDesc','AddRef','Release','GetDevice','LockRect','UnlockRect']};
@@ -26,6 +26,10 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $pp))
       (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
       (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0))
+      (global.get $eax))
+    (func (export "cpu_texture") (param $d i32) (param $pool i32) (param $out i32) (result i32)
+      (call $d3d9_texture_create (local.get $d) (i32.const 4) (i32.const 4) (i32.const 3)
+        (i32.const 0) (i32.const 21) (local.get $pool) (local.get $out))
       (global.get $eax))
     (func (export "rt_texture") (param $d i32) (param $cube i32) (param $out i32) (result i32)
       (global.set $esp (i32.const 0x074ff000))
@@ -132,7 +136,7 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     createSoftwareWorker:()=>new WorkerConsumer(new Worker(path.join(__dirname,'../lib/d3d-render-worker.js')),
       {module,memory,sigs,imageBase:e.get_image_base()>>>0,reclaimHeap:h=>e.d3d_render_adopt_free_list(h)})});
   const invoke=async(fn,...args)=>{let value=fn(...args);while(e.get_d3d_render_token()){
-    if(fn===e.Device9_ColorFill)assert.strictEqual(e.get_esp()>>>0,0x074ff000,'pending ColorFill preserves stdcall stack');
+    if(fn===e.Device9_ColorFill||fn===e.Device9_UpdateSurface)assert.strictEqual(e.get_esp()>>>0,0x074ff000,'pending copy/fill preserves stdcall stack');
     await bridge.wait(e.get_d3d_render_token());value=fn(...args);}
     if(fn===e.Device9_ColorFill)assert.strictEqual(e.get_esp()>>>0,0x074ff014,'completed ColorFill pops arguments once');
     return value>>>0;};
@@ -143,6 +147,24 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
     ok(await invoke(e.Device9_Present,ad),'filled backbuffer Present');
     assert.strictEqual(new Uint32Array(memory.buffer,e.back_bits(ad),64)[0],0xff102030);
     ok(e.offscreen(ad,3,2,0,out,22),'default offscreen fill');const fillSurface=read(out);
+    ok(e.offscreen(ad,4,3,2,out,22),'UpdateSurface system source');const uploadSource=read(out);
+    ok(await invoke(e.Surface9_LockRect,uploadSource,lock,0,0),'source write');
+    const uploadBits=read(lock+4);for(let i=0;i<12;i++)e.guest_write32(uploadBits+i*4,0xff203040+i);
+    bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,0,fillSurface,0));
+    ok(await invoke(e.Surface9_UnlockRect,uploadSource),'source unlock');
+    write(rect,[1,1,3,3]);const destPoint=alloc(8);write(destPoint,[1,0]);
+    ok(await invoke(e.Device9_ColorFill,ad,fillSurface,0,0xff010203),'GPU-owned destination before upload');
+    ok(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint),'rect UpdateSurface');
+    assert.strictEqual(e.get_esp()>>>0,0x074ff018,'UpdateSurface stdcall');
+    ok(await invoke(e.Surface9_LockRect,fillSurface,lock,0,16),'updated destination readback');
+    const uploaded=read(lock+4);assert.deepStrictEqual(Array.from({length:6},(_,i)=>read(uploaded+i*4)),
+      [0xff010203,0xff203045,0xff203046,0xff010203,0xff203049,0xff20304a]);
+    bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint));
+    ok(await invoke(e.Surface9_UnlockRect,fillSurface),'destination unlock');
+    bad(await invoke(e.Device9_UpdateSurface,ad,fillSurface,0,uploadSource,0));
+    bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,0,fillSurface,0));
+    write(destPoint,[-1,0]);bad(await invoke(e.Device9_UpdateSurface,ad,uploadSource,rect,fillSurface,destPoint));
+    assert.strictEqual(e.Surface9_Release(uploadSource),0);e.guest_free(destPoint);
     ok(await invoke(e.Device9_ColorFill,ad,fillSurface,0,0x12345678),'ColorFill unbound default offscreen');
     ok(await invoke(e.Surface9_LockRect,fillSurface,lock,0,16),'filled offscreen readback');
     assert.strictEqual(read(read(lock+4)),0xff345678,'X8 fill forces opaque alpha');
@@ -187,6 +209,21 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
       ok(await invoke(e.Device9_GetRenderTargetData,ad,s,copy),'read rendered texture surface');
       const copied=pixels(copy);assert.strictEqual(copied.value,0xff123456,'mip contents independent');
       assert.strictEqual(read(copied.p+12),0xff987654,'filled subrect writes exact destination');
+      ok(e.cpu_texture(ad,2,out),'system memory texture source');const sourceTexture=read(out);
+      ok(e.Texture9_GetSurfaceLevel(sourceTexture,1,out),'system source mip');const sourceMip=read(out);
+      ok(await invoke(e.Surface9_LockRect,sourceMip,lock,0,0),'lock source mip');
+      const sourceBits=read(lock+4);[0x12345678,0xabcdef01,0x23456789,0x3456789a].forEach((v,i)=>e.guest_write32(sourceBits+i*4,v));
+      ok(await invoke(e.Surface9_UnlockRect,sourceMip),'unlock source mip');
+      ok(await invoke(e.Device9_UpdateSurface,ad,sourceMip,0,s,0),'system texture to RT mip/cube');
+      ok(await invoke(e.Device9_GetRenderTargetData,ad,s,copy),'read uploaded RT mip/cube');
+      const updated=pixels(copy);assert.deepStrictEqual(Array.from({length:4},(_,i)=>read(updated.p+i*4)),
+        [0x12345678,0xabcdef01,0x23456789,0x3456789a]);
+      ok(e.cpu_texture(ad,0,out),'default normal texture destination');const destTexture=read(out);
+      ok(e.Texture9_GetSurfaceLevel(destTexture,1,out),'default destination mip');const destMip=read(out);
+      ok(await invoke(e.Device9_UpdateSurface,ad,sourceMip,0,destMip,0),'system to ordinary texture');
+      const destRecord=destTexture+64+32;assert.strictEqual(read(destRecord+28),1,'destination dirty sequence');
+      assert.strictEqual(read(read(destRecord+16)+12),0x3456789a,'ordinary texture CPU data updated');
+      e.Surface9_Release(destMip);e.Texture9_Release(destTexture);e.Surface9_Release(sourceMip);e.Texture9_Release(sourceTexture);
       if(!cube){
         const top=surface(0);
         ok(e.Device9_SetRenderTarget(ad,0,top),'bind sampled mip');
