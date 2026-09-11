@@ -853,11 +853,15 @@
   ;; https://learn.microsoft.com/en-us/windows-hardware/drivers/display/instruction-token
   ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-registers-vs-2-0
   ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/mova---vs
+  ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-instructions-vs-2-0
+  ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/expp---vs
   (func $d3d_ir_arity20 (param $op i32) (result i32)
     (if (i32.or (i32.eq (local.get $op) (i32.const 46)) (i32.eq (local.get $op) (i32.const 35))) (then (return (i32.const 2))))
+    (if (i32.or (i32.eq (local.get $op) (i32.const 78)) (i32.eq (local.get $op) (i32.const 79)))
+      (then (return (call $d3d_ir_arity (local.get $op)))))
     (if (i32.and (i32.ge_u (local.get $op) (i32.const 20)) (i32.le_u (local.get $op) (i32.const 24)))
       (then (return (call $d3d_ir_arity (local.get $op)))))
-    (if (i32.or (i32.le_u (local.get $op) (i32.const 13))
+    (if (i32.or (i32.le_u (local.get $op) (i32.const 19))
       (i32.or (i32.eq (local.get $op) (i32.const 19))
       (i32.or (i32.eq (local.get $op) (i32.const 31)) (i32.eq (local.get $op) (i32.const 81)))))
       (then (return (call $d3d_ir_arity (local.get $op)))))
@@ -1009,11 +1013,17 @@
                 (then (return (call $d3d_ir_fail (i32.const 13) (local.get $start)))))
               (if (i32.eq (local.get $firstinput) (i32.const -1)) (then (local.set $firstinput (local.get $index))))
               (if (i32.ne (local.get $firstinput) (local.get $index)) (then (return (call $d3d_ir_fail (i32.const 18) (local.get $start)))))))))
-          (if (i32.and (i32.ge_u (local.get $op) (i32.const 6)) (i32.le_u (local.get $op) (i32.const 7))) (then
+          (if (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 6)) (i32.le_u (local.get $op) (i32.const 7)))
+            (i32.or (i32.and (i32.ge_u (local.get $op) (i32.const 14)) (i32.le_u (local.get $op) (i32.const 15)))
+              (i32.or (i32.eq (local.get $op) (i32.const 78)) (i32.eq (local.get $op) (i32.const 79))))) (then
             (if (i32.ne (local.get $sel) (i32.mul (i32.and (local.get $sel) (i32.const 3)) (i32.const 85)))
               (then (return (call $d3d_ir_fail (i32.const 7) (local.get $start)))))))
           (if (i32.eqz (local.get $bank)) (then
-            (local.set $needed (call $d3d_ir_swizzle_mask (call $d3d_ir_read_mask (local.get $op) (local.get $i) (local.get $mask)) (local.get $sel)))
+            ;; VS2 EXPP is scalar-replicated, including destination .w. The
+            ;; shared VS1 dependency helper intentionally treats .w as constant.
+            (local.set $needed (call $d3d_ir_swizzle_mask
+              (select (i32.const 1) (call $d3d_ir_read_mask (local.get $op) (local.get $i) (local.get $mask))
+                (i32.eq (local.get $op) (i32.const 78))) (local.get $sel)))
             (if (i32.ne (i32.and (i32.wrap_i64 (i64.shr_u (local.get $temps) (i64.extend_i32_u (i32.shl (local.get $index) (i32.const 2))))) (local.get $needed)) (local.get $needed))
               (then (return (call $d3d_ir_fail (i32.const 17) (local.get $start))))))))
         (if (local.get $out) (then
@@ -1028,7 +1038,10 @@
           (then (local.set $position (i32.or (local.get $position) (local.get $mask)))))
         (if (i32.eq (local.get $op) (i32.const 46)) (then (local.set $address (i32.const 1))))))
       (if (i32.and (i32.ne (local.get $op) (i32.const 31)) (i32.ne (local.get $op) (i32.const 81))) (then
-        (local.set $slots (i32.add (local.get $slots) (select (local.get $rows) (i32.const 1) (i32.ne (local.get $rows) (i32.const 0)))))
+        (local.set $slots (i32.add (local.get $slots)
+          (select (i32.const 3) (select (i32.const 2)
+            (select (local.get $rows) (i32.const 1) (i32.ne (local.get $rows) (i32.const 0)))
+            (i32.eq (local.get $op) (i32.const 18))) (i32.eq (local.get $op) (i32.const 16)))))
         (if (i32.gt_u (local.get $slots) (i32.const 256)) (then (return (call $d3d_ir_fail (i32.const 19) (local.get $start)))))))
       (local.set $n (i32.add (local.get $n) (i32.const 1)))
       (if (i32.gt_u (local.get $n) (i32.const 4096)) (then (return (call $d3d_ir_fail (i32.const 11) (local.get $start)))))

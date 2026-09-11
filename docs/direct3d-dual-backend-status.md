@@ -1743,3 +1743,20 @@ and legacy96710 passes263. GPU66016 passes40 cases including both GL1/2 finite
 LRP endpoint oracles. Full build52807 passes canonical1162139 / compat1162607,
 unchanged region layout and no data overlaps (includes concurrent OLE strong-lock
 work, silent baseline345). No private arithmetic token admission is claimed.
+
+After checkpoint272fdb75, private arithmetic token admission is implemented:
+EXP/LOG/LIT/DST/LRP/EXPP/LOGP use the existing native IR schema. Scalar replicate
+checks and selected temporary-component initialization include EXPP.w's VS2
+dependency; LIT/DST keep their precise component dependencies. LIT costs3 slots
+and LRP2 against the256-slot limit, with existing read-port and relative-constant
+rules retained. The public compiler still rejects VS2.
+
+New fixture53094 was RED at EXP error16;56890 passes195 cases after admission.
+Existing private32078 passes84, matrix28171 passes165, legacyIR67578 passes;
+logical81529, fragment, region and diff checks pass. Expanded same-IR replay6190
+passes100 actual WebGL1/2 frames against50 native position/raster frames, adding
+all seven arithmetic instructions with independent exact-binary expectations.
+Full build5124 passes canonical1162212 / compat1162680 with unchanged region
+layout and no data overlaps. Flow control,
+remaining arithmetic instructions and complete VS2 capability admission remain
+open; this is not a full-profile or Black & White gameplay result.

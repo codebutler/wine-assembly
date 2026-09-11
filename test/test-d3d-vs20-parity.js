@@ -34,6 +34,27 @@ const IR=require('../lib/d3d-shader-ir'),Shader=require('../lib/d3d9-shader');
    for(let c=0;c<columns;c++)dot=Math.fround(dot+Math.fround(values[c]*vector[c]));expected[row]=dot;}
   sources.set(key,tokens);cases.push([address,key,expected,vector]);
  }
+ // Arithmetic uses exact binary expectations away from UNORM half ties. Both
+ // backends consume the detached IR produced by the same native token decoder.
+ for(const [op,vector,expected]of[
+  [14,[-2,9,9,9],[.25,.25,.25,.25]],
+  [15,[2,9,9,9],[1,1,1,1]],
+  [16,[.25,.0625,9,.5],[1,.25,.25,1]],
+  [17,[.125,.5,.75,.25],[1,.25,.75,.75]],
+  [18,[.25,.25,.75,1],[.25,.375,.625,.25]],
+  [78,[-2,9,9,9],[.25,.25,.25,.25]],
+  [79,[2,9,9,9],[1,1,1,1]],
+ ]){
+  const key=`arithmetic${op}`,scalar=[14,15,78,79].includes(op);
+  const b=op===17?[1,.5,.25,.75]:[1,.75,.5,.25],c=[0,.25,1,.5];
+  const args=[S(1,2,scalar?0:228)];if(op===17||op===18)args.push(S(2,255));
+  if(op===18)args.push(S(0,2));
+  const tokens=[0xfffe0200,...ins(31,0x80000000,D(1)),...ins(31,0x80010005,D(1,2)),
+   ...ins(81,D(2,255),...b.map(fbits)),...ins(81,D(2,254),...c.map(fbits)),
+   ...ins(1,D(0,2),S(2,254)),...ins(op,D(0),...args),
+   ...ins(2,D(4),S(1),S(0)),...ins(1,D(5),S(0)),65535];
+  sources.set(key,tokens);cases.push([0,key,expected,vector]);
+ }
  const programs=new Map(),frames=[];
  const psTokens=[0xffff0101,1,D(0),S(1),65535],psIR=e.d3d_shader_ir_compile(put(psTokens),psTokens.length);
  assert(psIR);const ps=e.d3d_shader_vm_compile(psIR);assert(ps);e.d3d_shader_ir_free(psIR);
