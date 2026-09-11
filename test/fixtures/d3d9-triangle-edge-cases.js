@@ -29,5 +29,28 @@
  }
  function viewportSequence(){return [[0,0,8,8],[2,1,4,4],[0,0,8,8],[1,2,4,4]].map(([x,y,width,height])=>({
   viewport:{x,y,width,height,minZ:0,maxZ:1},points:[[x+.5,y+.5,.5],[x+width-.5,y+.5,2],[x+.5,y+height-.5,4]]}));}
- const api={cases,mask,draw,viewportSequence};if(typeof module!=='undefined')module.exports=api;else root.D3D9TriangleEdges=api;
+ // Independent analytic polygons, not a JavaScript copy of homogeneous clipping.
+ // For near/far the projected Z plane cuts the two axis-aligned edges halfway.
+ function clippingCases(){const result=[];
+  const raw=(points,w,z)=>points.map(([x,y],i)=>[(x/4-1)*w[i],(1-y/4)*w[i],z[i]*w[i],w[i]]);
+  for(const w of[[1,1,1],[.5,2,4]]){
+   for(const [name,z]of[['near',[-.5,.5,.5]],['far',[1.5,.5,.5]]])
+    result.push({name:name+'/'+w.join(),vertices:raw([[0,0],[8,0],[0,8]],w,z),polygon:[[0,4],[4,0],[8,0],[0,8]]});
+   const source=[[-4,2],[6,2],[6,7]],polygon=[[0,4],[0,2],[6,2],[6,7]];
+   for(const [name,transform]of[['left',([x,y])=>[x,y]],['right',([x,y])=>[8-x,y]],['top',([x,y])=>[y,x]],['bottom',([x,y])=>[y,8-x]]])
+    result.push({name:name+'/'+w.join(),vertices:raw(source.map(transform),w,[.5,.5,.5]),polygon:polygon.map(transform)});
+   result.push({name:'fully-near-rejected/'+w.join(),vertices:raw([[0,0],[8,0],[0,8]],w,[-1,-1,-1]),polygon:[]});
+   result.push({name:'near-and-left/'+w.join(),vertices:raw([[-4,0],[8,0],[0,8]],w,[-.5,.5,.5]),polygon:[[0,2],[2,0],[8,0],[0,8]]});
+   result.push({name:'on-near-plane/'+w.join(),vertices:raw([[0,0],[8,0],[0,8]],w,[0,.5,.5]),polygon:[[0,0],[8,0],[0,8]]});
+  }
+  // Eye-plane intersections are specified directly in homogeneous space.
+  // The retained finite projected hulls below follow from the side/near planes.
+  result.push({name:'negative-w',vertices:[[0,0,-.5,-1],[-.5,-.5,.5,1],[.5,-.5,.5,1]],polygon:[[8,8],[0,8],[2,6],[6,6]]});
+  result.push({name:'nonzero-w-zero',vertices:[[0,.5,-.5,0],[-.5,-.5,.5,1],[.5,-.5,.5,1]],polygon:[[6,4],[2,4],[2,6],[6,6]]});
+  return result;
+ }
+ function polygonMask(polygon,width,height){const result=Array(width*height).fill(false);
+  for(let i=1;i+1<polygon.length;i++){const triangle=mask([polygon[0],polygon[i],polygon[i+1]],width,height);triangle.forEach((v,j)=>{result[j] ||= v;});}return result;
+ }
+ const api={cases,mask,draw,viewportSequence,clippingCases,polygonMask};if(typeof module!=='undefined')module.exports=api;else root.D3D9TriangleEdges=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

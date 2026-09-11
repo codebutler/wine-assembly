@@ -1563,3 +1563,15 @@ notes for artifact paths and exact inputs; no guest state was patched.
 Fullbuild76498 passed the updated silent-handler inventory, then stopped on four
 raw PaintRect accesses in concurrent monitor work in09a-handlers.wat. The owner
 was notified; full-build revalidation of the latest snapshot change is pending.
+
+Software homogeneous clipping audit: native98252 passes74 coverage cases,
+including40 new analytic clipping checks for near/far/all four sides, varying W,
+both windings, simultaneous near/left clipping, exact on-plane vertices,
+negative W and nonzero vertices at W=0. Expected projected polygons are specified
+independently rather than produced by a second clipping implementation. Query
+sample counts equal the unique expected pixel masks, checking clip-fan ownership
+as well as visible coverage. Adjacent native pipeline55231 passes351 shader,
+varying/depth, clipping, helper, lifetime and cancellation cases. Inspection and
+these tests found no concrete software clipper defect; no WAT change was made.
+Arbitrary subpixel rounding and GPU hardware tie-rule equivalence remain open;
+this evidence does not assert universal Windows hardware conformance.
