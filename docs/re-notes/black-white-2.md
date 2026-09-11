@@ -752,3 +752,18 @@ experimental programmable profile for this app only; renderer selection stays
 user-controlled (`?d3d9-renderer=software` for software, WebGL by default).
 CLI: `node test/run.js --app=black_white_2_demo --d3d9-renderer=software`.
 This registers the extracted game, not an installer-success or gameplay claim.
+
+Progression update: current-font run98750 remains live, reaching intro frame1513
+at5947 seconds with finishFrame1786 and zero reported renderer failures.
+`frame-5941.png` was visually inspected: complete Lionhead logo/reflection, not
+yet the menu. Older pre-font-fix run33057 is now authoritatively terminal with
+exit0; its recorded final intro frame1787 and cached missing-glyph state are
+historical evidence only. No restart or guest-state patch was used.
+
+Current-font run98750 has now passed intro frame1786 and reached the profile
+creation menu. Personally inspected `frame-7320.png` shows readable “Select
+Profile”, “New Profile Name”, “Close”, and the main menu labels over the island
+background. At7331 seconds the renderer reports20665 completed draws and zero
+failures. This proves the glyph fix reaches the real game's menu, not just the
+standalone font probe. Profile selection and changing gameplay remain unverified;
+the frozen executable artifact predates lighting/cache/scissor checkpoints.

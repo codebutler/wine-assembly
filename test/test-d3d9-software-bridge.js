@@ -8,7 +8,7 @@ const {Bridge} = require('../lib/d3d9-host');
   const names=['CreateVertexShader','CreatePixelShader','SetVertexShader','SetPixelShader',
     'SetVertexShaderConstantF','SetPixelShaderConstantF','SetMaterial','SetLight','LightEnable',
     'SetDepthStencilSurface','GetDepthStencilSurface',
-    'Reset','TestCooperativeLevel','GetVertexShader','GetPixelShader','GetViewport','GetRenderState','BeginStateBlock','EndStateBlock',
+    'Reset','TestCooperativeLevel','GetVertexShader','GetPixelShader','GetViewport','GetRenderState','BeginStateBlock','EndStateBlock','SetScissorRect',
     'SetFVF','SetRenderState','SetTransform','SetViewport','SetStreamSource','SetTexture','SetSamplerState','DrawPrimitive','DrawPrimitiveUP','Present'];
   const {exports:e,memory}=await bootRenderHarness({fonts:'none',
     extraHostOverrides:{gpu_gl_call:(op,p,a)=>bridge.call(op,p,a)},extraWat:`
@@ -594,6 +594,26 @@ const {Bridge} = require('../lib/d3d9-host');
   litDraw([0,0,0,255],'viewport block changes native raster coverage');
   assert.strictEqual(resized[25],0x80204060,'lit triangle moves to the right-half viewport');
   assert.strictEqual(e.block_Release(viewportBlock),0);
+  [0,0,16,10,0,0x3f800000].forEach((v,i)=>e.guest_write32(viewport+i*4,v));
+  ok(e.SetViewport(device,viewport),'restore full viewport for scissor');
+  ok(e.clear_target(device,0,0,1,0xff000000,1),'erase before enabling scissor');
+  const scissorRect=alloc(16);
+  [2,0,5,3].forEach((v,i)=>e.guest_write32(scissorRect+i*4,v));
+  ok(e.SetScissorRect(device,scissorRect),'native scissor rectangle');
+  ok(e.SetRenderState(device,174,1),'enable scissor');
+  new Uint8Array(memory.buffer,wa(scissorRect),16).fill(0x77);
+  litDraw([0,0,0,255],'scissor rejects fragments outside owned rectangle');
+  assert.strictEqual(resized[19],0x80204060,'lit pixel inside scissor survives');
+  ok(e.clear_target(device,0,0,1,0xff00ff00,1),'scissored Clear');ok(e.Present(device),'scissored Clear Present');
+  assert.strictEqual(resized[19],0xff00ff00);assert.strictEqual(resized[17],0xff000000);
+  assert.strictEqual(resized[21],0xff000000,'right scissor edge is exclusive');
+  const beforeEmpty=resized.slice();[4,4,4,4].forEach((v,i)=>e.guest_write32(scissorRect+i*4,v));
+  ok(e.SetScissorRect(device,scissorRect),'empty native scissor');
+  ok(e.clear_target(device,0,0,1,0xffffff00,1),'empty scissored Clear');
+  ok(e.DrawPrimitiveUP(device,4,1,litVertices,24),'empty scissored Draw');ok(e.Present(device),'empty scissor Present');
+  assert.deepStrictEqual(resized,beforeEmpty,'empty scissor has no pixel side effects');
+  ok(e.SetRenderState(device,174,0),'disable scissor');
+  litDraw([32,64,96,128],'disabled scissor restores full viewport');
   assert.strictEqual(entry.kind,'software');
   assert.strictEqual(entry.queue.completed,entry.queue.submitted);
   assert(entry.queue.completed>=3,'initial clear, draw and Present use one queue');

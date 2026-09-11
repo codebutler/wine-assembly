@@ -22,6 +22,35 @@ and [interval semantics](https://learn.microsoft.com/en-us/windows/win32/direct3
 
 ## Current integration checkpoint
 
+Scissor executor checkpoint: native51017 and independent73298 PASS15
+point/wire/solid cases, depth/stencil/query exclusion, copied rectangle ownership,
+invalid-bind preservation and late-bind rejection. WebGL2504 and independent6215
+PASS20 cases across WebGL1 solid and WebGL2 solid/point/wire, including top-row,
+right-column, empty and disabled rectangles. Software retains shader/helper
+execution and rejects output before alpha/depth/stencil/query effects; that
+ordering is source-reviewed, not a dedicated derivative pixel fixture. GPU
+scissor uses the actual attachment height for its Y conversion. Manifest and
+logical-operand gates pass. Native Windows raster conformance remains separate
+from agreement with each backend's unscissored baseline.
+
+Scissor frontend/state checkpoint70190 PASS: real Set/GetScissorRect with
+owned RECT bytes, pointer/ordering/target-bound validation, a distinct explicit
+empty-rectangle state, independent render-state enable, and selective
+record/Capture/Apply. Reset27538 passes direct/worker paths: failed Reset retains
+the rectangle and successful Reset restores the resized full-target default.
+Async snapshots retain rectangle coordinates across immediate guest reuse.
+Real COM51349 passes scissored lit draw, Clear, exclusive edges, empty regions
+and enable/disable through the canonical framebuffer. Clear normalization
+intersects explicit regions with viewport and scissor before the shared queue;
+the legacy no-backend Clear rejects enabled scissoring rather than ignoring it.
+Browser57824 passes actual x86 scissored Draw and Clear in cooperative and
+guest-main Worker modes through the render Worker, including canonical pixels
+and allocation retirement. Full build69313 passes1148824/1149292 bytes.
+These semantics follow Microsoft's
+[scissor-test contract](https://learn.microsoft.com/en-us/windows/win32/direct3d9/scissor-test).
+Full SetRenderTarget binding and its viewport/scissor reset side effects remain
+an existing open API/resource gate, not completed by this scissor slice.
+
 Viewport state-block prerequisite95990 PASS: `SetViewport` now records owned
 24-byte values without changing live state; repeated writes retain the last
 valid value. Capture/Apply, untouched live getters, unrecorded-state preservation
@@ -35,7 +64,7 @@ An earlier sandbox browser65745 stopped at navigation timeout before guest
 launch; the successful retry used a fresh matched canonical snapshot.
 This follows the documented
 [recordable state methods](https://learn.microsoft.com/en-us/windows/win32/api/d3d9/nf-d3d9-idirect3ddevice9-beginstateblock).
-Full typed ALL/PIXEL/VERTEX creation remains an open gate; scissor, palette,
+Full typed ALL/PIXEL/VERTEX creation remains an open gate; palette,
 clip-plane and other missing categories are not silently claimed by this change.
 
 Directional-lighting state checkpoint: native material/light state15817 PASS

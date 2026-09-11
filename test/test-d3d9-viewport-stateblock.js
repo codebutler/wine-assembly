@@ -2,7 +2,7 @@
 const assert = require('assert');
 const {bootRenderHarness} = require('./render-helper');
 (async () => {
-  const methods = ['SetViewport', 'GetViewport', 'BeginStateBlock', 'EndStateBlock'];
+  const methods = ['SetViewport', 'GetViewport', 'SetScissorRect', 'GetScissorRect', 'BeginStateBlock', 'EndStateBlock'];
   const {exports:e} = await bootRenderHarness({fonts:'none', extraWat:`
     (func (export "device") (param $out i32) (result i32)
       (local $d i32) (local $rt i32)
@@ -56,5 +56,27 @@ const {bootRenderHarness} = require('./render-helper');
   write(input,b);assert.strictEqual(e.SetViewport(d,input),0);
   assert.strictEqual(e.Apply(empty),0);assert.deepStrictEqual(get(),b,'unrecorded viewport stays live');
   assert.strictEqual(e.Release(empty),0);assert.strictEqual(e.Release(block),0);
-  console.log('PASS D3D9 viewport state blocks: recording, last valid write, immutable bytes, Capture/Apply, live getters and bounds');
+  const scissor=()=>{assert.strictEqual(e.GetScissorRect(d,result),0);return Array.from({length:4},(_,i)=>read(result+i*4));};
+  assert.deepStrictEqual(scissor(),[0,0,320,240],'viewport changes do not redefine the default scissor');
+  assert.strictEqual(e.BeginStateBlock(d),0);
+  write(input,[2,3,100,120]);assert.strictEqual(e.SetScissorRect(d,input),0);
+  write(input,[4,5,90,110]);assert.strictEqual(e.SetScissorRect(d,input),0);
+  assert.deepStrictEqual(scissor(),[0,0,320,240],'recording leaves live scissor unchanged');
+  for(const values of [[-1,0,1,1],[0,-1,1,1],[5,0,4,1],[0,5,1,4],[0,0,321,240],[0,0,320,241]]){
+    write(input,values);assert.strictEqual(e.SetScissorRect(d,input)>>>0,invalid);
+  }
+  for(const p of [0,0xfffffff8,0x80000000]){
+    assert.strictEqual(e.SetScissorRect(d,p)>>>0,invalid);
+    assert.strictEqual(e.GetScissorRect(d,p)>>>0,invalid);
+  }
+  assert.strictEqual(e.EndStateBlock(d,out),0);const scissors=read(out);
+  write(input,[0,0,0,0]);assert.strictEqual(e.Apply(scissors),0);
+  assert.deepStrictEqual(scissor(),[4,5,90,110],'last valid copied scissor wins');
+  write(input,[7,9,7,9]);assert.strictEqual(e.SetScissorRect(d,input),0);
+  assert.strictEqual(e.Capture(scissors),0);
+  write(input,[0,0,320,240]);assert.strictEqual(e.SetScissorRect(d,input),0);
+  assert.strictEqual(e.Apply(scissors),0);
+  assert.deepStrictEqual(scissor(),[7,9,7,9],'empty scissor survives Capture/Apply');
+  assert.strictEqual(e.Release(scissors),0);
+  console.log('PASS D3D9 viewport/scissor state blocks: recording, last valid write, immutable bytes, Capture/Apply, live getters and bounds');
 })().catch(error=>{console.error(error);process.exitCode=1;});

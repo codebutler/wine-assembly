@@ -16,6 +16,7 @@
       (local.get $old) (i32.add (local.get $old) (i32.const 1))) (local.get $old))))
   (i32.add (local.get $old) (i32.const 1)))
 (func $d3d9_default_output (param $device i32) (param $depth i32)
+  (call $d3dim_set_render_state (local.get $device) (i32.const 174) (i32.const 0))
   (call $d3dim_set_render_state (local.get $device) (i32.const 137) (i32.const 1))
   (call $d3dim_set_render_state (local.get $device) (i32.const 139) (i32.const 0))
   (call $d3dim_set_render_state (local.get $device) (i32.const 141) (i32.const 1))

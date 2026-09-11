@@ -92,6 +92,21 @@ const root=path.join(__dirname,'..');
           guestWorker:!!w.guestWorker,pending:b.requests.size,submitted:q.submitted,completed:q.completed};
       });
       assert.deepStrictEqual(result,{pixel:0xffff0000,worker:true,guestWorker:threaded,pending:0,submitted:4,completed:4});
+      await call('IDirect3DDevice9_Clear',['device',0,0,1,0xff0000ff,0,0]);
+      await page.evaluate(()=>{const w=runningApps[0].wine,p=w.d3dProbe;
+        [2,0,4,2].forEach((v,i)=>w.instance.exports.guest_write32(p.pp+i*4,v));});
+      await call('IDirect3DDevice9_SetScissorRect',['device','pp']);
+      await call('IDirect3DDevice9_SetRenderState',['device',174,1]);
+      await page.evaluate(()=>{const w=runningApps[0].wine,p=w.d3dProbe;
+        for(let i=0;i<4;i++)w.instance.exports.guest_write32(p.pp+i*4,0x77777777);});
+      await call('IDirect3DDevice9_DrawPrimitiveUP',['device',4,1,'vertices',16]);
+      await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
+      const scissorPixels=()=>page.evaluate(()=>{const w=runningApps[0].wine,
+        p=new Uint32Array(w.memory.buffer,w.d3dProbe.target,64);return [p[10],p[9],p[18]];});
+      assert.deepStrictEqual(await scissorPixels(),[0xffff0000,0xff0000ff,0xff0000ff]);
+      await call('IDirect3DDevice9_Clear',['device',0,0,1,0xff00ff00,0,0]);
+      await call('IDirect3DDevice9_Present',['device',0,0,0,0]);
+      assert.deepStrictEqual(await scissorPixels(),[0xff00ff00,0xff0000ff,0xff0000ff]);
       await call('IDirect3DDevice9_Release',['device']);
       const retired=await page.evaluate(async()=>{
         const w=runningApps[0].wine,b=w.hostCtx.d3d9Bridge;
@@ -100,7 +115,7 @@ const root=path.join(__dirname,'..');
       assert.strictEqual(retired.allocatedBytes,0);assert(retired.heapAdopted>=0);
       assert.deepStrictEqual(errors,[]);
       await page.close();
-      console.log(`PASS browser ${threaded?'guest-main Worker':'cooperative main'} -> software render Worker -> canonical red pixel and native retirement`);
+      console.log(`PASS browser ${threaded?'guest-main Worker':'cooperative main'} -> software render Worker -> canonical draw/scissored Draw+Clear and native retirement`);
     }
   } finally {await browser.close();await closeServer(server);}
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -43,9 +43,10 @@
     ;; +21776 lost state, +21780 creation thread, +21784 presentation interval;
     ;; +21788 desktop dimensions; +21792 textures4/5; +21800 samplers4/5.
     ;; +21928 D3DMATERIAL9 (68 bytes, all-zero default), +21996 light-list head.
-    (local.set $state (call $heap_alloc (i32.const 22000)))
+    ;; +22000 scissor RECT16,+22016 explicit rectangle flag (zero = full target).
+    (local.set $state (call $heap_alloc (i32.const 22020)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22000))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 22020))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
@@ -1148,6 +1149,8 @@
       (i32.or (local.get $arg1) (local.get $arg2)))
       (then (global.set $eax (i32.const 0x8876086C)) (return)))
     (if (local.get $program) (then
+      (if (call $gl32 (i32.add (call $d3ddev_state (local.get $arg0)) (i32.const 952)))
+        (then (global.set $eax (i32.const 0x8876086C)) (return))) ;; RS174 scissor needs a real backend
       (if (call $gl32 (i32.add (local.get $program) (i32.const 21736)))
         (then (global.set $eax (i32.const 0x8876086C)) (return)))
       (call $gs32 (i32.add (local.get $program) (i32.const 1688)) (local.get $arg4))))
@@ -1336,13 +1339,12 @@
 
   ;; IDirect3DDevice9_SetScissorRect — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_SetScissorRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
-    (global.set $eax (i32.const 0))
+    (call $d3d9_scissor (local.get $arg0) (local.get $arg1) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DDevice9_GetScissorRect — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_GetScissorRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_scissor (local.get $arg0) (local.get $arg1) (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DDevice9_SetSoftwareVertexProcessing — 2 args (incl. this)
