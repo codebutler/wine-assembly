@@ -5218,8 +5218,19 @@
 
   ;; GetHWnd(this, lphWnd)
   (func $handle_IDirectDrawClipper_GetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (global.get $main_hwnd))))
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (call $gs32 (local.get $arg1) (load.field DxObject misc0 (local.get $entry)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
@@ -5240,8 +5251,27 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; SetHWnd(this, dwFlags, hWnd) — no-op
+  ;; SetHWnd(this, dwFlags, hWnd) — retain the window whose visible client
+  ;; region defines this clipper. Window-derived region snapshots remain a
+  ;; separate concern, but GetHWnd and later surface attachment must share the
+  ;; caller's actual association rather than the process's main window.
   (func $handle_IDirectDrawClipper_SetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
+      (then
+        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    ;; Microsoft documents dwFlags as reserved and required to be zero.
+    (if (i32.or
+          (i32.ne (local.get $arg1) (i32.const 0))
+          (i32.eqz (call $window_handle_valid (local.get $arg2))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (store.field DxObject misc0 (local.get $entry) (local.get $arg2))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 

@@ -288,3 +288,10 @@ bit zero, the sole processor in the browser Win98 machine. Empty and
 out-of-process masks fail with ERROR_INVALID_PARAMETER instead of returning a
 fabricated previous mask. GetProcessAffinityMask likewise rejects process
 handles outside the one modeled guest process before publishing its 0x1 masks.
+
+2026-09-11: 343 -> 342. IDirectDrawClipper::SetHWnd now retains the validated
+window associated with each clipper object, and GetHWnd returns that exact
+association instead of fabricating the process main window. Reserved flags,
+invalid windows and null output pointers fail without changing retained state.
+Generating and consuming the window's changing visible clip region remains a
+separate DirectDraw task.
