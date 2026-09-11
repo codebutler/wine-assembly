@@ -7708,7 +7708,13 @@ async function main() {
           : ((renderer._mouseButtonsMask || 0) & ~mask);
         if (!renderer._asyncPressedKeys) renderer._asyncPressedKeys = Object.create(null);
         if (down) renderer._asyncPressedKeys[vk] = true;
-        if (wasDown !== down && renderer._queueDirectInputMouseButton) {
+        // A frozen control command is queued until the next step, while eval
+        // and recovery commands run immediately at the parked boundary. If
+        // one of those clears the host mask before this mouse-up executes,
+        // wasDown is already false even though the guest DirectInput device
+        // still holds the preceding press. Always forward synthetic releases:
+        // an extra up record is harmless, but omitting it leaves games firing.
+        if ((!down || wasDown !== down) && renderer._queueDirectInputMouseButton) {
           renderer._queueDirectInputMouseButton(
             renderer._pointerInputMemory || renderer.wasmMemory, mask, down);
         }
