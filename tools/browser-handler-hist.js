@@ -1,0 +1,126 @@
+#!/usr/bin/env node
+// Name and attribute a handler/hot-block histogram that was read out of the
+// BROWSER instead of test/run.js.
+//
+//   node tools/browser-handler-hist.js <hist.json> [--top=20] [--blocks=25]
+//                                      [--exe-base=0x400000] [--dump=FILE]
+//
+// WHY THIS EXISTS: `--handler-hist` only exists in test/run.js, and an app
+// whose gameplay only runs in a browser (anything on the OpenGL path —
+// lib/gl-compat.js needs a `document`, and wglCreateContext returns 0 without
+// one) can never be profiled with it. The same numbers are plain wasm exports,
+// so a page can read them; what it cannot do is name handler 64 or say which
+// DLL block 0x00a98462 is in. That is this file.
+//
+// The input is whatever JSON a page probe produced from these exports:
+//   get_handler_hist_base/_slots/_count   -> { handlers: [[id, hits], ...] }
+//   get_hot_block_hist_base/_count        -> { blocks:   [["hexaddr", hits], ...] }
+//   wine.moduleBases                      -> { mods: { name: [base, origBase] } }
+// plus the scalar totals `ops` and `blockHits`. Extra fields are ignored, so
+// the probe is free to carry a WinePerf snapshot along in the same object.
+//
+// Handler names come from the `(elem ...)` list in src/02-thread-table.wat —
+// the same source test/run.js reads — so a renumber cannot desync them.
+
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+const argv = process.argv.slice(2);
+const opt = (name, dflt) => {
+  const a = argv.find(x => x.startsWith(`--${name}=`));
+  return a ? a.slice(name.length + 3) : dflt;
+};
+const file = argv.find(a => !a.startsWith('--'));
+if (!file) {
+  console.error('usage: browser-handler-hist.js <hist.json> [--top=N] [--blocks=N]');
+  process.exit(2);
+}
+const TOP = Number(opt('top', 20));
+const BLOCKS = Number(opt('blocks', 25));
+const EXE_BASE = Number(opt('exe-base', '0x400000'));
+const DUMP = opt('dump', '');
+
+function handlerNames() {
+  const names = [];
+  const source = fs.readFileSync(path.join(ROOT, 'src', '02-thread-table.wat'), 'utf8');
+  for (const line of source.split(/\r?\n/)) {
+    const m = line.match(/^\s*(\$[^\s()]+).*;;\s*(\d+)(?::\s*(.*))?$/);
+    if (!m) continue;
+    const id = parseInt(m[2], 10);
+    if (!Number.isFinite(id)) continue;
+    names[id] = m[3] ? `${m[1]}: ${m[3].trim()}` : m[1];
+  }
+  return names;
+}
+
+const hist = JSON.parse(fs.readFileSync(file, 'utf8'));
+const names = handlerNames();
+
+// One entry per distinct module base: `wine.moduleBases` stores each DLL under
+// both its bare name and its .dll name, and printing both halves would double
+// every row.
+const mods = [];
+const seen = new Set();
+for (const [name, pair] of Object.entries(hist.mods || {})) {
+  const [base, origBase] = pair;
+  if (!base || seen.has(base)) continue;
+  seen.add(base);
+  mods.push({ name: name.includes('.') ? name : name + '.dll', base, origBase });
+}
+mods.push({ name: 'exe', base: EXE_BASE, origBase: EXE_BASE });
+mods.sort((a, b) => a.base - b.base);
+
+const attribute = (addr) => {
+  let hit = null;
+  for (const m of mods) { if (addr >= m.base) hit = m; else break; }
+  if (!hit) return { name: '?', va: addr };
+  return { name: hit.name, va: (addr - hit.base + hit.origBase) >>> 0 };
+};
+
+const ops = hist.ops || 0;
+const blockHits = hist.blockHits || 0;
+console.log(`ops ${ops.toLocaleString()}   block entries ${blockHits.toLocaleString()}` +
+  (blockHits ? `   ${(ops / blockHits).toFixed(2)} ops/block` : '') +
+  `   distinct blocks ${hist.distinct || (hist.blocks || []).length}`);
+
+console.log('');
+console.log('top handlers:');
+for (const [id, hits] of (hist.handlers || []).slice(0, TOP)) {
+  const pct = ops ? (hits * 100 / ops).toFixed(2) : '0.00';
+  console.log(`  H${String(id).padStart(3)} ${(names[id] || '$handler_' + id).padEnd(46)}` +
+    ` ${String(hits).padStart(10)} (${pct}%)`);
+}
+
+console.log('');
+console.log('top blocks:');
+const perModule = new Map();
+for (const [hex, hits] of (hist.blocks || [])) {
+  const addr = parseInt(hex, 16) >>> 0;
+  const a = attribute(addr);
+  perModule.set(a.name, (perModule.get(a.name) || 0) + hits);
+}
+for (const [hex, hits] of (hist.blocks || []).slice(0, BLOCKS)) {
+  const addr = parseInt(hex, 16) >>> 0;
+  const a = attribute(addr);
+  const pct = blockHits ? (hits * 100 / blockHits).toFixed(2) : '0.00';
+  console.log(`  0x${addr.toString(16).padStart(8, '0')}  ${a.name}+0x${a.va.toString(16)}`.padEnd(44) +
+    ` ${String(hits).padStart(9)} (${pct}%)`);
+}
+
+console.log('');
+console.log('listed block hits by module:');
+for (const [name, hits] of [...perModule].sort((a, b) => b[1] - a[1])) {
+  const pct = blockHits ? (hits * 100 / blockHits).toFixed(1) : '0.0';
+  console.log(`  ${name.padEnd(14)} ${String(hits).padStart(10)} (${pct}% of all block entries)`);
+}
+
+if (DUMP) {
+  fs.writeFileSync(DUMP, (hist.blocks || [])
+    .map(([hex, hits]) => {
+      const addr = parseInt(hex, 16) >>> 0;
+      const a = attribute(addr);
+      return `0x${addr.toString(16)} ${hits} ${a.name}+0x${a.va.toString(16)}`;
+    }).join('\n') + '\n');
+  console.log(`\nwrote ${(hist.blocks || []).length} blocks to ${DUMP}`);
+}
