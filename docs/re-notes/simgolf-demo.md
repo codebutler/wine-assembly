@@ -612,7 +612,70 @@ consumer that runs at real time no matter how slow the guest is. Nothing in
 the host can paper over it; making the blitter loops cheaper is what would
 also fix the sound.
 
-## Measured browser frame rate: ~2-3 fps of gameplay, in BOTH backends
+## CORRECTION: the frame rate is 4.9 fps, and `guestFps` is a 2-second window
+
+The table in the next section quotes `WinePerf.snapshot().guestFps`. **Do not
+quote that field as an app's frame rate.** It is `_rate(this.guestFrames)` with
+a default `windowMs` of 2000 (lib/perf-hud.js:364,418), so at a few presents a
+second it is a five-sample estimate of an instant. Read across six snapshots of
+this one app it returned 1.85, 2.05, 2.58, 2.69, 3.19 and **6.05** — a 3.3x
+spread with nothing wrong in any of them.
+
+Counted properly, from the raw present-timestamp ring over a **46.8-second
+window: 230 presents = 4.91 present/s**. `tools/page-probes/read-handler-hist.js`
+now hands that ring back and `tools/browser-handler-hist.js` prints the window,
+so the number comes from 230 samples instead of 5. Everything below the
+correction line stands as a *relative* comparison between the two backends —
+both arms were measured the same wrong way — but the absolute figures there are
+low by roughly 2x.
+
+### And the blitter is ~60% of the interpreter, not 73%
+
+Per present, measured in the same window: **356.0k block entries and 1.419M
+threaded ops**, of which jgl.dll is 261.2k block entries — 73.4% of *blocks*.
+But jgl's blitter blocks are smaller than the app's average (3.23 ops/block
+against 3.99 overall), so its share of *ops* is only ~59%. Priced with
+bench-loops' primitives (a dispatch ~8ns, a block transfer ~9ns on top):
+
+| | ops/frame | block entries/frame | modelled ms/frame |
+|---|---|---|---|
+| jgl.dll | ~844k | 261.2k | 9.10 |
+| whole guest | 1419k | 356.0k | 14.55 |
+
+so jgl is **~62% of modelled interpreter time**, not 73%. Folding it perfectly
+is `1/(0.375 + 0.625/10)` = **2.3x**, not the 2.8-3.4x §19.1 claimed off the
+block-entry share. Applied to the corrected 4.91 fps baseline that is **~11
+fps**, which is a better answer than the 6-8 the uncorrected numbers gave.
+
+Also load-immune and useful: at 3.0-3.75 block entries per pixel (the range
+`ck_lut16` and `ck_lut16_opaque` measure) jgl is blitting **~70-87k pixels per
+frame** — well under the 940x736 canvas, so this is per-frame sprite work over
+a retained terrain, not a full redraw.
+
+### The gap that matters more than the fold
+
+`356.0k blocks/frame x 4.91 fps` = **1.75M blocks/s** (the snapshot's own
+`blocksPerSec` says 1.71M, so this is self-consistent). The same primitives
+that price the table above predict `1e9 / 40.9ns` = **24.4M blocks/s**. The
+emulator is running at **one fourteenth** of what its own dispatch cost
+implies.
+
+That gap is worth more than any fold: closing even half of it beats 2.3x. Two
+candidate explanations, neither tested:
+
+1. **The box.** Every measurement in this file was taken at loadavg 33-113
+   with 37 users on the machine. bench-loops is equally exposed, but a
+   single tight loop and a 2056-block working set are not equally exposed.
+2. **The microbench flatters itself**, exactly as CLAUDE.md warns: "it
+   understates dispatch cost by construction (a periodic loop is perfectly
+   BTB-predicted)". A real app with 2056 distinct hot blocks pays branch
+   mispredicts and cache misses that a 3-op loop never does.
+
+Until one of those is measured on a quiet box, **every fps projection in this
+file is a projection off a contaminated baseline**, and the fold's 2.3x is a
+ratio between two numbers that are both suspect in the same direction.
+
+## Measured browser frame rate: ~2-3 fps of gameplay, in BOTH backends (SUPERSEDED — see correction above)
 
 Headful Chrome against `tools/dev-server.js --isolate --port=8123`, one
 20-second sample after the loader, `?debug&perf` so `WinePerf.snapshot()`

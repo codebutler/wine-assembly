@@ -27,7 +27,21 @@
   for (var k in mb) { mods[k] = [(mb[k].base || mb[k].loadAddr || 0), (mb[k].origBase || 0)]; }
   var perf = null;
   try { perf = window.WinePerf && window.WinePerf.snapshot ? window.WinePerf.snapshot() : null; } catch (_) {}
-  return JSON.stringify({ perf: perf, err: window.__histErr || null, armed: window.__histArmed || 0,
+  // snapshot().guestFps is a rolling 2000ms rate -- at a couple of presents a
+  // second that is a five-sample estimate, far too thin to divide into a
+  // 20-second block count. The ring of raw present timestamps is the real
+  // measurement, so hand it over and let the host pick the window.
+  var frames = null, nowMs = 0;
+  try {
+    nowMs = performance.now();
+    if (window.WinePerf && window.WinePerf.guestFrames) frames = window.WinePerf.guestFrames.slice();
+  } catch (_) {}
+  // armSnap + perf bracket the histogram window: every count below was taken
+  // between them, so presents and wall time for THIS window are the two
+  // differences, not the cumulative figures in either snapshot alone.
+  return JSON.stringify({ perf: perf, armSnap: window.__histArmSnap || null,
+    presentTimes: frames, nowMs: nowMs, armPerfMs: window.__histArmPerfMs || 0,
+    err: window.__histErr || null, armed: window.__histArmed || 0,
     ops: tot, handlers: H.slice(0, 30), blockHits: bt, distinct: B.length,
     blocks: B.slice(0, 40), mods: mods });
 })()

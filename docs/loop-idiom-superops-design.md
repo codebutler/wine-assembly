@@ -1465,7 +1465,27 @@ the keyed loop costs `12.12*8 + 3.75*9` = **~131 ns/pixel** against ~9 for the
 folded twin; a keyed fold must still test the key per pixel inside the run, so
 call its floor 12-20 ns/pixel and the loop speedup **7-11x**.
 
-Against SimGolf's 73% block-entry share that is a whole-app **~2.8-3.4x**, and
-Amdahl caps any keyed fold at 3.7x no matter how good it is. That is the number
-the fold has to be argued on — not the microbench percentage, per the rule in
-CLAUDE.md, and not corpus reuse, per §19.
+Against SimGolf's 73% block-entry share that is a whole-app ~2.8-3.4x — **but
+that share is the wrong denominator, see the correction below.**
+
+### 19.2 Correction: block-entry share is not time share
+
+73.4% is jgl's share of *block entries*. Its blitter blocks are smaller than
+the app's average (3.23 ops/block against 3.99), so its share of *ops* is only
+~59%, and priced with this harness's own primitives (dispatch ~8ns, block
+transfer ~9ns on top) it is **~62% of modelled interpreter time**: 9.10 of
+14.55 modelled ms per frame, from a measured 844k of 1419k ops and 261.2k of
+356.0k block entries per present.
+
+That puts a perfect fold at `1/(0.375 + 0.625/10)` = **2.3x**, not 2.8-3.4x.
+Using a block-entry share as a time share overstates any fold that targets
+*short* blocks, which is every loop-idiom fold in this document — so read §14's
+and §17's app-level projections with the same suspicion and recompute them off
+ops before quoting.
+
+One measurement bounds all of it. SimGolf retires 1.75M blocks/s in the
+browser; the same primitives predict 24.4M. **The interpreter runs at a
+fourteenth of its own modelled speed**, so either the loaded box or the
+microbench's perfectly-predicted loop (CLAUDE.md's own warning) is worth more
+than every fold in this file combined. Measure that on a quiet box before
+building anything here.

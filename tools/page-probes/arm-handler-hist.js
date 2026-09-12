@@ -18,5 +18,14 @@ setTimeout(function () {
     e.reset_handler_hist();
     e.set_handler_hist_enabled(1);
     window.__histArmed = Date.now();
+    // Same clock the present-timestamp ring uses, so the reader can count
+    // exactly the presents that fall inside the histogram window.
+    try { window.__histArmPerfMs = performance.now(); } catch (_) {}
+    // Snapshot the frame counters at the SAME instant the histogram starts, so
+    // the reader can difference them. WinePerf.snapshot() is cumulative over
+    // the whole run -- its fps covers the loader too, and dividing lifetime
+    // presents into a 20-second histogram window is how you talk yourself into
+    // a pixels-per-frame figure that is off by the length of the warmup.
+    try { window.__histArmSnap = window.WinePerf.snapshot(); } catch (_) {}
   } catch (err) { window.__histErr = String(err); }
 }, window.__histArmDelay || 230000), 'hist-arm-scheduled'

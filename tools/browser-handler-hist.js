@@ -115,6 +115,34 @@ for (const [name, hits] of [...perModule].sort((a, b) => b[1] - a[1])) {
   console.log(`  ${name.padEnd(14)} ${String(hits).padStart(10)} (${pct}% of all block entries)`);
 }
 
+// The histogram window, in frames. Counts are load-immune and a present count
+// is load-immune too, so block-entries-per-present survives a busy box even
+// though every millisecond figure on it does not. Divide by the blocks/pixel
+// that tools/bench-loops.js measures for the same loop shape and the result is
+// pixels blitted per frame — the number that says whether a per-pixel fold can
+// reach a target frame rate, with no timing in it anywhere.
+const times = hist.presentTimes;
+if (Array.isArray(times) && times.length && hist.armPerfMs && hist.nowMs) {
+  const from = hist.armPerfMs, to = hist.nowMs;
+  const inWindow = times.filter(t => t >= from && t <= to);
+  const spanS = (to - from) / 1000;
+  console.log('');
+  console.log(`histogram window: ${spanS.toFixed(1)}s, ${inWindow.length} guest presents` +
+    ` => ${(inWindow.length / spanS).toFixed(2)} present/s` +
+    ` (ring holds ${times.length}; snapshot's 2s guestFps was ` +
+    `${hist.perf && hist.perf.guestFps != null ? hist.perf.guestFps.toFixed(2) : '?'})`);
+  if (inWindow.length) {
+    console.log(`  ${(blockHits / inWindow.length / 1000).toFixed(1)}k block entries per present` +
+      `   ${(ops / inWindow.length / 1000).toFixed(1)}k ops per present`);
+    for (const [name, hits] of [...perModule].sort((a, b) => b[1] - a[1]).slice(0, 4)) {
+      const perFrame = hits / inWindow.length;
+      console.log(`  ${name.padEnd(14)} ${(perFrame / 1000).toFixed(1)}k block entries/frame` +
+        `  => ${(perFrame / 3.75 / 1000).toFixed(1)}k px/frame at 3.75 blocks/px` +
+        ` (${(perFrame / 3.0 / 1000).toFixed(1)}k at 3.00)`);
+    }
+  }
+}
+
 if (DUMP) {
   fs.writeFileSync(DUMP, (hist.blocks || [])
     .map(([hex, hits]) => {
