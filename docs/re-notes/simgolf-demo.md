@@ -611,3 +611,65 @@ roughly a twenty-fifth of the machine it was written for, and audio is the one
 consumer that runs at real time no matter how slow the guest is. Nothing in
 the host can paper over it; making the blitter loops cheaper is what would
 also fix the sound.
+
+## Measured browser frame rate: ~2-3 fps of gameplay, in BOTH backends
+
+Headful Chrome against `tools/dev-server.js --isolate --port=8123`, one
+20-second sample after the loader, `?debug&perf` so `WinePerf.snapshot()`
+carries phase attribution. `tools/profile-web-frames.js` grew a `--threads`
+flag for this (it sets the page's `wine-assembly.threads` key between the
+`localStorage.clear()` and the reload, serves COOP/COEP from its own static
+server, and prints the backend that actually came up — worker startup can fail
+and fall back, and a threads run that quietly measured the cooperative
+scheduler is worse than no run).
+
+| | cooperative | cooperative | worker threads | worker threads |
+|---|---|---|---|---|
+| loadavg during | 92 | 33 | 83 | 36 |
+| **guest fps** (app's own presents) | **2.05** | **2.69** | **1.85** | **2.58** |
+| page fps (compositor) | 24.7 | 16.8 | 60.0 | 59.4 |
+| blocks/s | 2.73M | 1.32M | 1.89M | 1.12M |
+| frame interval p50 / p90 (ms) | 17 / 149 | 17 / 251 | 17 / 18 | 17 / 17.5 |
+| long tasks in 20s | 58 | 72 | 3 | 1 |
+| main thread blocked | 66% | 81% | 0% | 0% |
+| throttled | 99% | 98% | 0% | 0% |
+
+**The game runs at two to three frames per second, and threads do not change
+that.** What threads change is who waits: cooperatively the guest slice runs on
+the main thread, so 66-81% of wall clock is inside a task the browser cannot
+interrupt and the page composites at 17-25fps with a 250ms p90; on the Worker
+backend the page is a clean 60fps with one long task in twenty seconds. The
+emulated machine advances at the same speed either way — `guestFps` and
+`blocks/s` are the same within the noise of this box, and `blocks/s` is
+actually *lower* in the threads runs. A smooth 60fps page showing a 2fps game
+is the outcome; `PRESENT/s`, application fps and page fps are three different
+measurements and only the first two describe SimGolf.
+
+Every one of these is flagged BUSY by the profiler (loadavg 33-104 across the
+four runs), so read them as a floor. The ratio between backends is the robust
+part; the absolute fps is not.
+
+### Threads mode renders no terrain
+
+The first threads run reported a flat 60fps and "the screen never changed",
+which reads like a guest that never reached gameplay. It is not. Filming it
+(`--film`) shows SimGolf **does** reach the interface — the title, the
+`Christmas Pines MC / March 2001` course plaque, the control cluster — with the
+entire course area **black**. The only pixels changing in that arm were the
+perf HUD's own 300x152 box at (629,12), which is why the change probe read
+idle. The cooperative film at the same point shows the course: water, shore,
+trees and an animating swimmer.
+
+So the worker backend is not slower on this app, it is **wrong** on it, and no
+frame-rate comparison between the two is meaningful beyond the table above.
+Untested hypothesis worth one session: SimGolf renders through the GL path,
+`lib/gl-compat.js` needs a `document` and lives on the main thread, so a guest
+main thread inside a Worker has to broker every GL call back — the terrain is
+what would disappear first if that brokering drops commands.
+
+### What the fold in docs/loop-idiom-superops-design.md §19.1 would mean here
+
+2.0-2.7 fps now; the measured 2.8-3.4x puts it at **6-8 fps**. That is not
+playable, but it is the difference between a slideshow and something that
+animates, and it is the same factor that would let the Miles mixer keep its
+0.74s ring fed. Nothing else measured on this app is worth more.

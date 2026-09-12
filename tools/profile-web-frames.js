@@ -107,6 +107,13 @@ const CPU_PROFILE = argv.includes('--cpu-profile');
 // as what the app feels like; headless stays the default for pass/fail checks
 // that only need the page to work.
 const HEADFUL = argv.includes('--headful');
+// --threads runs the guest on the isolated Worker backend instead of the
+// cooperative scheduler — the browser twin of test/run.js's --threads. The
+// opt-in is a localStorage key read at launch, so it has to be written before
+// the reload that starts the app, and the page only honours it on a
+// cross-origin-isolated origin (see startStaticServer). The run reports which
+// backend actually came up: worker startup can fail and fall back.
+const THREADS = argv.includes('--threads');
 // --guest-key=VK@atSec:holdSec[,...]: hold a guest key down for a while DURING
 // the sample. Scrolling a map is the workload that separates "the app is idle"
 // from "the app is redrawing everything", and it is a held arrow key, not a
@@ -167,7 +174,17 @@ function startStaticServer() {
     if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403); res.end('forbidden'); return; }
     fs.readFile(file, (error, data) => {
       if (error) { res.writeHead(error.code === 'ENOENT' ? 404 : 500); res.end(error.code || 'read error'); return; }
-      res.writeHead(200, { 'Content-Type': mimeType(file), 'Cache-Control': 'no-store' });
+      res.writeHead(200, {
+        'Content-Type': mimeType(file),
+        'Cache-Control': 'no-store',
+        // A shared WebAssembly.Memory needs a cross-origin-isolated page, so
+        // without these two headers the threads opt-in silently falls back to
+        // the cooperative scheduler and the run measures the wrong backend.
+        ...(THREADS ? {
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Embedder-Policy': 'require-corp',
+        } : {}),
+      });
       res.end(data);
     });
   });
@@ -263,6 +280,18 @@ async function main() {
     // real first-time visitor cannot reach. Keep this ordering aligned with
     // tools/web-input-probe.js.
     await page.evaluate(() => { try { localStorage.clear(); } catch (_) {} });
+    // After the clear, before the reload: the clear would wipe it, and the
+    // launch path reads it once at startup.
+    if (THREADS) {
+      const isolated = await page.evaluate(() => {
+        try { localStorage.setItem('wine-assembly.threads', '1'); } catch (_) {}
+        return typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated;
+      });
+      if (!isolated) {
+        throw new Error('--threads needs a cross-origin-isolated origin; with --origin, ' +
+          'point it at `node tools/dev-server.js --isolate`');
+      }
+    }
     await page.reload({ waitUntil: 'load', timeout: 60000 });
     await page.waitForFunction('typeof launchApp === "function"', { timeout: 60000 });
 
@@ -446,6 +475,17 @@ async function main() {
     // The guest needs to be past its loader before pacing means anything.
     await wait(WARMUP * 1000);
     console.log(`slice size: ${await page.evaluate(() => (runningApps[0] || {}).wine ? runningApps[0].wine.stepsPerSlice : null)} steps`);
+    // Report the backend that actually came up rather than the one requested:
+    // Worker startup can fail and fall back cooperatively, and a threads run
+    // that quietly measured the cooperative scheduler is worse than no run.
+    const backend = await page.evaluate(() => {
+      const w = (runningApps[0] || {}).wine;
+      return (w && w.threadManager && w.threadManager.backend) || 'cooperative (no thread manager yet)';
+    });
+    console.log(`guest backend: ${backend}${THREADS ? ' (--threads requested)' : ''}`);
+    if (THREADS && !/worker/.test(backend)) {
+      console.log('  WARNING: --threads was requested but the guest is not on the Worker backend');
+    }
     await armCounts();
 
     // One event per evaluate, with real time in between. Delivering all four
