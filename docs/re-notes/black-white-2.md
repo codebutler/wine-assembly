@@ -2156,3 +2156,53 @@ an earlier board entry claimed. This log shows the picker surviving two complete
 click cycles (mousedown 223972 / mouseup 232249, then 285656 / 292236) and the
 spin beginning only after the second — and the first fault of the run lands
 after cursor motion has already started, not on the first hover.
+
+### The allocation never failed — measured, not assumed
+
+The obvious reading of the unchecked grow is "our heap returned NULL". It did
+not. `[heap] OOM` reporting now exists for exactly this question (five refusal
+paths in `$heap_alloc`, logged unconditionally), and a full 600-second run —
+647,150 batches, `--memory-mb=1024`, `--fault-null` armed — produced **zero OOM
+lines and zero faults**. Our heap refused this game nothing.
+
+The measured ceilings, for anyone sizing a memory-hungry guest: 8MB allocations
+run out at **312MB** on the default 512MB host memory and **816MB** with
+`--memory-mb=1024`, the difference being the extension backing window above
+`$THREAD_RPC`'s end. Note that `$VIRTUAL_BACKING_EXT` appears only in a comment
+in `01-header.wat` — the window is real and implemented as
+`$virtual_backing_ext_take` in `10-helpers.wat`, but it is not a declared
+region, so grepping the name finds nothing.
+
+So the NULL `items` is not a failed allocation, which changes what the fault
+pattern means. If `malloc` always succeeded, then an `items` that reads as zero
+was not *stored* as zero — it was **read from the wrong place**. A `cellBase`
+pointing into unrelated but mapped memory produces exactly the observed pair: a
+large garbage value where the count belongs and a zero where the items pointer
+belongs. The `0x0`/`0x4` and `0xb7ab_xxxx` faults are then the cases where that
+same wrong base lands somewhere unmapped rather than somewhere mapped.
+
+That run also reached only the Lionhead logo in 600 seconds (the particle
+animation renders correctly), against session 35's menu at 471s — this box sits
+at load 16-45 with several agents on it, so wall-clock progress is not
+comparable between runs and batch numbers cannot be reused across
+configurations for input scheduling.
+
+### The grid is an embedded member at parent+0x74
+
+At the query call site the receiver is formed as `lea ecx,[esi+0x74]`
+(`0x9e4712`), so the grid is **inline in its parent**, not a pointer to a
+separately allocated object. Its cell array is therefore `[parent+0x94]`, and
+the output triple the caller zeroes and reads back is `parent+0xC4/0xC8/0xCC`,
+consistent with the earlier decode of the two call sites.
+
+This matters for the remaining question: an embedded grid is constructed with
+its parent, so "the cell array pointer is wrong" is not a missing allocation of
+the grid itself but either an `Init(w, h, cellSize)` that never ran or one that
+ran with garbage inputs.
+
+Two dead ends recorded so they are not retried. `tools/find_fn.js` puts the
+insert's entry at `0x9e505c` and `0x9e50d6`; both are wrong (`xrefs` finds no
+callers of `0x9e505c`), which is the documented caution about that tool. And
+`find_field.js` on offsets `0x14`/`0x94` returns 2637 and 237 hits
+respectively, nearly all misaligned `adc` decodes of data — the field offsets
+here are too common for a static field search to be worth anything.
