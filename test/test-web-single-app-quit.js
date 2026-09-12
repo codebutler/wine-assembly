@@ -120,10 +120,27 @@ async function main() {
     // with no Fullscreen API the display grab now takes the page with it
     // (index.html's enterPageFullscreenIfNoApi), and setting the classes by
     // hand skips exactly the code that has to be undone again on the way out.
+    //
+    // Pinned, not just set: winmine is not really an exclusive app, so the
+    // very next repaint recomputes exclusive as false, and
+    // _setExclusiveFullscreen(false) then calls exitPageFullscreen for it --
+    // the state under test is gone again before it can be read. That race is
+    // decided by how many repaints land between two page.evaluate calls, so
+    // on a loaded box it lost every time. Force the renderer's own verdict the
+    // way test/test-web-page-fullscreen.js does, which is also what a real
+    // full-screen game looks like: exclusive on every frame.
     await page.evaluate(() => {
       const app = runningApps.find(item => item && item.name === 'winmine_wep');
+      // `win => !!win` rather than a flat `true`: the renderer asks this about
+      // the top window on every repaint including the one with no windows
+      // left, and a verdict of "exclusive" on an empty desktop would hand the
+      // page to a guest that is gone -- which is the very thing the rest of
+      // this test is checking does not happen.
+      app.wine.renderer._isExclusiveFullscreenWindow = win => !!win;
       app.wine.renderer._setExclusiveFullscreen(true);
     });
+    await page.waitForFunction(
+      () => document.body.classList.contains('page-fullscreen'), { timeout: 10000 });
     const owned = await page.evaluate(() => document.body.className);
     assert(owned.includes('page-fullscreen'),
       `an exclusive app on an API-less browser should own the page, got "${owned}"`);
@@ -228,6 +245,96 @@ async function main() {
     });
     await page.waitForFunction(() => runningApps.some(item => item && item.name === 'notepad'),
       { timeout: 120000 });
+
+    // ------------------------------------------------------------------
+    // The exit chip. Reported as "'Close' button don't seem to do anything on
+    // this pinball view": the round X at the top right while a full-screen
+    // game owns the phone.
+    //
+    // Two separate failures are possible and they look identical from the
+    // outside, so both are measured here. Either something on the overlay
+    // stack (the guest canvas, a touch-control zone) sits over the chip and
+    // swallows the touch, or the tap lands and the handler is a visual no-op
+    // -- which is what it was: the chip called exitPageFullscreen, and in
+    // single-app mode leaving page-fullscreen changes nothing on screen (the
+    // app already had every pixel) while hiding the chip itself behind
+    // `windowed-phone` and leaving the desktop icons hidden behind
+    // `app-running`. One tap and there was nothing left to press.
+    //
+    // Nothing here is pinball-specific: any app that takes the display goes
+    // through this same chip, so the check rides on the app that is already
+    // running.
+    await page.waitForFunction(() => {
+      const app = runningApps.find(item => item && item.name === 'notepad');
+      return !!(app && app.wine && app.wine.renderer);
+    }, { timeout: 60000 });
+    await page.evaluate(() => {
+      const app = runningApps.find(item => item && item.name === 'notepad');
+      // Pinned for the same reason as above: a chip that is only on screen
+      // until the next repaint is not the thing being measured.
+      app.wine.renderer._isExclusiveFullscreenWindow = win => !!win;
+      app.wine.renderer._setExclusiveFullscreen(true);
+    });
+    await page.waitForFunction(
+      () => document.body.classList.contains('page-fullscreen'), { timeout: 10000 });
+    const chip = await page.evaluate(() => {
+      const el = document.getElementById('page-fullscreen-exit');
+      if (!el) return { missing: true };
+      const r = el.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      const overlay = document.getElementById('touch-controls');
+      return {
+        display: getComputedStyle(el).display,
+        w: r.width, h: r.height, cx, cy,
+        // Who actually receives a touch at that point. Anything but the chip
+        // itself means the tap never reaches the handler at all.
+        hit: hit ? (hit.id || hit.className || hit.tagName) : 'none',
+        // The visible circle is 30px, under Apple's 44px minimum, so the
+        // button carries a transparent ::before that widens the TARGET. A
+        // point just outside the drawn edge has to still be the button.
+        slopHit: (() => {
+          const near = document.elementFromPoint(cx, Math.max(0, r.top - 5));
+          return near ? (near.id || near.className || near.tagName) : 'none';
+        })(),
+        chipZ: parseInt(getComputedStyle(el).zIndex, 10),
+        // The overlay and the chip share a parent (#screen-wrap), so their
+        // z-index values are directly comparable; the in-place zones pinball
+        // spreads over the table live inside it.
+        overlayZ: overlay ? parseInt(getComputedStyle(overlay).zIndex, 10) : null,
+        classes: document.body.className,
+      };
+    });
+    assert(!chip.missing, 'the page has no exit chip at all');
+    assert.notStrictEqual(chip.display, 'none',
+      `the exit chip must be on screen while an app owns the display, body "${chip.classes}"`);
+    assert(chip.w >= 28 && chip.h >= 28,
+      `the exit chip is the only way out; it must stay a real touch target, got ${chip.w}x${chip.h}`);
+    assert.strictEqual(chip.slopHit, 'page-fullscreen-exit',
+      `a touch 5px above the chip lands on "${chip.slopHit}"; the 30px circle needs ` +
+      `its widened target, or a near miss reads as a dead button`);
+    assert.strictEqual(chip.hit, 'page-fullscreen-exit',
+      `a touch at the exit chip's own centre lands on "${chip.hit}" instead of the chip`);
+    if (chip.overlayZ !== null) {
+      assert(chip.overlayZ < chip.chipZ,
+        `the touch-control overlay (z ${chip.overlayZ}) must stay under the exit chip (z ${chip.chipZ})`);
+    }
+
+    // A real touch at the measured point, not a synthesized element.click():
+    // the question under test is whether a finger there reaches the handler.
+    await page.touchscreen.tap(chip.cx, chip.cy);
+    await page.waitForFunction(() => runningApps.length === 0, { timeout: 30000 });
+    const afterChip = await page.evaluate(desktopState);
+    await page.screenshot({ path: path.join(OUT, 'after-exit-chip.png') });
+    assert.strictEqual(afterChip.running, 0, 'the exit chip has to end the app, not just the fullscreen layout');
+    assert.strictEqual(afterChip.display, 'grid',
+      `the exit chip must give the launcher back, body was "${afterChip.classes}"`);
+    for (const cls of ['app-running', 'exclusive-fullscreen', 'page-fullscreen']) {
+      assert(!afterChip.classes.includes(cls),
+        `"${cls}" survived the exit chip: body was "${afterChip.classes}"`);
+    }
+    assert(afterChip.firstIconOnScreen, 'the icons the exit chip returns to must be tappable');
 
     console.log('PASS  quitting an app in single-app mode gives the desktop back');
   } finally {

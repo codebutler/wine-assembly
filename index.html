@@ -960,6 +960,17 @@
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
     }
+    /* 30px is under Apple's 44px minimum, and this is the only way out of a
+       full-screen game on a phone -- a miss reads as a dead button, which is
+       exactly how it was reported. Grow the TARGET without growing the chip:
+       the pseudo-element hit-tests as part of the button, so a 46px square
+       takes the touch while the visible circle stays 30px and covers no more
+       of the picture than it did. */
+    body.page-fullscreen #page-fullscreen-exit::before {
+      content: '';
+      position: absolute;
+      inset: -8px;
+    }
     body.page-fullscreen #page-fullscreen-exit:active { opacity: 1; }
     /* The guest window already has its own close control. Page fullscreen
        here is only Safari toolbar management, not a second app to dismiss. */
@@ -1524,7 +1535,7 @@
         </div>
         <div id="page-fullscreen-hint" role="status">Add to Home Screen to hide Safari&rsquo;s bars too</div>
         <button type="button" id="page-fullscreen-exit" title="Leave full screen"
-                aria-label="Leave full screen" onclick="exitPageFullscreen(event)">&#x2715;</button>
+                aria-label="Leave full screen" onclick="closeFullscreenChip(event)">&#x2715;</button>
         <textarea id="mobile-keyboard-proxy" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-hidden="true"></textarea>
       </div>
       <div id="log">Wine-Assembly v0.2
@@ -1773,6 +1784,7 @@ Resource-aware Win98 emulator
         body.classList.contains('app-running') &&
         !body.classList.contains('exclusive-fullscreen');
       body.classList.toggle('windowed-phone', windowed);
+      syncFullscreenChipLabel();
       if (!windowed) return;
       // Freeze the orientation decision during keyboard entry: a portrait
       // keyboard can make the remaining viewport wider than it is tall.
@@ -1998,6 +2010,56 @@ Resource-aware Win98 emulator
     // lib/renderer.js drops the app out of exclusive fullscreen through this,
     // so a game that closes its display takes the page back with it.
     window.exitPageFullscreen = exitPageFullscreen;
+
+    // The top-right X chip. On a desktop it means "leave full screen" and
+    // always did. On a phone that reading is not just useless, it is a trap,
+    // and it was reported as "'Close' button doesn't do anything on this
+    // pinball view".
+    //
+    // Single-app mode has already given the app the whole screen: there is no
+    // taskbar, no toolbar, and #desktop-icons is hidden by `app-running`. So
+    // leaving page-fullscreen changes nothing a visitor can see -- the guest
+    // still fills the display -- while doing three invisible things that make
+    // it worse: it latches _fullscreenDeclined, it drops
+    // `exclusive-fullscreen`, and the resize that follows therefore adds
+    // `windowed-phone`, whose CSS hides this chip. The icons stay hidden
+    // because the app is still running, so after one tap there is nothing at
+    // all left to press. A game started with a fullscreen switch (pinball's
+    // `-fullscreen`) has no caption of its own to close either, so the only
+    // way out of the app is a page reload.
+    //
+    // This is not pinball-specific: every app that takes the display gets the
+    // same chip through the same path.
+    //
+    // So on a phone the X means what an X on a phone means -- close the app --
+    // and the shell's own teardown puts the launcher back (see
+    // onAppRunningChange below, which clears all three hiding classes).
+    function closeFullscreenChip(event) {
+      if (SINGLE_APP_MODE && document.body.classList.contains('app-running')) {
+        if (event) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+        stopAllApps();
+        return;
+      }
+      exitPageFullscreen(event);
+    }
+    window.closeFullscreenChip = closeFullscreenChip;
+
+    // ...and it has to say so. A control whose only label is "Leave full
+    // screen" is why the report came in phrased as a Close button that does
+    // nothing: a visitor reads the X, presses it to get out of the app, and
+    // measures the result against that intention.
+    function syncFullscreenChipLabel() {
+      const chip = document.getElementById('page-fullscreen-exit');
+      if (!chip) return;
+      const closes = SINGLE_APP_MODE && document.body.classList.contains('app-running');
+      const label = closes ? 'Close app' : 'Leave full screen';
+      chip.title = label;
+      chip.setAttribute('aria-label', label);
+    }
+    window.syncFullscreenChipLabel = syncFullscreenChipLabel;
 
     // What each app is made of, and which ones get a desktop icon: lib/apps.js.
     // The CLI reads the same table, so `run.js --app=sol` mounts exactly the
