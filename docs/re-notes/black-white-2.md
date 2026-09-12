@@ -1787,3 +1787,34 @@ DIB-section object flag, so the pixels land in `$dib_alloc` storage that has a
 guest address. `test/test-loadimage-dibsection.js` covers both directions in
 about two seconds: the section reports a non-NULL `bmBits` that addresses the
 file's pixels, and plain `LR_LOADFROMFILE` still reports `bmBits = 0`.
+
+### The NULL blit was a fake success handle, and it is gone
+
+`0x009b71f0` is a media finder: it copies a path into a stack buffer and calls
+`LoadImageA(NULL, name, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE|LR_CREATEDIBSECTION)`
+through `[0xc1244c]`, then retries twice with `..\%s` and `%c:\%s` before
+giving up with `mov eax,3`. `--trace-api=LoadImageA` catches all three:
+
+```
+[API #724053] LoadImageA(0x0, 0x074ff65c, 0x0, 0x0, 0x0, 0x00002010) [ret=0x009b7246]
+[API #724054] LoadImageA(0x0, 0x074ff65c, 0x0, 0x0, 0x0, 0x00002010) [ret=0x009b727b]
+[API #724055] LoadImageA(0x0, 0x074ff65c, 0x0, 0x0, 0x0, 0x00002010) [ret=0x009b72a6]
+```
+
+and `--trace-fs` names the files: `Data\Font0-0.bmp` and
+`data\load_indicator.bmp`. Neither exists anywhere in the demo, so all three
+candidate paths fail on real Windows too and the game's error return is the
+correct outcome.
+
+It never got there. `$handle_LoadImageA` answered a failed `LR_LOADFROMFILE`
+load with a synthetic 32x32 compatible bitmap, which passed the caller's
+`test edi,edi` at `0x9b7248` and sent it down the success path — where
+`GetObjectA` reported `bmBits = 0` for that device-dependent stand-in and
+`rep movsd` read from address 0. The stand-in is reasonable for a resource id
+the walker cannot find; for a *file*, failure is the answer, and the caller is
+branching on it.
+
+Two changes, both in `$handle_LoadImageA`/`$load_image_bitmap_file`:
+`LR_CREATEDIBSECTION` now builds a real DIB section whose bits have a guest
+address, and a file that will not load returns NULL. Measured on a full walk to
+the land picker, total `[fault]` lines went **1089 to 1**.
