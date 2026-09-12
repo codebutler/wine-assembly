@@ -1261,3 +1261,71 @@ the reverse for `ForceIntro`, and clears both for `Default`. But a
 `MPDebug.txt` in its first eighty seconds, so the route is unproven and the
 readers of those two bits have not been found either; the poke above is what
 actually works today.
+
+### The frontend does not see window-message mouse input (2026-09-11, Claude)
+
+With the menu up — the Select Profile dialog with a New Profile Name modal
+over it — a full `mousemove` / `mousedown` / gap / `mouseup` on the
+highlighted OK button at 640x480 coordinates 248,272 left the modal exactly
+where it was, twice, and Return did nothing either. The button's yellow
+diamond is an idle pulse, not a hover state: it is already lit in a capture
+taken before any pointer event, and its phase changes on its own between
+captures. So there was never evidence the cursor was tracked on that path,
+and the game's own cursor sits pinned in the top-left corner of every frame.
+
+The PE imports `DINPUT8.dll!DirectInput8Create`, and a run traced with
+`--trace-api=DirectInput8Create,GetCursorPos,SetCursorPos,ShowCursor,ClipCursor`
+shows it called once from `0x009afd9f` during startup, alongside four
+`ClipCursor` calls, a `ShowCursor` and a `GetCursorPos` — all before the menu.
+This is a DirectInput8 frontend with a software cursor, so the harness
+primitives it needs are the DI ones, not the window-message ones:
+
+- `relmousemove:DX:DY` → `renderer.handleRelativeMouseMove`, whose own comment
+  says it exists because "software-cursor games keep their own position";
+- `di-mousedown` / `di-mouseup` for the buttons;
+- `renderer.setMousePosition` only feeds `GetCursorPos`, via
+  `$host_get_mouse_position` in `$handle_GetCursorPos`.
+
+One trap worth writing down, because it costs a whole run to find: over
+`--control-stdin` these are input *entries*, so they must be sent as
+`{action:"input", cmd:"di-mousedown"}`. A bare `{action:"di-mousedown"}` is
+rejected with `need {cmd:"action:args"}` — `test/run.js` derives the entry
+from `cmd.cmd` and only a plain-string control command falls back to the
+action name.
+
+### Driving the frontend through DirectInput (2026-09-11, Claude)
+
+Confirmed by measurement: the DI path works and the window-message path does
+not. Three captures from one run, `--skip-intro` plus relative moves:
+
+- `01-menu` — the game's own cursor is drawn in the top-left corner, where it
+  has sat since the first frame.
+- `02-cursor-centre` — after `relmousemove:-2000:-2000` (slam to the origin,
+  since the deltas are relative and the absolute position is the game's own)
+  then `relmousemove:320:240`, the cursor is drawn at roughly 332,238. The
+  frontend tracks the DirectInput deltas.
+- `03-name-ok` — a `di-mousedown` / 2.5s / `di-mouseup` pair on the New
+  Profile Name OK button at 248,272 dismissed *both* stacked dialogs and left
+  the main menu up, titled `Player`, with the bottom bar live: Continue, New
+  Game, Load Game, Change Profile, Options, Quit.
+
+So the recipe for any B&W2 frontend click is: `relmousemove:-2000:-2000` to
+re-origin, `relmousemove:X:Y` to the target, a gap, `di-mousedown`, a gap,
+`di-mouseup`. The gaps matter for the same reason they matter everywhere else
+in this repo — the game samples the button state per frame, and at software
+rendering speed a frame is seconds of wall clock, so a press and release
+inside one sample is invisible.
+
+Bottom-bar button centres at 640x480, measured off `03-name-ok`: Continue 60,
+New Game 155, Load Game 265, Change Profile 380, Options 480, Quit 590 — all
+at y=443.
+
+Two further results from the same run. Clicking New Game at 155,443 reaches
+the mouse-controls tutorial — four panels with the good and evil advisors,
+alpha-blended sprites and a Continue button at about 320,460 — so the
+frontend renders and routes correctly past the profile screens. And the
+split-backing fallback from 41022d0d does **not** fire anywhere up to that
+point: a census of `VIRTUAL_MAP_TABLE` taken twice at the menu reports 162
+records, zero of them continuation-marked. Whatever forces a split is later
+than the frontend, so that path still needs a land to be proven in the real
+game rather than only in `test/test-virtual-map-split-commit.js`.
