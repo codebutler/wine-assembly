@@ -685,3 +685,92 @@ thousands of draws. That divergence is the signature to look for.
   stream is well-formed the whole time.
 - **`wglGetProcAddress` returning 0 is not the blocker.** The game asks, gets
   nothing, and proceeds on the fixed-function path.
+
+## The near-black menu text: it is the guest's own colour, not our pipeline
+
+Measured 2026-09-12 with three browser probes over the main menu (all
+`--headful`, real GPU; headless without `--swiftshader` renders nothing at all).
+
+Every string in the menu arrives at `FixedFunctionGL.enqueuePacked` as **two
+draws over the same font atlas**, back to back, one pixel apart:
+
+```
+n=156 v=9204 box=-73,-17,74,-1  col[0,0,0,1]                    bound=61
+n=156 v=9204 box=-74,-16,73,0   col[1,1,1,1  1,0.8125,0.0625,1] bound=61
+```
+
+`1, 0.8125, 0.0625` is WC3's UI gold (#FFD010). Both draws carry byte-identical
+state: alpha test `GEQUAL 0.0157`, blend `SRC_ALPHA / ONE_MINUS_SRC_ALPHA`,
+texenv `MODULATE`, lighting off, depth test `GL_ALWAYS` with the **depth mask
+off** — so depth cannot reject the later pass. Texture 61 is a 256x256 atlas
+created empty and filled by `glTexSubImage2D` with **white** texels
+(`maxRGBA 255/255/255/255`), so `MODULATE` by gold is gold.
+
+Two forcing experiments settle what is actually on screen. Both hook
+`enqueuePacked` and key off "every vertex colour is exactly (0,0,0,\*)":
+
+| experiment | result |
+|---|---|
+| drop every all-black draw | the menu labels **vanish entirely** |
+| repaint every all-black draw gold | a clean, correct **gold menu**, readable at `--gain=1` |
+
+So the black geometry *is* the text that reaches the screen, the gold pass
+contributes nothing visible anywhere, and our raster path renders the glyphs
+perfectly the moment the colour is right. The remaining question is where
+game.dll gets black from — and, secondarily, where the gold pass lands
+(object-space boxes being equal says nothing; only the composed
+`PROJECTION * MODELVIEW` does, and `glLoadMatrixf` between the passes flushes
+the batch and can set a different one).
+
+### Ruled out for the text, with the measurement that killed each
+
+- **The default vertex colour.** game.dll's BSS scratch `0x6f5b1df8` — the
+  4-byte cell `0x6f0c1646` redirects the colour pointer to when the caller
+  supplies no colour array — already reads `0xFFFFFFFF` on the first sample.
+  A probe poking it to white every 200ms performed **0 pokes**. (And Game.dll
+  imports no `glColor*` at all, so every colour comes through
+  `glColorPointer`; our own no-array default is `[1,1,1,1]`,
+  `lib/gl-command-stream.js:321`.)
+- **Texture format.** Every upload is `format=GL_RGBA / GL_UNSIGNED_BYTE`.
+  `internalFormat` varies over `GL_RGB4/RGBA2/RGBA4/RGB5_A1`, all of which
+  `_textureFormat` correctly collapses to RGBA. The `GL_INTENSITY (0x8049)` /
+  `GL_LUMINANCE_ALPHA (0x190A)` hole in that four-way mapping is real but this
+  app never hits it.
+- **Depth rejection.** `GL_ALWAYS`, depth mask 0, on both passes.
+- **A missing second pass.** Both are submitted; the census counts them.
+- **Batching losing state.** Every non-packed GL call flushes `pendingDraw`
+  first (`lib/gl-compat.js:1118`), so only consecutive packed draws merge.
+
+## The campaign reaches PRESS ANY KEY — the map load does not stall
+
+Measured 2026-09-12, `--headful`, walk
+
+```
+click 805,165 (Single Player) -> type "Hero" -> Create 298,253 ->
+row 190,330 -> Select 298,460 -> Campaign 805,220 ->
+Prologue: Exodus of the Horde 750,230 -> wait
+```
+
+At 561s the film shows the briefing fully rendered: the parchment world map,
+the Horde crest, the red X on Lordaeron, "Chapter One / Chasing Visions /
+Somewhere in the Arathi Highlands, Thrall, the young", and a full bar reading
+**PRESS ANY KEY TO CONTINUE**. Text on that screen renders correctly at
+`--gain=1`, so the black-text bug is specific to the menu font path.
+
+Corrections to earlier notes in this file:
+
+- **The load does not stall at ~2%/85%.** Runs that appeared to stall were too
+  short. The load takes roughly 1900 guest frames after the Prologue click.
+- **A click landing mid-load kills the guest.** runCF scripted its
+  "PRESS ANY KEY" click by frame count and it fired at 440s while the bar was
+  at ~85%; film frames go from 1,005,330 bytes to 5,377 (flat desktop teal) in
+  one 5s step. The same walk without that click survived to the finished
+  briefing. Pace the press off the briefing, not off a guess.
+- **The VFS is not the blocker.** With
+  `--trace-api=CreateFileA,GetFileAttributesA,CreateDirectoryA,WriteFile,DeleteFileA`
+  and `window.__waTraceApiDetails = true` (there is no CLI flag for the
+  argument decoding; without it host.js prints raw pointers), the guest
+  successfully creates `C:\Save`, `C:\Save\Profile1`, writes
+  `Campaigns.w3p` four times, and `CreateFileA`s
+  `C:\Save\Profile1\Campaigns.w3v` with `CREATE_ALWAYS`. Every file call the
+  documented `0x6f3b2880` SaveCampaigns teardown chain depends on goes through.
