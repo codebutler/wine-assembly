@@ -1364,3 +1364,48 @@ run misses with no diagnostic at all — the dialog simply stays up. The run tha
 worked left about twenty-eight seconds between settling the cursor and pressing
 it, by accident. Budget ~25s after the move and ~10s between down and up, and
 photograph before each click while a sequence is still being calibrated.
+
+### Land load nulls a texture pointer: DXT3 and A8L8 were missing (2026-09-11, Claude)
+
+Clicking Continue on the tutorial loads a land (`Land3.ter`, 969 1024x1024
+textures, real shaders) and then EIP goes to 0 on a white screen. The chain,
+read back from the hit counters and the disassembly:
+
+    [obj+0x1d0] ends at 2 (failed)
+      -> 0x00938fc0 returns NULL
+      -> caller 0x00a5553b does `mov edx,[edi]; call [edx+0x34]`
+         (IDirect3DTexture9::GetLevelCount) on NULL
+      -> $g2w absorbs the null read into NULL_SENTINEL, EIP := 0
+
+`D3DXGetImageInfoFromFileInMemory` is **not** the failure point — it succeeds
+all 262 times, and the asset named `data\landscape\dummy.bmp` is a cache key
+for a CPU-filled splat texture, not a file anybody opens. A `--count` probe on
+the loader's two arms measured the real split:
+
+    0x00938c13 = 262   loads attempted
+    0x00938cf6 = 100   failed
+    0x00938f22 = 162   succeeded
+
+and a format histogram over the 278 `IDirect3DDevice9_CreateTexture` calls in
+the same run named the cause outright:
+
+    133  0x31545844  DXT1
+     97  0x33545844  DXT3      <- not implemented
+     29  0x00000015  A8R8G8B8
+     16  0x35545844  DXT5
+      2  0x00000033  A8L8 (51) <- not implemented
+      1  0x00000016  X8R8G8B8
+
+`IDirect3D9::CheckDeviceFormat` answers S_OK to everything, so the game is
+entitled to ask for both and only finds out at `CreateTexture`.
+
+Both are implemented now. DXT3 is a 16-byte block: sixteen explicit 4-bit
+alphas in bytes 0..7, low nibble first, replicated to 8 bits (`0xf` -> `0xff`,
+not `0xf0`), and DXT5's colour half at byte 8 — always four interpolated
+colours, never DXT1's `c0 <= c1` punch-through mode. A8L8 is two bytes per
+texel, luminance low and alpha high, which is the first uncompressed format
+here that is not four bytes wide: `$d3d9_texture_pitch` and the lock subrect's
+x offset both had the 4 written in.
+
+Files: `lib/d3d9-texture.js`, `lib/d3d9-host.js`,
+`src/09ae-d3d9-resources.wat`, `test/test-d3d9-textures.js`.

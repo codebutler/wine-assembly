@@ -18,6 +18,20 @@ const Texture=require('../lib/d3d9-texture');
     const rgba=Texture.decode(bytes,4,4,Texture.DXT5);
     assert.deepStrictEqual(Array.from({length:16},(_,i)=>rgba[i*4+3]),[...expected,...expected]);
   }
+  // DXT3 keeps DXT1's colour half at byte 8 and spends bytes 0..7 on sixteen
+  // explicit 4-bit alphas, low nibble first, replicated so 0xf reads as opaque.
+  const dxt3=new Uint8Array(16);
+  for(let j=0;j<8;j++)dxt3[j]=(2*j)|((2*j+1)<<4);
+  dxt3.set(dxt1,8);
+  const dxt3rgba=Texture.decode(dxt3,4,4,Texture.DXT3);
+  assert.deepStrictEqual(Array.from(dxt3rgba.slice(0,12)),[255,0,0,0, 0,255,0,17, 170,85,0,34]);
+  assert.deepStrictEqual(Array.from({length:16},(_,i)=>dxt3rgba[i*4+3]),
+    Array.from({length:16},(_,i)=>(i<<4)|i));
+  const reversedDxt3=new Uint8Array(16);reversedDxt3.fill(255,0,8);
+  reversedDxt3.set([0,0,255,255,255,255,255,255],8);
+  assert.deepStrictEqual(Array.from(Texture.decode(reversedDxt3,1,1,Texture.DXT3)),[170,170,170,255],
+    'DXT3 uses four-color interpolation even when endpoint0 <= endpoint1');
+  assert.throws(()=>Texture.decode(dxt3.slice(1),4,4,Texture.DXT3),/byte length/);
   assert.throws(()=>Texture.decode(dxt1.slice(1),4,4,Texture.DXT1),/byte length/);
   assert.throws(()=>Texture.decode(dxt1,0,4,Texture.DXT1),/dimensions/);
   const reversedDxt5=new Uint8Array([255,0,0,0,0,0,0,0,0,0,255,255,255,255,255,255]);
@@ -96,7 +110,21 @@ const Texture=require('../lib/d3d9-texture');
   assert.strictEqual(e.surface_lock(surface,locked),0,'parent survives original texture release');
   assert.strictEqual(e.surface_unlock(surface),0);
   assert.strictEqual(e.release_surface(surface),0);
-  for(const [format,blockBytes] of [[Texture.DXT1,8],[Texture.DXT5,16]]){
+  // A8L8 is two bytes per texel, so its pitch and lock offsets are half the
+  // four-byte default every other uncompressed format uses.
+  assert.strictEqual(e.texture(d,8,4,1,out,51),0);
+  const a8l8=e.guest_read32(out)>>>0;
+  assert.strictEqual(e.desc(a8l8,0,desc),0);assert.strictEqual(e.guest_read32(desc),51);
+  assert.strictEqual(e.lock(a8l8,0,locked,0),0);assert.strictEqual(e.guest_read32(locked),16);
+  const a8l8base=e.guest_read32(locked+4)>>>0;
+  assert.strictEqual(e.guest_read32(a8l8+64+12),16*4);
+  assert.strictEqual(e.unlock(a8l8,0),0);
+  [3,1,8,4].forEach((v,i)=>e.guest_write32(rect+i*4,v));
+  assert.strictEqual(e.lock(a8l8,0,locked,rect),0);
+  assert.strictEqual(e.guest_read32(locked+4)>>>0,a8l8base+16+6);
+  assert.strictEqual(e.unlock(a8l8,0),0);
+  assert.strictEqual(e.release_texture(a8l8),0);
+  for(const [format,blockBytes] of [[Texture.DXT1,8],[Texture.DXT3,16],[Texture.DXT5,16]]){
     assert.strictEqual(e.texture(d,8,8,0,out,format),0);const compressed=e.guest_read32(out)>>>0;
     let base;
     for(let level=0;level<4;level++){
