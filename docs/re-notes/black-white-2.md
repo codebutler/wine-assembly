@@ -1444,3 +1444,188 @@ So B&W2's land simply needs more committed memory than `$VIRTUAL_BACKING_BASE`
 has. The map is full: 180 allocated regions end at ~`0x07BC6000`, the pool runs
 `0x08000000..0x1BC00000`, and `$GUEST_PAGE_TABLE`, `$DIB_BACKING_BASE` and
 `$THREAD_RPC` fill the rest up to the 512 MB ceiling exactly.
+
+## What the game asks about memory, and what we used to answer
+
+Before raising the ceiling it is worth checking whether B&W2 sizes its load
+from what we tell it. It does, through two calls, and both of our answers were
+wrong in the direction that makes it over-commit:
+
+    [API #140848] SetProcessWorkingSetSize(0xffffffff, 0x08000000, 0x1ce00000) [ret=0x00612cc3]
+    [API #685967] IDirect3DDevice9_GetAvailableTextureMem(0x07f36030) [ret=0x00934a20]
+
+The working-set pair is 128 MB / 462 MB, and 462 MB is exactly the 512 MB we
+reported from `GlobalMemoryStatusEx` minus the 50 MB the game subtracts — so
+the number came straight back out of our answer. It then asks D3D9 how much
+texture memory there is, once, from `0x00934a20`, and stores the result at
+`[ebp+0x460]`; that handler was a silent stub returning 0.
+
+Neither answer was about the right pool. A guest commit can only ever come out
+of `$VIRTUAL_BACKING_BASE` — everything else in the linear memory is
+emulator-private — so the honest physical total is the pool's 316 MB and the
+honest available figure is what its bump cursor has left. `$virtual_backing_available`
+in `src/10-helpers.wat` computes that; `GlobalMemoryStatusEx` now reports it,
+and `GetAvailableTextureMem` returns it rounded down to a whole megabyte the
+way a real driver does.
+
+## The land's texture slot array, and the formats it falls back through
+
+After the extension backing window removed the memory wall, the land load died
+one instruction past a texture getter:
+
+    [eip-zero] guest called through NULL at batch 1772135
+      dbg_prev_eip=0x00a21f27
+
+`0x00938fc0` is that getter. It reads a state word at `[ecx+0x1d0]` (0 and 3
+are ready, 1 means "a load is in flight", and `0x00938930` spins in
+`SleepEx(0, TRUE)` until it leaves 1) and returns the D3D resource pointer at
+`[ecx]`. Read it as "the getter returned NULL" and you chase the loader; the
+`--count` arms say no load ever failed. It is the wrong reading. With `ecx`
+NULL, `$g2w` absorbs *both* reads into `NULL_SENTINEL`, so a NULL `this` is
+indistinguishable from a successful call returning NULL, and `--fault-null`
+is the only thing that separates them:
+
+    [fault] unmapped guest access 0x0 from eip=0x938fe5   ; mov eax,[esi], esi = 0
+    [fault] unmapped guest access 0x0 from eip=0xa21f27   ; mov ecx,[eax]
+    [fault] unmapped guest access 0x48 from eip=0xa21f27  ; call [ecx+0x48]
+
+So the empty thing is the *caller's* slot array. `0x00a21ee0` blits a subrect of
+`[esi+edi*4+0x1d0]`, and `0x00a20fe0` is what fills those two slots — sized from
+`[esi+0x1d8]`/`[esi+0x1dc]`, which `0x00a23420` zeroes along with the slots:
+
+    lea edi,[esi+0x1d0]; mov ebx,2          ; two slots
+      call 0x933910(w,h,1,0,0x51,4)         ; D3DFMT_L16
+      cmp [edi],0 / jnz done
+      call 0x933910(w,h,1,0,0x32,4)         ; D3DFMT_L8
+      test eax,eax / jnz done
+      call 0x933910(w,h,1,0,0x14,0)         ; D3DFMT_R8G8B8
+      mov [edi],eax                         ; stores NULL and carries on
+
+Nothing bails out when all three fail. A format histogram over the whole land
+load — `--trace-api=IDirect3DDevice9_CreateTexture`, argument 6 — names what it
+actually asks for, and it is not only that chain:
+
+| format | calls |
+|---|---|
+| DXT1 `0x31545844` | 136 |
+| DXT3 `0x33545844` | 106 |
+| DXT5 `0x35545844` | 16 |
+| A8R8G8B8 (21) | 32 |
+| **L8 (50)** | **4** |
+| A8L8 (51) | 3 |
+| **R8G8B8 (20)** | **2** |
+| **R5G6B5 (23)** | **1** |
+| X8R8G8B8 (22) | 1 |
+
+L16 never appears: the game's own capability probe at `0x009371d0` skips it and
+starts at L8. The three bolded rows are the ones we refused, so those slots
+stayed NULL — and `IDirect3D9_CheckDeviceFormat` was a blanket `S_OK`, which is
+what let the game believe all three were available in the first place. Every
+CreateTexture call in the run returns through d3dx9_25 (`ret=0x025fa2e5`), never
+from the exe directly, so a breakpoint on the exe side sees none of this.
+
+## A -2000,-2000 mouse delta hangs the land-selection screen
+
+**The land picker is not broken; the way we were driving it was.** With no
+input at all it submits about thirteen draws a second for as long as you care
+to watch (measured: 3409 → 4309 submissions over 65 seconds, EIP moving between
+the IDirect3DDevice9 thunk and game code). Send it one
+`relmousemove:-2000:-2000` — the "slam to the origin" that every earlier screen
+in this file takes without complaint — and it stops presenting about ten
+seconds later and never recovers.
+
+The recipe that reaches the land picker uses that slam because a DirectInput
+delta carries no position and there is no other way to know where the cursor
+started. A 2D menu clamps it at the screen edge, which is why the three screens
+before this one take clicks fine. This one is a 3D scene and feeds the raw
+delta somewhere a huge value ruins.
+
+### What the hang looks like, for recognizing it again
+
+Three measurements, all from the drive that sent the slam:
+
+- **D3D submissions flatline.** The allocation probe's series climbs 520
+  (t=218s) → 3054 (323s) → 6346 (534s) → 6964 (604s) and then sits at **6973**
+  for the remaining 800 seconds of the run. The land screen first appears at
+  t≈619s, so presenting stops about twenty seconds after it is finished.
+- **Every later input is ignored.** That drive tried five more: a click on the
+  coloured thumbnail at (135,375), a click on the vignette at (320,180), Enter,
+  a double click, and Space. All five captures are byte-identical, md5
+  `817f4239cd047d69ab0fdcc8f8192926` — the game was already gone.
+- **Nothing is allocated either.** The virtual-map census is frozen across all
+  of them at `{count:351, extBytes:37654528, continuations:0}`.
+
+The 5-second sampler shows the run stalling in two distinct places:
+
+| window | what the sampler sees |
+|---|---|
+| t=655s → t=1042s | **one 387-second gap** — a single batch that did not return. The last sample before it is `eip=0x00adeda9`, CRT/heap territory. |
+| t=1042s → end | 118 samples, five seconds apart, **every one** at `0x9e5272` or `0x9e5276`, exactly alternating. |
+
+So the emulator is healthy in the second window — batches return on schedule —
+and the guest is simply inside one loop.
+
+### 0x009e5140 is a spatial-grid region query
+
+`thiscall(&minPt, &maxPt, &outArray)`, `ret 0xc`. The `this` object is a
+uniform grid over the map:
+
+| offset | meaning |
+|---|---|
+| `+0x00`..`+0x0c` | world bounds `x0, y0, x1, y1` |
+| `+0x10` | row stride, in cells |
+| `+0x14` / `+0x18` | cell width / cell height — the `idiv` divisors at `0x9e5184`/`0x9e5193` |
+| `+0x20` | base of the cell array, 12 bytes per cell (`+0x00` count, `+0x04` items) |
+
+The body is three nested loops:
+
+```
+0x9e5250   for each cell row y0c..y1c            ; ebp walks 0xc per row
+0x9e5260     for each cell in the row            ; esi = the output array
+               for each object in the cell       ; ebx
+0x9e5272         linear scan outArray for a dup  ; cmp [ecx],edi / jz 0x9e52e9
+0x9e5281         not found -> append             ; grow via operator new[] 0xad425d,
+                                                 ;   copy, operator delete 0xad671a
+```
+
+The output array is the usual `{capacity@+0, count@+4, data@+8}`. The dup scan
+is linear in `count`, so the whole query costs
+`cells × objectsPerCell × |out|` — quadratic in the size of the result set. A
+query rectangle covering the whole map never finishes.
+
+Callers: `0x9e46c0` and `0x9e4740`, both of which normalize their rect through
+`0x9eeee0` (a min/max sort of `{x0,y0,x1,y1}`), expand it by one in each
+direction, and write the result count back to `this+0xc8`. Those are reached
+from `0x9d4cf2` and `0x9d4ff5`.
+
+**One trap to be aware of before blaming the game.** If `operator new[]` ever
+hands back NULL, `outArray.data` becomes unmapped, `$g2w`'s NULL_SENTINEL makes
+every dup-scan read return 0, the item being inserted is never equal to 0, so
+*every* object appends and `count` grows without bound — turning a finite
+quadratic pass into a genuinely infinite one. `outArray.data` is therefore the
+first thing to read when sampling this loop, not the last.
+
+### Reaching the land picker headlessly
+
+Roughly twenty minutes of wall clock on an unloaded box, all of it through
+`tools/black-white-software-probe.js --control-stdin --skip-intro`:
+
+| t (approx) | action |
+|---|---|
+| +180s | main menu |
+| | click (248,272) — new profile |
+| +50s | click (155,443) |
+| +80s | click (320,460) — *Continue* on the mouse-controls tutorial |
+| +60s | the land-selection screen |
+
+The clicks are **DirectInput and relative**: `src/09a8-handlers-directx.wat`
+keeps a delta pair and an event ring, which is what a DI8 game polls, so each
+one is `relmousemove:-2000:-2000` (slam to the origin), 10s, `relmousemove:X:Y`,
+25s, `di-mousedown`, 10s, `di-mouseup`. The long gaps are load-bearing: a DI
+button event carries no position, so the game clicks wherever its own cursor has
+got to, and at software-rendering speed one frame is seconds of wall clock. A
+press three seconds after a move lands where the cursor was *before* the move.
+
+Pin the build with `--wasm=` plus a saved `WINE_REGION_MAP` mirror. This is a
+shared worktree and a drive that rebuilds picks up whatever half-finished edit
+is on disk at spawn time.
