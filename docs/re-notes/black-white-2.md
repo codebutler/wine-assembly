@@ -1950,3 +1950,70 @@ uninitialised pointer, a freed-and-reused allocation, or a wrong field offset.
 
 Both the `{n, items}` pair and everything above it remain a single probe reading
 plus static disassembly. Re-read it live at the picker before designing anything.
+
+### What `0x9e5140` actually is: a spatial-grid rect query with a 12-byte cell
+
+Fully decoded now, and it retires *both* earlier stories. It is
+`thiscall Grid::Query(ecx=grid, arg1=rectMin*, arg2=rectMax*, arg3=out*)`
+(`ret 0xc` at `0x9e532f` confirms three stack args).
+
+Grid object (`ebx`):
+
+| off | meaning |
+|---|---|
+| `+0x00`,`+0x04` | origin x, y |
+| `+0x08`,`+0x0c` | max x, y (bounds-reject at `0x9e516b`/`0x9e5174`) |
+| `+0x10` | row length (cells per row) |
+| `+0x14`,`+0x18` | cell width, cell height (the `idiv` divisors) |
+| `+0x20` | cell array base |
+
+Cell addressing, `0x9e5214`..`0x9e5236`:
+
+```
+eax = [grid+0x10] * row          ; row length * row index
+eax = eax * 3                    ; lea eax,[eax+eax*2]
+eax = [grid+0x20] + eax*4        ; base + rowIndex*rowLen*12
+ebp = eax + col*12 + 4           ; lea ebp,[eax+edx*4+4]
+```
+
+so **a cell is 12 bytes** and `ebp` deliberately points at *cell+4*, which is
+why the body reads `[ebp+0]` as the cell's count and `[ebp+4]` as its items.
+
+The output has the same three-dword shape, and this is the part that matters:
+
+```
+0x9e4701  lea edx,[esi+0xc4]   ; arg3  <-- LEA, not a load
+0x9e4712  lea ecx,[esi+0x74]   ; the grid
+0x9e4715  mov [esi+0xc8],edi   ; edi=0: zero the output count
+0x9e471b  call 0x9e5140
+0x9e4720  mov edx,[esi+0xc8]   ; read it back as the result count
+```
+
+The second call site (`0x9e479e`) is the same pattern one object over:
+grid `esi+0x9c`, out `esi+0xd0`, count `esi+0xd4`, zeroed at `0x9e4798`.
+
+**Therefore `[esi+4]` inside the loop is `[parent+0xC8]` — the output count —
+and `[esi+8]` is `[parent+0xCC]`, the output items pointer.** It was never a
+`std::vector` header, so it is neither a string (retracted above) nor a float
+array: it is an output counter that the caller sets to 0 on the line before the
+call. The inner scan at `0x9e5272` is an ordinary "is this candidate already in
+the results" dedupe over the results collected so far, which is correct and
+cheap when the count is sane.
+
+Checked, so the compiler's stack reuse is not the culprit: `0x9e5245` writes the
+*column count* into arg3's incoming slot `[esp+0x30]`, but `esi` is loaded from
+that slot once at `0x9e520b`, the row-loop back edge at `0x9e5320` targets
+`0x9e5210` (*after* that load) and the column-loop back edge at `0x9e530b`
+targets `0x9e5250`. `esi` is never reloaded. The game's code is sound.
+
+**So the open question is now precise:** `[parent+0xC8]` is zeroed immediately
+before the call and reads 993,082,159 inside it. The candidates are (a) the
+zeroing store did not land, (b) the parent `this` is not the object we think,
+or (c) something wrote over it in between. Note the grid at `parent+0x74`
+evidently *is* valid in the same call — the bounds compares passed, neither
+`idiv` divided by zero, and the cell reached had a positive count — which
+argues against a wholly wild `this`.
+
+The live probe to run at the picker is therefore **not** `esi` alone but the
+parent record around it: `esi-0xC4` for the object, `esi+0` / `+4` / `+8` for
+the output triple, and whether `[esi+8]` is a mappable pointer.
