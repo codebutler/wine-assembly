@@ -40,7 +40,11 @@ function makeRenderer(canvasW, canvasH, keepAspect) {
     getContext() { return {}; },
   });
   renderer.singleAppMode = true;
-  renderer.singleAppKeepAspect = !!keepAspect;
+  // A number is a requested client aspect and must survive as a number; see
+  // the numeric-keepAspect case below and lib/browser-shell.js, which does the
+  // same narrowing when it hands the registry value to the renderer.
+  renderer.singleAppKeepAspect =
+    typeof keepAspect === 'number' && keepAspect > 0 ? keepAspect : !!keepAspect;
   renderer.presentationCanvas = { width: canvasW, height: canvasH };
   return renderer;
 }
@@ -171,6 +175,38 @@ const aspect = rect => rect.w / rect.h;
   assert.ok(fitted.x >= 0 && fitted.y >= 0, 'and never starts off-screen');
 }
 
+// A NUMERIC keepAspect names the client aspect the artwork wants, in place of
+// the one the window happens to have. Pegged's own numbers: a 249x249 outer
+// window whose client is 241x203 (1.188), which is not the shape its 7x7 board
+// wants. Asking for 0.99 must produce a client of that shape instead, and it
+// must be the CLIENT that is held — the chrome band is still added on top.
+{
+  const renderer = makeRenderer(400, 670, 0.99);
+  const fitted = renderer._singleAppMaximizeRect(
+    win(20, 20, 249, 249, 8, 46), { x: 20, y: 20, w: 249, h: 249 });
+  const client = { w: fitted.w - 8, h: fitted.h - 46 };
+  assert.ok(Math.abs(aspect(client) - 0.99) < 0.02,
+    `the requested client aspect is what is produced (got ${aspect(client)})`);
+  assert.ok(Math.abs(aspect(client) - 241 / 203) > 0.1,
+    'and it is emphatically not the natural one');
+  assert.ok(fitted.w <= 400 && fitted.h <= 670, 'still inside the canvas');
+  // Strictly bigger than the natural-aspect fit, which is half the point: the
+  // taller window is also less teal.
+  const natural = makeRenderer(400, 670, true)._singleAppMaximizeRect(
+    win(20, 20, 249, 249, 8, 46), { x: 20, y: 20, w: 249, h: 249 });
+  assert.ok(fitted.h > natural.h, 'a squarer board is a taller window here');
+}
+// `true` must keep meaning "the natural aspect" — +true is 1, so a sloppy
+// numeric coercion would silently hand every flagged app a square client.
+{
+  const renderer = makeRenderer(400, 670, true);
+  const fitted = renderer._singleAppMaximizeRect(
+    win(20, 20, 249, 249, 8, 46), { x: 20, y: 20, w: 249, h: 249 });
+  const client = { w: fitted.w - 8, h: fitted.h - 46 };
+  assert.ok(Math.abs(aspect(client) - 241 / 203) < 0.02,
+    `true still preserves the natural client aspect (got ${aspect(client)})`);
+}
+
 // --- When it does NOT apply -------------------------------------------------
 
 {
@@ -282,10 +318,19 @@ function maximize(renderer, w) {
 
 const apps = require('../lib/apps.js');
 const registry = apps.APPS || (apps.WineApps && apps.WineApps.APPS) || apps;
-for (const id of ['taipei', 'pegged', 'cwordzap']) {
+for (const id of ['taipei', 'cwordzap']) {
   assert.strictEqual(registry[id] && registry[id].keepAspect, true,
     `${id} stretches its board to the client rect and must be flagged`);
 }
+// Pegged names a NUMBER instead: its own default client (241x203) is not the
+// aspect its board wants, so preserving the natural one preserves a 1.25 wide
+// ellipse. Measured on the phone at 375x667 -- 0.99 puts the peg grid at
+// 285x290 CSS with 20x19 holes, against 285x254 with 20x16 holes at the
+// natural 1.188. See the comment on the registry entry.
+assert.strictEqual(typeof (registry.pegged && registry.pegged.keepAspect), 'number',
+  'pegged asks for a specific client aspect, not the one it was born with');
+assert.ok(registry.pegged.keepAspect > 0.5 && registry.pegged.keepAspect < 2,
+  'and it is a w/h ratio, not a pixel count');
 // Reversi is the negative control from the same pack: same WS_THICKFRAME, same
 // single-app maximize, but it draws a fixed-size board centred in whatever it
 // is given, so full-canvas is already correct for it. Notepad likewise shows
@@ -299,9 +344,11 @@ for (const id of ['reversi', 'notepad', 'mspaint98', 'sol', 'spider', 'cruel',
 
 const shellSource = fs.readFileSync(path.join(root, 'lib', 'browser-shell.js'), 'utf8');
 const { hasPageScript } = require('./browser-runtime-scripts');
-assert(shellSource.includes('keepAspect: app.keepAspect === true'),
-  'the shell should carry the registry flag onto the running app');
-assert(shellSource.includes('sharedRenderer.singleAppKeepAspect = !!(last && last.keepAspect)'),
+assert(/keepAspect:\s*\(typeof app\.keepAspect === 'number'/.test(shellSource) &&
+  shellSource.includes("app.keepAspect === true"),
+  'the shell should carry the registry flag — number or boolean — onto the running app');
+assert(/singleAppKeepAspect\s*=\s*\n?\s*\(last && typeof last\.keepAspect === 'number'/
+  .test(shellSource),
   'and hand it to the renderer, which is what decides the maximize rect');
 assert(/const alreadyFull = !keepAspect &&/.test(shellSource),
   'the "already full-screen, nothing to do" shortcut must not skip the fitted resize');

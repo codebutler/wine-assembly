@@ -32,7 +32,13 @@ function makeEl(tag) {
       remove: (n) => el._classes.delete(n),
       contains: (n) => el._classes.has(n),
     },
-    setAttribute() {},
+    attributes: {},
+    setAttribute(name, value) { el.attributes[name] = String(value); },
+    getAttribute(name) {
+      return Object.prototype.hasOwnProperty.call(el.attributes, name)
+        ? el.attributes[name] : null;
+    },
+    innerHTML: '',
     appendChild(child) {
       child.parentNode = el;
       el.children.push(child);
@@ -123,7 +129,17 @@ const buttons = flat.filter(el => el.className === 'tc-btn');
 const dpad = flat.find(el => el.className === 'tc-dpad');
 assert.strictEqual(buttons.length, 3, 'three buttons rendered');
 assert.ok(dpad, 'dpad rendered');
-const [btnZ, btnSlash, btnF2] = buttons;
+// By label, not by document order: the corners are built in whatever order
+// the first widget for each asks for one, and the view/keyboard chips claim
+// bottom-right before any app button is added.
+const byLabel = label => {
+  const el = buttons.find(b => b.textContent === label);
+  assert.ok(el, `button "${label}" rendered`);
+  return el;
+};
+const btnZ = byLabel('Z');
+const btnSlash = byLabel('/');
+const btnF2 = byLabel('F2');
 dpad._rect = { left: 100, top: 300, width: 132, height: 132 };
 
 // 1. One press, one matching release.
@@ -251,8 +267,17 @@ for (const el of TouchControls._widgets) {
 assert.strictEqual(TouchControls.getOccupiedHeight(), 144,
   'with layout available the band is measured from the topmost bottom widget');
 TouchControls.setLayout({ buttons: [{ vk: 0x71, label: 'New game', pos: 'tl' }] });
+// The app's own button is at the top, but the view/keyboard chips ride in the
+// bottom-right stack now, so the band is theirs: a 40px row plus the 18px
+// bottom padding. They are only weightless when the layout turns them off.
+assert.strictEqual(TouchControls.getOccupiedHeight(), 58,
+  'a top-corner button reserves only what the chips below it need');
+TouchControls.setLayout({
+  viewToggle: false, keyboard: false,
+  buttons: [{ vk: 0x71, label: 'New game', pos: 'tl' }],
+});
 assert.strictEqual(TouchControls.getOccupiedHeight(), 0,
-  'a top-corner button reserves nothing at the bottom');
+  'with no chips either, a top-corner button reserves nothing at the bottom');
 TouchControls.destroy();
 
 // 8. In-place zones: pinball's flippers ARE the bottom of the table.
@@ -475,11 +500,17 @@ TouchControls.destroy();
   TouchControls.setLayout({ buttons: [{ vk: 0x71, label: 'New game', pos: 'tl' }] });
   const toggle = TouchControls._widgets.find(el => el.className === 'tc-mode');
   assert.ok(toggle, 'the overlay carries a view-mode toggle');
-  assert.strictEqual(toggle.textContent, 'Fill',
+  // With no crop naming its two states the pill is the corner-bracket icon
+  // every media player draws, so what is asserted is the accessible name --
+  // and, as before, that it names what a PRESS does, not the mode you are in.
+  assert.strictEqual(toggle.attributes['aria-label'], 'switch to Fill view',
     'the label names what a press does, not the mode you are in');
+  assert.ok(/M8 3H3v5/.test(toggle.innerHTML), 'brackets point out: it will fill');
   toggle.dispatch('touchstart', touchEvent([touch(90, 0, 0)]));
   assert.strictEqual(mode, 'zoom', 'a press switches the renderer to zoom');
-  assert.strictEqual(toggle.textContent, 'Fit', 'and the label flips with it');
+  assert.strictEqual(toggle.attributes['aria-label'], 'switch to Fit view',
+    'and the label flips with it');
+  assert.ok(/M3 8h5V3/.test(toggle.innerHTML), 'and the brackets turn inward');
   toggle.dispatch('touchend', touchEvent([touch(90, 0, 0)]));
   toggle.dispatch('touchstart', touchEvent([touch(91, 0, 0)]));
   assert.strictEqual(mode, 'fit', 'and a second press switches back');
@@ -505,51 +536,85 @@ TouchControls.destroy();
   const keyPill = TouchControls._widgets.find(el => el.className === 'tc-key');
   assert.ok(keyPill, 'the keyboard pill rides along with the view toggle');
 
-  // The letterbox is the one part of the screen nothing else can ever occupy,
-  // and the middle of it is clear of both corner clusters.
-  // Give the two bottom clusters real rects, so the gap between them is a
-  // real measurement rather than the middle of an empty bar.
+  // The pills ride the bottom-right stack, below the app's own buttons. That
+  // is the flex row they are appended to, so nothing is positioned by hand and
+  // they cannot land on the picture whatever the presented rect turns out to
+  // be -- which is the failure the old dead-space search kept producing: with
+  // a 168px cross pad in one corner there was no gap wide enough for both, so
+  // one of them ended up pinned to the left bezel at 35% opacity, over the
+  // board and under the notch inset.
+  const chipRow = TouchControls._rows['br:-1'];
+  assert.ok(chipRow, 'the chips get their own row');
+  assert.ok(chipRow.children.includes(keyPill) && chipRow.children.includes(toggle),
+    'and both ride it');
+  assert.strictEqual(TouchControls._corners.br.children[0], chipRow,
+    'created before any app button, so column-reverse puts it at the bottom');
+
+  const noInlinePlacement = () => {
+    for (const p of [keyPill, toggle]) {
+      for (const prop of ['left', 'top', 'position', 'transform', 'opacity']) {
+        assert.strictEqual(p.style[prop] || '', '',
+          `the ${prop} of a flowed pill is the stylesheet's business`);
+      }
+    }
+  };
+
   for (const w of TouchControls._widgets) {
     if (w._tcCorner === 'bl') {
       w.getBoundingClientRect = () => ({ left: 18, right: 186, top: 506, bottom: 646, width: 168, height: 140 });
     }
   }
   TouchControls.layoutZones();
-  // Only a left cluster here, so the gap is everything right of the pad.
-  // Two pills share that gap: 40px each with a 10px gap = a 90px span centred
-  // in the 204px opening, so the keyboard pill leads at 243 and the view
-  // toggle follows at 293. The point of the assertion is that they do not
-  // land on the same pixel, which two independent centring placers would.
-  assert.strictEqual(keyPill.style.left, '243px',
-    'the pills sit in the gap beside the corner cluster, not on top of it');
-  assert.strictEqual(toggle.style.left, '293px', 'and beside each other, not on top');
-  assert.strictEqual(toggle.style.top, '562px', 'inside the bigger of the two bars');
-  assert.strictEqual(keyPill.style.top, '562px', 'both in the same bar');
-  assert.strictEqual(toggle.style.opacity, '1', 'and is legible while it is in dead space');
-  assert.notStrictEqual(keyPill.style.left, toggle.style.left, 'never stacked on each other');
+  noInlinePlacement();
 
-  // If only one pill fits beside the bottom controls, use the other dead band
-  // for the second one instead of falling back over the game content.
-  for (const w of TouchControls._widgets) {
-    if (w._tcCorner === 'bl') {
-      w.getBoundingClientRect = () => ({ left: 18, right: 310, top: 506, bottom: 646, width: 292, height: 140 });
-    }
-  }
+  // Neither a narrow opening nor a full-screen picture moves them: there is no
+  // placement decision left to get wrong.
   layoutRenderer.getPresentedRectClient = () => ({ x: 0, y: 80, w: 390, h: 420 });
   TouchControls.layoutZones();
-  assert.strictEqual(keyPill.style.top, '562px', 'one pill uses the narrow bottom opening');
-  assert.strictEqual(toggle.style.top, '20px', 'the remaining pill uses the empty top band');
-  assert.strictEqual(toggle.style.opacity, '1', 'and never falls back translucent over content');
-
-  // Filling the screen leaves no dead space: it gets a corner and goes quiet
-  // rather than taking room from the picture.
+  noInlinePlacement();
   layoutRenderer.getPresentedRectClient = () => ({ x: 0, y: 0, w: 390, h: 664 });
   TouchControls.layoutZones();
-  assert.strictEqual(toggle.style.left, '8px', 'with no letterbox it retreats to the edge');
-  assert.strictEqual(keyPill.style.left, '8px', 'so does the keyboard pill');
-  assert.strictEqual(keyPill.style.top, '287px', 'stacked at the edge, not overlapping');
-  assert.strictEqual(toggle.style.top, '337px', 'one pill height plus the gap below it');
-  assert.strictEqual(toggle.style.opacity, '0.35', 'and stops competing with the game');
+  noInlinePlacement();
+
+  // A board layout places its pills by hand, against the app's action button,
+  // because its corners are positioned against the PICTURE rather than the
+  // phone. Those coordinates are host-relative, so the pills have to leave the
+  // chip row first: absolute positioning inside it resolves against the corner
+  // stack, and Rodent's Revenge put its pills 1236px down a 740px screen.
+  TouchControls.setLayout({
+    boardLayout: true,
+    dpad: { pos: 'bl', style: 'cross' },
+    buttons: [{ vk: 0x71, label: 'New game', pos: 'br' }],
+  });
+  const boardToggle = TouchControls._widgets.find(el => el.className === 'tc-mode');
+  const boardKey = TouchControls._widgets.find(el => el.className === 'tc-key');
+  const action = TouchControls._widgets.find(el => el.textContent === 'New game');
+  action.getBoundingClientRect = () => ({
+    left: 257, right: 372, top: 652, bottom: 710, width: 115, height: 58,
+  });
+  TouchControls.layoutZones();
+  for (const p of [boardToggle, boardKey]) {
+    assert.strictEqual(p.parentNode, TouchControls.el,
+      'a hand-placed pill hangs off the overlay, not off the corner stack');
+    assert.strictEqual(p.style.position, 'absolute', 'and is placed by hand');
+    assert.ok(parseInt(p.style.top, 10) < 664,
+      `on the screen, not below it (top=${p.style.top})`);
+    assert.ok(parseInt(p.style.left, 10) < 390,
+      `and not off its right edge (left=${p.style.left})`);
+  }
+
+  // Swapping back to an ordinary layout returns them to the row, in order.
+  TouchControls.setLayout({ dpad: { pos: 'bl', style: 'cross' }, swipes: true });
+  TouchControls.layoutZones();
+  const backRow = TouchControls._rows['br:-1'];
+  const backToggle = TouchControls._widgets.find(el => el.className === 'tc-mode');
+  const backKey = TouchControls._widgets.find(el => el.className === 'tc-key');
+  assert.deepStrictEqual(backRow.children, [backToggle, backKey],
+    'both pills are back in the chip row, view toggle first');
+  for (const p of [backToggle, backKey]) {
+    assert.strictEqual(p.style.position || '', '',
+      'and the board layout leaves no absolute positioning behind');
+  }
 
   // A caret in the guest means a text field is focused. The swipe field must
   // stop taking touches or the tap that puts the caret in the NEXT field --
@@ -864,6 +929,16 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   global.window.innerWidth = 390;
   global.window.visualViewport = { height: 844, offsetTop: 0 };
   global.window.getComputedStyle = () => ({ getPropertyValue: key => key === '--tc-safe-top' ? '47px' : '0px' });
+
+  // An app with no game controls gives up nothing: the two utility pills float
+  // over the picture, and the keyboard one of them opens is a temporary
+  // overlay with its own button to dismiss it. Notepad gets the whole phone.
+  TouchControls.setLayout(null);
+  assert.deepStrictEqual(TouchControls.getBoardArea(),
+    { x: 0, y: 47 / 844, w: 1, h: (844 - 47) / 844 },
+    'nothing but the status bar is taken from a chrome-only layout');
+
+  TouchControls.setLayout({ dpad: { pos: 'bl', style: 'cross' } });
   let area = TouchControls.getBoardArea();
   assert.strictEqual(area.y * 844, 47);
   assert.strictEqual(Math.round((area.y + area.h) * 844), 640);
@@ -885,4 +960,125 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   TouchControls.destroy();
   global.window = previous;
   console.log('PASS board area: status/notch insets, no double inset, keyboard freeze, landscape rails');
+}
+
+// Landscape gutter centring. A portrait-shaped game letterboxed on a landscape
+// phone leaves a teal gutter down each side; the clusters are positioned by the
+// rail reservation, which is a fraction of the SCREEN, so they used to sit
+// against the bezel rather than in the middle of the space beside the picture.
+// getBoardArea() deliberately does NOT change -- it is presentation's input and
+// must stay constant or the fit and the reservation chase each other -- so the
+// widgets follow the last presented rect instead, one way.
+{
+  const previous = { ...global.window };
+  global.window.innerWidth = 667;
+  global.window.visualViewport = { height: 375, offsetTop: 0 };
+  global.window.getComputedStyle = () => ({
+    getPropertyValue: (key) =>
+      (key === 'padding-left' || key === 'padding-right') ? '18px' : '0px',
+  });
+  let presented = { x: 192, y: 0, w: 283, h: 375 };   // Rattler in landscape
+  const gutterRenderer = {
+    handleKeyDown() {}, handleKeyUp() {},
+    getPresentedRectClient: () => presented,
+  };
+  TouchControls.install({ document: global.document, renderer: gutterRenderer });
+  TouchControls.setLayout({
+    boardLayout: true,
+    dpad: { pos: 'bl', style: 'cross' },
+    buttons: [{ vk: 0x71, label: 'New game', pos: 'br' }],
+  });
+  TouchControls.el._rect = { left: 0, top: 0, right: 667, bottom: 375, width: 667, height: 375 };
+  const corners = { bl: TouchControls._corners.bl, br: TouchControls._corners.br };
+  // Widths a real layout produces: a 168px cross pad and a 115px button, each
+  // inside 18px of padding.
+  const base = { bl: { left: 0, width: 204 }, br: { left: 516, width: 151 } };
+  const shiftOf = (el) => {
+    const m = /translateX\((-?[\d.]+)px\)/.exec(el.style.transform || '');
+    return m ? parseFloat(m[1]) : 0;
+  };
+  // A browser reports the TRANSFORMED box from getBoundingClientRect. Model
+  // that, or the test cannot see a layout that compounds its own shift.
+  const settle = () => {
+    for (const key of ['bl', 'br']) {
+      const dx = shiftOf(corners[key]);
+      corners[key]._rect = {
+        left: base[key].left + dx, right: base[key].left + dx + base[key].width,
+        top: 173, bottom: 375, width: base[key].width, height: 202,
+      };
+    }
+  };
+  settle();
+  TouchControls.layoutZones();
+  settle();
+  // 115px button, 192px gutter: 38.5px of gutter each side instead of 18 and 59.
+  assert.strictEqual(shiftOf(corners.br), -20.5,
+    'the action button centres in the 192px right gutter instead of hugging the bezel');
+  assert.strictEqual(corners.bl.style.transform, '',
+    'a cluster already wider than its gutter slack is never pushed OUTWARD past its own padding');
+  const settled = shiftOf(corners.br);
+  TouchControls.layoutZones();
+  settle();
+  TouchControls.layoutZones();
+  settle();
+  assert.strictEqual(shiftOf(corners.br), settled,
+    'repeated layouts are idempotent -- the shift is measured unshifted, not compounded');
+
+  // A wide game fills the landscape screen: no gutter, so the buttons stay
+  // floating over the picture exactly as before. No reserved strip.
+  presented = { x: 0, y: 0, w: 667, h: 375 };
+  TouchControls.layoutZones();
+  settle();
+  assert.strictEqual(corners.br.style.transform, '', 'no gutter, no shift');
+  assert.strictEqual(corners.bl.style.transform, '');
+
+  // A gutter narrower than the cluster must not slide it off the bezel.
+  presented = { x: 40, y: 0, w: 600, h: 375 };
+  TouchControls.layoutZones();
+  settle();
+  assert.strictEqual(corners.bl.style.transform, '');
+  assert.strictEqual(corners.br.style.transform, '');
+
+  // Portrait has no side gutters to centre in at all.
+  presented = { x: 0, y: 100, w: 375, h: 300 };
+  TouchControls.el._rect = { left: 0, top: 0, right: 375, bottom: 667, width: 375, height: 667 };
+  global.window.visualViewport = { height: 667, offsetTop: 0 };
+  TouchControls.layoutZones();
+  assert.strictEqual(corners.bl.style.transform, '');
+  assert.strictEqual(corners.br.style.transform, '');
+
+  // Fill: renderer.setViewMode only SCHEDULES the repaint that recomputes the
+  // presentation viewport, so laying out inline places the controls against the
+  // mode they just left. The overlay has to lay out again after that repaint.
+  const frames = [];
+  global.window.requestAnimationFrame = (fn) => frames.push(fn);
+  let mode = 'fit';
+  gutterRenderer.viewMode = 'fit';
+  gutterRenderer.mobileCrop = { x: 0, y: 0, w: 1, h: 0.85 };
+  gutterRenderer.setViewMode = (next) => {
+    if (mode === next) return false;
+    mode = next; gutterRenderer.viewMode = next;
+    // The new rect appears only when the scheduled repaint runs.
+    global.window.requestAnimationFrame(() => { presented = { x: 0, y: 0, w: 667, h: 375 }; });
+    return true;
+  };
+  TouchControls.el._rect = { left: 0, top: 0, right: 667, bottom: 375, width: 667, height: 375 };
+  global.window.visualViewport = { height: 375, offsetTop: 0 };
+  presented = { x: 192, y: 0, w: 283, h: 375 };
+  TouchControls.setViewMode('zoom');
+  assert(frames.length >= 2, 'a mode switch schedules its own re-layout, not just a repaint');
+  settle();
+  assert.strictEqual(shiftOf(corners.br), -20.5,
+    'the inline layout can only see the rect of the mode being left -- which is the whole bug');
+  const seen = [];
+  while (frames.length) {
+    const batch = frames.splice(0, frames.length);
+    for (const fn of batch) { fn(); settle(); seen.push(shiftOf(corners.br)); }
+  }
+  assert.strictEqual(shiftOf(corners.br), 0,
+    'once the Fill viewport exists the buttons are placed against it, not against the Fit rect');
+  delete global.window.requestAnimationFrame;
+  TouchControls.destroy();
+  global.window = previous;
+  console.log('PASS landscape clusters centre in the letterbox gutters and re-settle after a view-mode switch');
 }
