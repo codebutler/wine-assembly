@@ -1172,8 +1172,27 @@ pass; artifact `/private/tmp/bw-split-fix/wine.wasm`, 1191381 bytes, SHA256
 `a1552d40b78739e5fa11bcba9a0ecace798d7bd8e3f81ad1605eeff8ba0c94b0`, layout
 hash d417ce1f6829dade.
 
+`test/test-bw-arena-commit-replay.js` then answers the same question against
+the real fragmentation instead of a synthetic imitation, in 14 seconds. The
+allocation observer's capture at batch 221408 holds all 170 sparse map
+records as they stood when the guest asked for its arena and got NULL;
+`test/fixtures/bw-alloc-capture-221408.json` is that table, and the fixture
+seeds it into a fresh instance and asks for the same 10878976 bytes. It
+re-derives the largest gap and the total free space from the seeded records
+rather than trusting the recorded numbers, so it cannot quietly become
+trivial, and it refuses to run if the backing pool's pinned base or size has
+moved since the capture. The arena places across two extents, every one of
+its 2656 pages translates to distinct zeroed storage, the seams read back
+what was written to them, and release gives every chunk back. Disarming the
+fallback in the same build returns 0, exactly as the game saw.
+
+Reaching this state by playing costs hours of software rendering and ends in
+a process that cannot be restarted, which is one fragile data point for the
+cost of a session; the durable capture is worth more than the replay of its
+history. That is why there is no gameplay-driving tool here.
+
 Not established by any of the above: that the level loads. The allocation is
 the next thing the guest would have crashed on, not a demonstration of
-gameplay. `tools/bw-gameplay-drive.js` exists to settle that without another
-hand-driven session — it drives the probe through intro, Return, New Game and
-Continue on its own samples and captures the loading screens.
+gameplay, and the status document's own open items — fixed-function
+world-space clipping unimplemented and rejected by the software path, WebGL
+clip planes rejected before GPU access — are still open.
