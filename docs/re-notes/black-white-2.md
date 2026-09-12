@@ -1904,3 +1904,49 @@ into a text buffer.
 Caveat on provenance: the `{n, items}` pair is a single probe reading, and
 everything above is built on it plus static disassembly. It should be
 re-read live at the picker before any fix is designed against it.
+
+### CORRECTION: the ASCII reading of the vector header is not the best one.
+### The same bytes are two adjacent, increasing IEEE floats.
+
+The entry above reads `n = 0x3B313B2F` and `items = 0x3B333B32` as little-endian
+ASCII `"/;1;"` + `"2;3;"` = `"/;1;2;3;"` and concludes the vector header overlaps
+a runtime-generated string buffer. That reading is possible but it is **not
+supported**, and a competing reading of the identical bytes fits better:
+
+| dword | u32 | **f32** | ascii |
+|---|---|---|---|
+| `0x3B313B2F` | 993082159 | **2.704333e-3** | `/;1;` |
+| `0x3B333B32` | 993213234 | **2.734852e-3** | `2;3;` |
+
+Two consecutive slots holding `0.0027043` and `0.0027349` — same magnitude,
+monotonically increasing, delta `3.05e-5`. That is the shape of an ordinary
+**float array** (a curve, a weight table, a heightfield row), and it needs no
+coincidence to explain: any pair of small positive floats in `[2.4e-3, 3.0e-3)`
+shares the exponent byte `0x3B`, and the `;` at both odd positions is that
+shared exponent, not a separator. The digits `1`/`2`/`3` in the ASCII view are
+just the mantissa creeping upward. **The "string" is an artifact of reading a
+float array as text.**
+
+What was checked, and came back negative for the string reading:
+
+- No `"%d;"`, `";%d"`, `"%s;"`, `"0;1;2"` or `"1;2;3"` format/literal string
+  exists anywhere in `BW2Demo.exe` (`tools/find_string.js --all`), so nothing in
+  the image builds a semicolon-separated list of that form.
+- No file under `installed/` contains `;1;2;3;` or `/;1;` (recursive `grep -rl`),
+  so it is not loaded data either.
+- The byte run `2f 3b 31 3b 32 3b 33 3b` does not occur in
+  `Construction_deltas3.raw`, `Construction_heights.raw` or
+  `BnWPoolingSetup.bin`, the three raw float blobs the demo ships.
+
+So: **do not build a fix on the "header overlaps a string buffer" story.** What
+is established is only the mechanical part, which both readings share and which
+is what actually wedges the game — `[esi+4]` is read as a count and holds
+993,082,159, so the duplicate scan at `0x9e5272`..`0x9e527f` runs about a
+billion iterations with a working exit it will not reach in any plausible time.
+The open question is unchanged and still needs the live re-read: **what is the
+object at `[object+0x74]` reached from `0x9e46c0`, and why is a float array (or
+whatever it really is) reaching this code as a `std::vector` header** — an
+uninitialised pointer, a freed-and-reused allocation, or a wrong field offset.
+
+Both the `{n, items}` pair and everything above it remain a single probe reading
+plus static disassembly. Re-read it live at the picker before designing anything.
