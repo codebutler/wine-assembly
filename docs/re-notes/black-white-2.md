@@ -1691,3 +1691,42 @@ runs a pick against it. `0x009e5140` is the victim, not the culprit, and it
 is reached on *every* mouse poll over this screen — which is why the screen
 survives indefinitely with no input at all (drive 9) and dies on the first
 motion of any size.
+
+### The land picker's infinite loop is an unreported out-of-memory
+
+Tracing the faulting block itself (`--trace-at=0x9e50e6` with `esi:12`, 307
+hits) closes the chain. The cell is a 12-byte vector `{capacity, count, items}`
+and the append is an ordinary `push_back`:
+
+    0x9e50d7  mov edx,[esi]          ; count      (esi = cell+4)
+    0x9e50d9  cmp edx,[esi-0x4]      ; == capacity?
+    0x9e50df  jnz 0x9e50e6
+    0x9e50e1  call 0x9e8200          ; grow
+    0x9e50e6  mov eax,[esi]          ; count
+    0x9e50e8  mov ecx,[esi+0x4]      ; items
+    0x9e50eb  mov [ecx+eax*4],ebp    ; items[count] = object   <-- faults
+
+and grow is a textbook doubling vector that **never checks its allocation**:
+
+    0x9e8200  (cap ? cap*2 : 1) * 4 bytes
+    0x9e821b  call 0xad425d          ; operator new[]
+    0x9e8220  mov edi,eax            ; no test, no jz
+    0x9e8230  ...copy old elements...
+    0x9e8244  call 0xad671a          ; operator delete[] (old)
+    0x9e824c  mov [esi+0x8],edi      ; items = whatever new[] returned
+
+Of the 334 faulting stores in one run, **190 are to address 0x0 or 0x4** —
+`items` is NULL — and every traced entry arrives with `prev_eip=0x009e8249`,
+i.e. straight out of that grow. So `operator new[]` is returning NULL.
+
+On real Windows this is a crash at `mov [ecx+eax*4],ebp`. Here `$g2w` maps the
+null store onto `NULL_SENTINEL`: the write disappears, `count` is still
+incremented, and the next dup-scan reads the same sentinel back as 0, matches
+nothing, and appends again — forever. **The infinite loop is not the bug; it is
+how an unchecked `operator new[]` failure presents when a null dereference is
+survivable.** That also explains why no input at all is safe (drive 9): nothing
+calls the pick, so nothing calls grow.
+
+This is the same wall as the bad_alloc in "Land load now runs out of backing"
+above, just reached from a path that does not check the result. The remaining
+question is what the allocator has left at that moment, not what the loop does.
