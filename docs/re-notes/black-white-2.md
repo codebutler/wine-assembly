@@ -1196,3 +1196,68 @@ the next thing the guest would have crashed on, not a demonstration of
 gameplay, and the status document's own open items — fixed-function
 world-space clipping unimplemented and rejected by the software path, WebGL
 clip planes rejected before GPU access — are still open.
+
+### Ending the intro on demand (2026-09-11, Claude)
+
+The opening sequence is in-engine, not a movie file — there is nothing to
+remove from the install — and software-rasterizing its 1787 frames at the
+measured ~0.5 frames/second put the main menu about an hour away. That hour
+was the reason every question about what happens *after* the menu cost a
+session to ask.
+
+It can be ended instead. `0x00529433` is the intro tick's own exit test:
+
+```
+00529421  cmp dword [esi+0x24], 0x0      ; finishFrame, -1 while running
+00529425  jge  0x529433
+00529427  mov edx, [esi+0x20]            ; frame
+0052942a  add edx, 0x1f4
+00529430  mov [esi+0x24], edx            ; finishFrame = frame + 500
+00529433  mov eax, [esi+0x24]
+00529436  cmp eax, -1
+00529439  jz   0x52944a
+0052943b  cmp [esi+0x20], eax
+0052943e  jle  0x52944a
+00529440  mov al, 1                      ; finished
+```
+
+The arming above it is the engine's own: once the completion float at
+`[esi+0x28]` passes its threshold it sets `finishFrame` to `frame + 500`, the
+fade. So writing `finishFrame` below the current frame is not a synthetic
+state — it is exactly the state the sequence ends in, reached without
+rendering the frames in between. Nothing else is written.
+
+`tools/black-white-software-probe.js --skip-intro` does it as soon as the
+existing `0x00526d93` EIP trace names the object (`ESI`; `+0x20` frame,
+`+0x24` finishFrame, `+0x28` completion). Measured: the frame counter froze
+at 3 instead of climbing, and the capture thirty seconds later is the **main
+menu** — the Select Profile / New Profile Name dialog over the land globe,
+with the bottom button bar. Ninety-five seconds, against an hour.
+
+Ruled out by measurement first, so nobody repeats it: Escape, Space, Return
+and a click all leave the intro counter advancing unchanged.
+
+A second, guest-legitimate route exists on paper and is *not* proven. The
+demo parses `.\Scripts\MPDebug.txt` at `0x005fce85`, handing the parser at
+`0x009b5000` the token table at `0x0170b280` and the dispatcher at
+`0x00619f40`. That table is 28 entries of `{const char *name, char
+signature[10]}`, where the signature spells each argument (`N` number, `A`
+string); the token id is the table index and the dispatcher's jump table at
+`0x0061a44c` is indexed by `id - 2`. The syntax is the one `Scripts/map.txt`
+already uses, `TOKEN("string",123)`. Useful entries:
+
+| id | token | args |
+|---|---|---|
+| 6 | `LOAD_FEATURE_SCRIPT` | A — splits the path and special-cases a leading `Land` |
+| 7 | `SET_LAND_NUMBER` | N — stored at `[g+0x4e10d8]` |
+| 8 | `PAUSE_GAME` | — |
+| 17 | `LOAD_LANDSCAPE` | A |
+| 18 | `LOAD_GAME_SCRIPT` | A |
+| 25 | `SET_STARTUP` | A — `"AllowSkip"`, `"ForceIntro"`, `"Default"` |
+
+`SET_STARTUP` clears bit 23 and sets bit 22 of `[g+0x10]` for `AllowSkip`,
+the reverse for `ForceIntro`, and clears both for `Default`. But a
+`--trace-fs` run with the file in place shows the demo never opens
+`MPDebug.txt` in its first eighty seconds, so the route is unproven and the
+readers of those two bits have not been found either; the poke above is what
+actually works today.

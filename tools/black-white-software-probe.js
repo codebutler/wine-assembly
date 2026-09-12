@@ -9,6 +9,13 @@
 // [--max-batches=1000000000] is a secondary guard; --seconds is the wall budget.
 // [--allocation-probe] captures the 10.3MiB gameplay allocation return,
 // keeping the debugger armed through earlier allocations at the shared site.
+// [--skip-intro] ends the opening sequence as soon as the EIP trace names its
+// object, reaching the main menu in about ninety seconds instead of software
+// rendering1787 frames. 0x00529433 is the engine's own exit test --
+//   eax = [esi+0x24]; if (eax != -1 && [esi+0x20] > eax) return "finished"
+// -- and 0x00529421 is where the engine itself arms that field, frame+500,
+// once the completion float at [esi+0x28] passes its threshold. Writing it
+// early puts the intro in exactly the state it ends in; nothing else is poked.
 const fs=require('fs'),path=require('path'),os=require('os'),readline=require('readline');
 const {spawn}=require('child_process');
 const {setTimeout:delay}=require('timers/promises');
@@ -108,7 +115,7 @@ if(args.includes('--allocation-probe'))flags.push('--dump-virtual-maps');
     // Attach to the running real-time guest. Frozen mode intentionally uses a
     // different clock; these counters cover only the observed attachment window.
     const start=performance.now();
-    let nextCapture=captureEvery;
+    let nextCapture=captureEvery,skipped=false;
     while(!stopRequested&&!ended&&performance.now()-start<seconds*1000){
       await delay(Math.min(5000,Math.max(1,seconds*1000-(performance.now()-start))));
       if(stopRequested||ended)break;
@@ -121,6 +128,13 @@ if(args.includes('--allocation-probe'))flags.push('--dump-virtual-maps');
       })()`);
       const record={seconds:(performance.now()-start)/1000,traceHits,...sample};
       records.write(JSON.stringify(record)+'\n');console.log(JSON.stringify(record));
+      if(args.includes('--skip-intro')&&!skipped&&sample.intro&&sample.intro.finishFrame===0xffffffff){
+        skipped=true;
+        console.log('Intro skip:',await evaluate(`(()=>{const o=${introObject};
+          const frame=exports.guest_read32(o+32)>>>0;
+          exports.guest_write32(o+36,(frame-1)>>>0);
+          return {frame,finishFrame:exports.guest_read32(o+36)>>>0};})()`));
+      }
       if(captureEvery&&record.seconds>=nextCapture){
         const filename=`frame-${String(Math.floor(record.seconds)).padStart(4,'0')}.png`;
         await command('png',{path:path.join(output,filename)});
