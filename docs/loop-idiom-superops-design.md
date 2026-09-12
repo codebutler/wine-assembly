@@ -1367,3 +1367,66 @@ H408 executed 2,869,328 load groups in that gameplay window, while the former
 `H343 -> H343` top pair disappeared. The resulting frame still scored terrain
 102,464, life 3,612, mana 2,910 and 189 quantized colors. Machine load exceeded
 80 during the replay, so no wall-time/FPS claim is made.
+
+## 19. Colour-keyed LUT blits: the corpus says jgl.dll, and almost nothing else
+
+SimGolf's profile (docs/re-notes/simgolf-demo.md) put 73% of all block entries
+in two `jgl.dll` loops whose common arms are exactly what H418's `wide16` path
+already executes -- `dst16 = table16[src8]`, source stride 1, destination
+stride 2 -- with one difference that makes them unreachable: a sentinel test
+before the store. `cmp byte [esi],0xff / jnb advance` splits each pixel into
+four or five basic blocks, and `$loop_match_block` returns immediately unless
+the block branches to itself, so no recognizer is ever attempted. These are the
+`multi-branch` declines.
+
+`tools/find-ck-lut-nests.js` censuses that shape directly: every short backward
+conditional jump, decoded linearly from its target, kept only when the decode
+lands exactly on the jump it started from. Over every PE in `test/binaries`
+(1494 files read, duplicates included; ~290 distinct images):
+
+| binary | CK_LUT16 | CK_LUT8 | unkeyed LUT |
+|---|---|---|---|
+| `jgl.dll` (SimGolf) | 265 | 32 | 28 |
+| `pockettanks.exe` | 3 | 0 | 4 |
+| `h3demo.exe` | 2 | 0 | 28 |
+| `jazz2.exe`, `starcraft.exe`, `diablo_s.exe`, `3dfx.dll` | 0 | 2 each | 11-44 |
+| `AbeDemo.exe` | 1 | 0 | 6 |
+| `usp10.dll` | 2 | 0 | 1 |
+
+The positives are real -- Pocket Tanks' `0x409a60` is
+`cmp byte [esi+ecx],0 / jz / movzx esi,byte [ecx] / mov si,[ebx+esi*2+0x400] /
+mov [edi],si / inc ecx / add edi,2 / dec eax / jnz` -- but **297 of the 613
+keyed matches are in one library**. The unkeyed `LUT*_NOKEY` column (1880
+corpus-wide, 88 in each Direct3D software rasterizer) is the shape the existing
+matcher already targets.
+
+Hotness, where we have it, narrows it further. Pocket Tanks' own hottest blocks
+in a menu window are `0x00430d62`: `call [ebp+0x10] / add [mem],esi /
+call [ebp-0x4] / add [mem],edi / dec ebx / jnz` -- an indirect-call-per-pixel
+pipeline, which is `call`-decline territory and which no LUT fold can reach.
+Its keyed loop never appeared in the hot list.
+
+**Verdict: a keyed-LUT fold is a SimGolf fold**, the same way `RLE_RUN` was a
+Caesar fold (1 of 287 PEs). That is a legitimate thing to build -- RLE_RUN
+shipped and bought 7% on its one app -- but it should be argued on SimGolf's
+own numbers, not on reuse. In its favour: the share is far larger than any
+previous single-app fold (73% of block entries against RLE_RUN's one hot pair),
+and the executor already exists, so the work is a recognizer plus a keyed inner
+loop rather than a new engine. The pieces H418 would need:
+
+1. a sentinel test per element, with the store skipped and the cursors still
+   advanced (both loops);
+2. an index taken from the destination word rather than a source byte --
+   `dst = shadow_tbl[dst]`, the shape §3.2.1 named and the implementation never
+   grew -- with a table extent beyond the 512 bytes the wide form proves today
+   (jgl's shadow table is indexed by a full 16-bit pixel);
+3. a second cursor that advances without contributing to the index (the alpha
+   map in `jgl+0x10015361`);
+4. an exit that ends the run when the rare arithmetic-blend arm is taken --
+   3% of pixels there -- leaving that pixel to the interpreter. No arithmetic
+   blending inside the fold, per §3.2.1.
+
+Recognition has two possible homes: extend matching past self-loops to a
+diamond that rejoins at one advance block, or follow `$try_emit_rle_run`
+(src/07-decoder.wat:421), which already matches a whole nest off raw x86 at a
+block start. The RLE precedent is the closer fit.
