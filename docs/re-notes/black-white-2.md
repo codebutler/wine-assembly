@@ -1329,3 +1329,38 @@ point: a census of `VIRTUAL_MAP_TABLE` taken twice at the menu reports 162
 records, zero of them continuation-marked. Whatever forces a split is later
 than the frontend, so that path still needs a land to be proven in the real
 game rather than only in `test/test-virtual-map-split-commit.js`.
+
+### Clicking New Game crashes on rsqrtps (2026-09-11, Claude)
+
+Fixed in 7881bf7e, recorded here because the shape of the failure is worth
+recognising. Clicking Continue on the mouse-controls tutorial puts the engine
+into its vertex work for the first time, and it dies immediately:
+
+```
+*** CRASH at batch 561082: unreachable      ($th_bad_opcode)
+  EIP=0x00962cb6
+  00962cb6  0f 52 c8     rsqrtps xmm1, xmm0
+```
+
+The enclosing function is `0x00962bb0`, a normalizer over an array of 16-byte
+vectors: `movaps` the pair, `addps`/`subps` to get sum and difference, two
+horizontal `shufps`+`addss` reductions for the squared lengths, `comiss` to
+pick which of the two to keep, then `rsqrtps` plus two Newton-Raphson steps
+(`mulps`/`mulps`/`subps` against constants at `0x1d6edb0` and `0x1d6edd0`).
+Every form in that loop except `rsqrtps` was already decoded, which is why
+nothing else in the game had tripped over it.
+
+Adding the single opcode would only have moved the crash a few instructions,
+so 7881bf7e added the rest of the SSE1 packed group at once — `0F 51/52/53`,
+`0F 54/55/56`, `0F 5D/5F` and the three `F3`-prefixed scalar twins.
+
+### Clicks need a long settle, not a long press (2026-09-11, Claude)
+
+A DirectInput button event carries no position: the game clicks wherever *its*
+cursor has got to. At software-rendering speed one frame is seconds of wall
+clock, so a `relmousemove` followed three seconds later by a `di-mousedown`
+presses at the position the game held *before* the move, and every click in a
+run misses with no diagnostic at all — the dialog simply stays up. The run that
+worked left about twenty-eight seconds between settling the cursor and pressing
+it, by accident. Budget ~25s after the move and ~10s between down and up, and
+photograph before each click while a sequence is still being calibrated.
