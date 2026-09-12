@@ -1,6 +1,6 @@
 {
   "generated_from": "src/01-header.wat",
-  "count": 241,
+  "count": 242,
   "sigs": {
     "log": {
       "params": [
@@ -750,6 +750,13 @@
       "results": []
     },
     "unmapped_trace": {
+      "params": [
+        "i32",
+        "i32"
+      ],
+      "results": []
+    },
+    "heap_oom_trace": {
       "params": [
         "i32",
         "i32"

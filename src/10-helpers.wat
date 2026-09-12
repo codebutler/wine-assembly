@@ -1456,13 +1456,20 @@
             (i32.add (local.get $chunk) (i32.const 0xFFFF))
             (i32.const 0xFFFF0000)))
         (local.set $new_top (call $virtual_reserve_down (local.get $chunk)))
-        (if (i32.eqz (local.get $new_top)) (then (return (i32.const 0))))
+        (if (i32.eqz (local.get $new_top))
+          (then
+            (call $host_heap_oom_trace (local.get $chunk) (i32.const 2))
+            (return (i32.const 0))))
         (if (i32.eqz (call $virtual_map_commit (local.get $new_top) (local.get $chunk)))
-          (then (return (i32.const 0))))
+          (then
+            (call $host_heap_oom_trace (local.get $chunk) (i32.const 3))
+            (return (i32.const 0))))
         (local.set $record (call $heap_arena_register
           (local.get $new_top) (i32.add (local.get $new_top) (local.get $chunk))))
         (if (i32.eqz (local.get $record))
-          (then (return (i32.const 0))))
+          (then
+            (call $host_heap_oom_trace (local.get $chunk) (i32.const 4))
+            (return (i32.const 0))))
         (call $heap_arena_free_tail (global.get $heap_sparse_ptr) (global.get $heap_sparse_end)
           (global.get $heap_sparse_record))
         (global.set $heap_sparse_record (local.get $record))
@@ -1502,11 +1509,15 @@
     (local $bsz i32) (local $rem i32) (local $steps i32)
     ;; Refuse huge/overflowing allocations before adding the block header.
     (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))
-      (then (return (i32.const 0))))
+      (then
+        (call $host_heap_oom_trace (local.get $size) (i32.const 5))
+        (return (i32.const 0))))
     ;; need = align8(size + 4 header), minimum 16
     (local.set $need (i32.and (i32.add (i32.add (local.get $size) (i32.const 4)) (i32.const 7)) (i32.const 0xFFFFFFF8)))
     (if (i32.lt_u (local.get $need) (local.get $size))
-      (then (return (i32.const 0))))
+      (then
+        (call $host_heap_oom_trace (local.get $size) (i32.const 5))
+        (return (i32.const 0))))
     (if (i32.lt_u (local.get $need) (i32.const 16)) (then (local.set $need (i32.const 16))))
     ;; Walk free list (guest pointers)
     (local.set $prev_w (i32.const 0)) ;; 0 = scanning from head
@@ -1596,7 +1607,11 @@
           (if (i32.eqz (call $heap_low_reserve (local.get $need)))
             (then
               (local.set $ptr (call $heap_sparse_alloc (local.get $need)))
-              (if (local.get $ptr) (then (br $found)) (else (return (i32.const 0))))))))
+              (if (local.get $ptr)
+                (then (br $found))
+                (else
+                  (call $host_heap_oom_trace (local.get $need) (i32.const 1))
+                  (return (i32.const 0))))))))
       (local.set $ptr (global.get $heap_ptr))
       (i32.store (call $g2w (local.get $ptr)) (local.get $need))
       (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need)))

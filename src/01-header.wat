@@ -617,6 +617,15 @@
   (import "host" "unmapped_trace"
     (func $host_unmapped_trace (param i32 i32)))
 
+  ;; A guest allocation that could not be served, with the byte count asked for
+  ;; and which of the fallbacks ran out. Always reported: a malloc that returns
+  ;; NULL is rare, and the programs that do not check it go wrong arbitrarily
+  ;; far from here -- Black & White 2's spatial grid stores the NULL into a cell
+  ;; and then walks hundreds of thousands of entries from address zero, with
+  ;; nothing anywhere naming the allocation that started it.
+  (import "host" "heap_oom_trace"
+    (func $host_heap_oom_trace (param i32 i32)))
+
   ;; Every standard scrollbar strip as it is painted: control-local rect,
   ;; orientation, and the page model it was handed. A strip that is flat grey
   ;; with no arrows is either a paint that never happened or one whose `long`
