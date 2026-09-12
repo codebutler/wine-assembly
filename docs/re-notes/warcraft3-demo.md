@@ -50,9 +50,27 @@ deleteContext}` for the WGL lifecycle, and read the result back through
 ### The menu walk, in guest pixels
 
 The window is 940x700 and the GL drawable now matches it, so screenshot
-coordinates *are* guest coordinates. Labels render near-black; read them with
-`node tools/png-crop.js FILE --rect=X,Y,W,H --scale=3 --out=…` rather than by
-eye on the full frame.
+coordinates *are* guest coordinates. That is not an assumption any more:
+`sharedRenderer._exclusiveTransform` reads
+`{srcX:0,srcY:0,srcW:940,srcH:700,dstX:0,dstY:0,dstW:940,dstH:700}` with the
+canvas at 940x700, i.e. identity, so a film pixel maps to a guest coordinate
+with no arithmetic. (`--query='?debug'` is what gives the film clip
+`{x:10,y:162,width:940,height:700}`; with any other query the clip is wrong
+and every coordinate read off the picture is off by that offset.)
+
+**Read the labels with `--gain`, and stop navigating by panel art.** The text
+is drawn near-black (`#00000e`), which is invisible on a full frame and easy to
+mistake for "no text", but it is *there* and one flag lifts it:
+
+```
+node tools/png-crop.js FRAME --rect=650,110,290,560 --scale=2 --gain=14 --out=panel.png
+```
+
+That renders the Single Player panel as plain black-on-blue and the whole menu
+becomes readable. This is not a nicety: four separate walks in this session
+clicked 805,425 believing it was Campaign — it is Custom Game, the fourth row —
+and burned about an hour each on the interstitial that follows. One `--gain`
+crop of any menu frame settles which row is which in seconds.
 
 | Screen | Control | Guest x,y |
 |---|---|---|
@@ -67,6 +85,15 @@ eye on the full frame.
 | Single Player | View Replay | 805,357 |
 | Single Player | Custom Game | 805,425 |
 | Single Player | back (bottom plate) | 805,600 |
+| Campaign | Prologue: Exodus of the Horde | 750,230 |
+| Campaign | Human / Undead / Orc (all "Not Available In Demo") | 750,300 / 370 / 440 |
+| Campaign | Difficulty dropdown ("Normal") | 240,581 |
+| Campaign | Back | 795,663 |
+
+The Campaign screen is the one place the demo says out loud what it is: at
+`--gain=6` the four campaign rows under Prologue all read **"Not Available In
+Demo"**, so Prologue is the only mission in the build and there is no other
+route into a map.
 
 **Custom Game opens a full-screen black panel first** — logo, two gameplay
 screenshots, and one `OK` button at 470,610 — which appears on the very next
