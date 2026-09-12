@@ -20,7 +20,11 @@ const { createHostImports } = require('../lib/host-imports');
   new Uint8Array(memory.buffer).set(exe, e.get_staging());
   e.load_pe(exe.length);
   const base = e.get_image_base();
-  const a = base + 0x9000, b = a + 32, out = b + 32;
+  // Each case assembles at base+0x1000+count*256, so the operand scratch has to
+  // sit past where the last case can reach -- at the original base+0x9000 the
+  // 128th case wrote its own code over the inputs and the failure looked like a
+  // wrong answer from the instruction under test.
+  const a = base + 0x80000, b = a + 32, out = b + 32;
   const le32 = n => [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24];
   const bits = value => {
     const buf = Buffer.alloc(4); buf.writeFloatLE(value); return buf.readUInt32LE();
@@ -128,6 +132,107 @@ const { createHostImports } = require('../lib/host-imports');
       assert.strictEqual(e.get_eip(), 0);
       assert.deepStrictEqual(Array.from({ length: 4 }, (_, i) => e.guest_read32(out + i * 4) >>> 0),
         av.map((v, i) => bits(operation(v, bv[i]))), `${label} all four lanes`);
+    }
+  }
+  // The SSE1 packed group added for Black & White 2's vertex normalizer. The
+  // bitwise forms are checked on raw bit patterns rather than floats, because
+  // that is what the guest actually uses them for -- ANDPS with a 0x7fffffff
+  // mask is how an abs() is spelled in this kind of code.
+  for (const [opcode, label, operation] of [
+    [0x54, 'ANDPS', (x, y) => (x & y) >>> 0],
+    [0x55, 'ANDNPS', (x, y) => (~x & y) >>> 0],
+    [0x56, 'ORPS', (x, y) => (x | y) >>> 0],
+  ]) {
+    for (const memorySource of [false, true]) {
+      const av = [0x7fffffff, 0x80000000, 0xdeadbeef, 0];
+      const bv = [0xc0490fdb, 0xffffffff, 0x0f0f0f0f, 0x12345678];
+      av.forEach((v, i) => e.guest_write32(a + i * 4, v));
+      bv.forEach((v, i) => e.guest_write32(b + i * 4, v));
+      const code = [
+        0x0f, 0x10, 0x05, ...le32(a), 0x0f, 0x10, 0x0d, ...le32(b),
+        0x0f, opcode, ...(memorySource ? [0x05, ...le32(b)] : [0xc1]),
+        0x0f, 0x11, 0x05, ...le32(out), 0xc3,
+      ];
+      const pc = base + 0x1000 + count++ * 256, sp = base + 0xd00000;
+      code.forEach((v, i) => e.guest_write8(pc + i, v));
+      e.guest_write32(sp, 0); e.set_esp(sp); e.set_eip(pc); e.run(10000);
+      assert.strictEqual(e.get_eip(), 0);
+      assert.deepStrictEqual(Array.from({ length: 4 }, (_, i) => e.guest_read32(out + i * 4) >>> 0),
+        av.map((v, i) => operation(v, bv[i])), `${label} all four lanes`);
+    }
+  }
+  // MINPS/MAXPS return the source operand whenever the pair is unordered or
+  // equal, so the NaN lane and the +0/-0 lane are the whole point of this case
+  // -- wasm's f32x4.min/max would return the other one.
+  for (const [opcode, label, operation] of [
+    [0x5d, 'MINPS', (x, y) => (x < y ? x : y)],
+    [0x5f, 'MAXPS', (x, y) => (x > y ? x : y)],
+  ]) {
+    for (const memorySource of [false, true]) {
+      const av = [1.5, -4, NaN, 0], bv = [2, 2, 7, -0];
+      av.forEach((v, i) => e.guest_write32(a + i * 4, bits(v)));
+      bv.forEach((v, i) => e.guest_write32(b + i * 4, bits(v)));
+      const code = [
+        0x0f, 0x10, 0x05, ...le32(a), 0x0f, 0x10, 0x0d, ...le32(b),
+        0x0f, opcode, ...(memorySource ? [0x05, ...le32(b)] : [0xc1]),
+        0x0f, 0x11, 0x05, ...le32(out), 0xc3,
+      ];
+      const pc = base + 0x1000 + count++ * 256, sp = base + 0xd00000;
+      code.forEach((v, i) => e.guest_write8(pc + i, v));
+      e.guest_write32(sp, 0); e.set_esp(sp); e.set_eip(pc); e.run(10000);
+      assert.strictEqual(e.get_eip(), 0);
+      assert.deepStrictEqual(Array.from({ length: 4 }, (_, i) => e.guest_read32(out + i * 4) >>> 0),
+        av.map((v, i) => bits(operation(v, bv[i]))), `${label} all four lanes`);
+    }
+  }
+  // SQRTPS/RSQRTPS/RCPPS ignore the destination entirely. The reciprocal pair
+  // is a ~12-bit approximation on real silicon and exact here, so the expected
+  // values are the exactly-rounded single-precision results.
+  for (const [opcode, label, operation] of [
+    [0x51, 'SQRTPS', x => Math.fround(Math.sqrt(x))],
+    [0x52, 'RSQRTPS', x => Math.fround(1 / Math.fround(Math.sqrt(x)))],
+    [0x53, 'RCPPS', x => Math.fround(1 / x)],
+  ]) {
+    for (const memorySource of [false, true]) {
+      const av = [1.5, -4, 9, 0], bv = [4, 0.25, 100, 2];
+      av.forEach((v, i) => e.guest_write32(a + i * 4, bits(v)));
+      bv.forEach((v, i) => e.guest_write32(b + i * 4, bits(v)));
+      const code = [
+        0x0f, 0x10, 0x05, ...le32(a), 0x0f, 0x10, 0x0d, ...le32(b),
+        0x0f, opcode, ...(memorySource ? [0x05, ...le32(b)] : [0xc1]),
+        0x0f, 0x11, 0x05, ...le32(out), 0xc3,
+      ];
+      const pc = base + 0x1000 + count++ * 256, sp = base + 0xd00000;
+      code.forEach((v, i) => e.guest_write8(pc + i, v));
+      e.guest_write32(sp, 0); e.set_esp(sp); e.set_eip(pc); e.run(10000);
+      assert.strictEqual(e.get_eip(), 0);
+      assert.deepStrictEqual(Array.from({ length: 4 }, (_, i) => e.guest_read32(out + i * 4) >>> 0),
+        bv.map(v => bits(operation(Math.fround(v)))), `${label} all four lanes`);
+    }
+  }
+  // The F3-prefixed scalar twins touch lane 0 only.
+  for (const [opcode, label, operation] of [
+    [0x51, 'SQRTSS', x => Math.fround(Math.sqrt(x))],
+    [0x52, 'RSQRTSS', x => Math.fround(1 / Math.fround(Math.sqrt(x)))],
+    [0x53, 'RCPSS', x => Math.fround(1 / x)],
+  ]) {
+    for (const memorySource of [false, true]) {
+      for (const value of [4, 0.25, 100, 2]) {
+        [bits(7), ...upper].forEach((v, i) => e.guest_write32(a + i * 4, v));
+        [bits(value), 0x7fcabcde, 0, 0xffffffff].forEach((v, i) => e.guest_write32(b + i * 4, v));
+        const code = [
+          0x0f, 0x10, 0x05, ...le32(a), 0x0f, 0x10, 0x0d, ...le32(b),
+          0xf3, 0x0f, opcode, ...(memorySource ? [0x05, ...le32(b)] : [0xc1]),
+          0x0f, 0x11, 0x05, ...le32(out), 0xc3,
+        ];
+        const pc = base + 0x1000 + count++ * 256, sp = base + 0xd00000;
+        code.forEach((v, i) => e.guest_write8(pc + i, v));
+        e.guest_write32(sp, 0); e.set_esp(sp); e.set_eip(pc); e.run(10000);
+        assert.strictEqual(e.get_eip(), 0);
+        assert.deepStrictEqual(Array.from({ length: 4 }, (_, i) => e.guest_read32(out + i * 4) >>> 0),
+          [bits(operation(Math.fround(value))), ...upper],
+          `${label} ${value}, memory=${memorySource}`);
+      }
     }
   }
   console.log(`PASS ${count} scalar SSE arithmetic/comparison cases`);

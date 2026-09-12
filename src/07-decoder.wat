@@ -5180,12 +5180,18 @@
                           (i32.or
                             (i32.eq (local.get $op) (i32.const 0x2c))
                             (i32.or
-                              (i32.eq (local.get $op) (i32.const 0x58))
+                              (i32.eq (local.get $op) (i32.const 0x51))
                               (i32.or
-                                (i32.eq (local.get $op) (i32.const 0x59))
+                                (i32.eq (local.get $op) (i32.const 0x52))
                                 (i32.or
-                                  (i32.eq (local.get $op) (i32.const 0x5c))
-                                  (i32.eq (local.get $op) (i32.const 0x5e)))))))))))
+                                  (i32.eq (local.get $op) (i32.const 0x53))
+                                  (i32.or
+                                    (i32.eq (local.get $op) (i32.const 0x58))
+                                    (i32.or
+                                      (i32.eq (local.get $op) (i32.const 0x59))
+                                      (i32.or
+                                        (i32.eq (local.get $op) (i32.const 0x5c))
+                                        (i32.eq (local.get $op) (i32.const 0x5e))))))))))))))
                 (i32.or
                   (i32.or
                     (i32.or
@@ -5198,8 +5204,17 @@
                         (i32.eq (local.get $op) (i32.const 0x17)))))
                   (i32.or
                     (i32.or
-                      (i32.eq (local.get $op) (i32.const 0x28))
-                      (i32.eq (local.get $op) (i32.const 0x29)))
+                      (i32.or
+                        (i32.eq (local.get $op) (i32.const 0x28))
+                        (i32.eq (local.get $op) (i32.const 0x29)))
+                      ;; 0F 51..56 are SQRTPS/RSQRTPS/RCPPS/ANDPS/ANDNPS/ORPS
+                      ;; and 0F 5D/5F are MINPS/MAXPS -- one contiguous run
+                      ;; plus two strays, all handled by $sse_packed_extra.
+                      (i32.or
+                        (i32.and (i32.ge_u (local.get $op) (i32.const 0x51))
+                                 (i32.le_u (local.get $op) (i32.const 0x56)))
+                        (i32.or (i32.eq (local.get $op) (i32.const 0x5d))
+                                (i32.eq (local.get $op) (i32.const 0x5f)))))
                     (i32.or
                       (i32.eq (local.get $op) (i32.const 0x2c))
                       (i32.or
@@ -5228,7 +5243,13 @@
                   (if (i32.eq (local.get $op) (i32.const 0x5e))
                     (then (local.set $imm (i32.const 13))))
                   (if (i32.eq (local.get $op) (i32.const 0x5c))
-                    (then (local.set $imm (i32.const 14)))))
+                    (then (local.set $imm (i32.const 14))))
+                  (if (i32.eq (local.get $op) (i32.const 0x51))
+                    (then (local.set $imm (i32.const 27))))
+                  (if (i32.eq (local.get $op) (i32.const 0x52))
+                    (then (local.set $imm (i32.const 28))))
+                  (if (i32.eq (local.get $op) (i32.const 0x53))
+                    (then (local.set $imm (i32.const 29)))))
                 (else
                   (if (i32.eq (local.get $op) (i32.const 0x57))
                     (then (local.set $imm (i32.const 1))))
@@ -5248,7 +5269,18 @@
                   (if (i32.eq (local.get $op) (i32.const 0x2c))
                     (then (local.set $imm (i32.const 5))))
                   (if (i32.eq (local.get $op) (i32.const 0xC6))
-                    (then (local.set $imm (i32.const 7))))))
+                    (then (local.set $imm (i32.const 7))))
+                  ;; 0F 51..56 map onto 19..24 in order; MINPS/MAXPS sit apart
+                  ;; in the opcode map but next to them in the subop numbering.
+                  (if (i32.and (i32.ge_u (local.get $op) (i32.const 0x51))
+                               (i32.le_u (local.get $op) (i32.const 0x56)))
+                    (then (local.set $imm
+                      (i32.add (i32.sub (local.get $op) (i32.const 0x51))
+                               (i32.const 19)))))
+                  (if (i32.eq (local.get $op) (i32.const 0x5f))
+                    (then (local.set $imm (i32.const 25))))
+                  (if (i32.eq (local.get $op) (i32.const 0x5d))
+                    (then (local.set $imm (i32.const 26))))))
               (if (i32.eq (global.get $mr_mod) (i32.const 3))
                 (then
                   (if (i32.eq (local.get $op) (i32.const 0xC6))

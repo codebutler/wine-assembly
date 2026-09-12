@@ -169,19 +169,67 @@
       (then (local.set $r (f32.div (local.get $a) (local.get $s)))))
     (if (i32.eq (local.get $sub) (i32.const 14))
       (then (local.set $r (f32.sub (local.get $a) (local.get $s)))))
+    ;; 27/28/29 are SQRTSS/RSQRTSS/RCPSS -- unary on the source lane, with the
+    ;; destination's upper three lanes preserved like every other scalar form.
+    (if (i32.eq (local.get $sub) (i32.const 27))
+      (then (local.set $r (f32.sqrt (local.get $s)))))
+    (if (i32.eq (local.get $sub) (i32.const 28))
+      (then (local.set $r (f32.div (f32.const 1) (f32.sqrt (local.get $s))))))
+    (if (i32.eq (local.get $sub) (i32.const 29))
+      (then (local.set $r (f32.div (f32.const 1) (local.get $s)))))
     (f32x4.replace_lane 0 (local.get $d) (local.get $r)))
 
   (func $sse_is_scalar_arithmetic (param $sub i32) (result i32)
     (i32.or
-      (i32.or (i32.eq (local.get $sub) (i32.const 10)) (i32.eq (local.get $sub) (i32.const 11)))
-      (i32.or (i32.eq (local.get $sub) (i32.const 13)) (i32.eq (local.get $sub) (i32.const 14)))))
+      (i32.or
+        (i32.or (i32.eq (local.get $sub) (i32.const 10)) (i32.eq (local.get $sub) (i32.const 11)))
+        (i32.or (i32.eq (local.get $sub) (i32.const 13)) (i32.eq (local.get $sub) (i32.const 14))))
+      (i32.or
+        (i32.or (i32.eq (local.get $sub) (i32.const 27)) (i32.eq (local.get $sub) (i32.const 28)))
+        (i32.eq (local.get $sub) (i32.const 29)))))
+
+  ;; The rest of SSE1's packed arithmetic: the square-root group at 0F 51/52/53
+  ;; and the bitwise/limit group at 0F 54/55/56/5D/5F. All are pure functions of
+  ;; (dst, src) with the same encoding in both operand shapes, so the register
+  ;; and memory handlers share them here rather than each spelling them out.
+  ;;
+  ;; RSQRTPS and RCPPS are ~12-bit approximations on real silicon and exact
+  ;; here. That is the safe direction to be wrong in, and the callers that care
+  ;; about the last bits refine with Newton-Raphson either way -- Black & White
+  ;; 2's vertex normalizer at 0x00962cb6 does exactly that, two steps of it.
+  ;;
+  ;; MINPS/MAXPS return the *source* operand when the pair is unordered or
+  ;; equal. That is wasm's pmin/pmax with the operands swapped -- f32x4.min and
+  ;; f32x4.max propagate NaN instead and would be a different instruction.
+  (func $sse_is_packed_extra (param $sub i32) (result i32)
+    (i32.and (i32.ge_u (local.get $sub) (i32.const 19))
+             (i32.le_u (local.get $sub) (i32.const 26))))
+
+  (func $sse_packed_extra (param $sub i32) (param $d v128) (param $s v128) (result v128)
+    (if (i32.eq (local.get $sub) (i32.const 19))        ;; SQRTPS
+      (then (return (f32x4.sqrt (local.get $s)))))
+    (if (i32.eq (local.get $sub) (i32.const 20))        ;; RSQRTPS
+      (then (return (f32x4.div (f32x4.splat (f32.const 1)) (f32x4.sqrt (local.get $s))))))
+    (if (i32.eq (local.get $sub) (i32.const 21))        ;; RCPPS
+      (then (return (f32x4.div (f32x4.splat (f32.const 1)) (local.get $s)))))
+    (if (i32.eq (local.get $sub) (i32.const 22))        ;; ANDPS
+      (then (return (v128.and (local.get $d) (local.get $s)))))
+    (if (i32.eq (local.get $sub) (i32.const 23))        ;; ANDNPS: ~dst & src
+      (then (return (v128.andnot (local.get $s) (local.get $d)))))
+    (if (i32.eq (local.get $sub) (i32.const 24))        ;; ORPS
+      (then (return (v128.or (local.get $d) (local.get $s)))))
+    (if (i32.eq (local.get $sub) (i32.const 25))        ;; MAXPS
+      (then (return (f32x4.pmax (local.get $s) (local.get $d)))))
+    (f32x4.pmin (local.get $s) (local.get $d)))         ;; 26: MINPS
 
   ;; sub=0 is a 128-bit move; sub=1 is XORPS; sub=2 is MOVSS; sub=3 is
   ;; UNPCKLPS; sub=4 is MOVLHPS (register source); sub=7 is SHUFPS, with its
   ;; imm8 in operand bits 16..23; sub=8/9 are ADDPS/MULPS;
   ;; sub=10/11 are ADDSS/MULSS (preserve destination upper 96 bits);
   ;; sub=12 is UCOMISS/COMISS (no destination write); sub=13/14 DIVSS/SUBSS;
-  ;; sub=15/16 DIVPS/SUBPS; sub=17 CVTSI2SS (default nearest-even rounding).
+  ;; sub=15/16 DIVPS/SUBPS; sub=17 CVTSI2SS (default nearest-even rounding);
+  ;; sub=19..26 are the packed group in $sse_packed_extra and sub=27..29 the
+  ;; scalar SQRTSS/RSQRTSS/RCPSS in $sse_scalar_arithmetic.
   (func $th_sse_rr (param $op i32)
     (local $sub i32) (local $dst i32) (local $src i32)
     (local $d v128) (local $s v128) (local $v v128)
@@ -234,6 +282,9 @@
       (then (local.set $v (f32x4.div (local.get $d) (local.get $s)))))
     (if (i32.eq (local.get $sub) (i32.const 16))
       (then (local.set $v (f32x4.sub (local.get $d) (local.get $s)))))
+    (if (call $sse_is_packed_extra (local.get $sub))
+      (then (local.set $v (call $sse_packed_extra
+        (local.get $sub) (local.get $d) (local.get $s)))))
     (if (i32.eq (local.get $sub) (i32.const 2))
       (then (local.set $v (i32x4.replace_lane 0
         (local.get $d) (i32x4.extract_lane 0 (local.get $s))))))
@@ -328,6 +379,9 @@
           (then (local.set $v (f32x4.div (local.get $d) (local.get $s)))))
         (if (i32.eq (local.get $sub) (i32.const 16))
           (then (local.set $v (f32x4.sub (local.get $d) (local.get $s)))))
+        (if (call $sse_is_packed_extra (local.get $sub))
+          (then (local.set $v (call $sse_packed_extra
+            (local.get $sub) (local.get $d) (local.get $s)))))
         (if (i32.eq (local.get $sub) (i32.const 3))
           (then (local.set $v
             (i32x4.replace_lane 3
