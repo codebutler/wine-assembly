@@ -577,7 +577,8 @@
         (block $gap_found (loop $gap
           (if (i32.gt_u (local.get $size)
                 (i32.sub (region.end $VIRTUAL_BACKING_BASE) (local.get $backing_ptr)))
-            (then (return (i32.const 0))))
+            (then (return (call $virtual_map_commit_split
+              (local.get $guest) (local.get $size) (local.get $protect)))))
           (br_if $gap_found (i32.ge_u (local.get $i) (local.get $count)))
           (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
           (local.set $backing (i32.load offset=8 (local.get $rec)))
@@ -609,6 +610,118 @@
     (call $virtual_shared_top_observe (local.get $guest))
     (global.set $virtual_alloc_top (local.get $guest))
     (local.get $guest))
+
+  ;; One guest commit does not need one backing extent. A guest range is
+  ;; translated per page through the page table, and every host-side bulk copy
+  ;; already asks $g2wSpan how far the current run reaches, precisely because
+  ;; adjacent guest maps have unrelated backings. So when the pool has the
+  ;; bytes but not in one piece, halve the request and place each half on its
+  ;; own extent rather than failing the allocation.
+  ;;
+  ;; This is the difference between Black & White 2 loading a level and not:
+  ;; its post-Continue commit asks for 10878976 bytes against a largest gap of
+  ;; 10678272 with 96387072 free in total, and the guest copies into the NULL
+  ;; it gets back without checking it.
+  ;;
+  ;; Records after the first carry bit 31 in their AllocationProtect word, so
+  ;; MEM_RELEASE — which names only the base — can walk the chain and free the
+  ;; whole allocation. Bits 0..10 hold the PAGE_* value; the flag never reaches
+  ;; a PTE, because publication happens per chunk with the caller's unmodified
+  ;; protect and the marking pass runs afterwards.
+  ;;
+  ;; Halving bottoms out at one 64KB granule, so recursion is bounded by
+  ;; log2(size/64KB). A half that cannot be placed rolls its siblings back:
+  ;; a VirtualAlloc that returns NULL must leave no backing committed.
+  (func $virtual_map_commit_split
+      (param $guest i32) (param $size i32) (param $protect i32) (result i32)
+    (local $half i32)
+    (if (i32.le_u (local.get $size) (i32.const 0x10000))
+      (then (return (i32.const 0))))
+    (local.set $half
+      (i32.and (i32.shr_u (local.get $size) (i32.const 1)) (i32.const 0xFFFF0000)))
+    (if (i32.eqz (local.get $half))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $virtual_map_commit_locked
+          (local.get $guest) (local.get $half) (local.get $protect)))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $virtual_map_commit_locked
+          (i32.add (local.get $guest) (local.get $half))
+          (i32.sub (local.get $size) (local.get $half)) (local.get $protect)))
+      (then
+        (call $virtual_map_release_range_locked (local.get $guest) (local.get $half))
+        (return (i32.const 0))))
+    (call $virtual_map_mark_continuations (local.get $guest) (local.get $size))
+    ;; Each half ran the commit tail, so the per-instance downward reservation
+    ;; cursor now names the second half's base. Put it back on the allocation's
+    ;; own base, or the next VirtualAlloc(NULL) carves out of a range this
+    ;; allocation already owns. (The shared cell only ever lowers, so it is
+    ;; already correct; observing again states that rather than assuming it.)
+    (call $virtual_shared_top_observe (local.get $guest))
+    (global.set $virtual_alloc_top (local.get $guest))
+    (local.get $guest))
+
+  ;; Flag every record of a split allocation except the one the guest holds.
+  (func $virtual_map_mark_continuations (param $guest i32) (param $size i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32)
+    (local.set $end (i32.add (local.get $guest) (local.get $size)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.gt_u (local.get $base) (local.get $guest))
+            (i32.le_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+              (local.get $end)))
+        (then
+          (i32.store offset=12 (local.get $rec)
+            (i32.or (i32.load offset=12 (local.get $rec)) (i32.const 0x80000000)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  ;; Release every mapping wholly inside a guest range. Used to undo the
+  ;; committed part of a split that could not be finished; releasing compacts
+  ;; the table, so the scan restarts rather than walking a moved tail.
+  (func $virtual_map_release_range_locked (param $guest i32) (param $size i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32)
+    (local.set $end (i32.add (local.get $guest) (local.get $size)))
+    (block $done (loop $again
+      (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+      (local.set $i (i32.const 0))
+      (block $scanned (loop $scan
+        (br_if $scanned (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+          (i32.shl (local.get $i) (i32.const 4))))
+        (local.set $base (i32.load (local.get $rec)))
+        (if (i32.and
+              (i32.ge_u (local.get $base) (local.get $guest))
+              (i32.le_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+                (local.get $end)))
+          (then
+            (drop (call $virtual_map_release_one (local.get $base)))
+            (br $again)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+      (br $done))))
+
+  ;; Look up the record whose base is exactly this guest address.
+  (func $virtual_map_find_record (param $guest i32) (result i32)
+    (local $count i32) (local $i i32) (local $rec i32)
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (if (i32.eq (i32.load (local.get $rec)) (local.get $guest))
+        (then (return (local.get $rec))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
 
   ;; Publish the process heap. Called by the PE loader on the instance that loads
   ;; the image; every other instance picks the same values up from HEAP_SHARED in
@@ -800,7 +913,29 @@
     (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
     (local.get $result))
 
+  ;; MEM_RELEASE names a base and no size, so the chunks a split commit placed
+  ;; on separate extents have to be found from the base: each one begins where
+  ;; the previous ended and carries the continuation flag. Releasing only the
+  ;; first would leak the rest of the allocation on every level reload.
   (func $virtual_map_release_locked (param $guest i32) (result i32)
+    (local $rec i32) (local $size i32)
+    (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (local.set $size (i32.load offset=4 (local.get $rec)))
+    (if (i32.eqz (call $virtual_map_release_one (local.get $guest)))
+      (then (return (i32.const 0))))
+    (block $done (loop $chain
+      (local.set $guest (i32.add (local.get $guest) (local.get $size)))
+      (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+      (br_if $done (i32.eqz (local.get $rec)))
+      (br_if $done (i32.eqz
+        (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x80000000))))
+      (local.set $size (i32.load offset=4 (local.get $rec)))
+      (br_if $done (i32.eqz (call $virtual_map_release_one (local.get $guest))))
+      (br $chain)))
+    (i32.const 1))
+
+  (func $virtual_map_release_one (param $guest i32) (result i32)
     (local $count i32) (local $i i32) (local $rec i32) (local $last i32)
     (local $last_rec i32) (local $size i32) (local $backing i32)
     (local $backing_ptr i32)

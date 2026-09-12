@@ -1122,3 +1122,58 @@ returned armedtrue/address10125769/request10848128. Artifacts are
 `/var/folders/dz/1fqkk_jd4350qkm91pm9_q3c0000gp/T/bw-software-probe-1Fi3BW`.
 Initial55s sample reaches intro19 with zero renderer failures and no input held.
 The parent owns the terminal handle; subagent handles are not interchangeable.
+
+### Split backing for a fragmented commit (2026-09-11, Claude)
+
+The measured blocker was never a shader or a missing opcode: at Continue the
+guest asks for a 10878976-byte heap arena (`$heap_sparse_alloc`, 166*64KiB
+rounded), `virtual_map_commit_locked` could not find that many *contiguous*
+bytes in the backing pool — largest gap 10678272, short by 200704 — and
+returned NULL, which the guest copied into without checking. Total free
+backing at that moment was 96387072 bytes. Best-fit reuse (earlier this day)
+keeps the pool from fragmenting further; it cannot conjure a contiguous run
+out of a pool that is already fragmented.
+
+One guest commit does not actually need one backing extent. Guest addresses
+translate per page through the page table, and every host-side bulk copy
+already asks `g2wSpan` how far the current run reaches — precisely because
+adjacent guest maps have unrelated backings. So `virtual_map_commit_locked`
+now falls back, at the point where it used to return 0, to halving the
+request and placing each half on its own extent (`$virtual_map_commit_split`).
+Halving bottoms out at one 64KiB granule, so recursion is bounded by
+log2(size/64KiB).
+
+Two consequences had to be handled rather than assumed:
+
+- `MEM_RELEASE` names only the base. Records after the first carry bit 31 in
+  their AllocationProtect word (`$virtual_map_mark_continuations`), and
+  `$virtual_map_release_locked` walks that chain, so a released split
+  allocation gives back every chunk instead of leaking all but the first on
+  each level reload. Bits 0..10 keep the PAGE_* value and the flag never
+  reaches a PTE: publication is per chunk with the caller's unmodified
+  protect, and the marking pass runs afterwards.
+- A half that cannot be placed rolls its siblings back
+  (`$virtual_map_release_range_locked`): a VirtualAlloc that returns NULL must
+  leave no backing committed. The per-instance downward reservation cursor is
+  put back on the allocation's own base, or the next VirtualAlloc(NULL) would
+  carve out of a range this one already owns.
+
+`test/test-virtual-map-split-commit.js` pins the contract on a pool left with
+two four-unit holes and no wilderness: an eight-unit commit succeeds, lands
+one chunk on each hole, moves no live mapping, translates and zeroes on every
+page including across the seam, fails clean when the total does not fit, and
+releases completely. Negative control: with the fallback disarmed in the same
+build, that commit returns 0. Also PASS: virtual-map-cross-instance (its
+"failed placement must not change map count or backing cursor" assertion still
+holds — the rollback restores both), virtual-page-protection,
+virtual-query-user-boundary, heap-partition, pointer-probes,
+global-alloc-reuse, shell-malloc, bw-allocation-observer. Full build gates
+pass; artifact `/private/tmp/bw-split-fix/wine.wasm`, 1191381 bytes, SHA256
+`a1552d40b78739e5fa11bcba9a0ecace798d7bd8e3f81ad1605eeff8ba0c94b0`, layout
+hash d417ce1f6829dade.
+
+Not established by any of the above: that the level loads. The allocation is
+the next thing the guest would have crashed on, not a demonstration of
+gameplay. `tools/bw-gameplay-drive.js` exists to settle that without another
+hand-driven session — it drives the probe through intro, Return, New Game and
+Continue on its own samples and captures the loading screens.
