@@ -1874,9 +1874,23 @@ Resource-aware Win98 emulator
       // that says the bars are down -- including the first one, on a page that
       // arrived already collapsed. The resize below is the expensive half and
       // only runs when there is genuinely more room than last time.
+      const wasCollapsed = document.body.classList.contains('bars-collapsed');
       document.body.classList.add('bars-collapsed');
-      if (height <= pinnedViewportHeight) return;
-      pinnedViewportHeight = height;
+      // ...or when the CLASS itself just changed, which is also a layout
+      // change. In LANDSCAPE on iOS the bars OVERLAY the page instead of
+      // shortening it: measured on an iPhone in landscape, innerHeight is 375
+      // with the bars up and 375 with them down, while 100svh is 292 and
+      // 100lvh is 375. So #screen-wrap (100dvh) grows by 83px at the collapse
+      // while innerHeight -- the only thing this gate used to test -- never
+      // moves, and the guest desktop was left sized to the pre-collapse box.
+      // Measured on the device with WordPad up: a 794x300 backing inside a
+      // 712x375 wrap, presented at dst [0,51,2136,807] of a 2136x1125 output,
+      // i.e. teal bands top and bottom on a screen with room for the whole
+      // window. Forcing one resizeCanvas() there gave 712x375 and WordPad
+      // filled the screen. Portrait keeps the old test, where the bars really
+      // do shorten the viewport and innerHeight really does grow.
+      if (wasCollapsed && height <= pinnedViewportHeight) return;
+      if (height > pinnedViewportHeight) pinnedViewportHeight = height;
       // Pin rather than track: dvh follows the bars both ways, so a stray
       // swipe back up would resize the guest a second time. Take the taller
       // size once and keep it; the gutter unmounts with the same class.
