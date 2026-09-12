@@ -2059,3 +2059,100 @@ Two practical consequences:
    defect is still open. Reaching gameplay this way would show the engine and
    renderer work; it would **not** fix or excuse the grid-query wedge, which
    stays a separate open bug.
+
+## The picker wedge is an unbounded scan over a NULL array
+
+`--fault-null=1` on the picker run produced the mechanism. **Read the faults out
+of `<artifacts>/run.log`, not the driver's stdout** — `tools/black-white-software-probe.js`
+spawns `run.js` with piped stdio and writes the child's output to that file, so
+any driver filtering stdout by line prefix discards every fault line silently.
+That mistake cost a session: a run with 617,784 faults in it was reported here
+as "zero faults".
+
+`run.log` from the session-36 picker run holds **617,784 faults across 15
+distinct EIPs**, and two of them carry the whole story:
+
+| EIP | n | address range | step |
+|---|---|---|---|
+| `0x9e5269` | 617,414 | `0x0` … `0x25af0c` | `+4`, 617,411 times |
+| `0x9e50e6` | 334 | `0x0`, then `0xb7abdea0`–`0xb7ac59a0` | `0x1800` (60×), `±4` |
+
+The reported EIP is `(global.get $eip)` from `src/03-registers.wat:249`, which in
+threaded code is the **block entry**, not the faulting instruction — so each row
+names a block, and the access has to be attributed by reading that block.
+
+`0x9e5269` is the inner loop of the query at `0x9e5140`. In sync from the entry,
+`ebp = cellBase + row*[grid+0x10]*12 + col*12 + 4`, the same `+4` convention the
+insert uses, so `[ebp]` is the cell's count and `[ebp+4]` its items pointer; the
+loop body is `mov ecx,[ebp+4]` / `mov edi,[ecx+ebx*4]`. An address walk of
+`0x0, 0x4, 0x8, …` is therefore unambiguous: **`items` is NULL and `ebx` is
+counting up**, with the loop bound `[ebp]` at 617k and still climbing when the
+32MB log was cut. That loop *is* the wedge — the host census either side of it
+shows `get_ticks` frozen at 339620 and `log_i32` frozen at 97531 while `log`
+climbs by exactly 100000 per census report, i.e. a guest spinning in one loop
+that calls nothing else.
+
+Where the NULL comes from is the insert at `0x9e5060` and its grow path:
+
+```
+0x9e50d7  mov edx,[esi]        ; count      (cell = {capacity, count, items})
+0x9e50d9  cmp edx,[esi-0x4]    ; == capacity?
+0x9e50df  jnz 0x9e50e6
+0x9e50e1  call 0x9e8200        ; GROW
+0x9e50e6  mov eax,[esi]        ; count
+0x9e50e8  mov ecx,[esi+0x4]    ; items
+0x9e50eb  mov [ecx+eax*4],ebp  ; items[count] = value
+0x9e50ee  add dword [esi],0x1  ; count++
+```
+
+and `0x9e8200` is:
+
+```
+0x9e8204  mov eax,[esi]        ; capacity
+0x9e8213  lea eax,[ebx*4]      ; new byte count (ebx = capacity ? 2*capacity : 1)
+0x9e821b  call 0xad425d        ; -> 0xad41b9, MSVCRT malloc
+0x9e824c  mov [esi+0x8],edi    ; items = malloc result, UNCHECKED
+0x9e8250  mov [esi],ebx        ; capacity = new capacity, unconditionally
+```
+
+**There is no NULL check.** A failed `malloc` stores 0 into `items`, doubles the
+recorded capacity anyway, and returns; the caller then writes through the NULL
+and increments the count. Every later insert sees `count != capacity`, skips the
+grow, and increments again — so the count grows without bound while the array
+stays NULL. The eventual query walks that count from address 0. That is a guest
+bug in the sense that the game has no check, but it only fires because the
+allocation failed, which is ours to explain.
+
+`malloc` here is the MSVCRT retry loop at `0xad41b9`: `_heap_alloc` at
+`0xad566e`, and on a zero result the new-handler at `0xadc1fe` then a retry.
+Note this binary calls `_set_sbh_threshold(0)` at startup (it is in `run.log`),
+so the small-block heap is disabled and every one of these goes to the main
+heap.
+
+The grid object itself, from the two routines' field use:
+
+| Offset | Meaning |
+|---|---|
+| `+0x08`, `+0x0c` | bounds, compared with `jge` before any indexing |
+| `+0x10` | cells per row (the `0x1800` = 512×12 fault stride says 512 here) |
+| `+0x14`, `+0x18` | cell size X / Y — **`idiv` divisors**, so the indexing is integer, not float |
+| `+0x20` | cell array base |
+| `+0x24` | running max cell occupancy |
+
+Two things that rules out. The indexing is integer division of world coordinates,
+so no float→int conversion is involved and the
+`no-plain-trunc-on-guest-floats` class of bug cannot be the cause. And the
+`0x1800` stride at the insert site is exactly `512 * 12`, i.e. the row arithmetic
+is coherent — what is wrong is the base `[grid+0x20]` itself, which reads `0`
+on some calls and `0xb7ab_xxxx` on others. Both are unmapped.
+
+What is *not* yet established: which allocation produced those bases, and
+whether our heap returned NULL, returned an unmapped non-NULL pointer, or the
+base was never written at all. `0xb7ac1020` is not an address any of our
+regions hands out, which is the next thread to pull.
+
+One correction to the record: the wedge is **not** triggered by the hover, as
+an earlier board entry claimed. This log shows the picker surviving two complete
+click cycles (mousedown 223972 / mouseup 232249, then 285656 / 292236) and the
+spin beginning only after the second — and the first fault of the run lands
+after cursor motion has already started, not on the first hover.
