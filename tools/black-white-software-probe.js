@@ -42,6 +42,10 @@ const flags=[`--exe=${path.join(game,'BW2Demo.exe')}`,'--vfs-include=**/*',
 if(arg('wasm',null))flags.push(`--wasm=${path.resolve(arg('wasm'))}`,'--no-build');
 else if(args.includes('--no-build'))flags.push('--no-build');
 if(args.includes('--allocation-probe'))flags.push('--dump-virtual-maps');
+// Repeatable pass-through for any run.js flag this probe does not name itself,
+// so a one-off diagnostic -- --fault-null, --trace-sched, a --count probe --
+// does not need its own option added here every time.
+for(const a of args)if(a.startsWith('--extra='))flags.push(a.slice('--extra='.length));
 (async()=>{
   console.log('Artifacts:',output,'loadavg:',os.loadavg());
   const log=fs.createWriteStream(path.join(output,'run.log')),records=fs.createWriteStream(path.join(output,'samples.ndjson'));
