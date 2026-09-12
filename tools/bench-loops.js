@@ -764,6 +764,111 @@ function treeMem(nInterior) {
 }
 for (const n of [16, 32, 96]) SHAPES[`tree_mem${n}`] = treeMem(n);
 
+// Colour-keyed LUT16 blit — SimGolf's jgl.dll 0x10016eee, byte for byte. This
+// is the shape docs/loop-idiom-superops-design.md §19 says no recognizer can
+// see: the sentinel test splits one pixel across four basic blocks, and
+// $loop_match_block only ever runs on a block that branches to ITSELF, so the
+// keyed loop is declined as `multi-branch` before any predicate is tried.
+//
+// It exists to price the structure against `lut16_h3`, which is the same
+// per-pixel work (one source byte, one 16-bit table read, one 16-bit store)
+// written as a single self-loop that LUT_RUN folds today. Run them together
+// under --toggle=lut_superops: the h3 arm measures what the fold buys, the
+// keyed arm is the null control that should not move at all.
+//
+// `tEvery`/`sEvery` set the pixel mix (0 = never). 0xff is the transparent
+// key and skips the store; 0xf8 selects the DEST-indexed shadow table
+// (`dst = shadow[dst]`, 65536 entries — the extent the wide16 executor's
+// 512-byte table proof cannot cover); everything else is an ordinary
+// source-indexed lookup.
+function ckLut16(tEvery, sEvery) {
+  const srcByte = i => {
+    if (tEvery && i % tEvery === 0) return 0xFF;
+    if (sEvery && i % sEvery === 4) return 0xF8;
+    return (i * 43 + 11) % 0xF8;
+  };
+  const dstPattern = i => (i * 37 + 5) & 0xFFFF;
+  const srcLutAt = j => ((((j * 17) & 0xF800) | ((j * 29) & 0x07E0) |
+    ((j * 7) & 0x001F)) ^ 0x39E7) & 0xFFFF;
+  const expected = i => {
+    const b = srcByte(i);
+    if (b === 0xFF) return dstPattern(i);              // key: store skipped
+    if (b === 0xF8) return dstPattern(i) ^ 0x5A5A;     // shadow[dst]
+    return srcLutAt(b);                                 // table[src]
+  };
+  const mix = tEvery
+    ? `${(100 / tEvery).toFixed(0)}% keyed, ${(100 / sEvery).toFixed(0)}% shadow`
+    : 'every pixel opaque';
+  return {
+    describe: `colour-keyed dst16[i] = lut16[src8[i]] with a skip arm (SimGolf jgl 0x10016eee, ${mix})`,
+    real: 'SimGolf sprite blitter, 73% of all block entries; §19 CK_LUT16, unmatchable today',
+    emit(a) {
+      const n = Math.floor(a.bufBytes / 3);
+      const src = a.buf, dst = src + n, srcLut = a.lut, shadow = a.lut + 0x1000;
+      // Exactly the bytes at jgl+0x10016eee. The two forward displacements and
+      // the -39 back edge are the DLL's own, so the block structure the
+      // decoder sees here is the block structure it sees in the app.
+      const code = [
+        0x80, 0x3E, 0xFF,             // cmp byte [esi], 0xff
+        0x73, 0x1B,                   // jnb  skip
+        0x80, 0x3E, 0xF8,             // cmp byte [esi], 0xf8
+        0x75, 0x0D,                   // jnz  normal
+        0x66, 0x8B, 0x1F,             // mov  bx, [edi]
+        0x66, 0x8B, 0x5C, 0x5D, 0x00, // mov  bx, [ebp+ebx*2+0x0]
+        0x66, 0x89, 0x1F,             // mov  [edi], bx
+        0xEB, 0x09,                   // jmp  skip
+        0x8A, 0x06,                   // normal: mov al, [esi]
+        0x66, 0x8B, 0x1C, 0x41,       // mov  bx, [ecx+eax*2]
+        0x66, 0x89, 0x1F,             // mov  [edi], bx
+        0x46,                         // skip: inc esi
+        0x83, 0xC7, 0x02,             // add  edi, 2
+        0x4A,                         // dec  edx
+        0x75, 0xD9,                   // jnz  back
+      ];
+      return {
+        iters: n,
+        // Same accounting as lut16_h3 so the two are directly comparable, even
+        // though a keyed pixel reads the table and writes the destination.
+        bytesTouched: n * 3,
+        code,
+        setup(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          for (let j = 0; j < 256; j++) dv.setUint16(g2w(srcLut) + j * 2, srcLutAt(j), true);
+          for (let w = 0; w < 0x10000; w++) dv.setUint16(g2w(shadow) + w * 2, w ^ 0x5A5A, true);
+          for (let i = 0; i < n; i++) mem[g2w(src) + i] = srcByte(i);
+          // The destination must be seeded: a keyed pixel leaves it alone and
+          // a shadow pixel reads it, so a zeroed buffer would verify a loop
+          // that skipped every store.
+          for (let i = 0; i < n; i++) dv.setUint16(g2w(dst) + i * 2, dstPattern(i), true);
+          e.set_esi(src); e.set_edi(dst); e.set_ecx(srcLut); e.set_ebp(shadow);
+          e.set_edx(n); e.set_eax(0); e.set_ebx(0);
+        },
+        verify(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          // One index of each arm, plus both ends — a mix-dependent sample,
+          // because "all three arms ran" is the property under test.
+          const probes = new Set([0, 1, 4, 5, n >> 1, n - 1]);
+          for (const i of probes) {
+            const want = expected(i);
+            const got = dv.getUint16(g2w(dst) + i * 2, true);
+            if (got !== want) {
+              return `dst16[${i}]=0x${got.toString(16)} want 0x${want.toString(16)} ` +
+                `(src=0x${srcByte(i).toString(16)})`;
+            }
+          }
+          if (e.get_edx() !== 0) return `edx=${e.get_edx()}, expected 0`;
+          if (e.get_esi() !== src + n || e.get_edi() !== dst + n * 2) {
+            return 'source/destination cursors did not finish';
+          }
+          return null;
+        },
+      };
+    },
+  };
+}
+SHAPES.ck_lut16 = ckLut16(8, 8);
+SHAPES.ck_lut16_opaque = ckLut16(0, 0);
+
 const TOGGLES = {
   tree_fold: 'set_tree_fold',
   lut_superops: 'set_loop_lut_emit',

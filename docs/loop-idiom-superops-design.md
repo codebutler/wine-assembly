@@ -1430,3 +1430,42 @@ Recognition has two possible homes: extend matching past self-loops to a
 diamond that rejoins at one advance block, or follow `$try_emit_rle_run`
 (src/07-decoder.wat:421), which already matches a whole nest off raw x86 at a
 block start. The RLE precedent is the closer fit.
+
+### 19.1 What it would be worth, measured
+
+`tools/bench-loops.js` grew two shapes for this: `ck_lut16` is jgl's
+`0x10016eee` byte for byte (key test, shadow arm, source-indexed arm, shared
+advance, the DLL's own displacements, so the decoder sees the app's block
+structure), and `ck_lut16_opaque` is the same loop with every pixel taking the
+ordinary arm. Both are priced against `lut16_h3` — identical per-pixel work,
+one source byte and one 16-bit table read and one 16-bit store, written as the
+single self-loop `LUT_RUN` already folds. Run together under
+`--toggle=lut_superops`, the keyed shapes are the null control.
+
+Load-immune, identical across two runs (`--bytes=2m`, reps 5 and 9):
+
+| shape | ops/pixel | block entries/pixel | LUT matches/runs |
+|---|---|---|---|
+| `ck_lut16` (jgl mix) | 12.12 | 3.75 | 0 / 0 |
+| `ck_lut16_opaque` | 12.00 | 3.00 | 0 / 0 |
+| `lut16_h3`, fold off | 9.00 | 1.00 | 1 / 0 |
+| `lut16_h3`, fold on | **0.01** | **0.01** | 1 / 6,298 |
+
+The `0 / 0` is the point, and it is the empirical form of the claim above: with
+`LUT_RUN` **on**, the keyed loop does not merely fail to fold, it is never
+matched. The unkeyed twin matches and folds in the same process.
+
+Timing on this box is contaminated — the null control moved -6.7% and +7.6%
+between the two keyed arms, so ±7% is the floor, and the same shape's minimum
+drifted 1.8x between runs. Only the within-process interleaved A/B is quotable:
+folding `lut16_h3` is worth **+96.5% / +97.3% of its time**, 272.7 -> 8.7 and
+490.0 -> 10.4 ns/pixel, a 30-47x cut on the loop. Priced instead off this
+harness's own calibration (a dispatch ~8ns, a block transfer ~9ns on top),
+the keyed loop costs `12.12*8 + 3.75*9` = **~131 ns/pixel** against ~9 for the
+folded twin; a keyed fold must still test the key per pixel inside the run, so
+call its floor 12-20 ns/pixel and the loop speedup **7-11x**.
+
+Against SimGolf's 73% block-entry share that is a whole-app **~2.8-3.4x**, and
+Amdahl caps any keyed fold at 3.7x no matter how good it is. That is the number
+the fold has to be argued on — not the microbench percentage, per the rule in
+CLAUDE.md, and not corpus reuse, per §19.
