@@ -498,6 +498,23 @@
     (i32.eqz (call $gl8 (i32.add (local.get $p) (i32.const 4))))
   )
 
+  ;; True when the whole name ends in ".dll". Every module we dispatch
+  ;; statically is a .dll; a LoadLibrary of some other extension (.ax, .ocx,
+  ;; .drv, .asi) can only be satisfied by a real file, so when the VFS does not
+  ;; have one the answer is NULL rather than a synthetic handle. Warcraft III
+  ;; asks for "blizzard.ax" — its optional DirectShow filter, absent from the
+  ;; small demo build — and calls whatever GetProcAddress hands back.
+  (func $guest_name_has_dll_ext (param $name i32) (result i32)
+    (local $len i32)
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (call $gl8 (i32.add (local.get $name) (local.get $len)))))
+      (local.set $len (i32.add (local.get $len) (i32.const 1)))
+      (br $scan)))
+    (if (i32.lt_u (local.get $len) (i32.const 4)) (then (return (i32.const 0))))
+    (call $guest_name_tail_is_dll
+      (i32.add (local.get $name) (i32.sub (local.get $len) (i32.const 4))))
+  )
+
   ;; Statically dispatched system DLLs do not have a mapped PE image or DLL
   ;; table entry, so a name lookup is the only way to recognize them. Callers
   ;; use the handle with GetProcAddress, which already resolves non-mapped
@@ -1328,6 +1345,17 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
         (return)))
     (local.set $tmp (call $guest_name_is_static_system_dll (local.get $arg0)))
+    ;; Not a system module by name and not a file we hold: a module whose name
+    ;; is not a .dll at all has no static dispatch behind it, so report the
+    ;; load failure Windows would rather than hand back a handle that resolves
+    ;; to nothing.
+    (if (i32.and (i32.eqz (local.get $tmp))
+                 (i32.eqz (call $guest_name_has_dll_ext (local.get $arg0))))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 126))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
     (global.set $eax (select (i32.add (global.get $STATIC_SYS_DLL_HANDLE_BASE) (i32.sub (local.get $tmp) (i32.const 1))) (global.get $image_base) (i32.ne (local.get $tmp) (i32.const 0))))
     (call $freelib_mark_loaded (global.get $eax))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
@@ -2830,6 +2858,15 @@
           (then (global.set $last_error (i32.const 6)))) ;; ERROR_INVALID_HANDLE
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
         (return)))
+    (if (call $iocp_close (local.get $arg0))
+      (then
+        (global.set $eax (i32.const 1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    ;; A file may be bound to a completion port; the binding outlives neither
+    ;; the file nor the port, and a stale one would send a later request's
+    ;; completion to a handle the guest has already reused.
+    (call $iocp_assoc_drop (local.get $arg0))
     (drop (call $host_fs_close_handle (local.get $arg0)))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
@@ -3296,7 +3333,17 @@
             (if (i32.and (local.get $arg2) (i32.const 0x1000))
               (then (global.set $eax (call $virtual_map_commit_protect
                 (local.get $new_top) (local.get $size) (local.get $arg3))))
-              (else (global.set $eax (local.get $new_top))))))))
+              (else
+                ;; A reservation with no commit owns address space that no map
+                ;; record describes, and nothing tells us when the guest drops
+                ;; it. $virtual_reserve_reclaim_locked recovers released address
+                ;; space by taking the minimum over the record table, which
+                ;; cannot see this range — so remember the lowest such range
+                ;; ever handed out and let the reclaim stop there. Everything
+                ;; below it stays permanently spoken for, which costs address
+                ;; space; handing it out twice would cost correctness.
+                (call $virtual_reserve_record (local.get $new_top) (local.get $size))
+                (global.set $eax (local.get $new_top))))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
   )
 
@@ -3310,7 +3357,18 @@
             (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
             (i32.eqz (local.get $arg1)))
           (i32.ne (i32.and (local.get $arg2) (i32.const 0x8000)) (i32.const 0)))
-      (then (drop (call $virtual_map_release (local.get $arg0)))))
+      (then
+        ;; Diagnostic, disarmed unless the page set a caller (see
+        ;; $virtual_leak_release_caller). ESP still points at the return
+        ;; address here -- the epilogue below is what pops it -- so this is the
+        ;; one place that can tell one guest call site from another.
+        (global.set $virtual_leak_this_call
+          (i32.and
+            (i32.ne (global.get $virtual_leak_release_caller) (i32.const 0))
+            (i32.eq (i32.load (call $g2w (global.get $esp)))
+              (global.get $virtual_leak_release_caller))))
+        (drop (call $virtual_map_release (local.get $arg0)))
+        (global.set $virtual_leak_this_call (i32.const 0))))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
@@ -3729,6 +3787,7 @@
 
   ;; 51: WriteFile(hFile, lpBuffer, nBytesToWrite, lpBytesWritten, lpOverlapped) — 5 args
   (func $handle_WriteFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $saved_pos i32) (local $ok i32) (local $written i32)
     ;; Output screen-buffer handles route through the same active/inactive cell
     ;; store as WriteConsoleA; stdin retains the historical compatibility no-op.
     (if (call $console_buffer_record (local.get $arg0))
@@ -3743,6 +3802,39 @@
         (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $arg2))))
         (global.set $eax (i32.const 1))
         (global.set $esp (i32.add (global.get $esp) (i32.const 24))) (return)))
+    ;; The completion-port twin of the overlapped read in $handle_ReadFile:
+    ;; a positioned write that must not disturb the file pointer and reports
+    ;; through the port. Warcraft III submits these at 0x00418603 with
+    ;; lpNumberOfBytesWritten = NULL and tests GetLastError() == 997.
+    ;; There is no fs_write_file_at bridge, so the seek is explicit and the
+    ;; original position is put back before returning.
+    (if (i32.and (i32.ne (local.get $arg4) (i32.const 0))
+                 (i32.ne (call $iocp_assoc_find (local.get $arg0)) (i32.const 0)))
+      (then
+        (local.set $saved_pos (call $host_fs_set_file_pointer
+          (local.get $arg0) (i32.const 0) (i32.const 1))) ;; FILE_CURRENT
+        (drop (call $host_fs_set_file_pointer (local.get $arg0)
+          (call $gl32 (i32.add (local.get $arg4) (i32.const 8)))
+          (i32.const 0))) ;; FILE_BEGIN
+        (local.set $ok (call $host_fs_write_file
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (i32.add (local.get $arg4) (i32.const 4))))
+        (drop (call $host_fs_set_file_pointer
+          (local.get $arg0) (local.get $saved_pos) (i32.const 0)))
+        (if (i32.eqz (local.get $ok))
+          (then
+            (global.set $last_error (i32.const 29)) ;; ERROR_WRITE_FAULT
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (return)))
+        (local.set $written (call $gl32 (i32.add (local.get $arg4) (i32.const 4))))
+        (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $written))))
+        (drop (call $iocp_complete_overlapped (local.get $arg0) (local.get $arg4)
+          (local.get $written) (i32.const 0)))
+        (global.set $last_error (i32.const 997)) ;; ERROR_IO_PENDING
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
     ;; File handles — delegate to virtual FS
     (global.set $eax (call $host_fs_write_file
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
@@ -12377,7 +12469,12 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
   ;; 412: RaiseException(dwExceptionCode, dwExceptionFlags, nNumberOfArguments, lpArguments)
   ;; 4 args stdcall. Pop first so SEH walker sees the caller's frame, then dispatch.
   (func $handle_RaiseException (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; A handler whose filter answers EXCEPTION_CONTINUE_EXECUTION resumes the
+    ;; interrupted code, which for a software exception is the instruction
+    ;; after this call. Record that before the stdcall cleanup discards it.
+    (global.set $delphi_resume_eip (call $gl32 (global.get $esp)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (global.set $delphi_resume_esp (global.get $esp))
     ;; RaiseException is a software exception and must invoke each registered
     ;; handler with the standard four-argument EXCEPTION_DISPOSITION protocol.
     ;; Registration records are runtime-specific: VB6, Delphi and hand-written
@@ -12892,8 +12989,53 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (global.set $eip (local.get $callback)))
 
   (func $handle_ReadFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $lazy i32)
+    (local $lazy i32) (local $err i32) (local $bytes i32)
     ;; ReadFile(hFile, lpBuffer, nToRead, lpBytesRead, lpOverlapped) — 5 args
+    ;;
+    ;; An OVERLAPPED on a handle bound to a completion port is a *positioned*
+    ;; read that must not move the file pointer and must report its result
+    ;; through the port rather than through the return value. Warcraft III's
+    ;; asynchronous file layer is built on exactly this and blocks forever
+    ;; without it. The read itself is synchronous here, so the completion is
+    ;; queued before the call returns and the guest still sees the
+    ;; ERROR_IO_PENDING it is written to expect.
+    ;;
+    ;; A handle with an OVERLAPPED but no port binding falls through to the
+    ;; ordinary path below, which is what Win32 does for a file opened
+    ;; without FILE_FLAG_OVERLAPPED.
+    (if (i32.and (i32.ne (local.get $arg4) (i32.const 0))
+                 (i32.ne (call $iocp_assoc_find (local.get $arg0)) (i32.const 0)))
+      (then
+        ;; InternalHigh (OVERLAPPED+4) is where the byte count belongs, so the
+        ;; host writes it there directly instead of into a scratch dword.
+        (local.set $err (call $host_fs_read_file_at
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (i32.add (local.get $arg4) (i32.const 4))
+          (call $gl32 (i32.add (local.get $arg4) (i32.const 8)))
+          (call $gl32 (i32.add (local.get $arg4) (i32.const 12)))))
+        ;; 997 here is the lazy-mount park, not the guest's pending status:
+        ;; re-run this exact call once the host has the bytes.
+        (if (i32.eq (local.get $err) (i32.const 997))
+          (then (call $io_block (i32.const 24)) (return)))
+        (if (i32.and (i32.ne (local.get $err) (i32.const 0))
+                     (i32.ne (local.get $err) (i32.const 38)))
+          (then
+            (global.set $last_error (local.get $err))
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (return)))
+        (local.set $bytes (call $gl32 (i32.add (local.get $arg4) (i32.const 4))))
+        (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $bytes))))
+        (drop (call $iocp_complete_overlapped (local.get $arg0) (local.get $arg4)
+          (local.get $bytes)
+          ;; 38 = ERROR_HANDLE_EOF: a legitimate short read, reported to the
+          ;; guest as STATUS_END_OF_FILE in OVERLAPPED.Internal.
+          (select (i32.const 0xC0000011) (i32.const 0)
+            (i32.eq (local.get $err) (i32.const 38)))))
+        (global.set $last_error (i32.const 997)) ;; ERROR_IO_PENDING
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
     (global.set $eax (call $host_fs_read_file
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
@@ -18658,6 +18800,57 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
+  ;; The rest of the IMM32 surface Warcraft III imports. It asks for all of it
+  ;; the moment a text field appears -- the Single Player screen -- and every
+  ;; one of these is reached with the HIMC that $handle_ImmGetContext returned,
+  ;; which on this no-IME machine is NULL. That is not a shortcut: Windows with
+  ;; no IME installed returns NULL there too, and these are then the documented
+  ;; results for a context that does not exist. They are constant because the
+  ;; answer genuinely does not vary, not because the work was skipped -- the
+  ;; day this machine grows an input context, they grow state with it.
+
+  ;; ImmGetOpenStatus(hIMC) → BOOL: is the IME open. No context, never open.
+  (func $handle_ImmGetOpenStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; ImmSetOpenStatus(hIMC, fOpen) → BOOL. Opening an IME that is not there
+  ;; fails; reporting success would tell the game a composition window exists.
+  (func $handle_ImmSetOpenStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+
+  ;; ImmGetConversionStatus(hIMC, lpfdwConversion, lpfdwSentence) → BOOL.
+  ;; FALSE on an invalid context, and on failure Windows leaves both output
+  ;; DWORDs untouched -- so this deliberately writes neither. A caller that
+  ;; ignores the return value keeps whatever it initialised them to, which is
+  ;; the same thing it would keep on a real no-IME machine.
+  (func $handle_ImmGetConversionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  ;; ImmSetConversionStatus(hIMC, fdwConversion, fdwSentence) → BOOL.
+  (func $handle_ImmSetConversionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  ;; ImmGetCompositionStringA(hIMC, dwIndex, lpBuf, dwBufLen) → LONG. The
+  ;; return is a byte COUNT, so 0 means "an empty composition string, and the
+  ;; buffer is now valid" -- a lie we would be caught in. IMM_ERROR_GENERAL
+  ;; (-2) is what an invalid context returns, and it is negative, which is the
+  ;; test every caller of this function performs.
+  (func $handle_ImmGetCompositionStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const -2))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  ;; ImmGetCandidateListA(hIMC, dwIndex, lpCandList, dwBufLen) → DWORD, the
+  ;; size copied or required. Zero is the documented failure here (unlike the
+  ;; composition string above, this one returns a size, not a count that could
+  ;; legitimately be empty), and no CANDIDATELIST is written.
+  (func $handle_ImmGetCandidateListA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
   ;; CharLower accepts either a character in the low word or a mutable,
   ;; NUL-terminated string. Translate a string pointer once, then vary only
   ;; the character width between A and W.
@@ -21401,15 +21594,13 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (block $done
       (if (i32.eqz (local.get $arg0)) (then (br $done)))
       (if (i32.ne (call $gl32 (local.get $arg0)) (i32.const 64)) (then (br $done)))
-      (local.set $total (i32.shl (memory.size) (i32.const 16)))
-      (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
-      (local.set $cursor (i32.load offset=4 (global.get $VIRTUAL_MAP_STATE)))
-      (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
-      (if (i32.eqz (local.get $cursor))
-        (then (local.set $cursor (global.get $VIRTUAL_BACKING_BASE))))
-      (local.set $avail (i32.sub
-        (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE))
-        (local.get $cursor)))
+      ;; The physical total is the sparse backing pool, not the whole linear
+      ;; memory: everything else in it is emulator-private and no guest commit
+      ;; can ever reach it. Black & White 2 reads this total, subtracts 50MB
+      ;; and hands the rest to SetProcessWorkingSetSize -- with the old answer
+      ;; it budgeted 462MB against a pool that holds 316MB.
+      (local.set $total (call $virtual_backing_capacity))
+      (local.set $avail (call $virtual_backing_available))
       (local.set $i (i32.const 4))
       (loop $clear
         (call $gs32 (i32.add (local.get $arg0) (local.get $i)) (i32.const 0))

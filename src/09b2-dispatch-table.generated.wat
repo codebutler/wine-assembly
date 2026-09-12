@@ -1741,7 +1741,7 @@
       (then
         (call $dispatch_api_table_page_12 (i32.sub (local.get $api_id) (i32.const 3072)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
-    (if (i32.lt_u (local.get $api_id) (i32.const 3404))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3437))
       (then
         (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
@@ -15165,8 +15165,41 @@
   )
 
   (func $dispatch_api_table_page_13 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; api ids 3328..3403
+    ;; api ids 3328..3436
     (block $fallback
+    (block $api_108
+    (block $api_107
+    (block $api_106
+    (block $api_105
+    (block $api_104
+    (block $api_103
+    (block $api_102
+    (block $api_101
+    (block $api_100
+    (block $api_99
+    (block $api_98
+    (block $api_97
+    (block $api_96
+    (block $api_95
+    (block $api_94
+    (block $api_93
+    (block $api_92
+    (block $api_91
+    (block $api_90
+    (block $api_89
+    (block $api_88
+    (block $api_87
+    (block $api_86
+    (block $api_85
+    (block $api_84
+    (block $api_83
+    (block $api_82
+    (block $api_81
+    (block $api_80
+    (block $api_79
+    (block $api_78
+    (block $api_77
+    (block $api_76
     (block $api_75
     (block $api_74
     (block $api_73
@@ -15243,7 +15276,7 @@
     (block $api_2
     (block $api_1
     (block $api_0
-      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $fallback (local.get $api_id))
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $api_76 $api_77 $api_78 $api_79 $api_80 $api_81 $api_82 $api_83 $api_84 $api_85 $api_86 $api_87 $api_88 $api_89 $api_90 $api_91 $api_92 $api_93 $api_94 $api_95 $api_96 $api_97 $api_98 $api_99 $api_100 $api_101 $api_102 $api_103 $api_104 $api_105 $api_106 $api_107 $api_108 $fallback (local.get $api_id))
     ) ;; 3328: DirectXSetup
       (call $handle_DirectXSetup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
@@ -15471,6 +15504,105 @@
       (return)
     ) ;; 3403: IDirectPlayLobby3_WaitForConnectionSettings
       (call $handle_IDirectPlayLobby3_WaitForConnectionSettings (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3404: glEnableClientState
+      (call $handle_gpu_api (i32.const 86) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3405: glArrayElement
+      (call $handle_gpu_api (i32.const 87) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3406: glVertexPointer
+      (call $handle_gpu_api (i32.const 88) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3407: glNormalPointer
+      (call $handle_gpu_api (i32.const 89) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3408: glRotated
+      (call $handle_gpu_api (i32.const 90) (i32.const 8) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3409: glVertex2fv
+      (call $handle_gpu_api (i32.const 91) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3410: glMateriali
+      (call $handle_gpu_api (i32.const 92) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3411: glFlush
+      (call $handle_gpu_api (i32.const 93) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3412: glLineWidth
+      (call $handle_gpu_api (i32.const 94) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3413: glTexCoord2fv
+      (call $handle_gpu_api (i32.const 95) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3414: glTexParameteri
+      (call $handle_gpu_api (i32.const 96) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3415: glVertex2i
+      (call $handle_gpu_api (i32.const 97) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3416: gluBuild1DMipmaps
+      (call $handle_gpu_api (i32.const 98) (i32.const 6) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3417: PathGetCharTypeA
+      (call $handle_PathGetCharTypeA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3418: PathGetCharTypeW
+      (call $handle_PathGetCharTypeW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3419: EnumDisplayDevicesA
+      (call $handle_EnumDisplayDevicesA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3420: ChangeDisplaySettingsExA
+      (call $handle_ChangeDisplaySettingsExA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3421: wglSwapLayerBuffers
+      (call $handle_wglSwapLayerBuffers (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3422: CreateIoCompletionPort
+      (call $handle_CreateIoCompletionPort (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3423: PostQueuedCompletionStatus
+      (call $handle_PostQueuedCompletionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3424: GetQueuedCompletionStatus
+      (call $handle_GetQueuedCompletionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3425: glDisableClientState
+      (call $handle_gpu_api (i32.const 99) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3426: glTexCoordPointer
+      (call $handle_gpu_api (i32.const 100) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3427: glColorPointer
+      (call $handle_gpu_api (i32.const 101) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3428: glDrawElements
+      (call $handle_gpu_api (i32.const 102) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3429: glGetIntegerv
+      (call $handle_gpu_api (i32.const 103) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3430: glReadBuffer
+      (call $handle_gpu_api (i32.const 104) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3431: ImmGetOpenStatus
+      (call $handle_ImmGetOpenStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3432: ImmSetOpenStatus
+      (call $handle_ImmSetOpenStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3433: ImmGetConversionStatus
+      (call $handle_ImmGetConversionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3434: ImmSetConversionStatus
+      (call $handle_ImmSetConversionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3435: ImmGetCompositionStringA
+      (call $handle_ImmGetCompositionStringA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3436: ImmGetCandidateListA
+      (call $handle_ImmGetCandidateListA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; fallback
     (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3328)))

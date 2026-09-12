@@ -7,7 +7,7 @@
 
   (func $run (export "run") (param $max_blocks i32)
     (local $thread i32)
-    (local $hc_i i32) (local $hc_slot i32)
+    (local $hc_i i32) (local $hc_slot i32) (local $hc_fp i32)
     (local $prev_eip i32) (local $prev_esp i32)
     (local $saved_budget i32) (local $shared_cache_generation i32)
     ;; A global rather than a local because $branch_end spends it too — see the
@@ -128,7 +128,21 @@
             (if (i32.eq (i32.load (local.get $hc_slot)) (global.get $eip))
               (then
                 (i32.store offset=4 (local.get $hc_slot)
-                  (i32.add (i32.load offset=4 (local.get $hc_slot)) (i32.const 1)))))
+                  (i32.add (i32.load offset=4 (local.get $hc_slot)) (i32.const 1)))
+                (if (i32.eqz (local.get $hc_i))
+                  (then
+                    (if (i32.eqz (global.get $hit0_first_caller))
+                      (then (global.set $hit0_first_caller (global.get $dbg_prev_eip))))
+                    (global.set $hit0_last_caller (global.get $dbg_prev_eip))
+                    (global.set $hit0_last_ebp (global.get $ebp))
+                    (local.set $hc_fp (global.get $ebp))
+                    (global.set $hit0_f1 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))
+                    (local.set $hc_fp (call $gl32 (local.get $hc_fp)))
+                    (global.set $hit0_f2 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))
+                    (local.set $hc_fp (call $gl32 (local.get $hc_fp)))
+                    (global.set $hit0_f3 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))
+                    (local.set $hc_fp (call $gl32 (local.get $hc_fp)))
+                    (global.set $hit0_f4 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))))))
             (local.set $hc_i (i32.add (local.get $hc_i) (i32.const 1)))
             (br $hc_loop))))
         )
@@ -293,6 +307,22 @@
   (func (export "get_last_run_blocks") (result i32) (global.get $last_run_blocks))
   (func (export "get_last_run_halt")   (result i32) (global.get $last_run_halt))
   (func (export "get_block_budget")    (result i32) (global.get $block_budget))
+
+  ;; Diagnostic switch, see $virtual_leak_small_releases in 01-header.wat. The
+  ;; argument is the largest release, in bytes, to turn into a no-op; 0 restores
+  ;; normal behaviour. Nothing in the product calls this.
+  (func (export "set_virtual_leak_small_releases") (param $bytes i32)
+    (global.set $virtual_leak_small_releases (local.get $bytes)))
+  (func (export "get_virtual_leak_small_releases") (result i32)
+    (global.get $virtual_leak_small_releases))
+  ;; Same diagnostic narrowed to one guest call site: the runtime return address
+  ;; of the VirtualFree caller whose MEM_RELEASE should be ignored. 0 disarms.
+  (func (export "set_virtual_leak_release_caller") (param $ret i32)
+    (global.set $virtual_leak_release_caller (local.get $ret)))
+  (func (export "get_virtual_leak_release_caller") (result i32)
+    (global.get $virtual_leak_release_caller))
+  (func (export "get_virtual_leak_hits") (result i32)
+    (global.get $virtual_leak_hits))
 
   ;; Hook for test/test-shift-equivalence.js, which checks the unified
   ;; $do_shift against an independent model of the x86 semantics over every
@@ -899,6 +929,19 @@
     (call $handle_StartDocA
       (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
+    (global.set $esp (local.get $saved_esp))
+    (global.get $eax))
+  ;; LoadImageA reads its sixth argument (fuLoad) off the guest stack, so the
+  ;; test entry has to place it there the way a real stdcall frame would.
+  (func (export "test_call_LoadImageA")
+        (param i32) (param i32) (param i32) (param i32) (param i32) (param i32)
+        (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (global.get $esp))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get 5))
+    (call $handle_LoadImageA
+      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+      (local.get 4) (i32.const 0))
     (global.set $esp (local.get $saved_esp))
     (global.get $eax))
   (func (export "test_call_CreateDIBSection")
@@ -1733,17 +1776,54 @@
       (param $thunk_gs i32) (param $thunk_ge i32) (param $num_th i32)
       (param $main_rsrc_rva i32)
     (local $pe_off i32)
-    (global.set $THREAD_BASE (i32.add (region.addr $THREAD_CACHE_BASE 0)
-      (i32.mul (local.get $tid) (global.get $THREAD_CACHE_STRIDE))))
-    (global.set $THREAD_END  (i32.add (global.get $THREAD_BASE) (global.get $THREAD_CACHE_STRIDE)))
+    ;; The three per-thread arenas are split, not strided: the main thread
+    ;; (tid 0) gets a large partition at offset 0 and every worker gets a small
+    ;; one after it. A worker compiles the single routine it was spawned for,
+    ;; so an equal share would have starved the thread that decodes the whole
+    ;; program to feed fifteen that decode almost nothing. See the declarations
+    ;; in 00-regions.wat. tid 0 keeps the globals' declared defaults, which are
+    ;; the main thread's values, so only the worker arithmetic lives here.
+    (if (local.get $tid)
+      (then
+        (global.set $THREAD_BASE (i32.add (region.addr $THREAD_CACHE_BASE 0)
+          (i32.add (global.get $THREAD_CACHE_MAIN_BYTES)
+            (i32.mul (i32.sub (local.get $tid) (i32.const 1))
+                     (global.get $THREAD_CACHE_STRIDE)))))
+        (global.set $THREAD_END (i32.add (global.get $THREAD_BASE)
+          (global.get $THREAD_CACHE_STRIDE))))
+      (else
+        (global.set $THREAD_BASE (region.addr $THREAD_CACHE_BASE 0))
+        (global.set $THREAD_END (i32.add (global.get $THREAD_BASE)
+          (global.get $THREAD_CACHE_MAIN_BYTES)))))
     (global.set $thread_alloc (global.get $THREAD_BASE))
     ;; Page-compilation state is per-instance for the same reason THREAD_BASE
     ;; is: a worker is a separate instance over the same memory, and chunk
     ;; pointers name that thread's own arena partition.
-    (global.set $PAGE_DIR (i32.add (global.get $PAGE_DIR_BASE)
-      (i32.mul (local.get $tid) (global.get $PAGE_DIR_STRIDE))))
-    (global.set $PAGE_INDEX (i32.add (global.get $PAGE_INDEX_ARENA)
-      (i32.mul (local.get $tid) (global.get $PAGE_INDEX_STRIDE))))
+    (if (local.get $tid)
+      (then
+        (global.set $PAGE_DIR (i32.add (global.get $PAGE_DIR_BASE)
+          (i32.add (global.get $PAGE_DIR_MAIN_BYTES)
+            (i32.mul (i32.sub (local.get $tid) (i32.const 1))
+                     (global.get $PAGE_DIR_STRIDE)))))
+        (global.set $PAGE_DIR_ENTRIES (global.get $PAGE_DIR_WORKER_ENTRIES))
+        (global.set $PAGE_DIR_MASK
+          (i32.sub (global.get $PAGE_DIR_WORKER_ENTRIES) (i32.const 1)))
+        (global.set $PAGE_INDEX (i32.add (global.get $PAGE_INDEX_ARENA)
+          (i32.add (global.get $PAGE_INDEX_MAIN_BYTES)
+            (i32.mul (i32.sub (local.get $tid) (i32.const 1))
+                     (global.get $PAGE_INDEX_STRIDE)))))
+        (global.set $PAGE_INDEX_SLOTS (global.get $PAGE_INDEX_WORKER_SLOTS)))
+      (else
+        (global.set $PAGE_DIR (global.get $PAGE_DIR_BASE))
+        (global.set $PAGE_DIR_ENTRIES
+          (i32.div_u (global.get $PAGE_DIR_MAIN_BYTES) (i32.const 16)))
+        (global.set $PAGE_DIR_MASK
+          (i32.sub (i32.div_u (global.get $PAGE_DIR_MAIN_BYTES) (i32.const 16))
+                   (i32.const 1)))
+        (global.set $PAGE_INDEX (global.get $PAGE_INDEX_ARENA))
+        (global.set $PAGE_INDEX_SLOTS
+          (i32.div_u (global.get $PAGE_INDEX_MAIN_BYTES)
+                     (global.get $PAGE_INDEX_BYTES)))))
     (global.set $page_index_next (i32.const 0))
     (call $page_dir_reset)
     (global.set $code_cache_generation_seen
@@ -2325,6 +2405,15 @@
     (i32.load offset=4 (i32.add (global.get $HIT_COUNT_BASE)
                                 (i32.shl (local.get $slot) (i32.const 3)))))
   (func (export "clear_counts") (global.set $hit_count_n (i32.const 0)) (call $dbg_recompute))
+  ;; Who reached slot 0's address (see $hit0_first_caller in 01-header.wat).
+  (func (export "get_hit0_first_caller") (result i32) (global.get $hit0_first_caller))
+  (func (export "get_hit0_last_caller")  (result i32) (global.get $hit0_last_caller))
+  (func (export "get_hit0_last_ebp")     (result i32) (global.get $hit0_last_ebp))
+  (func (export "get_hit0_frame") (param $n i32) (result i32)
+    (if (i32.eq (local.get $n) (i32.const 1)) (then (return (global.get $hit0_f1))))
+    (if (i32.eq (local.get $n) (i32.const 2)) (then (return (global.get $hit0_f2))))
+    (if (i32.eq (local.get $n) (i32.const 3)) (then (return (global.get $hit0_f3))))
+    (global.get $hit0_f4))
 
   ;; Disabled-by-default stack-packet compiler prototype. Toggling clears the
   ;; decoded-block cache so already-decoded generic/packet blocks do not linger.

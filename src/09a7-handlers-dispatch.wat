@@ -62,7 +62,14 @@
   ;; the caller gets the file's real pixels at the file's real size. Returns 0
   ;; when the file is missing or is not a BMP, leaving the resource path to
   ;; decide what to do next.
-  (func $load_image_bitmap_file (param $path_wa i32) (result i32)
+  ;; LR_CREATEDIBSECTION asks for a DIB section rather than a DDB, and the
+  ;; difference is visible to the guest: GetObject reports bmBits for a section
+  ;; and NULL for a DDB, because a DDB's pixels live in device storage the app
+  ;; may not touch. Black & White 2 loads its land-picker thumbnails with
+  ;; LoadImageA(NULL, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE|LR_CREATEDIBSECTION)
+  ;; and then blits row by row straight out of bmBits, so a DDB here sends it
+  ;; reading from address 0.
+  (func $load_image_bitmap_file (param $path_wa i32) (param $dib_section i32) (result i32)
     (local $handle i32) (local $size i32) (local $buf_ga i32) (local $buf_wa i32)
     (local $read_ga i32) (local $read_wa i32) (local $off i32) (local $hdr i32) (local $bmp i32)
     (local.set $handle (call $host_fs_create_file
@@ -108,10 +115,19 @@
       (then
         (call $heap_free (local.get $buf_ga))
         (return (i32.const 0))))
-    (local.set $bmp (call $gdi_bitmap_create_dibitmap
-      (i32.const 0) (local.get $hdr)
-      (i32.add (local.get $buf_wa) (local.get $off))
-      (i32.const 1) (i32.const 0)))
+    (if (local.get $dib_section)
+      (then
+        (if (call $gdi_bitmap_plan_info (local.get $hdr) (global.get $GDI_BITMAP_PLAN))
+          (then (local.set $bmp (call $gdi_bitmap_create_owned
+            (global.get $GDI_BITMAP_PLAN)
+            (i32.add (local.get $buf_wa) (local.get $off))
+            (i32.const 1) (i32.const 1) (i32.const 1)
+            (i32.const 0) (i32.const 0))))))
+      (else
+        (local.set $bmp (call $gdi_bitmap_create_dibitmap
+          (i32.const 0) (local.get $hdr)
+          (i32.add (local.get $buf_wa) (local.get $off))
+          (i32.const 1) (i32.const 0)))))
     (call $heap_free (local.get $buf_ga))
     (local.get $bmp))
 
@@ -130,12 +146,21 @@
                                (i32.const 0x10)) (i32.const 0))
               (i32.gt_u (local.get $arg1) (i32.const 0xFFFF)))
           (then
-            (local.set $tmp (call $load_image_bitmap_file (call $g2w (local.get $arg1))))
-            (if (local.get $tmp)
-              (then
-                (global.set $eax (local.get $tmp))
-                (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
-                (return)))))
+            (local.set $tmp (call $load_image_bitmap_file (call $g2w (local.get $arg1))
+              (i32.ne (i32.and (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
+                               (i32.const 0x2000)) (i32.const 0))))
+            ;; A file load that failed must report failure. The 32x32 stand-in
+            ;; below exists for a resource id the walker cannot find, where a
+            ;; caller usually just draws nothing; handing it back for a missing
+            ;; *file* is actively harmful, because LR_LOADFROMFILE callers test
+            ;; the handle and branch on it. Black & White 2 walks three
+            ;; candidate paths for each land thumbnail and gives up with a
+            ;; message if all three fail -- but our stand-in passed its first
+            ;; `test eax,eax`, so it went on to blit from the bitmap's bmBits,
+            ;; which for a device-dependent stand-in is 0.
+            (global.set $eax (local.get $tmp))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+            (return)))
         (local.set $tmp (call $host_gdi_load_bitmap (local.get $arg0)
           (if (result i32) (i32.gt_u (local.get $arg1) (i32.const 0xFFFF))
             (then (local.get $arg1))
@@ -3838,6 +3863,37 @@
     (call $wnd_unicode_set (local.get $hwnd) (i32.const 1)))
 
 
+  ;; SHLWAPI PathGetCharType: Win98 native 5.x DLL exports #485/#486.
+  ;; Character classification only, not full filename validation. In particular
+  ;; '+' '=' '[' ']' and high characters retain SHORTCHAR in this adapter.
+  (func $path_get_char_type (param $ch i32) (result i32)
+    (if (i32.or (i32.le_u (local.get $ch) (i32.const 31))
+          (i32.or (i32.eq (local.get $ch) (i32.const 34))
+            (i32.or (i32.eq (local.get $ch) (i32.const 60))
+              (i32.or (i32.eq (local.get $ch) (i32.const 62))
+                (i32.eq (local.get $ch) (i32.const 124))))))
+      (then (return (i32.const 0))))
+    (if (i32.or (i32.eq (local.get $ch) (i32.const 42))
+          (i32.eq (local.get $ch) (i32.const 63)))
+      (then (return (i32.const 4))))
+    (if (i32.or (i32.eq (local.get $ch) (i32.const 47))
+          (i32.or (i32.eq (local.get $ch) (i32.const 58))
+            (i32.eq (local.get $ch) (i32.const 92))))
+      (then (return (i32.const 8))))
+    (if (i32.or (i32.eq (local.get $ch) (i32.const 32))
+          (i32.or (i32.eq (local.get $ch) (i32.const 44))
+            (i32.eq (local.get $ch) (i32.const 59))))
+      (then (return (i32.const 1))))
+    (i32.const 3))
+
+  (func $handle_PathGetCharTypeA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $path_get_char_type (i32.and (local.get $arg0) (i32.const 255))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_PathGetCharTypeW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $path_get_char_type (i32.and (local.get $arg0) (i32.const 65535))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
   ;; 820: PathGetArgsA(pszPath) → pointer to args after first unquoted space
   (func $handle_PathGetArgsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $base i32) (local $ptr i32) (local $ch i32) (local $in_quote i32)
@@ -4013,3 +4069,348 @@
           (then (call $io_block (local.get $unpop)))
           (else (if (local.get $pending)
             (then (global.set $last_error (i32.const 30)))))))))
+
+  ;; ============================================================
+  ;; I/O completion ports
+  ;; ============================================================
+  ;; Warcraft III runs its job system on one: the main thread creates a port
+  ;; with no file attached, posts work to it, and 2*NumberOfProcessors worker
+  ;; threads block in GetQueuedCompletionStatus. That is a plain concurrent
+  ;; queue, which is what this implements. Ports attached to a file handle are
+  ;; a different feature -- they need overlapped file I/O to complete into the
+  ;; queue, and nothing here does that -- so those fail loudly instead of
+  ;; handing back a port nothing will ever post to.
+  ;;
+  ;; Layout: eight 16-byte headers {handle, head, tail, count} followed by
+  ;; eight 256-entry queues of {bytes, key, OVERLAPPED*}.
+  (global $IOCP_MAX_PORTS i32 (i32.const 8))
+  (global $IOCP_QUEUE_CAP i32 (i32.const 256))
+  ;; A port handle is its slot, tagged so it cannot be confused with the
+  ;; ThreadManager's synchronization handles or a VFS file handle.
+  (global $IOCP_HANDLE_TAG i32 (i32.const 0x1C0C0000))
+
+  (func $iocp_header (param $idx i32) (result i32)
+    (i32.add (global.get $IOCP_TABLE) (i32.mul (local.get $idx) (i32.const 16))))
+
+  (func $iocp_queue (param $idx i32) (result i32)
+    (i32.add (global.get $IOCP_TABLE)
+      (i32.add (i32.const 128)
+        (i32.mul (local.get $idx)
+          (i32.mul (global.get $IOCP_QUEUE_CAP) (i32.const 12))))))
+
+  ;; Slot index for a port handle, or -1 when the handle names no live port.
+  (func $iocp_slot (param $handle i32) (result i32)
+    (local $idx i32)
+    (if (i32.ne (i32.and (local.get $handle) (i32.const 0xFFFF0000))
+                (global.get $IOCP_HANDLE_TAG))
+      (then (return (i32.const -1))))
+    (local.set $idx (i32.and (local.get $handle) (i32.const 0xFFFF)))
+    (if (i32.ge_u (local.get $idx) (global.get $IOCP_MAX_PORTS))
+      (then (return (i32.const -1))))
+    (if (i32.ne (i32.load (call $iocp_header (local.get $idx))) (local.get $handle))
+      (then (return (i32.const -1))))
+    (local.get $idx))
+
+  (func $iocp_create (result i32)
+    (local $idx i32) (local $hdr i32) (local $handle i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $idx) (global.get $IOCP_MAX_PORTS)))
+      (if (i32.eqz (i32.load (call $iocp_header (local.get $idx))))
+        (then
+          (local.set $hdr (call $iocp_header (local.get $idx)))
+          (local.set $handle (i32.or (global.get $IOCP_HANDLE_TAG) (local.get $idx)))
+          (i32.store (i32.add (local.get $hdr) (i32.const 4)) (i32.const 0))
+          (i32.store (i32.add (local.get $hdr) (i32.const 8)) (i32.const 0))
+          (i32.store (i32.add (local.get $hdr) (i32.const 12)) (i32.const 0))
+          (i32.store (local.get $hdr) (local.get $handle))
+          (return (local.get $handle))))
+      (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Close a port handle. Returns 1 when this was a port, 0 when it was not,
+  ;; so CloseHandle can go on to try the other handle namespaces.
+  (func $iocp_close (param $handle i32) (result i32)
+    (local $idx i32)
+    (local.set $idx (call $iocp_slot (local.get $handle)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then (return (i32.const 0))))
+    (i32.store (call $iocp_header (local.get $idx)) (i32.const 0))
+    (i32.const 1))
+
+  (func $iocp_push (param $idx i32) (param $bytes i32) (param $key i32)
+      (param $overlapped i32) (result i32)
+    (local $hdr i32) (local $tail i32) (local $queue_entry i32)
+    (local.set $hdr (call $iocp_header (local.get $idx)))
+    (if (i32.ge_u (i32.load (i32.add (local.get $hdr) (i32.const 12)))
+                  (global.get $IOCP_QUEUE_CAP))
+      (then (return (i32.const 0))))
+    (local.set $tail (i32.load (i32.add (local.get $hdr) (i32.const 8))))
+    (local.set $queue_entry (i32.add (call $iocp_queue (local.get $idx))
+      (i32.mul (local.get $tail) (i32.const 12))))
+    (i32.store (local.get $queue_entry) (local.get $bytes))
+    (i32.store (i32.add (local.get $queue_entry) (i32.const 4)) (local.get $key))
+    (i32.store (i32.add (local.get $queue_entry) (i32.const 8)) (local.get $overlapped))
+    (i32.store (i32.add (local.get $hdr) (i32.const 8))
+      (i32.rem_u (i32.add (local.get $tail) (i32.const 1)) (global.get $IOCP_QUEUE_CAP)))
+    (i32.store (i32.add (local.get $hdr) (i32.const 12))
+      (i32.add (i32.load (i32.add (local.get $hdr) (i32.const 12))) (i32.const 1)))
+    (i32.const 1))
+
+  ;; ---- file-handle associations ------------------------------------------
+  ;; A port with a file attached is the other half of the feature, and
+  ;; Warcraft III needs it: its asynchronous file layer binds each open file to
+  ;; the job port with CompletionKey = the file object, then submits reads and
+  ;; writes with an OVERLAPPED and waits for the completion to come back
+  ;; through GetQueuedCompletionStatus. Measured at 0x00418522
+  ;;
+  ;;   00418514  mov eax,[esi+0x6c]         ; the file handle
+  ;;   00418517  push 0 / push esi / push edx / push eax
+  ;;   00418522  call [0x00444214]          ; CreateIoCompletionPort
+  ;;
+  ;; and its submit side one function later at 0x00418603, WriteFile with
+  ;; lpNumberOfBytesWritten = NULL and lpOverlapped = edi+8, testing
+  ;; GetLastError() == 997 for the pending case. Refusing the association was
+  ;; a deadlock, not a safety net: runDA had the main thread parked forever in
+  ;; WaitForSingleObject at 0x00403440 and two worker threads parked forever in
+  ;; GetQueuedCompletionStatus on a port whose count never left zero.
+  ;;
+  ;; Our file I/O is synchronous, so an overlapped request is served in place
+  ;; and its completion is pushed onto the port before the call returns. The
+  ;; guest cannot tell that apart from a very fast device: it gets FALSE plus
+  ;; ERROR_IO_PENDING, and the completion is already queued for whichever
+  ;; thread reaches GetQueuedCompletionStatus first.
+  ;;
+  ;; The table lives in the tail of $IOCP_TABLE, after the eight headers (128
+  ;; bytes) and the eight 256-entry queues (8*256*12 = 24576), so it starts at
+  ;; 24704 and its 64 twelve-byte entries end at 25472, inside the region's
+  ;; 0x8000. Entry: {fileHandle, portSlot+1, completionKey}; a zero slot field
+  ;; is a free entry, which is why the slot is stored biased by one.
+  (global $IOCP_ASSOC_OFF i32 (i32.const 24704))
+  (global $IOCP_ASSOC_MAX i32 (i32.const 64))
+
+  (func $iocp_assoc_entry (param $i i32) (result i32)
+    (i32.add (global.get $IOCP_TABLE)
+      (i32.add (global.get $IOCP_ASSOC_OFF) (i32.mul (local.get $i) (i32.const 12)))))
+
+  ;; The entry for a file handle, or 0 when that handle is bound to no port.
+  (func $iocp_assoc_find (param $handle i32) (result i32)
+    (local $i i32) (local $e i32)
+    (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $IOCP_ASSOC_MAX)))
+      (local.set $e (call $iocp_assoc_entry (local.get $i)))
+      (if (i32.and
+            (i32.ne (i32.load (i32.add (local.get $e) (i32.const 4))) (i32.const 0))
+            (i32.eq (i32.load (local.get $e)) (local.get $handle)))
+        (then (return (local.get $e))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Bind a file handle to a port slot. Re-binding an already-bound handle
+  ;; overwrites its key, which is what a second CreateIoCompletionPort on the
+  ;; same file means.
+  (func $iocp_assoc_add (param $handle i32) (param $idx i32) (param $key i32) (result i32)
+    (local $i i32) (local $e i32)
+    (local.set $e (call $iocp_assoc_find (local.get $handle)))
+    (if (i32.eqz (local.get $e))
+      (then
+        (block $done (loop $scan
+          (br_if $done (i32.ge_u (local.get $i) (global.get $IOCP_ASSOC_MAX)))
+          (if (i32.eqz (i32.load (i32.add (call $iocp_assoc_entry (local.get $i)) (i32.const 4))))
+            (then
+              (local.set $e (call $iocp_assoc_entry (local.get $i)))
+              (br $done)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $scan)))))
+    (if (i32.eqz (local.get $e)) (then (return (i32.const 0))))
+    (i32.store (local.get $e) (local.get $handle))
+    (i32.store (i32.add (local.get $e) (i32.const 4)) (i32.add (local.get $idx) (i32.const 1)))
+    (i32.store (i32.add (local.get $e) (i32.const 8)) (local.get $key))
+    (i32.const 1))
+
+  ;; Release a file handle's binding. Safe to call for any handle, so
+  ;; CloseHandle can call it without first asking whether it was ever bound.
+  (func $iocp_assoc_drop (param $handle i32)
+    (local $e i32)
+    (local.set $e (call $iocp_assoc_find (local.get $handle)))
+    (if (local.get $e)
+      (then (i32.store (i32.add (local.get $e) (i32.const 4)) (i32.const 0)))))
+
+  ;; Finish one overlapped request on a bound file handle: publish the byte
+  ;; count into the OVERLAPPED the guest supplied and queue the completion.
+  ;; Returns 1 when a completion was queued, 0 when this handle is bound to no
+  ;; port (in which case the caller must complete the call synchronously, as
+  ;; Win32 does for a file opened without FILE_FLAG_OVERLAPPED).
+  ;;
+  ;; $status is the NTSTATUS written to OVERLAPPED.Internal: 0 for success,
+  ;; 0xC0000011 (STATUS_END_OF_FILE) for a short read at EOF.
+  (func $iocp_complete_overlapped (param $handle i32) (param $overlapped i32)
+      (param $bytes i32) (param $status i32) (result i32)
+    (local $e i32) (local $idx i32)
+    (local.set $e (call $iocp_assoc_find (local.get $handle)))
+    (if (i32.eqz (local.get $e)) (then (return (i32.const 0))))
+    (local.set $idx (i32.sub (i32.load (i32.add (local.get $e) (i32.const 4))) (i32.const 1)))
+    ;; The port may have been closed while a file stayed bound to it.
+    (if (i32.ne (i32.load (call $iocp_header (local.get $idx)))
+                (i32.or (global.get $IOCP_HANDLE_TAG) (local.get $idx)))
+      (then
+        (i32.store (i32.add (local.get $e) (i32.const 4)) (i32.const 0))
+        (return (i32.const 0))))
+    (if (local.get $overlapped)
+      (then
+        (call $gs32 (local.get $overlapped) (local.get $status))
+        (call $gs32 (i32.add (local.get $overlapped) (i32.const 4)) (local.get $bytes))))
+    (drop (call $iocp_push (local.get $idx) (local.get $bytes)
+      (i32.load (i32.add (local.get $e) (i32.const 8))) (local.get $overlapped)))
+    (i32.const 1))
+
+  ;; CreateIoCompletionPort(FileHandle, ExistingCompletionPort, CompletionKey,
+  ;;                        NumberOfConcurrentThreads) -> HANDLE
+  (func $handle_CreateIoCompletionPort (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32)
+    (if (i32.eq (local.get $arg0) (i32.const -1))
+      (then
+        ;; INVALID_HANDLE_VALUE with an existing port is the one combination
+        ;; Win32 itself rejects: there is nothing to attach.
+        (if (local.get $arg1)
+          (then
+            (global.set $eax (i32.const 0))
+            (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (global.set $eax (call $iocp_create))
+        (if (i32.eqz (global.get $eax))
+          (then (global.set $last_error (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    ;; Attaching a file. Without an existing port the call creates one and
+    ;; attaches to it in a single step.
+    (local.set $idx (i32.const -1))
+    (if (local.get $arg1)
+      (then (local.set $idx (call $iocp_slot (local.get $arg1))))
+      (else
+        (global.set $eax (call $iocp_create))
+        (if (i32.eqz (global.get $eax))
+          (then
+            (global.set $last_error (i32.const 8))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (local.set $arg1 (global.get $eax))
+        (local.set $idx (call $iocp_slot (local.get $arg1)))))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (call $iocp_assoc_add (local.get $arg0) (local.get $idx) (local.get $arg2))
+      (then (global.set $eax (local.get $arg1)))
+      (else
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  ;; PostQueuedCompletionStatus(port, bytes, key, lpOverlapped) -> BOOL
+  (func $handle_PostQueuedCompletionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32)
+    (local.set $idx (call $iocp_slot (local.get $arg0)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (global.set $eax (call $iocp_push (local.get $idx)
+      (local.get $arg1) (local.get $arg2) (local.get $arg3)))
+    (if (i32.eqz (global.get $eax))
+      (then (global.set $last_error (i32.const 298)))) ;; ERROR_TOO_MANY_POSTS
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  ;; GetQueuedCompletionStatus(port, lpBytes, lpKey, lpOverlapped, dwMilliseconds)
+  ;; -> BOOL. An empty queue parks the calling thread on its own import thunk
+  ;; (the $cs_block pattern) so other guest threads run and can post; the call
+  ;; re-enters from the top when this thread is scheduled again.
+  (func $handle_GetQueuedCompletionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32) (local $hdr i32) (local $head i32) (local $queue_entry i32)
+    (local $now i32)
+    (local.set $idx (call $iocp_slot (local.get $arg0)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (local.set $hdr (call $iocp_header (local.get $idx)))
+    (if (i32.eqz (i32.load (i32.add (local.get $hdr) (i32.const 12))))
+      (then
+        ;; Nothing queued. A zero timeout is an immediate poll.
+        (if (i32.eqz (local.get $arg4))
+          (then
+            (global.set $iocp_wait_port (i32.const 0))
+            (call $iocp_fail_empty (local.get $arg1) (local.get $arg2) (local.get $arg3))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (return)))
+        (if (i32.ne (local.get $arg4) (i32.const -1))
+          (then
+            (local.set $now (call $host_get_ticks))
+            ;; First park of this bounded wait: start its clock. Later ones
+            ;; compare against the deadline that park recorded.
+            (if (i32.ne (global.get $iocp_wait_port) (local.get $arg0))
+              (then
+                (global.set $iocp_wait_port (local.get $arg0))
+                (global.set $iocp_wait_deadline
+                  (i32.add (local.get $now) (local.get $arg4))))
+              (else
+                (if (i32.ge_u (local.get $now) (global.get $iocp_wait_deadline))
+                  (then
+                    (global.set $iocp_wait_port (i32.const 0))
+                    (call $iocp_fail_empty
+                      (local.get $arg1) (local.get $arg2) (local.get $arg3))
+                    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+                    (return)))))))
+        (call $iocp_block)
+        (return)))
+    ;; A completion is available: this call owns its frame again.
+    (global.set $handler_set_eip (i32.const 0))
+    (global.set $iocp_wait_port (i32.const 0))
+    (local.set $head (i32.load (i32.add (local.get $hdr) (i32.const 4))))
+    (local.set $queue_entry (i32.add (call $iocp_queue (local.get $idx))
+      (i32.mul (local.get $head) (i32.const 12))))
+    (if (local.get $arg1)
+      (then (call $gs32 (local.get $arg1) (i32.load (local.get $queue_entry)))))
+    (if (local.get $arg2)
+      (then (call $gs32 (local.get $arg2)
+        (i32.load (i32.add (local.get $queue_entry) (i32.const 4))))))
+    (if (local.get $arg3)
+      (then (call $gs32 (local.get $arg3)
+        (i32.load (i32.add (local.get $queue_entry) (i32.const 8))))))
+    (i32.store (i32.add (local.get $hdr) (i32.const 4))
+      (i32.rem_u (i32.add (local.get $head) (i32.const 1)) (global.get $IOCP_QUEUE_CAP)))
+    (i32.store (i32.add (local.get $hdr) (i32.const 12))
+      (i32.sub (i32.load (i32.add (local.get $hdr) (i32.const 12))) (i32.const 1)))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+
+  ;; A dequeue that found nothing: WAIT_TIMEOUT with the out parameters
+  ;; cleared, which is what a caller checks before touching lpOverlapped.
+  (func $iocp_fail_empty (param $pbytes i32) (param $pkey i32) (param $poverlapped i32)
+    (global.set $handler_set_eip (i32.const 0))
+    (if (local.get $pbytes) (then (call $gs32 (local.get $pbytes) (i32.const 0))))
+    (if (local.get $pkey) (then (call $gs32 (local.get $pkey) (i32.const 0))))
+    (if (local.get $poverlapped)
+      (then (call $gs32 (local.get $poverlapped) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (global.set $last_error (i32.const 258))) ;; WAIT_TIMEOUT
+
+  ;; Park on the import thunk without consuming the stdcall frame, exactly as
+  ;; $cs_block and $console_input_block do. ESP must not move: the re-entry
+  ;; finds its own arguments where the call left them.
+  (func $iocp_block
+    (if (global.get $current_thunk_eip)
+      (then (global.set $eip (global.get $current_thunk_eip))))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $yield_reason (i32.const 9))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $steps (i32.const 0)))

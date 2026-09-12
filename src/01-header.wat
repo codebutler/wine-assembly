@@ -903,7 +903,14 @@
   ;; net_frame_commit() — discard the frame most recently peeked.
   (import "host" "net_frame_commit" (func $host_net_frame_commit))
 
-  (import "host" "memory" (memory 8192 8192 shared))
+  ;; Minimum 8192 pages (512MB) and maximum 16384: a host that creates the
+  ;; 512MB memory every platform has always used still satisfies this import,
+  ;; and a host that has the headroom may create up to 1GB instead. The extra
+  ;; half is $VIRTUAL_BACKING_EXT, the second sparse backing window, and
+  ;; nothing but that window is ever placed above 0x20000000 — so a module
+  ;; running on the smaller memory simply never addresses it. The code asks
+  ;; memory.size, never this declaration, before touching a byte up there.
+  (import "host" "memory" (memory 8192 16384 shared))
   (export "memory" (memory 0))
 
   ;; String constants at WASM offset 0x100
@@ -1446,8 +1453,10 @@
   ;; 0x07F01400  768B    CURSOR_TABLE (32 × ICONINFO + pushed flag)
   ;; 0x07F01700  160B    CURSOR_MASK_DESC + CURSOR_COLOR_DESC (two 80B surfaces)
   ;; 0x07F01800  3KB     EDIT_LAYOUT_SCRATCH (384 entries × 8 bytes)
-  ;; 0x07F02400 16B      VIRTUAL_MAP_STATE (count, backing bump pointer)
-  ;; 0x07F02410 32KB     VIRTUAL_MAP_TABLE (2048 entries x 16 bytes)
+  ;; 0x07F02400 32B      VIRTUAL_MAP_STATE (count, backing bump pointer,
+  ;;                     downward reserve cursor, released-hole count,
+  ;;                     bare-reservation count)
+  ;; 0x07F02410 128KB    VIRTUAL_MAP_TABLE (8192 entries x 16 bytes)
   ;; 0x07F0A420 4B       GDI_BITMAP_FONT_IO (filesystem read count)
   ;; 0x07F0A440 80B      GDI_BITMAP_FONT_DESC (surface scratch)
   ;; 0x07F0A600 192B     GDI_BITMAP_FONT_LRU (last-use stamp per strike slot)
@@ -1478,7 +1487,7 @@
   ;; 0x07F10000 4KB      HANDLER_HIST_COUNTS (1024 i32 counters)
   ;; 0x07F11000 4KB      free (former DX_SURF_PAL)
   ;; 0x07F12000 8KB      CODE_PAGE_BITMAP (1 bit per 4KB guest page < 0x10000000)
-  ;; 0x07F14000 8KB      SYNC_TABLE (512 entries × 16 bytes)
+  ;; 0x07F14000 64KB     SYNC_TABLE (4096 entries × 16 bytes)
   ;; 0x07F16000 16KB     D3DIM_VIEWPORT_LIGHT_HEAD (4096 light-list heads)
   ;; 0x07F1A000 24KB     free (former DX_SURF_STATE / DX_CURSOR_SAVE)
   ;; 0x07F20000  256B    HIT_COUNT_BASE (16 --count slots of {addr, count})
@@ -1559,7 +1568,12 @@
   (global $THUNK_END    i32 (i32.const 0x07152000))
   (global $THREAD_CACHE_BASE i32 (region.addr $THREAD_CACHE_BASE 0))
   (global $THREAD_CACHE_BASE_SIZE i32 (region.size $THREAD_CACHE_BASE))
-  (global $THREAD_CACHE_STRIDE i32 (i32.const 0x003C0000))
+  ;; The partition sizes, not a uniform stride: main gets
+  ;; $THREAD_CACHE_MAIN_BYTES at offset 0 and worker N (1..15) gets
+  ;; $THREAD_CACHE_STRIDE at MAIN_BYTES + (N-1)*STRIDE. See the declaration in
+  ;; 00-regions.wat for why they differ, and $init_thread for the arithmetic.
+  (global $THREAD_CACHE_MAIN_BYTES i32 (i32.const 0x00F00000))
+  (global $THREAD_CACHE_STRIDE i32 (i32.const 0x00100000))
   ;; 0x07152000..0x07192000 held the direct-mapped block-cache index; pages
   ;; replaced it outright (docs/page-compile-design.md §§4/4.1), leaving it free.
   ;; Page compilation (docs/page-compile-design.md). Both regions live in the
@@ -1581,25 +1595,36 @@
   ;; space because a chunk is capped at PAGE_CHUNK_BYTES (0x4000), so a real
   ;; offset never needs bit 14 and the marker is free.
   ;;
-  ;; 8KB each, 128 slots per thread, 1MB stride, 8 threads.
+  ;; 8KB each. The main thread keeps 128 slots (1MB); each of the fifteen
+  ;; workers gets 16 (128KB), because a worker compiles the one routine it was
+  ;; spawned for. $PAGE_INDEX_SLOTS is therefore per-instance, set alongside
+  ;; $PAGE_INDEX in $init_thread, and the defaults here are the main thread's.
   (global $PAGE_INDEX_ARENA i32 (region.addr $PAGE_INDEX_ARENA 0))
   (global $PAGE_INDEX_ARENA_SIZE i32 (region.size $PAGE_INDEX_ARENA))
-  (global $PAGE_INDEX_STRIDE i32 (i32.const 0x00100000))
+  (global $PAGE_INDEX_MAIN_BYTES i32 (i32.const 0x00100000))
+  (global $PAGE_INDEX_STRIDE i32 (i32.const 0x00020000))
   (global $PAGE_INDEX_BYTES  i32 (i32.const 0x2000))
-  (global $PAGE_INDEX_SLOTS  i32 (i32.const 128))
+  (global $PAGE_INDEX_SLOTS  (mut i32) (i32.const 128))
+  (global $PAGE_INDEX_WORKER_SLOTS i32 (i32.const 16))
   (global $PAGE_INDEX_NONE   i32 (i32.const 0xFFFF))
   ;; Bit 14 marks an interior byte. "Is this offset an entry point" is therefore
   ;; the single test `entry < PAGE_INDEX_COVER`, which catches 0xFFFF too.
   (global $PAGE_INDEX_COVER  i32 (i32.const 0x4000))
   (global $PAGE_INDEX_OFFMASK i32 (i32.const 0x3FFF))
   ;; PAGE_DIR: per-thread direct-mapped table keyed on the guest page number.
-  ;; 1024 entries x 16 bytes: +0 page base (0 = empty), +4 index ptr,
-  ;; +8 chunk base, +12 chunk length. 16KB per thread, 8 threads.
+  ;; 16 bytes per entry: +0 page base (0 = empty), +4 index ptr, +8 chunk base,
+  ;; +12 chunk length. Split like the other two per-thread arenas: the main
+  ;; thread keeps 1024 entries (16KB) and each of the fifteen workers gets 256
+  ;; (4KB). Entries and mask are per-instance, set in $init_thread; the values
+  ;; here are the main thread's, and the mask must stay entries-1 because it is
+  ;; used as a mask and the table is direct-mapped.
   (global $PAGE_DIR_BASE i32 (region.addr $PAGE_DIR_BASE 0))
   (global $PAGE_DIR_BASE_SIZE i32 (region.size $PAGE_DIR_BASE))
-  (global $PAGE_DIR_STRIDE i32 (i32.const 0x4000))
-  (global $PAGE_DIR_ENTRIES i32 (i32.const 1024))
-  (global $PAGE_DIR_MASK i32 (i32.const 1023))
+  (global $PAGE_DIR_MAIN_BYTES i32 (i32.const 0x4000))
+  (global $PAGE_DIR_STRIDE i32 (i32.const 0x1000))
+  (global $PAGE_DIR_ENTRIES (mut i32) (i32.const 1024))
+  (global $PAGE_DIR_MASK (mut i32) (i32.const 1023))
+  (global $PAGE_DIR_WORKER_ENTRIES i32 (i32.const 256))
   ;; One contiguous chunk per compiled page, carved from the existing per-thread
   ;; decoded-code arena so the established flush machinery already covers it.
   ;; PAGE_CHUNK_BYTES is the 16KB maximum; pages begin in the smallest
@@ -1634,7 +1659,7 @@
   ;; THREAD_END = THREAD_BASE + THREAD_CACHE_STRIDE. Per-thread partition limit; overflow
   ;; checks use this so main (tid=0) doesn't trample T1's thread cache region.
   ;; Updated in $init_thread per tid.
-  (global $THREAD_END   (mut i32) (region.addr $THREAD_CACHE_BASE 0x003C0000))
+  (global $THREAD_END   (mut i32) (region.addr $THREAD_CACHE_BASE 0x00F00000))
   ;; Per-thread page-compilation state. Worker threads are separate WASM
   ;; instances over the same memory, so every one of these is per-instance and
   ;; must be re-armed in $init_thread -- see the per-instance-globals rule that
@@ -1849,6 +1874,10 @@
   (global $THREAD_MSG_QUEUE_MAX i32 (i32.const 64))
   ;; Timer metadata that must be process-wide rather than per-instance.
   ;; +0 active count, +4 next auto id, +0x10 owner tid for each of 16 slots.
+  ;; I/O completion ports. Header per port: handle, head, tail, count; the
+  ;; queue entries follow the eight headers.
+  (global $IOCP_TABLE i32 (region.addr $IOCP_TABLE 0))
+  (global $IOCP_TABLE_SIZE i32 (region.size $IOCP_TABLE))
   (global $TIMER_SHARED i32 (region.addr $TIMER_SHARED 0))
   (global $TIMER_SHARED_SIZE i32 (region.size $TIMER_SHARED))
   (global $WND_OWN_DC_TABLE_SIZE i32 (region.size $WND_OWN_DC_TABLE))
@@ -1862,9 +1891,12 @@
   ;; Current sibling stacking order, parallel to WND_RECORDS. Higher ranks are
   ;; above lower ranks; a process-global sequence is sufficient because ranks
   ;; are compared only between windows with the same parent.
+  ;; The "next rank" cursor deliberately has no global: it was one, and a
+  ;; mutable global is per WASM INSTANCE, so a guest thread running on its own
+  ;; instance handed out ranks the main thread had already used and its windows
+  ;; stacked wrong. $wnd_z_assign_top derives the next rank from this table.
   (global $WND_Z_ORDER_TABLE i32 (region.addr $WND_Z_ORDER_TABLE 0))
   (global $WND_Z_ORDER_TABLE_SIZE i32 (region.size $WND_Z_ORDER_TABLE))
-  (global $wnd_z_next (mut i32) (i32.const 0))
   ;; Open files, indexed by the small handle a 16-bit task sees. DOS numbers
   ;; file handles from zero and a C runtime indexes its own per-handle table
   ;; with them, so a task that gets 0x136 back from OpenFile hands it to
@@ -2364,7 +2396,35 @@
   (global $VIRTUAL_MAP_STATE_SIZE i32 (region.size $VIRTUAL_MAP_STATE))
   (global $VIRTUAL_MAP_TABLE i32 (region.addr $VIRTUAL_MAP_TABLE 0))
   (global $VIRTUAL_MAP_TABLE_SIZE i32 (region.size $VIRTUAL_MAP_TABLE))
-  (global $MAX_VIRTUAL_MAPS i32 (i32.const 2048))
+  ;; 8192, not 2048: Warcraft III's Storm allocator asks the OS for its arena in
+  ;; thousands of small pieces, and measured on the campaign load it reaches the
+  ;; old 2048-record bound after ~180s with only 36MB of the 316MB pool spent.
+  ;; Every commit past that returns NULL, Storm turns that into a NULL SMemAlloc
+  ;; and the game raises "This application has encountered a critical error"
+  ;; naming whichever source file happened to ask — so the bound reads as three
+  ;; different bugs. The table is metadata only (the page table is what $g2w
+  ;; reads), so the cost of raising it is the commit-time record scan, which is
+  ;; why $virtual_map_commit_locked now skips its best-fit pass outright when no
+  ;; release has left a hole.
+  (global $MAX_VIRTUAL_MAPS i32 (i32.const 8192))
+  ;; Uncommitted MEM_RESERVE ranges, which own guest address space that no map
+  ;; record describes. Without them the downward reserve cursor can never be
+  ;; raised back safely and it is a one-way bump: Warcraft III's campaign load
+  ;; churns reserve/release and walks it from 0x50000000 to VIRTUAL_ALLOC_MIN in
+  ;; six minutes while 3/4 of the backing pool is still free. 8 bytes each,
+  ;; base then size.
+  (global $VIRTUAL_RESERVE_TABLE i32 (region.addr $VIRTUAL_RESERVE_TABLE 0))
+  (global $VIRTUAL_RESERVE_TABLE_SIZE i32 (region.size $VIRTUAL_RESERVE_TABLE))
+  (global $MAX_VIRTUAL_RESERVES i32 (i32.const 8192))
+  ;; Released backing extents below the high-water mark, as an explicit free
+  ;; list. The best-fit pass used to derive them from the record table on every
+  ;; commit, which is O(records^2) — 25M record pairs per commit once Warcraft
+  ;; III has 5000 live maps, at ~60 commits a second, which is more work than a
+  ;; core can do and is why its campaign load crawled and then stopped. 8 bytes
+  ;; each, base then size, kept coalesced.
+  (global $VIRTUAL_HOLE_TABLE i32 (region.addr $VIRTUAL_HOLE_TABLE 0))
+  (global $VIRTUAL_HOLE_TABLE_SIZE i32 (region.size $VIRTUAL_HOLE_TABLE))
+  (global $MAX_VIRTUAL_HOLES i32 (i32.const 4096))
   (global $VIRTUAL_BACKING_BASE i32 (region.addr $VIRTUAL_BACKING_BASE 0))
   (global $VIRTUAL_BACKING_BASE_SIZE i32 (region.size $VIRTUAL_BACKING_BASE))
   ;; The sparse VA arena ends exactly where the separate DIB guest arena
@@ -2661,6 +2721,16 @@
   (global $delphi_seh_thunk (mut i32) (i32.const 0))
   (global $delphi_seh_rec (mut i32) (i32.const 0))
   (global $delphi_exception_record (mut i32) (i32.const 0))
+  ;; Where a software exception resumes when a frame's filter answers
+  ;; EXCEPTION_CONTINUE_EXECUTION: the instruction after the RaiseException
+  ;; call, with the stack the call left behind.
+  (global $delphi_resume_eip (mut i32) (i32.const 0))
+  (global $delphi_resume_esp (mut i32) (i32.const 0))
+  ;; GetQueuedCompletionStatus parks by re-entering its own thunk, so a bounded
+  ;; wait needs its deadline kept across those re-entries. Both are per guest
+  ;; thread, because every thread has its own WASM instance.
+  (global $iocp_wait_port (mut i32) (i32.const 0))
+  (global $iocp_wait_deadline (mut i32) (i32.const 0))
   ;; Synchronous WM_CREATE: continuation thunk + saved state
   (global $createwnd_ret_thunk (mut i32) (i32.const 0))
   (global $sync_msg_ret_thunk (mut i32) (i32.const 0))
@@ -2784,6 +2854,10 @@
   (global $rsrc_ctx_base (mut i32) (i32.const 0))
   (global $rsrc_ctx_rva  (mut i32) (i32.const 0))
   (global $exe_size_of_image (mut i32) (i32.const 0))
+  ;; The EXE's own export directory RVA (data directory 0), 0 when it exports
+  ;; nothing. An EXE that exports is the provider for its companion DLLs'
+  ;; imports — Warcraft III's Game.dll imports 460 ordinals from War3Demo.exe.
+  (global $exe_export_rva (mut i32) (i32.const 0))
   ;; rand() state
   (global $rand_seed (mut i32) (i32.const 12345))
   ;; TLS: simple fixed-size TLS (64 slots), allocated in heap on first use
@@ -3531,6 +3605,21 @@
   (global $HIT_COUNT_BASE i32 (region.addr $HIT_COUNT_BASE 0))
   (global $HIT_COUNT_BASE_SIZE i32 (region.size $HIT_COUNT_BASE))
   (global $hit_count_n (mut i32) (i32.const 0))
+  ;; Slot 0 of the hit counters also remembers WHO reached the address: the
+  ;; first and most recent $dbg_prev_eip seen there. A count answers "is this
+  ;; reached"; a virtual call reached through a vtable slot has no static
+  ;; caller at all, so "by whom" needs the runtime edge and nothing else
+  ;; records it passively. Zero until slot 0 is armed and hit.
+  (global $hit0_first_caller (mut i32) (i32.const 0))
+  (global $hit0_last_caller  (mut i32) (i32.const 0))
+  (global $hit0_last_ebp     (mut i32) (i32.const 0))
+  ;; Four return addresses walked off EBP at the moment slot 0 is hit. A vtable
+  ;; call names no caller statically and one frame of $dbg_prev_eip names only
+  ;; the thunk; the interesting call site is usually two or three frames up.
+  (global $hit0_f1 (mut i32) (i32.const 0))
+  (global $hit0_f2 (mut i32) (i32.const 0))
+  (global $hit0_f3 (mut i32) (i32.const 0))
+  (global $hit0_f4 (mut i32) (i32.const 0))
 
   (global $clipboard_fmt_counter (mut i32) (i32.const 0))
 
@@ -3981,3 +4070,25 @@
   ;; entering its handler. The Win16 bridge also calls that handler directly,
   ;; so the empty path may roll activity back only when this token was present.
   (global $spin_peek_activity_marked (mut i32) (i32.const 0))
+
+  ;; Diagnostic, 0 = off (and off is the only shipped setting). When nonzero it
+  ;; is a byte size: a MEM_RELEASE of a region no larger than this becomes a
+  ;; no-op that still reports success, so a guest that keeps reading through a
+  ;; pointer into memory it already gave back sees the old bytes instead of an
+  ;; unmapped hole. It exists to answer "is that one use-after-free the whole
+  ;; blocker" in a single run; it leaks by construction and is never a fix.
+  (global $virtual_leak_small_releases (mut i32) (i32.const 0))
+
+  ;; The same diagnostic, aimed instead of broad: a runtime return address. When
+  ;; it is nonzero, only a MEM_RELEASE whose caller matches leaks, so exactly
+  ;; one call site in the guest is neutered and the allocator behaves normally
+  ;; everywhere else. Leaking every small release turned out to reach a
+  ;; different crash rather than a further screen, which is what a blunt
+  ;; instrument does. $virtual_leak_this_call is the one-shot it sets around the
+  ;; release call, because the decision is made in the handler (which can read
+  ;; the return address off the guest stack) and acted on further down.
+  (global $virtual_leak_release_caller (mut i32) (i32.const 0))
+  (global $virtual_leak_this_call (mut i32) (i32.const 0))
+  ;; How many releases the diagnostic actually swallowed. Without it, "armed
+  ;; and had no effect" and "never matched a call site" are the same reading.
+  (global $virtual_leak_hits (mut i32) (i32.const 0))

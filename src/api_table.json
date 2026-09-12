@@ -28707,5 +28707,236 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 2723015888
+  },
+  {
+    "id": 3404,
+    "name": "glEnableClientState",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 731997211
+  },
+  {
+    "id": 3405,
+    "name": "glArrayElement",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2397394153
+  },
+  {
+    "id": 3406,
+    "name": "glVertexPointer",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1516779109
+  },
+  {
+    "id": 3407,
+    "name": "glNormalPointer",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3616823890
+  },
+  {
+    "id": 3408,
+    "name": "glRotated",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1526951195
+  },
+  {
+    "id": 3409,
+    "name": "glVertex2fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3446239286
+  },
+  {
+    "id": 3410,
+    "name": "glMateriali",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2898887198
+  },
+  {
+    "id": 3411,
+    "name": "glFlush",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 2909380848
+  },
+  {
+    "id": 3412,
+    "name": "glLineWidth",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3435811344
+  },
+  {
+    "id": 3413,
+    "name": "glTexCoord2fv",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3913766738
+  },
+  {
+    "id": 3414,
+    "name": "glTexParameteri",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1122727697
+  },
+  {
+    "id": 3415,
+    "name": "glVertex2i",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3868015257
+  },
+  {
+    "id": 3416,
+    "name": "gluBuild1DMipmaps",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1394753683
+  },
+  {
+    "id": 3417,
+    "name": "PathGetCharTypeA",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3456489877
+  },
+  {
+    "id": 3418,
+    "name": "PathGetCharTypeW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3087382259
+  },
+  {
+    "id": 3419,
+    "name": "EnumDisplayDevicesA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 500342088
+  },
+  {
+    "id": 3420,
+    "name": "ChangeDisplaySettingsExA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2900399580
+  },
+  {
+    "id": 3421,
+    "name": "wglSwapLayerBuffers",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 166798966
+  },
+  {
+    "id": 3422,
+    "name": "CreateIoCompletionPort",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3025100844
+  },
+  {
+    "id": 3423,
+    "name": "PostQueuedCompletionStatus",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3288186502
+  },
+  {
+    "id": 3424,
+    "name": "GetQueuedCompletionStatus",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2589235030
+  },
+  {
+    "id": 3425,
+    "name": "glDisableClientState",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2704567862
+  },
+  {
+    "id": 3426,
+    "name": "glTexCoordPointer",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1811532033
+  },
+  {
+    "id": 3427,
+    "name": "glColorPointer",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3975847566
+  },
+  {
+    "id": 3428,
+    "name": "glDrawElements",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2070224409
+  },
+  {
+    "id": 3429,
+    "name": "glGetIntegerv",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3221975590
+  },
+  {
+    "id": 3430,
+    "name": "glReadBuffer",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1296630944
+  },
+  {
+    "id": 3431,
+    "name": "ImmGetOpenStatus",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 543690368
+  },
+  {
+    "id": 3432,
+    "name": "ImmSetOpenStatus",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1209349716
+  },
+  {
+    "id": 3433,
+    "name": "ImmGetConversionStatus",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 106178384
+  },
+  {
+    "id": 3434,
+    "name": "ImmSetConversionStatus",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2772048924
+  },
+  {
+    "id": 3435,
+    "name": "ImmGetCompositionStringA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 473850404
+  },
+  {
+    "id": 3436,
+    "name": "ImmGetCandidateListA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 899828546
   }
 ]

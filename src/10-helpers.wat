@@ -5663,7 +5663,7 @@
 
   ;; Every WASM instance owns its count and its corresponding thread partition.
   (func $post_queue_base (result i32)
-    (if (i32.ge_u (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 8))
+    (if (i32.ge_u (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 16))
       (then (unreachable)))
     (i32.add (global.get $LOCAL_POST_QUEUES)
       (i32.mul (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 1024))))

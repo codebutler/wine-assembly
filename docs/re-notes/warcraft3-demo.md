@@ -899,3 +899,235 @@ Two vertices per draw is not a measurement, though: a quad strip can start and
 end on a cell corner. `scratchpad/uvcensus.js` reads every vertex of every
 tex61 draw and reports the u/v range and how many sit exactly on `(0,0)`; run
 it before writing a fix.
+
+### CORRECTION: the use-after-free is real, and the probe was not causing it
+
+The section above says to re-run with deadprobe's auto-press disabled before
+trusting the crash. That run is runCS (2026-09-12, `--headful`,
+`scratchpad/deadprobe-noauto.js`, zero `[auto]` lines in the whole log), and it
+reproduces everything with **no key pressed at all** until the scripted one:
+
+```
+222s  node appears, state 4, target 0x444800b0 mapped, vtable 0x004456d8
+232s  state 4 -> 6            <- happens on its own; the presses did not cause it
+299s  [vt] vtable 0x004456d8 -> 0 at eip 0x00402330
+300s  refcount 0x454c0c goes 1 -> 0, target UNMAPPED, alive bytes
+      [d8 56 44 00 ff ff ff ff 34 01 8f 44 cb fe 70 bb]
+426s  scripted space press; 0x418bf2 calls through it, eip goes to 0
+```
+
+runCO did the same thing on a different address (`0x444c00b0`, teardown at
+336s), so the addresses move run to run but the sequence does not. **The
+teardown is app-driven and deterministic.** The auto-press was still worth
+removing — a probe that types into the game cannot be used as evidence — but it
+was not the cause, and state 6 is simply the node's normal progression.
+
+The `[vt]` eip is worth reading this time. `0x00402330` is inside `0x004022df`,
+which ends:
+
+```
+0040231b  test esi, esi
+0040231f  shr esi, 0x15
+00402322  mov ecx, [0x44f91c+esi*4]     ; heap handle table, indexed by addr>>21
+0040232a  call [0x444108]               ; the deallocator
+```
+
+so the poll caught the free itself, not the decision to free. (In runCO the same
+poll landed on a matrix multiply at `0x6f05b550` — it samples every 100ms and
+reports where the guest happens to be, so treat its eip as a hint, never as the
+instruction that did the store.)
+
+### Where to look next: the teardown's own call stack
+
+Neither the init nor the shutdown can be found statically — `xrefs.js` and
+`find-refs.js` both return **zero** references to either, code or data, so both
+are reached through computed pointers.
+
+At runtime it is one armed counter. In the shutdown,
+
+```
+00412a56  test bl, 0x1
+00412a59  jz short 0x412a6e
+00412a5b  dec [0x454c0c]
+00412a61  jnz short 0x412a6e      ; still referenced -> nothing happens
+00412a63  mov ecx, [0x455000]     ; <- reached ONLY when it hit zero
+00412a69  call 0x4139a0           ;    the teardown that frees the object
+```
+
+`0x412a63` is the fall-through of a conditional jump, so it is a genuine block
+entry and `set_count` will match it, and it fires only on the fatal transition —
+never on a balanced release. **It must be slot 0**: `src/13-exports.wat` records
+`hit0_first_caller`, `hit0_last_ebp` and the four-deep EBP frame walk for slot 0
+and no other. `scratchpad/shutprobe.js` arms exactly that from the page
+(`set_count` / `get_count` / `get_hit0_frame` are plain exports, so a browser-only
+app can use the same counters `--count` uses in `run.js`).
+
+The count peaks at exactly 1, so one lost init is enough to make a balanced
+shutdown fatal — read the frames against the campaign→briefing transition.
+
+## SOLVED: the freed object is a worker-pool failure, and the pool failed because we ran out of thread slots
+
+The whole chain, measured end to end. Nothing in it is inferred.
+
+```
+ThreadManager._maxWorkerThreads = 7        (lib/thread-manager.js)
+  -> the 8th concurrent CreateThread returns 0
+       "[ThreadManager] CreateThread failed: no decoded-cache slot"
+  -> MSVCRT _beginthreadex returns 0       (import 10 of MSVCRT.dll, IAT 0x444260)
+  -> 0x413c65  jz 0x413d72                 the exe abandons the worker pool
+  -> 0x413c10 returns 0
+  -> 0x4135e5  jnz 0x4135ef not taken      0x413580 returns 0
+  -> 0x41292f  jz 0x412972                 the bit-0x20 subsystem init rolls back
+  -> 0x412a5b  dec [0x454c0c] hits 0
+  -> 0x4139a0                              the object is freed
+  -> 0x418bf2  mov eax,[ecx] / call [eax+0x28]   briefing dismiss, eip = 0
+```
+
+`runCW` counted both ends of it in one sample: **two** `no decoded-cache slot`
+refusals and **two** rollbacks at `0x412972`, exactly 1:1, with no other
+refusal and no other rollback in the run.
+
+### What the earlier `CreateIoCompletionPort` reading got wrong
+
+The previous pass followed `0x413580` only as far as its first failure arm and
+concluded the I/O completion port at `0x4126f0` was returning zero. It is not.
+`scratchpad/iocpprobe.js` armed the function entry and its success block and
+reported `iocp-entry=2 iocp-ok=2` — the port is created, `[esi+0x618]` is
+non-zero, and `0x413580` walks straight past that check:
+
+```
+004135c4  mov eax, [esi+0x618]      ; non-zero, so
+004135da  jz 0x4135ef               ; not taken
+004135dc  mov ecx, esi
+004135de  call 0x413c10             ; <- THIS is what returns 0
+004135e5  jnz 0x4135ef              ; not taken -> return 0
+```
+
+`CreateIoCompletionPort` was a real gap and is really implemented now
+(`src/09a7-handlers-dispatch.wat`, an eight-slot port table with a genuine
+queue), but it was never this crash. The lesson is the same one this file keeps
+re-learning: **disassemble the whole function before naming its failure arm.**
+
+### Why 15 worker slots and not 8
+
+Warcraft III does not create threads one at a time. It keeps five alive
+(one Storm, one MSS audio, three CRT) and then asks for **five more at once**
+before any of them runs, so the peak is ten live workers:
+
+```
+createThread#9  -> 0xe100b  live[1..5 active] pending[6,7,8]
+createThread#10 -> 0x0      live[1..5 active] pending[6,7,8,9]   <- refused
+```
+
+`src/00-regions.wat` now splits the three per-thread arenas non-uniformly
+instead of striding them evenly, because the main thread decodes the whole
+program and a worker decodes the one routine it was spawned for:
+
+| arena | main | each of 15 workers | region size |
+|---|---|---|---|
+| `$THREAD_CACHE_BASE` | 15MB | 1MB | 30MB, unchanged |
+| `$PAGE_INDEX_ARENA` | 128 slots (1MB) | 16 slots (128KB) | 8MB → 2.875MB |
+| `$PAGE_DIR_BASE` | 1024 entries | 256 entries | 128KB → 76KB |
+
+So the main thread's decoded-code partition nearly quadruples (3.9MB → 15MB)
+while the map as a whole shrinks — sixteen equal shares would have cut main to
+1.9MB to buy fifteen workers a partition each they cannot begin to fill.
+`$init_thread` in `src/13-exports.wat` is the only code that knows the shape;
+`$PAGE_INDEX_SLOTS`, `$PAGE_DIR_ENTRIES` and `$PAGE_DIR_MASK` became
+per-instance mutable globals it sets, and the globals' declared defaults are
+the main thread's values.
+
+With the fix, the same startup reports `rollback=0 teardown-1to0=0 init-ok=2`
+where it previously reported `rollback=2 teardown-1to0=2`.
+
+## SOLVED: the map load then stalled, because the file half of the completion port was refused
+
+The worker-slot fix bought the campaign briefing, and the briefing then sat
+still. Three runs of the same walk produced byte-identical film: runCY's
+LOADING bar unchanged from 290s to 1340s, runCZ's `f030-311s.png` and
+`f036-371s.png` the same md5 and the same 1006154 bytes, narration frozen
+mid-sentence at "Somewhere in the Arathi Highlands, Thrall, the young".
+
+**The main thread was not grinding, it was waiting.** Of the 99 main-EIP
+samples taken from 300s on in runCZ, 89 landed on `0x00403440`:
+
+```
+00403440  push ebp / mov ebp,esp
+00403443  mov eax,[ebp+0x8]        ; dwMilliseconds
+00403446  mov ecx,[ecx]            ; this->handle
+0040344a  call [0x00444104]        ; KERNEL32 IAT +0x6c = import 27 = WaitForSingleObject
+00403451  ret 0x4
+```
+
+a one-line `CEvent::Wait` wrapper. Its seven call sites include two that pass
+`6a ff` — `push -1`, i.e. INFINITE.
+
+The corrected thread census (runDA) named the rest of the deadlock. **Do not
+read `thread.eip`/`thread.lastEip` in cooperative mode**: those exist only in
+the worker backend, and a probe that falls through to `thread.startAddr`
+prints eight threads "frozen" at msvcrt's `_beginthreadex` thunk `0x12167c5`
+for three hundred seconds while saying nothing at all. A cooperative thread
+record owns its own wasm instance; ask that instance.
+
+```
+main            0x403440 y1      WaitForSingleObject, INFINITE
+T3              0x403440 y1      the same wrapper
+T2 T4 T7 T10    y1               blocked on events
+T5              0x4034cb y1      WaitForMultipleObjects (IAT 0x444114)
+T8 T9           0x7500300 y0     thunk 0x300/8 = index 96, and War3Demo.exe's
+                                 import 96 is GetQueuedCompletionStatus
+T6              exited@0x418511
+iocp  p0{0x1c0c0000 head=0 tail=0 count=0}      for the entire run
+```
+
+Two threads blocked forever on a port that never received anything, everyone
+else blocked on events those two would have set.
+
+**The cause.** Warcraft III's asynchronous file layer binds each open file to
+the job port and submits overlapped requests against it:
+
+```
+00418514  mov eax,[esi+0x6c]       ; the FILE handle
+00418517  push 0 / push esi / push edx / push eax
+00418522  call [0x00444214]        ; CreateIoCompletionPort(file, port, key, 0)
+...
+004185f7  mov ecx,[esi+0x6c]
+00418603  call [0x00444184]        ; WriteFile(h, buf, len, NULL, lpOverlapped)
+0041860d  call [0x00444130]        ; GetLastError
+00418613  cmp eax,0x3e5            ; == 997, ERROR_IO_PENDING
+```
+
+`$handle_CreateIoCompletionPort` refused exactly that association with
+`$crash_unimplemented`, on the reasoning that a silent success would be an
+unexplained hang. In a cooperative worker a trap is caught by ThreadManager,
+logged and the thread marked exited — so the refusal *was* the unexplained
+hang, one thread quieter.
+
+**The fix** (`src/09a7-handlers-dispatch.wat`, `src/09a-handlers.wat`)
+implements the association instead. A 64-entry table `{fileHandle, portSlot+1,
+completionKey}` lives in the tail of `$IOCP_TABLE`, after the eight headers
+(128 bytes) and the eight 256-entry queues (24576 bytes), at offset 24704.
+`ReadFile`/`WriteFile` with an `lpOverlapped` on a bound handle become
+*positioned* I/O — `fs_read_file_at` for the read, an explicit seek-and-restore
+for the write, since there is no `fs_write_file_at` bridge — that does not move
+the file pointer, fills `OVERLAPPED.Internal`/`InternalHigh`, queues the
+completion, and returns FALSE with `ERROR_IO_PENDING`. Our file I/O is
+synchronous, so the completion is already in the queue when the guest checks
+`GetLastError`; the guest cannot tell that from a very fast device.
+`CloseHandle` drops the binding so a reused handle number cannot inherit a dead
+file's completion key. An `lpOverlapped` on a handle bound to no port stays
+synchronous, which is what Win32 does for a file opened without
+`FILE_FLAG_OVERLAPPED`.
+
+`test/test-wat-iocp-overlapped.js` replays the four calls against a VFS file
+directly, because the only binary in the corpus that takes this path is five
+minutes of walking into a GL campaign briefing away.
+
+**Measured before and after, same walk:**
+
+| | before (runDA/runCY/runCZ) | after (runDB) |
+|---|---|---|
+| port | `head=0 tail=0 count=0` all run | `head=4 tail=4 count=0` |
+| threads | T6 `exited@0x418511` | no exits |
+| briefing film | byte-identical for 1000s+ | every frame different |
+| bar at 400s | LOADING, ~20% | **PRESS ANY KEY TO CONTINUE** |

@@ -237,17 +237,41 @@
     (owner "01-header.wat:$GUEST_HEAP_BASE"))
   (region.declare $HANDLER_PAIR_HIST_COUNTS (size 0x00100000) (align 0x00001000)
     (owner "04-cache.wat:$handler_hist_record"))
-  (region.declare $PAGE_INDEX_ARENA (size 0x00800000) (align 0x00001000)
-    (stride $PAGE_INDEX_STRIDE (count 8))
+  ;; Split like $THREAD_CACHE_BASE below, and for the same reason: the main
+  ;; thread compiles nearly every page an app ever runs, and a worker compiles
+  ;; the one routine it was spawned for. So the main thread keeps its full 128
+  ;; index slots (0x100000) and each of the fifteen workers gets 16 (0x20000).
+  ;; No uniform (stride ...) can describe that, and stating a false one would
+  ;; be worse than stating none: 0x100000 + 15 * 0x20000 = 0x2E0000, and the
+  ;; region SHRINKS by 5MB while carrying twice as many threads.
+  (region.declare $PAGE_INDEX_ARENA (size 0x002E0000) (align 0x00001000)
     (owner "01-header.wat:$PAGE_INDEX_ARENA"))
-  (region.declare $PAGE_DIR_BASE (size 0x00020000) (align 0x00001000)
-    (stride $PAGE_DIR_STRIDE (count 8))
+  ;; Same split: main 1024 directory entries (0x4000), each worker 256
+  ;; (0x1000). 0x4000 + 15 * 0x1000 = 0x13000.
+  (region.declare $PAGE_DIR_BASE (size 0x00013000) (align 0x00001000)
     (owner "01-header.wat:$PAGE_DIR_BASE"))
   (region.declare $WIN16_APP_DLL_STAGING (size 0x00600000) (align 0x00001000)
     (stride $WIN16_APP_DLL_STRIDE (count 6))
     (owner "08c-ne-loader.wat:$win16_dll_staging"))
+  ;; NOT eight equal partitions any more, and deliberately not sixteen equal
+  ;; ones either. The main thread is not one thread among many: it decodes the
+  ;; whole program, and a worker decodes the one routine it was spawned for.
+  ;; Sixteen equal shares of this region would have cut main from 3.9MB to
+  ;; 1.9MB to buy workers a partition each they cannot begin to fill.
+  ;;
+  ;; So: main takes 0x00F00000 (15MB, nearly four times what it had) and each
+  ;; of fifteen workers takes $THREAD_CACHE_STRIDE = 0x00100000. That is
+  ;; 0xF00000 + 15 * 0x100000 = 0x1E00000, the same region size as before.
+  ;; $init_thread in 13-exports.wat is the one place that knows the shape.
+  ;;
+  ;; Why fifteen workers: Warcraft III keeps five threads alive and then asks
+  ;; for a burst of five more at once. At seven worker slots the eighth
+  ;; CreateThread was refused for want of a partition, MSVCRT _beginthreadex
+  ;; returned 0, the exe abandoned the worker pool it was building at
+  ;; 0x413c10, its subsystem init rolled back, and the refcounted object the
+  ;; campaign briefing calls through was freed while still in use.
+  ;; docs/re-notes/warcraft3-demo.md has the whole measured chain.
   (region.declare $THREAD_CACHE_BASE (size 0x01E00000) (align 0x00001000)
-    (stride $THREAD_CACHE_STRIDE (count 8))
     (owner "01-header.wat:$THREAD_CACHE_BASE"))
   (region.declare-derived $GUEST_STACK (base (g2w 0x07400000)) (size 0x00100000) (align 0x00001000)
     (owner "01-header.wat:$GUEST_STACK"))
@@ -374,10 +398,16 @@
     (owner "09a-handlers.wat:$cursor_scale_bitmap"))
   (region.declare $EDIT_LAYOUT_SCRATCH (size 0x00000C00) (align 0x00000100)
     (owner "09c3-controls.wat:$edit_layout_len"))
-  (region.declare $VIRTUAL_MAP_STATE (size 0x00000010) (align 0x00000100)
+  (region.declare $VIRTUAL_MAP_STATE (size 0x00000020) (align 0x00000100)
     (owner "10-helpers.wat:$virtual_map_commit_locked"))
-  (region.declare $VIRTUAL_MAP_TABLE (size 0x00008000) (align 0x00000010)
+  (region.declare $VIRTUAL_MAP_TABLE (size 0x00020000) (align 0x00000010)
     (owner "10-helpers.wat:$virtual_map_commit_locked"))
+  (region.declare $VIRTUAL_RESERVE_TABLE (size 0x00010000) (align 0x00000010)
+    (stride 8 (count $MAX_VIRTUAL_RESERVES))
+    (owner "10-helpers.wat:$virtual_reserve_record"))
+  (region.declare $VIRTUAL_HOLE_TABLE (size 0x00008000) (align 0x00000010)
+    (stride 8 (count $MAX_VIRTUAL_HOLES))
+    (owner "10-helpers.wat:$virtual_hole_add"))
   (region.declare $GDI_BITMAP_FONT_IO (size 0x00000004) (align 0x00000010)
     (owner "10b-gdi-font.wat:$GDI_BITMAP_FONT_IO"))
   (region.declare $GDI_BITMAP_FONT_DESC (size 0x00000050) (align 0x00000010)
@@ -431,12 +461,16 @@
     (owner "04-cache.wat:$handler_hist_record"))
   (region.declare $CODE_PAGE_BITMAP (size 0x00002000) (align 0x00001000)
     (owner "04-cache.wat:$code_page_mark"))
-  (region.declare $SYNC_TABLE (size 0x00002000) (align 0x00001000)
+  (region.declare $SYNC_TABLE (size 0x00010000) (align 0x00001000)
     (owner "01-header.wat:$SYNC_TABLE"))
   (region.declare $D3DIM_VIEWPORT_LIGHT_HEAD (size 0x00004000) (align 0x00001000)
     (owner "09aa-handlers-d3dim.wat:$D3DIM_VIEWPORT_LIGHT_HEAD"))
   (region.declare $HIT_COUNT_BASE (size 0x00000100) (align 0x00001000)
     (owner "01-header.wat:$HIT_COUNT_BASE"))
+  ;; Eight I/O completion ports, each with a 256-entry queue of three dwords
+  ;; (bytes transferred, completion key, OVERLAPPED*) after a 16-byte header.
+  (region.declare $IOCP_TABLE (size 0x00008000) (align 0x00001000)
+    (owner "01-header.wat:$IOCP_TABLE"))
   (region.declare $TIMER_SHARED (size 0x00000050) (align 0x00000100)
     (owner "09a-handlers.wat:$timer_set"))
   (region.declare $EXTRA_CMDLINE_BUFFER (size 0x00000100) (align 0x00000100)
@@ -559,6 +593,11 @@
     (owner "10-helpers.wat:$dib_free_wasm"))
   (region.declare-fixed $THREAD_RPC (base 0x1FF00000) (size 0x00100000) (align 0x00001000)
     (owner "13-exports.wat:$run"))
+  ;; $THREAD_RPC ends at 0x20000000, and the map ends with it. Everything above
+  ;; that is the second sparse backing window -- see $virtual_backing_ext_base
+  ;; in 10-helpers.wat, which is deliberately NOT a region: a region must fit
+  ;; inside the import's INITIAL memory, and that window exists only on a host
+  ;; that chose to create more than the 8192-page minimum.
 
   ;; ============================================================
   ;; SPANS — address-range LIMITS, not storage.
@@ -589,7 +628,9 @@
   ;; these to the front exposed a Win16 Rodent runtime-DLL startup failure;
   ;; the browser Worker regression covers that layout-sensitive path.
   ;; Ownership is independent of the allocator's chosen addresses.
-  (region.declare $LOCAL_POST_QUEUES (size 0x00002000) (align 0x00000010)
+  ;; 1KB per thread, sixteen threads: main plus the fifteen worker partitions
+  ;; $THREAD_CACHE_BASE carves.
+  (region.declare $LOCAL_POST_QUEUES (size 0x00004000) (align 0x00000010)
     (owner "10-helpers.wat:$post_queue_base"))
   (region.declare $HEAP_ARENAS (size 0x00004010) (align 0x00000010)
     (owner "10-helpers.wat:$heap_arena_register"))
