@@ -1730,3 +1730,60 @@ calls the pick, so nothing calls grow.
 This is the same wall as the bad_alloc in "Land load now runs out of backing"
 above, just reached from a path that does not check the result. The remaining
 question is what the allocator has left at that moment, not what the loop does.
+
+### CORRECTION: `operator new[]` never returns NULL, and the allocator is not the problem
+
+Commit `8ed6886b` concluded that the land picker's infinite loop was an
+unreported out-of-memory — that `0x9e8200`'s `call 0xad425d` returned NULL and
+the grow routine stored it without checking. That is wrong on both halves:
+
+- `0xad425d` → `jmp 0xad41b9` is MSVCRT `operator new`, which loops on `malloc`,
+  calls `_callnewh` on failure, and **throws** when that returns 0. It has no
+  path that returns NULL to its caller.
+- Our allocator has capacity at the land picker — live probes of 64 B through
+  1 MB all succeed — and it structurally cannot hand back the wild `items`
+  values we see. `$heap_sparse_alloc` takes every chunk from
+  `$virtual_reserve_down`, which refuses anything below `$VIRTUAL_ALLOC_MIN`
+  (`0x10000000`) and commits each chunk before returning it. The observed
+  `items` cluster `0xb7a77000..0xb7ac6000` is outside the VirtualAlloc arena
+  entirely, so no allocation produced it.
+
+A drive with `--trace-at=0x9e8220` (the call-return landing inside grow) across
+a full walk to the picker plus the hanging nudge recorded **zero** hits, which
+settles it: grow is not even on the faulting path. The cell records the loop
+reads are garbage — the `n`/`items` words decode as ASCII fragments — so the
+grid's cell-table pointer `[edi+0x20]` is pointing at unrelated data, and the
+question is what left it that way, not what the allocator returned.
+
+### The land load blits from a NULL `bmBits`, and that is ours
+
+The 1054 faults at `0x9b7370` during the land load are the concrete defect
+underneath. The block is a row blit, and the destination is checked:
+
+```
+009b72cd  push 0 ; call [0xc12054]      ; CreateCompatibleDC(NULL)
+009b72dd  push edi ; push eax ; call [0xc12050]   ; SelectObject(hdc, hbmp)
+009b72ed  lea eax,[esp+0x18] ; push eax ; push 0x18 ; push edi
+          call [0xc1205c]               ; GetObjectA(hbmp, 24, &BITMAP)
+009b7303  movzx eax,word [esp+0x2a]     ; bmBitsPixel
+009b7326  call 0x8b1180                 ; allocate the destination
+009b7331  jz   0x9b73a3                 ; ...and it IS checked
+009b7370  mov edi,eax                   ; dest = the checked allocation
+009b7379  mov esi,edx                   ; src  = derived from bmBits
+009b737b  rep movsd
+```
+
+So the faulting reads are the **source**: `bmBits`, straight out of
+`GetObjectA`. The bitmap comes from the call at `0x9b7279` —
+`LoadImageA(NULL, path, IMAGE_BITMAP, 0, 0, 0x2010)`, i.e.
+`LR_LOADFROMFILE | LR_CREATEDIBSECTION`.
+
+`$load_image_bitmap_file` built a DDB for every caller, and a DDB's pixels are
+device-private: `$gdi_bitmap_write_object` deliberately reports `bmBits = 0` for
+one. That is right for a DDB and wrong here — the app asked for a section
+precisely so it could read the bits. The fix threads the flag through
+`$load_image_bitmap_file` and takes `$gdi_bitmap_create_owned` with the
+DIB-section object flag, so the pixels land in `$dib_alloc` storage that has a
+guest address. `test/test-loadimage-dibsection.js` covers both directions in
+about two seconds: the section reports a non-NULL `bmBits` that addresses the
+file's pixels, and plain `LR_LOADFROMFILE` still reports `bmBits = 0`.
