@@ -1629,3 +1629,33 @@ press three seconds after a move lands where the cursor was *before* the move.
 Pin the build with `--wasm=` plus a saved `WINE_REGION_MAP` mirror. This is a
 shared worktree and a drive that rebuilds picks up whatever half-finished edit
 is on disk at spawn time.
+
+### Drive this game by watching the screen, not by sleeping
+
+Every recipe in this file that reads "+180s menu, click, +50s, click" was
+measured on an idle box, and it is only valid on one. Drive 12 ran at load
+average ~8 and each of its three menu clicks landed on a splash screen: at
+t=180s the game was still showing the Black & White 2 title card, at t=300s
+the Lionhead logo, at t=380s the ATI logo. The clicks themselves were fine.
+The tags on the captures were fiction, and a capture tagged `03-profile-made`
+showing a company logo reads as "the click did nothing" unless you open it.
+
+Two shapes make that mistake cheap to spot and cheap to avoid:
+
+- A splash-chain frame is *small*. The title card and the profile screen come
+  out around 220-400 KB of PNG; the Lionhead logo is 36 KB and the ATI logo is
+  11 KB, because they are a handful of flat colours. `ls -la` on the shot
+  directory sorts splash from content before any image is opened. (Same signal
+  as `tools/app-contact-sheet.js --pick=largest`, for the same reason.)
+- Wait for the screen instead. Keep one reference frame per screen from a run
+  that did reach it, capture every 15 s, and advance when
+  `diffPng(capture, reference, {tolerance:24}).share` drops under 0.12. Two
+  frames of one screen from different runs differ by ~1% here (the game
+  animates — see the vignette note above), and any *other* screen differs by
+  tens of percent, so the gap between "this screen" and "not this screen" is
+  two orders of magnitude wide and needs no tuning. Log every reference's share
+  on each poll: a run that never arrives then says which screen it is stuck on
+  rather than just timing out.
+
+The reference frames currently used are the `n12-0{1,2,3,4}-*` captures
+(menu / profile-made / tutorial / land-select).
