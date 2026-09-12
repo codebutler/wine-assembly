@@ -90,7 +90,7 @@ function instrumentRegisters(source) {
   source = replaceOne(source,
     String.raw`    (call $guest_page_affine_span (local.get $ga) (local.get $len))
   )
-  (func $w2g`,
+  ;; Sparse backing`,
     String.raw`    (local.set $wa
       (call $guest_page_affine_span (local.get $ga) (local.get $len)))
     (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
@@ -98,7 +98,12 @@ function instrumentRegisters(source) {
       (else (call $g2w_stat_inc (i32.const 4))))
     (local.get $wa)
   )
-  (func $w2g`,
+  ;; Sparse backing`,
+    // The anchor used to end at `(func $w2g`, which stopped matching the day
+    // $w2g_sparse was inserted between the two -- and an anchor that matches
+    // nothing fails the whole instrumented build. Anchor on the comment that
+    // introduces the sparse walk instead; it is the line that follows the
+    // affine span in either arrangement.
     'packed affine result');
 
   return source;
