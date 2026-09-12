@@ -391,6 +391,18 @@
       user-select: none;
     }
     canvas.guest-cursor-hidden { cursor: none !important; }
+    /* The direct-presentation path (Win98Renderer._canPresentDirectly) shows
+       this canvas itself and lets CSS scale it, and width/height 100% is a
+       free NON-UNIFORM stretch the moment the backing aspect and the box
+       aspect disagree. screenCanvasSize() normally keeps them equal, but that
+       is an unstated invariant with several ways to break for a frame or
+       longer: a rotation before the resize event lands, a backing pinned to a
+       window's natural size by singleAppBackingSize, a height frozen while the
+       on-screen keyboard is up. Solitaire came back vertically stretched in
+       landscape that way -- the window the same size, the picture taller.
+       When the aspects agree this rule does nothing at all; when they do not,
+       a brief letterbox is the honest picture and a stretch is not. */
+    body.single-app canvas { object-fit: contain; }
     #mobile-keyboard-proxy {
       position: fixed;
       left: 0;
@@ -749,6 +761,12 @@
     body.single-app.app-running:not(.no-debug):not(.debug-open) #titlebar,
     body.single-app.app-running:not(.no-debug):not(.debug-open) #toolbar,
     body.single-app.app-running:not(.no-debug):not(.debug-open) #log { display: none; }
+    /* The Win98 shell frame is 8px of margin plus a 2px outset border, and on
+       a phone that is 20px of the width spent on a teal surround nobody asked
+       for -- the app's own picture is the frame. Collapse it whenever an app
+       is up in single-app mode, not only in the no-debug build, so what the
+       debug peek adds is the peek and not a border. */
+    body.single-app.app-running #shell,
     body.no-debug #shell { margin: 0; border: 0; background: transparent; }
     body.no-debug #titlebar,
     body.no-debug #toolbar,
@@ -791,7 +809,14 @@
        the media-import button applies to itself. */
     body.exclusive-fullscreen #desktop-icons { display: none !important; }
     body.exclusive-fullscreen #browser-fullscreen-consent { display: flex; }
-    body.no-debug.exclusive-fullscreen canvas {
+    /* NOT #touch-cursor. These rules mean "the guest's screen canvases", but a
+       bare `canvas` also catches the cursor sprite, which is a body-level
+       overlay positioned by transform. Laid out in flow at width:100% and then
+       translated to the finger, its box runs past the right edge of the page —
+       and a mobile browser answers horizontal overflow by shrinking the whole
+       page to fit, one way, permanently. That is why a 640x480 game landed in
+       a 205x154 box in the middle of an iPhone SE in landscape. */
+    body.no-debug.exclusive-fullscreen canvas:not(#touch-cursor) {
       position: relative !important;
       inset: auto !important;
       flex: 1 1 0;
@@ -809,7 +834,7 @@
       min-width: 0;
       min-height: 0;
     }
-    body:not(.no-debug).exclusive-fullscreen canvas {
+    body:not(.no-debug).exclusive-fullscreen canvas:not(#touch-cursor) {
       position: relative !important;
       inset: auto !important;
       flex: 1 1 0;
@@ -818,17 +843,26 @@
       width: 100% !important;
       height: 0 !important;
     }
-    body.exclusive-fullscreen #screen-canvas-stack {
-      flex: 1 1 0;
-      width: 100%;
-      height: 0;
-      min-height: 0;
-    }
-    body.exclusive-fullscreen #screen-canvas-stack canvas {
+    /* The two rules above size the screen canvas as a FLEX ITEM -- flex:1 1 0
+       with height:0 -- but #screen-canvas-stack is display:block, so the flex
+       properties do nothing and height:0 is taken literally: a 341px-tall
+       stack containing a canvas 0px tall, and a full-screen game that draws
+       nothing at all. body.page-fullscreen has always carried the matching
+       stack-scoped rule for exactly this; exclusive-fullscreen never got one.
+       Two ids beat the two classes of the bare selectors, so this wins in both
+       the debug and the shipping shell without repeating either. */
+    body.exclusive-fullscreen #screen-canvas-stack canvas:not(#touch-cursor) {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
       height: 100% !important;
+      max-width: none !important;
+      max-height: none !important;
+    }
+    body.exclusive-fullscreen #screen-canvas-stack {
+      flex: 1 1 0;
+      width: 100%;
+      height: 0;
       min-height: 0;
     }
     /* Page fullscreen: the fallback for a browser with no Fullscreen API.
@@ -876,13 +910,25 @@
       height: 0;
       min-height: 0;
     }
-    body.page-fullscreen #screen-canvas-stack canvas {
+    /* `:not(#touch-cursor)` is not decoration here, it is the specificity that
+       makes this rule win. The bare `body.page-fullscreen canvas` rule below
+       sets height:0 !important for the flex layout the stack does not use, and
+       it once lost to this one on specificity alone -- until the cursor-sprite
+       fix gave it a :not(#id), which counts as an ID and tied the two at
+       (1,1,1). A tie goes to the later rule, and the later rule is that one,
+       so #screen and #screen-present became 0px tall inside a 292px stack and
+       the phone showed a black page with a running app behind it. Measured on
+       a real iPhone: canvas 732x300 backing, clientHeight 0. Two IDs here beat
+       one there whatever the source order. */
+    body.page-fullscreen #screen-canvas-stack canvas:not(#touch-cursor) {
       position: absolute !important;
       inset: 0 !important;
       width: 100% !important;
       height: 100% !important;
+      max-width: none !important;
+      max-height: none !important;
     }
-    body.page-fullscreen canvas {
+    body.page-fullscreen canvas:not(#touch-cursor) {
       position: relative !important;
       inset: auto !important;
       flex: 1 1 0;
@@ -1317,6 +1363,7 @@
           <option value="dungeon_keeper_demo">Dungeon Keeper Demo</option>
           <option value="darkstone_demo">Darkstone Demo</option>
           <option value="jazz2_demo">Jazz Jackrabbit 2 Demo</option>
+          <option value="simgolf_demo">Sid Meier's SimGolf Demo</option>
           <option value="black_white_2_demo">Black &amp; White 2 Demo</option>
           <option value="quake2_demo">Quake II Demo</option>
           <option value="quake2_demo_installer">Quake II Demo Installer</option>
@@ -2863,6 +2910,10 @@ Resource-aware Win98 emulator
       appendDebugLog(lines.join('\n'));
     }
 
+    // Held across calls so the keyboard cannot change the desktop's shape
+    // while it is up; see the freeze in screenCanvasSize().
+    let lastStageShare = 1;
+
     function screenCanvasSize() {
       const canvas = document.getElementById('screen');
       const wrap = document.getElementById('screen-wrap');
@@ -2900,17 +2951,39 @@ Resource-aware Win98 emulator
       // avoid. Hold the pre-keyboard height until the keyboard goes away.
       const frozenH = keyboardController ? keyboardController.frozenHeight() : 0;
       const displayH = frozenH > 0 ? Math.floor(frozenH) : measuredH;
-      // A single backing scale keeps CSS presentation proportional even on
-      // short landscape screens where both minimum dimensions cannot fit.
-      const scale = displayW > 0 && displayH > 0
-        ? Math.max(Math.max(1, MIN_BACKING_WIDTH / displayW), MIN_BACKING_HEIGHT / displayH)
-        : 1;
-      let w = Math.max(MIN_BACKING_WIDTH, Math.round((displayW || 1) * scale));
-      let h = Math.max(MIN_BACKING_HEIGHT, Math.round((displayH || 1) * scale));
       // Fixed board windows keep their guest position across rotation. Keep
       // their complete backing pixels when the physical screen gets shorter;
       // presentation scales that intact board into the new control layout.
       const boardRenderer = window.wineShell && window.wineShell.renderer;
+      // The desktop is the STAGE, not the viewport: presentation reserves the
+      // touch controls' band afterwards, and a desktop sized past it gets
+      // letterboxed into it -- which spends the slack sideways as teal gutters.
+      // Frozen with the height while the keyboard is up, for the same reason
+      // that is: a WM_SIZE mid-keystroke re-centres every centred dialog.
+      if (frozenH <= 0) {
+        lastStageShare = boardRenderer && boardRenderer.singleAppStageShare
+          ? boardRenderer.singleAppStageShare() : 1;
+      }
+      const stageH = Math.max(1, (displayH || 1) * lastStageShare);
+      // A single backing scale keeps CSS presentation proportional even on
+      // short landscape screens where both minimum dimensions cannot fit.
+      const scale = displayW > 0 && stageH > 0
+        ? Math.max(Math.max(1, MIN_BACKING_WIDTH / displayW), MIN_BACKING_HEIGHT / stageH)
+        : 1;
+      // stageH is Math.max(1, ...), so a measured height of ZERO does not
+      // divide by zero -- it divides by one, and MIN_BACKING_HEIGHT/1 is a
+      // 300x scale. That turned a 667-wide phone into a 200100x480 desktop
+      // (an exclusive-fullscreen canvas had been given flex sizing inside a
+      // block parent and measured 0 tall). A collapsed layout is a bug to fix
+      // where it collapses, but it must never be amplified into a canvas
+      // allocation that large -- 200100x480 is 384MB of backing store.
+      // 4096 is far above anything a phone asks for; Peaks, the widest window
+      // in the corpus, needs 736.
+      const MAX_BACKING = 4096;
+      let w = Math.min(MAX_BACKING,
+        Math.max(MIN_BACKING_WIDTH, Math.round((displayW || 1) * scale)));
+      let h = Math.min(MAX_BACKING,
+        Math.max(MIN_BACKING_HEIGHT, Math.round(stageH * scale)));
       if (SINGLE_APP_MODE && boardRenderer && boardRenderer.singleAppBackingSize) {
         ({ w, h } = boardRenderer.singleAppBackingSize(w, h));
       }
@@ -2919,6 +2992,56 @@ Resource-aware Win98 emulator
           if (!win || win.isChild || !win.visible) continue;
           w = Math.max(w, (win.x | 0) + (win.w | 0));
           h = Math.max(h, (win.y | 0) + (win.h | 0));
+        }
+      }
+      // An app that grows its own window past the desktop it was given has
+      // nowhere to draw the overflow: the back-canvas is composited onto the
+      // desktop canvas and clipped there, so the single-app crop -- which is
+      // the union of the window rects, clamped to the canvas -- can only ever
+      // present the part that fit. Calculator's View > Scientific goes from
+      // 262 to 480 wide on a 400-wide phone desktop and loses its right third.
+      // So let the desktop grow to hold it.
+      //
+      // The test is the window's SIZE, not where it happens to sit. A window
+      // that merely starts at a cascade offset (Notepad opens at 20,20 and is
+      // then maximized) fits the desktop perfectly well and would otherwise
+      // ratchet it 20px wider every launch; a window sized to the canvas was
+      // given that room rather than asking for it. Once a window really is
+      // too big, its whole extent has to be covered -- the guest will not
+      // move it back to the origin for us.
+      //
+      // Measured against the size just computed from the viewport, NOT against
+      // the canvas as it stands: comparing with the canvas makes the growth
+      // self-cancelling, since a window that has already been given its room
+      // no longer looks too big and the next re-measure takes it away again.
+      if (SINGLE_APP_MODE && boardRenderer) {
+        const canvasW = boardRenderer.canvas ? boardRenderer.canvas.width | 0 : 0;
+        const canvasH = boardRenderer.canvas ? boardRenderer.canvas.height | 0 : 0;
+        for (const win of Object.values(boardRenderer.windows || {})) {
+          if (!win || win.isChild || !win.visible || win._maximized) continue;
+          if ((win.w | 0) === canvasW && (win.h | 0) === canvasH) continue;
+          if ((win.w | 0) > w) w = Math.max(w, (win.x | 0) + (win.w | 0));
+          if ((win.h | 0) > h) h = Math.max(h, (win.y | 0) + (win.h | 0));
+          // A window that overhangs the desktop without being bigger than it.
+          // Snake is 266x352 and would fit twice over on a 400-wide phone
+          // desktop -- but it places itself at x=158, so its right 24px fall
+          // off the edge, are never composited onto the desktop canvas, and
+          // the single-app crop cannot recover them: the crop is the union of
+          // the window rects CLAMPED to the canvas, and those pixels do not
+          // exist to be cropped. The score box is cut through a digit.
+          //
+          // Only for a window the user cannot resize -- no WS_THICKFRAME, no
+          // WS_MAXIMIZEBOX. That restriction is what makes this safe from the
+          // ratchet the rule above is written around: a non-resizable window
+          // is never auto-maximized, so the room granted here cannot turn it
+          // into a window that no longer needs the room and loses it again on
+          // the next measure. Notepad, Solitaire and every other resizable app
+          // still fall through to the size test alone.
+          const RESIZABLE_STYLE = 0x00040000 | 0x00010000;
+          if (!((win.style >>> 0) & RESIZABLE_STYLE)) {
+            w = Math.max(w, (win.x | 0) + (win.w | 0));
+            h = Math.max(h, (win.y | 0) + (win.h | 0));
+          }
         }
       }
       const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
