@@ -388,6 +388,256 @@
           (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $top) (local.get $guest))))
       (br $retry))))
 
+  ;; Raise the shared downward cursor back to the lowest guest address still
+  ;; mapped, so a released reservation's ADDRESS SPACE is reusable and not only
+  ;; its backing.
+  ;;
+  ;; Without this the cursor is a one-way bump: Warcraft III's campaign load
+  ;; churns reserve/release at ~5MB of address space per second and walks the
+  ;; cursor from VIRTUAL_ALLOC_TOP_INIT down through 862MB in six minutes, so it
+  ;; hits VIRTUAL_ALLOC_MIN and starts failing allocations while only 68MB of
+  ;; the 316MB backing pool is in use. Backing exhaustion and address-space
+  ;; exhaustion look identical to the guest — both are a NULL VirtualAlloc.
+  ;;
+  ;; A MEM_RESERVE that was never committed has no map record, so it is
+  ;; invisible to the minimum $virtual_reserve_reclaim_locked takes and raising
+  ;; the cursor past it would hand its range out twice. They live in their own
+  ;; table rather than in VIRTUAL_MAP_TABLE, because a record there means
+  ;; "committed, backed and published" to five other scans.
+  ;;
+  ;; Warcraft III is why this is a table and not a single remembered floor: it
+  ;; reserves a range, commits PARTS of it, and holds hundreds of such
+  ;; reservations at once, so a scheme that waits for one commit to cover one
+  ;; reservation clears nothing and the cursor still walks to the floor.
+  ;;
+  ;; VIRTUAL_MAP_STATE+16 is the live entry count. +20 is the sticky floor for
+  ;; reservations this table had no room for: past that point the reclaim stops
+  ;; there forever, which costs address space rather than correctness.
+  ;; ---- Released-extent free list -------------------------------------------
+  ;; The backing pool is a bump allocator plus the extents releases leave
+  ;; behind. Those extents used to be re-derived from VIRTUAL_MAP_TABLE on every
+  ;; commit — candidate boundaries crossed with every record, O(records^2) — and
+  ;; that is affordable at a few hundred records and ruinous at several
+  ;; thousand. They are tracked directly instead: one entry per free extent,
+  ;; coalesced on insert, best-fit on take. The policy is unchanged (smallest
+  ;; fitting extent first, wilderness kept contiguous); only the cost is.
+  ;;
+  ;; An extent that will not fit in the table is dropped rather than recorded
+  ;; wrong: that loses the reuse of those bytes until the high-water mark
+  ;; rewinds past them, and never hands live backing out twice.
+  (func $virtual_hole_count (result i32)
+    (i32.load offset=12 (global.get $VIRTUAL_MAP_STATE)))
+
+  (func $virtual_hole_set_count (param $n i32)
+    (i32.store offset=12 (global.get $VIRTUAL_MAP_STATE) (local.get $n)))
+
+  (func $virtual_hole_drop (param $i i32)
+    (local $count i32) (local $ent i32) (local $last i32)
+    (local.set $count (call $virtual_hole_count))
+    (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (local.get $i) (i32.const 3))))
+    (local.set $last (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 3))))
+    (i32.store (local.get $ent) (i32.load (local.get $last)))
+    (i32.store offset=4 (local.get $ent) (i32.load offset=4 (local.get $last)))
+    (i32.store (local.get $last) (i32.const 0))
+    (i32.store offset=4 (local.get $last) (i32.const 0))
+    (call $virtual_hole_set_count (i32.sub (local.get $count) (i32.const 1))))
+
+  ;; Insert a free extent, absorbing any entry that touches it. Absorbing
+  ;; restarts the scan: merging two neighbours can make the merged extent touch
+  ;; a third, and leaving that unmerged is how a pool fragments into extents
+  ;; that are individually too small for a request the free space could serve.
+  (func $virtual_hole_add (param $base i32) (param $size i32)
+    (local $count i32) (local $i i32) (local $ent i32)
+    (local $hbase i32) (local $hsize i32) (local $end i32)
+    (if (i32.eqz (local.get $size)) (then (return)))
+    (block $merged (loop $again
+      (local.set $count (call $virtual_hole_count))
+      (local.set $end (i32.add (local.get $base) (local.get $size)))
+      (local.set $i (i32.const 0))
+      (block $scanned (loop $scan
+        (br_if $scanned (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3))))
+        (local.set $hbase (i32.load (local.get $ent)))
+        (local.set $hsize (i32.load offset=4 (local.get $ent)))
+        (if (i32.and
+              (i32.le_u (local.get $hbase) (local.get $end))
+              (i32.le_u (local.get $base)
+                (i32.add (local.get $hbase) (local.get $hsize))))
+          (then
+            (if (i32.lt_u (local.get $hbase) (local.get $base))
+              (then
+                (local.set $size (i32.add (local.get $size)
+                  (i32.sub (local.get $base) (local.get $hbase))))
+                (local.set $base (local.get $hbase))))
+            (if (i32.gt_u (i32.add (local.get $hbase) (local.get $hsize))
+                  (i32.add (local.get $base) (local.get $size)))
+              (then (local.set $size (i32.sub
+                (i32.add (local.get $hbase) (local.get $hsize))
+                (local.get $base)))))
+            (call $virtual_hole_drop (local.get $i))
+            (br $again)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+      (br $merged)))
+    (local.set $count (call $virtual_hole_count))
+    (if (i32.ge_u (local.get $count) (global.get $MAX_VIRTUAL_HOLES)) (then (return)))
+    (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (local.get $count) (i32.const 3))))
+    (i32.store (local.get $ent) (local.get $base))
+    (i32.store offset=4 (local.get $ent) (local.get $size))
+    (call $virtual_hole_set_count (i32.add (local.get $count) (i32.const 1))))
+
+  ;; Smallest extent that fits, or 0. The remainder goes back on the list.
+  (func $virtual_hole_take (param $size i32) (result i32)
+    (local $count i32) (local $i i32) (local $ent i32) (local $hsize i32)
+    (local $best i32) (local $best_size i32) (local $base i32)
+    (local.set $count (call $virtual_hole_count))
+    (local.set $best (i32.const -1))
+    (local.set $best_size (i32.const -1))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $hsize (i32.load offset=4
+        (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3)))))
+      (if (i32.and (i32.ge_u (local.get $hsize) (local.get $size))
+            (i32.lt_u (local.get $hsize) (local.get $best_size)))
+        (then
+          (local.set $best (local.get $i))
+          (local.set $best_size (local.get $hsize))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (if (i32.eq (local.get $best) (i32.const -1)) (then (return (i32.const 0))))
+    (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (local.get $best) (i32.const 3))))
+    (local.set $base (i32.load (local.get $ent)))
+    (call $virtual_hole_drop (local.get $best))
+    (if (i32.gt_u (local.get $best_size) (local.get $size))
+      (then (call $virtual_hole_add (i32.add (local.get $base) (local.get $size))
+        (i32.sub (local.get $best_size) (local.get $size)))))
+    (local.get $base))
+
+  ;; Everything at or above a rewound high-water mark is wilderness again, so
+  ;; drop it from the list rather than keep an extent nobody may hand out twice.
+  (func $virtual_hole_trim (param $high_water i32)
+    (local $i i32) (local $ent i32) (local $hbase i32) (local $hsize i32)
+    (block $done (loop $again
+      (local.set $i (i32.const 0))
+      (block $scanned (loop $scan
+        (br_if $scanned (i32.ge_u (local.get $i) (call $virtual_hole_count)))
+        (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3))))
+        (local.set $hbase (i32.load (local.get $ent)))
+        (local.set $hsize (i32.load offset=4 (local.get $ent)))
+        ;; Strictly above: an extent ending exactly at the mark is still a
+        ;; listed hole. Re-adding a truncated copy of one that merely straddles
+        ;; the mark leaves it ending exactly there, which is what stops this
+        ;; restart loop from finding the same entry again forever.
+        (if (i32.gt_u (i32.add (local.get $hbase) (local.get $hsize))
+              (local.get $high_water))
+          (then
+            (call $virtual_hole_drop (local.get $i))
+            (if (i32.lt_u (local.get $hbase) (local.get $high_water))
+              (then (call $virtual_hole_add (local.get $hbase)
+                (i32.sub (local.get $high_water) (local.get $hbase)))))
+            (br $again)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+      (br $done))))
+
+  (func $virtual_reserve_record (param $guest i32) (param $size i32)
+    (local $count i32) (local $floor i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (if (i32.ge_u (local.get $count) (global.get $MAX_VIRTUAL_RESERVES))
+      (then
+        (local.set $floor (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE)))
+        (if (i32.or (i32.eqz (local.get $floor))
+              (i32.lt_u (local.get $guest) (local.get $floor)))
+          (then (i32.store offset=20 (global.get $VIRTUAL_MAP_STATE) (local.get $guest)))))
+      (else
+        (i32.store
+          (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+            (i32.shl (local.get $count) (i32.const 3)))
+          (local.get $guest))
+        (i32.store offset=4
+          (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+            (i32.shl (local.get $count) (i32.const 3)))
+          (local.get $size))
+        (i32.store offset=16 (global.get $VIRTUAL_MAP_STATE)
+          (i32.add (local.get $count) (i32.const 1)))))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP)))
+
+  ;; MEM_RELEASE names the reservation base. Drop the entry by swapping the last
+  ;; one down, the same compaction the map table uses.
+  (func $virtual_reserve_forget_locked (param $guest i32)
+    (local $count i32) (local $i i32) (local $ent i32) (local $last i32)
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $ent (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (if (i32.eq (i32.load (local.get $ent)) (local.get $guest))
+        (then
+          (local.set $last (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+            (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 3))))
+          (i32.store (local.get $ent) (i32.load (local.get $last)))
+          (i32.store offset=4 (local.get $ent) (i32.load offset=4 (local.get $last)))
+          (i32.store (local.get $last) (i32.const 0))
+          (i32.store offset=4 (local.get $last) (i32.const 0))
+          (i32.store offset=16 (global.get $VIRTUAL_MAP_STATE)
+            (i32.sub (local.get $count) (i32.const 1)))
+          (br $done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  (func $virtual_reserve_reclaim_locked
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local $min i32) (local $cell i32) (local $top i32)
+    (local.set $min (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE)))
+    (if (i32.eqz (local.get $min))
+      (then (local.set $min (global.get $VIRTUAL_ALLOC_TOP_INIT))))
+    ;; Uncommitted reservations first: they are the ranges the map table cannot
+    ;; see, and the whole reason this cannot simply be min(record base).
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $res_done (loop $res
+      (br_if $res_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $base (i32.load
+        (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3)))))
+      (if (i32.and (i32.ge_u (local.get $base) (global.get $VIRTUAL_ALLOC_MIN))
+            (i32.lt_u (local.get $base) (local.get $min)))
+        (then (local.set $min (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $res)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and (i32.ge_u (local.get $base) (global.get $VIRTUAL_ALLOC_MIN))
+            (i32.lt_u (local.get $base) (local.get $min)))
+        (then (local.set $min (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.set $cell (region.addr $VIRTUAL_MAP_STATE 8))
+    (block $settled (loop $retry
+      (local.set $top (i32.atomic.load (local.get $cell)))
+      ;; Only ever raise, and only to a boundary no live map sits below.
+      (br_if $settled (i32.ge_u (local.get $top) (local.get $min)))
+      (br_if $settled
+        (i32.eq (local.get $top)
+          (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $top) (local.get $min))))
+      (br $retry)))
+    (global.set $virtual_alloc_top (local.get $min)))
+
   (func $virtual_reserve_down (param $size i32) (result i32)
     (local $cell i32) (local $top i32) (local $new_top i32) (local $seen i32)
     (local.set $cell (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8)))
@@ -442,6 +692,47 @@
     (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
     (local.get $r))
 
+  ;; One past the last byte of the extension backing window, or 0 when this
+  ;; host did not create a memory large enough to have one. The import declares
+  ;; a minimum of 8192 pages and a maximum of 16384, so both sizes are legal
+  ;; and only memory.size can say which one is underneath us. A host that made
+  ;; something in between is answered honestly: the window ends where its
+  ;; memory does.
+  ;; Where the extension window starts: one past the end of the declared map,
+  ;; which is $THREAD_RPC's end. It is not itself a region, because a region
+  ;; must fit inside the import's initial memory and this window does not
+  ;; exist at all on a host that created only the 8192-page minimum.
+  (func $virtual_backing_ext_base (result i32) (region.end $THREAD_RPC))
+
+  (func $virtual_backing_ext_end (result i32)
+    (local $bytes i32)
+    (local.set $bytes (i32.shl (memory.size) (i32.const 16)))
+    (if (i32.le_u (local.get $bytes) (call $virtual_backing_ext_base))
+      (then (return (i32.const 0))))
+    (local.get $bytes))
+
+  (func $virtual_backing_ext_cursor (result i32)
+    (local $cursor i32)
+    (local.set $cursor (i32.load offset=24 (global.get $VIRTUAL_MAP_STATE)))
+    (select (local.get $cursor) (call $virtual_backing_ext_base) (local.get $cursor)))
+
+  ;; Bump $size bytes off the extension window, or 0 when there is none or it
+  ;; is full. Pure bump, no reuse: the extension exists because the primary
+  ;; pool ran out, and a guest that gets that far is growing, not churning.
+  ;; Released extents there become holes the best-fit pass below the primary
+  ;; high-water mark will never look at, which costs address space and never
+  ;; correctness.
+  (func $virtual_backing_ext_take (param $size i32) (result i32)
+    (local $cursor i32) (local $end i32)
+    (local.set $end (call $virtual_backing_ext_end))
+    (if (i32.eqz (local.get $end)) (then (return (i32.const 0))))
+    (local.set $cursor (call $virtual_backing_ext_cursor))
+    (if (i32.gt_u (local.get $size) (i32.sub (local.get $end) (local.get $cursor)))
+      (then (return (i32.const 0))))
+    (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
+      (i32.add (local.get $cursor) (local.get $size)))
+    (local.get $cursor))
+
   (func $virtual_map_commit_locked
       (param $guest i32) (param $size i32) (param $protect i32) (result i32)
     (local $count i32) (local $backing_ptr i32) (local $guest_end i32)
@@ -449,13 +740,51 @@
     (local $backing i32) (local $map_end i32) (local $backing_end i32)
     (local $extended i32) (local $high_water i32)
     (local $candidate i32) (local $gap_end i32) (local $best i32)
-    (local $best_size i32) (local $j i32) (local $covered i32)
+    (local $best_size i32) (local $j i32) (local $covered i32) (local $ext i32)
     (if (i32.gt_u (local.get $size) (global.get $VIRTUAL_BACKING_BASE_SIZE))
       (then (return (i32.const 0))))
     (local.set $guest_end (i32.add (local.get $guest) (local.get $size)))
     (if (i32.lt_u (local.get $guest_end) (local.get $guest)) (then (return (i32.const 0))))
     (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (local.set $backing_ptr (i32.load (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))))
+    (if (i32.eqz (local.get $backing_ptr))
+      (then (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))))
+    (local.set $high_water (local.get $backing_ptr))
+
+    ;; Records the leak diagnostic kept past their MEM_RELEASE are address space
+    ;; the guest owns again, so the moment a commit wants any of that range back
+    ;; the leak has to end -- release for real, then commit as normal. Doing it
+    ;; here rather than in the overlap branches below is what makes the
+    ;; diagnostic safe: those branches split a request against an existing
+    ;; record and would otherwise give one guest range two backings, which
+    ;; corrupts whatever is built in it (measured: Storm's own MDLGENOBJECT
+    ;; check fires mid-load). The loop restarts because a release compacts the
+    ;; table. Off unless $virtual_leak_small_releases or the caller gate is set.
+    (block $unleaked (loop $unleak
+      (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+      (local.set $i (i32.const 0))
+      (block $none (loop $scan_marked
+        (br_if $none (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+          (i32.shl (local.get $i) (i32.const 4))))
+        (if (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x40000000))
+          (then
+            (local.set $base (i32.load (local.get $rec)))
+            (if (i32.and
+                  (i32.lt_u (local.get $base) (local.get $guest_end))
+                  (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+                    (local.get $guest)))
+              (then
+                (i32.store offset=12 (local.get $rec)
+                  (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0xBFFFFFFF)))
+                (drop (call $virtual_map_release_one (local.get $base)))
+                (br $unleak)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan_marked)))
+      (br $unleaked)))
+    ;; The releases above may have moved both of these.
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $backing_ptr (i32.load (region.addr $VIRTUAL_MAP_STATE 4)))
     (if (i32.eqz (local.get $backing_ptr))
       (then (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))))
     (local.set $high_water (local.get $backing_ptr))
@@ -472,7 +801,20 @@
       (if (i32.and
             (i32.ge_u (local.get $guest) (local.get $base))
             (i32.le_u (local.get $guest_end) (local.get $map_end)))
-        (then (return (local.get $guest))))
+        (then
+          ;; A record the leak diagnostic kept past its MEM_RELEASE is still
+          ;; free address space as far as the guest is concerned, so a commit
+          ;; landing on it has to look like a fresh one: zero the range and
+          ;; drop the marker. Never set outside that diagnostic.
+          (if (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x40000000))
+            (then
+              (call $zero_memory
+                (i32.add (local.get $backing) (i32.sub (local.get $guest) (local.get $base)))
+                (local.get $size))
+              (i32.store offset=12 (local.get $rec)
+                (i32.and (i32.load offset=12 (local.get $rec))
+                  (i32.const 0xBFFFFFFF)))))
+          (return (local.get $guest))))
       ;; Commit APIs may repeat the reservation base with a larger size
       ;; (MSVBVM60), or start inside an existing committed run and extend past
       ;; its end (the MSVC small-block heap in Total Annihilation). Appending
@@ -520,49 +862,9 @@
       (then (return (i32.const 0))))
     ;; Prefer the smallest released extent below the high-water mark. Keeping
     ;; the untouched wilderness contiguous prevents short-lived allocations
-    ;; from needlessly destroying a later large fit. No live backing moves.
-    ;; Candidate boundaries are the pool base and each live map end; the
-    ;; table is unsorted, so inspect all records for each boundary (bounded
-    ;; by MAX_VIRTUAL_MAPS). Existing contiguous extension above wins first.
-    (local.set $best_size (i32.const -1))
-    (local.set $i (i32.const 0))
-    (block $candidates_done (loop $candidates
-      (br_if $candidates_done (i32.gt_u (local.get $i) (local.get $count)))
-      (local.set $candidate (global.get $VIRTUAL_BACKING_BASE))
-      (if (local.get $i)
-        (then
-          (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
-            (i32.shl (i32.sub (local.get $i) (i32.const 1)) (i32.const 4))))
-          (local.set $candidate (i32.add (i32.load offset=8 (local.get $rec))
-            (i32.load offset=4 (local.get $rec))))))
-      (if (i32.lt_u (local.get $candidate) (local.get $high_water))
-        (then
-          (local.set $gap_end (local.get $high_water))
-          (local.set $covered (i32.const 0))
-          (local.set $j (i32.const 0))
-          (block $boundary_done (loop $boundary
-            (br_if $boundary_done (i32.ge_u (local.get $j) (local.get $count)))
-            (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
-              (i32.shl (local.get $j) (i32.const 4))))
-            (local.set $backing (i32.load offset=8 (local.get $rec)))
-            (local.set $backing_end (i32.add (local.get $backing)
-              (i32.load offset=4 (local.get $rec))))
-            (if (i32.and (i32.le_u (local.get $backing) (local.get $candidate))
-                  (i32.lt_u (local.get $candidate) (local.get $backing_end)))
-              (then (local.set $covered (i32.const 1)) (br $boundary_done)))
-            (if (i32.and (i32.gt_u (local.get $backing) (local.get $candidate))
-                  (i32.lt_u (local.get $backing) (local.get $gap_end)))
-              (then (local.set $gap_end (local.get $backing))))
-            (local.set $j (i32.add (local.get $j) (i32.const 1)))
-            (br $boundary)))
-          (if (i32.and (i32.eqz (local.get $covered))
-                (i32.and (i32.ge_u (i32.sub (local.get $gap_end) (local.get $candidate)) (local.get $size))
-                  (i32.lt_u (i32.sub (local.get $gap_end) (local.get $candidate)) (local.get $best_size))))
-            (then
-              (local.set $best (local.get $candidate))
-              (local.set $best_size (i32.sub (local.get $gap_end) (local.get $candidate)))))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $candidates)))
+    ;; from needlessly destroying a later large fit. No live backing moves --
+    ;; the extent is handed out exactly as it was released.
+    (local.set $best (call $virtual_hole_take (local.get $size)))
     (if (local.get $best) (then (local.set $backing_ptr (local.get $best))))
     (if (i32.gt_u
           (i32.add (local.get $backing_ptr) (local.get $size))
@@ -577,8 +879,17 @@
         (block $gap_found (loop $gap
           (if (i32.gt_u (local.get $size)
                 (i32.sub (region.end $VIRTUAL_BACKING_BASE) (local.get $backing_ptr)))
-            (then (return (call $virtual_map_commit_split
-              (local.get $guest) (local.get $size) (local.get $protect)))))
+            (then
+              ;; The primary pool has no room for this request in one piece.
+              ;; Before halving it across two extents, spend the extension
+              ;; window if the host gave us one: a whole commit on contiguous
+              ;; backing is strictly better than a split, and on the hosts that
+              ;; have no extension this call returns 0 and nothing changes.
+              (local.set $ext (call $virtual_backing_ext_take (local.get $size)))
+              (if (local.get $ext)
+                (then (local.set $backing_ptr (local.get $ext)) (br $gap_found)))
+              (return (call $virtual_map_commit_split
+                (local.get $guest) (local.get $size) (local.get $protect)))))
           (br_if $gap_found (i32.ge_u (local.get $i) (local.get $count)))
           (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
           (local.set $backing (i32.load offset=8 (local.get $rec)))
@@ -604,12 +915,53 @@
     ;; it visible. Reversing these two lines is the whole bug this ordering
     ;; avoids: $g2w would map a guest address onto a record still being filled.
     (i32.atomic.store (global.get $VIRTUAL_MAP_STATE) (i32.add (local.get $count) (i32.const 1)))
-    (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
-      (select (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size))
-        (i32.gt_u (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size)))))
+    ;; The primary bump must keep naming a primary address: an extension
+    ;; placement has already advanced its own cursor, and writing an ext
+    ;; address here would tell every later commit -- and $virtual_backing_available
+    ;; -- that the 316MB pool was infinitely past its end.
+    (if (i32.eqz (local.get $ext))
+      (then (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
+        (select (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size))
+          (i32.gt_u (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size)))))))
     (call $virtual_shared_top_observe (local.get $guest))
     (global.set $virtual_alloc_top (local.get $guest))
     (local.get $guest))
+
+  ;; Bytes the sparse pool can still commit. Every guest memory question --
+  ;; GlobalMemoryStatusEx's physical total, D3D9's available texture memory --
+  ;; is a question about this pool, because it is the only place a commit can
+  ;; come from. Answering with the whole linear memory promises bytes no
+  ;; VirtualAlloc will ever return.
+  ;;
+  ;; It reads the bump cursor, so released holes below the high-water mark go
+  ;; uncounted even though $virtual_map_commit_locked's best-fit pass can still
+  ;; place a request in one. That errs low, which is the safe direction for a
+  ;; number an app budgets its load against.
+  (func $virtual_backing_available (result i32)
+    (local $cursor i32) (local $free i32) (local $end i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $cursor (i32.load offset=4 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $end (call $virtual_backing_ext_end))
+    (if (local.get $end)
+      (then (local.set $free (i32.sub (local.get $end) (call $virtual_backing_ext_cursor)))))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (if (i32.eqz (local.get $cursor))
+      (then (local.set $cursor (global.get $VIRTUAL_BACKING_BASE))))
+    (if (i32.lt_u (local.get $cursor) (region.end $VIRTUAL_BACKING_BASE))
+      (then (local.set $free (i32.add (local.get $free)
+        (i32.sub (region.end $VIRTUAL_BACKING_BASE) (local.get $cursor))))))
+    (local.get $free))
+
+  ;; Total bytes a guest commit can ever come from on this host: the primary
+  ;; pool always, plus the extension window when the host built a memory with
+  ;; one. This is the honest ullTotalPhys -- the rest of the linear memory is
+  ;; emulator-private and no VirtualAlloc can reach it.
+  (func $virtual_backing_capacity (result i32)
+    (local $end i32)
+    (local.set $end (call $virtual_backing_ext_end))
+    (if (i32.eqz (local.get $end)) (then (return (global.get $VIRTUAL_BACKING_BASE_SIZE))))
+    (i32.add (global.get $VIRTUAL_BACKING_BASE_SIZE)
+      (i32.sub (local.get $end) (call $virtual_backing_ext_base))))
 
   ;; One guest commit does not need one backing extent. A guest range is
   ;; translated per page through the page table, and every host-side bulk copy
@@ -919,8 +1271,45 @@
   ;; first would leak the rest of the allocation on every level reload.
   (func $virtual_map_release_locked (param $guest i32) (result i32)
     (local $rec i32) (local $size i32)
+    ;; DIAGNOSTIC ONLY, off by default. When a guest reads through a pointer
+    ;; into a region it has already released, the read returns 0 here and its
+    ;; own luck on real Windows -- where the freed page may still hold the old
+    ;; bytes, or the page may not be freed at all because a different heap
+    ;; layout left something live in it -- is not reproduced. Turning this on
+    ;; makes small releases leak instead, which answers "is that use-after-free
+    ;; the only thing in the way" without guessing. It is never a fix: it hands
+    ;; the guest memory it has given back.
+    (if (i32.or (global.get $virtual_leak_small_releases)
+                (global.get $virtual_leak_this_call))
+      (then
+        (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+        (if (local.get $rec)
+          (then (if (i32.or (global.get $virtual_leak_this_call)
+                      (i32.le_u (i32.load offset=4 (local.get $rec))
+                        (global.get $virtual_leak_small_releases)))
+            (then
+              ;; Mark it logically released. Storm frees a page and commits the
+              ;; same base again three instructions later, and Windows hands
+              ;; back ZERO-FILLED pages there; a leaked record would otherwise
+              ;; be re-committed with its old contents intact, which corrupts
+              ;; the next object built in it. The commit path zeroes and clears
+              ;; this bit, so the leak only affects reads through pointers the
+              ;; guest should no longer be holding.
+              (i32.store offset=12 (local.get $rec)
+                (i32.or (i32.load offset=12 (local.get $rec))
+                  (i32.const 0x40000000)))
+              (global.set $virtual_leak_hits
+                (i32.add (global.get $virtual_leak_hits) (i32.const 1)))
+              (return (i32.const 1))))))))
+    ;; A reservation the guest never committed has no record at all, so its
+    ;; release has to be handled before the record lookup gives up -- otherwise
+    ;; its entry sits in the reserve table forever and pins the reclaim floor.
+    (call $virtual_reserve_forget_locked (local.get $guest))
     (local.set $rec (call $virtual_map_find_record (local.get $guest)))
-    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $rec))
+      (then
+        (call $virtual_reserve_reclaim_locked)
+        (return (i32.const 0))))
     (local.set $size (i32.load offset=4 (local.get $rec)))
     (if (i32.eqz (call $virtual_map_release_one (local.get $guest)))
       (then (return (i32.const 0))))
@@ -960,8 +1349,18 @@
                 (i32.add (local.get $backing) (local.get $size))
                 (local.get $backing_ptr))
             (then
+              ;; The top extent: the bump cursor takes it back, and any free
+              ;; extent that now sits at or above the rewound mark is
+              ;; wilderness again rather than a listed hole.
               (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
-                (local.get $backing))))
+                (local.get $backing))
+              (call $virtual_hole_trim (local.get $backing)))
+            ;; Not the top extent, so this release punches a hole the bump
+            ;; cursor cannot recover. It goes on the free list, where the next
+            ;; commit's best-fit finds it in one pass over the holes instead of
+            ;; re-deriving every gap from the record table.
+            (else
+              (call $virtual_hole_add (local.get $backing) (local.get $size))))
           (local.set $last (i32.sub (local.get $count) (i32.const 1)))
           (local.set $last_rec
             (i32.add (global.get $VIRTUAL_MAP_TABLE)
@@ -977,6 +1376,16 @@
           (i32.store offset=8 (local.get $last_rec) (i32.const 0))
           (i32.store offset=12 (local.get $last_rec) (i32.const 0))
           (i32.store (global.get $VIRTUAL_MAP_STATE) (local.get $last))
+          ;; An empty table owns no backing at all, so the whole pool is
+          ;; wilderness again: rewind the bump cursor and forget every listed
+          ;; extent, whatever the two had drifted to. Without this a teardown
+          ;; leaves the pool looking as fragmented as its busiest moment.
+          (if (i32.eqz (local.get $last))
+            (then
+              (i32.store offset=4 (global.get $VIRTUAL_MAP_STATE)
+                (global.get $VIRTUAL_BACKING_BASE))
+              (call $virtual_hole_set_count (i32.const 0))))
+          (call $virtual_reserve_reclaim_locked)
           (return (i32.const 1))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -1090,7 +1499,7 @@
   (func $heap_alloc (param $size i32) (result i32)
     (local $need i32) (local $ptr i32)
     (local $prev_w i32) (local $cur i32) (local $cur_w i32)
-    (local $bsz i32) (local $rem i32)
+    (local $bsz i32) (local $rem i32) (local $steps i32)
     ;; Refuse huge/overflowing allocations before adding the block header.
     (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))
       (then (return (i32.const 0))))
@@ -1104,6 +1513,22 @@
     (local.set $cur (global.get $free_list))
     (block $found (block $scan (loop $fl
       (br_if $scan (i32.eqz (local.get $cur)))
+      ;; A free list is only ever reached by following guest-owned next links,
+      ;; so a cycle in it is an unbounded loop inside one WASM call: no block
+      ;; budget bounds it, no host import escapes it, and the whole emulator
+      ;; wedges with nothing in any log. WordPad's shutdown reaches exactly
+      ;; that -- a block freed twice leaves A->B->A -- so bound the walk the
+      ;; same way $d3d_render_list_tail bounds its own, and cut the list here
+      ;; on the way out so the next allocation cannot walk into it again.
+      ;; Everything past the cut is leaked, which is strictly better than a
+      ;; hang, and bump allocation still serves this request.
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (if (i32.gt_u (local.get $steps) (i32.const 65536))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
+            (else (global.set $free_list (i32.const 0))))
+          (br $scan)))
       ;; Validate the link before reading its header through g2w.
       (if (i32.eqz (call $heap_arena_find (local.get $cur)))
         (then
@@ -1208,12 +1633,29 @@
   ;; heap_free: return block to free list
   (func $heap_free (param $guest_ptr i32)
     (local $block i32) (local $w i32) (local $size i32)
+    (local $cur i32) (local $steps i32)
     (if (i32.eqz (local.get $guest_ptr)) (then (return)))
     (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
     (if (i32.eqz (call $heap_arena_find (local.get $block))) (then (return)))
     (local.set $w (call $g2w (local.get $block)))
     (local.set $size (i32.load (local.get $w)))
     (if (call $heap_block_bad (local.get $block) (local.get $size)) (then (return)))
+    ;; Linking a block that is already on the list is what makes the list
+    ;; cyclic: free(B) with head A, then free(A) again, and A->B->A. Real
+    ;; programs do it -- WordPad's shutdown does -- so refuse the second link
+    ;; instead of building the cycle. The scan is bounded because the duplicate
+    ;; is always near the head in practice (the two frees are close together);
+    ;; a deeper one still cannot hang, because $heap_alloc's walk is bounded
+    ;; and cuts the list when it trips.
+    (local.set $cur (global.get $free_list))
+    (block $checked (loop $scan
+      (br_if $checked (i32.eqz (local.get $cur)))
+      (br_if $checked (i32.gt_u (local.get $steps) (i32.const 64)))
+      (if (i32.eq (local.get $cur) (local.get $block)) (then (return)))
+      (if (i32.eqz (call $heap_arena_find (local.get $cur))) (then (br $checked)))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br $scan)))
     ;; Ownership transfers to the freeing instance. The producer's bump cursor
     ;; already passed this block; its private free list never contained it.
     ;; Prepend to free list: store next = old head

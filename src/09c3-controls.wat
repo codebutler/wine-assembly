@@ -696,7 +696,7 @@
         (param $hwnd i32) (param $x i32) (param $y i32) (param $w i32) (param $h i32) (param $flags i32)
     (local $idx i32) (local $a i32) (local $parent i32) (local $moved i32)
     (local $ox i32) (local $oy i32) (local $ow i32) (local $oh i32)
-    (local $hdc i32) (local $brush i32) (local $slot i32)
+    (local $hdc i32) (local $brush i32) (local $slot i32) (local $shrank i32)
     (if (i32.and
           (i32.eqz (call $ctrl_table_get_class (local.get $hwnd)))
           (i32.eqz (call $wnd_get_parent (local.get $hwnd))))
@@ -704,71 +704,82 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1)) (then (return)))
     (local.set $a (call $ctrl_geom_addr (local.get $idx)))
-    (if (i32.eqz (i32.and (local.get $flags) (i32.const 2)))
+    ;; A control that moves OR shrinks leaves its old pixels behind: children
+    ;; have no surface of their own, they draw onto the parent's back-canvas,
+    ;; so nothing repaints the rectangle it vacated. Win32 erases the parent
+    ;; over the uncovered region for exactly this reason. fontview.exe
+    ;; right-aligns its Print button on startup, and the strip it moved off
+    ;; stayed on screen as a slice of a second button.
+    ;;
+    ;; The SHRINK half matters just as much and is not a special case of the
+    ;; move: RegEdit's splitter drag leaves the tree pane at the same x,y and
+    ;; takes 82px off its WIDTH, so SetWindowPos passes SWP_NOMOVE and the
+    ;; move test never ran. The strip the tree gave up kept its own white
+    ;; interior; the sibling list pane covers most of it when it slides over,
+    ;; and what is left is the 4px splitter gap, painted white instead of the
+    ;; dialog face. That is the visible "RegEdit does not repaint its window".
+    ;;
+    ;; Only for WAT-native controls, whose pixels WAT owns and must
+    ;; therefore clean up after. An application's own child window paints
+    ;; itself from its own WM_PAINT and lays itself out against siblings
+    ;; this code knows nothing about; erasing under one of those with the
+    ;; parent's brush wipes application output that nothing will redraw.
+    ;; mspaint moves its canvas and toolbars during startup layout and the
+    ;; ungated erase blanked its client area.
+    (local.set $ox (i32.load16_s (local.get $a)))
+    (local.set $oy (i32.load16_s offset=2 (local.get $a)))
+    (local.set $ow (i32.load16_u offset=4 (local.get $a)))
+    (local.set $oh (i32.load16_u offset=6 (local.get $a)))
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 2))) ;; !SWP_NOMOVE
       (then
-        ;; A control that moves leaves its old pixels behind: children have no
-        ;; surface of their own, they draw onto the parent's back-canvas, so
-        ;; nothing repaints the rectangle it vacated. Win32 erases the parent
-        ;; over the uncovered region for exactly this reason. fontview.exe
-        ;; right-aligns its Print button on startup, and the strip it moved off
-        ;; stayed on screen as a slice of a second button.
-        ;;
-        ;; Only for WAT-native controls, whose pixels WAT owns and must
-        ;; therefore clean up after. An application's own child window paints
-        ;; itself from its own WM_PAINT and lays itself out against siblings
-        ;; this code knows nothing about; erasing under one of those with the
-        ;; parent's brush wipes application output that nothing will redraw.
-        ;; mspaint moves its canvas and toolbars during startup layout and the
-        ;; ungated erase blanked its client area.
-        (local.set $ox (i32.load16_s (local.get $a)))
-        (local.set $oy (i32.load16_s offset=2 (local.get $a)))
-        (local.set $ow (i32.load16_u offset=4 (local.get $a)))
-        (local.set $oh (i32.load16_u offset=6 (local.get $a)))
         (local.set $moved (i32.or
           (i32.ne (local.get $ox) (local.get $x))
           (i32.ne (local.get $oy) (local.get $y))))
         (i32.store16        (local.get $a) (local.get $x))
-        (i32.store16 offset=2 (local.get $a) (local.get $y))
-        (if (i32.and
-              (i32.and
-                (local.get $moved)
-                (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0)))
-              (i32.and (i32.gt_s (local.get $ow) (i32.const 0))
-                       (i32.gt_s (local.get $oh) (i32.const 0))))
-          (then
-            (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
-            (if (local.get $parent)
-              (then
-                ;; CONTROL_GEOM is parent-client relative, which is what a
-                ;; client DC on the parent draws in.
-                (local.set $hdc
-                  (call $host_alloc_window_dc (local.get $parent) (i32.const 0)))
-                (if (local.get $hdc)
-                  (then
-                    (local.set $brush (call $wnd_get_bg_brush (local.get $parent)))
-                    (if (i32.eqz (local.get $brush))
-                      (then (local.set $brush (i32.const 0x30011)))) ;; COLOR_3DFACE
-                    (drop (call $host_gdi_fill_rect (local.get $hdc)
-                      (local.get $ox) (local.get $oy)
-                      (i32.add (local.get $ox) (local.get $ow))
-                      (i32.add (local.get $oy) (local.get $oh))
-                      (local.get $brush)))
-                    (drop (call $host_release_dc (local.get $hdc)))))
-                (call $invalidate_hwnd (local.get $parent))
-                ;; A sibling may overlap what was just erased, so repaint the
-                ;; whole set rather than leaving a hole where one of them was.
-                (local.set $slot (i32.const 0))
-                (block $sib_done (loop $sib
-                  (local.set $slot
-                    (call $wnd_next_child_slot (local.get $parent) (local.get $slot)))
-                  (br_if $sib_done (i32.eq (local.get $slot) (i32.const -1)))
-                  (call $invalidate_hwnd (call $wnd_slot_hwnd (local.get $slot)))
-                  (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
-                  (br $sib)))))))))
-    (if (i32.eqz (i32.and (local.get $flags) (i32.const 1)))
+        (i32.store16 offset=2 (local.get $a) (local.get $y))))
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 1))) ;; !SWP_NOSIZE
       (then
+        (local.set $shrank (i32.or
+          (i32.lt_s (local.get $w) (local.get $ow))
+          (i32.lt_s (local.get $h) (local.get $oh))))
         (i32.store16 offset=4 (local.get $a) (local.get $w))
-        (i32.store16 offset=6 (local.get $a) (local.get $h)))))
+        (i32.store16 offset=6 (local.get $a) (local.get $h))))
+    (if (i32.and
+          (i32.and
+            (i32.or (local.get $moved) (local.get $shrank))
+            (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0)))
+          (i32.and (i32.gt_s (local.get $ow) (i32.const 0))
+                   (i32.gt_s (local.get $oh) (i32.const 0))))
+      (then
+        (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
+        (if (local.get $parent)
+          (then
+            ;; CONTROL_GEOM is parent-client relative, which is what a
+            ;; client DC on the parent draws in.
+            (local.set $hdc
+              (call $host_alloc_window_dc (local.get $parent) (i32.const 0)))
+            (if (local.get $hdc)
+              (then
+                (local.set $brush (call $wnd_get_bg_brush (local.get $parent)))
+                (if (i32.eqz (local.get $brush))
+                  (then (local.set $brush (i32.const 0x30011)))) ;; COLOR_3DFACE
+                (drop (call $host_gdi_fill_rect (local.get $hdc)
+                  (local.get $ox) (local.get $oy)
+                  (i32.add (local.get $ox) (local.get $ow))
+                  (i32.add (local.get $oy) (local.get $oh))
+                  (local.get $brush)))
+                (drop (call $host_release_dc (local.get $hdc)))))
+            (call $invalidate_hwnd (local.get $parent))
+            ;; A sibling may overlap what was just erased, so repaint the
+            ;; whole set rather than leaving a hole where one of them was.
+            (local.set $slot (i32.const 0))
+            (block $sib_done (loop $sib
+              (local.set $slot
+                (call $wnd_next_child_slot (local.get $parent) (local.get $slot)))
+              (br_if $sib_done (i32.eq (local.get $slot) (i32.const -1)))
+              (call $invalidate_hwnd (call $wnd_slot_hwnd (local.get $slot)))
+              (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+              (br $sib))))))))
 
   ;; Pack x|y<<16 / w|h<<16 for export to JS.
   (func $ctrl_get_xy_packed (param $hwnd i32) (result i32)
@@ -17337,7 +17348,13 @@
     ;; Standard Edit menu/command ids should act on the focused edit control
     ;; before app frameworks forward them into native RichEdit's rich/OLE
     ;; clipboard path. Non-edit command ids fall through to the app wndproc.
-    (if (i32.eq (local.get $msg) (i32.const 0x0111)) ;; WM_COMMAND
+    ;; Only for an application's own frame window. A WAT-owned window
+    ;; (ctrl_class != 0 -- a message box is class 15) defines its own command
+    ;; ids, and they collide: IDNO is 7 and so is one app's
+    ;; ID_EDIT_SELECT_ALL, so "No" on WordPad's "Save changes?" box used to
+    ;; select all the text behind it and leave the modal up forever.
+    (if (i32.and (i32.eq (local.get $msg) (i32.const 0x0111)) ;; WM_COMMAND
+                 (i32.eqz (local.get $ctrl_class)))
       (then
         (if (call $menu_try_edit_command (i32.and (local.get $wParam) (i32.const 0xFFFF)))
           (then (return (i32.const 0))))))
