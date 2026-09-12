@@ -50,11 +50,41 @@
   (func $wnd_z_reset_slot (param $slot i32)
     (i32.store (call $wnd_z_addr_for_slot (local.get $slot)) (i32.const 0)))
 
-  (func $wnd_z_init_slot (param $slot i32)
-    (global.set $wnd_z_next
-      (i32.add (global.get $wnd_z_next) (i32.const 1024)))
+  ;; Put this slot above every window that currently has a rank.
+  ;;
+  ;; The rank sequence used to be a mutable global, $wnd_z_next — that is ONE
+  ;; PRIVATE COPY PER WASM INSTANCE, and every guest thread in --threads (and in
+  ;; the browser's Worker backend) is its own instance over this one shared
+  ;; memory. Both copies start at zero, so the first window a worker registers
+  ;; was handed rank 1024, which the main instance had already given to one of
+  ;; its own. $wnd_z_is_above_sibling compares with a strict i32.gt_s, so a tie
+  ;; reads as "not above": a popup, dialog or child created or raised on a
+  ;; secondary thread composites UNDER the sibling it is supposed to cover, and
+  ;; nothing anywhere reports it. Same bug shape as $heap_ptr, $num_thunks and
+  ;; $com_aux_next (docs/design-real-threads.md §3.1b).
+  ;;
+  ;; The table it writes into is already shared, so the sequence is derived from
+  ;; the table instead of replicated beside it — no new shared cell, and no way
+  ;; for two instances to disagree. The scan and the store are one critical
+  ;; section under $LOCK_WND (recursive, so the callers that already hold it are
+  ;; fine, and it is pure table arithmetic with no host import — rule 1). 256
+  ;; slots, walked only when a window is created or raised.
+  (func $wnd_z_assign_top (param $slot i32)
+    (local $i i32) (local $rank i32) (local $max i32)
+    (call $lock_wnd_acquire)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (local.set $rank (i32.load (call $wnd_z_addr_for_slot (local.get $i))))
+      (if (i32.gt_s (local.get $rank) (local.get $max))
+        (then (local.set $max (local.get $rank))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
     (i32.store (call $wnd_z_addr_for_slot (local.get $slot))
-      (global.get $wnd_z_next)))
+      (i32.add (local.get $max) (i32.const 1024)))
+    (call $lock_wnd_release))
+
+  (func $wnd_z_init_slot (param $slot i32)
+    (call $wnd_z_assign_top (local.get $slot)))
 
   (func $wnd_z_get (param $hwnd i32) (result i32)
     (local $slot i32)
@@ -67,10 +97,7 @@
     (local $slot i32)
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return)))
-    (global.set $wnd_z_next
-      (i32.add (global.get $wnd_z_next) (i32.const 1024)))
-    (i32.store (call $wnd_z_addr_for_slot (local.get $slot))
-      (global.get $wnd_z_next)))
+    (call $wnd_z_assign_top (local.get $slot)))
 
   (func $wnd_z_is_above_sibling (param $hwnd i32) (param $sibling i32) (result i32)
     (i32.and
