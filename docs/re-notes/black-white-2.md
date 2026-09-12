@@ -2017,3 +2017,45 @@ argues against a wholly wild `this`.
 The live probe to run at the picker is therefore **not** `esi` alone but the
 parent record around it: `esi-0xC4` for the object, `esi+0` / `+4` / `+8` for
 the output triple, and whether `[esi+8]` is a mappable pointer.
+
+### The land is chosen by a startup directive, not only by the picker
+
+`BW2Demo.exe` reads two script files by name — `.\Scripts\Map.txt` and
+`.\Scripts\MPDebug.txt` — and `Map.txt` as shipped is just two lines:
+
+```
+SET_LAND_NUMBER(3)
+LOAD_FEATURE_SCRIPT(".\data\landscape\BW2\Land3.bwe")
+```
+
+`MPDebug.txt` as shipped holds `SET_STARTUP("AllowSkip")`. `SET_STARTUP`
+accepts exactly four values, which sit together in `.rdata` at `0xc7edc4`:
+
+| VA | string |
+|---|---|
+| `0xc7edc4` | `Default` |
+| `0xc7edcc` | `ForceIntro` |
+| `0xc7edd8` | `AllowSkip` |
+| `0xc7ede4` | `Land` |
+
+The `AllowSkip` arm (`0x61a24e`) is a pure flag flip: it takes the global at
+`[0x19504a8]`, clears bit `0x800000` and sets bit `0x400000` in `+0x10`.
+
+The `Land` arm is the interesting one. At `0x61a037` the code compares a
+*prefix* of the argument against `"Land"`, and on a match passes the rest
+through `0xad6678` (atoi-shaped) into `0x60e890`, which compares the result
+against the land-number global at `[0x16a8e28]` and, when it differs, resets a
+block of engine state (`0x198c6b0`, `0x198b4a8`, `0x198b488`) before switching.
+So `SET_STARTUP("Land3")` names a land directly — the same thing the picker is
+trying to produce, reached without the picker.
+
+Two practical consequences:
+
+1. **Our extracted game directory is missing `Scripts/MPDebug.txt`**, which the
+   shipped `installed/` tree has. That is an extraction fidelity gap, not a
+   guest bug, and it means the demo has been running without any startup
+   directive at all.
+2. It gives a way to exercise the engine past the picker while the picker's own
+   defect is still open. Reaching gameplay this way would show the engine and
+   renderer work; it would **not** fix or excuse the grid-query wedge, which
+   stays a separate open bug.
