@@ -1818,3 +1818,31 @@ Two changes, both in `$handle_LoadImageA`/`$load_image_bitmap_file`:
 `LR_CREATEDIBSECTION` now builds a real DIB section whose bits have a guest
 address, and a file that will not load returns NULL. Measured on a full walk to
 the land picker, total `[fault]` lines went **1089 to 1**.
+
+### CORRECTION: the picker is alive, and only a real click wedges it
+
+Every earlier reading of "any mouse motion hangs the land picker" rested on the
+screen being byte-identical after a nudge. That test is worthless here: nothing
+on this screen hover-highlights, so an identical frame is the expected result
+whether the guest is running or not.
+
+Sampling EIP instead settles it. At the picker, before any click:
+
+```
+eip samples at the picker: b53580 b53543 a011c6 a01250 a51ac8 (distinct 5)
+```
+
+Five distinct addresses over 20 seconds — the guest is stepping and rendering.
+A 5-pixel `relmousemove` leaves it that way. It is a **click** that wedges it,
+and then EIP pins to `0x9e5272`/`0x9e5276` for eighteen minutes of polling with
+the screen at 0.0%.
+
+What the screen actually shows is worth recording: not a menu, but a rendered
+3D scene — a burning village, correct geometry and lighting — with a filmstrip
+of nine land thumbnails beneath it, the second one unlocked in colour at about
+(133, 378). D3D9 is drawing real content here.
+
+With the LoadImage fixes in, that wedge now happens with **zero** `[fault]`
+lines, so it is a genuine infinite loop in the grid query at `0x9e521f`, not
+something `NULL_SENTINEL` is hiding. The walk to the picker also dropped from
+~3600s to 962s.
