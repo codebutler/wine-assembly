@@ -1409,3 +1409,38 @@ x offset both had the 4 written in.
 
 Files: `lib/d3d9-texture.js`, `lib/d3d9-host.js`,
 `src/09ae-d3d9-resources.wat`, `test/test-d3d9-textures.js`.
+
+### Land load now runs out of backing, not out of formats (2026-09-11, Claude)
+
+With DXT3 and A8L8 in place the loader's failure arm stops firing entirely:
+
+    0x00938cf6 = 0     (was 100)
+    0x00938f22 = 270   (was 162)
+
+The null-deref at `0x00a5553b` and the EIP-0 white screen are gone, the mouse
+tutorial renders fully textured, and the land load runs on for another two
+minutes before dying differently:
+
+    [C++ throw] .?AVbad_alloc@std@@ at EIP 0x00ada813
+    === UNHANDLED EXCEPTION: CXX_EXCEPTION 0xe06d7363 ===
+    [Exit] code=-529697949
+
+`tools/virtual-map-census.js` on that run's exit dump says this is capacity,
+not fragmentation:
+
+    records 299   pool 0x8000000..0x1bbf7000 (316.0 MB)
+    live 315.3 MB (99.8%)   free in holes 0.7 MB   largest hole 0.1 MB
+    split commits: 0
+
+and the allocation capture taken earlier in the same load breaks the 248 MB
+committed at that point into 167 MB of `$heap_alloc` arenas (161 MB of it
+handed out, 97%) against 81 MB of direct `VirtualAlloc` commits, with only
+7.9 MB on the heap free list. There is nothing to reclaim. Two things ruled
+out along the way: the guest never asks for `MEM_DECOMMIT` (all ten
+`push 0x4000` sites in `.text` are 16 KB `malloc` calls, not `VirtualFree`
+flags), and `MEM_RESERVE` already costs no backing.
+
+So B&W2's land simply needs more committed memory than `$VIRTUAL_BACKING_BASE`
+has. The map is full: 180 allocated regions end at ~`0x07BC6000`, the pool runs
+`0x08000000..0x1BC00000`, and `$GUEST_PAGE_TABLE`, `$DIB_BACKING_BASE` and
+`$THREAD_RPC` fill the rest up to the 512 MB ceiling exactly.
