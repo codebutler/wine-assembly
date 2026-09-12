@@ -301,8 +301,14 @@ function win(x, y, w, h, extra) {
     assert.deepStrictEqual([normal.cropW,normal.cropH],[641,481]);
     renderer.setViewMode('zoom');
     const table = renderer._computeExclusiveView(game).viewport;
-    assert.deepStrictEqual([table.cropX,table.cropY,table.cropW,table.cropH],[32,32,352,449]);
-    assert(Math.abs(table.dstW / table.dstH - 352/449) < 0.005,
+    // The table's own bounding box in the 641x481 scene, measured off a
+    // rendered frame: x 23..382, y 32..447, axis of symmetry x=203. The crop
+    // pinned here before (32,32 352x449) started 9px inside that left edge and
+    // carried 33 dead rows past its bottom, which is the reported "table is a
+    // lil bit off center" -- it put the axis 5px right of the picture centre.
+    assert.deepStrictEqual([table.cropX,table.cropY,table.cropW,table.cropH],[23,32,360,416]);
+    assert.strictEqual(table.cropX + table.cropW / 2, 203, 'centred on the table axis');
+    assert(Math.abs(table.dstW / table.dstH - 360/416) < 0.005,
       'Table preserves aspect without cropping either end');
     assert(table.dstW <= w && table.dstH <= h);
   }
@@ -412,20 +418,72 @@ for (const modalExport of ['modal_dialog_hwnd', 'dialogbox_hwnd']) {
     'headless rendering should not enter the zoom path');
 }
 
-// A square board keeps its complete one-tile perimeter in either orientation.
-for (const [width, height, area, side] of [
-  [390, 664, { x: 0, y: 0, w: 1, h: 460 / 664 }, 390],
-  [844, 390, { x: 204 / 844, y: 0, w: 436 / 844, h: 1 }, 390],
+// A square board keeps its complete one-tile perimeter in either orientation,
+// and the slack a square picture leaves in a non-square hole is filled with
+// the WINDOW's own pixels rather than with desktop teal: a contain crop grows
+// out to the board area's shape before it is placed. Cropping the chrome away
+// and then drawing the backdrop where it used to be is the worst of both.
+for (const [width, height, area] of [
+  [390, 664, { x: 0, y: 0, w: 1, h: 460 / 664 }],
+  [844, 390, { x: 204 / 844, y: 0, w: 436 / 844, h: 1 }],
 ]) {
   const renderer = makeRenderer(844, 664, width, height);
   renderer.mobileCrop = { x: 3 / 282, y: 78 / 357, w: 276 / 282, h: 276 / 357, contain: true };
   renderer.touchOverlay = { getBoardArea: () => area };
   renderer.setViewMode('zoom');
   const v = renderer._computeSingleAppZoom([win(56, 108, 282, 357)]).viewport;
-  assert.deepStrictEqual([v.cropX, v.cropY, v.cropW, v.cropH], [59, 186, 276, 276]);
-  assert.deepStrictEqual([v.dstW, v.dstH], [side, side], 'board remains square with all wall pixels visible');
-  assert(v.dstX >= Math.round(area.x * width));
-  assert(v.dstY + v.dstH <= Math.round(area.h * height));
+  // The board itself -- x 59..335, y 186..462 of the window -- is never cut.
+  assert(v.cropX <= 59 && v.cropX + v.cropW >= 335, 'the whole board is on screen');
+  assert(v.cropY <= 186 && v.cropY + v.cropH >= 462, 'including every wall row');
+  // Grown, never stretched: the picture keeps the crop's aspect ratio.
+  assert(Math.abs(v.dstW / v.dstH - v.cropW / v.cropH) < 0.01, 'no distortion');
+  // And it covers the hole, up to the point where the window itself runs out
+  // (landscape: a 282px-wide window cannot fill a 436px-wide area).
+  const areaW = Math.round(area.w * width), areaH = Math.round(area.h * height);
+  const grown = width > height ? v.dstH >= areaH - 1 : v.dstW >= areaW - 1;
+  assert(grown, `the picture fills the board area (${v.dstW}x${v.dstH} in ${areaW}x${areaH})`);
+  assert(v.dstX >= Math.round(area.x * width) - 1);
+  assert(v.dstY + v.dstH <= areaH + 1);
+  // Growth takes its pixels from the window, never from the desktop behind it.
+  assert(v.cropX >= 56 && v.cropX + v.cropW <= 56 + 282, 'no desktop to the sides');
+  assert(v.cropY >= 108 && v.cropY + v.cropH <= 108 + 357, 'none above or below');
+}
+
+// Landscape rails leave a COLUMN clear, not a band. A window that cannot be
+// grown to a column's shape used to be shrunk into it -- Funtris came out a
+// 332x175 stamp in the middle of a 740x390 screen, teal all around it. The
+// rails are floating buttons over the window's own margins, so the picture
+// takes the screen and they sit on it.
+{
+  const rails = {
+    getOccupiedFraction: () => 0.48,
+    getBoardArea: () => ({ x: 0.28, y: 0, w: 0.45, h: 1 }),
+  };
+  // Side rails are not a bottom band: nothing is reserved at the foot of the
+  // screen for them, so the desktop keeps its full height.
+  const inset = makeRenderer(800, 420, 740, 390);
+  inset.touchOverlay = rails;
+  assert.strictEqual(inset._singleAppBottomInset(), 0,
+    'rails reserve no band, however wide they are');
+
+  const renderer = makeRenderer(800, 420, 740, 390);
+  renderer.mobileCrop = { x: 0.03, y: 0.18, w: 0.49, h: 0.71, contain: true };
+  renderer.touchOverlay = rails;
+  renderer.setViewMode('fit');
+  const v = renderer._computeSingleAppZoom([win(0, 0, 740, 390)]).viewport;
+  assert.strictEqual(v.dstX, 0, 'the picture is not squeezed between the rails');
+  assert.strictEqual(v.dstW, 740, 'it spans the screen');
+  assert.strictEqual(v.dstH, 390, 'and its full height');
+
+  // A window that already HAS the column's shape still gets the column: the
+  // rails are only abandoned when keeping them would shrink the picture.
+  const tall = makeRenderer(800, 420, 740, 390);
+  tall.mobileCrop = { contain: true };
+  tall.touchOverlay = rails;
+  tall.setViewMode('fit');
+  const col = tall._computeSingleAppZoom([win(0, 0, 333, 390)]).viewport;
+  assert.ok(col.dstW < 740, `a fillable column is kept (dstW=${col.dstW})`);
+  assert.ok(col.dstX >= Math.round(0.28 * 740) - 1, 'and the picture sits in it');
 }
 
 console.log('PASS  single-app mode: phone detection, chrome, and window zoom');
@@ -443,6 +501,23 @@ for (const mode of ['fit', 'zoom']) {
   assert.strictEqual(v.cropY, 80, `${mode}: retain the full dialog caption`);
 }
 
+// A native modal is presented on its own, and what surrounds it is the Win98
+// desktop it is sitting on -- teal, like every other windowed presentation
+// here. Black belongs to a game that owns the display, standing in for a
+// monitor's own bars, and a full-screen dialog framed in it looks like a
+// different program.
+{
+  const renderer = makeRenderer(844, 844, 390, 844);
+  const dialog = win(20, 80, 345, 364);
+  renderer.getActiveModalWindow = () => dialog;
+  assert.strictEqual(renderer._computeSingleAppZoom([dialog]).viewport.background,
+    '#008080', 'a modal on the desktop letterboxes in desktop colour');
+
+  renderer._exclusiveFullscreen = true;
+  assert.strictEqual(renderer._computeSingleAppZoom([dialog]).viewport.background,
+    '#000000', 'but a dialog over a game that owns the display keeps its black');
+}
+
 {
   const renderer = makeRenderer(844, 664, 390, 664);
   renderer.mobileCrop = { x: 3 / 282, y: 78 / 357, w: 276 / 282, h: 276 / 357, contain: true, portraitTrimX: 12 };
@@ -450,7 +525,10 @@ for (const mode of ['fit', 'zoom']) {
   const windows = [win(56, 108, 282, 357)];
   renderer.setViewMode('zoom');
   const board = renderer._computeSingleAppZoom(windows).viewport;
-  assert.deepStrictEqual([board.cropX, board.cropY, board.cropW, board.cropH], [71, 186, 252, 276]);
+  // portraitTrimX narrows the crop by 12 guest px per side; the height is
+  // whatever growing out to the board area's shape asks for.
+  assert.deepStrictEqual([board.cropX, board.cropW], [71, 252]);
+  assert(board.cropY <= 186 && board.cropY + board.cropH >= 462, 'still uncut');
   renderer.setViewMode('fit');
   renderer.beginViewPinch();
   renderer.updateViewPinch(Math.sqrt(1.5));
@@ -464,3 +542,71 @@ for (const mode of ['fit', 'zoom']) {
   renderer.endViewPinch(true);
   assert.strictEqual(renderer.viewMode, 'zoom', 'cancel restores the starting view');
 }
+
+// Calculator's View > Scientific resizes its own window from 262 to 482 wide
+// on a 400-wide phone desktop. The single-app crop is the union of the window
+// rects CLAMPED TO THE CANVAS, so without a bigger desktop the right third is
+// not merely unzoomed -- it is not drawn anywhere and cannot be reached. The
+// growth has to be reversible too: back in Standard view the guest would
+// otherwise keep reporting a screen the phone does not have.
+{
+  const renderer = makeRenderer(400, 759, 390, 740);
+  const calls = [];
+  global.window = { resizeCanvas: () => calls.push(1) };
+  const calc = win(40, 0, 262, 253);
+  renderer.windows[calc.hwnd] = calc;
+
+  // move_window fires on every drag frame and every z-order shuffle; only a
+  // size can change how much desktop is wanted.
+  renderer.requestSingleAppBackingGrowth(calc);
+  renderer.requestSingleAppBackingGrowth(calc);
+  assert.strictEqual(renderer._pendingBackingGrowth, true,
+    'the first sighting of a window schedules one re-measure');
+  const firstPending = renderer._pendingBackingGrowth;
+  calc.x = 60;
+  renderer.requestSingleAppBackingGrowth(calc);
+  assert.strictEqual(renderer._pendingBackingGrowth, firstPending,
+    'a move at the same size is not a resize');
+
+  // A maximized window was GIVEN the desktop rather than asking for it, and
+  // matching it would ratchet the desktop to the largest orientation the
+  // session had ever been in and never hand the pixels back.
+  const maxed = makeRenderer(400, 759, 390, 740);
+  maxed.requestSingleAppBackingGrowth(win(0, 0, 800, 900, { _maximized: true }));
+  assert.strictEqual(maxed._pendingBackingGrowth, undefined,
+    'a maximized window never grows the desktop');
+
+  (async () => {
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    await tick();
+    assert.strictEqual(calls.length, 1,
+      'the re-measure is deferred and coalesced, not skipped');
+    assert.strictEqual(renderer._pendingBackingGrowth, false);
+
+    // View > Scientific: 262 -> 482 wide, past the 400-wide desktop.
+    calc.w = 482;
+    calc.h = 310;
+    renderer.requestSingleAppBackingGrowth(calc);
+    await tick();
+    assert.strictEqual(calls.length, 2,
+      'a window that outgrew the desktop asks the page to re-measure');
+
+    // And the way back. It must not be conditional on the window still
+    // looking too big -- by now the desktop has been grown to fit it.
+    calc.w = 262;
+    calc.h = 253;
+    renderer.requestSingleAppBackingGrowth(calc);
+    await tick();
+    assert.strictEqual(calls.length, 3,
+      'View > Standard re-measures too, so the room goes back');
+    delete global.window;
+  })();
+}
+
+// The page half: screenCanvasSize() is what actually grows, and it measures
+// against the size it just derived from the viewport -- not against the canvas
+// as it stands, which would already have been grown and cancel the rule out.
+assert(/if \(\(win\.w \| 0\) > w\) w = Math\.max\(w, \(win\.x \| 0\) \+ \(win\.w \| 0\)\);/.test(html),
+  'the desktop must grow to cover a window too wide to fit it, offset and all');
+assert(/for \(const win of Object\.values\(boardRenderer\.windows \|\| \{\}\)\) \{\s*\n\s*if \(!win \|\| win\.isChild \|\| !win\.visible \|\| win\._maximized\) continue;/.test(html),
+  'and must skip the maximized window, whose size is the desktop it was given');

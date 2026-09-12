@@ -797,24 +797,42 @@ TouchControls.destroy();
   const app=require('../lib/apps').APPS.pinball;
   assert.strictEqual(app.touchControls.zones[0].rect.w,app.touchControls.zones[1].rect.w,
     'flipper touch zones are symmetric');
-  assert(app.touchControls.zones[2].rect.y >= 0.7 && app.touchControls.zones[2].rect.h <= 0.25,
-    'plunger is a small lower-right touch region');
-  const r={mobileCrop:app.mobileCrop,viewMode:'fit',
+  assert(app.touchControls.zones[2].rect.y >= 0.7 && app.touchControls.zones[2].rect.h <= 0.31,
+    'plunger is a lower-right touch region beside the lane');
+  // The crop is the table's measured bounding box in the 641x481 scene
+  // (x 23..382, y 32..447), so a fraction of it is a fraction of the TABLE.
+  const crop=app.mobileCrop;
+  assert.strictEqual(crop.x*641,23);
+  assert.strictEqual(crop.w*641,360);
+  const r={mobileCrop:crop,viewMode:'fit',
     getPresentedRectClient:()=>({x:0,y:0,w:641,h:481})};
   TouchControls.install({document,renderer:r}); TouchControls.setRenderer(r);
   TouchControls.setLayout(app.touchControls);
   TouchControls.el._rect={left:0,top:0,right:641,bottom:481,width:641,height:481};
   TouchControls.layoutZones();
-  assert.strictEqual(parseFloat(TouchControls._zones[0].style.left),32);
-  assert.strictEqual(parseFloat(TouchControls._zones[0].style.width),176);
-  r.viewMode='zoom';r.getPresentedRectClient=()=>({x:0,y:0,w:352,h:449});
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.left),23);
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.width),180);
+  r.viewMode='zoom';r.getPresentedRectClient=()=>({x:0,y:0,w:360,h:416});
   TouchControls.layoutZones();
   assert.strictEqual(parseFloat(TouchControls._zones[0].style.left),0);
-  assert.strictEqual(parseFloat(TouchControls._zones[0].style.width),176);
+  assert.strictEqual(parseFloat(TouchControls._zones[0].style.width),180);
+
+  // The chip's FACE is the fit/fill bracket icon, in both states -- the
+  // registry's words for them ("Normal"/"Table") survive only as the
+  // accessible name. A 12px word on a 40px pill beside a keyboard glyph is
+  // not a control anyone reads.
   TouchControls.syncViewMode();
-  assert.strictEqual(TouchControls._modeEl.textContent,'Normal');
+  assert(!TouchControls._modeEl.textContent,
+    'no word on the face of the view chip');
+  assert(/<svg/.test(TouchControls._modeEl.innerHTML),'the face is the icon');
+  assert.strictEqual(TouchControls._modeEl.getAttribute('aria-label'),
+    'switch to Normal view','the app\'s own word is kept as the accessible name');
   r.viewMode='fit';TouchControls.syncViewMode();
-  assert.strictEqual(TouchControls._modeEl.textContent,'Table');
+  assert.strictEqual(TouchControls._modeEl.getAttribute('aria-label'),
+    'switch to Table view');
+  assert(!TouchControls._modeEl.textContent);
+
+  r.viewMode='zoom';
   r.getActiveModalWindow=()=>({hwnd:2});TouchControls.layoutZones();
   assert(TouchControls._zones.every(z=>z.style.visibility==='hidden'),'modal hides game hit areas');
   assert.strictEqual(TouchControls._modeEl.style.visibility,'hidden');
@@ -823,6 +841,159 @@ TouchControls.destroy();
   assert(TouchControls._zones.every(z=>z.style.visibility===''),'game controls return after dismissal');
   TouchControls.destroy();
 }
+
+// --- Pinball's phone affordances, per orientation ---------------------------
+//
+// Four reports from a real iPhone, portrait, single-app mode:
+//   1. the flippers and the plunger are invisible in-place zones and nothing
+//      says so. Name them UNDER the table, never on it.
+//   2. the two big "Nudge" word-pills go, and become arrows in the black
+//      triangles the tilted table leaves inside its own top corners -- the one
+//      part of the picture that carries nothing.
+//   3. the view chip shows an icon, not the word "Normal". (Above.)
+//   4. the table was off centre. That was the crop, fixed in lib/apps.js and
+//      pinned in test/test-single-app-mode.js.
+// ...and a fifth, landscape: one framing, and no black bars top or bottom.
+{
+  const app=require('../lib/apps').APPS.pinball;
+  const nudges=app.touchControls.buttons.filter(b=>/^board-/.test(String(b.pos||'')));
+  assert.strictEqual(nudges.length,2,'both nudges are anchored to the picture');
+  assert.deepStrictEqual(nudges.map(b=>[b.vk,b.pos,b.icon]),
+    // X from the left, '.' from the right: measured bindings, unchanged.
+    [[0x58,'board-tl','arrow-left'],[0xBE,'board-tr','arrow-right']]);
+  assert(!app.touchControls.buttons.some(b=>b.label==='Nudge'),
+    'no word-pill nudges left in the bottom rails');
+  assert.strictEqual(app.touchControls.buttons.find(b=>b.vk===0x71).pos,'bl',
+    'the one action button comes off the picture into the empty rail');
+
+  const setup=(hostRect,presented,viewMode)=>{
+    const r={mobileCrop:app.mobileCrop,viewMode,
+      getPresentedRectClient:()=>presented,
+      setViewMode(m){ this.viewMode = m==='zoom'?'zoom':'fit'; return true; }};
+    TouchControls.install({document,renderer:r}); TouchControls.setRenderer(r);
+    TouchControls.setLayout(app.touchControls);
+    TouchControls.el._rect=hostRect;
+    TouchControls.layoutZones();
+    return r;
+  };
+  const byLabel=(name)=>TouchControls._widgets.find(w=>w.getAttribute('aria-label')===name);
+  const caption=(text)=>TouchControls._captions.filter(c=>c.textContent===text);
+
+  // PORTRAIT 375x710. The table spans the full width (the crop is wider than
+  // the board area is tall), so the letterbox is all at the foot.
+  {
+    const presented={x:0,y:3,w:375,h:433};
+    setup({left:0,top:0,right:375,bottom:710,width:375,height:710},presented,'zoom');
+    const left=byLabel('Nudge left'), right=byLabel('Nudge right');
+    // Inside the picture's top corners, which is where the black is.
+    assert.strictEqual(parseFloat(left.style.left),6);
+    assert.strictEqual(parseFloat(left.style.top),9);
+    assert.strictEqual(parseFloat(right.style.left),375-6-52);
+    assert.strictEqual(parseFloat(right.style.top),9);
+    assert.strictEqual(parseFloat(left.style.width),52,
+      'generous: 52px against Apple\'s 44px minimum, and it floats over black');
+    // Captions in the letterbox UNDER the table -- below its last row, above
+    // the screen's bottom, and horizontally over the zone each one names.
+    const tableBottom=presented.y+presented.h;
+    for (const cap of TouchControls._captions) {
+      assert.strictEqual(cap.hidden,false);
+      const top=parseFloat(cap.style.top);
+      assert(top>=tableBottom,`caption at ${top} is on the playfield (ends ${tableBottom})`);
+      assert(top<710,'on the screen');
+      assert.strictEqual(cap.style.transform,'translateX(-50%)');
+    }
+    assert.strictEqual(caption('Launch').length,1);
+    assert.strictEqual(caption('Flipper').length,2,'one under each flipper');
+    const xs=caption('Flipper').map(c=>parseFloat(c.style.left));
+    assert.deepStrictEqual(xs,[0.24*375,0.62*375]);
+    assert(parseFloat(caption('Launch')[0].style.left)>xs[1]+40,
+      'the plunger caption clears the right flipper\'s');
+    // The chip is offered in portrait: Normal and Table are both worth having.
+    assert.strictEqual(TouchControls._modeEl.hidden,false);
+    TouchControls.destroy();
+  }
+
+  // LANDSCAPE 710x375. The table is fitted to the height and fills it, so
+  // there is no band under it at all -- the captions go to the gutter on
+  // their own side, which is the only place left that covers no playfield.
+  {
+    const presented={x:204,y:0,w:302,h:375};
+    const r=setup({left:0,top:0,right:710,bottom:375,width:710,height:375},
+      presented,'zoom');
+    const left=byLabel('Nudge left'), right=byLabel('Nudge right');
+    assert.strictEqual(parseFloat(left.style.left),204+6);
+    assert.strictEqual(parseFloat(right.style.left),204+302-6-52);
+    assert.strictEqual(parseFloat(left.style.top),6);
+    for (const cap of TouchControls._captions) {
+      assert.strictEqual(cap.hidden,false);
+      const x=parseFloat(cap.style.left);
+      assert(x<presented.x||x>presented.x+presented.w,
+        `caption at ${x} is over the playfield (${presented.x}..${presented.x+presented.w})`);
+      assert(parseFloat(cap.style.top)<375,'on the screen');
+    }
+    // Left flipper to the left gutter, right flipper and plunger to the right.
+    assert(parseFloat(caption('Flipper')[0].style.left)<presented.x);
+    assert(parseFloat(caption('Flipper')[1].style.left)>presented.x+presented.w);
+    assert(parseFloat(caption('Launch')[0].style.left)>presented.x+presented.w);
+    assert.notStrictEqual(parseFloat(caption('Flipper')[1].style.top),
+      parseFloat(caption('Launch')[0].style.top),
+      'two captions in one gutter stack, they do not overlap');
+    // Item 5: one framing in landscape. No chip...
+    assert.strictEqual(TouchControls._modeEl.hidden,true,
+      'nothing to toggle between in landscape');
+    // ...and a renderer left in Fit is put into it.
+    r.viewMode='fit';
+    TouchControls.layoutZones();
+    assert.strictEqual(r.viewMode,'zoom',
+      'landscape presents the table crop, which fills the height with no bars');
+    TouchControls.destroy();
+  }
+
+  // LANDSCAPE 667x375 -- the case that is not a smaller version of the one
+  // above. The rails' column is not the table's shape, so the renderer's
+  // contain branch gives up on it and grows the source out to the ENTIRE
+  // 641x481 scene: the presented rect now carries the score panel, and
+  // "fractions of the presented rect" would put the right-hand nudge on the
+  // Space Cadet logo. The mapping goes through the viewport's source rect
+  // instead, so the button stays in the table's own top corner.
+  {
+    const canvas = { width: 641, height: 481 };
+    const presented = { x: 134 / 3, y: 0, w: 1733 / 3, h: 375 };
+    const r = {
+      mobileCrop: app.mobileCrop, viewMode: 'zoom', canvas,
+      _exclusiveFullscreen: true,
+      _exclusivePresentationViewport: {
+        cropX: 0, cropY: 32, cropW: 641, cropH: 416,
+        dstX: 134, dstY: 0, dstW: 1733, dstH: 1125, outputW: 2001, outputH: 1125,
+      },
+      getPresentedRectClient: () => presented,
+      setViewMode(m) { this.viewMode = m === 'zoom' ? 'zoom' : 'fit'; return true; },
+    };
+    TouchControls.install({ document, renderer: r }); TouchControls.setRenderer(r);
+    TouchControls.setLayout(app.touchControls);
+    TouchControls.el._rect = { left: 0, top: 0, right: 667, bottom: 375, width: 667, height: 375 };
+    TouchControls.layoutZones();
+    const k = presented.w / 641;
+    const tableLeft = presented.x + 23 * k, tableRight = presented.x + 383 * k;
+    const panelLeft = presented.x + 405 * k;
+    const right = TouchControls._widgets.find(w => w.getAttribute('aria-label') === 'Nudge right');
+    const x = parseFloat(right.style.left);
+    assert(Math.abs(x - (tableRight - 6 - 52)) < 0.5,
+      `right nudge at ${x} should hug the TABLE's corner (${tableRight - 58})`);
+    assert(x + 52 < panelLeft, 'and stay off the score panel');
+    // The flipper split follows the table too, not the scene.
+    const mid = parseFloat(TouchControls._zones[1].style.left);
+    assert(Math.abs(mid - (tableLeft + (tableRight - tableLeft) / 2)) < 0.5,
+      `right flipper starts at the table's midline, got ${mid}`);
+    // The picture reaches both edges here, so there is no gutter and no band:
+    // nowhere to put a caption that is not on the game. Hidden beats covering.
+    assert(TouchControls._captions.every(c => c.hidden === true),
+      'captions are dropped rather than drawn over the playfield');
+    TouchControls.destroy();
+  }
+}
+
+console.log('PASS  pinball phone affordances: captions, corner nudges, one landscape view');
 
 console.log('PASS  touch controls hold, pair and release guest keys');
 
