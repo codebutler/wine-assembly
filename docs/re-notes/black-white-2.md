@@ -1846,3 +1846,61 @@ With the LoadImage fixes in, that wedge now happens with **zero** `[fault]`
 lines, so it is a genuine infinite loop in the grid query at `0x9e521f`, not
 something `NULL_SENTINEL` is hiding. The walk to the picker also dropped from
 ~3600s to 962s.
+
+### CORRECTION: it is not an infinite loop. It is a billion-iteration scan
+### over a vector whose header sits on top of an ASCII string
+
+The section above calls the pick wedge "a genuine infinite loop in the grid
+query". That is wrong, and the disassembly of the pinned addresses says so
+directly. `0x9e5272`/`0x9e5276` are the two halves of a plain linear
+duplicate scan:
+
+```
+0x9e5260  mov edx,[esi+4]      ; n
+0x9e5265  test edx,edx
+0x9e5267  jle 0x9e5281
+0x9e5269  mov ecx,[ebp+4]
+0x9e526c  mov edi,[ecx+ebx*4]  ; needle
+0x9e526f  mov ecx,[esi+8]      ; items
+0x9e5272  cmp [ecx],edi        ; <-- pinned
+0x9e5274  jz  0x9e52e9         ; duplicate found, skip the append
+0x9e5276  add eax,1            ; <-- pinned
+0x9e5279  add ecx,4
+0x9e527c  cmp eax,[esi+4]
+0x9e527f  jl  0x9e5272
+```
+
+`esi` is a `std::vector`-shaped object: `[esi]` capacity, `[esi+4]` size,
+`[esi+8]` items. The grow path below it (`0x9e5287`..`0x9e52a1`) doubles the
+capacity and calls `operator new[]` at `0xad425d`, which is the ordinary
+push_back-with-dup-check shape.
+
+The loop has an exit; it is simply `[esi+4]` iterations away from it. A live
+probe read the header as `{n: 993082159, items: 993213234}`, so the scan is
+~1e9 iterations — at this interpreter's throughput, days. Nothing is stuck
+and nothing needs a deadlock explanation; the loop is doing exactly what it
+was told, with a count that is not a count.
+
+What the two values are is the actual finding. Decoded as little-endian
+bytes:
+
+```
+n     = 0x3B313B2F  ->  2F 3B 31 3B  =  "/;1;"
+items = 0x3B333B32  ->  32 3B 33 3B  =  "2;3;"
+```
+
+Contiguously `"/;1;2;3;"` — a semicolon-delimited numeric list. The vector
+header is not arithmetically corrupt, it is **overlapping a string buffer**.
+No such literal exists in the image (`find_string.js` finds neither
+`";1;2;3;"` nor `"0;1;2;3"`), so the text is built at runtime.
+
+This retires the earlier "operator new[] returned NULL" theory for good, and
+it reframes the question. It is no longer "why does the query loop forever"
+but "why does the object at `esi` — the grid reached as `[object+0x74]` from
+`0x9e46c0`'s `lea ecx,[esi+0x74]` — hold text". Either something wrote a
+generated list over the object, or the object pointer used at the pick points
+into a text buffer.
+
+Caveat on provenance: the `{n, items}` pair is a single probe reading, and
+everything above is built on it plus static disassembly. It should be
+re-read live at the picker before any fix is designed against it.
