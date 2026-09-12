@@ -2,7 +2,7 @@
 // Measure browser frame pacing for any app in index.html.
 //
 //   node tools/profile-web-frames.js --app=blobby_volley --seconds=15 \
-//        [--guest-click=401:223@6] [--warmup=8]
+//        [--guest-click=X:Y@atSec[:holdSec],...] [--warmup=8]
 //
 // WHY THIS EXISTS: the CLI harness cannot answer "does it feel janky". It has
 // no rAF, no compositor and no main-thread contention -- it just runs batches
@@ -36,7 +36,54 @@ const APP = opt('app', 'blobby_volley');
 const SECONDS = Number(opt('seconds', 15));
 const WARMUP = Number(opt('warmup', 8));
 const CLICKS = (opt('guest-click', '') || '').split(',').filter(Boolean);
+// --guest-script=ACTION,ACTION,...  one ordered walk through a UI, where
+// ACTION is click:X:Y@delaySec[:holdSec], type:TEXT@delaySec[:secPerChar] or
+// key:0xVK[/0xCHAR]@delaySec[:holdSec]. Each delay is measured from the end of the
+// previous action, so the list reads like the sequence a person performs.
+//
+// A delay written as `fN` (e.g. `@f120`) waits for N GUEST FRAMES instead of N
+// seconds. Reach for that form on a loaded box: wall time keeps running through
+// a host stall and the guest does not, so a wall-clock walk fires its whole
+// sequence into a frozen screen — measured on Warcraft III, where one film went
+// from 231s straight to 1147s and every remaining click landed in that gap.
+// Frames are counted in the page off the emulator's own present hook, so the
+// pacing is the emulated machine's progress, not this machine's load. A frame
+// wait still gives up after `--frame-wait-cap` seconds (default 240) so a guest
+// that stops presenting cannot hang the run.
+const SCRIPT = (opt('guest-script', '') || '').split(',').filter(Boolean).map(spec => {
+  const [head, timing] = spec.split('@');
+  const [at, hold] = (timing || '').split(':');
+  const colon = head.indexOf(':');
+  const kind = head.slice(0, colon);
+  const rest = head.slice(colon + 1);
+  const frames = /^f\d+$/i.test(String(at || '')) ? Number(String(at).slice(1)) : 0;
+  const act = {
+    kind, frames,
+    at: frames ? 0 : (Number(at) || 0),
+    hold: Math.max(0.1, Number(hold) || 0.4),
+  };
+  if (kind === 'click') { const [x, y] = rest.split(':').map(Number); return { ...act, x, y }; }
+  if (kind === 'type') return { ...act, text: rest, hold: Math.max(0.05, Number(hold) || 0.3) };
+  // key:VK[/CHAR] -- CHAR is the character code TranslateMessage would produce
+  // (defaults to VK itself, which is already right for space, Return and the
+  // digit/letter keys).
+  if (kind === 'key') {
+    const [vk, ch] = rest.split('/').map(Number);
+    return { ...act, vk, ch: Number.isFinite(ch) ? ch : vk };
+  }
+  throw new Error(`--guest-script: unknown action "${kind}" in ${spec}`);
+});
+const FRAME_WAIT_CAP = Number(opt('frame-wait-cap', 240));
+const PROTOCOL_TIMEOUT = Number(opt('protocol-timeout', 900));
 const SHOT = opt('screenshot', '');
+// --count=ADDR[,ADDR] (`module+0xVA` accepted): arm the emulator's own native
+// hit counters and report how often each address was entered. run.js has had
+// this since forever, but a guest that only runs in a browser -- anything on
+// the GL path, because lib/gl-compat.js needs a document -- could not use it,
+// which is exactly where "is this function ever reached?" is hardest to answer
+// another way. The counters are plain wasm exports (set_count/get_count), so
+// the flag is just a page-side caller for them.
+const COUNTS = (opt('count', '') || '').split(',').filter(Boolean);
 // Query string appended to index.html. "?debug" is a materially different
 // page -- it keeps the debug log panel, and that panel is a plausible cost
 // centre in its own right -- so profiling without it can miss the report.
@@ -48,6 +95,10 @@ const AFTER_LAUNCH = opt('after-launch', '');
 // is too late to wrap anything the page touches during startup (an AudioContext
 // the guest opens in its first second, say); this is the seam for that.
 const BEFORE_LOAD = opt('before-load', '');
+// --swiftshader: give headless Chrome a software WebGL implementation instead
+// of no GPU at all. Frame pacing then measures the rasterizer, so use it for
+// functional runs of OpenGL/D3D guests, not for numbers about how an app feels.
+const SWIFTSHADER = argv.includes('--swiftshader');
 const CPU_PROFILE = argv.includes('--cpu-profile');
 // --headful: run in a visible Chrome window instead of a headless one. Headless
 // Chrome is a different renderer -- no compositor surface, no display refresh
@@ -81,6 +132,16 @@ const RESIZES = (opt('resize-viewport', '') || '').split(',').filter(Boolean).ma
 const ORIGIN = (opt('origin', '') || '').replace(/\/$/, '');
 // JS evaluated after sampling; its result is printed. Pairs with
 // --after-launch to install a counter and then read it back.
+// --film=DIR[:everySec]: write a numbered PNG of the emulator canvas every
+// everySec (default 2) from launch until the sample ends, so ONE run shows a
+// whole menu transition instead of a single end-of-run screenshot. An in-page
+// timer cannot do this reliably -- the emulator's step chain starves it -- and
+// a screenshot taken only at the end cannot say which click changed anything.
+const FILM = opt('film', '');
+// --relay=REGEX: print every page console line matching REGEX, as it happens.
+const RELAY = opt('relay', '') ? new RegExp(opt('relay', '')) : null;
+const FILM_DIR = FILM.includes(':') ? FILM.slice(0, FILM.lastIndexOf(':')) : FILM;
+const FILM_EVERY = FILM.includes(':') ? Number(FILM.slice(FILM.lastIndexOf(':') + 1)) || 2 : 2;
 const REPORT_EVAL = opt('report-eval', '');
 const TRACE_APIS = (opt('trace-api', '') || '').split(',').filter(Boolean);
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -141,11 +202,27 @@ async function main() {
     headless: !HEADFUL,
     executablePath: CHROME,
     userDataDir: profile,
+    // Puppeteer gives every CDP call 30s and then throws ProtocolError, which
+    // kills the run. A guest that blocks the main thread for longer than that
+    // is not a hung page — Warcraft III's campaign load does it repeatedly
+    // under SwiftShader — and losing the run at that exact moment throws away
+    // the one sample that was worth taking. Five minutes is still a deadline.
+    // Measured 2026-09-12: five minutes was not enough. Two WC3 runs died on
+    // `Runtime.callFunctionOn timed out` inside the campaign map load, on a box
+    // at load average 15, after the walk had already got that far.
+    protocolTimeout: PROTOCOL_TIMEOUT * 1000,
     // --disable-gpu only in headless: forcing software compositing in a visible
     // window would measure a browser nobody runs, which is the whole reason
     // --headful exists.
     args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check']
-      .concat(HEADFUL ? [] : ['--disable-gpu']),
+      .concat(HEADFUL ? [] : (SWIFTSHADER
+        // Headless Chrome has no GPU and, since Chrome 120, refuses to fall
+        // back to SwiftShader for WebGL unless asked. Without this an OpenGL
+        // guest gets a NULL context from wglCreateContext and takes its
+        // "no 3D hardware" path, which looks exactly like an emulator bug.
+        ? ['--enable-unsafe-swiftshader', '--use-gl=angle',
+           '--use-angle=swiftshader']
+        : ['--disable-gpu'])),
   });
   const problems = [];
   try {
@@ -155,6 +232,18 @@ async function main() {
     page.on('console', m => {
       const t = m.text();
       if (TRACE_APIS.length && /^\[API\]|^\s*=>/.test(t)) console.log(`[page] ${t}`);
+      // A guest that puts up a message box is telling you what went wrong in
+      // its own words, and it is the one console line worth relaying from
+      // every run: the box renders as a picture, so a screenshot shows that
+      // there IS a complaint without showing what it says.
+      if (/^\[MessageBox\]/.test(t)) console.log(`[page] ${t}`);
+      // --relay=REGEX is the escape hatch for a probe whose answer has to
+      // survive the page dying. --report-eval runs once at the end and returns
+      // nothing at all when the guest has put up a modal crash box and stopped
+      // pumping — the CDP call just times out — so a probe that only reports
+      // then loses exactly the run it was written for. Logging each sample and
+      // relaying it here puts the series in the run log as it happens.
+      if (RELAY && RELAY.test(t)) console.log(`[page] ${t}`);
       if (/UNIMPLEMENTED API:|RuntimeError|LinkError|crashed|FATAL:/i.test(t)) problems.push(t);
     });
     if (BEFORE_LOAD) {
@@ -226,38 +315,257 @@ async function main() {
       const r = await page.evaluate(js => String(eval(js)), AFTER_LAUNCH);
       console.log(`  after-launch: ${AFTER_LAUNCH} => ${r}`);
     }
+    // Arming has to wait for the warmup: the DLL table it reads is written by
+    // the PE loader, so at launch time it is empty and every `module+0xVA`
+    // spec fails with "module not loaded" -- or, before the instance exists at
+    // all, with "this build exports no set_count", which reads like a build
+    // problem and is not one.
+    const armCounts = async () => {
+      if (!COUNTS.length) return;
+      const armed = await page.evaluate(specs => {
+        // `runningApps` is a let/const binding in the page, so it is reachable
+        // as a bare identifier and is NOT a property of globalThis. Reading it
+        // off globalThis returns undefined and reports as "no set_count",
+        // which looks like a build problem and is not one.
+        const app = (typeof runningApps !== 'undefined' ? runningApps : [])[0];
+        const wine = app && app.wine;
+        // The wasm exports live on the instance; `wine` is the host object
+        // around it, and its own `exports` is a different thing.
+        const e = wine && ((wine.instance && wine.instance.exports) || wine.exports);
+        if (!e || !e.set_count) return { error: 'this build exports no set_count' };
+        // `module+0xVA` is the static VA out of a disassembler. It only equals
+        // the runtime VA when the image got its preferred base, so resolve
+        // through the PE header the loader recorded rather than assuming it,
+        // and report both so a relocated module is visible rather than silent.
+        // The DLL table the PE loader keeps in WAT is the authority on where
+        // an image landed. wine.moduleMap only has what went through
+        // LoadLibrary, so a statically imported DLL is missing from it.
+        const dv = new DataView(wine.memory.buffer);
+        const imageBase = e.get_image_base ? (e.get_image_base() >>> 0) : 0;
+        const g2w = guest => RegionMap.g2w(guest >>> 0, imageBase);
+        const readLinearStr = (wa, max) => {
+          let s = '';
+          for (let i = 0; i < max && wa + i < dv.byteLength; i++) {
+            const c = dv.getUint8(wa + i);
+            if (!c) break;
+            s += String.fromCharCode(c);
+          }
+          return s;
+        };
+        const modules = [];
+        if (e.get_dll_table && e.get_dll_count) {
+          const table = e.get_dll_table() >>> 0;
+          const count = e.get_dll_count() | 0;
+          for (let i = 0; i < count; i++) {
+            const entry = table + i * 32;
+            if (entry + 12 > dv.byteLength) break;
+            const loadAddr = dv.getUint32(entry, true) >>> 0;
+            const exportRva = dv.getUint32(entry + 8, true) >>> 0;
+            if (!loadAddr || !exportRva) continue;
+            const exportDir = g2w(loadAddr + exportRva);
+            if (exportDir + 16 > dv.byteLength) continue;
+            const nameRva = dv.getUint32(exportDir + 12, true) >>> 0;
+            if (!nameRva) continue;
+            const name = readLinearStr(g2w(loadAddr + nameRva), 96);
+            // The original image base is NOT readable from guest memory: the
+            // DLL loader copies sections, not the DOS/PE headers, so
+            // `[hdr+0x3c]` is not an e_lfanew and the value that comes back is
+            // 0 — which resolves every `module+0xVA` one image base too low and
+            // prints as a plausible address. host.js records what the loader
+            // read off the file bytes; the header read stays only as a fallback
+            // for a page that predates it.
+            const known = (wine.moduleBases || {})[String(name).toLowerCase()];
+            const hdr = g2w(loadAddr);
+            let origBase = known ? (known.origBase >>> 0) : 0;
+            if (!origBase && hdr + 0x40 < dv.byteLength) {
+              const peOff = dv.getUint32(hdr + 0x3c, true) >>> 0;
+              if (peOff && hdr + peOff + 56 < dv.byteLength) {
+                origBase = dv.getUint32(hdr + peOff + 52, true) >>> 0;
+              }
+            }
+            modules.push({ name, base: loadAddr, origBase });
+          }
+        }
+        const resolve = (spec) => {
+          const plus = spec.lastIndexOf('+');
+          if (plus < 0) return { spec, addr: Number(spec) >>> 0, module: null };
+          const name = spec.slice(0, plus).toLowerCase();
+          const va = Number(spec.slice(plus + 1)) >>> 0;
+          const m = modules.find(x => String(x.name).toLowerCase() === name ||
+            String(x.name).toLowerCase() === name + '.dll' ||
+            String(x.name).toLowerCase().replace(/\.(dll|exe)$/, '') === name);
+          if (!m) return { spec, addr: 0, error: 'module not loaded' };
+          return { spec, addr: (m.base + (va - m.origBase)) >>> 0,
+            module: m.name, base: m.base, origBase: m.origBase };
+        };
+        const out = specs.map(resolve);
+        e.clear_counts && e.clear_counts();
+        out.forEach((r, i) => { if (r.addr) e.set_count(i, r.addr); });
+        return { resolved: out, modules: modules.map(m => m.name).join(' ') };
+      }, COUNTS);
+      if (armed && armed.error) console.log(`  count: ${armed.error}`);
+      else for (const r of armed.resolved) {
+        console.log(`  count[${armed.resolved.indexOf(r)}] ${r.spec} -> `
+          + (r.addr ? `0x${r.addr.toString(16)}` : `FAILED: ${r.error}`)
+          + (r.module ? ` (${r.module} @0x${r.base.toString(16)}`
+            + `, orig 0x${r.origBase.toString(16)})` : ''));
+      }
+    };
+    // Start filming before the warmup, so the clicks below are ON camera.
+    let filmTimer = null, filmN = 0, filmBusy = false, filmErr = null;
+    if (FILM_DIR) {
+      fs.mkdirSync(FILM_DIR, { recursive: true });
+      const t0film = Date.now();
+      filmTimer = setInterval(async () => {
+        if (filmBusy) return;               // a slow screenshot must not queue up
+        filmBusy = true;
+        const at = ((Date.now() - t0film) / 1000).toFixed(0).padStart(3, '0');
+        const file = `${FILM_DIR}/f${String(filmN).padStart(3, '0')}-${at}s.png`;
+        try {
+          // Clip to the canvas's box rather than screenshotting the element:
+          // an element screenshot of a canvas inside a clipping container comes
+          // back as a failure, and a swallowed failure films an empty directory
+          // while still counting frames.
+          const box = await page.evaluate(() => {
+            const c = document.getElementById('screen');
+            if (!c) return null;
+            const r = c.getBoundingClientRect();
+            return { x: r.x, y: r.y, width: r.width, height: r.height };
+          });
+          if (filmN === 0) console.log(`film clip: ${JSON.stringify(box)}`);
+          if (box && box.width >= 1 && box.height >= 1) {
+            await page.screenshot({ path: file, clip: box });
+          } else {
+            await page.screenshot({ path: file });
+          }
+          filmN++;
+        } catch (e) { if (!filmErr) filmErr = String(e && e.message || e); }
+        filmBusy = false;
+      }, FILM_EVERY * 1000);
+    }
     // The guest needs to be past its loader before pacing means anything.
     await wait(WARMUP * 1000);
     console.log(`slice size: ${await page.evaluate(() => (runningApps[0] || {}).wine ? runningApps[0].wine.stepsPerSlice : null)} steps`);
+    await armCounts();
 
-    // Clicks are given in GUEST coordinates and mapped through the renderer's
-    // exclusive transform, the same way the web tests do it.
-    for (const spec of CLICKS) {
-      const [pt, delaySec] = spec.split('@');
-      const [gx, gy] = pt.split(':').map(Number);
-      if (delaySec) await wait(Number(delaySec) * 1000);
-      // One event per evaluate, with real time in between. Delivering all four
-      // synchronously means the guest never runs between them, so it never
-      // sees the cursor MOVE -- and a guest that hit-tests against its own
-      // tracked cursor (Blobby does) then ignores the click entirely.
-      const step = (fn) => page.evaluate((x, y, which) => {
-        const t = sharedRenderer && sharedRenderer._exclusiveTransform;
-        const cx = t && t.srcW ? Math.round((t.dstX || 0) + ((x - (t.srcX || 0)) * t.dstW / t.srcW)) : x;
-        const cy = t && t.srcH ? Math.round((t.dstY || 0) + ((y - (t.srcY || 0)) * t.dstH / t.srcH)) : y;
-        if (which === 'move') sharedRenderer.handleMouseMove(cx, cy);
-        else if (which === 'down') sharedRenderer.handleMouseDown(cx, cy, 1);
-        else if (sharedRenderer.handleMouseUp) sharedRenderer.handleMouseUp(cx, cy, 1);
-      }, fn.x, fn.y, fn.which);
+    // One event per evaluate, with real time in between. Delivering all four
+    // synchronously means the guest never runs between them, so it never
+    // sees the cursor MOVE -- and a guest that hit-tests against its own
+    // tracked cursor (Blobby does) then ignores the click entirely.
+    const step = (fn) => page.evaluate((x, y, which) => {
+      const t = sharedRenderer && sharedRenderer._exclusiveTransform;
+      const cx = t && t.srcW ? Math.round((t.dstX || 0) + ((x - (t.srcX || 0)) * t.dstW / t.srcW)) : x;
+      const cy = t && t.srcH ? Math.round((t.dstY || 0) + ((y - (t.srcY || 0)) * t.dstH / t.srcH)) : y;
+      if (which === 'move') sharedRenderer.handleMouseMove(cx, cy);
+      else if (which === 'down') sharedRenderer.handleMouseDown(cx, cy, 1);
+      else if (sharedRenderer.handleMouseUp) sharedRenderer.handleMouseUp(cx, cy, 1);
+    }, fn.x, fn.y, fn.which);
+
+    // A press is only as long as the guest's own clock makes it. Under
+    // SwiftShader on a loaded box the emulated machine can advance a single
+    // frame in several seconds, and a game that samples the button once a
+    // frame (rather than taking WM_LBUTTONDOWN off its queue) then never
+    // sees a press that went down and up between two of its samples. The
+    // default stays short so existing command lines behave the same; pass
+    // a hold when the guest is slow.
+    const clickGuest = async (gx, gy, hold) => {
       await step({ x: gx, y: gy, which: 'move' });
       await wait(400);
       // Second move one pixel on: some guests only redraw/re-hit-test on a delta.
       await step({ x: gx + 1, y: gy + 1, which: 'move' });
       await wait(400);
       await step({ x: gx + 1, y: gy + 1, which: 'down' });
-      await wait(400);
+      await wait(hold * 1000);
       await step({ x: gx + 1, y: gy + 1, which: 'up' });
       await wait(400);
-      console.log(`clicked guest ${gx},${gy}`);
+      console.log(`clicked guest ${gx},${gy} (held ${hold}s)`);
+    };
+
+    // Type one character the way a browser does: WM_KEYDOWN, WM_CHAR, WM_KEYUP.
+    // handleKeyDown alone is not enough for a game that reads text -- an engine
+    // with its own edit box takes the character off WM_CHAR, and a virtual-key
+    // code is not a character.
+    const typeGuest = async (text, perChar) => {
+      for (const ch of text) {
+        const code = ch.charCodeAt(0);
+        const vk = (ch >= 'a' && ch <= 'z') ? code - 32
+          : (ch === ' ') ? 32 : code;
+        await page.evaluate((v, c) => {
+          sharedRenderer.handleKeyDown(v);
+          sharedRenderer.handleKeyPress(c);
+          sharedRenderer.handleKeyUp(v);
+        }, vk, code);
+        await wait(perChar * 1000);
+      }
+      console.log(`typed guest ${JSON.stringify(text)} (${perChar}s/char)`);
+    };
+
+    // --guest-script: one sequential list, so a menu walk that needs
+    // click -> type -> click can be written down in the order it happens.
+    // Separate flags cannot express that: each is its own loop, so the last
+    // click of a walk would always fire before the first keystroke.
+    // Count guest presents in the page. The emulator's onGuestFrame slot is
+    // already taken by the shell, so chain rather than replace it.
+    const armFrameCounter = () => page.evaluate(() => {
+      const w = (runningApps[0] || {}).wine;
+      if (!w) return false;
+      // The shell only installs its own onGuestFrame for some apps, and it may
+      // install it after this arms, so chain whatever is there (possibly
+      // nothing) and re-arm whenever the slot stops being ours.
+      if (w.onGuestFrame === w.__pwfHookFn) return true;
+      if (window.__pwfFrames === undefined) window.__pwfFrames = 0;
+      const prev = w.onGuestFrame;
+      w.__pwfHookFn = f => {
+        window.__pwfFrames = (window.__pwfFrames || 0) + 1;
+        return typeof prev === 'function' ? prev(f) : undefined;
+      };
+      w.onGuestFrame = w.__pwfHookFn;
+      return true;
+    });
+    const readFrames = () => page.evaluate(() => window.__pwfFrames || 0);
+    const waitFrames = async (n) => {
+      await armFrameCounter();
+      const start = await readFrames();
+      const deadline = Date.now() + FRAME_WAIT_CAP * 1000;
+      let seen = start;
+      while (seen - start < n && Date.now() < deadline) {
+        await wait(250);
+        await armFrameCounter();          // the shell may have taken the slot back
+        seen = await readFrames();
+      }
+      console.log(`waited ${seen - start}/${n} guest frames`
+        + `${seen - start < n ? ` (gave up after ${FRAME_WAIT_CAP}s)` : ''}`);
+    };
+
+    for (const act of SCRIPT) {
+      if (act.frames) await waitFrames(act.frames);
+      else if (act.at) await wait(act.at * 1000);
+      if (act.kind === 'click') await clickGuest(act.x, act.y, act.hold);
+      else if (act.kind === 'type') await typeGuest(act.text, act.hold);
+      else if (act.kind === 'key') {
+        // Down, then the character, then up. A real keyboard produces all
+        // three and TranslateMessage is what turns the first into the second,
+        // so a guest that waits on WM_CHAR -- "press any key to continue"
+        // screens usually do -- never sees a down/up pair on its own.
+        await page.evaluate((v, c) => {
+          sharedRenderer.handleKeyDown(v);
+          if (c) sharedRenderer.handleKeyPress(c);
+        }, act.vk, act.ch || 0);
+        await wait(act.hold * 1000);
+        await page.evaluate(v => sharedRenderer.handleKeyUp(v), act.vk);
+        console.log(`key 0x${act.vk.toString(16)} tapped (held ${act.hold}s)`);
+      }
+    }
+
+    // Clicks are given in GUEST coordinates and mapped through the renderer's
+    // exclusive transform, the same way the web tests do it.
+    for (const spec of CLICKS) {
+      const [pt, timing] = spec.split('@');
+      const [delaySec, holdSec] = (timing || '').split(':');
+      const [gx, gy] = pt.split(':').map(Number);
+      const hold = Math.max(0.4, Number(holdSec) || 0.4);
+      if (delaySec) await wait(Number(delaySec) * 1000);
+      await clickGuest(gx, gy, hold);
     }
 
     // Attribute time to the canvas primitives the presentation path uses.
@@ -446,9 +754,27 @@ async function main() {
       await wait(200);
     }
     console.log(`guest eip samples: ${eips.join(' ')}  (${new Set(eips).size} distinct)`);
+    if (filmTimer) {
+      clearInterval(filmTimer);
+      console.log(`film: ${filmN} frames in ${FILM_DIR}${filmErr ? ` (first error: ${filmErr})` : ''}`);
+    }
     if (SHOT) {
       await page.screenshot({ path: SHOT });
       console.log(`screenshot: ${SHOT}`);
+    }
+
+    if (COUNTS.length) {
+      const counts = await page.evaluate(n => {
+        const wine = ((globalThis.runningApps || [])[0] || {}).wine;
+        const x = wine && ((wine.instance && wine.instance.exports) || wine.exports);
+        if (!x || !x.get_count) return null;
+        const out = [];
+        for (let i = 0; i < n; i++) out.push(x.get_count(i) | 0);
+        return out;
+      }, COUNTS.length).catch(() => null);
+      console.log('Hit counts:');
+      COUNTS.forEach((spec, i) => console.log(
+        `  ${spec}: ${counts ? counts[i] : 'unavailable'}`));
     }
 
     if (REPORT_EVAL) {
