@@ -774,3 +774,128 @@ Corrections to earlier notes in this file:
   `Campaigns.w3p` four times, and `CreateFileA`s
   `C:\Save\Profile1\Campaigns.w3v` with `CREATE_ALWAYS`. Every file call the
   documented `0x6f3b2880` SaveCampaigns teardown chain depends on goes through.
+
+## Custom Game is blocked in the demo — it is not a second route to gameplay
+
+Measured 2026-09-12 (runCQ, `--headful`). The idea was to skip the campaign
+briefing entirely: a melee map loaded from **Single Player → Custom Game** never
+shows a "press any key" screen, so it never touches the dismiss path below.
+
+It does not work. Clicking Custom Game at `805,425` puts up a modal
+immediately — two bordered gameplay screenshots above a single button — and
+nothing else happens for the next two minutes. The button reads **OK**, which
+is only legible after `node tools/png-crop.js … --gain=9`; at `--gain=2.5` the
+label is invisible and the panel reads convincingly as a *loading screen* with
+a progress bar stuck near zero. Two frames 95s apart differ by 19% of pixels
+with a max channel delta of 36 — that is the animated grass in the background
+border, not a bar filling.
+
+So the demo gates Custom Game, and the campaign Prologue is the only door.
+Worth knowing for the next person who has the same idea, and worth knowing that
+**a WC3 dialog with unreadable text looks exactly like a stalled loading
+screen**: lift the gain before concluding anything is loading.
+
+## The subsystem refcount at `0x454c0c`, and why the briefing dismiss found a freed object
+
+`War3Demo.exe` keeps a set of per-subsystem refcounts and a paired
+init/shutdown pair that take a bitmask in `bl`:
+
+| what | address | shape |
+|---|---|---|
+| init | `0x412880` | per bit: `inc` the count, and on the 0→1 edge call that subsystem's init (`0x413440` for bit `0x1`) |
+| shutdown | `0x412a58` | per bit: `dec` the count, and on the 1→0 edge call that subsystem's teardown (`0x4139a0` for bit `0x1`) |
+| bit `0x1` count | `0x454c0c` | `inc` at `0x4128bd`, `dec` at `0x412a5b` — the only two writers in the image |
+| bit `0x10` count | `0x454c14` | teardown `0x413ab0` |
+| bit `0x20` count | `0x454c18` | teardown `0x413de0` |
+| bit `0x8` count | `0x454c08` | teardown `0x413930`, then `0x413900`, then `[0x455000] = 0` |
+
+`0x455000` is the object those teardowns are called on; `xrefs.js` finds 30
+references to it and exactly two stores, the constructor at `0x412892` and the
+`mov dword [0x455000], 0` at `0x412a99`.
+
+The count reaches **exactly 1** in a real run, so one unbalanced shutdown call
+is enough to run the teardown and free everything under it.
+
+The dismiss handler itself is at `0x418be0`:
+
+```
+00418be0  push ebp / mov ebp, esp
+00418be3  test ecx, ecx
+00418be5  jnz short 0x418bf2
+00418be7  push 0x57 / call 0x442fac      ; the null case is handled
+00418bf2  mov eax, [ecx]                 ; <- dies here
+00418bf4  push esi / mov esi, [ebp+8] / push esi / push edx
+00418bfa  call [eax+0x28]
+```
+
+It null-checks `ecx` first, so the crash is **not** a null `this` — it is a
+stale non-null pointer. `find_fn.js` puts the entry at `0x418be0` and
+`xrefs.js` finds no direct callers, so it is reached through a stored function
+pointer.
+
+### Two corrections to the earlier reading of this crash
+
+- **There is no networking in this app.** A full 500s run with `--relay='.'`
+  logged **zero** calls matching `wsa|socket|recv|send|connect|bind|listen|gethost|inet_`.
+  Naming `0x444c00b0` an `OsNet::NETCONN` was a guess and should not be
+  repeated; `0x454c0c` is a subsystem refcount, nothing more.
+- **The probe was pressing the keys.** `scratchpad/deadprobe.js` fires up to six
+  space presses of its own the moment the watched node reaches state 6. In
+  runCO those fired at 254s–269s, while the profile and campaign menus were up
+  and four minutes before the briefing existed. The refcount went 1→0 at 336s
+  and the scripted press only arrived at 468s. A run whose probe types into the
+  game cannot tell "the app does this" from "we did this", so runCO does not
+  establish that the guest frees this object on its own. Re-run with the
+  auto-press disabled before trusting the use-after-free.
+
+### The pointer's whole life, as measured
+
+```
+242s  node appears, state 4, target 0x444c00b0 mapped, vtable 0x004456d8
+254s  probe auto-press #1; state is now 6
+336s  refcount 0x454c0c goes 1 -> 0
+338s  target page UNMAPPED; first bytes were [d8 56 44 00 ff ff ff ff ...]
+      and are now [0c 00 00 00 b4 00 bc 3c ...] — a freelist header
+468s  scripted space press; 0x418bf2 calls through it, eip goes to 0
+```
+
+## The menu font is drawn twice, and only the shadow pass has texture coordinates
+
+`Game.dll`'s `OPENGL32.dll` import list settles how this app draws anything —
+50 entries, and **not one immediate-mode entry point**. No `glBegin`, no
+`glVertex*`, no `glColor*`, no `glTexCoord*`. It draws with `glVertexPointer`,
+`glColorPointer`, `glTexCoordPointer`, `glNormalPointer` and `glDrawElements`,
+and `wglGetProcAddress` returns 0 in our layer (`lib/gl-compat.js:1111`), so it
+has no multitexture or other extension path either.
+
+Every vertex attribute in this app therefore comes through
+`Encoder._arrayElement` (`lib/gl-command-stream.js:449`), which writes
+`state.texCoord` **only** when `GL_TEXTURE_COORD_ARRAY` is enabled and a pointer
+is set. Otherwise the vertex keeps the current `texCoord`, which for an app
+that never calls `glTexCoord2f` is the initial `[0, 0]`.
+
+That matters, because the two passes over font atlas 61 do not read alike:
+
+```
+[xf] tex61 col0,0,0,1 n78  cull=off winding=ccw  obj(-46,-16,0) w=1 ndc(0.61,0.5,0) uv(0,0.06) | obj(42,-1,0) uv(0.3,0)
+[xf] tex61 col1,1,1,1 n78  cull=off winding=ccw  obj(-47,-15,0) w=1 ndc(0.61,0.5,0) uv(0,0)    | obj(41,0,0)  uv(0,0)
+```
+
+Same atlas, same 78 vertices, one pixel apart, both `w=1` with NDC on screen and
+face culling off — so neither transform nor culling loses the second pass. But
+the black pass carries real glyph-cell coordinates and the white one reads
+`(0,0)` at both ends. `(0,0)` is the atlas corner, which in a font sheet is
+empty, and the alpha test in force is `GEQUAL 0.0157` — an all-transparent
+sample is discarded for every fragment. That is exactly what "submitted,
+transformed correctly, on screen, contributing nothing" looks like.
+
+It also inverts the reading in the section above one more time: the black pass
+is the **shadow**, the white pass is the **text**, and the menu has been drawing
+only its drop shadow all along. The earlier note that repainting the black pass
+gold produced a correct-looking gold menu (runCM) is still true, but it is a
+coincidence of WC3's text being gold — it recoloured the shadow, not the text.
+
+Two vertices per draw is not a measurement, though: a quad strip can start and
+end on a cell corner. `scratchpad/uvcensus.js` reads every vertex of every
+tex61 draw and reports the u/v range and how many sit exactly on `(0,0)`; run
+it before writing a fix.
