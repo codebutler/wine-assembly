@@ -1659,3 +1659,35 @@ Two shapes make that mistake cheap to spot and cheap to avoid:
 
 The reference frames currently used are the `n12-0{1,2,3,4}-*` captures
 (menu / profile-made / tutorial / land-select).
+
+### CORRECTION: it is not the size of the delta — any mouse poll hangs the land picker
+
+The section above blames a single `-2000,-2000` lump. That was measured, but
+the conclusion drawn from it was too narrow. Drive 13 reached the land picker
+(reference-matched, `land=0.0%`) and moved the cursor in **50-pixel steps
+three seconds apart** — ordinary hand motion at this frame rate — and the
+screen stopped presenting exactly the same way: EIP pinned at `0x9e5276`, the
+software backend's submission counters flat at 1886, and every capture taken
+afterwards **0.00%** different from the one before. Drive 8's lump and drive
+13's sweep produce one symptom, so the delta size is not the variable.
+
+What the variable is, from a live probe inside the loop:
+
+| when | the grid cell record |
+|---|---|
+| before any input (`eip=0x878800`) | `{n: 0, items: 0}` |
+| hung (`eip=0x7503488`, in the D3D thunk under the query) | `{n: 993082159, items: 993213234}` |
+
+and the output array is not NULL at all — `{cap: 262144, count: 231616}`
+climbing to `241304` five seconds later. So the earlier NULL_SENTINEL theory
+for the grow path is wrong too: the array is real and the loop is genuinely
+appending hundreds of thousands of entries, because the cell it is walking
+claims ~993 million objects. `0x3B31E5EF` is not a count anybody wrote; it is
+whatever bytes that address happens to hold.
+
+So the bug is upstream of the loop: the spatial grid's cell pointer (or the
+grid header it is derived from) is garbage by the time the first mouse poll
+runs a pick against it. `0x009e5140` is the victim, not the culprit, and it
+is reached on *every* mouse poll over this screen — which is why the screen
+survives indefinitely with no input at all (drive 9) and dies on the first
+motion of any size.
