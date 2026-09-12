@@ -991,6 +991,74 @@ TouchControls.destroy();
       'captions are dropped rather than drawn over the playfield');
     TouchControls.destroy();
   }
+
+  // PORTRAIT, THE REAL DEVICE -- a canvas TALLER than the window, which is the
+  // shape that exposed the base rect. Measured on an iPhone (375x710 CSS,
+  // DPR 3): the desktop canvas is 641x757 while Space Cadet's window is
+  // 641x481 at 0,0, and the crop fractions are fractions of the WINDOW.
+  // Multiplying them by the canvas instead made the width right by pure
+  // coincidence (641 == 641) and stretched the height by 757/481, so the
+  // table's bottom came out at 839 on a 710-tall screen: no band under the
+  // picture, the landscape gutter branch took over, found no gutters, and hid
+  // every caption -- and both nudges sat 19px low, on the artwork.
+  //
+  // The viewport here is not hand-written: it is what the real renderer
+  // produces for that window, and it matches the device's reading field for
+  // field (cropX 23, cropY 32, 360x416 -> dst 0,415 1125x1300 in 1125x2130).
+  {
+    const { Win98Renderer } = require('../lib/renderer');
+    const r = new Win98Renderer({ width: 641, height: 757, getContext() { return {}; } });
+    r.singleAppMode = true;
+    r.presentationCanvas = { width: 1125, height: 2130 };
+    r.mobileCrop = app.mobileCrop;
+    // The board area the device's own overlay reserves at this size.
+    r.touchOverlay = { getBoardArea: () => ({ x: 0, y: 415 / 2130, w: 1, h: 0.5 }) };
+    // No rAF in this fake DOM, and nothing here needs a repaint.
+    r.scheduleRepaint = () => {};
+    r.setViewMode('zoom');
+    const zoom = r._computeSingleAppZoom([{ hwnd: 0x10001, x: 0, y: 0, w: 641, h: 481,
+      visible: true, className: 'SpaceCadet' }]);
+    const v = zoom.viewport;
+    assert.deepStrictEqual(
+      [v.cropX, v.cropY, v.cropW, v.cropH, v.dstX, v.dstY, v.dstW, v.dstH],
+      [23, 32, 360, 416, 0, 415, 1125, 1300], 'the device viewport, reproduced');
+    // THE REGRESSION: the rectangle those fractions are OF is the window, and
+    // the renderer must say so rather than leaving the overlay to infer it.
+    assert.deepStrictEqual(v.cropBase, { x: 0, y: 0, w: 641, h: 481 },
+      'the crop base is the WINDOW rect, not the 641x757 canvas');
+
+    r._exclusiveFullscreen = true;
+    r._exclusivePresentationViewport = v;
+    const presented = { x: 0, y: 415 / 2130 * 710, w: 375, h: 1300 / 2130 * 710 };
+    r.getPresentedRectClient = () => presented;
+    TouchControls.install({ document, renderer: r }); TouchControls.setRenderer(r);
+    TouchControls.setLayout(app.touchControls);
+    TouchControls.el._rect = { left: 0, top: 0, right: 375, bottom: 710, width: 375, height: 710 };
+    TouchControls.layoutZones();
+
+    const table = TouchControls._cropRectClient(presented);
+    const near = (a, b, what) => assert(Math.abs(a - b) < 0.01, `${what}: ${a} != ${b}`);
+    near(table.x, 0, 'table left');
+    near(table.y, 138.3333, 'table top');
+    near(table.w, 375, 'table width');
+    near(table.h, 433.3333, 'table height');
+    // With the canvas as the base this was {y:157.5, h:682} -- bottom 839.
+    near(table.y + table.h, 571.6666, 'the table ends on the screen, not 129px below it');
+
+    // Consequence 1: there IS a band under the picture, so the captions are
+    // placed in it and stay visible.
+    assert.strictEqual(TouchControls._captions.length, 3, 'Flipper, Flipper, Launch');
+    for (const cap of TouchControls._captions) {
+      assert.strictEqual(cap.hidden, false, 'no caption is hidden on a portrait phone');
+      near(parseFloat(cap.style.top), 579.6666, 'caption sits just under the table');
+    }
+    // Consequence 2: the nudges anchor to the table's own top corners.
+    const nudge = name => parseFloat(
+      TouchControls._widgets.find(w => w.getAttribute('aria-label') === name).style.top);
+    near(nudge('Nudge left'), 144.3333, 'left nudge top');
+    near(nudge('Nudge right'), 144.3333, 'right nudge top');
+    TouchControls.destroy();
+  }
 }
 
 console.log('PASS  pinball phone affordances: captions, corner nudges, one landscape view');
