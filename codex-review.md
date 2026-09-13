@@ -1,6 +1,6 @@
 # Project review — 2026-09-10
 
-## Standalone bitmap-font recovery — 2026-09-13 (not merged)
+## Standalone bitmap-font recovery — 2026-09-13
 
 Candidate branch `codex/font-main-20260913`, initially based on `adcc4e37`
 and reconciled with main `a534fda6` in `4c8dec3b`, isolates
@@ -26,12 +26,17 @@ The compatible recovery tree passes all 10 replacement groups and 7 identity
 groups. Its committed `80bc9a61` baseline reproduces the collision bug (one
 registration instead of two); the working fix passes. These are recovery-tree
 results, not evidence that standalone current main compiles or passes.
-The exact standalone `10b` source also passes all 7 identity groups when
+The exact standalone `10b` source also passes all 10 replacement and 7 identity groups when
 substituted read-only into the compatible recovery harness; other source files
 remain unchanged. This validates the local path validator, not main acceptance.
 
-Do not merge this candidate until the owning lanes commit their prerequisites,
-then reconcile current main and rerun the full build and native font tests.
+The user subsequently explicitly requested merging this isolated slice despite
+the reported main blockers. It is reconciled through `a3a376f1`; native
+compilation still reproduces the missing-handler failure. The four-file merge
+does not import the unfinished handler or any broad recovery changes. Treat
+this as a scoped correctness integration, **not a passing main build or release**.
+The owning lanes still need to commit their prerequisites, followed by a full
+build and the native font tests on committed main.
 This does not close font generation/live-handle lifetime, registry concurrency,
 TrueType identity, or the broad recovery integration findings below.
 
