@@ -4334,3 +4334,52 @@ too short). The measurement that answers it needs no new tooling:
 vector's begin/end -- `(end-begin)/4` is the element count, to be read beside the
 `EDI` and `EBX` the register dump already prints. `EBX >= count` is the
 out-of-bounds read, confirmed.
+
+## CORRECTION 2026-09-13: the NULL-star mechanism does not drive the hang
+
+The section above ("the NULL is an out-of-bounds star read; the hang is a
+circular walk") named `0x9e35e0`'s unchecked `arr[i+1]` as the source of a NULL
+`next` that makes the walk at `0x9e17d0`/`0x9e1e50` spin forever. A measured run
+refutes the first half of that.
+
+Run: `bw-software-probe-4WdnWU`, worktree build carrying the A4R4G4B4 (format 26)
+texture fix, driven to the land click, 460788 batches over 3908s. `--count` on
+the four addresses:
+
+```
+0x009e3750 = 6            ; neighbour rejected -> pair (i, i+1)   <- the "bad" path
+0x009e3755 = 2            ; neighbour accepted -> pair (i-1, i)
+0x009e17d0 = 14741
+0x009e1e50 = 11958660
+```
+
+The neighbour selection ran **eight times in the whole run**. Eight executions of
+an out-of-bounds read cannot account for 11.9M iterations of the walk, so
+`0x9e35e0` is not the driver of the hang, whatever else is true of its missing
+bounds check.
+
+The fault census kills the mechanism outright. With `--fault-null` armed this run
+reported **510 faults total, 66 of them at `0x9e1e50`, against 11958660 entries
+to that block** -- 0.0006%. The walk is reading mapped, non-sentinel pointers on
+essentially every iteration. It is therefore NOT looping because a NULL `next`
+reads as 0 and never matches the start node; that was the entire proposed
+mechanism and it does not hold.
+
+What the earlier 23.9M-fault census (`bw-software-probe-q3ArIc`) measured is a
+different build: it predates the A4R4G4B4 fix. The working hypothesis for the
+difference -- NOT yet confirmed -- is that the refused texture format left a
+slot NULL and produced the fault storm, and that fixing it removed the storm
+while leaving a second, independent defect underneath with the same outward
+symptom. Two stacked bugs would explain why the OOM, the fault count and the
+hang all looked like one thing.
+
+Still true and still unexplained:
+- The walk terminates only by returning to its start node, and it is not
+  returning. With valid pointers, that means the list genuinely does not close.
+- The first fault of the run is at `eip=0x9cef45`, where `ebx` (loaded from a
+  local at `0x9cef4b`) is NULL and is then read at `[ebx+0x28]`, `[ebx+0x48]`
+  and written at `[ebx+ecx*4+0x4c]`. This is upstream of everything above and is
+  the next thing to chase.
+
+Do not re-derive the float-precision hypothesis; §"integer predicate" above still
+stands and is independent of this correction.
