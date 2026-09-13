@@ -26,6 +26,9 @@ The compatible recovery tree passes all 10 replacement groups and 7 identity
 groups. Its committed `80bc9a61` baseline reproduces the collision bug (one
 registration instead of two); the working fix passes. These are recovery-tree
 results, not evidence that standalone current main compiles or passes.
+The exact standalone `10b` source also passes all 7 identity groups when
+substituted read-only into the compatible recovery harness; other source files
+remain unchanged. This validates the local path validator, not main acceptance.
 
 Do not merge this candidate until the owning lanes commit their prerequisites,
 then reconcile current main and rerun the full build and native font tests.
