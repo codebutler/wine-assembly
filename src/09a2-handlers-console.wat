@@ -1826,23 +1826,89 @@
   (func $console_write_output (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32) (param $wide i32)
     (local $src i32) (local $bw i32) (local $bh i32) (local $bx i32) (local $by i32)
     (local $rgn i32) (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+    (local $src_left i32) (local $src_top i32) (local $bound i32) (local $changed i32)
     (local $row i32) (local $col i32) (local $soff i32) (local $doff i32)
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
         (global.set $eax (i32.const 0))
         (return)))
-    (call $console_cells_ensure)
-    (local.set $src (call $g2w (local.get $arg1)))
-    (local.set $bw (i32.and (local.get $arg2) (i32.const 0xFFFF)))
-    (local.set $bh (i32.shr_u (local.get $arg2) (i32.const 16)))
-    (local.set $bx (i32.and (local.get $arg3) (i32.const 0xFFFF)))
-    (local.set $by (i32.shr_u (local.get $arg3) (i32.const 16)))
+    (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg4)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (return)))
+    ;; COORD fields are signed SHORTs. Treat both buffers as true 2-D arrays;
+    ;; clipping a negative or off-edge source coordinate must not wrap it into
+    ;; an unrelated guest address.
+    (local.set $bw (i32.extend16_s (local.get $arg2)))
+    (local.set $bh (i32.shr_s (local.get $arg2) (i32.const 16)))
+    (local.set $bx (i32.extend16_s (local.get $arg3)))
+    (local.set $by (i32.shr_s (local.get $arg3) (i32.const 16)))
     (local.set $rgn (call $g2w (local.get $arg4)))
     (local.set $left (i32.load16_s (local.get $rgn)))
     (local.set $top (i32.load16_s (i32.add (local.get $rgn) (i32.const 2))))
     (local.set $right (i32.load16_s (i32.add (local.get $rgn) (i32.const 4))))
     (local.set $bottom (i32.load16_s (i32.add (local.get $rgn) (i32.const 6))))
+    (local.set $src_left (local.get $left))
+    (local.set $src_top (local.get $top))
+
+    ;; A destination screen cell maps to source
+    ;; (bx + x - src_left, by + y - src_top). Intersect the requested screen
+    ;; rectangle with both coordinate spaces before reading caller memory.
+    (if (i32.lt_s (local.get $left) (i32.const 0))
+      (then (local.set $left (i32.const 0))))
+    (local.set $bound (i32.sub (local.get $src_left) (local.get $bx)))
+    (if (i32.lt_s (local.get $left) (local.get $bound))
+      (then (local.set $left (local.get $bound))))
+    (if (i32.lt_s (local.get $top) (i32.const 0))
+      (then (local.set $top (i32.const 0))))
+    (local.set $bound (i32.sub (local.get $src_top) (local.get $by)))
+    (if (i32.lt_s (local.get $top) (local.get $bound))
+      (then (local.set $top (local.get $bound))))
+    (local.set $bound (i32.sub (global.get $console_width) (i32.const 1)))
+    (if (i32.gt_s (local.get $right) (local.get $bound))
+      (then (local.set $right (local.get $bound))))
+    (local.set $bound
+      (i32.sub
+        (i32.add (local.get $src_left) (local.get $bw))
+        (i32.add (local.get $bx) (i32.const 1))))
+    (if (i32.gt_s (local.get $right) (local.get $bound))
+      (then (local.set $right (local.get $bound))))
+    (local.set $bound (i32.sub (global.get $console_height) (i32.const 1)))
+    (if (i32.gt_s (local.get $bottom) (local.get $bound))
+      (then (local.set $bottom (local.get $bound))))
+    (local.set $bound
+      (i32.sub
+        (i32.add (local.get $src_top) (local.get $bh))
+        (i32.add (local.get $by) (i32.const 1))))
+    (if (i32.gt_s (local.get $bottom) (local.get $bound))
+      (then (local.set $bottom (local.get $bound))))
+
+    (if (i32.or
+          (i32.or (i32.le_s (local.get $bw) (i32.const 0))
+                  (i32.le_s (local.get $bh) (i32.const 0)))
+          (i32.or (i32.gt_s (local.get $left) (local.get $right))
+                  (i32.gt_s (local.get $top) (local.get $bottom))))
+      (then
+        (local.set $left (i32.const 0))
+        (local.set $top (i32.const 0))
+        (local.set $right (i32.const -1))
+        (local.set $bottom (i32.const -1))))
+    ;; Report the actual screen-buffer rectangle even for an empty successful
+    ;; operation, where Right < Left and Bottom < Top.
+    (i32.store16 (local.get $rgn) (local.get $left))
+    (i32.store16 offset=2 (local.get $rgn) (local.get $top))
+    (i32.store16 offset=4 (local.get $rgn) (local.get $right))
+    (i32.store16 offset=6 (local.get $rgn) (local.get $bottom))
+    (local.set $changed
+      (i32.and (i32.le_s (local.get $left) (local.get $right))
+        (i32.le_s (local.get $top) (local.get $bottom))))
+    (if (local.get $changed)
+      (then
+        (call $console_cells_ensure)
+        (local.set $src (call $g2w (local.get $arg1)))))
     (local.set $row (local.get $top))
     (block $rdone (loop $rows
       (br_if $rdone (i32.gt_s (local.get $row) (local.get $bottom)))
@@ -1853,26 +1919,22 @@
         (local.set $soff (i32.add (local.get $src)
           (i32.mul (i32.const 4)
             (i32.add
-              (i32.mul (i32.add (i32.sub (local.get $row) (local.get $top)) (local.get $by)) (local.get $bw))
-              (i32.add (i32.sub (local.get $col) (local.get $left)) (local.get $bx))))))
-        ;; dest offset in console buffer
+              (i32.mul (i32.add (i32.sub (local.get $row) (local.get $src_top)) (local.get $by)) (local.get $bw))
+              (i32.add (i32.sub (local.get $col) (local.get $src_left)) (local.get $bx))))))
+        ;; Destination coordinates have already been clipped to this buffer.
         (local.set $doff (i32.add (i32.mul (local.get $row) (global.get $console_width)) (local.get $col)))
-        (if (i32.and (i32.ge_s (local.get $col) (i32.const 0))
-              (i32.and (i32.ge_s (local.get $row) (i32.const 0))
-                (i32.lt_u (local.get $doff) (i32.mul (global.get $console_width) (global.get $console_height)))))
-          (then
-            (i32.store16 (i32.add (global.get $console_text_base) (i32.mul (local.get $doff) (i32.const 2)))
-              (select (i32.load16_u (local.get $soff))
-                      (i32.load8_u (local.get $soff))
-                      (local.get $wide)))
-            (i32.store16 (i32.add (global.get $console_attr_base) (i32.mul (local.get $doff) (i32.const 2)))
-              (i32.load16_u (i32.add (local.get $soff) (i32.const 2))))))
+        (i32.store16 (i32.add (global.get $console_text_base) (i32.mul (local.get $doff) (i32.const 2)))
+          (select (i32.load16_u (local.get $soff))
+                  (i32.load8_u (local.get $soff))
+                  (local.get $wide)))
+        (i32.store16 (i32.add (global.get $console_attr_base) (i32.mul (local.get $doff) (i32.const 2)))
+          (i32.load16_u (i32.add (local.get $soff) (i32.const 2))))
         (local.set $col (i32.add (local.get $col) (i32.const 1)))
         (br $cols)))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
       (br $rows)))
     (global.set $eax (i32.const 1))
-    (call $console_buffer_finish (i32.const 1)))
+    (call $console_buffer_finish (local.get $changed)))
 
   ;; WriteConsoleOutputW(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpWriteRegion) → BOOL
   (func $handle_WriteConsoleOutputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
