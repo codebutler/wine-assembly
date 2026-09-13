@@ -93,6 +93,14 @@ const extraWat = String.raw`
       (local.get $text) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $esp))
+
+  (func (export "test_call_lstrlen_a")
+        (param $stack i32) (param $text i32) (result i32)
+    (global.set $esp (local.get $stack))
+    (call $handle_lstrlenA
+      (local.get $text) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $esp))
 `;
 
 (async () => {
@@ -153,6 +161,22 @@ const extraWat = String.raw`
   assert.strictEqual(wat.test_call_lstrlen(stack, text) >>> 0, stack + 8,
     'lstrlen pops its argument and return address');
   assert.strictEqual(wat.get_eax(), 13, 'lstrlen uses ANSI byte-string semantics');
+  assert.strictEqual(wat.test_call_lstrlen_a(stack, text) >>> 0, stack + 8,
+    'lstrlenA pops its argument and return address');
+  assert.strictEqual(wat.get_eax(), 13, 'lstrlen and lstrlenA return the same ANSI length');
+
+  const highBytes = wat.guest_alloc(3) >>> 0;
+  const highBytesWasm = RegionMap.g2w(highBytes, wat.get_image_base());
+  new Uint8Array(memory.buffer, highBytesWasm, 3).set([0x80, 0xff, 0]);
+  wat.test_call_lstrlen(stack, highBytes);
+  assert.strictEqual(wat.get_eax(), 2, 'lstrlen counts ANSI high bytes as characters');
+  wat.test_call_lstrlen_a(stack, highBytes);
+  assert.strictEqual(wat.get_eax(), 2, 'lstrlenA matches the ANSI high-byte count');
+
+  wat.test_call_lstrlen(stack, 0);
+  assert.strictEqual(wat.get_eax(), 0, 'lstrlen returns zero for NULL');
+  wat.test_call_lstrlen_a(stack, 0);
+  assert.strictEqual(wat.get_eax(), 0, 'lstrlenA returns zero for NULL');
 
   console.log('PASS  InstallShield dynamic KERNEL32 compatibility exports resolve');
 })().catch(error => {

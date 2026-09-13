@@ -4937,10 +4937,11 @@
   )
 
   ;; InstallShield 11 dynamically asks KERNEL32 for the historical unsuffixed
-  ;; export. Its byte-string contract is identical to lstrlenA.
+  ;; export. Microsoft documents lstrlen as selecting lstrlenA in ANSI builds.
   (func $handle_lstrlen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $lstr_len (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (call $handle_lstrlenA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; 219: lstrcpyA
