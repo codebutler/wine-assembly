@@ -2867,3 +2867,54 @@ the build pass skipped. Whether record 1 was never written or was written and
 then lost is the next thing to measure — and note that neither `--watch`'s EIP
 nor `--fault-null`'s can answer *who*, so the question to ask of a run is when
 a write lands, not where it came from.
+
+## How far it actually gets, and what the wedge is not
+
+Worth stating plainly, because "wedged in a geometry walker" undersells it: the
+software-renderer probe now gets **past the main menu and into the
+land-selection screen**. Run 51's gate capture at batch 400000 is the profile
+menu with the world map drawn and "New Game" highlighted, and its final frame
+is the land-selection screen — a rendered Greek village on fire with a
+filmstrip of eight island thumbnails along the bottom. The renderer is not the
+problem here.
+
+That reframed the wedge as possibly a *hover* path: every run so far had parked
+the cursor at (250,277), in the middle of the rendered scene, and the picker
+(`0x9c1a90`) is the kind of query a mouse-over drives. If so, clicking a
+filmstrip thumbnail instead would never run it, and would reach gameplay with
+no source change — which matters, because a rebuild is not available while
+other agents hold `src/` dirty and `--no-build` is mandatory.
+
+**That is wrong, and run 53 settled it.** With Enter pressed 25000 batches
+earlier and the cursor parked on the filmstrip rather than the scene, the hit
+counts came back byte-identical to runs 42, 46, 47 and 51:
+
+| probe | hits |
+|---|---|
+| `0x9e8200` vector grow | 1325 |
+| `0x9c1a90` picker | 1 |
+| `0x9d4a30` slot 7 | 10 |
+| `0x9e17b0` walker | 303 |
+
+The run never advanced far enough to write the capture scheduled 20000 batches
+after the Enter, so the wedge happens on *entering* land selection, before any
+click can be delivered. The picker runs exactly once, the walker 303 times, and
+the guest stops — the same way, in the same place, whatever the cursor is doing.
+
+So the sequence is fixed: entering land selection runs the build, the build
+leaves a list the walker cannot terminate on, and no input schedule routes
+around it. Reaching gameplay needs the underlying defect fixed, not avoided.
+
+**One caution for whoever picks this up.** `--trace-at`'s register dump is
+taken at the breakpoint, so it is contemporaneous with the hexdump beside it
+(`test/run.js` takes both in the same block) — but the registers are whatever
+the *paused* instruction sees, not what an earlier instruction loaded. At
+`0x9d4a69` I read `EAX` as `element->record` from `mov eax,[ebx]` eight
+instructions back and built a translation-divergence theory on it; `xor eax,eax`
+clears it at `0x9d4a4a` and `call 0x9d6600` returns into it, so `EAX` there is
+the resize's return value and the theory was about nothing. The register that
+does survive is `EDI`, loaded once at `0x9d4a45` — and it confirms the dump
+exactly: element 11's `EDI` is `0x2eb30300`, which is the head the hexdump
+shows at `0x2ec301c0 = 0x2ec30008 + 11*0x28`, and element 1's is `0`, matching
+its record. Check which instruction last wrote a register before reading
+meaning into it.
