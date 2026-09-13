@@ -3360,3 +3360,37 @@ partially re-linked — while the stale ring node `0x2eb30ff8` still points at i
 That is a use-after-free of the ring, and it predicts `0x9de0a0`'s pop path runs
 between the two events. Testing it needs the *sequence* of frees and allocations
 around batch 435422, not another exit-time snapshot.
+
+## One boot, many questions: the wedge is now interactive
+
+Every finding above cost a fresh 800-second run, because the wedge lands around
+guest batch 435420 and nothing survives the process. That is the wrong shape for
+an investigation that asks one small memory question at a time.
+
+It is also unnecessary. `tools/black-white-software-probe.js` already passes
+`--control-stdin` down to `test/run.js`, and run.js's control loop has an `eval`
+action (`test/run.js:5393`) whose body runs inside the host process with
+`instance`, `exports`, `renderer`, `memory`, `g2w`, `tickState` and `ctx` in
+scope. The guest wedges *inside a loop*, not inside a single WASM call — the
+walker's block retires normally and the batch returns on budget — so control
+commands keep being serviced while it spins.
+
+So: boot to the wedge **once**, keep the process parked there, and read any
+guest address in milliseconds for the rest of the session.
+
+```
+scratchpad/bw-live.sh   # the long-lived probe, stdin from a held-open fifo
+scratchpad/ask.sh '<js expression>'   # one question, one [ctl] reply line
+```
+
+`ask.sh` blocks on `tail -f | grep -m1` rather than polling. The plumbing was
+verified end to end against notepad (a few seconds to boot) before spending the
+B&W2 boot on it: two independent questions came back against one live guest, the
+second one reading `0x905a4d` — the `MZ` header — straight out of `memory` at
+`g2w(0x400000)`.
+
+What this does **not** do is answer questions about history. A write that
+happened at batch 435422 is gone by the time the process parks, so the watch and
+trace channels still have to be armed up front; the live session carries them
+(`--watch=0x2eb307d8 --watch-log`, `--trace-at=0x9de060`) so it is a superset of
+a one-shot run rather than a replacement for one.
