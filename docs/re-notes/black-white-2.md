@@ -4240,3 +4240,97 @@ frame (`base` at `ebp+0x84`, `offset` at `ebp+0x30`, since the caller's ESP
 before its two pushes is `ebp+0x10`) and prints all six fields with the record's
 guest address. That address is what a `--watch` can be pinned to, to catch the
 write into `+0x10` -- or to prove there never was one.
+
+## The NULL is an out-of-bounds array read, and the hang is a circular list that lost its circle
+
+The 23.9M faults from `0x9e1e50` (and the 4.5 *billion* from `0x9e17d0` in the
+runs before the heap fixes) are not a pointer the game checks and we corrupt.
+They are a **circular linked-list walk that can never terminate**:
+
+```
+009e17d0  mov eax,[edx+0x8]     ; <- the reported fault eip (block entry)
+009e17d3  mov ebx,[edx]         ; next
+...                             ; 64-bit integer cross products, no FP at all
+009e1822  mov edx,ebx
+009e1827  cmp [esp+0x20],edx    ; back at the start node?
+009e182b  jz  short 0x9e1831
+009e182f  jnz 0x9e17d0          ; ... else keep walking
+```
+
+`edx = [edx]` until `edx` equals the node the walk started from. Hand it a node
+whose `next` is NULL and `$g2w`'s NULL sentinel answers every load with 0, so
+`edx` is 0 forever, the start comparison never holds, and the loop spins. That
+is the whole "430 MB allocation" story: the walk is inside an algorithm that
+allocates per visited node, so an endless walk is an endless allocation. **On
+real hardware this is an access violation on the first iteration.** More memory
+was never going to help, and neither is a bigger heap.
+
+### Where the NULL comes from: `0x9e35e0` indexes a vertex star without a bounds check
+
+`0x9e35e0` (one function, `0x9e35e0`-`0x9e3cbe`; the `ret 0x4` at `0x9e3855` is
+an early return, not the end) walks a list of nodes and, for each, picks a pair
+of adjacent edges out of that node's star -- a `std::vector<Edge*>` at
+`[node+0x14]` / `[node+0x18]`:
+
+```
+009e36ef  call 0x9edb80         ; i = index of edge e in the star, or -1
+009e36f4  mov ebx,eax
+009e36f6  lea edi,[ebx-0x1]
+009e36f9  test edi,edi
+009e36fb  jl   short 0x9e3750   ; i == 0 (or i == -1): no left neighbour
+009e36fd  mov ecx,[esi+0x14]
+009e3703  mov eax,[ecx+edi*4]   ; arr[i-1]
+009e3723  call 0x9ddf80         ; -> its two endpoint vertices
+009e372c  ...                   ; does either equal the key vertex?
+009e373a  jz   short 0x9e3755   ; yes: use the pair (i-1, i)
+009e3750  mov edi,ebx           ; no:  use the pair (i, i+1)
+009e3752  add ebx,0x1
+009e3755  mov esi,[esi+0x14]
+009e3758  mov eax,[esi+edi*4]   ; -> record +0x0c
+009e375f  mov ebx,[esi+ebx*4]   ; -> record +0x10   <-- arr[i+1], unchecked
+```
+
+`0x9edb80` is a plain linear "index of" over that same vector and returns **-1**
+when the edge is not in it. Neither index is clamped and neither wraps. So the
+half-filled 24-byte record we measured -- `+0x0c` a valid vertex, `+0x10` NULL
+-- is exactly the signature of `arr[i+1]` read one past the end: `[garbage]`
+lands unmapped, `$g2w` answers 0, and `[0+8]` answers 0 again. The census
+agrees, and names the two derefs that see it:
+
+```
+[fault]   eip=0x9e35e0 x127 addresses 0x4-0x247c830b   ; arr element is garbage
+[fault]   eip=0x9ddf80 x35  addresses 0x0-0x8          ; this == NULL
+[fault]   eip=0x9ddfb0 x7   addresses 0x8-0x8          ; `mov eax,[ecx+8]; ret`, ecx == 0
+```
+
+The record's six fields are written at `0x9e36eb`/`0x9e3766`/`0x9e375b`/
+`0x9e378e`/`0x9e37b9`/`0x9e37cc` (offsets +0, +4, +8, +0xc, +0x10, +0x14), which
+is why only one of the two vertex fields is ever the bad one.
+
+### The comparisons are integer, so the precision story stays dead
+
+`0x9c4152` is the segment-intersection predicate this subdivision runs on, and
+it is an **integer-coordinate** routine: `mov ecx,[edx+4] / sub ecx,[eax+4] /
+imul ecx,[edx]`, then `fild dword` -- the doubles only ever hold cross products
+of integers. Its two outputs are rounded back to integers at `0x9c43ac` with the
+control word switched to truncate (`fnstcw / or ah,0x0c / fldcw / fistp word /
+fldcw`) after a +/-0.5 bias chosen by sign, and our `$fpu_to_i16` routes through
+`$fpu_round`, which honours RC. The `ZE` raises `--trace-fpu` counted at
+`0x009c4214` and `0x009c42a5` are the two `fdiv qword [ebp-0x8]` by a zero
+determinant -- degenerate/parallel segments, masked, +/-Inf, and then compared
+away. So the key equality tests at `0x9e36c1` and `0x9e3730` are exact integer
+compares, not float compares, and no amount of x87 fidelity moves them.
+
+What is left is *why* index `i` is the last element of the star (or the star is
+too short). The measurement that answers it needs no new tooling:
+
+```
+--trace-at=0x9e3755 --trace-at-limit=300 --trace-at-mem=esi+0x14:4,esi+0x18:4
+--count=0x9e3750,0x9e3755,0x9e17d0,0x9e1e50
+```
+
+`--trace-at` fires at the block entry, *before* `mov esi,[esi+0x14]` overwrites
+`esi`, so `esi` is still the node and the two `--trace-at-mem` reads are the
+vector's begin/end -- `(end-begin)/4` is the element count, to be read beside the
+`EDI` and `EBX` the register dump already prints. `EBX >= count` is the
+out-of-bounds read, confirmed.

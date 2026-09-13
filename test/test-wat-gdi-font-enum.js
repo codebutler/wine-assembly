@@ -21,6 +21,30 @@ const RegionMap = require('../lib/region-map.generated.js');
     (call $handle_EnumFontsA (i32.const 0) (local.get $filter)
       (local.get $callback) (local.get $data) (i32.const 0) (i32.const 0))
     (global.get $eip))
+  (func (export "test_start_EnumFontFamiliesA")
+        (param $filter i32) (param $callback i32) (param $data i32) (result i32)
+    (local $start i32)
+    (local.set $start (global.get $esp))
+    (call $gs32 (local.get $start) (i32.const 0))
+    (call $handle_EnumFontFamiliesA (i32.const 0) (local.get $filter)
+      (local.get $callback) (local.get $data) (i32.const 0) (i32.const 0))
+    (global.get $eip))
+  (func (export "test_start_EnumFontsW")
+        (param $filter i32) (param $callback i32) (param $data i32) (result i32)
+    (local $start i32)
+    (local.set $start (global.get $esp))
+    (call $gs32 (local.get $start) (i32.const 0))
+    (call $handle_EnumFontsW (i32.const 0) (local.get $filter)
+      (local.get $callback) (local.get $data) (i32.const 0) (i32.const 0))
+    (global.get $eip))
+  (func (export "test_start_EnumFontFamiliesW")
+        (param $filter i32) (param $callback i32) (param $data i32) (result i32)
+    (local $start i32)
+    (local.set $start (global.get $esp))
+    (call $gs32 (local.get $start) (i32.const 0))
+    (call $handle_EnumFontFamiliesW (i32.const 0) (local.get $filter)
+      (local.get $callback) (local.get $data) (i32.const 0) (i32.const 0))
+    (global.get $eip))
   (func (export "test_start_EnumFontFamiliesExW")
         (param $logfont i32) (param $callback i32) (param $data i32) (result i32)
     (local $start i32)
@@ -216,6 +240,28 @@ const RegionMap = require('../lib/region-map.generated.js');
     assert(wat.guest_read32(callbackData + 12 + index * 16) > 0,
       `callback ${index} must receive native text metrics`);
   }
+
+  const familyData = allocZero(4 + 16 * (EXPECTED.length + 2));
+  assert(wat.test_start_EnumFontFamiliesA(0, callback, familyData));
+  runCallbacks();
+  assert.deepStrictEqual(
+    Array.from({ length: 1 + EXPECTED.length * 4 }, (_, index) =>
+      wat.guest_read32(familyData + index * 4)),
+    Array.from({ length: 1 + EXPECTED.length * 4 }, (_, index) =>
+      wat.guest_read32(callbackData + index * 4)),
+    'EnumFontFamiliesA must share EnumFontsA callback order, records, and result');
+
+  const wideEnumData = allocZero(4 + 16 * 3);
+  assert(wat.test_start_EnumFontsW(wideFilter, callback, wideEnumData));
+  runCallbacks();
+  const wideFamilyData = allocZero(4 + 16 * 3);
+  assert(wat.test_start_EnumFontFamiliesW(wideFilter, callback, wideFamilyData));
+  runCallbacks();
+  assert.strictEqual(wat.guest_read32(wideEnumData), 1);
+  assert.deepStrictEqual(
+    Array.from({ length: 5 }, (_, index) => wat.guest_read32(wideFamilyData + index * 4)),
+    Array.from({ length: 5 }, (_, index) => wat.guest_read32(wideEnumData + index * 4)),
+    'EnumFontFamiliesW must share EnumFontsW callback order, records, and result');
 
   const stopCallback = makeCallback(true);
   const stopData = allocZero(4 + 16 * 4);

@@ -199,7 +199,7 @@
   (region.declare $BROWSE_DIALOG_STRINGS (size 0x00000060) (align 0x00000010)
     (owner "01-header.wat:$BROWSE_DIALOG_STRINGS"))
   (region.declare $DX_VERSION_INFO (size 0x0000005C) (align 0x00000010)
-    (owner "09a-handlers.wat:$handle_GetFileVersionInfoA"))
+    (owner "09a1-comctl-handlers.wat:$handle_GetFileVersionInfoA"))
   ;; Storage for every string the compiler interns from a `"text"` literal.
   ;; Named by `(string.pool $WATX_STRING_POOL)` in 01-header.wat; without that
   ;; declaration the pool is placed above the last data segment, which in this
@@ -225,7 +225,7 @@
   ;; before the fixed guest mirror. Keep the address allocator-owned rather
   ;; than pinning another raw address.
   (region.declare $LAST_ACTIVE_POPUP_TABLE (size 0x00000400) (align 0x00000100)
-    (owner "09a-handlers.wat:$wnd_last_active_popup_addr_for_slot"))
+    (owner "09a1-comctl-handlers.wat:$wnd_last_active_popup_addr_for_slot"))
   ;; WIDENED 0x100000 -> 0x3EE000 (wave 3). The low heap never fitted in 1MB:
   ;; $heap_low_reserve hands out 1MB chunks and stopped only when the next
   ;; chunk would reach $PAGE_INDEX_ARENA, which the hand-placed map happened to
@@ -397,7 +397,7 @@
   (region.declare $CURSOR_COLOR_DESC (size 0x00000050) (align 0x00000010)
     (owner "09a-handlers.wat:$cursor_scale_bitmap"))
   (region.declare $EDIT_LAYOUT_SCRATCH (size 0x00000C00) (align 0x00000100)
-    (owner "09c3-controls.wat:$edit_layout_len"))
+    (owner "09c3-wndprocs.wat:$edit_layout_len"))
   (region.declare $VIRTUAL_MAP_STATE (size 0x00000020) (align 0x00000100)
     (owner "10-helpers.wat:$virtual_map_commit_locked"))
   (region.declare $VIRTUAL_MAP_TABLE (size 0x00020000) (align 0x00000010)

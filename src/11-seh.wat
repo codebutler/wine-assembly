@@ -119,11 +119,23 @@
     (global.set $delphi_seh_rec (local.get $seh_rec))
     (call $dispatch_delphi_exception_handler))
 
+  ;; The SEH walk reads guest memory through $gl32/$g2w. With --fault-null=raise
+  ;; armed, an unmapped chain pointer would raise again from inside the walk and
+  ;; recurse until the wasm stack gives out, so the walk runs bracketed by a
+  ;; guard that $g2w_miss checks before it raises.
   (func $raise_exception (param $code i32)
+    (global.set $fault_raising (i32.const 1))
+    (call $raise_exception_walk (local.get $code))
+    (global.set $fault_raising (i32.const 0)))
+
+  (func $raise_exception_walk (param $code i32)
     (local $seh_rec i32) (local $handler i32) (local $frame_ebp i32)
     (local $trylevel i32) (local $scopetable i32) (local $entry i32)
     (local $filter i32) (local $filter_wa i32) (local $except_body i32)
     (local $filter_result i32) (local $first_byte i32)
+    ;; Every path out of here that returns has replaced $eip, so claim the
+    ;; redirect up front rather than at each of the four exits. $run clears it.
+    (global.set $eip_redirected (i32.const 1))
     ;; Read SEH chain head from FS:[0]
     (local.set $seh_rec (call $gl32 (global.get $fs_base)))
     (block $unhandled (loop $walk

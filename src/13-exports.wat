@@ -43,6 +43,9 @@
       ;; over that callback EIP and continue the interrupted block on its callback
       ;; stack. No block is spent from the budget: this is the same block, still
       ;; in progress, and its terminator will return here before another starts.
+      ;; Consumed: we are back at the top of the loop with the handler's $eip in
+      ;; place, which is exactly what the flag was protecting.
+      (global.set $eip_redirected (i32.const 0))
       (if (global.get $resume_ip)
         (then
           (global.set $ip (global.get $resume_ip))
@@ -1857,6 +1860,8 @@
     (global.set $current_thread_id (i32.add (local.get $tid) (i32.const 1)))
     (global.set $post_queue_count (i32.const 0))
     (global.set $pq_read_off (i32.const 0))
+    (global.set $sync_msg_depth (i32.const 0))
+    (global.set $cross_thread_send_depth (i32.const 0))
     (global.set $code_start (local.get $code_s))
     (global.set $code_end (local.get $code_e))
     (global.set $thunk_guest_base (local.get $thunk_gs))
@@ -2296,12 +2301,16 @@
     (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32)
     (result i32)
     (local $wp i32)
+    (global.set $cross_thread_send_depth
+      (i32.add (global.get $cross_thread_send_depth) (i32.const 1)))
     (local.set $wp (call $wnd_table_get (local.get $hwnd)))
     (if (i32.or (i32.eqz (local.get $wp))
                 (i32.ge_u (local.get $wp) (i32.const 0xFFFF0000)))
       (then
         (global.set $eax (call $wnd_send_message
           (local.get $hwnd) (local.get $msg) (local.get $wparam) (local.get $lparam)))
+        (global.set $cross_thread_send_depth
+          (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))
         (return (i32.const 0))))
     (global.set $esp (i32.sub (global.get $esp) (i32.const 16)))
     (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $lparam))
@@ -2319,6 +2328,8 @@
 
   (func (export "thread_send_end") (result i32)
     (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+    (global.set $cross_thread_send_depth
+      (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))
     (global.get $eax))
 
   ;; Finish the original parked SendMessage stdcall on its owning instance.
@@ -2357,7 +2368,9 @@
   (func (export "set_bp") (param $addr i32) (global.set $bp_addr (local.get $addr)) (global.set $bp_first_caller (i32.const 0)) (call $dbg_recompute))
   (func (export "clear_bp") (global.set $bp_addr (i32.const 0)) (call $dbg_recompute))
   (func (export "get_bp_addr") (result i32) (global.get $bp_addr))
-  ;; --fault-null: 0=off, 1=log unmapped guest accesses, 2=log and trap.
+  ;; --fault-null: 0=off, 1=log unmapped guest accesses, 2=log and trap,
+  ;; 3=log and raise a guest EXCEPTION_ACCESS_VIOLATION at the faulting
+  ;; instruction (--fault-null=raise), which is what real hardware does.
   ;; Per-instance like every mutable global, so a worker thread needs its own
   ;; call to see the same setting.
   (func (export "set_fault_unmapped") (param $mode i32)

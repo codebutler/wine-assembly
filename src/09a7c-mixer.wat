@@ -496,8 +496,11 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_mixerGetControlDetailsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_control_details_entry (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    ;; VALUE queries contain no strings; LISTTEXT is rejected by the shared
+    ;; entry point, so the A handler is the complete implementation here too.
+    (call $handle_mixerGetControlDetailsA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   (func $handle_mixerSetControlDetails (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $p i32) (local $details i32) (local $channels i32) (local $left i32) (local $right i32) (local $control i32) (local $result i32)

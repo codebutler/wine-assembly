@@ -1755,6 +1755,19 @@
   ;; lands mid-block routinely, and re-running a block's leading pushes moves ESP
   ;; twice. Non-zero means "resume here"; $run consumes it and clears it.
   (global $resume_ip (mut i32) (i32.const 0))
+
+  ;; $raise_exception replaces $eip outright, so the block that was running is
+  ;; abandoned, not suspended -- and $resume_ip outranks $eip in $run. Without
+  ;; this flag the op after the faulting one parks $ip in $resume_ip on its way
+  ;; out and $run resumes the abandoned block instead of entering the handler.
+  ;; Set by $raise_exception, consumed and cleared by $run.
+  (global $eip_redirected (mut i32) (i32.const 0))
+
+  ;; Set while $raise_exception is walking the SEH chain. That walk reads guest
+  ;; memory, so a chain pointer that is itself unmapped would re-enter the
+  ;; raise from $g2w_miss and recurse until the stack gives out. The inner miss
+  ;; falls back to the sentinel instead.
+  (global $fault_raising (mut i32) (i32.const 0))
   (global $API_HASH_TABLE i32 (region.addr $API_HASH_TABLE 0))
   (global $API_HASH_TABLE_SIZE i32 (region.size $API_HASH_TABLE))
   ;; Window/class/parent tables (below GUEST_BASE, above the API hash table).
@@ -2757,6 +2770,10 @@
   ;; Non-zero while $wnd_send_message is recursively executing an x86 wndproc.
   ;; Host waits in this scope must not yield away the nested guest call frame.
   (global $sync_msg_depth (mut i32) (i32.const 0))
+  ;; Subset of sync_msg_depth entered through the owner-thread dispatcher.
+  ;; InSendMessage is TRUE only for SendMessage from another thread; an
+  ;; ordinary same-thread recursive SendMessage must still report FALSE.
+  (global $cross_thread_send_depth (mut i32) (i32.const 0))
   (global $cbt_hook_ret_thunk (mut i32) (i32.const 0)) ;; CBT hook → WM_CREATE continuation (CACA0002)
   (global $child_cbt_ret_thunk (mut i32) (i32.const 0)) ;; Child CBT hook → dispatch WM_CREATE (CACA0026)
   (global $child_create_ret_thunk (mut i32) (i32.const 0)) ;; Child WM_CREATE returned → hand hwnd back (CACA0027)

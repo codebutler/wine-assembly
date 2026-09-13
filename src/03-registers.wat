@@ -248,7 +248,23 @@
       (then
         (call $host_unmapped_trace (local.get $ga) (global.get $eip))
         (if (i32.eq (global.get $fault_unmapped) (i32.const 2))
-          (then (unreachable)))))
+          (then (unreachable)))
+        ;; Mode 3: what the hardware does. The sentinel keeps a guest that
+        ;; dereferences NULL alive -- reads answer 0, writes go nowhere -- which
+        ;; is why a corrupted pointer surfaces thousands of instructions from
+        ;; where it was made, and why a list walk that should have taken an
+        ;; access violation on its first step instead runs forever. Raising
+        ;; hands the fault to the guest's own __except, or to the unhandled-
+        ;; exception path, at the instruction that caused it.
+        ;;
+        ;; The sentinel is still returned: the faulting op completes against
+        ;; four bytes of scratch rather than being unwound mid-instruction, so
+        ;; one register may take a garbage value before control reaches the
+        ;; handler. $eip is already the handler's by then, and $eip_redirected
+        ;; stops $run resuming the abandoned block.
+        (if (i32.and (i32.eq (global.get $fault_unmapped) (i32.const 3))
+                     (i32.eqz (global.get $fault_raising)))
+          (then (call $raise_exception (i32.const 0xC0000005))))))
     (i32.store (global.get $NULL_SENTINEL) (i32.const 0))
     (global.get $NULL_SENTINEL))
 
@@ -333,6 +349,13 @@
     (if (i32.lt_u
           (i32.sub (local.get $wa) (global.get $VIRTUAL_BACKING_BASE))
           (global.get $VIRTUAL_BACKING_BASE_SIZE))
+      (then (return (call $w2g_sparse (local.get $wa)))))
+    ;; The extension backing window, above the declared map. Same record table,
+    ;; so the same walk answers it; only the range test has to know it exists.
+    ;; A host that created the 512MB minimum has no such addresses, and
+    ;; $virtual_backing_ext_end returns 0 there so this test never fires.
+    (if (i32.and (i32.ge_u (local.get $wa) (call $virtual_backing_ext_base))
+          (i32.lt_u (local.get $wa) (call $virtual_backing_ext_end)))
       (then (return (call $w2g_sparse (local.get $wa)))))
     (if (result i32)
       (i32.lt_u

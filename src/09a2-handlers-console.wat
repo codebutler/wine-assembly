@@ -923,9 +923,12 @@
     (global.set $eax (i32.or (global.get $console_width) (i32.shl (global.get $console_height) (i32.const 16))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; GetConsoleCP() → UINT
+  ;; GetConsoleCP() → UINT. The code page belongs to the console associated
+  ;; with this process, not to the process itself: a GUI image without a
+  ;; console, or a process after FreeConsole, must fail with zero.
   (func $handle_GetConsoleCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $console_cp))
+    (global.set $eax
+      (select (global.get $console_cp) (i32.const 0) (call $console_is_attached)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
 
   ;; FillConsoleOutputCharacterW(hConsole, cCharacter, nLength, dwWriteCoord, lpNumberOfCharsWritten) → BOOL
