@@ -4554,3 +4554,56 @@ uploaded through the software path in an x86 interpreter.
 **Measure this on a quiet box or not at all.** These runs spanned loadavg 54 to
 485, and the same build reached 249 submissions in 304s at load 54 against 7 in
 310s at load ~450.
+
+### The 430MB request is a std::vector growth (2026-09-13, Claude)
+
+Static, so it needs no run and no quiet box. Following the frame chain from the
+amendment above (`malloc` <- `operator new` <- `0x009d5440`), the allocation is
+under `0x9e32a0`, which `0x9e35e0` calls at `0x9e3606`-`0x9e360e`:
+
+```
+009d543b  e8 a0 e1 00 00   call 0x9e35e0      ; returns to 0x9d5440  [verified]
+```
+
+`0x9e35e0` is a large function, not a stub -- the `ret 0x4` at `0x9e361b` is an
+early-exit path and the body continues at `0x9e361e`, branching as far as
+`0x9e380a`. `0x9e32a0` is frame-pointer-omitted (`sub esp,0x60`, no `ebp`
+frame), which is why the EBP walk skips from `operator new` straight to
+`0x9d5440`.
+
+`0x9e32a0` builds **three** vectors, each a `{begin,end,end_cap}` triple in its
+frame (`esp+0x44/48/4c`, `esp+0x24/28/2c`, `esp+0x64/68/6c`), each with the
+same MSVC push-back idiom: compare `(end-begin)>>2` against `(cap-begin)>>2`,
+store and bump on the fast path, else call the growth helper `0x5e44d0`.
+
+`0x5e44d0` is `std::vector<T>::_Insert_n` for a 4-byte `T`:
+
+```
+005e44ea  mov eax, [esi+0xc] / sub eax,edx / sar eax,2   ; capacity
+005e4506  mov ecx, [esi+0x8] / sub ecx,edx / sar ecx,2   ; size
+005e450f  mov ebx, 0x3fffffff                            ; max_size for 4-byte T
+005e4514  sub ebx, ecx
+005e4516  cmp ebx, edi                                   ; edi = count to insert
+005e4518  jnb short 0x5e4528
+005e451c  call 0x59c580                                  ; _Xlength_error
+```
+
+So the element size is 4, confirmed three ways (`sar 2` at the push-back sites,
+`sar 2` here, and the `0x3fffffff` max_size constant). **`0x19aa0000` is
+430,571,520 bytes = 107,642,880 elements**, and it is a *capacity* growth, not a
+one-shot request for a known size.
+
+That matters, because it partly walks back the "one allocation, not an
+accumulation" line in the amendment above. The single refused allocation is
+real, but a vector reaching 107.6M 4-byte elements got there by *accumulating*,
+and by doubling — so earlier growths of ~215MB, ~107MB and so on **succeeded**
+before this one was refused. Something pushes ~10^8 pointers into one of these
+three vectors. An unbounded walk feeding a push_back is exactly that shape, so
+the NULL-sentinel mechanism is back on the table as the *source* of the pushes
+even though it is not itself the thing that allocates.
+
+**Next probe, and it is cheap:** `--break=0x5e44d0` or
+`--trace-at=0x5e44d0` with the `this` pointer in `ecx` — dump
+`[ecx+4]/[ecx+8]/[ecx+0xc]` to get begin/end/cap, and `[esp+0x14]` for the
+insert count. That names *which* of the three vectors runs away and what its
+size was on the way up, without waiting for the 430MB refusal at the end.
