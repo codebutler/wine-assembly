@@ -3944,3 +3944,50 @@ backing. That check costs one eval and would have named the bug on the first
 day. When guest memory contains data no guest code should have written there,
 ask whether it is the *same memory* as somewhere else before asking who wrote
 it.
+
+## The land load runs now, and dies further on: a texture that never loaded
+
+First run on `bec0e26e` (no-alias), driven through the click chain by hand:
+profile dialog -> OK -> New Game -> Continue -> tutorial -> Continue -> land
+selection -> land 1. **The union loop at `0x9e5272` never appears.** The load
+proceeds for ~1.5 million batches past the point the old build wedged at, and
+then:
+
+```
+[eip-zero] guest called through NULL at batch 1952681
+  dbg_prev_eip=0x0093907b
+```
+
+That is a texture accessor:
+
+```
+00939050  push esi / mov esi,ecx
+00939053  mov eax,[esi+0x1d0]        ; texture load state
+0093905b  jz 0x939075                ; 0 -> use it
+00939060  jz 0x939075                ; 3 -> loaded, use it
+00939065  jnz 0x939079               ; not 1 -> esi = NULL
+00939067  call 0x938930              ; 1 -> poll until the async load finishes
+0093906c  cmp [esi+0x1d0],3
+00939073  jnz 0x939079               ; still not loaded -> esi = NULL
+00939075  mov esi,[esi]
+00939079  xor esi,esi
+0093907b  ...
+00939083  mov eax,[esi]              ; esi = 0 -> eax = 0
+0093908f  call [eax+0x4c]            ; call through NULL
+```
+
+The state field is `+0x1d0`: **2 = requested/not loaded** (written at the entry
+of the request path `0x9394e0` and at `0x9389b0`/`0x939200`), **1 = async load
+in flight**, **3 = loaded**. `0x938930` is the poll: while the state is 1 it
+calls `[0xc12314]` (a sleep) and prints `"Texture Asynchronous Load: Having to
+poll for texture %s!!!"` at `0xd07bfc` through `[0xc12150]`.
+
+So at the crash the texture was in state **2** -- the caller dereferenced a
+texture whose load was never started or never completed, and the game has no
+NULL check on that path. Nothing in `run.log` reports a failed file open, a
+failed `CreateTexture`, or an unimplemented API, so the next question is who
+was supposed to move that object from 2 to 1/3: the async loader is a guest
+thread, and this run is the cooperative scheduler.
+
+The screen at the crash is still the land-selection menu (415832 bytes), so the
+load never got as far as drawing the world.
