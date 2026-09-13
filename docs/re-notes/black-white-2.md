@@ -3463,48 +3463,62 @@ That gives the whole sequence a clock:
 | 435423-435908 | ~490 batches of ordinary pool traffic, 303 walker calls returning |
 | 435909 | the 304th call — a point that tests "inside" — never returns |
 
-## Open: an interactive run stalls on the profile dialog, cause unknown
+## The approach path: the profile dialog is the real blocker, and it takes no input
 
-Runs 57-62 all reach the land-selection menu in about 750 seconds and wedge
-there. Three attempts to reach the same state with a control channel open did
-not, and two mechanisms proposed for that have been measured and refuted. What
-is actually established:
+The wedge is not what keeps this game off the land. Run 62's captures show the
+land-selection menu fully up and correctly drawn when the walker wedges, so the
+menu is reached and rendered; the walker spins on something the scene behind it
+queries. What actually stops a run from getting there is one screen earlier.
 
-| run | control-stdin | tick-ms | batches/s | reached the land menu? |
-|---|---|---|---|---|
-| run 62 | no | 200 (default) | ~580 | yes, between 404s and 800s |
-| live A | yes | 200 | ~2300 | no, 2400s |
-| live B | yes | 200 | ~5700 | no, 1800s |
-| live C | yes | 20 | ~6000 | no, 900s |
+**Capture size identifies the screen** without opening it, which makes a sweep
+cheap to read: ~220KB loading, ~340KB the "New Profile Name" dialog, ~415KB the
+land menu.
 
-**Refuted: "the debug flags pace the clock."** Live B carries run 62's exact
-flags and still stalls.
+### The dialog's auto-advance is flaky, and no flag separates the cases
 
-**Refuted: "the headless clock races ahead."** Live C compensates with
-`--tick-ms-per-batch=20`, which puts guest time at ~120 guest-seconds per wall
-second against run 62's ~116 — equal pacing, same stall.
+The probe contains **no input automation at all**, so runs that reach the land
+menu do it unattended. Twelve runs, same build, same box:
 
-**Also wrong: reading batches/s as a cause.** An app spinning in a message pump
-retires tiny blocks, so a stalled run *produces* a high batch rate; the number is
-a symptom of the stall, not an explanation for it.
+| outcome | runs | what they had in common |
+|---|---|---|
+| reached the land menu (~403s) | 6 | nothing that the stalled ones lacked |
+| stalled on the dialog for the whole budget | 6 | nothing that the reached ones lacked |
 
-What the stalled runs show is the **"New Profile Name" dialog**, drawn over the
-profile selector, with the main thread parked in the message pump at
-`eip=0x7503488`. Run 62 passes that dialog with **no input whatsoever** — the
-probe has no input automation in it at all — so whatever dismisses it is the
-game's own doing, and it is not happening under a control channel.
+Three mechanisms were proposed for the split and all three were measured and
+refuted:
 
-Input does not reach it either. All three of these were delivered and none moved
-the dialog: `renderer.handleMouseDown/Up` on the OK button, `WM_LBUTTONDOWN`/`UP`
-posted to the main hwnd via the `input-message` control action, and `VK_RETURN`
-pushed onto `renderer.inputQueue`. `_activeInputProfile` is null, so the game has
-acquired no DirectInput device.
+- **"The debug flags pace the clock."** Refuted: a run carrying run 62's exact
+  flags stalls, and run 62's own script reruns green.
+- **"The headless clock races ahead."** Refuted: `--tick-ms-per-batch=20` puts
+  guest time at ~120 guest-seconds per wall second against the baseline's ~116 —
+  equal pacing, same stall.
+- **"`--input` changes the pacing."** Refuted, and backwards: a stalled run
+  retires tiny blocks in a message pump, so its batch counter races, and
+  batch-scheduled events therefore fire minutes early. The stall makes the
+  schedule fire early, not the other way round.
 
-The next measurement is the one that isolates it: the live script's exact flags
-with `--control-stdin` removed. If that reaches the menu, the control channel is
-the cause and the question becomes which of its seams matters; if it does not,
-the cause is one of the other differences from run 62 (`--output` location, the
-absent `--capture-every`).
+A high batches/s reading is a **symptom** of a run sitting in a pump, never a
+cause. `--control-stdin` is not a variable at all — the probe passes it on every
+run.
+
+### No input path reaches the dialog
+
+The dialog is drawn by the game, not by Win98 controls, and
+`_activeInputProfile` is null, so no DirectInput device has been acquired. All
+of the following were delivered and none moved it, including sixty attempts
+spread across ten batch points from 150000 to 600000 covering both the inner
+dialog's OK at ~(250,275) and the outer one's at ~(250,338):
+
+| path | result |
+|---|---|
+| `renderer.handleMouseDown/Up` (the `click` input action) | no effect |
+| `WM_LBUTTONDOWN`/`WM_LBUTTONUP` posted to the main hwnd | queued, no effect |
+| `VK_RETURN` pushed onto `renderer.inputQueue` | no effect |
+| `di-mousedown`/`di-mouseup` (feeds `GetAsyncKeyState`) | no effect |
+| `mousemove` first, so `GetCursorPos` agrees, then each of the above | no effect |
+
+So the open question is not which path *should* work but which API the game
+actually polls, and that is a `--trace-api` census away.
 
 ### What the wedge actually blocks
 
