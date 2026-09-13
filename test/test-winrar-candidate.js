@@ -104,6 +104,20 @@ function saturatedCountInRect(png, left, top, right, bottom) {
   return count;
 }
 
+function titleBlueCountInRect(png, left, top, right, bottom) {
+  let count = 0;
+  for (let y = top; y < bottom; y++) {
+    for (let x = left; x < right; x++) {
+      const i = (y * png.width + x) * 4;
+      const r = png.data[i];
+      const g = png.data[i + 1];
+      const b = png.data[i + 2];
+      if (b > 100 && b - r > 30 && b - g > 20 && png.data[i + 3]) count++;
+    }
+  }
+  return count;
+}
+
 (async () => {
   const candidate = MANIFEST.candidates.find(item => item.id === 'winrar-310');
   assert(candidate, 'WinRAR 3.10 has a candidate-corpus entry');
@@ -181,12 +195,24 @@ function saturatedCountInRect(png, left, top, right, bottom) {
     const png = PNG.sync.read(fs.readFileSync(framePath));
     assert.strictEqual(`${png.width}x${png.height}`, '640x480',
       'WinRAR candidate uses the browser-sized Win98 desktop');
-    const teal = colorCount(png, [0, 128, 128]);
-    const gray = colorCount(png, [192, 192, 192]);
-    const white = colorCount(png, [255, 255, 255]);
-    const blue = colorCount(png, [0, 0, 128]);
-    assert(teal > 80000 && gray > 50000 && white > 50000 && blue > 50,
-      `WinRAR setup UI is not visibly rendered (${teal} teal, ${gray} gray, ${white} white, ${blue} blue)`);
+    // Prove the installer itself rendered. The amount of desktop teal is the
+    // inverse of the correctly sized windows and changes whenever placement or
+    // non-client metrics improve, so it is not evidence about their contents.
+    // These deliberately roomy regions instead cover the active title bar,
+    // destination edit, license text pane, and bottom command-button row.
+    const titleBlue = titleBlueCountInRect(png, 60, 50, 600, 125);
+    const destinationWhite = colorCountInRect(png, [255, 255, 255],
+      70, 170, 530, 215);
+    const licenseWhite = colorCountInRect(png, [255, 255, 255],
+      70, 200, 590, 430);
+    const licenseInk = darkCountInRect(png, 70, 200, 590, 430);
+    const buttonGray = colorCountInRect(png, [192, 192, 192],
+      220, 425, 450, 475);
+    assert(titleBlue > 5000 && destinationWhite > 4000 &&
+      licenseWhite > 75000 && licenseInk > 7000 && buttonGray > 5000,
+      `WinRAR setup controls are not visibly rendered (${titleBlue} title pixels, ` +
+        `${destinationWhite} destination pixels, ${licenseWhite} license-paper pixels, ` +
+        `${licenseInk} license-ink pixels, ${buttonGray} button pixels)`);
 
     assert(fs.existsSync(INSTALLED_WINRAR),
       'prepare WinRAR before testing the dropdown: node tools/fetch-candidate-corpus.js --id=winrar-310 --prepare');
