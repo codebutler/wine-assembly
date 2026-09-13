@@ -1211,8 +1211,34 @@
   ;; record has one writer (the reserving instance); frees only read it. The
   ;; allocated end, unlike the process reservation cursor, excludes unused tail
   ;; bytes and DLL gaps. Records remain valid when that instance changes chunks.
+  ;;
+  ;; A slot $heap_arena_release_free emptied is available again, and it says so
+  ;; by leaving $HEAP_ARENA_RECYCLED in its live-bytes word -- a slot that was
+  ;; never used is all zeroes and stays untouched, so "the table is full" still
+  ;; means what it meant. Claiming is a CAS that takes the tag away, because the
+  ;; base is what makes the record visible to $heap_arena_find and has to be
+  ;; written last: two registrants racing for one dead slot would otherwise both
+  ;; fill it in and the loser's extent would be published under the winner's base.
   (func $heap_arena_register (param $base i32) (param $end i32) (result i32)
-    (local $count i32) (local $rec i32)
+    (local $count i32) (local $rec i32) (local $i i32)
+    (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+    (if (i32.gt_u (local.get $count) (i32.const 1024))
+      (then (local.set $count (i32.const 1024))))
+    (block $reused (loop $slot
+      (br_if $reused (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
+      (if (i32.and (i32.eqz (i32.atomic.load (local.get $rec)))
+            (i32.eq (i32.atomic.rmw.cmpxchg offset=12 (local.get $rec)
+              (global.get $HEAP_ARENA_RECYCLED) (i32.const 0))
+              (global.get $HEAP_ARENA_RECYCLED)))
+        (then
+          (i32.store offset=4 (local.get $rec) (local.get $end))
+          (i32.atomic.store offset=8 (local.get $rec) (local.get $base))
+          (i32.atomic.store (local.get $rec) (local.get $base))
+          (return (local.get $rec))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $slot)))
     (block $claimed (loop $retry
       (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
       (if (i32.ge_u (local.get $count) (i32.const 1024))
@@ -1224,6 +1250,7 @@
     (local.set $rec (i32.add (global.get $HEAP_ARENAS)
       (i32.add (i32.const 16) (i32.mul (local.get $count) (i32.const 16)))))
     (i32.store offset=4 (local.get $rec) (local.get $end))
+    (i32.atomic.store offset=12 (local.get $rec) (i32.const 0))
     (i32.atomic.store offset=8 (local.get $rec) (local.get $base))
     ;; Publishing base last makes a partially registered record invisible.
     (i32.atomic.store (local.get $rec) (local.get $base))
@@ -1251,6 +1278,102 @@
       (br $scan)))
     (i32.const 0))
 
+  ;; Live allocated bytes in one arena, at +12. Every block $heap_alloc hands
+  ;; out adds its header size here and every $heap_free takes it back, so a
+  ;; retired arena reading zero is one whose memory nothing owns any more.
+  ;; Atomic because blocks cross instances: "ownership transfers to the freeing
+  ;; instance" is the rule $heap_free already states, and a thread that frees
+  ;; another thread's block must not lose the decrement.
+  (func $heap_arena_charge (param $rec i32) (param $delta i32)
+    (if (local.get $rec)
+      (then (drop (i32.atomic.rmw.add offset=12 (local.get $rec) (local.get $delta))))))
+
+  ;; Drop every free-list entry inside [base,end). The list is the only thing
+  ;; still naming this memory; a link left behind would hand out an address that
+  ;; no longer resolves. Only this instance's list is reachable from here —
+  ;; another instance's stale link is caught by the $heap_arena_find validation
+  ;; $heap_alloc already does on every link, which cuts its list rather than
+  ;; following one into released space.
+  (func $heap_free_list_purge (param $base i32) (param $end i32)
+    (local $cur i32) (local $prev_w i32) (local $next i32) (local $steps i32)
+    (local.set $cur (global.get $free_list))
+    (block $done (loop $walk
+      (br_if $done (i32.eqz (local.get $cur)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br_if $done (i32.gt_u (local.get $steps) (i32.const 65536)))
+      ;; An unmappable link ends the walk the same way $heap_alloc's does.
+      (if (i32.eqz (call $heap_arena_find (local.get $cur)))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
+            (else (global.set $free_list (i32.const 0))))
+          (br $done)))
+      (local.set $next (i32.load offset=4 (call $g2w (local.get $cur))))
+      (if (i32.and (i32.ge_u (local.get $cur) (local.get $base))
+                   (i32.lt_u (local.get $cur) (local.get $end)))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (local.get $next)))
+            (else (global.set $free_list (local.get $next)))))
+        (else (local.set $prev_w (call $g2w (local.get $cur)))))
+      (local.set $cur (local.get $next))
+      (br $walk))))
+
+  ;; Give back every retired sparse arena nothing is living in.
+  ;;
+  ;; A free block may not be merged with the one in the arena next door, so an
+  ;; abandoned arena is dead weight: it holds guest address space the downward
+  ;; reserve cursor can never walk back over and backing the commit path can
+  ;; never re-use. Black & White 2's land loader grows one container by roughly
+  ;; 1.5x a step -- 1, 1.4, 2.2, 3.3, 4.8, 7.1, 10.7, 16, 24, 36, 54, 81, 121 MB,
+  ;; each step a HeapReAlloc that frees the step before it -- and every step got
+  ;; its own sparse arena. Measured at the 191 MB step: 390 map records, the
+  ;; reserve cursor 923 MB down from 0x50000000 and 315 of the backing pool's
+  ;; 316 MB spent, for a container 121 MB long. The allocation failed, the game
+  ;; threw std::bad_alloc and died. Handing the arenas back makes that series
+  ;; cost its largest two members instead of their sum.
+  ;;
+  ;; "Retired" is +8 == +4: $heap_arena_free_tail sets the allocated end to the
+  ;; reserved end when an instance moves off an arena, so an arena some instance
+  ;; is still bump-allocating from has room left and is never a candidate. Low
+  ;; arenas are excluded outright -- their address space is the direct window,
+  ;; which is not the reserve cursor's to hand back.
+  (func $heap_arena_release_free (result i32)
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local $end i32) (local $freed i32)
+    (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+    (if (i32.gt_u (local.get $count) (i32.const 1024))
+      (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
+      (local.set $base (i32.atomic.load (local.get $rec)))
+      (local.set $end (i32.load offset=4 (local.get $rec)))
+      (if (i32.and
+            (i32.and
+              (i32.ge_u (local.get $base) (global.get $VIRTUAL_ALLOC_MIN))
+              (i32.eq (i32.atomic.load offset=8 (local.get $rec)) (local.get $end)))
+            (i32.and
+              (i32.eqz (i32.atomic.load offset=12 (local.get $rec)))
+              (i32.ne (local.get $rec) (global.get $heap_sparse_record))))
+        (then
+          (call $heap_free_list_purge (local.get $base) (local.get $end))
+          ;; Unpublish before the backing goes: a record with a zero base is
+          ;; invisible to $heap_arena_find, so nothing can validate a pointer
+          ;; into memory that is on its way back to the pool.
+          (i32.atomic.store (local.get $rec) (i32.const 0))
+          (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
+          (i32.store offset=4 (local.get $rec) (i32.const 0))
+          (i32.atomic.store offset=12 (local.get $rec)
+            (global.get $HEAP_ARENA_RECYCLED))
+          (drop (call $virtual_map_release (local.get $base)))
+          (local.set $freed (i32.add (local.get $freed)
+            (i32.sub (local.get $end) (local.get $base))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $freed))
+
   ;; Retire the unused tail of an instance-owned arena after a replacement
   ;; arena has been successfully registered. It was reserved exclusively for
   ;; this instance, but never published as allocated, so first give it a valid
@@ -1272,6 +1395,10 @@
     (if (i32.ne (i32.load offset=4 (local.get $record)) (local.get $end)) (then (return)))
     (i32.store (call $g2w (local.get $ptr)) (local.get $size))
     (i32.atomic.store offset=8 (local.get $record) (local.get $end))
+    ;; The tail was never handed out, so charge it before freeing it: the live
+    ;; count is allocations minus frees, and an unmatched decrement would take
+    ;; the arena below zero and keep it out of $heap_arena_release_free forever.
+    (call $heap_arena_charge (local.get $record) (local.get $size))
     (call $heap_free (i32.add (local.get $ptr) (i32.const 4))))
 
   ;; Reserve this instance's next private chunk of the low guest heap window.
@@ -1545,15 +1672,30 @@
           (i32.and
             (i32.add (local.get $chunk) (i32.const 0xFFFF))
             (i32.const 0xFFFF0000)))
+        ;; Out of address space, or out of backing: before either becomes the
+        ;; guest's problem, hand back the arenas nothing lives in any more and
+        ;; ask once more. This is the only caller, because the scan walks every
+        ;; arena and this instance's whole free list — affordable when the
+        ;; alternative is returning NULL, not on every spill.
         (local.set $new_top (call $virtual_reserve_down (local.get $chunk)))
+        (if (i32.eqz (local.get $new_top))
+          (then
+            (if (call $heap_arena_release_free)
+              (then (local.set $new_top (call $virtual_reserve_down (local.get $chunk)))))))
         (if (i32.eqz (local.get $new_top))
           (then
             (call $host_heap_oom_trace (local.get $chunk) (i32.const 2))
             (return (i32.const 0))))
         (if (i32.eqz (call $virtual_map_commit (local.get $new_top) (local.get $chunk)))
           (then
-            (call $host_heap_oom_trace (local.get $chunk) (i32.const 3))
-            (return (i32.const 0))))
+            (if (i32.eqz (call $heap_arena_release_free))
+              (then
+                (call $host_heap_oom_trace (local.get $chunk) (i32.const 3))
+                (return (i32.const 0))))
+            (if (i32.eqz (call $virtual_map_commit (local.get $new_top) (local.get $chunk)))
+              (then
+                (call $host_heap_oom_trace (local.get $chunk) (i32.const 3))
+                (return (i32.const 0))))))
         (local.set $record (call $heap_arena_register
           (local.get $new_top) (i32.add (local.get $new_top) (local.get $chunk))))
         (if (i32.eqz (local.get $record))
@@ -1568,6 +1710,7 @@
     (local.set $ptr (global.get $heap_sparse_ptr))
     (global.set $heap_sparse_ptr (i32.add (global.get $heap_sparse_ptr) (local.get $need)))
     (i32.store (call $g2w (local.get $ptr)) (local.get $need))
+    (call $heap_arena_charge (global.get $heap_sparse_record) (local.get $need))
     (i32.atomic.store offset=8 (global.get $heap_sparse_record) (global.get $heap_sparse_ptr))
     (local.get $ptr))
 
@@ -1597,6 +1740,7 @@
     (local $need i32) (local $ptr i32)
     (local $prev_w i32) (local $cur i32) (local $cur_w i32)
     (local $bsz i32) (local $rem i32) (local $steps i32) (local $from_free i32)
+    (local $cur_rec i32)
     ;; Refuse huge/overflowing allocations before adding the block header.
     (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))
       (then
@@ -1630,8 +1774,11 @@
             (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
             (else (global.set $free_list (i32.const 0))))
           (br $scan)))
-      ;; Validate the link before reading its header through g2w.
-      (if (i32.eqz (call $heap_arena_find (local.get $cur)))
+      ;; Validate the link before reading its header through g2w. The record it
+      ;; resolves to is also the one a block taken from here is charged against,
+      ;; so the accounting costs no extra scan.
+      (local.set $cur_rec (call $heap_arena_find (local.get $cur)))
+      (if (i32.eqz (local.get $cur_rec))
         (then
           (if (local.get $prev_w)
             (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
@@ -1673,6 +1820,8 @@
                   (i32.load (i32.add (local.get $cur_w) (i32.const 4)))))
                 (else (global.set $free_list
                   (i32.load (i32.add (local.get $cur_w) (i32.const 4))))))))
+          (call $heap_arena_charge (local.get $cur_rec)
+            (i32.load (call $g2w (local.get $ptr))))
           (local.set $from_free (i32.const 1))
           (br $found)))
       (local.set $prev_w (local.get $cur_w))
@@ -1706,6 +1855,7 @@
       (local.set $ptr (global.get $heap_ptr))
       (i32.store (call $g2w (local.get $ptr)) (local.get $need))
       (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need)))
+      (call $heap_arena_charge (global.get $heap_arena_record) (local.get $need))
       (i32.atomic.store offset=8 (global.get $heap_arena_record) (global.get $heap_ptr)))
     ;; A recycled block still holds whatever the last owner left in it -- and,
     ;; at offset 4, this allocator's own free-list next pointer. Bump space is
@@ -1757,10 +1907,11 @@
   ;; heap_free: return block to free list
   (func $heap_free (param $guest_ptr i32)
     (local $block i32) (local $w i32) (local $size i32)
-    (local $cur i32) (local $steps i32)
+    (local $cur i32) (local $steps i32) (local $rec i32)
     (if (i32.eqz (local.get $guest_ptr)) (then (return)))
     (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
-    (if (i32.eqz (call $heap_arena_find (local.get $block))) (then (return)))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (if (i32.eqz (local.get $rec)) (then (return)))
     (local.set $w (call $g2w (local.get $block)))
     (local.set $size (i32.load (local.get $w)))
     (if (call $heap_block_bad (local.get $block) (local.get $size)) (then (return)))
@@ -1784,7 +1935,8 @@
     ;; already passed this block; its private free list never contained it.
     ;; Prepend to free list: store next = old head
     (i32.store (i32.add (local.get $w) (i32.const 4)) (global.get $free_list))
-    (global.set $free_list (local.get $block)))
+    (global.set $free_list (local.get $block))
+    (call $heap_arena_charge (local.get $rec) (i32.sub (i32.const 0) (local.get $size))))
 
 ;; DC record offsets: hdc, pen, brush, pos x/y, text/bk colors, bk mode,
   ;; text align, map mode, window origin/extents, viewport origin/extents,

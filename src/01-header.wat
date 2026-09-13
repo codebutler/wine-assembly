@@ -2697,6 +2697,11 @@
   (global $heap_arena_record (mut i32) (i32.const 0))
   (global $HEAP_ARENAS i32 (region.addr $HEAP_ARENAS 0))
   (global $HEAP_ARENAS_SIZE i32 (region.size $HEAP_ARENAS))
+  ;; Left in a released record's live-bytes word by $heap_arena_release_free.
+  ;; It is what tells a slot that has been handed back apart from one that was
+  ;; never used: only the first is claimed again, so a table whose every slot
+  ;; has been touched is still full and still fails the registration.
+  (global $HEAP_ARENA_RECYCLED i32 (i32.const 0x52454C46)) ;; "RELF"
   (global $heap_sparse_ptr (mut i32) (i32.const 0))
   (global $heap_sparse_end (mut i32) (i32.const 0))
   (global $heap_sparse_record (mut i32) (i32.const 0))
