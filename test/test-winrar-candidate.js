@@ -272,9 +272,16 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
     assert(fs.existsSync(integrationFramePath),
       'WinRAR did not capture its Integration property page');
     const integrationPng = PNG.sync.read(fs.readFileSync(integrationFramePath));
-    const staleGeneralInk = darkCountInRect(integrationPng, 300, 185, 480, 211);
-    assert(staleGeneralInk < 30,
-      `WinRAR property page retained hidden General controls (${staleGeneralInk} stale dark pixels)`);
+    // This region contains Integration's shell-options group and Context menu
+    // button. Before DS_SETFONT reached the native tab, COMCTL32 calculated
+    // wider hit rectangles than the visible labels and the same click opened
+    // Viewer's large white external-viewer edit instead.
+    const integrationInk = darkCountInRect(integrationPng, 235, 225, 495, 315);
+    const strayViewerWhite = colorCountInRect(integrationPng, [255, 255, 255],
+      235, 225, 495, 315);
+    assert(integrationInk > 1000 && strayViewerWhite < 1000,
+      `visible Integration tab selected the wrong property page ` +
+        `(${integrationInk} Integration pixels, ${strayViewerWhite} Viewer-edit pixels)`);
     const exposedPageWhite = colorCountInRect(integrationPng, [255, 255, 255],
       50, 87, 510, 91);
     assert(exposedPageWhite < 40,
@@ -331,7 +338,7 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       '--max-batches=120',
       '--batch-size=50000',
       `--input=1:wait-title:Please_register:2000,2:dlg-click:1,` +
-        `10:mousedown:170:76,11:mouseup:170:76,20:dlg-click:104,` +
+        `10:mousedown:170:76,11:mouseup:170:76,20:dlg-click:103,` +
         `21:wait-title-snapshot:Browse_for_Folder:100:browse:${browseFramePath}`,
     ], {
       cwd: ROOT,

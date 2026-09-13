@@ -6889,6 +6889,19 @@
           (call $title_table_set (local.get $ctrl_hwnd)
             (local.get $text_wa) (call $strlen (local.get $text_wa)))))
       (drop (call $wnd_send_message (local.get $ctrl_hwnd) (i32.const 0x0001) (i32.const 0) (local.get $cs)))
+      ;; DS_SETFONT makes the dialog manager install its dialog font on every
+      ;; control.  Resource dialogs here already use the measured Win98 8pt
+      ;; MS Sans Serif base above, so give native COMCTL32 tabs that same
+      ;; canonical stock font.  Otherwise the real tab wndproc sizes and hit
+      ;; tests items with the taller SYSTEM_FONT while the shared-surface
+      ;; painter draws DEFAULT_GUI_FONT, making clicks select the next page.
+      (if (i32.and
+            (i32.ne (i32.and (local.get $style) (i32.const 0x40)) (i32.const 0))
+            (i32.ne (local.get $native_tab) (i32.const 0)))
+        (then
+          (drop (call $wnd_send_message
+            (local.get $ctrl_hwnd) (i32.const 0x0030)
+            (i32.const 0x30021) (i32.const 0)))))
       ;; Control wndproc has copied text into its own state struct;
       ;; free the template-side copy to avoid leaking per dialog open.
       (if (local.get $text_ptr) (then (call $heap_free (local.get $text_ptr))))
