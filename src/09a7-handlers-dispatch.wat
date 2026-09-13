@@ -1680,6 +1680,15 @@
 
   ;; IDirectDrawGammaControl is a view onto an existing surface slot. GTA2
   ;; snapshots the current ramp and installs its own during video startup.
+  (func $ddraw_gamma_control_valid (param $this i32) (result i32)
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
+    (i32.and
+      (i32.eq (load.field DxObject type (local.get $entry)) (i32.const 2))
+      (i32.ne (i32.and (load.field DxObject flags (local.get $entry))
+        (i32.const 1)) (i32.const 0))))
+
   (func $handle_IDirectDrawGammaControl_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; IID_IDirectDrawGammaControl {69C11C3E-B46B-11D1-AD7A-00C04FC29B4E}.
     (global.set $eax (call $dx_query_interface_single
@@ -1700,25 +1709,50 @@
 
   (func $handle_IDirectDrawGammaControl_GetGammaRamp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ramp i32) (local $i i32) (local $value i32)
-    (if (i32.eqz (local.get $arg2))
+    (if (i32.eqz (call $ddraw_gamma_control_valid (local.get $arg0)))
+      (then (global.set $eax (i32.const 0x88760082))) ;; DDERR_INVALIDOBJECT
+      (else (if (i32.or (local.get $arg1) (i32.eqz (local.get $arg2)))
       (then (global.set $eax (i32.const 0x80070057)))
       (else
         (local.set $ramp (call $g2w (local.get $arg2)))
-        (local.set $i (i32.const 0))
-        (block $done (loop $fill
-          (br_if $done (i32.ge_u (local.get $i) (i32.const 256)))
-          (local.set $value (i32.mul (local.get $i) (i32.const 257)))
-          (i32.store16 (i32.add (local.get $ramp) (i32.shl (local.get $i) (i32.const 1))) (local.get $value))
-          (i32.store16 (i32.add (i32.add (local.get $ramp) (i32.const 512)) (i32.shl (local.get $i) (i32.const 1))) (local.get $value))
-          (i32.store16 (i32.add (i32.add (local.get $ramp) (i32.const 1024)) (i32.shl (local.get $i) (i32.const 1))) (local.get $value))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br $fill)))
-        (global.set $eax (i32.const 0))))
+        (if (global.get $gdi_gamma_ramp_guest)
+          (then
+            (memory.copy (local.get $ramp)
+              (call $g2w (global.get $gdi_gamma_ramp_guest)) (i32.const 1536)))
+          (else
+            (local.set $i (i32.const 0))
+            (block $done (loop $fill
+              (br_if $done (i32.ge_u (local.get $i) (i32.const 256)))
+              (local.set $value (i32.mul (local.get $i) (i32.const 257)))
+              (i32.store16 (i32.add (local.get $ramp) (i32.shl (local.get $i) (i32.const 1))) (local.get $value))
+              (i32.store16 (i32.add (i32.add (local.get $ramp) (i32.const 512)) (i32.shl (local.get $i) (i32.const 1))) (local.get $value))
+              (i32.store16 (i32.add (i32.add (local.get $ramp) (i32.const 1024)) (i32.shl (local.get $i) (i32.const 1))) (local.get $value))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $fill)))))
+        (global.set $eax (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_IDirectDrawGammaControl_SetGammaRamp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (select (i32.const 0) (i32.const 0x80070057)
-      (i32.ne (local.get $arg2) (i32.const 0))))
+    (local $ramp i32)
+    (if (i32.eqz (call $ddraw_gamma_control_valid (local.get $arg0)))
+      (then (global.set $eax (i32.const 0x88760082))) ;; DDERR_INVALIDOBJECT
+      (else (if (i32.or
+          (i32.gt_u (local.get $arg1) (i32.const 1))
+          (i32.eqz (local.get $arg2)))
+        (then (global.set $eax (i32.const 0x80070057))) ;; DDERR_INVALIDPARAMS
+        (else
+          (if (i32.eqz (global.get $gdi_gamma_ramp_guest))
+            (then
+              (local.set $ramp (call $heap_alloc (i32.const 1536)))
+              (if (i32.eqz (local.get $ramp))
+                (then
+                  (global.set $eax (i32.const 0x8007000E))
+                  (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+                  (return)))
+              (global.set $gdi_gamma_ramp_guest (local.get $ramp))))
+          (memory.copy (call $g2w (global.get $gdi_gamma_ramp_guest))
+            (call $g2w (local.get $arg2)) (i32.const 1536))
+          (global.set $eax (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; CLSID_ShellLink's Win98 interfaces. Inno Setup configures IShellLinkA,
