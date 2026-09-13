@@ -3663,3 +3663,56 @@ batches and pulsed. `$S/bw-wallclick.sh` does that over `--control-stdin`:
 photograph every 30s, and when the capture size says the dialog is up, park the
 cursor with a large negative relative delta, walk it to the button, hold the
 button 5s, release.
+
+## The whole front end is navigable (2026-09-13)
+
+Driving the acquired relative mouse on the wall clock walks the entire menu
+chain for the first time. One boot, `--control-stdin`, a click = park with
+`handleRelativeMouseMove(-3000,-3000)`, walk to the target, hold the button 5s,
+release (`$S/bw-wallclick.sh` + `$S/clickat.sh`):
+
+| t (wall s) | capture | screen |
+|---|---|---|
+| 30 | 2075 B | black |
+| 60–90 | 220 KB | loading |
+| 150 | 340 KB | **"New Profile Name"** over "Select Profile", name prefilled `Player`, OK/Cancel |
+| 150 + click (250,275) | 339 KB | same dialog, cursor sprite now drawn on OK |
+| 150 + second click | **397 KB** | **main menu** — title `Player`, bar reads Credits / New Game / Load Game / Change Profile / Options / Quit |
+| + click (165,443) | 395 KB | **mouse-tutorial screen** (four panels, Continue button) |
+| + click (320,461) | 394 KB | **land-selection menu** — burning village scene, eight land thumbnails |
+| + click (75,380) / (140,378) | 415889 B | land menu, then the guest enters a long non-rendering load |
+
+Two things this settles:
+
+- **The capture-size discriminator gains two entries**: ~395–397 KB is the main
+  menu / tutorial, and the old "415889 = land menu" still holds.
+- **The cursor is unmistakably ours.** In the 340 KB capture the game's own
+  cursor glow sits exactly on OK, where the relative walk put it, and in the
+  next capture it has changed to the pressed sprite. The DirectInput mouse is
+  wired end to end.
+
+### After the land click: not a wedge, a long scan
+
+The land click stops the repaint (captures stay byte-identical at 415889) and
+pins EIP at `0x9e5272`. That is *not* the `0x9e17b0` wedge. Disassembled it is
+an ordinary linear search:
+
+```
+9e5272  cmp [ecx], edi
+9e5274  jz  0x9e52e9        ; hit
+9e5276  add eax, 1
+9e5279  add ecx, 4
+9e527c  cmp eax, [esi+4]    ; count
+9e527f  jl  0x9e5272
+```
+
+Read out of the live instance: `esi=0x35c51fb4`, count `[esi+4]=0xb351`
+(45905), data `[esi+8]=0x2db5d884`, and `ecx` is exactly `data + eax*4`. `eax`
+was 37756 on one sample and 47603 four seconds later — past the 45905 of the
+first pass, so the *outer* loop is turning too. Nothing is unmapped and nothing
+is stuck: this is an O(n·m) scan over a 45905-entry table, running at
+interpreter speed, which is what land loading costs here.
+
+So the sequence that reaches gameplay is now known and reproducible; what is
+left between the land menu and the land is throughput, the same thing the
+`--cpu-prof` split above points at.
