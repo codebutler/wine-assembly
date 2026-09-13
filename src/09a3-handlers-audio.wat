@@ -2136,9 +2136,15 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; joyGetPos(uJoyID, lpInfo) — 2 args, return JOYERR_UNPLUGGED (167)
+  ;; joyGetPos(uJoyID, lpInfo) — Win98 accepts IDs 0..15 and requires an
+  ;; output JOYINFO pointer. A well-formed request reaches the absent device.
   (func $handle_joyGetPos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 167))  ;; JOYERR_UNPLUGGED
+    (if (i32.or
+          (i32.gt_u (local.get $arg0) (i32.const 15))
+          (i32.eqz (local.get $arg1)))
+      (then (global.set $eax (i32.const 11)))  ;; MMSYSERR_INVALPARAM
+      (else (global.set $eax (i32.const 167)))  ;; JOYERR_UNPLUGGED
+    )
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
