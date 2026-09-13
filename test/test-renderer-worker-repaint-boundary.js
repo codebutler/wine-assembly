@@ -9,23 +9,21 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { Win98Renderer } = require('../lib/renderer');
+const { readWatSourceClosure } = require('./wat-source-closure');
 
 const ROOT = path.resolve(__dirname, '..');
-const beginPaintWat = fs.readFileSync(path.join(ROOT, 'src/09a-handlers.wat'), 'utf8');
-const endPaintWat = fs.readFileSync(path.join(ROOT, 'src/09a4-handlers-gdi.wat'), 'utf8');
-const controlsWat = fs.readFileSync(path.join(ROOT, 'src/09c3-controls.wat'), 'utf8');
+const watSource = readWatSourceClosure();
 const hostImports = fs.readFileSync(path.join(ROOT, 'lib/host-imports.js'), 'utf8');
 const browserHost = fs.readFileSync(path.join(ROOT, 'host.js'), 'utf8');
 const guestRpc = fs.readFileSync(path.join(ROOT, 'lib/guest-rpc.js'), 'utf8');
-const helpersWat = fs.readFileSync(path.join(ROOT, 'src/10-helpers.wat'), 'utf8');
-assert(beginPaintWat.includes('(call $host_paint_begin (local.get $arg0))'),
+assert(watSource.includes('(call $host_paint_begin (local.get $arg0))'),
   'BeginPaint must open the browser publication transaction');
-assert(endPaintWat.includes('(call $host_paint_end (local.get $arg0))'),
+assert(watSource.includes('(call $host_paint_end (local.get $arg0))'),
   'EndPaint must close the browser publication transaction');
-assert(controlsWat.includes('(call $host_paint_begin (local.get $hwnd))') &&
-  controlsWat.includes('(call $host_paint_end (local.get $hwnd))'),
+assert(watSource.includes('(call $host_paint_begin (local.get $hwnd))') &&
+  watSource.includes('(call $host_paint_end (local.get $hwnd))'),
   'WAT-native EDIT paint must bracket its fill and text as one publication');
-const modalPump = controlsWat.match(/\(func \$modal_pump_step[\s\S]*?\n  \)/);
+const modalPump = watSource.match(/\(func \$modal_pump_step[\s\S]*?\n  \)/);
 assert(modalPump && /\(drop \(call \$wat_wndproc_dispatch[\s\S]*?\n\s*\(call \$host_invalidate \(local\.get \$hwnd\)\)/
   .test(modalPump[0]),
   'modal native-control paint completion must request a canonical composite');
@@ -36,7 +34,7 @@ assert(browserHost.includes("WineAssembly.versionedUrl('lib/host-import-sigs.gen
   'Worker launch must centrally version the signature table containing paint brackets');
 assert(guestRpc.includes("'paint_begin',") && guestRpc.includes("'paint_end',"),
   'value-only paint brackets must not add two blocking RPCs per control paint');
-const uncoverBody = helpersWat.match(/\(func \$wnd_uncover_parent[\s\S]*?\n  \)/);
+const uncoverBody = watSource.match(/\(func \$wnd_uncover_parent[\s\S]*?\n  \)/);
 assert(uncoverBody && uncoverBody[0].includes('(call $update_invalidate_rect (local.get $parent)'),
   'hiding a child invalidates only its exposed parent rectangle');
 
