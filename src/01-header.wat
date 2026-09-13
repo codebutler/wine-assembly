@@ -2757,6 +2757,10 @@
   ;; Non-zero while $wnd_send_message is recursively executing an x86 wndproc.
   ;; Host waits in this scope must not yield away the nested guest call frame.
   (global $sync_msg_depth (mut i32) (i32.const 0))
+  ;; Subset of sync_msg_depth entered through the owner-thread dispatcher.
+  ;; InSendMessage is TRUE only for SendMessage from another thread; an
+  ;; ordinary same-thread recursive SendMessage must still report FALSE.
+  (global $cross_thread_send_depth (mut i32) (i32.const 0))
   (global $cbt_hook_ret_thunk (mut i32) (i32.const 0)) ;; CBT hook → WM_CREATE continuation (CACA0002)
   (global $child_cbt_ret_thunk (mut i32) (i32.const 0)) ;; Child CBT hook → dispatch WM_CREATE (CACA0026)
   (global $child_create_ret_thunk (mut i32) (i32.const 0)) ;; Child WM_CREATE returned → hand hwnd back (CACA0027)

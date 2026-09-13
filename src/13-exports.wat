@@ -1857,6 +1857,8 @@
     (global.set $current_thread_id (i32.add (local.get $tid) (i32.const 1)))
     (global.set $post_queue_count (i32.const 0))
     (global.set $pq_read_off (i32.const 0))
+    (global.set $sync_msg_depth (i32.const 0))
+    (global.set $cross_thread_send_depth (i32.const 0))
     (global.set $code_start (local.get $code_s))
     (global.set $code_end (local.get $code_e))
     (global.set $thunk_guest_base (local.get $thunk_gs))
@@ -2296,12 +2298,16 @@
     (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32)
     (result i32)
     (local $wp i32)
+    (global.set $cross_thread_send_depth
+      (i32.add (global.get $cross_thread_send_depth) (i32.const 1)))
     (local.set $wp (call $wnd_table_get (local.get $hwnd)))
     (if (i32.or (i32.eqz (local.get $wp))
                 (i32.ge_u (local.get $wp) (i32.const 0xFFFF0000)))
       (then
         (global.set $eax (call $wnd_send_message
           (local.get $hwnd) (local.get $msg) (local.get $wparam) (local.get $lparam)))
+        (global.set $cross_thread_send_depth
+          (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))
         (return (i32.const 0))))
     (global.set $esp (i32.sub (global.get $esp) (i32.const 16)))
     (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $lparam))
@@ -2319,6 +2325,8 @@
 
   (func (export "thread_send_end") (result i32)
     (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+    (global.set $cross_thread_send_depth
+      (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))
     (global.get $eax))
 
   ;; Finish the original parked SendMessage stdcall on its owning instance.

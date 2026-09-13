@@ -18287,10 +18287,12 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; 685: InSendMessage — TRUE if current message was sent by another thread via
-  ;; SendMessage. Single-threaded emulator → always FALSE. stdcall, 0 args.
+  ;; 685: InSendMessage — TRUE only while this window procedure is processing
+  ;; a SendMessage delivered by another guest thread. $sync_msg_depth is
+  ;; broader because same-thread recursive sends need the same interpreter
+  ;; protection; the owner-thread dispatcher maintains the narrower depth.
   (func $handle_InSendMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (i32.ne (global.get $cross_thread_send_depth) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
