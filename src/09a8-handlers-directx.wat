@@ -4925,9 +4925,17 @@
     (global.set $eax (i32.const 0x88760005)) ;; DDERR_ALREADYINITIALIZED
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; IsLost — never lost
+  ;; Browser-backed surface memory remains allocated for a live surface. A
+  ;; stale or foreign COM wrapper is not a surface and must not inherit DD_OK.
   (func $handle_IDirectDrawSurface_IsLost (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $entry i32)
+    (if (i32.eqz (local.get $arg0))
+      (then (global.set $eax (i32.const 0x88760082))) ;; DDERR_INVALIDOBJECT
+      (else
+        (local.set $entry (call $dx_from_this (local.get $arg0)))
+        (if (i32.eq (load.field DxObject type (local.get $entry)) (i32.const 2))
+          (then (global.set $eax (i32.const 0))) ;; DD_OK: memory retained
+          (else (global.set $eax (i32.const 0x88760082))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; Lock(this, lpDestRect, lpDDSD, dwFlags, hEvent) — 5 args
