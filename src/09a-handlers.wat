@@ -3352,6 +3352,14 @@
   ;; though every corresponding Windows allocation was freed successfully.
   ;; Decommit and low/direct mappings need no backing operation here.
   (func $handle_VirtualFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; MEM_DECOMMIT. The mapping stays -- decommit is not release, and the guest
+    ;; may commit the same addresses again -- but the pages it gets back then
+    ;; are zero on Windows, so the backing has to be cleared now. See
+    ;; $virtual_map_decommit_zero for the app that proved this matters.
+    (if (i32.and
+          (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
+          (i32.ne (i32.and (local.get $arg2) (i32.const 0x4000)) (i32.const 0)))
+      (then (call $virtual_map_decommit_zero (local.get $arg0) (local.get $arg1))))
     (if (i32.and
           (i32.and
             (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))

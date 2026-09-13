@@ -1060,6 +1060,52 @@
         (br $scan)))
       (br $done))))
 
+  ;; MEM_DECOMMIT, honestly. Windows hands back zero-filled pages the next time
+  ;; a decommitted range is committed, and the MSVC small-block heap leans on
+  ;; that: it decommits 32KB groups whose free-list links are still written
+  ;; through them, then re-commits and reads the result as fresh memory. Our
+  ;; commit path returns an already-mapped range untouched -- which is right for
+  ;; re-committing pages that were never decommitted -- so unless the decommit
+  ;; clears the backing the guest gets its own stale free list back. Measured on
+  ;; Black & White 2: after the land click, the 128x128 spatial grid at
+  ;; guest 0x2e0d27e0 (16384 cells x 12 bytes) held 9639 zero cells and ~6700
+  ;; carrying an old 32-byte-granular free-list chain, so one cell read
+  ;; {count=0x2deb040a, data=NULL} and the set-union loop at 0x9e5272 scanned
+  ;; guest address `i*4` for 770 million iterations. Zeroing here rather than at
+  ;; the next commit is the same observable behaviour -- reading a decommitted
+  ;; page is an access violation on Windows, so nothing may see the difference
+  ;; -- and it costs nothing on the commit path.
+  (func $virtual_map_decommit_zero (param $guest i32) (param $size i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32) (local $rec_end i32) (local $lo i32) (local $hi i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (local.set $rec_end
+        (i32.add (local.get $base) (i32.load offset=4 (local.get $rec))))
+      ;; A zero size means "to the end of the allocation at this base", the only
+      ;; form Windows accepts for a decommit that does not name a length.
+      (local.set $end (select (local.get $rec_end)
+        (i32.add (local.get $guest) (local.get $size))
+        (i32.eqz (local.get $size))))
+      (local.set $lo (select (local.get $guest) (local.get $base)
+        (i32.gt_u (local.get $guest) (local.get $base))))
+      (local.set $hi (select (local.get $end) (local.get $rec_end)
+        (i32.lt_u (local.get $end) (local.get $rec_end))))
+      (if (i32.lt_u (local.get $lo) (local.get $hi))
+        (then (call $zero_memory
+          (i32.add (i32.load offset=8 (local.get $rec))
+            (i32.sub (local.get $lo) (local.get $base)))
+          (i32.sub (local.get $hi) (local.get $lo)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP)))
+
   ;; Look up the record whose base is exactly this guest address.
   (func $virtual_map_find_record (param $guest i32) (result i32)
     (local $count i32) (local $i i32) (local $rec i32)
