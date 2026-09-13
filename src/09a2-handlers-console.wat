@@ -2121,10 +2121,193 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   ;; ScrollConsoleScreenBufferW(hConsole, lpScrollRectangle, lpClipRectangle, dwDestinationOrigin, lpFill) → BOOL
-  ;; Simplified: just return success (full scroll would need temp buffer)
   (func $handle_ScrollConsoleScreenBufferW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scroll i32) (local $clip i32) (local $fill i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+    (local $clip_left i32) (local $clip_top i32) (local $clip_right i32) (local $clip_bottom i32)
+    (local $dest_x i32) (local $dest_y i32) (local $dx i32) (local $dy i32)
+    (local $target_left i32) (local $target_top i32) (local $target_right i32) (local $target_bottom i32)
+    (local $copy_left i32) (local $copy_top i32) (local $copy_right i32) (local $copy_bottom i32)
+    (local $x i32) (local $y i32) (local $x_end i32) (local $y_end i32)
+    (local $x_step i32) (local $y_step i32) (local $to_x i32) (local $to_y i32)
+    (local $source_off i32) (local $target_off i32) (local $changed i32)
+    (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg4)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (local.set $scroll (call $g2w (local.get $arg1)))
+    (local.set $fill (call $g2w (local.get $arg4)))
+    (local.set $left (i32.load16_s (local.get $scroll)))
+    (local.set $top (i32.load16_s offset=2 (local.get $scroll)))
+    (local.set $right (i32.load16_s offset=4 (local.get $scroll)))
+    (local.set $bottom (i32.load16_s offset=6 (local.get $scroll)))
+    (if (i32.or (i32.lt_s (local.get $right) (local.get $left))
+                (i32.lt_s (local.get $bottom) (local.get $top)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (if (local.get $arg2)
+      (then
+        (local.set $clip (call $g2w (local.get $arg2)))
+        (local.set $clip_left (i32.load16_s (local.get $clip)))
+        (local.set $clip_top (i32.load16_s offset=2 (local.get $clip)))
+        (local.set $clip_right (i32.load16_s offset=4 (local.get $clip)))
+        (local.set $clip_bottom (i32.load16_s offset=6 (local.get $clip))))
+      (else
+        (local.set $clip_left (i32.const 0))
+        (local.set $clip_top (i32.const 0))
+        (local.set $clip_right (i32.sub (global.get $console_width) (i32.const 1)))
+        (local.set $clip_bottom (i32.sub (global.get $console_height) (i32.const 1)))))
+    (if (i32.or (i32.lt_s (local.get $clip_right) (local.get $clip_left))
+                (i32.lt_s (local.get $clip_bottom) (local.get $clip_top)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    ;; The clip rectangle limits every destination and fill write.
+    (if (i32.lt_s (local.get $clip_left) (i32.const 0))
+      (then (local.set $clip_left (i32.const 0))))
+    (if (i32.lt_s (local.get $clip_top) (i32.const 0))
+      (then (local.set $clip_top (i32.const 0))))
+    (if (i32.ge_s (local.get $clip_right) (global.get $console_width))
+      (then (local.set $clip_right (i32.sub (global.get $console_width) (i32.const 1)))))
+    (if (i32.ge_s (local.get $clip_bottom) (global.get $console_height))
+      (then (local.set $clip_bottom (i32.sub (global.get $console_height) (i32.const 1)))))
+    (local.set $dest_x
+      (i32.shr_s (i32.shl (local.get $arg3) (i32.const 16)) (i32.const 16)))
+    (local.set $dest_y (i32.shr_s (local.get $arg3) (i32.const 16)))
+    (local.set $dx (i32.sub (local.get $dest_x) (local.get $left)))
+    (local.set $dy (i32.sub (local.get $dest_y) (local.get $top)))
+    (local.set $target_left (local.get $dest_x))
+    (local.set $target_top (local.get $dest_y))
+    (local.set $target_right
+      (i32.add (local.get $dest_x) (i32.sub (local.get $right) (local.get $left))))
+    (local.set $target_bottom
+      (i32.add (local.get $dest_y) (i32.sub (local.get $bottom) (local.get $top))))
+    (call $console_cells_ensure)
+
+    ;; Clip source reads to the screen buffer, then traverse like memmove so
+    ;; an overlapping destination never overwrites a cell still to be read.
+    (local.set $copy_left (select (i32.const 0) (local.get $left)
+      (i32.lt_s (local.get $left) (i32.const 0))))
+    (local.set $copy_top (select (i32.const 0) (local.get $top)
+      (i32.lt_s (local.get $top) (i32.const 0))))
+    (local.set $copy_right (select
+      (i32.sub (global.get $console_width) (i32.const 1)) (local.get $right)
+      (i32.ge_s (local.get $right) (global.get $console_width))))
+    (local.set $copy_bottom (select
+      (i32.sub (global.get $console_height) (i32.const 1)) (local.get $bottom)
+      (i32.ge_s (local.get $bottom) (global.get $console_height))))
+    (if (i32.le_s (local.get $dy) (i32.const 0))
+      (then
+        (local.set $y (local.get $copy_top))
+        (local.set $y_end (local.get $copy_bottom))
+        (local.set $y_step (i32.const 1)))
+      (else
+        (local.set $y (local.get $copy_bottom))
+        (local.set $y_end (local.get $copy_top))
+        (local.set $y_step (i32.const -1))))
+    (if (i32.and (i32.eqz (local.get $dy)) (i32.gt_s (local.get $dx) (i32.const 0)))
+      (then
+        (local.set $x_end (local.get $copy_left))
+        (local.set $x_step (i32.const -1)))
+      (else
+        (local.set $x_end (local.get $copy_right))
+        (local.set $x_step (i32.const 1))))
+    (if (i32.and
+          (i32.le_s (local.get $copy_left) (local.get $copy_right))
+          (i32.le_s (local.get $copy_top) (local.get $copy_bottom)))
+      (then
+        (block $copy_rows_done (loop $copy_rows
+          (local.set $x
+            (select (local.get $copy_right) (local.get $copy_left)
+              (i32.lt_s (local.get $x_step) (i32.const 0))))
+          (block $copy_cols_done (loop $copy_cols
+            (local.set $to_x (i32.add (local.get $x) (local.get $dx)))
+            (local.set $to_y (i32.add (local.get $y) (local.get $dy)))
+            (if (i32.and
+                  (i32.and (i32.ge_s (local.get $to_x) (local.get $clip_left))
+                           (i32.le_s (local.get $to_x) (local.get $clip_right)))
+                  (i32.and (i32.ge_s (local.get $to_y) (local.get $clip_top))
+                           (i32.le_s (local.get $to_y) (local.get $clip_bottom))))
+              (then
+                (local.set $source_off
+                  (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
+                (local.set $target_off
+                  (i32.add (i32.mul (local.get $to_y) (global.get $console_width)) (local.get $to_x)))
+                (i32.store16
+                  (i32.add (global.get $console_text_base) (i32.shl (local.get $target_off) (i32.const 1)))
+                  (i32.load16_u
+                    (i32.add (global.get $console_text_base) (i32.shl (local.get $source_off) (i32.const 1)))))
+                (i32.store16
+                  (i32.add (global.get $console_attr_base) (i32.shl (local.get $target_off) (i32.const 1)))
+                  (i32.load16_u
+                    (i32.add (global.get $console_attr_base) (i32.shl (local.get $source_off) (i32.const 1)))))
+                (local.set $changed (i32.const 1))))
+            (br_if $copy_cols_done (i32.eq (local.get $x) (local.get $x_end)))
+            (local.set $x (i32.add (local.get $x) (local.get $x_step)))
+            (br $copy_cols)))
+          (br_if $copy_rows_done (i32.eq (local.get $y) (local.get $y_end)))
+          (local.set $y (i32.add (local.get $y) (local.get $y_step)))
+          (br $copy_rows)))))
+
+    ;; Fill source cells that are not covered by the destination rectangle.
+    ;; Intersecting first keeps even extreme signed rectangles bounded by the
+    ;; actual screen buffer and optional clip rectangle.
+    (if (i32.lt_s (local.get $copy_left) (local.get $clip_left))
+      (then (local.set $copy_left (local.get $clip_left))))
+    (if (i32.lt_s (local.get $copy_top) (local.get $clip_top))
+      (then (local.set $copy_top (local.get $clip_top))))
+    (if (i32.gt_s (local.get $copy_right) (local.get $clip_right))
+      (then (local.set $copy_right (local.get $clip_right))))
+    (if (i32.gt_s (local.get $copy_bottom) (local.get $clip_bottom))
+      (then (local.set $copy_bottom (local.get $clip_bottom))))
+    (local.set $y (local.get $copy_top))
+    (if (i32.and
+          (i32.le_s (local.get $copy_left) (local.get $copy_right))
+          (i32.le_s (local.get $copy_top) (local.get $copy_bottom)))
+      (then
+        (block $fill_rows_done (loop $fill_rows
+          (local.set $x (local.get $copy_left))
+          (block $fill_cols_done (loop $fill_cols
+            (if (i32.eqz
+                  (i32.and
+                    (i32.and (i32.ge_s (local.get $x) (local.get $target_left))
+                             (i32.le_s (local.get $x) (local.get $target_right)))
+                    (i32.and (i32.ge_s (local.get $y) (local.get $target_top))
+                             (i32.le_s (local.get $y) (local.get $target_bottom)))))
+              (then
+                (local.set $target_off
+                  (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
+                (i32.store16
+                  (i32.add (global.get $console_text_base) (i32.shl (local.get $target_off) (i32.const 1)))
+                  (i32.load16_u (local.get $fill)))
+                (i32.store16
+                  (i32.add (global.get $console_attr_base) (i32.shl (local.get $target_off) (i32.const 1)))
+                  (i32.load16_u offset=2 (local.get $fill)))
+                (local.set $changed (i32.const 1))))
+            (br_if $fill_cols_done (i32.eq (local.get $x) (local.get $copy_right)))
+            (local.set $x (i32.add (local.get $x) (i32.const 1)))
+            (br $fill_cols)))
+          (br_if $fill_rows_done (i32.eq (local.get $y) (local.get $copy_bottom)))
+          (local.set $y (i32.add (local.get $y) (i32.const 1)))
+          (br $fill_rows)))))
     (global.set $eax (i32.const 1))
-    (call $console_refresh)
+    (call $console_buffer_finish (local.get $changed))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   ;; WriteConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsWritten) → BOOL
