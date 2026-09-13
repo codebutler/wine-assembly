@@ -718,14 +718,63 @@
   ;; SetConsoleCursorPosition(hConsole, dwCursorPosition) → BOOL
   ;; dwCursorPosition is COORD packed: loword=X, hiword=Y
   (func $handle_SetConsoleCursorPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $x i32) (local $y i32) (local $win i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
-    (global.set $console_cursor_x (i32.and (local.get $arg1) (i32.const 0xFFFF)))
-    (global.set $console_cursor_y (i32.shr_u (local.get $arg1) (i32.const 16)))
+    ;; COORD members are signed SHORTs. Reject negative or out-of-buffer cells
+    ;; without changing this buffer's cursor or viewport.
+    (local.set $x
+      (i32.shr_s (i32.shl (local.get $arg1) (i32.const 16)) (i32.const 16)))
+    (local.set $y (i32.shr_s (local.get $arg1) (i32.const 16)))
+    (if (i32.or
+          (i32.or (i32.lt_s (local.get $x) (i32.const 0))
+                  (i32.lt_s (local.get $y) (i32.const 0)))
+          (i32.or (i32.ge_s (local.get $x) (global.get $console_width))
+                  (i32.ge_s (local.get $y) (global.get $console_height))))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (global.set $console_cursor_x (local.get $x))
+    (global.set $console_cursor_y (local.get $y))
+    ;; Win32 scrolls the viewport while preserving its size when a valid new
+    ;; cursor position lies outside the visible window.
+    (local.set $win (call $console_loaded_window_record))
+    (local.set $left (i32.load16_s (local.get $win)))
+    (local.set $top (i32.load16_s offset=2 (local.get $win)))
+    (local.set $right (i32.load16_s offset=4 (local.get $win)))
+    (local.set $bottom (i32.load16_s offset=6 (local.get $win)))
+    (if (i32.lt_s (local.get $x) (local.get $left))
+      (then
+        (local.set $right
+          (i32.sub (local.get $right) (i32.sub (local.get $left) (local.get $x))))
+        (local.set $left (local.get $x))))
+    (if (i32.gt_s (local.get $x) (local.get $right))
+      (then
+        (local.set $left
+          (i32.add (local.get $left) (i32.sub (local.get $x) (local.get $right))))
+        (local.set $right (local.get $x))))
+    (if (i32.lt_s (local.get $y) (local.get $top))
+      (then
+        (local.set $bottom
+          (i32.sub (local.get $bottom) (i32.sub (local.get $top) (local.get $y))))
+        (local.set $top (local.get $y))))
+    (if (i32.gt_s (local.get $y) (local.get $bottom))
+      (then
+        (local.set $top
+          (i32.add (local.get $top) (i32.sub (local.get $y) (local.get $bottom))))
+        (local.set $bottom (local.get $y))))
+    (i32.store16 (local.get $win) (local.get $left))
+    (i32.store16 offset=2 (local.get $win) (local.get $top))
+    (i32.store16 offset=4 (local.get $win) (local.get $right))
+    (i32.store16 offset=6 (local.get $win) (local.get $bottom))
     (global.set $eax (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))

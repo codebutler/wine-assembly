@@ -375,6 +375,38 @@ const extraWat = String.raw`
     'relative viewport did not offset all four current sides');
   assert.strictEqual(wat.test_set_console_size(first, coord(40, 20)), 0,
     'buffer shrank underneath an offset viewport');
+
+  assert.strictEqual(wat.test_set_console_cursor(first, coord(59, 29)), 1,
+    'valid off-window cursor position failed');
+  assert.strictEqual(wat.test_get_console_info(first, resizedInfo), 1);
+  assert.strictEqual(wat.guest_read32(resizedInfo + 4) >>> 0, coord(59, 29) >>> 0,
+    'valid cursor position was not retained');
+  assert.deepStrictEqual(readRect(resizedInfo + 10), [20, 10, 59, 29],
+    'viewport origin did not move just enough to reveal the cursor');
+
+  for (const [badCoord, label] of [
+    [coord(-1, 0), 'negative X'],
+    [coord(0, -1), 'negative Y'],
+    [coord(60, 0), 'X at buffer width'],
+    [coord(0, 30), 'Y at buffer height'],
+  ]) {
+    wat.test_set_last_error(0x1234);
+    assert.strictEqual(wat.test_set_console_cursor(first, badCoord), 0,
+      `${label} cursor position succeeded`);
+    assert.strictEqual(wat.test_last_error(), 87,
+      `${label} cursor position did not set ERROR_INVALID_PARAMETER`);
+  }
+  assert.strictEqual(wat.test_get_console_info(first, resizedInfo), 1);
+  assert.strictEqual(wat.guest_read32(resizedInfo + 4) >>> 0, coord(59, 29) >>> 0,
+    'failed cursor positioning changed the cursor');
+  assert.deepStrictEqual(readRect(resizedInfo + 10), [20, 10, 59, 29],
+    'failed cursor positioning changed the viewport');
+
+  assert.strictEqual(wat.test_set_console_cursor(first, coord(0, 0)), 1,
+    'valid cursor position before the viewport failed');
+  assert.strictEqual(wat.test_get_console_info(first, resizedInfo), 1);
+  assert.deepStrictEqual(readRect(resizedInfo + 10), [0, 0, 39, 19],
+    'viewport did not follow the cursor back toward the buffer origin');
   writeRect(windowRect, 0, 0, 39, 19);
   assert.strictEqual(wat.test_set_console_window(first, 1, windowRect), 1);
   assert.strictEqual(wat.test_set_console_size(first, coord(40, 20)), 1);
