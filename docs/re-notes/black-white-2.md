@@ -2448,3 +2448,20 @@ result the grow path receives. That is one `--trace-at` address (two or more
 force `BATCH_SIZE=1` and the run never arrives), and it is the measurement that
 decides whether the NULL is an allocation failure our diagnostics cannot see or
 something the game never built.
+
+### `--fault-null=stop` is a lottery on this app (run 41, negative)
+
+Run 41 asked the grow-path question with `=stop` still set and never reached the
+picker: it trapped at **batch 34226**, during startup, on a probe of address
+`0x403` from `eip=0x9e8200`, with the trace-at at `0x9e8220` never firing once.
+
+`=stop` traps on the first fault *anywhere*, and run 39's full census — four
+EIPs, none of them `0x9e8200` — shows that startup probe does not even occur on
+every run. These runs are not deterministic; `--real-ticks` paces them against
+wall clock on a box whose load moves. **Run 40's clean landing on the picker
+fault was luck, not method.**
+
+Since the cap landed there is no reason to use `=stop` here at all: plain
+`--fault-null` can no longer OOM the host, so the run goes all the way into the
+wedge and the exit census gives the totals. Use `=stop` only when the first
+fault is known to be the one you want.
