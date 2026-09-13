@@ -3973,9 +3973,25 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) ;; stdcall 4 params + ret
   )
 
-  ;; 675: GetMenuCheckMarkDimensions — STUB: unimplemented
+  ;; Windows 98 classic at 96 DPI uses a square 13px default check bitmap.
+  ;; This is a metric, not the wider 20px menu column that includes padding.
+  ;; Keep it named so GetSystemMetrics(SM_CXMENUCHECK/SM_CYMENUCHECK) can
+  ;; share the same authority when those late Win98 metric IDs are added.
+  (func $menu_checkmark_size (result i32)
+    (i32.const 13))
+
+  ;; 675: GetMenuCheckMarkDimensions() -> MAKELONG(width, height).
+  ;; The Windows 98 classic 96-DPI menu check bitmap is 13x13 pixels.  Keep
+  ;; this distinct from the wider 20px column reserved by our menu painter:
+  ;; the latter includes the padding around the system bitmap.
   (func $handle_GetMenuCheckMarkDimensions (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $size i32)
+    (local.set $size (call $menu_checkmark_size))
+    (global.set $eax
+      (i32.or
+        (local.get $size)
+        (i32.shl (local.get $size) (i32.const 16))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; 682: InsertMenuW(hMenu, uPosition, uFlags, uIDNewItem, lpNewItem).
