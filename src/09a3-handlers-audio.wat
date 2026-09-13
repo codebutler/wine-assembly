@@ -2167,9 +2167,12 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
   )
 
-  ;; joyReleaseCapture(uJoyID) is harmless when no capture exists.
+  ;; joyReleaseCapture(uJoyID) is harmless when no capture exists, but Win98
+  ;; still rejects IDs outside its documented JOYSTICKID1..15 range.
   (func $handle_joyReleaseCapture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))  ;; MMSYSERR_NOERROR
+    (if (i32.le_u (local.get $arg0) (i32.const 15))
+      (then (global.set $eax (i32.const 0)))  ;; JOYERR_NOERROR
+      (else (global.set $eax (i32.const 11)))) ;; MMSYSERR_INVALPARAM
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
