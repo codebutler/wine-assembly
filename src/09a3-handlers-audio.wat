@@ -2148,9 +2148,25 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
-  ;; joyGetPosEx(uJoyID, lpInfo) — same no-joystick result as joyGetPos.
+  ;; joyGetPosEx(uJoyID, lpInfo) — Win98 accepts IDs 0..15 and requires the
+  ;; caller to initialize the 52-byte JOYINFOEX version and request flags.
   (func $handle_joyGetPosEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 167))  ;; JOYERR_UNPLUGGED
+    (if (i32.gt_u (local.get $arg0) (i32.const 15))
+      (then (global.set $eax (i32.const 2)))  ;; MMSYSERR_BADDEVICEID
+      (else
+        (if (i32.eqz (local.get $arg1))
+          (then (global.set $eax (i32.const 11)))  ;; MMSYSERR_INVALPARAM
+          (else
+            (if (i32.or
+                  (i32.ne (i32.load (local.get $arg1)) (i32.const 52))
+                  (i32.eqz (i32.load offset=4 (local.get $arg1))))
+              (then (global.set $eax (i32.const 11)))  ;; MMSYSERR_INVALPARAM
+              (else (global.set $eax (i32.const 167)))  ;; JOYERR_UNPLUGGED
+            )
+          )
+        )
+      )
+    )
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
