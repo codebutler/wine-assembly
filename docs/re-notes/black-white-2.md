@@ -4725,3 +4725,80 @@ Also: a hand-rolled press that sets `_mouseButtonsMask` and calls
 `_queueDirectInputMouseButton` directly is **not** equivalent to
 `renderer.handleMouseDown(x,y,0)`. It skips `_signalDirectInputDevice(2)` and
 the whole window-routing path. Use the real handler.
+
+## Why B&W2 is slow: 77% of guest ops are string-hashing a resource name (2026-09-13)
+
+Measured on a 22s fixed window, software renderer, `--handler-hist
+--handler-hist-thread=0 --hot-block-dump`. Two separate questions were tangled
+together here and they have different answers.
+
+### It is not the emulator, and it is not the rasterizer
+
+| measurement | result |
+|---|---|
+| pure busy-loop control (no I/O, no yields) | 25% of one core |
+| this run, 20s wall | 2.0-3.1s CPU (~13%) |
+| blocks retired per second **of CPU** | ~5.3M (normal range) |
+| why each batch stopped | `budget spent`, 100% of batches |
+
+Every batch spends its whole block budget, so nothing is bailing early, and
+throughput per CPU-second is normal. The box was at loadavg 416-475 against 8
+cores (440+ node processes from other sessions), so wall-clock here is inflated
+about 4-8x by the machine. Two things that looked like our bugs are not:
+`--real-ticks` costs ~1.8x, and a 10x larger `--batch-size` made it slightly
+*worse*, which rules out per-batch event-loop wakeup latency.
+
+### What the guest actually spends its instructions on
+
+Top six handlers, 59.9M ops in the window:
+
+    H3  $th_add_r_i32        8578153 (14.33%)
+    H19 $th_cmp_r_r          7663147 (12.80%)
+    H149 $th_compute_ea_sib  7593165 (12.68%)
+    H309 $th_jcc_b           7583990 (12.67%)
+    H47 $th_alu_m32_r        7192798 (12.01%)
+    H78 $th_movzx8           7190911 (12.01%)
+
+That is 77% of all ops, and the counts are equal because they are one loop body
+executed ~7.6M times. The hot blocks name it:
+
+| VA | share of block entries | shape |
+|---|---|---|
+| `0x009a8780` | 10.5% | `mov cl,[eax] / add eax,1 / test cl,cl / jnz` - **strlen** |
+| `0x009a87a2` | 10.5% | the copy that follows it |
+| `0x009a8712` | 9.9% | `movsx ebx,[edx+edi] / shr ebp,24 / xor / shl eax,8 / xor eax,[ecx+ebx*4]` - **table-driven CRC32**, one byte per iteration |
+| `0x00ad764b` + `52` + `57` + `5c` | 31.4% | `cmp cl,'a' / jl / cmp cl,'z' / jg / sub cl,0x20` - **uppercase in place**, one char per iteration |
+
+`0x009a8770` is the enclosing function: strlen the name, alloca, copy, uppercase
+it, CRC32 it. It is a **case-insensitive string-keyed resource lookup**, and
+B&W2 calls it constantly. 63% of all block entries and 77% of all ops go into
+hashing resource names character by character.
+
+This is also why the app looks stuck rather than slow. Sitting on the profile
+dialog it went **823 seconds presenting one frame and issuing 22 draws** - not a
+deadlock and not a slow rasterizer, but the resource loader grinding through
+these loops. The same loops dominate the boot window, which is why reaching the
+profile dialog takes ~22 minutes of wall clock on this box.
+
+### Why none of it is folded
+
+`$loop_match_block` in `src/07b-loop-match.wat` only ever runs on a block that
+branches to **itself**, so the uppercase loop is invisible to it by
+construction: the two `jl`/`jg` sentinel branches split one character into four
+basic blocks, and a character costs four block transfers. The strlen and CRC32
+loops *are* single-block self-loops and so are visible - but there is no scan
+fold in the matcher at all. `SCAN_RUN` exists as a predicate in
+`tools/match-loops.js` and has no WAT handler behind it; only `LUT_RUN` is on
+(`COPY_RUN` is off). Run counters for the window: `extended 3348 | blocks
+chained 4674`, i.e. essentially nothing folded.
+
+So the work list, in payoff order, is a scan/strlen fold, a byte-transform fold
+that can see a multi-block diamond, and a CRC32 fold. Note `tools/match-loops.js`
+cannot be run against this exe to confirm - it does not finish within 90s on a
+20MB image.
+
+**Caveat on units:** these are block entries and handler ops, both load-immune.
+No wall-clock speedup is claimed here, and none should be quoted from this box
+at loadavg 450. A fold collapses a loop into one dispatch, so block counts stop
+being comparable across the change - measure progress in presents or in guest
+API calls per CPU-second instead.
