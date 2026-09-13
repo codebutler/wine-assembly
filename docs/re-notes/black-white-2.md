@@ -2666,3 +2666,39 @@ recipe reached the picker in runs 39, 42, 43 and 46 and stalled at the dialog in
 run 45. These runs use `--real-ticks`, so batch numbers drift with host load,
 and the box is regularly at load 11. Budget for a re-run rather than reading a
 diverged run's output as data.
+
+## The picker's elements decode, and the empty thing is one array slot
+
+Dumping each element at the `0x9d4a69` trace hit (run 47) gives a flat 16-byte
+record:
+
+```
+0x2eccfc98  08 00 c3 2e | 00 00 00 00 | 02 00 00 00 | 00 00 00 00   id 0   kind 2
+0x2eccfca8  30 00 c3 2e | 01 00 00 00 | 02 00 00 00 | 00 00 00 00   id 1   kind 2
+0x2eccfcb8  00 00 00 00 | 02 00 00 00 | 04 00 00 00 | 00 00 00 00   id 2   kind 4
+0x2eccfd48  c0 01 c3 2e | 0b 00 00 00 | 02 00 00 00 | 00 00 00 00   id 11  kind 2
+0x2eccfd58  00 00 00 00 | 0c 00 00 00 | 04 00 00 00 | 00 00 00 00   id 12  kind 4
+```
+
+So an element is `{record*, id, kind, 0}`. The pointers are not scattered
+allocations: they are an array of **40-byte records at `0x2ec30008 + 0x28*id`**,
+and id 11 lands on `0x2ec301c0` exactly. Kind 4 elements carry no record at all
+(the pointer is NULL and nothing dereferences it — vtable slot 7 and slot 8 are
+only reached for kind 2), which is why a NULL pointer there is not the bug.
+
+That narrows the failure by one more level. The array exists. Record 0 and
+record 1 exist and are addressable. Record 11 holds a real list head
+(`0x2eb30300`, and id 9's is `0x2eb30f6c`). **Only the contents of records 0 and
+1 are missing** — their head word is zero while their neighbours' are not.
+
+Vtable slot 13 (`0x9d47a0`) reads `[[element]+0x24]`, the last dword of the same
+40-byte record, so the record is a small fixed struct, not a class with a vptr.
+Slot 10 (`0x9d47f0`) is `getVertex(obj, i)`: it walks `[record]` forward `i`
+times and returns `[node+8]`. Slot 7 collects consecutive pairs of `[node+8]`
+points into 20-byte `{x1,y1,x2,y2,_}` records, so the list is an **edge ring**
+and `[record]` is its first node.
+
+**The question is now narrow enough to answer with a watchpoint rather than a
+disassembly:** was `0x2ec30008` ever written? Never written means whatever
+builds these rings skipped the first two. Written and later cleared means a
+lifetime bug, and `--watch-log` times it.
