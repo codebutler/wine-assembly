@@ -3,55 +3,8 @@
 
 const assert = require('assert');
 const { loadWin16Dlls } = require('../lib/dll-loader');
+const { buildVersionBlob, buildVersionPe } = require('../tools/pe-version');
 const { bootRenderHarness } = require('./render-helper');
-
-function makeVersionBlob() {
-  const blob = Buffer.alloc(92);
-  blob.writeUInt16LE(blob.length, 0);
-  blob.writeUInt16LE(52, 2);
-  const key = 'VS_VERSION_INFO\0';
-  for (let i = 0; i < key.length; i++) blob.writeUInt16LE(key.charCodeAt(i), 6 + i * 2);
-  blob.writeUInt32LE(0xFEEF04BD, 0x28);
-  blob.writeUInt32LE(0x00010000, 0x2C);
-  blob.writeUInt32LE(0x00050006, 0x30);
-  blob.writeUInt32LE(0x00070008, 0x34);
-  return blob;
-}
-
-function makeVersionPe(blob) {
-  const file = Buffer.alloc(0x400);
-  file.writeUInt16LE(0x5A4D, 0);
-  file.writeUInt32LE(0x80, 0x3C);
-  file.writeUInt32LE(0x00004550, 0x80);
-  file.writeUInt16LE(0x014C, 0x84);
-  file.writeUInt16LE(1, 0x86);
-  file.writeUInt16LE(0xE0, 0x94);
-  const opt = 0x98;
-  file.writeUInt16LE(0x010B, opt);
-  file.writeUInt32LE(3, opt + 92);
-  file.writeUInt32LE(0x1000, opt + 112);
-  file.writeUInt32LE(0x200, opt + 116);
-  const section = 0x178;
-  file.write('.rsrc\0\0\0', section, 'ascii');
-  file.writeUInt32LE(0x200, section + 8);
-  file.writeUInt32LE(0x1000, section + 12);
-  file.writeUInt32LE(0x200, section + 16);
-  file.writeUInt32LE(0x200, section + 20);
-  const root = 0x200;
-  file.writeUInt16LE(1, root + 14);
-  file.writeUInt32LE(16, root + 16);
-  file.writeUInt32LE(0x80000018, root + 20);
-  file.writeUInt16LE(1, root + 0x18 + 14);
-  file.writeUInt32LE(1, root + 0x18 + 16);
-  file.writeUInt32LE(0x80000030, root + 0x18 + 20);
-  file.writeUInt16LE(1, root + 0x30 + 14);
-  file.writeUInt32LE(0x0409, root + 0x30 + 16);
-  file.writeUInt32LE(0x48, root + 0x30 + 20);
-  file.writeUInt32LE(0x1100, root + 0x48);
-  file.writeUInt32LE(blob.length, root + 0x4C);
-  blob.copy(file, 0x300);
-  return file;
-}
 
 const extraWat = String.raw`
   (func $test_ver_init
@@ -153,8 +106,10 @@ const extraWat = String.raw`
   assert.deepStrictEqual(loaded, []);
   assert.deepStrictEqual(reads, ['CARDS'], 'the emulated VER slot must not trigger a file lookup');
 
-  const blob = makeVersionBlob();
-  const pe = makeVersionPe(blob);
+  const blob = buildVersionBlob([
+    0xFEEF04BD, 0x00010000, 0x00050006, 0x00070008,
+  ]);
+  const pe = buildVersionPe(blob);
   const { exports: e, memory, hostCtx } = await bootRenderHarness({ extraWat, fonts: 'none' });
   hostCtx.vfs.files.set('c:\\windows\\temp\\version.dll', {
     data: new Uint8Array(pe), attrs: 0x20,

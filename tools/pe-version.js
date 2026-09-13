@@ -15,6 +15,61 @@ const { readPE } = require(path.join(__dirname, '..', 'lib', 'pe.js'));
 
 const RT_VERSION = 16;
 
+// Build the compact resource fixture used by the Win32 and Win16 version-API
+// tests. fixedWords begin at VS_FIXEDFILEINFO's signature field (offset 0x28);
+// omitted trailing fields stay zero, which is useful for narrowly scoped tests.
+function buildVersionBlob(fixedWords) {
+  const blob = Buffer.alloc(92);
+  blob.writeUInt16LE(blob.length, 0);
+  blob.writeUInt16LE(52, 2);
+  blob.writeUInt16LE(0, 4);
+  const key = 'VS_VERSION_INFO\0';
+  for (let i = 0; i < key.length; i++) {
+    blob.writeUInt16LE(key.charCodeAt(i), 6 + i * 2);
+  }
+  for (let i = 0; i < fixedWords.length; i++) {
+    blob.writeUInt32LE(fixedWords[i] >>> 0, 0x28 + i * 4);
+  }
+  return blob;
+}
+
+// Wrap one VS_VERSION_INFO blob in the smallest PE32 .rsrc tree our loader
+// accepts: RT_VERSION -> resource id 1 -> language 0x0409 -> data entry.
+function buildVersionPe(blob) {
+  const file = Buffer.alloc(0x400);
+  file.writeUInt16LE(0x5A4D, 0);
+  file.writeUInt32LE(0x80, 0x3C);
+  file.writeUInt32LE(0x00004550, 0x80);
+  file.writeUInt16LE(0x014C, 0x84);
+  file.writeUInt16LE(1, 0x86);
+  file.writeUInt16LE(0xE0, 0x94);
+  const opt = 0x98;
+  file.writeUInt16LE(0x010B, opt);
+  file.writeUInt32LE(3, opt + 92);
+  file.writeUInt32LE(0x1000, opt + 112);
+  file.writeUInt32LE(0x200, opt + 116);
+  const section = 0x178;
+  file.write('.rsrc\0\0\0', section, 'ascii');
+  file.writeUInt32LE(0x200, section + 8);
+  file.writeUInt32LE(0x1000, section + 12);
+  file.writeUInt32LE(0x200, section + 16);
+  file.writeUInt32LE(0x200, section + 20);
+  const root = 0x200;
+  file.writeUInt16LE(1, root + 14);
+  file.writeUInt32LE(RT_VERSION, root + 16);
+  file.writeUInt32LE(0x80000018, root + 20);
+  file.writeUInt16LE(1, root + 0x18 + 14);
+  file.writeUInt32LE(1, root + 0x18 + 16);
+  file.writeUInt32LE(0x80000030, root + 0x18 + 20);
+  file.writeUInt16LE(1, root + 0x30 + 14);
+  file.writeUInt32LE(0x0409, root + 0x30 + 16);
+  file.writeUInt32LE(0x48, root + 0x30 + 20);
+  file.writeUInt32LE(0x1100, root + 0x48);
+  file.writeUInt32LE(blob.length, root + 0x4C);
+  blob.copy(file, 0x300);
+  return file;
+}
+
 function findVersionBlob(file) {
   const pe = readPE(file);
   const buf = pe.buf;
@@ -117,32 +172,36 @@ function describe(file) {
   return out;
 }
 
-const args = process.argv.slice(2);
-const asJson = args.includes('--json');
-const files = args.filter(a => !a.startsWith('--'));
-if (files.length === 0) {
-  console.error('Usage: node tools/pe-version.js <pe> [<pe>...] [--json]');
-  process.exit(2);
-}
+if (require.main === module) {
+  const args = process.argv.slice(2);
+  const asJson = args.includes('--json');
+  const files = args.filter(a => !a.startsWith('--'));
+  if (files.length === 0) {
+    console.error('Usage: node tools/pe-version.js <pe> [<pe>...] [--json]');
+    process.exit(2);
+  }
 
-const results = files.map(f => {
-  const r = describe(f);
-  r.size = fs.statSync(f).size;
-  return r;
-});
+  const results = files.map(f => {
+    const r = describe(f);
+    r.size = fs.statSync(f).size;
+    return r;
+  });
 
-if (asJson) {
-  console.log(JSON.stringify(results, null, 2));
-} else {
-  for (const r of results) {
-    console.log(`${r.file}  (${r.size} bytes)`);
-    if (!r.fileVersion && Object.keys(r.strings).length === 0) {
-      console.log('  no VS_VERSION_INFO resource');
-      continue;
-    }
-    if (r.fileVersion) console.log(`  FixedFileInfo   file=${r.fileVersion} product=${r.productVersion}`);
-    for (const [k, v] of Object.entries(r.strings)) {
-      console.log(`  ${k.padEnd(18)}${v}`);
+  if (asJson) {
+    console.log(JSON.stringify(results, null, 2));
+  } else {
+    for (const r of results) {
+      console.log(`${r.file}  (${r.size} bytes)`);
+      if (!r.fileVersion && Object.keys(r.strings).length === 0) {
+        console.log('  no VS_VERSION_INFO resource');
+        continue;
+      }
+      if (r.fileVersion) console.log(`  FixedFileInfo   file=${r.fileVersion} product=${r.productVersion}`);
+      for (const [k, v] of Object.entries(r.strings)) {
+        console.log(`  ${k.padEnd(18)}${v}`);
+      }
     }
   }
 }
+
+module.exports = { buildVersionBlob, buildVersionPe, describe, findVersionBlob, parseNode };

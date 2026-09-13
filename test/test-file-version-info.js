@@ -3,62 +3,15 @@
 const assert = require('assert');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
+const { buildVersionBlob, buildVersionPe } = require('../tools/pe-version');
 const { compileSrcWasm } = require('./compile-src');
 
-function makeVersionBlob() {
-  const blob = Buffer.alloc(92);
-  blob.writeUInt16LE(blob.length, 0);
-  blob.writeUInt16LE(52, 2);
-  blob.writeUInt16LE(0, 4);
-  const key = 'VS_VERSION_INFO\0';
-  for (let i = 0; i < key.length; i++) blob.writeUInt16LE(key.charCodeAt(i), 6 + i * 2);
-  blob.writeUInt32LE(0xFEEF04BD, 0x28);
-  blob.writeUInt32LE(0x00010000, 0x2C);
-  blob.writeUInt32LE(0x00050006, 0x30);
-  blob.writeUInt32LE(0x00070008, 0x34);
-  blob.writeUInt32LE(0x0009000A, 0x38);
-  blob.writeUInt32LE(0x000B000C, 0x3C);
-  return blob;
-}
-
-function makeVersionPe(blob) {
-  const file = Buffer.alloc(0x400);
-  file.writeUInt16LE(0x5A4D, 0);
-  file.writeUInt32LE(0x80, 0x3C);
-  file.writeUInt32LE(0x00004550, 0x80);
-  file.writeUInt16LE(0x014C, 0x84);
-  file.writeUInt16LE(1, 0x86);
-  file.writeUInt16LE(0xE0, 0x94);
-  const opt = 0x98;
-  file.writeUInt16LE(0x010B, opt);
-  file.writeUInt32LE(3, opt + 92);
-  file.writeUInt32LE(0x1000, opt + 112);
-  file.writeUInt32LE(0x200, opt + 116);
-  const section = 0x178;
-  file.write('.rsrc\0\0\0', section, 'ascii');
-  file.writeUInt32LE(0x200, section + 8);
-  file.writeUInt32LE(0x1000, section + 12);
-  file.writeUInt32LE(0x200, section + 16);
-  file.writeUInt32LE(0x200, section + 20);
-  const root = 0x200;
-  file.writeUInt16LE(1, root + 14);
-  file.writeUInt32LE(16, root + 16);
-  file.writeUInt32LE(0x80000018, root + 20);
-  file.writeUInt16LE(1, root + 0x18 + 14);
-  file.writeUInt32LE(1, root + 0x18 + 16);
-  file.writeUInt32LE(0x80000030, root + 0x18 + 20);
-  file.writeUInt16LE(1, root + 0x30 + 14);
-  file.writeUInt32LE(0x0409, root + 0x30 + 16);
-  file.writeUInt32LE(0x48, root + 0x30 + 20);
-  file.writeUInt32LE(0x1100, root + 0x48);
-  file.writeUInt32LE(blob.length, root + 0x4C);
-  blob.copy(file, 0x300);
-  return file;
-}
-
 async function main() {
-  const blob = makeVersionBlob();
-  const pe = makeVersionPe(blob);
+  const blob = buildVersionBlob([
+    0xFEEF04BD, 0x00010000, 0x00050006,
+    0x00070008, 0x0009000A, 0x000B000C,
+  ]);
+  const pe = buildVersionPe(blob);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const imports = createHostImports(ctx);
