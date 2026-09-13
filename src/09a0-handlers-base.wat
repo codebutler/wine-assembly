@@ -2965,12 +2965,18 @@
   (func $handle_GetCPInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $cp i32) (local $info i32)
     ;; CPINFO struct: MaxCharSize(4), DefaultChar[2](2), LeadByte[12](12)
-    (if (i32.eqz (local.get $arg1))
+    (local.set $cp (call $resolve_code_page (local.get $arg0)))
+    ;; Do not publish a plausible SBCS description for a code page the
+    ;; conversion layer cannot actually provide. Validate before translating
+    ;; or mutating the caller's output structure.
+    (if (i32.or
+          (i32.eqz (local.get $arg1))
+          (i32.eqz (call $is_supported_code_page (local.get $cp))))
       (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
-    (local.set $cp (call $resolve_code_page (local.get $arg0)))
     (local.set $info (call $g2w (local.get $arg1)))
     (call $zero_memory (local.get $info) (i32.const 18))
     (i32.store8 offset=4 (local.get $info) (i32.const 0x3F)) ;; DefaultChar = "?"
