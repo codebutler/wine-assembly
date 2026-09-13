@@ -47,6 +47,12 @@
   ;; SetMenu later resolves that opaque handle into RT_MENU bytes.
   (global $last_load_menu_wide (mut i32) (i32.const 0))
 
+  ;; A dynamic TrackPopupMenu paints from a transient copy after the caller's
+  ;; MNUD record has been serialized. Retain the originating HMENU separately
+  ;; so handle-based geometry queries cannot mistake any other live popup for
+  ;; the one currently displayed.
+  (global $menu_open_dynamic_hmenu (mut i32) (i32.const 0))
+
   ;; --------- MENU_DATA_TABLE accessors ---------
 
   (func $menu_data_table_addr (param $slot i32) (result i32)
@@ -3056,6 +3062,7 @@
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
         (global.set $menu_open_popup_blob (i32.const 0))))
+    (global.set $menu_open_dynamic_hmenu (i32.const 0))
     (global.set $menu_open_hwnd  (local.get $hwnd))
     (global.set $menu_open_top   (local.get $top_idx))
     (global.set $menu_open_hover (i32.const -1))
@@ -3081,6 +3088,7 @@
           (call $dynamic_menu_make_popup_blob (local.get $hmenu)))
         (if (i32.eqz (global.get $menu_open_popup_blob))
           (then (return (i32.const 0))))
+        (global.set $menu_open_dynamic_hmenu (local.get $hmenu))
         (global.set $menu_open_hwnd  (local.get $hwnd))
         (global.set $menu_open_top   (i32.const 0))
         (global.set $menu_open_hover (i32.const -1))
@@ -3092,6 +3100,7 @@
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
         (global.set $menu_open_popup_blob (i32.const 0))))
+    (global.set $menu_open_dynamic_hmenu (i32.const 0))
     (local.set $menu_id (i32.and (local.get $hmenu) (i32.const 0xFFFF)))
     (local.set $top_idx (i32.sub (i32.and (i32.shr_u (local.get $hmenu) (i32.const 16)) (i32.const 0xFFFF)) (i32.const 1)))
     (if (i32.or (i32.eqz (local.get $menu_id)) (i32.lt_s (local.get $top_idx) (i32.const 0)))
@@ -3122,6 +3131,7 @@
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
         (global.set $menu_open_popup_blob (i32.const 0))))
+    (global.set $menu_open_dynamic_hmenu (i32.const 0))
     (call $push_rsrc_ctx (local.get $hInstance))
     (call $menu_load (local.get $hwnd) (local.get $menu_id))
     (call $pop_rsrc_ctx)
@@ -3140,6 +3150,7 @@
       (then
         (call $heap_free (global.get $menu_open_popup_blob))
         (global.set $menu_open_popup_blob (i32.const 0))))
+    (global.set $menu_open_dynamic_hmenu (i32.const 0))
     (global.set $menu_open_hwnd  (i32.const 0))
     (global.set $menu_open_top   (i32.const -1))
     (global.set $menu_open_hover (i32.const -1))
@@ -3955,22 +3966,133 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args
   )
 
+  ;; GetMenuItemRect uses the same geometry that paints and hit-tests menus.
+  ;; Windows does not assign meaningful item rectangles until a menu bar is
+  ;; attached or a popup is displayed, so hidden dynamic/resource popups fail
+  ;; without touching the caller's RECT rather than inventing coordinates.
+  (func $menu_get_item_rect
+        (param $hwnd_arg i32) (param $hmenu i32) (param $item i32)
+        (param $rect_g i32) (result i32)
+    (local $owner i32) (local $top_index i32) (local $count i32)
+    (local $blob i32) (local $hdc i32) (local $width i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+    (local $popup_x i32) (local $popup_y i32) (local $rect_w i32)
+    (if (i32.eqz (local.get $rect_g)) (then (return (i32.const 0))))
+
+    ;; A CreatePopupMenu handle is meaningful only while that exact popup is
+    ;; the dynamic menu currently displayed by TrackPopupMenu.
+    (if (call $dynamic_menu_state_w (local.get $hmenu))
+      (then
+        (if (i32.or
+              (i32.eqz (global.get $menu_open_popup_blob))
+              (i32.ne (local.get $hmenu) (global.get $menu_open_dynamic_hmenu)))
+          (then (return (i32.const 0))))
+        (if (i32.and
+              (i32.ne (local.get $hwnd_arg) (i32.const 0))
+              (i32.ne (local.get $hwnd_arg) (global.get $menu_open_hwnd)))
+          (then (return (i32.const 0))))
+        (local.set $count
+          (call $menu_child_count (global.get $menu_open_hwnd) (i32.const 0)))
+        (if (i32.ge_u (local.get $item) (local.get $count))
+          (then (return (i32.const 0))))
+        (local.set $width
+          (call $menu_dropdown_width (global.get $menu_open_hwnd) (i32.const 0)))
+        (if (i32.eqz (local.get $width)) (then (return (i32.const 0))))
+        (local.set $left (i32.add (global.get $menu_open_x) (i32.const 2)))
+        (local.set $top
+          (i32.add
+            (i32.add (global.get $menu_open_y) (i32.const 2))
+            (i32.mul (local.get $item) (i32.const 20))))
+        (local.set $right
+          (i32.sub (i32.add (global.get $menu_open_x) (local.get $width))
+                   (i32.const 2)))
+        (local.set $bottom (i32.add (local.get $top) (i32.const 20))))
+      (else
+        ;; Resource and attached menus resolve back to their owning window.
+        ;; The exact attached handle denotes the bar; GetSubMenu's encoded
+        ;; handle denotes one popup below it.
+        (local.set $owner (call $menu_hwnd_from_handle (local.get $hmenu)))
+        (if (i32.eqz (local.get $owner)) (then (return (i32.const 0))))
+        (local.set $top_index
+          (call $menu_handle_top_index (local.get $owner) (local.get $hmenu)))
+        (if (i32.lt_s (local.get $top_index) (i32.const 0))
+          (then
+            ;; A menu bar is attached to a specific window; NULL or another
+            ;; HWND cannot identify its screen placement.
+            (if (i32.ne (local.get $hwnd_arg) (local.get $owner))
+              (then (return (i32.const 0))))
+            (local.set $count (call $menu_bar_count (local.get $owner)))
+            (if (i32.ge_u (local.get $item) (local.get $count))
+              (then (return (i32.const 0))))
+            (local.set $blob (call $menu_blob_w (local.get $owner)))
+            (local.set $hdc (call $gdi_menu_overlay_ensure))
+            (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
+            (drop (call $host_gdi_select_object
+              (local.get $hdc) (i32.const 0x30021)))
+            (local.set $left
+              (i32.add
+                (call $menu_bar_screen_x (local.get $owner))
+                (call $bar_item_x
+                  (local.get $blob) (local.get $hdc) (local.get $item))))
+            (local.set $top (call $menu_bar_screen_y (local.get $owner)))
+            (local.set $right
+              (i32.add (local.get $left)
+                (call $bar_item_width
+                  (local.get $blob) (local.get $hdc) (local.get $item))))
+            (local.set $bottom
+              (i32.add (local.get $top) (call $menu_bar_screen_h))))
+          (else
+            ;; Popup positions exist only while this submenu is displayed.
+            (if (i32.or
+                  (i32.ge_u (local.get $top_index)
+                    (call $menu_bar_count (local.get $owner)))
+                  (i32.or
+                    (i32.ne (global.get $menu_open_dynamic_hmenu) (i32.const 0))
+                    (i32.or
+                      (i32.ne (global.get $menu_open_hwnd) (local.get $owner))
+                      (i32.ne (global.get $menu_open_top) (local.get $top_index)))))
+              (then (return (i32.const 0))))
+            (if (i32.and
+                  (i32.ne (local.get $hwnd_arg) (i32.const 0))
+                  (i32.ne (local.get $hwnd_arg) (local.get $owner)))
+              (then (return (i32.const 0))))
+            (local.set $count
+              (call $menu_child_count (local.get $owner) (local.get $top_index)))
+            (if (i32.ge_u (local.get $item) (local.get $count))
+              (then (return (i32.const 0))))
+            (local.set $width
+              (call $menu_dropdown_width (local.get $owner) (local.get $top_index)))
+            (if (i32.eqz (local.get $width)) (then (return (i32.const 0))))
+            (local.set $popup_x
+              (call $menu_dropdown_x (local.get $owner) (local.get $top_index)))
+            (local.set $popup_y (call $menu_dropdown_y (local.get $owner)))
+            (local.set $left
+              (i32.add (local.get $popup_x) (i32.const 2)))
+            (local.set $top
+              (i32.add
+                (i32.add (local.get $popup_y) (i32.const 2))
+                (i32.mul (local.get $item) (i32.const 20))))
+            (local.set $right
+              (i32.sub
+                (i32.add (local.get $popup_x) (local.get $width))
+                (i32.const 2)))
+            (local.set $bottom (i32.add (local.get $top) (i32.const 20)))))))
+
+    ;; Translate the output exactly once, and only after every failure check,
+    ;; so a rejected query leaves the caller's buffer unchanged.
+    (local.set $rect_w (call $g2w (local.get $rect_g)))
+    (i32.store          (local.get $rect_w) (local.get $left))
+    (i32.store offset=4 (local.get $rect_w) (local.get $top))
+    (i32.store offset=8 (local.get $rect_w) (local.get $right))
+    (i32.store offset=12 (local.get $rect_w) (local.get $bottom))
+    (i32.const 1))
+
   ;; 735: GetMenuItemRect(hWnd, hMenu, uItem, lprcItem) -> BOOL
   (func $handle_GetMenuItemRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $rect_wasm i32)
-    ;; arg0=hWnd, arg1=hMenu, arg2=uItem, arg3=lprcItem
-    (local.set $rect_wasm (call $g2w (local.get $arg3)))
-    ;; Fill RECT with reasonable defaults per menu item
-    (i32.store (local.get $rect_wasm)
-      (i32.mul (local.get $arg2) (i32.const 100))) ;; left
-    (i32.store (i32.add (local.get $rect_wasm) (i32.const 4))
-      (i32.const 0)) ;; top
-    (i32.store (i32.add (local.get $rect_wasm) (i32.const 8))
-      (i32.add (i32.mul (local.get $arg2) (i32.const 100)) (i32.const 100))) ;; right
-    (i32.store (i32.add (local.get $rect_wasm) (i32.const 12))
-      (i32.const 20)) ;; bottom
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) ;; stdcall 4 params + ret
+    (global.set $eax
+      (call $menu_get_item_rect
+        (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
   ;; Windows 98 classic at 96 DPI uses a square 13px default check bitmap.
