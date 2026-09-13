@@ -320,6 +320,20 @@ function runPostExtract(candidate, destination) {
       if (result.status !== 0) {
         throw new Error(`authentic Deus Ex installer failed with exit ${result.status}`);
       }
+    } else if (step.type === 'installUnrealDemo') {
+      for (const field of ['id', 'source', 'into']) {
+        assertSafeRelative(step[field], `${candidate.id}.postExtract[${index}].${field}`);
+      }
+      const result = spawnSync(process.execPath, [
+        path.join(ROOT, 'tools', 'install-unreal-demo.js'),
+        `--id=${step.id}`,
+        `--source=${path.join(destination, step.source)}`,
+        `--output=${path.join(destination, step.into)}`,
+      ], { cwd: ROOT, stdio: 'inherit' });
+      if (result.error) throw result.error;
+      if (result.status !== 0) {
+        throw new Error(`authentic Unreal demo installer failed with exit ${result.status}`);
+      }
     } else if (step.type === 'prepareInfinityFullInstall') {
       for (const field of ['key', 'data', 'into', 'outputKey']) {
         assertSafeRelative(step[field], `${candidate.id}.postExtract[${index}].${field}`);

@@ -175,7 +175,7 @@
   ;; guest code begins. Reserve the tail of the auxiliary-wrapper region
   ;; rather than overlapping VSOCK_TABLE at 0x07FFE000.
   (global $DX_VTBL_REGISTRY i32 (region.addr $DX_VTBL_REGISTRY 0))
-  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 66))
+  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 67))
 
   ;; Vtable blocks — arrays of thunk guest-addrs, one per interface type.
   ;; Must be in guest-reachable memory (above image_base), so allocated from heap.
@@ -262,6 +262,8 @@
   (global $DX_VTBL_D3DTEX9   (mut i32) (i32.const 0))
   (global $DX_VTBL_D3DSURF9  (mut i32) (i32.const 0))
   (global $DX_VTBL_D3DSWAP9  (mut i32) (i32.const 0))
+  ;; D3D8 capability-only factory; appended after every established vtable.
+  (global $DX_VTBL_D3D8      (mut i32) (i32.const 0))
 
   (func $dx_vtable_registry_reset
     (i32.store (global.get $DX_VTBL_REGISTRY) (i32.const 0)))
@@ -352,7 +354,8 @@
     (global.set $DX_VTBL_D3DSWAP9 (i32.load offset=252 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_DPLAY4 (i32.load offset=260 (global.get $DX_VTBL_REGISTRY)))
-    (global.set $DX_VTBL_DPLAYLOBBY3 (i32.load offset=264 (global.get $DX_VTBL_REGISTRY))))
+    (global.set $DX_VTBL_DPLAYLOBBY3 (i32.load offset=264 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_D3D8 (i32.load offset=268 (global.get $DX_VTBL_REGISTRY))))
 
   (func $dx_sync_thread_vtables_if_needed
     (if (i32.eqz (global.get $DX_VTBL_DDRAW))

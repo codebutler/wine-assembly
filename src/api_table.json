@@ -28959,5 +28959,132 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 1145687812
+  },
+  {
+    "id": 3440,
+    "name": "Direct3DCreate8",
+    "nargs": 1,
+    "test_call": true,
+    "convention": "stdcall",
+    "hash": 2419461769
+  },
+  {
+    "id": 3441,
+    "name": "IDirect3D8_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1217642292
+  },
+  {
+    "id": 3442,
+    "name": "IDirect3D8_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 582404335,
+    "handler": "dx_com_addref"
+  },
+  {
+    "id": 3443,
+    "name": "IDirect3D8_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1355039480,
+    "handler": "dx_com_release_basic"
+  },
+  {
+    "id": 3444,
+    "name": "IDirect3D8_RegisterSoftwareDevice",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2368357461
+  },
+  {
+    "id": 3445,
+    "name": "IDirect3D8_GetAdapterCount",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4084503883
+  },
+  {
+    "id": 3446,
+    "name": "IDirect3D8_GetAdapterIdentifier",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3917597095
+  },
+  {
+    "id": 3447,
+    "name": "IDirect3D8_GetAdapterModeCount",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1904282766
+  },
+  {
+    "id": 3448,
+    "name": "IDirect3D8_EnumAdapterModes",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2262348599
+  },
+  {
+    "id": 3449,
+    "name": "IDirect3D8_GetAdapterDisplayMode",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1012149473
+  },
+  {
+    "id": 3450,
+    "name": "IDirect3D8_CheckDeviceType",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2350223267,
+    "handler": "d3d8_not_available_6"
+  },
+  {
+    "id": 3451,
+    "name": "IDirect3D8_CheckDeviceFormat",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3100169444,
+    "handler": "d3d8_not_available_7"
+  },
+  {
+    "id": 3452,
+    "name": "IDirect3D8_CheckDeviceMultiSampleType",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2912315158,
+    "handler": "d3d8_not_available_6"
+  },
+  {
+    "id": 3453,
+    "name": "IDirect3D8_CheckDepthStencilMatch",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 539478727,
+    "handler": "d3d8_not_available_6"
+  },
+  {
+    "id": 3454,
+    "name": "IDirect3D8_GetDeviceCaps",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1908953678
+  },
+  {
+    "id": 3455,
+    "name": "IDirect3D8_GetAdapterMonitor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1494344106
+  },
+  {
+    "id": 3456,
+    "name": "IDirect3D8_CreateDevice",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1561565041,
+    "handler": "d3d8_not_available_7"
   }
 ]

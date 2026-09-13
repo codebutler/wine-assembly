@@ -1295,6 +1295,8 @@ const extra = [
   // never load, which falls back to a name-keyed Win32 thunk — so an entry
   // here is all it takes for Direct3DCreate9 to resolve.
   { name: 'Direct3DCreate9', nargs: 1 },
+  // UE2 executables probe D3D8 before honoring an OpenGL renderer choice.
+  { name: 'Direct3DCreate8', nargs: 1, test_call: true },
   // dinput.dll's GetProcAddress-only entry point (v5/v7 apps).
   { name: 'DirectInputCreateEx', nargs: 5 },
   // SHELL32 — Unicode Inno installers resolve this dynamically.
@@ -1447,6 +1449,12 @@ for (const api of extra) {
   }
 }
 
+// Direct3DCreate8 used to be a generated constant-NULL stub.  The real
+// capability facade has a named WAT handler, so do not preserve that retired
+// row metadata across regeneration.
+const d3d8Factory = existing.find(api => api.name === 'Direct3DCreate8');
+if (d3d8Factory) delete d3d8Factory.stub;
+
 // The Microsoft C runtime exports below use cdecl on x86: handlers pop only
 // the return address and callers remove arguments. Keep this explicit because
 // the table's historical default is stdcall (appropriate for Win32 APIs, but
@@ -1499,6 +1507,26 @@ for (const iface of d3dimIfaces) {
 // Pull Direct3D 9 methods from shared spec (used by gen_d3d9_stubs.js too)
 const { interfaces: d3d9Ifaces } = require('./d3d9-methods');
 for (const iface of d3d9Ifaces) {
+  for (const m of iface.methods) {
+    const fullName = iface.prefix + '_' + m.name;
+    const current = existing.find(api => api.name === fullName);
+    if (current) {
+      current.nargs = m.nargs;
+      if (m.handler) current.handler = m.handler;
+      else delete current.handler;
+    } else {
+      const api = { id: existing.length, name: fullName, nargs: m.nargs, convention: 'stdcall', hash: 0 };
+      if (m.handler) api.handler = m.handler;
+      existing.push(api);
+      seen.add(fullName);
+    }
+  }
+}
+
+// Pull the D3D8 factory interface from its ABI-order spec.  Device creation is
+// deliberately unavailable; this block exists for capability-only probes.
+const { interfaces: d3d8Ifaces } = require('./d3d8-methods');
+for (const iface of d3d8Ifaces) {
   for (const m of iface.methods) {
     const fullName = iface.prefix + '_' + m.name;
     const current = existing.find(api => api.name === fullName);

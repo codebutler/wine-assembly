@@ -409,6 +409,11 @@ comInterfaces.push({ prefix: 'IDirectSound3DListener', global: 'DX_VTBL_DS3DLIST
 comInterfaces.push({ prefix: 'IDirectPlay4', global: 'DX_VTBL_DPLAY4', extends: 'IDirectPlay3' });
 comInterfaces.push({ prefix: 'IDirectPlayLobby3', global: 'DX_VTBL_DPLAYLOBBY3', extends: 'IDirectPlayLobby2' });
 
+// D3D8 capability-only factory.  Keep it at the absolute registry tail so no
+// established worker-thread vtable offset moves.
+const { vtableGlobals: d3d8Vtables } = require('./d3d8-methods');
+for (const v of d3d8Vtables) comInterfaces.push(v);
+
 // Build a map of prefix → { startId, count } from the api_table
 const byName = new Map(apiTable.map(a => [a.name, a]));
 const ifaceInfo = new Map();

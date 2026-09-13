@@ -529,12 +529,96 @@
           (then (drop (call $host_menu_destroy (local.get $submenu)))))))
     (i32.const 1))
 
+  ;; Remove one item from the mutable copy of a window-attached resource
+  ;; dropdown. GetSubMenu represents these as (position+1)<<16 | source-low16,
+  ;; so they are neither MNUD heap menus nor handles in the host's menu map.
+  ;; Return -1 when $hmenu is not one of those encoded dropdowns, otherwise the
+  ;; Win32 BOOL result. Child records are fixed 28-byte entries in the menu
+  ;; blob; deleting a popup also retires its embedded child block.
+  (func $resource_menu_remove
+        (param $hmenu i32) (param $item i32) (param $by_position i32)
+        (param $destroy i32) (result i32)
+    (local $hwnd i32) (local $top i32) (local $blob i32) (local $block i32)
+    (local $count i32) (local $idx i32) (local $i i32)
+    (local $dst i32) (local $src i32) (local $sub i32)
+    (local.set $hwnd (call $menu_hwnd_from_handle (local.get $hmenu)))
+    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const -1))))
+    (local.set $top (call $menu_handle_top_index (local.get $hwnd) (local.get $hmenu)))
+    ;; The attached bar itself has top=-1. Only GetSubMenu's direct-dropdown
+    ;; handles name a mutable child block here.
+    (if (i32.lt_s (local.get $top) (i32.const 0))
+      (then (return (i32.const -1))))
+    (if (i32.ge_u (local.get $top) (call $menu_bar_count (local.get $hwnd)))
+      (then (return (i32.const 0))))
+    (local.set $blob (call $menu_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (local.set $block
+      (i32.add (local.get $blob)
+        (i32.load offset=8
+          (i32.add (local.get $blob)
+            (i32.add (i32.const 4) (i32.mul (local.get $top) (i32.const 16)))))))
+    (if (i32.eq (local.get $block) (local.get $blob))
+      (then (return (i32.const 0))))
+    (local.set $count (i32.load (local.get $block)))
+    (if (local.get $by_position)
+      (then (local.set $idx (local.get $item)))
+      (else
+        (local.set $idx (i32.const -1))
+        (local.set $i (i32.const 0))
+        (block $found (loop $find
+          (br_if $found (i32.ge_u (local.get $i) (local.get $count)))
+          (if (i32.eq
+                (i32.load offset=20
+                  (i32.add (local.get $block)
+                    (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 28)))))
+                (local.get $item))
+            (then (local.set $idx (local.get $i)) (br $found)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $find)))))
+    (if (i32.or
+          (i32.lt_s (local.get $idx) (i32.const 0))
+          (i32.ge_u (local.get $idx) (local.get $count)))
+      (then (return (i32.const 0))))
+    (local.set $dst
+      (i32.add (local.get $block)
+        (i32.add (i32.const 4) (i32.mul (local.get $idx) (i32.const 28)))))
+    (local.set $sub (i32.load offset=24 (local.get $dst)))
+    (local.set $i (local.get $idx))
+    (block $done (loop $shift
+      (br_if $done
+        (i32.ge_u (i32.add (local.get $i) (i32.const 1)) (local.get $count)))
+      (local.set $src (i32.add (local.get $dst) (i32.const 28)))
+      (i32.store           (local.get $dst) (i32.load           (local.get $src)))
+      (i32.store offset=4  (local.get $dst) (i32.load offset=4  (local.get $src)))
+      (i32.store offset=8  (local.get $dst) (i32.load offset=8  (local.get $src)))
+      (i32.store offset=12 (local.get $dst) (i32.load offset=12 (local.get $src)))
+      (i32.store offset=16 (local.get $dst) (i32.load offset=16 (local.get $src)))
+      (i32.store offset=20 (local.get $dst) (i32.load offset=20 (local.get $src)))
+      (i32.store offset=24 (local.get $dst) (i32.load offset=24 (local.get $src)))
+      (local.set $dst (local.get $src))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $shift)))
+    (call $zero_memory (local.get $dst) (i32.const 28))
+    (i32.store (local.get $block) (i32.sub (local.get $count) (i32.const 1)))
+    (if (i32.and
+          (i32.ne (local.get $destroy) (i32.const 0))
+          (i32.ne (local.get $sub) (i32.const 0)))
+      (then (i32.store (i32.add (local.get $blob) (local.get $sub)) (i32.const 0))))
+    (i32.const 1))
+
   (func $menu_remove_item
         (param $hmenu i32) (param $item i32) (param $flags i32)
         (param $destroy i32) (result i32)
     (local $result i32)
     (local.set $result
       (call $dynamic_menu_remove
+        (local.get $hmenu) (local.get $item)
+        (i32.ne (i32.and (local.get $flags) (i32.const 0x400)) (i32.const 0))
+        (local.get $destroy)))
+    (if (i32.ne (local.get $result) (i32.const -1))
+      (then (return (local.get $result))))
+    (local.set $result
+      (call $resource_menu_remove
         (local.get $hmenu) (local.get $item)
         (i32.ne (i32.and (local.get $flags) (i32.const 0x400)) (i32.const 0))
         (local.get $destroy)))

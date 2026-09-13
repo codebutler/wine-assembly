@@ -1271,18 +1271,24 @@
         ;; keeping our stale update region lets hidden controls draw fragments
         ;; after SW_HIDE.
         (call $paint_clear_subtree (local.get $arg0))))
-    ;; USER sends a newly shown child its current client size. Hidden child
+    ;; USER sends a newly shown window its current client size. Hidden child
     ;; containers commonly defer layout until this notification; Unreal
     ;; Setup creates its inner owner-draw list only after the hidden wrapper's
-    ;; creation-time sizing has completed.
+    ;; creation-time sizing has completed. A non-main top-level needs the same
+    ;; queued notification: its CreateWindow path cannot use pending_wm_size
+    ;; because that single slot belongs to main_hwnd. Unreal keeps a visible
+    ;; log window as main while showing its separate viewport; without this
+    ;; size message WinDrv never allocates the software framebuffer.
     (if (i32.and
           (i32.and
             (i32.and (i32.ne (local.get $arg1) (i32.const 0))
                      (i32.eqz (local.get $was_visible)))
-            (i32.ne
-              (i32.and (call $wnd_get_style (local.get $arg0))
-                       (i32.const 0x40000000))
-              (i32.const 0)))
+            (i32.or
+              (i32.ne
+                (i32.and (call $wnd_get_style (local.get $arg0))
+                         (i32.const 0x40000000))
+                (i32.const 0))
+              (i32.ne (local.get $arg0) (global.get $main_hwnd))))
           (i32.ne (local.get $client_size) (i32.const 0)))
       (then
         (drop (call $post_queue_push
