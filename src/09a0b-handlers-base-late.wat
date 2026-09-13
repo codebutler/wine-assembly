@@ -156,7 +156,19 @@
 
   ;; 477: IsValidLocale(Locale, dwFlags) → BOOL
   (func $handle_IsValidLocale (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    ;; EnumSystemLocalesA, the default-locale APIs, locale data, keyboard
+    ;; layout, and code pages all expose one internally consistent en-US
+    ;; installation. The default aliases resolve to that same locale.
+    (global.set $eax
+      (i32.and
+        (i32.or
+          (i32.eq (local.get $arg1) (i32.const 1)) ;; LCID_INSTALLED
+          (i32.eq (local.get $arg1) (i32.const 2))) ;; LCID_SUPPORTED
+        (i32.or
+          (i32.eq (local.get $arg0) (i32.const 0x0409)) ;; en-US
+          (i32.or
+            (i32.eq (local.get $arg0) (i32.const 0x0400)) ;; LOCALE_USER_DEFAULT
+            (i32.eq (local.get $arg0) (i32.const 0x0800)))))) ;; LOCALE_SYSTEM_DEFAULT
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; Invoke one ANSI string enumeration callback and free its temporary buffer
