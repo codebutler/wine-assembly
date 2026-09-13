@@ -4802,3 +4802,58 @@ No wall-clock speedup is claimed here, and none should be quoted from this box
 at loadavg 450. A fold collapses a loop into one dispatch, so block counts stop
 being comparable across the change - measure progress in presents or in guest
 API calls per CPU-second instead.
+
+## CORRECTION 2026-09-13: the "77% of ops" profile above was measured wrong, twice
+
+Two independent mistakes, both mine, and the conclusion does not survive either.
+
+**1. The run was missing the seeded DLLs.** `tools/black-white-software-probe.js`
+passes `--dll-seed=d3dx9_25.dll,binkw32.dll,dbghelp.dll`; I profiled without it.
+Without those DLLs the guest calls our D3DX stubs, and `D3DXMatrixPerspectiveFovLH`
+is a fail-fast stub, so the run dies at batch 190 with `=== UNIMPLEMENTED API ===`
+instead of doing the app's real work. Any profile taken that way is of a
+different program. Same 22s window, the two configurations:
+
+| | no `--dll-seed` | with `--dll-seed` |
+|---|---|---|
+| batches | 54 | **1851** |
+| handler ops | 59.9M | **807.2M** |
+| API calls | 82,927 | 904,189 |
+
+**2. `top blocks` silently drops most of its input.** `$hot_block_hist_record`
+(`src/04-cache.wat:1000`) is a **4-way** bucket: after four probes it increments
+`$hot_block_hist_collisions` and records nothing. That run reported
+`distinct=19680 collisions=7216503` against ~3.78M recorded entries, i.e. **66%
+of block entries never entered the list**, and the hottest loop was among the
+lost ones. The printed top-blocks table is not a profile unless `collisions` is
+small - check it before quoting it. The **SIB-consumer histogram in the same
+output is trustworthy** (`collisions=1091` of 40M); it is what actually found the
+hot loop.
+
+### What the profile says once both are fixed
+
+    H190 $th_fpu_mem_ro   184685100 (22.88%)
+    H189 $th_fpu_reg       57341141  (7.10%)
+    H188 $th_fpu_mem       39245653  (4.86%)
+
+**x87 is ~35% of all ops** - the game's own geometry plus d3dx9_25's software
+math. That is the steady-state cost and the thing worth attacking.
+
+The one loop still worth folding is the byte checksum at `0x0085b210`:
+
+    0085b210  movzx ecx, byte [eax+edi]
+    0085b214  add  [0x1d5e148], ecx
+    0085b21a  add  eax, 1
+    0085b21d  cmp  eax, esi
+    0085b21f  jb   0x85b210
+
+It ran **20,656,128** times, which is exactly `BW2Demo.exe`'s file size - the app
+byte-sums its own 20MB image as an anti-tamper self-check. That is a fixed
+~124M-op startup tax (~15% of this window), it is a single-block self-loop, and
+its accumulator is a fixed memory address re-read and rewritten every iteration,
+so a fold can hold it in a local and write back once.
+
+**Not stdlib.** `0x9a8780` (strlen) and `0xad764b` (uppercase) are inlined CRT,
+but together they are only ~12% of ops; matching statically-linked CRT functions
+would not have touched the dominant cost. `0x85b210` and the CRC32 at `0x9a8712`
+are game code, not library code.
