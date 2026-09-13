@@ -35,6 +35,8 @@ async function main() {
   assert.strictEqual(wat.test_call_GetSystemMetrics(46), 2, 'SM_CYEDGE');
   assert.strictEqual(wat.test_call_GetSystemMetrics(49), 16, 'SM_CXSMICON');
   assert.strictEqual(wat.test_call_GetSystemMetrics(50), 16, 'SM_CYSMICON');
+  assert.strictEqual(wat.test_call_GetSystemMetrics(71), 13, 'SM_CXMENUCHECK');
+  assert.strictEqual(wat.test_call_GetSystemMetrics(72), 13, 'SM_CYMENUCHECK');
   assert.strictEqual(wat.test_call_GetSystemMetrics(31)
     + 2 * wat.test_call_GetSystemMetrics(33) + 1, 27,
   'Explorer tray baseline includes an 18px size button and the classic frame');

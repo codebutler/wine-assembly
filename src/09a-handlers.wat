@@ -981,6 +981,13 @@
       (then (return (i32.add (call $screen_metric_w) (i32.const 8)))))
     (if (i32.eq (local.get $index) (i32.const 0x3E)) ;; SM_CYMAXIMIZED
       (then (return (i32.add (call $screen_metric_h) (i32.const 8)))))
+    ;; These late Win98 metrics describe the bitmap itself, not the padded
+    ;; column the menu painter reserves around it. GetMenuCheckMarkDimensions
+    ;; shares this exact authority and packs the same value into both words.
+    (if (i32.eq (local.get $index) (i32.const 71)) ;; SM_CXMENUCHECK
+      (then (return (call $menu_checkmark_size))))
+    (if (i32.eq (local.get $index) (i32.const 72)) ;; SM_CYMENUCHECK
+      (then (return (call $menu_checkmark_size))))
     (i32.const 0))
 
   ;; 90: GetSystemMetrics (actual slot used by imports)
