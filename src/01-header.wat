@@ -1755,6 +1755,19 @@
   ;; lands mid-block routinely, and re-running a block's leading pushes moves ESP
   ;; twice. Non-zero means "resume here"; $run consumes it and clears it.
   (global $resume_ip (mut i32) (i32.const 0))
+
+  ;; $raise_exception replaces $eip outright, so the block that was running is
+  ;; abandoned, not suspended -- and $resume_ip outranks $eip in $run. Without
+  ;; this flag the op after the faulting one parks $ip in $resume_ip on its way
+  ;; out and $run resumes the abandoned block instead of entering the handler.
+  ;; Set by $raise_exception, consumed and cleared by $run.
+  (global $eip_redirected (mut i32) (i32.const 0))
+
+  ;; Set while $raise_exception is walking the SEH chain. That walk reads guest
+  ;; memory, so a chain pointer that is itself unmapped would re-enter the
+  ;; raise from $g2w_miss and recurse until the stack gives out. The inner miss
+  ;; falls back to the sentinel instead.
+  (global $fault_raising (mut i32) (i32.const 0))
   (global $API_HASH_TABLE i32 (region.addr $API_HASH_TABLE 0))
   (global $API_HASH_TABLE_SIZE i32 (region.size $API_HASH_TABLE))
   ;; Window/class/parent tables (below GUEST_BASE, above the API hash table).

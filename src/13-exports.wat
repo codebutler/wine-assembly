@@ -43,6 +43,9 @@
       ;; over that callback EIP and continue the interrupted block on its callback
       ;; stack. No block is spent from the budget: this is the same block, still
       ;; in progress, and its terminator will return here before another starts.
+      ;; Consumed: we are back at the top of the loop with the handler's $eip in
+      ;; place, which is exactly what the flag was protecting.
+      (global.set $eip_redirected (i32.const 0))
       (if (global.get $resume_ip)
         (then
           (global.set $ip (global.get $resume_ip))
@@ -2365,7 +2368,9 @@
   (func (export "set_bp") (param $addr i32) (global.set $bp_addr (local.get $addr)) (global.set $bp_first_caller (i32.const 0)) (call $dbg_recompute))
   (func (export "clear_bp") (global.set $bp_addr (i32.const 0)) (call $dbg_recompute))
   (func (export "get_bp_addr") (result i32) (global.get $bp_addr))
-  ;; --fault-null: 0=off, 1=log unmapped guest accesses, 2=log and trap.
+  ;; --fault-null: 0=off, 1=log unmapped guest accesses, 2=log and trap,
+  ;; 3=log and raise a guest EXCEPTION_ACCESS_VIOLATION at the faulting
+  ;; instruction (--fault-null=raise), which is what real hardware does.
   ;; Per-instance like every mutable global, so a worker thread needs its own
   ;; call to see the same setting.
   (func (export "set_fault_unmapped") (param $mode i32)

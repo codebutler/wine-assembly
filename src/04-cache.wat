@@ -926,7 +926,11 @@
       (then
         ;; Hand $run the op we are declining to run, so it resumes the block
         ;; instead of restarting it. See $resume_ip in 01-header.wat.
-        (global.set $resume_ip (global.get $ip))
+        ;; Unless $eip has just been replaced out from under this block by an
+        ;; exception raise: that block is abandoned, and parking $ip here would
+        ;; send $run back into it instead of into the handler.
+        (if (i32.eqz (global.get $eip_redirected))
+          (then (global.set $resume_ip (global.get $ip))))
         (return)))
     (local.set $fn (i32.load (global.get $ip)))
     (local.set $op (i32.load offset=4 (global.get $ip)))
