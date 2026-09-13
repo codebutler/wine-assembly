@@ -4175,3 +4175,68 @@ precision: these are the Qhull-family routines, `--trace-fpu` has still never
 been run across the land load, and zero `[fpu]` lines would send the search back
 to the object graph while exceptions around the traversal would make x87 the
 prime suspect.
+
+### The NULL is a record field, and the 430 MB is the same function's own container
+
+`FAULT_WHO=0x9e1e50` (a worktree-only dump in `unmapped_trace`: registers, ten
+dwords at ESP and an eight-deep EBP walk, the first N times one block faults)
+answers both halves at once. Every fault reports the same frames:
+
+```
+[who] fault#1 addr=0x0 eip=0x9e1e50
+[who]   eax=0x2e184fe8 ecx=0x0 edx=0x35c55010 ebx=0x0 esi=0x2e204464 edi=0x2e184fe8
+[who]   frames 0x9e3a25 <- 0x9d5440
+[who] fault#2 addr=0x4 ... esi=0x0
+```
+
+`eax` is a valid pointer, so argument 1 is fine and the faulting instructions
+are not the ones that read it. They are
+
+```
+009e1e6c  mov ecx, [ebp+0xc]    ; argument 2
+009e1e70  mov esi, [ecx]        ; ecx = 0  -> fault at 0x0
+009e1e72  mov ecx, [ecx+0x4]    ;         -> fault at 0x4
+```
+
+and fault #2's `esi=0` is the zero the first read already returned. **Argument 2
+is NULL.** Of the three call sites the hot one is `0x9e3a20`, which builds its
+arguments out of a 24-byte record:
+
+```
+009e39e7  mov eax, [esp+0x20]   ; byte offset
+009e39eb  mov edx, [esp+0x74]   ; array base
+009e39ef  add edx, eax
+009e39f1  mov esi, [edx]        ; +0x00
+009e39f9  mov edi, [edx+0xc]    ; +0x0c -> argument 1, VALID
+009e39fc  mov ebx, [edx+0x10]   ; +0x10 -> argument 2, NULL
+009e3a06  push ebx
+009e3a0f  push edi
+009e3a20  call 0x9e1e50
+```
+
+So the record is **half filled**: `+0xc` is a good pointer and `+0x10` beside it
+is zero. Not an unallocated record, not a wild pointer -- one field.
+
+`0x9e3a20` is inside `0x9e35e0`, the same function the 430 MB allocation came
+from, and `[esp+0x74]` is the local container `0x9e35e0` zeroes on entry
+(`0x9e362f`-`0x9e3649`) and hands to `0x9e22f0` for every node it reaches.
+`0x9e22f0` is a **linear scan over 24-byte records** --
+
+```
+009e2300  mov edx,[ecx+0x8] / sub edx,esi / imul 0x2aaaaaab / sar edx,2   ; (end-begin)/24
+009e2320  cmp [esi], edi     ; key is field +0x00
+009e2327  add esi, 0x18      ; next record
+```
+
+-- returning true when a record's `+0x00` matches, and `0x9e35e0` skips the node
+when it does (`test al,al / jnz 0x9e37ee`). That is a visited set, and it is
+also the container that reached 430 MB. **A visited set only grows without
+bound when its lookup never hits**, so the 430 MB and the NULL field are two
+symptoms of the same thing: the records being appended do not describe what the
+traversal thinks they describe.
+
+Next measurement: the dump now also resolves the array base and offset from the
+frame (`base` at `ebp+0x84`, `offset` at `ebp+0x30`, since the caller's ESP
+before its two pushes is `ebp+0x10`) and prints all six fields with the record's
+guest address. That address is what a `--watch` can be pinned to, to catch the
+write into `+0x10` -- or to prove there never was one.
