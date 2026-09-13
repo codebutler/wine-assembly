@@ -7177,7 +7177,16 @@
                             (br $gi (local.get $r4))) (br $gi (local.get $r5)))
                             (br $gi (local.get $r6)))
                           (local.get $r7))
-                        (i32.shr_u (local.get $b) (i32.const 4)))))))))
+                        ;; Scale is TWO bits at b[5:4]. The `& 3` is load-bearing
+                        ;; on exactly one kind: TU_STORE8_SIB is the only one that
+                        ;; carries SIB fields AND a lane bit, and TU_B_LANE_D is
+                        ;; 0x40 -- bit 6, which an unmasked `b >> 4` folds into
+                        ;; the shift amount as +4. A high-byte store through an
+                        ;; indexed address then writes at index<<(scale+4).
+                        ;; Found by test/test-block-exec.js, which reaches the
+                        ;; combination H454 has apparently never met in a
+                        ;; self-loop; H457 shares this decode verbatim.
+                        (i32.and (i32.shr_u (local.get $b) (i32.const 4)) (i32.const 3)))))))))
 
             ;; Evaluate. Every arm publishes exactly the flag fields its
             ;; scalar handler publishes, by calling the same helper -- which
