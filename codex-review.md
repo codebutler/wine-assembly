@@ -1,5 +1,30 @@
 # Project review — 2026-09-10
 
+## Standalone bitmap-font recovery — 2026-09-13 (not merged)
+
+Candidate branch `codex/font-main-20260913`, based on main `adcc4e37`, isolates
+failure-atomic bitmap-font replacement and owned, normalized full-path identity.
+It stages every strike and destination before publication, preserves old fonts
+on malformed input or allocation/capacity failure, and distinguishes colliding
+path hashes. Paths are bounded and checked before access; synchronous file loads
+snapshot the caller pathname before host imports. No host/filesystem changes,
+stock-startup exports, record-layout changes, or new memory regions are included.
+New native tests cover replacement rollback and path collisions/ownership.
+
+Independent source review found no blocker; test syntax and diff checks pass.
+**Current-main acceptance is blocked, not passed:** the canonical build stops
+at pre-existing Imm handler duplicate-census entries, and native test compilation
+stops at missing `$handle_EnumDisplayDevicesA`. Its dispatch entry was committed
+in `e6bf89bd`, but the handler is still in another lane's dirty
+`src/09a3-handlers-audio.wat`. The owner was notified on the messageboard;
+no foreign changes were staged or imported. A fallback at parent `a09a9428`
+also fails compilation (unrelated `load_image_bitmap_file` argument mismatch).
+
+Do not merge this candidate until the owning lanes commit their prerequisites,
+then reconcile current main and rerun the full build and native font tests.
+This does not close font generation/live-handle lifetime, registry concurrency,
+TrueType identity, or the broad recovery integration findings below.
+
 ## Recovery execution update — 2026-09-11
 
 **Final build update:** OLE owner fix `f1b91444` resolves the intermediate handler-checker failure described below. Clean committed main `90503599` now passes the full canonical/compatibility build at **1,160,121 / 1,160,589 bytes**, layout `9c6027bce1d500a1`; the 24 native x87 isolation checks and 11 pipeline differential cases pass. The full test suite was not run. Broad recovery remains isolated pending newer-main reconciliation and coordinated handling of active overlapping edits.
