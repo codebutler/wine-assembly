@@ -55,6 +55,7 @@
 (include "09a7-handlers-dispatch.wat")
 (include "09a7b-ole.wat")
 (include "09a7c-mixer.wat")
+(include "09a7d-handlers-shell-file.wat")
 (include "09a8-handlers-directx.wat")
 (include "09a8b-handlers-opengl.wat")
 (include "09a9-comctl32.wat")
