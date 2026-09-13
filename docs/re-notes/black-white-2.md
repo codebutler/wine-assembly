@@ -2206,3 +2206,105 @@ callers of `0x9e505c`), which is the documented caution about that tool. And
 `find_field.js` on offsets `0x14`/`0x94` returns 2637 and 237 hits
 respectively, nearly all misaligned `adc` decodes of data — the field offsets
 here are too common for a static field search to be worth anything.
+
+## The profile gate, and the input recipe that reaches the land picker
+
+Every session before this one stopped at a screen that looked like a hang and
+was not one. Two separate gates, both now known:
+
+**The intro is an attract loop.** Title screen → Lionhead logo → repeat,
+forever. Neither a click nor a keypress dismisses it, so a run that waits for it
+to end never starts. `tools/black-white-software-probe.js --skip-intro` is
+mandatory: it writes the intro object's finish-frame field directly, armed once
+the EIP trace range `0x00526d93-0x00526d97` fires and names the object in ESI.
+Runs `rt150k.png` (title) and `rt190k.png` (logo) are the proof of the loop —
+two captures 40,000 batches apart showing the two halves of the cycle.
+
+**The game will not start without a profile.** Past the intro it puts up a
+profile dialog, and the main menu is behind it. The dialog is dismissed through
+DirectInput, not the renderer's mouse path:
+
+```
+355000:relmousemove:-2000:-2000   # home the DirectInput cursor
+365000:relmousemove:250:277       # the OK button
+385000:di-mousedown:1
+395000:di-mouseup:1
+430000:keydown:13                 # Enter activates "New Game"
+```
+
+That sequence reaches the **land picker** — 3D preview plus the eight land
+thumbnails — reproducibly. Batch numbers are for the probe's defaults
+(`--batch-size=200000 --real-ticks`); `--real-ticks` is not optional, and a run
+without it burns its whole budget inside the intro.
+
+## The 4GB host OOM at the picker was `--fault-null`, not a leak
+
+One full-chain run reached the picker and then died with
+
+```
+[22942:...] 1099020 ms: Mark-Compact 4095.6 (4097.3) -> 4094.8 (4100.6) MB ...
+FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory
+```
+
+This was read as an emulator-side unbounded allocation. It is not. The fatal
+stack names `node::inspector::InspectorConsoleCall` at frame 17 with
+`Builtins_NewRestArgumentsElements` above it: **the 4GB was being allocated
+inside `console.log`.** Node's `process.stdout` is asynchronous when it is a
+pipe, so a `console.log` the reader cannot keep up with queues in the writer's
+heap instead of blocking — and a guest scanning a NULL array outruns any reader.
+The Mark-Compact above reclaimed 0.2MB of 4094.8MB, so all of it was live queue,
+and the last line of that run's `run.log` is a truncated mid-write
+`[fault] unmapped guest access 0x0 fr`.
+
+D3D was ruled out from the same run rather than argued about: `samples.ndjson`
+shows draws flat at 3296 with `pending=0` for the last 80 seconds of sampling
+while the heap kept climbing, and `submitted == consumed == completed`, so the
+command queue drains.
+
+Fixed in `bf260ef4`: `--fault-null` prints at most 64 lines per EIP and counts
+the rest, with a `[fault] census` at exit naming every EIP, its true count and
+the address range it walked. The cap is per EIP, so a rare fault beside a
+spinning one still prints in full. Unit-tested in
+`test/test-fault-null-census.js` (0.1s).
+
+**The general warning**, which applies to every diagnostic that prints per guest
+event: under `tools/black-white-software-probe.js` the child's stdout is a pipe,
+and an unbounded printer there does not merely produce a large log — it kills
+the run, and kills it far enough from the guest bug that the log is useless.
+
+## Two more NULL-object faults, distinct from the grid
+
+The same run recorded 12,675 faults at EIPs that are **not** the grid query.
+`0x9e17d0` (enclosing block entry `0x9e17b0`) dereferences a NULL `edx` six
+times per iteration over roughly 2100 iterations:
+
+```
+009e17d0  mov eax, [edx+0x8]
+009e17d3  mov ebx, [edx]
+009e17d5  mov edi, [eax]
+009e17d7  mov esi, [eax+0x4]
+009e17da  mov ecx, [ebx+0x8]
+009e17dd  mov edx, [ecx]
+```
+
+and `0x9d4a69` null-checks a register only *after* dereferencing three others:
+
+```
+009d4a70  mov ecx, [esi]
+009d4a72  mov edx, [ecx+0x4]
+009d4a75  mov ecx, [edx+0x10]
+009d4a78  test ecx, ecx
+009d4a7a  jz short 0x9d4a87
+```
+
+These are a different NULL-object bug from the picker grid and have not been
+traced to their source yet.
+
+### Scope correction on the picker wedge
+
+The picker does **not** deterministically wedge. One run reached it with zero
+faults and zero `[heap] OOM` lines. The earlier claim that the hover triggers
+the wedge was already retracted — the log shows the picker surviving two
+complete click cycles first — and the ruling-out of allocation failure holds
+only up to the profile screen, since the zero-OOM runs never reached a land and
+the probe's own source records that *the land* commits the whole 316MB pool.
