@@ -5,6 +5,7 @@
   (global $msvcrt_errno_ptr (mut i32) (i32.const 0))
   (global $msvcrt_signal_table (mut i32) (i32.const 0))
   (global $msvcrt_tm_ptr (mut i32) (i32.const 0))
+  (global $msvcrt_getdrive_ptr (mut i32) (i32.const 0))
 
   ;; __mb_cur_max() — cdecl. The default Win98 ANSI code page is single-byte in
   ;; this emulator, so old MSVCRT callers see the same max character width as C.
@@ -15,7 +16,31 @@
 
   ;; _getdrive() — cdecl, returns 1 for A:, 2 for B:, 3 for C:, etc.
   (func $handle__getdrive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 3))
+    (local $len i32) (local $letter i32)
+    ;; The CRT uses an internal current-directory buffer too. Retain one per
+    ;; process instance so this cold query does not churn the guest free list.
+    (if (i32.eqz (global.get $msvcrt_getdrive_ptr))
+      (then
+        (global.set $msvcrt_getdrive_ptr (call $heap_alloc (i32.const 260)))))
+    (global.set $eax (i32.const 0))
+    (if (global.get $msvcrt_getdrive_ptr)
+      (then
+        (local.set $len (call $host_fs_get_current_directory
+          (i32.const 260) (global.get $msvcrt_getdrive_ptr) (i32.const 0)))
+        (if (i32.and
+              (i32.and (i32.gt_u (local.get $len) (i32.const 1))
+                       (i32.lt_u (local.get $len) (i32.const 260)))
+              (i32.eq
+                (call $gl8 (i32.add (global.get $msvcrt_getdrive_ptr) (i32.const 1)))
+                (i32.const 0x3a)))
+          (then
+            (local.set $letter
+              (i32.and (call $gl8 (global.get $msvcrt_getdrive_ptr)) (i32.const 0xdf)))
+            (if (i32.and (i32.ge_u (local.get $letter) (i32.const 0x41))
+                         (i32.le_u (local.get $letter) (i32.const 0x5a)))
+              (then
+                (global.set $eax
+                  (i32.sub (local.get $letter) (i32.const 0x40)))))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
