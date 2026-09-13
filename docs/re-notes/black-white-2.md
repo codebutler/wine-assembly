@@ -2973,3 +2973,87 @@ Node layout, read off a healthy chain (element 11's, at `0x2eb30300`) at a
 +0x00  next        +0x04  prev       +0x08  point*
 +0x0c  ?           +0x10  owner record*   <- matches the record the head came from
 ```
+
+## The ring is open, and that is only fatal when the answer is "inside"
+
+The previous section predicted a node with `next == 0` in the chain from
+`0x2eb30ff8`. Dumping the node pool (`--dump=0x2eb30000:32768`, which covers
+every link address seen) and walking it by pointer confirms it, and the chain is
+short:
+
+```
+0x2eb310c0 -> 0x2eb305a8 -> 0x2eb30ff8 -> 0x2eb307d8 -> NULL
+point:      0x2ec747a8    0x2ec7479c    0x2ec74790    0x2ec74784
+```
+
+Four consecutive point objects 12 bytes apart — a quadrilateral whose last edge
+is missing. The head the thunk hands the walker is the *third* of the four, so
+the walk reaches the open end after two hops.
+
+**Read only `+0x00` (next) and `+0x08` (point) as known.** The earlier guess of
+`+0x04 prev` / `+0x10 owner` does not survive a pool-wide audit: forward chains
+routinely walk far past the node count of the record at `+0x10` (39 hops for 7
+nodes), and 548 nodes have `next->prev != self`. Those two offsets are
+retracted. The walker itself only ever dereferences `+0` and `+8`, so those are
+the only fields with ground truth behind them.
+
+### Why an open ring is usually harmless
+
+Disassembling the whole loop shows the walker is a **convex point-in-polygon
+test**, not a plain list walk. Per edge it takes vertex `A = [[edx+8]]` and
+`B = [[edx]+8]`, forms two cross products, and `setge al`. The bottom is:
+
+```
+009e1820  test ecx, ecx
+009e1822  mov edx, ebx            ; edx = next
+009e1824  setge al
+009e1827  cmp [esp+0x20], edx     ; <- the HEAD, see the slot note below
+009e182b  jz short 0x9e1831       ; wrapped: done
+009e182d  test al, al
+009e182f  jnz short 0x9e17d0      ; still inside: keep going
+```
+
+So there are **two** exits: the ring closed, or the point fell outside an edge.
+A point that is outside leaves on the first failing edge and never reaches the
+open end — which is exactly why 303 calls returned and only the 304th did not.
+An open ring is a latent defect that fires only when the query answers "inside".
+
+`[esp+0x20]` really is the head, and the arithmetic is worth writing down
+because two different slots alias to `0x20` at different depths. After
+`sub esp,0xc`, arg1 sits at `[esp+0x10]` and arg2 at `[esp+0x14]`. At
+push-depth 3, `mov [esp+0x20],ecx` writes the **arg2** slot (stashing the
+point's y). One more `push edi` later, at push-depth 4, `cmp [esp+0x20],edx`
+reads one slot lower — the **arg1** slot, the original head. The same
+arithmetic independently checks out on `[esp+0x24]` (= y) and `[esp+0x10]`
+(= x) inside the body.
+
+The caller's arg2 is `lea esi,[esp+0x18]`, a stack `{x,y}` pair, not a list
+record — so there is no "end sentinel" reading available. The terminator is the
+head and nothing else.
+
+### Why this has to be our bug
+
+With `edx == 0` every load returns the NULL sentinel's zero, so `ecx` ends at 0,
+`setge` makes `al = 1`, and `cmp head, 0` is never equal. **Both** loop
+conditions are permanently true. On real hardware the same open ring takes an
+access violation at `[0+8]` instead, so the shipped game cannot be walking an
+open ring here — a write that closes it is going missing on our side. The node
+pool itself is mapped (we just dumped 32KB of it), so the store is not vanishing
+into the sentinel at the node.
+
+The walker has exactly one entry point — `xrefs` and `find-refs` both report a
+single reference, the slot-8 thunk `0x9d47b0` — so `head = [[element]]` =
+`record->head`, and `[record+0]` has one known writer (`0x9c1b04`,
+`mov [edi],eax`) and one known eraser (`0x9c0c50`, `mov dword [ecx],0`).
+
+### Retracted along the way
+
+`0x9e8200` (the vector grow) faults 6578 times against 1325 entries, and
+`1325 x 5` derefs `= 6625` is tempting — but the printed addresses refute
+"every grow has an unmapped `this`". They are small structured integers
+(`0x0, 0x4, 0x3ff, 0x403, 0x1b57, 0x1b5b, 0x1f3f, 0x1f43`) repeating in a
+7-per-cycle pattern, not garbage pointers. Note `0x3ff`, `0x1b57`, `0x1f3f` are
+`1024-1`, `7000-1`, `8000-1`, and 7000/8000 are two of the pool capacities from
+`0x9d79f0` — capacity *values* being used as addresses. Only the first 64 faults
+per EIP are printed, so this sample may be startup traffic unrelated to the
+wedge. Unresolved, and deliberately not on the critical path.
