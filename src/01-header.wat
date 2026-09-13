@@ -2406,7 +2406,7 @@
   (global $DI_NORMAL i32 (i32.const 3))
   (global $SYNC_TABLE i32 (region.addr $SYNC_TABLE 0))
   (global $SYNC_TABLE_SIZE i32 (region.size $SYNC_TABLE))
-  (global $MAX_SYNC_OBJECTS i32 (i32.const 512))
+  (global $MAX_SYNC_OBJECTS i32 (i32.const 4096))
   ;; Packed guest page table. One entry covers each 4KB page in the
   ;; complete 32-bit guest address space. Entries store an aligned WASM backing
   ;; page plus normalized access flags in the otherwise-zero low 12 bits.

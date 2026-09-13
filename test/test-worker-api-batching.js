@@ -137,7 +137,7 @@ windowHost.imports.set_cursor(0x67F00);
 assert.strictEqual(renderer.canvas.style.cursor, 'default',
   'selecting IDC_ARROW restores the browser cursor');
 
-const wat = fs.readFileSync(path.join(ROOT, 'src/09a-handlers.wat'), 'utf8');
+const wat = require('./wat-source-closure').readWatSourceClosure();
 const begin = wat.indexOf('(func $handle_GetKeyboardState');
 const end = wat.indexOf('\n  (func ', begin + 1);
 assert(begin >= 0 && end > begin, 'GetKeyboardState handler is present');

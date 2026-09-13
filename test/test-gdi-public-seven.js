@@ -6,14 +6,12 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const { readWatSourceClosure } = require('./wat-source-closure');
 // $GUEST_BASE, from the map declared in src/00-regions.wat.
 const RegionMap = require('../lib/region-map.generated.js');
 const { fontMounts } = require('../lib/font-substitutions');
 
-const gdiSources = {
-  A: fs.readFileSync(path.join(__dirname, '..', 'src', '09a4-handlers-gdi.wat'), 'utf8'),
-  W: fs.readFileSync(path.join(__dirname, '..', 'src', '09a-handlers.wat'), 'utf8'),
-};
+const gdiSource = readWatSourceClosure();
 function watFunction(source, name) {
   const start = source.indexOf(`(func $${name}`);
   assert(start >= 0, `missing ${name}`);
@@ -25,7 +23,7 @@ function watFunction(source, name) {
   throw new Error(`unterminated ${name}`);
 }
 for (const suffix of ['A', 'W']) {
-  const legacy = watFunction(gdiSources[suffix], `handle_GetCharWidth${suffix}`);
+  const legacy = watFunction(gdiSource, `handle_GetCharWidth${suffix}`);
   assert(legacy.includes(`call $handle_GetCharWidth32${suffix}`),
     `legacy GetCharWidth${suffix} must delegate to its canonical 32-bit handler`);
   assert(!legacy.includes('$gdi_font_char_widths'),

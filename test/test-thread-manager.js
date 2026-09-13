@@ -3,12 +3,13 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { ThreadManager } = require('../lib/thread-manager');
+const { readWatSourceClosure } = require('./wat-source-closure');
 
-const handlersWat = fs.readFileSync(path.join(__dirname, '..', 'src', '09a-handlers.wat'), 'utf8');
+const handlersWat = readWatSourceClosure();
 const headerWat = fs.readFileSync(path.join(__dirname, '..', 'src', '01-header.wat'), 'utf8');
 assert(!handlersWat.includes('(call $host_log_i32 (global.get $eax))'),
   'synchronization handlers must not cross to the host solely to print return values');
-assert(headerWat.includes('(global $MAX_SYNC_OBJECTS i32 (i32.const 512))'),
+assert(headerWat.includes('(global $MAX_SYNC_OBJECTS i32 (i32.const 4096))'),
   'the WAT synchronization table must match the host manager capacity');
 
 function makeThreadManager(opts) {
@@ -43,14 +44,15 @@ assert.notStrictEqual(idHandle, idView.getUint32(threadIdWa, true),
 const tm = makeThreadManager();
 const handles = [];
 
-for (let i = 0; i < 7; i++) {
+for (let i = 0; i < tm._maxWorkerThreads; i++) {
   const handle = tm.createThread(0x1000 + i, 0, 0);
   assert(handle, `worker slot ${i + 1} should allocate`);
   handles.push(handle);
 }
 
 assert.strictEqual(tm.createThread(0x2000, 0, 0), 0, 'all pending slots should block another worker');
-assert.deepStrictEqual(tm._pendingThreads.map(p => p.tid), [1, 2, 3, 4, 5, 6, 7]);
+assert.deepStrictEqual(tm._pendingThreads.map(p => p.tid),
+  Array.from({ length: tm._maxWorkerThreads }, (_, index) => index + 1));
 
 for (const pending of tm._pendingThreads) {
   tm.threads.set(pending.handle, { tid: pending.tid, state: 'active' });
@@ -193,11 +195,11 @@ assert.strictEqual(currentProcessTm.waitSingle(0x000E23E8, 0xFFFFFFFF), 0xFFFF,
 
 const syncLifecycleTm = makeThreadManager();
 const syncHandles = [];
-for (let i = 0; i < 512; i++) {
+for (let i = 0; i < 4096; i++) {
   syncHandles.push(syncLifecycleTm.createEvent(false, false));
 }
 assert(syncHandles.every(Boolean),
-  'all 512 synchronization slots should allocate, leaving room beyond Diablo II\'s startup event pool');
+  'all 4096 synchronization slots should allocate, leaving room beyond Warcraft III\'s startup event pool');
 assert.strictEqual(syncLifecycleTm.createEvent(false, false), 0, 'the full synchronization table rejects another event');
 assert.strictEqual(syncLifecycleTm.closeSyncHandle(syncHandles[17]), true, 'CloseHandle should release an event slot');
 const staleEvent = syncHandles[17];

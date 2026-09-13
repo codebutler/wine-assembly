@@ -325,7 +325,6 @@ const treeviewSource = fs.readFileSync(path.join(SRC, '09c2-treeview.wat'), 'utf
 assert(!/\(i32\.const\s+0x0*9000\)/i.test(treeviewSource),
   'treeview table must use $TV_TABLE, not a hard-coded 0x9000 base');
 
-const handlersSource = fs.readFileSync(path.join(SRC, '09a-handlers.wat'), 'utf8');
 const hostImportsSource = fs.readFileSync(path.join(ROOT, 'lib', 'host-imports.js'), 'utf8');
 assert(!/GDI_PALETTE_(?:TABLE|SELECTED|ENTRIES)/.test(hostImportsSource),
   'JavaScript must not retain semantic GDI palette storage');

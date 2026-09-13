@@ -149,8 +149,9 @@ function makeManager(backend, extraOpts) {
     check(s.imageBase === 0x400000 && s.codeStart === 0x401000,
       'PE metadata came from the guest main thread, not the idle main instance',
       `imageBase=0x${(s.imageBase >>> 0).toString(16)}`);
-    check(s.hwndBase === 0x10001 + 0x10000 && backend.specs[1].hwndBase === 0x10001 + 0x20000,
-      'each thread gets its own hwnd range, as in the cooperative backend',
+    check(s.hwndBase === tm.workerHwndBase(1) &&
+      backend.specs[1].hwndBase === tm.workerHwndBase(2),
+      'each real Worker gets the same in-app hwnd partition as the cooperative backend',
       `${s.hwndBase.toString(16)}, ${backend.specs[1].hwndBase.toString(16)}`);
     check(s.stackSize === 0x20000 && backend.specs[1].stackSize === 0x10000,
       'the requested stack size is honoured, with the Win32 default when zero',
