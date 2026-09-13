@@ -4508,3 +4508,49 @@ were made at load averages of 54, 208 and 394. The same build reached 249 d3d9
 submissions in 304s at load 54 and 19 submissions in 616s at load 394 — a 20x
 spread that is entirely the machine. Any "it stalls after N submissions"
 conclusion drawn without that number beside it is unsafe.
+
+### What the title card actually is (2026-09-13, Claude)
+
+The app is not stuck *on* the title screen, and it is not deadlocked. Decoding
+the probe's own command-stream counters with `OPCODES` from
+`lib/d3d-command-stream.js` (`1 RESOURCE_CREATE, 5 DRAW, 6 CLEAR, 12 PRESENT`),
+a run that has reached the title card reports:
+
+```
+submitted {"1":1,"5":162,"6":4,"12":80}
+categories {"5/2/false/false/2048x1024:1":78, "5/2/false/false/64x64:1":78}
+```
+
+That is **80 presented frames** carrying ~2 draws each — one 2048x1024 surface
+and one 64x64 — i.e. an ordinary render loop redrawing the title card. The
+engine then *stops presenting* (the counters freeze, 249 total in that run) and
+the guest disappears into `d3dx9_25` for the rest of the run.
+
+Where it goes is measurable and is the same place every time: EIP samples land
+in original VAs `0x004e7000`–`0x004ea000`, and `--host-census` shows the work
+there is CRT-heavy allocation, not a blocking wait —
+`TlsGetValue`/`GetLastError`/`SetLastError` in exact lockstep (the MSVC
+per-call TLS/errno preamble, 6679 each per 30k trace lines) alongside
+`HeapAlloc`/`HeapFree`/`HeapSize`. Disassembly around `0x004ea780` is float
+math with `fnstcw`/`fldcw or 0xc00` (D3DX's float-to-int rounding idiom).
+
+So the sequence is: render the title card for ~80 frames, then begin loading
+the menu through D3DX in software, and that load is where the wall clock goes.
+"It hangs at the title screen" is wrong; "it is still loading" is right.
+
+Two things this rules out, so they are not worth re-deriving:
+- Not the intro. The intro tick at `0x00529433` takes **zero** `--trace-at`
+  hits across a ten-minute run, so the opening sequence is not executing and
+  `--skip-intro` is irrelevant here (it is also broken -- see the correction
+  above).
+- Not a blocking API. No API is being waited on; the host census is dominated
+  by `log`/`log_api_exit` pairs, which are the per-call trace hooks, with every
+  non-CRT counter (`get_window_rect`, `gpu_gl_call`, `fs_*`) frozen.
+
+`--time-scale=10` did not move it either, which by the flag's own contract means
+this is not timing-bound. It is throughput: 2048x1024 surfaces filtered and
+uploaded through the software path in an x86 interpreter.
+
+**Measure this on a quiet box or not at all.** These runs spanned loadavg 54 to
+485, and the same build reached 249 submissions in 304s at load 54 against 7 in
+310s at load ~450.
