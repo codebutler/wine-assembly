@@ -1,7 +1,7 @@
 {
-  "recorded": "2026-09-10",
+  "recorded": "2026-09-13",
   "note": "Per-file counts of raw literals inside declared regions. This is a RATCHET: counts may fall, never rise. `converted` regions must stay at 0.",
-  "total": 62,
+  "total": 61,
   "converted": [],
   "byFile": {
     "src/09a-handlers.wat": 7,
@@ -12,7 +12,6 @@
     "test/test-winhelp-wat-parser.js": 3,
     "lib/api-format.js": 2,
     "lib/mem-utils.js": 2,
-    "src/09c3-controls.wat": 2,
     "test/run.js": 2,
     "test/test-directdraw-backbuffer-desc.js": 2,
     "test/test-disabled-dialog-controls.js": 2,
@@ -23,6 +22,7 @@
     "lib/renderer-input.js": 1,
     "lib/thread-manager.js": 1,
     "src/09a7-handlers-dispatch.wat": 1,
+    "src/09c3-controls.wat": 1,
     "src/09e-win16-api.wat": 1,
     "test/pe-dump.js": 1,
     "test/test-dialog-setfocus-tabstop.js": 1,
