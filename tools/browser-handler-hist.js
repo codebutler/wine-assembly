@@ -57,26 +57,8 @@ function handlerNames() {
 const hist = JSON.parse(fs.readFileSync(file, 'utf8'));
 const names = handlerNames();
 
-// One entry per distinct module base: `wine.moduleBases` stores each DLL under
-// both its bare name and its .dll name, and printing both halves would double
-// every row.
-const mods = [];
-const seen = new Set();
-for (const [name, pair] of Object.entries(hist.mods || {})) {
-  const [base, origBase] = pair;
-  if (!base || seen.has(base)) continue;
-  seen.add(base);
-  mods.push({ name: name.includes('.') ? name : name + '.dll', base, origBase });
-}
-mods.push({ name: 'exe', base: EXE_BASE, origBase: EXE_BASE });
-mods.sort((a, b) => a.base - b.base);
-
-const attribute = (addr) => {
-  let hit = null;
-  for (const m of mods) { if (addr >= m.base) hit = m; else break; }
-  if (!hit) return { name: '?', va: addr };
-  return { name: hit.name, va: (addr - hit.base + hit.origBase) >>> 0 };
-};
+const { makeAttributor } = require('./hist-blocks');
+const attribute = makeAttributor(hist, EXE_BASE);
 
 const ops = hist.ops || 0;
 const blockHits = hist.blockHits || 0;
