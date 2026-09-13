@@ -1953,20 +1953,77 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   ;; ReadConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsRead) → BOOL
-  (func $handle_ReadConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  ;; Shared A/W low-level input reader. A return of one means the call parked
+  ;; (or control dispatch took over) and its wrapper must leave ESP untouched.
+  (func $console_input_records_api
+      (param $handle i32) (param $buffer i32) (param $length i32)
+      (param $count_ptr i32) (param $wide i32) (param $peek i32) (result i32)
     (local $n i32)
+    (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return (i32.const 0))))
+    (if (i32.or (i32.eqz (local.get $count_ptr))
+          (i32.and (i32.ne (local.get $length) (i32.const 0))
+                   (i32.eqz (local.get $buffer))))
+      (then
+        (if (local.get $count_ptr)
+          (then (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))))
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return (i32.const 0))))
+    ;; A zero-sized destination cannot receive a record, so complete without
+    ;; blocking and without touching the queue or the (possibly NULL) buffer.
+    (if (i32.eqz (local.get $length))
+      (then
+        (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))
+        (if (i32.eqz (local.get $peek))
+          (then (global.set $handler_set_eip (i32.const 0))))
+        (global.set $eax (i32.const 1))
+        (return (i32.const 0))))
     (call $console_input_poll_host)
-    (if (global.get $console_ctrl_dispatching) (then (return)))
-    (if (i32.eqz (call $console_input_count))
+    (if (global.get $console_ctrl_dispatching)
+      (then (return (i32.const 1))))
+    (if (i32.and (i32.eqz (local.get $peek))
+                 (i32.eqz (call $console_input_count)))
       (then
         (call $console_input_block)
-        (return)))
-    (global.set $handler_set_eip (i32.const 0))
-    (local.set $n (call $console_read_input (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (call $console_input_drop (local.get $n))
-    (if (local.get $arg3)
-      (then (i32.store (call $g2w (local.get $arg3)) (local.get $n))))
+        (return (i32.const 1))))
+    (if (i32.eqz (local.get $peek))
+      (then (global.set $handler_set_eip (i32.const 0))))
+    (local.set $n (call $console_read_input
+      (local.get $buffer) (local.get $length) (local.get $wide)))
+    (if (i32.eqz (local.get $peek))
+      (then (call $console_input_drop (local.get $n))))
+    (i32.store (call $g2w (local.get $count_ptr)) (local.get $n))
     (global.set $eax (i32.const 1))
+    (i32.const 0))
+
+  (func $console_input_count_api (param $handle i32) (param $count_ptr i32)
+                                  (result i32)
+    (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return (i32.const 0))))
+    (if (i32.eqz (local.get $count_ptr))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return (i32.const 0))))
+    (call $console_input_poll_host)
+    (if (global.get $console_ctrl_dispatching)
+      (then (return (i32.const 1))))
+    (i32.store (call $g2w (local.get $count_ptr)) (call $console_input_count))
+    (global.set $eax (i32.const 1))
+    (i32.const 0))
+
+  (func $handle_ReadConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $console_input_records_api
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (i32.const 1) (i32.const 0))
+      (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; Shared ReadConsoleOutputA/W rectangle reader. CHAR_INFO is four bytes in

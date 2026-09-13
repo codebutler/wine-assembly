@@ -857,38 +857,25 @@
   ;; Blocking, like the real API: it returns only once at least one event is
   ;; queued.
   (func $handle_ReadConsoleInputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $n i32)
-    (call $console_input_poll_host)
-    (if (global.get $console_ctrl_dispatching) (then (return)))
-    (if (i32.eqz (call $console_input_count))
-      (then
-        (call $console_input_block)
-        (return)))
-    (local.set $n (call $console_read_input (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (call $console_input_drop (local.get $n))
-    (if (local.get $arg3)
-      (then (i32.store (call $g2w (local.get $arg3)) (local.get $n))))
-    (global.set $eax (i32.const 1))
+    (if (call $console_input_records_api
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (i32.const 0) (i32.const 0))
+      (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; 511: PeekConsoleInputA(hConsole, lpBuffer, nLength, lpNumberOfEventsRead) → BOOL
   ;; Non-destructive: copies without dropping, and never blocks.
   (func $handle_PeekConsoleInputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $console_input_poll_host)
-    (if (global.get $console_ctrl_dispatching) (then (return)))
-    (if (local.get $arg3)
-      (then (i32.store (call $g2w (local.get $arg3))
-        (call $console_read_input (local.get $arg1) (local.get $arg2) (i32.const 0))))
-      (else (drop (call $console_read_input (local.get $arg1) (local.get $arg2) (i32.const 0)))))
-    (global.set $eax (i32.const 1))
+    (if (call $console_input_records_api
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (i32.const 0) (i32.const 1))
+      (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; 512: GetNumberOfConsoleInputEvents(hConsole, lpNumberOfEvents) → BOOL
   (func $handle_GetNumberOfConsoleInputEvents (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $console_input_poll_host)
-    (if (global.get $console_ctrl_dispatching) (then (return)))
-    (i32.store (call $g2w (local.get $arg1)) (call $console_input_count))
-    (global.set $eax (i32.const 1))
+    (if (call $console_input_count_api (local.get $arg0) (local.get $arg1))
+      (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; 513: CreatePipe — STUB: unimplemented
