@@ -10701,15 +10701,20 @@ SetColorAdjustment — validate and copy complete per-DC state.
   ;; answer genuinely does not vary, not because the work was skipped -- the
   ;; day this machine grows an input context, they grow state with it.
 
+  ;; Common no-context failure result; each API retains explicit stdcall cleanup.
+  ;; Keep last_error and all caller output memory unchanged.
+  (func $imm_no_context_result
+    (global.set $eax (i32.const 0)))
+
   ;; ImmGetOpenStatus(hIMC) → BOOL: is the IME open. No context, never open.
   (func $handle_ImmGetOpenStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (call $imm_no_context_result)
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; ImmSetOpenStatus(hIMC, fOpen) → BOOL. Opening an IME that is not there
   ;; fails; reporting success would tell the game a composition window exists.
   (func $handle_ImmSetOpenStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (call $imm_no_context_result)
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; ImmGetConversionStatus(hIMC, lpfdwConversion, lpfdwSentence) → BOOL.
@@ -10718,13 +10723,14 @@ SetColorAdjustment — validate and copy complete per-DC state.
   ;; ignores the return value keeps whatever it initialised them to, which is
   ;; the same thing it would keep on a real no-IME machine.
   (func $handle_ImmGetConversionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (call $imm_no_context_result)
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; ImmSetConversionStatus(hIMC, fdwConversion, fdwSentence) → BOOL.
   (func $handle_ImmSetConversionStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $handle_ImmGetConversionStatus
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; ImmGetCompositionStringA(hIMC, dwIndex, lpBuf, dwBufLen) → LONG. The
   ;; return is a byte COUNT, so 0 means "an empty composition string, and the
@@ -10740,7 +10746,7 @@ SetColorAdjustment — validate and copy complete per-DC state.
   ;; composition string above, this one returns a size, not a count that could
   ;; legitimately be empty), and no CANDIDATELIST is written.
   (func $handle_ImmGetCandidateListA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (call $imm_no_context_result)
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; CharLower accepts either a character in the low word or a mutable,

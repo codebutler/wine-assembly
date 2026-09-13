@@ -1,5 +1,16 @@
 # Project review — 2026-09-10
 
+## Build follow-up — 2026-09-13
+
+Removed the five new IMM duplicate-handler entries through a shared no-context
+failure result, explicit per-API stack cleanup, and same-arity conversion-status
+forwarding. No duplicate baseline was expanded. Fifteen actual-source native
+WATX cases pass on both the original and refactored code: identical return value,
+stack cleanup, last error, and untouched output memory. Duplicate census and
+handler-ESP gates pass. The full build now reaches the silent-handler inventory
+pin, which is maintained by another active lane; complete main build/font
+acceptance remains open, including uncommitted display-handler prerequisites.
+
 ## Standalone bitmap-font recovery — 2026-09-13
 
 Candidate branch `codex/font-main-20260913`, initially based on `adcc4e37`
