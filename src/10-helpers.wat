@@ -638,6 +638,89 @@
       (br $retry)))
     (global.set $virtual_alloc_top (local.get $min)))
 
+  ;; The base of a live range overlapping [cand, cand+size), or 0 when nothing
+  ;; owns any of it. Both tables have a say: a committed map record, and an
+  ;; uncommitted MEM_RESERVE that no record describes. Caller holds the lock.
+  (func $virtual_range_blocker_locked (param $cand i32) (param $size i32) (result i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32)
+    (local.set $end (i32.add (local.get $cand) (local.get $size)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $base) (local.get $end))
+            (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+              (local.get $cand)))
+        (then (return (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $base) (local.get $end))
+            (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+              (local.get $cand)))
+        (then (return (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Place a reservation in a gap when the cursor cannot go any lower.
+  ;;
+  ;; The cursor is a one-way downward bump and the reclaim can only raise it as
+  ;; far as the lowest live range, so one long-lived allocation near the floor
+  ;; makes the whole arena above it unreachable however empty it is. Black &
+  ;; White 2 lands exactly there: after its abandoned growth steps are handed
+  ;; back, the one 121 MB buffer it kept sits at 0x164f0000 with 106 MB of
+  ;; address space under it and ~800 MB free above -- and the 191 MB step it
+  ;; asks for next is refused. So slide a candidate down from the ceiling past
+  ;; whatever it hits until it fits or runs out of arena. Each step starts below
+  ;; the range that blocked it, so the walk is monotone and cannot cycle.
+  (func $virtual_reserve_gap (param $size i32) (result i32)
+    (local $cand i32) (local $blocker i32) (local $steps i32)
+    ;; A reservation the reserve table had no room for is remembered only as the
+    ;; sticky floor at +20, which says "something down there is spoken for"
+    ;; without saying what. Placing into a gap needs every owner named, so once
+    ;; that has happened the arena is bump-only again.
+    (if (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE))
+      (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $size)
+          (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (global.get $VIRTUAL_ALLOC_MIN)))
+      (then (return (i32.const 0))))
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $cand
+      (i32.and (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (local.get $size))
+        (i32.const 0xFFFF0000)))
+    (block $done (loop $slide
+      (br_if $done (i32.lt_u (local.get $cand) (global.get $VIRTUAL_ALLOC_MIN)))
+      (br_if $done (i32.gt_u (local.get $cand) (global.get $VIRTUAL_ALLOC_TOP_INIT)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br_if $done (i32.gt_u (local.get $steps) (i32.const 20000)))
+      (local.set $blocker
+        (call $virtual_range_blocker_locked (local.get $cand) (local.get $size)))
+      (if (i32.eqz (local.get $blocker))
+        (then
+          (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+          (return (local.get $cand))))
+      ;; Below the range that blocked it. A blocker at or under the floor ends
+      ;; the walk rather than wrapping the subtraction.
+      (if (i32.lt_u (local.get $blocker) (local.get $size)) (then (br $done)))
+      (local.set $cand
+        (i32.and (i32.sub (local.get $blocker) (local.get $size))
+          (i32.const 0xFFFF0000)))
+      (br $slide)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (i32.const 0))
+
   (func $virtual_reserve_down (param $size i32) (result i32)
     (local $cell i32) (local $top i32) (local $new_top i32) (local $seen i32)
     (local.set $cell (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8)))
@@ -656,8 +739,11 @@
       (local.set $new_top
         (i32.and (i32.sub (local.get $top) (local.get $size))
           (i32.const 0xFFFF0000)))
-      (if (i32.lt_u (local.get $new_top) (global.get $VIRTUAL_ALLOC_MIN))
-        (then (return (i32.const 0))))
+      ;; A size larger than the cursor wraps the subtraction into a high address
+      ;; that passes the floor test, so test the subtraction, not its result.
+      (if (i32.or (i32.lt_u (local.get $top) (local.get $size))
+                  (i32.lt_u (local.get $new_top) (global.get $VIRTUAL_ALLOC_MIN)))
+        (then (return (call $virtual_reserve_gap (local.get $size)))))
       (br_if $done
         (i32.eq (local.get $seen)
           (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $seen) (local.get $new_top))))
