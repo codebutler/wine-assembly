@@ -3815,3 +3815,75 @@ this is one bad element, not a wholesale corruption.
 This also re-frames the two long-standing NULL-deref counts in the fault census
 (`eip=0x9e17d0` x937,819,405 at addresses `0x0`-`0x8`, and `0x9e8200`): the same
 family of symptom -- structures that should have been filled reading back NULL.
+
+## ANSWERED (2026-09-13): the garbage record came from our own heap free list
+
+The record at `0x2e0f03e8` is not garbage the game wrote. It is a cell of a
+spatial grid that the game never wrote at all, and that our `$heap_alloc`
+handed over still holding the previous owner's bytes.
+
+**The enclosing function `0x9e5140` is a grid query.** Its object's fields
+decode as `+0x00..+0x0c` world bounds (min/max X/Y), `+0x10` cells per row,
+`+0x14`/`+0x18` cell width and height, `+0x1c` rows, `+0x20` the cell-array
+base. Live: bounds ±32768, 512 cells per row, 128x128 cell size, 16384 cells
+x 12 bytes = 196608 bytes at guest `0x2e0d27e0`. Cell k is `base + k*12`, and
+the union loop's `ebp` is `cell + 4` -- so the "source vector" is a cell's
+`{count, data}` pair and the query is *union the contents of every cell the
+query rectangle touches*. A second, coarser 32x32 grid (cell 2048) hangs off
+`+0x28` of the same object with its array at `0x2e1d5f18`.
+
+The cells are populated **lazily and never cleared**. Every cell the loader
+does not put an object in has to read back `{0, NULL}`, which the game gets for
+free on Windows because a large `HeapAlloc` comes off fresh committed pages.
+
+**Where the bytes came from.** `probe-maps.sh` resolved the 1 MB record
+containing the array (`g=0x2e040000+0x100000 @ w=0x18299000`) to a single
+contiguous map entry matching `$heap_sparse_alloc`'s `0x00100000` minimum
+chunk: this is our own HeapAlloc arena, not a guest `VirtualAlloc` region.
+`$virtual_map_commit_locked` zeroes every fresh commit, so bump space is clean
+and only *recycled* space can be dirty. The dirty-dword census of the 192 KB
+array settles it:
+
+```
+PAT dirty=8350/49152 first=8,40,72,104,136,168,200,232,264,...
+    mod32=363,254,6144,265,237,360,363,364
+```
+
+6144 dirty dwords at offset 8 mod 32 -- exactly one per 32-byte block across
+the whole region, which is this allocator's own free-list `next` pointer at
+`block+4` (the payload starts at `block+4`, so a link lands at payload offset
+`8 mod 32` for 32-byte blocks). The coarse grid's array, served out of larger
+recycled blocks, has only `3/3072` dirty dwords (value `0x1118`, spaced
+`0x1118`) and exactly one bad cell.
+
+**Proof, not inference.** In the live wedged process, setting `count = 0` on
+every cell with `data == 0 && count != 0` (2208 cells across both grids),
+emptying the poisoned `dst` vector and zeroing the stuck source count moved EIP
+out of the loop within a minute:
+
+```
+REPAIR fixed=2208 dstWas=124429 srcNnow=0
+eip 9e5272 -> 9ee2a7 -> 9ee4e3 -> 9ee2b5
+```
+
+**The fix** is `b81f8a54`: `$heap_alloc` zeroes a block's payload whenever it
+serves it from the free list. Before it, the same `HeapAlloc` returned zeroed
+memory early in a process (bump space) and stale memory later (recycled space)
+-- a difference no guest is written to tolerate.
+
+**Ruled out along the way, and worth recording because it is a real bug that
+looked exactly like this one:** `VirtualFree(MEM_DECOMMIT)` was a no-op, so a
+re-commit of the same addresses returned stale bytes where Windows guarantees
+zero pages, and `BW2Demo.exe` does exactly that at `0x00ade6aa`
+(`push 0x4000; push 0x8000; push ecx; call VirtualFree`). Fixed in `4a46d8a4`
+with `test/test-virtual-decommit-zero.js`. It changed the B&W2 symptom by not
+one byte -- the verification run reproduced the wedge at the same addresses
+with the same values. The memory involved here never went through
+`VirtualAlloc` at all.
+
+One measurement caveat from this session: the `--watch`/`set_watchpoint`
+facility's *silence* is not evidence. The run whose log was read for "nothing
+ever stored to that cell" never printed `Watchpoint armed at batch`, so the
+watch may never have been armed; tested separately it does track stores
+correctly (`armed 35c51fb8 val=117104 -> 118124 -> 119118`). The live-repair
+experiment is what settled the question.
