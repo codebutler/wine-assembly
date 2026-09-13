@@ -4643,3 +4643,49 @@ once per frame, so sub-frame pieces re-accumulate into the same lump. Pace the
 steps on the wall clock, one control command per step, and let a frame pass in
 between. The scratch drive script now parks in 11 steps of (-64,-48) and glides
 to the target in 6, each its own control round trip.
+
+### Driving to the menu: the procedure that works (2026-09-13, Claude)
+
+Five harness bugs were fixed to get this right; the notes below are what each
+one cost, so the next session does not re-find them.
+
+**Identify screens by compressed PNG size, not by a canvas checksum.** The game
+animates the scene behind every screen, so a whole-frame checksum changes about
+once a second on its own -- "it changed" carries no information. And every one
+of these screens is static for minutes, so "it settled" confirms whichever
+screen you are already on. A checksum-based drive clicked at a title card for
+ten minutes while reporting four successful screen advances. Size is crude but
+it answers *which* screen. Measured windows, 640x480:
+
+| screen | size window |
+|---|---|
+| title card | 210000-235000 |
+| Select Profile / New Profile Name | 300000-390000 |
+| main menu, tutorial | 385000-400000 |
+| land menu | 408000-422000 |
+| blank / not yet drawn | ~2000-3200 |
+
+Require **two consecutive captures** inside the window and within 4000 bytes of
+each other, so a frame caught mid-transition cannot confirm a screen alone.
+
+**Take the byte count from the control reply, not from `stat`.** The `png`
+command's reply carries `{"bytes":N}` after the encode; `stat` races it. That
+race produced alternating `220353 / 0 / 0` readings which reset the
+two-in-a-row test every other sample, so no screen could ever confirm.
+
+**Never feed a large relative mouse delta** -- see the section above. Park and
+move in small steps, each its own control command, paced on the wall clock.
+
+**Do not expect `--skip-intro` to do anything** -- it writes to a stack local
+(see the correction above), and in these runs the intro tick never executed at
+all.
+
+**Budget the D3DX phase, not the click.** The app presents ~20-80 frames of the
+title card and then disappears into `d3dx9_25` loading the menu in software.
+That phase, not the input, is the wall clock: it ran past four minutes at
+loadavg 54 and had not finished.
+
+**Check `uptime` first, and do not bother below a quiet box.** This machine has
+8 cores. Runs this session spanned loadavg 54 to 486; at 486 that is ~60x
+oversubscription, about 1.6% of a core per process, and the same build reached
+249 command submissions in 304s at load 54 against 7 in 310s at load ~450.
