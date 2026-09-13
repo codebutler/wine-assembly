@@ -55,7 +55,12 @@ const CLICKS = (opt('guest-click', '') || '').split(',').filter(Boolean);
 // that stops presenting cannot hang the run.
 //
 // `wait:X:Y:RRGGBB@timeoutSec[:tol]` is the third pacing form and the only one
-// that is CLOSED LOOP: it polls the pixel at guest X,Y until it matches the
+// that is CLOSED LOOP: it polls the pixel at X,Y until it matches the
+// colour -- and X,Y here are FILM coordinates, the ones you read off a --film
+// frame, NOT the guest coordinates a click takes. They differ whenever the
+// guest runs exclusive/fullscreen, because a click maps guest -> canvas
+// through _exclusiveTransform and a film frame is already the canvas. Sample
+// the target colour from a film frame and pass those same coordinates --
 // colour (or, with `!RRGGBB`, until it stops matching) and only then lets the
 // walk continue. It performs no input of its own. Reach for it when the screen
 // a walk depends on appears after a variable delay, which on this box is most
@@ -608,25 +613,32 @@ async function main() {
         + `${seen - start < n ? ` (gave up after ${FRAME_WAIT_CAP}s)` : ''}`);
     };
 
-    // Read one GUEST pixel. This goes through a 1x1 page screenshot rather
-    // than getImageData, because the screen canvas is a WebGL canvas for
-    // anything on the OpenGL path (Warcraft III is) and getContext('2d') on
-    // one of those returns null -- a probe that quietly reads null forever
-    // would turn every wait into its timeout and look like a stuck guest.
-    // The screenshot path is what the film already uses and is indifferent to
-    // the canvas type. Guest coordinates map through the same
-    // _exclusiveTransform clickGuest uses, then to CSS pixels via the canvas's
-    // own rect, since a screenshot clip is in CSS pixels and the backing store
-    // usually is not.
+    // Read one pixel in FILM coordinates -- the same x,y you would read off a
+    // frame in --film, NOT the guest coordinates a click takes. Those two
+    // spaces are different whenever the guest runs exclusive/fullscreen: the
+    // renderer stretches the guest screen into the canvas, so clickGuest maps
+    // guest -> canvas through _exclusiveTransform while a film frame IS the
+    // canvas. Applying that transform here read a point ~20px away from the
+    // one the film showed, which matched nothing and looked exactly like a
+    // stuck guest. Film coordinates are also the ones you can actually sample
+    // a target colour from, since that is what is on disk.
+    //
+    // The read goes through a 1x1 page screenshot rather than getImageData,
+    // because the screen canvas is WebGL for anything on the OpenGL path
+    // (Warcraft III is) and getContext('2d') on one of those returns null,
+    // which would silently turn every wait into its timeout.
     const readPixel = async (gx, gy) => {
       const at = await page.evaluate((x, y) => {
         const c = document.getElementById('screen');
         if (!c || !c.width || !c.height) return null;
-        const t = sharedRenderer && sharedRenderer._exclusiveTransform;
-        const cx = t && t.srcW ? Math.round((t.dstX || 0) + ((x - (t.srcX || 0)) * t.dstW / t.srcW)) : x;
-        const cy = t && t.srcH ? Math.round((t.dstY || 0) + ((y - (t.srcY || 0)) * t.dstH / t.srcH)) : y;
+        // No backing-store scaling. --film clips this same rect in CSS pixels,
+        // so a film pixel is a CSS offset into it; multiplying by
+        // r.width / c.width sampled ~20px away whenever the backing store and
+        // the CSS box disagree, which is every exclusive-mode guest. Measured
+        // on Warcraft III: the film read #fed40d and the scaled probe #120905
+        // at the same coordinate in the same frame.
         const r = c.getBoundingClientRect();
-        return { x: r.x + cx * (r.width / c.width), y: r.y + cy * (r.height / c.height) };
+        return { x: r.x + x, y: r.y + y, cw: c.width, rw: r.width };
       }, gx, gy);
       if (!at) return null;
       try {
@@ -646,9 +658,18 @@ async function main() {
     // --guest-script comment at the top for why the clock is not usable here.
     const waitPixel = async (act) => {
       const deadline = Date.now() + act.timeout * 1000;
-      let seen = null, hits = 0;
+      let seen = null, hits = 0, polls = 0;
       while (Date.now() < deadline) {
         seen = await readPixel(act.x, act.y);
+        // Say what is being sampled, at the start and then occasionally. A
+        // silent wait cannot be told apart from a wait that is reading the
+        // wrong pixel, and that difference cost a 40-minute run: the film
+        // showed the anchor colour on screen while the probe matched nothing.
+        if (polls === 0 || polls % 30 === 29) {
+          console.log(`  wait ${act.x},${act.y}: saw ${hex(seen)}`
+            + ` (want ${act.negate ? '!=' : '=='} ${hex(act.rgb)} +/-${act.tol})`);
+        }
+        polls++;
         if (seen) {
           const near = seen.every((v, i) => Math.abs(v - act.rgb[i]) <= act.tol);
           // Two consecutive agreeing samples, because these screens animate and
