@@ -7,10 +7,14 @@
   (global $msvcrt_tm_ptr (mut i32) (i32.const 0))
   (global $msvcrt_getdrive_ptr (mut i32) (i32.const 0))
 
-  ;; __mb_cur_max() — cdecl. The default Win98 ANSI code page is single-byte in
-  ;; this emulator, so old MSVCRT callers see the same max character width as C.
+  ;; __mb_cur_max() — cdecl. Win9x ANSI DBCS pages use at most two bytes per
+  ;; multibyte character; Western/OEM single-byte pages use one.
   (func $handle___mb_cur_max (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (global.set $eax
+      (select
+        (i32.const 2)
+        (i32.const 1)
+        (call $is_dbcs_code_page (global.get $ansi_code_page))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
@@ -107,9 +111,8 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; Compare at most n unsigned bytes. The CRT's current locale is deliberately
-  ;; single-byte (__mb_cur_max == 1), so _mbsnbcmp has strncmp semantics here:
-  ;; unlike memcmp it stops after the shared terminating NUL.
+  ;; Compare at most n unsigned bytes. _mbsnbcmp counts bytes rather than
+  ;; characters, so unlike memcmp it stops after the shared terminating NUL.
   (func $crt_compare_bytes
       (param $s1 i32) (param $s2 i32) (param $n i32)
       (param $stop_at_nul i32) (result i32)

@@ -314,9 +314,22 @@ const extraWat = String.raw`
     return out;
   }
 
-  exports.call_mb_cur_max();
-  assert.strictEqual(exports.last_eax(), 1, '__mb_cur_max reports single-byte ANSI');
-  assert.strictEqual(exports.last_esp_delta(), 4, '__mb_cur_max preserves cdecl cleanup');
+  for (const [codePage, expectedWidth] of [
+    [1252, 1],
+    [437, 1],
+    [932, 2],
+    [936, 2],
+    [949, 2],
+    [950, 2],
+    [1361, 2],
+  ]) {
+    exports.set_ansi_code_page(codePage);
+    exports.call_mb_cur_max();
+    assert.strictEqual(exports.last_eax(), expectedWidth,
+      `__mb_cur_max reports the maximum character width for code page ${codePage}`);
+    assert.strictEqual(exports.last_esp_delta(), 4, '__mb_cur_max preserves cdecl cleanup');
+  }
+  exports.set_ansi_code_page(1252);
 
   exports.call_p_environ();
   const environSlot = exports.last_eax() >>> 0;
