@@ -12,6 +12,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -87,17 +88,6 @@ function imageStats(filename) {
     if (a) colors.add((r << 16) | (g << 8) | b);
   }
   return { png, width: png.width, height: png.height, colors: colors.size, nonBlack };
-}
-
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height,
-    'cannot compare differently sized LF2 frames');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-  }
-  return changed;
 }
 
 function walkFiles(root, relative = '') {
@@ -223,7 +213,9 @@ async function runGameplay(gameExe, screenshotDir) {
       assert(stats.nonBlack > 400000 && stats.colors > 1000,
         `LF2 ${label} frame was not textured combat: ${stats.colors} colors, ${stats.nonBlack} nonblack pixels`);
     }
-    const changed = pixelDiff(a.png, b.png);
+    const frameDiff = diffPng(a.png, b.png);
+    assert(!frameDiff.sizeMismatch, 'cannot compare differently sized LF2 frames');
+    const changed = frameDiff.changed;
     assert(changed > 50000,
       `LF2 fighters/arena did not advance after movement and attack: ${changed} pixels`);
     assert(!/UNIMPLEMENTED API:|\*\*\* CRASH|RuntimeError|LinkError/i.test(session.output()),

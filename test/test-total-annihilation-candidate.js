@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -40,17 +41,6 @@ function imageStats(filename) {
     colors.add((r << 16) | (g << 8) | b);
   }
   return { png, width: png.width, height: png.height, nonBlack, colors: colors.size };
-}
-
-function pixelDiff(a, b) {
-  check(a.width === b.width && a.height === b.height,
-    'Total Annihilation gameplay frame sizes differ');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-  }
-  return changed;
 }
 
 function startControlled(args) {
@@ -161,7 +151,9 @@ async function runInstaller(installRoot) {
     await step(session, 50);
     await session.send({ action: 'png', path: gameplayBPath });
     const gameplayB = imageStats(gameplayBPath);
-    const changed = pixelDiff(gameplayA.png, gameplayB.png);
+    const frameDiff = diffPng(gameplayA.png, gameplayB.png);
+    check(!frameDiff.sizeMismatch, 'Total Annihilation gameplay frame sizes differ');
+    const changed = frameDiff.changed;
     check(changed > 5000,
       `Total Annihilation battlefield did not respond to input (${changed} changed pixels)`);
 

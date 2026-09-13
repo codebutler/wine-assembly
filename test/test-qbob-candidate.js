@@ -11,6 +11,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
@@ -35,19 +36,6 @@ function imageStats(filename) {
     if (a) colors.add((r << 16) | (g << 8) | b);
   }
   return { png, width: png.width, height: png.height, nonBlack, colors: colors.size };
-}
-
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height,
-    'cannot compare differently sized QBob frames');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) {
-      changed++;
-    }
-  }
-  return changed;
 }
 
 async function main() {
@@ -122,7 +110,9 @@ async function main() {
     }
     assert(Math.max(a.nonBlack, b.nonBlack) > 250000,
       'QBob never completed a full gameplay frame');
-    const changed = pixelDiff(a.png, b.png);
+    const frameDiff = diffPng(a.png, b.png);
+    assert(!frameDiff.sizeMismatch, 'cannot compare differently sized QBob frames');
+    const changed = frameDiff.changed;
     assert(changed > 1000,
       `QBob gameplay did not advance between frames: ${changed} changed pixels`);
 

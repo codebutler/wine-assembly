@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -29,17 +30,6 @@ function imageStats(filename) {
     colors.add((png.data[i] << 16) | (png.data[i + 1] << 8) | png.data[i + 2]);
   }
   return { png, width: png.width, height: png.height, colors: colors.size };
-}
-
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height,
-    'cannot compare differently sized Cave Story frames');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-  }
-  return changed;
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -134,7 +124,9 @@ async function main() {
     const b = imageStats(frameBPath);
     assert(a.colors >= 25 && b.colors >= 25,
       `Cave Story gameplay palette regressed: ${a.colors}/${b.colors} colors`);
-    const changed = pixelDiff(a.png, b.png);
+    const frameDiff = diffPng(a.png, b.png);
+    assert(!frameDiff.sizeMismatch, 'cannot compare differently sized Cave Story frames');
+    const changed = frameDiff.changed;
     assert(changed > 1000,
       `Cave Story did not move after right+jump input: ${changed} changed pixels`);
     assert(!/UNIMPLEMENTED API:|\*\*\* CRASH|RuntimeError|LinkError/i.test(session.output()),

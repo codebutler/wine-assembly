@@ -7,6 +7,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -33,16 +34,6 @@ function imageStats(filename) {
     if (a) colors.add((r << 16) | (g << 8) | b);
   }
   return { png, width: png.width, height: png.height, nonBlack, colors: colors.size };
-}
-
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height, 'Snood frame sizes differ');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-  }
-  return changed;
 }
 
 function walkFiles(root, relative = '') {
@@ -223,7 +214,9 @@ async function runGameplay(gameExe, screenshotDir) {
     const b = imageStats(frameBPath);
     assert(a.colors > 100 && b.colors > 100 && a.nonBlack > 300000 && b.nonBlack > 300000,
       `Snood gameplay art was incomplete: ${a.colors}/${b.colors} colors`);
-    const changed = pixelDiff(a.png, b.png);
+    const frameDiff = diffPng(a.png, b.png);
+    assert(!frameDiff.sizeMismatch, 'Snood frame sizes differ');
+    const changed = frameDiff.changed;
     assert(changed > 2000, `Snood shot did not advance gameplay: ${changed} changed pixels`);
     const audio = await session.send({ action: 'eval', code: `(() => {
       const shared = ctx.sharedAudio;

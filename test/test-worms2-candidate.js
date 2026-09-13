@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -58,16 +59,6 @@ function imageStats(filename) {
     if (a) colors.add((r << 16) | (g << 8) | b);
   }
   return { png, width: png.width, height: png.height, colors: colors.size, nonBlack };
-}
-
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height, 'Worms 2 frame sizes differ');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-  }
-  return changed;
 }
 
 async function parkAtWindow(session, pattern, timeoutMs) {
@@ -271,7 +262,9 @@ async function runGameplay(game, screenshotDir) {
     await session.send({ action: 'frozen', mode: 'on' });
     await session.send({ action: 'png', path: frameBPath });
     const b = imageStats(frameBPath);
-    const changed = pixelDiff(a.png, b.png);
+    const frameDiff = diffPng(a.png, b.png);
+    assert(!frameDiff.sizeMismatch, 'Worms 2 frame sizes differ');
+    const changed = frameDiff.changed;
     assert(a.colors > 100 && b.colors > 80 && a.nonBlack > 425000 && b.nonBlack > 425000,
       `Worms 2 gameplay art was incomplete: ${a.colors}/${b.colors} colors`);
     assert(changed > 100000,
