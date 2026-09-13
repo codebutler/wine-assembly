@@ -122,6 +122,11 @@ node tools/check-wat-logical-and.js
 # inventory so it can only change deliberately, and forbid dangerous D3D9
 # resource/output methods from returning D3D_OK without implementation.
 node tools/check-silent-stubs.js
+# A GL call whose answer the guest reads on the next instruction has to be a
+# command-stream barrier. Buffered, it is not wrong so much as late: the guest
+# reads the destination before the batch is submitted and sees what was there
+# before. Warcraft III's whole scene drew untextured for exactly this reason.
+node tools/check-gl-barriers.js
 # Adding a host import to 01-header.wat without regenerating the signature table
 # does not break the build or the normal page — it breaks WORKER mode only, and
 # it breaks it QUIETLY: the worker's broker builds its import object from this
