@@ -4763,9 +4763,89 @@
     (global.set $eip (global.get $initterm_ret))
   )
 
-  ;; 211: _controlfp(new, mask) — cdecl; return default FPU control word
+  ;; Translate the x87 control word into the bit layout exposed by the 32-bit
+  ;; Microsoft CRT. Exception bits are deliberately reordered; RC moves from
+  ;; x87 bits 10..11 to CRT bits 8..9, and PC uses the reverse encoding.
+  (func $msvcrt_control_from_x87 (result i32)
+    (local $cw i32) (local $out i32) (local $pc i32)
+    (local.set $cw (global.get $fpu_cw))
+    (if (i32.and (local.get $cw) (i32.const 0x01))
+      (then (local.set $out (i32.or (local.get $out) (i32.const 0x00000010))))) ;; INVALID
+    (if (i32.and (local.get $cw) (i32.const 0x02))
+      (then (local.set $out (i32.or (local.get $out) (i32.const 0x00080000))))) ;; DENORMAL
+    (if (i32.and (local.get $cw) (i32.const 0x04))
+      (then (local.set $out (i32.or (local.get $out) (i32.const 0x00000008))))) ;; ZERODIVIDE
+    (if (i32.and (local.get $cw) (i32.const 0x08))
+      (then (local.set $out (i32.or (local.get $out) (i32.const 0x00000004))))) ;; OVERFLOW
+    (if (i32.and (local.get $cw) (i32.const 0x10))
+      (then (local.set $out (i32.or (local.get $out) (i32.const 0x00000002))))) ;; UNDERFLOW
+    (if (i32.and (local.get $cw) (i32.const 0x20))
+      (then (local.set $out (i32.or (local.get $out) (i32.const 0x00000001))))) ;; INEXACT
+    (local.set $out (i32.or (local.get $out)
+      (i32.shr_u (i32.and (local.get $cw) (i32.const 0x0C00)) (i32.const 2))))
+    (local.set $pc (i32.and (i32.shr_u (local.get $cw) (i32.const 8)) (i32.const 3)))
+    ;; x87 00/01/10/11 = 24/reserved/53/64; CRT 10/11/01/00.
+    (if (i32.eq (local.get $pc) (i32.const 0))
+      (then (local.set $pc (i32.const 2)))
+      (else (if (i32.eq (local.get $pc) (i32.const 1))
+        (then (local.set $pc (i32.const 3)))
+        (else (if (i32.eq (local.get $pc) (i32.const 2))
+          (then (local.set $pc (i32.const 1)))
+          (else (local.set $pc (i32.const 0))))))))
+    (local.set $out (i32.or (local.get $out)
+      (i32.shl (local.get $pc) (i32.const 16))))
+    (local.set $out (i32.or (local.get $out)
+      (i32.shl (i32.and (local.get $cw) (i32.const 0x1000)) (i32.const 6))))
+    (local.get $out))
+
+  ;; Apply a complete CRT-format control word to the x87 state while
+  ;; retaining reserved x87 bits. Precision is represented even though the
+  ;; f64-backed arithmetic cannot reproduce x87's selectable mantissa width.
+  (func $msvcrt_control_to_x87 (param $control i32)
+    (local $cw i32) (local $pc i32)
+    (local.set $cw (i32.and (global.get $fpu_cw) (i32.const 0xFFFFE0C0)))
+    (if (i32.and (local.get $control) (i32.const 0x00000010))
+      (then (local.set $cw (i32.or (local.get $cw) (i32.const 0x01)))))
+    (if (i32.and (local.get $control) (i32.const 0x00080000))
+      (then (local.set $cw (i32.or (local.get $cw) (i32.const 0x02)))))
+    (if (i32.and (local.get $control) (i32.const 0x00000008))
+      (then (local.set $cw (i32.or (local.get $cw) (i32.const 0x04)))))
+    (if (i32.and (local.get $control) (i32.const 0x00000004))
+      (then (local.set $cw (i32.or (local.get $cw) (i32.const 0x08)))))
+    (if (i32.and (local.get $control) (i32.const 0x00000002))
+      (then (local.set $cw (i32.or (local.get $cw) (i32.const 0x10)))))
+    (if (i32.and (local.get $control) (i32.const 0x00000001))
+      (then (local.set $cw (i32.or (local.get $cw) (i32.const 0x20)))))
+    (local.set $cw (i32.or (local.get $cw)
+      (i32.shl (i32.and (local.get $control) (i32.const 0x0300)) (i32.const 2))))
+    (local.set $pc (i32.and (i32.shr_u (local.get $control) (i32.const 16)) (i32.const 3)))
+    ;; CRT 00/01/10/11 = 64/53/24/reserved; x87 11/10/00/01.
+    (if (i32.eq (local.get $pc) (i32.const 0))
+      (then (local.set $pc (i32.const 3)))
+      (else (if (i32.eq (local.get $pc) (i32.const 1))
+        (then (local.set $pc (i32.const 2)))
+        (else (if (i32.eq (local.get $pc) (i32.const 2))
+          (then (local.set $pc (i32.const 0)))
+          (else (local.set $pc (i32.const 1))))))))
+    (local.set $cw (i32.or (local.get $cw)
+      (i32.shl (local.get $pc) (i32.const 8))))
+    (local.set $cw (i32.or (local.get $cw)
+      (i32.shr_u (i32.and (local.get $control) (i32.const 0x00040000)) (i32.const 6))))
+    (global.set $fpu_cw (local.get $cw)))
+
+  ;; 211: _controlfp(new, mask) — cdecl; query/update the current x87 word.
   (func $handle__controlfp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x9001F))
+    (local $control i32) (local $mask i32)
+    (local.set $control (call $msvcrt_control_from_x87))
+    ;; _controlfp does not modify the x86 DENORMAL OPERAND exception mask;
+    ;; _control87 is the API which may change that bit.
+    (local.set $mask (i32.and (local.get $arg1) (i32.const 0x0007031F)))
+    (local.set $control
+      (i32.or
+        (i32.and (local.get $control) (i32.xor (local.get $mask) (i32.const -1)))
+        (i32.and (local.get $arg0) (local.get $mask))))
+    (call $msvcrt_control_to_x87 (local.get $control))
+    (global.set $eax (call $msvcrt_control_from_x87))
     ;; The caller owns the two arguments. Pop only our return address.
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
