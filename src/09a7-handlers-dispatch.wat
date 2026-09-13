@@ -4002,8 +4002,11 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   (func $handle_GetFileSecurityW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $file_security_not_supported (local.get $arg4))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    ;; Win98 rejects both encodings before inspecting lpFileName, so the
+    ;; five-argument ABI and all failure outputs are exactly the ANSI path.
+    (call $handle_GetFileSecurityA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr)))
 
   ;; CommandLineToArgvW — already handled above as crash stub replacement
 
