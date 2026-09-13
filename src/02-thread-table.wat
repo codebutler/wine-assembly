@@ -11,7 +11,7 @@
   ;; For byte regs: 0=al,1=cl,2=dl,3=bl,4=ah,5=ch,6=dh,7=bh
 
   (type $handler_t (func (param i32)))
-  (table $handlers 455 funcref)
+  (table $handlers 456 funcref)
 
   (elem (i32.const 0)
     ;; -- Core --
@@ -513,4 +513,5 @@
     $th_x87_affine_prepare    ;; 452: compiled affine x87 prefix
     $th_x87_affine_finish     ;; 453: compiled affine x87 suffix
     $th_tree_fold             ;; 454: a whole integer-expression self-loop
+    $th_ck_lut16_run          ;; 455: a whole colour-keyed LUT16 sprite row
   )

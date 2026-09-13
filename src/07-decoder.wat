@@ -73,6 +73,14 @@
   (global $rp_imm    (mut i32) (i32.const 0))
   (global $rp_target (mut i32) (i32.const 0))
 
+  ;; $th_ck_lut16_run's colour-keyed LUT16 blit fold (SimGolf's jgl.dll).
+  ;; Off switch is for A/B only; see $try_emit_ck_lut16_run for the grammar.
+  (global $ck_lut16_enabled (mut i32) (i32.const 1))
+  ;; Blocks the matcher accepted, rows the executor ran, pixels it blitted.
+  (global $ck_lut16_matches (mut i32) (i32.const 0))
+  (global $ck_lut16_runs    (mut i32) (i32.const 0))
+  (global $ck_lut16_px      (mut i64) (i64.const 0))
+
   ;; Decoder-time, nonterminal LUT spans. Unlike H418 these are not loops:
   ;; an indirect jump has already selected one suffix of a fully unrolled
   ;; renderer, and execution continues into the ordinary row tail afterwards.
@@ -578,6 +586,238 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l3)))
     (i32.const 1))
+
+  ;; ---- the colour-keyed LUT16 blit fold ($th_ck_lut16_run) -------------
+  ;; SimGolf's jgl.dll draws every sprite pixel through a four-block diamond:
+  ;;
+  ;;   head:    cmp byte [S], 0xFF     ; 0xFF = transparent
+  ;;            jnb  advance
+  ;;            xor  T, T
+  ;;            cmp  byte [S], 0xF8    ; 0xF8..0xFE = shadow/blend arm
+  ;;            jnb  shadow
+  ;;            mov  T8, [S]           ; --- the ordinary source arm ---
+  ;;            mov  T16, [L + T*2]    ; RGB565 straight out of the palette
+  ;;            mov  [D], T16
+  ;;            jmp  advance
+  ;;   shadow:  ... (not decoded here; the fold bails into it)
+  ;;   advance: inc  S
+  ;;            add  D, imm8
+  ;;            dec  C
+  ;;            jnz  head
+  ;;
+  ;; $loop_match_block only ever runs on blocks that branch to THEMSELVES, so
+  ;; a sentinel test makes a loop invisible to every Design A recognizer --
+  ;; this is why the shape has to be matched here, off raw x86 at a block
+  ;; start, exactly as $try_emit_rle_run is. tools/find-ck-lut-nests.js says
+  ;; 297 of the corpus's 613 keyed matches are in this one DLL, so like
+  ;; RLE_RUN this is a one-app fold and is scoped as narrowly as that implies.
+  ;;
+  ;; The fold runs the transparent and source arms and BAILS on the shadow
+  ;; arm, parking EIP at the head with the cursors on the offending pixel --
+  ;; ending the run there instead would make the runs tiny and buy nothing,
+  ;; and resuming at the head is exactly equivalent because the head's first
+  ;; instruction re-reads [S] and recomputes its own flags.
+  (func $try_emit_ck_lut16_run (param $start_eip i32) (result i32)
+    (local $pc i32) (local $p i32) (local $m i32) (local $sib i32)
+    (local $S i32) (local $D i32) (local $C i32) (local $T i32) (local $L i32)
+    (local $head i32) (local $adv i32) (local $shadow i32) (local $exit_eip i32)
+    (local $dstep i32)
+    (if (i32.eqz (global.get $ck_lut16_enabled)) (then (return (i32.const 0))))
+    (if (i32.or (global.get $code16) (global.get $d_addr16))
+      (then (return (i32.const 0))))
+    (if (global.get $d_seg) (then (return (i32.const 0))))
+    (local.set $head (global.get $d_pc))
+    (local.set $pc (local.get $head))
+
+    ;; cmp byte [S], 0xFF
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
+      (then (return (i32.const 0))))
+    (local.set $S (i32.and (local.get $m) (i32.const 7)))
+    (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2)))
+                (i32.const 0xFF))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jnb advance
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x73))
+      (then (return (i32.const 0))))
+    (local.set $adv (i32.add (i32.add (local.get $pc) (i32.const 2))
+      (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; xor T, T
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x33))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.ne (i32.shr_u (local.get $m) (i32.const 6)) (i32.const 3))
+      (then (return (i32.const 0))))
+    (local.set $T (i32.and (local.get $m) (i32.const 7)))
+    (if (i32.ne (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+                (local.get $T))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; cmp byte [S], 0xF8 -- the same S, or this is a different loop
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2)))
+                (i32.const 0xF8))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jnb shadow
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x73))
+      (then (return (i32.const 0))))
+    (local.set $shadow (i32.add (i32.add (local.get $pc) (i32.const 2))
+      (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; mov T8, [S]
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8A))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (local.get $T)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; mov T16, [L + T*2] -- operand-size prefix, ModRM rm==4, SIB scale 2
+    (if (i32.or (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x66))
+                (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                        (i32.const 0x8B)))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (if (i32.ne (i32.shr_u (local.get $m) (i32.const 6)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+                (local.get $T))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (i32.const 4))
+      (then (return (i32.const 0))))
+    (local.set $sib (call $gl8 (i32.add (local.get $pc) (i32.const 3))))
+    (if (i32.ne (i32.shr_u (local.get $sib) (i32.const 6)) (i32.const 1))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (i32.shr_u (local.get $sib) (i32.const 3)) (i32.const 7))
+                (local.get $T))
+      (then (return (i32.const 0))))
+    (local.set $L (i32.and (local.get $sib) (i32.const 7)))
+    ;; base==5 with mod==0 is a disp32 absolute, not a register base.
+    (if (i32.eq (local.get $L) (i32.const 5)) (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 4)))
+
+    ;; mov [D], T16
+    (if (i32.or (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x66))
+                (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                        (i32.const 0x89)))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (local.get $T)))
+      (then (return (i32.const 0))))
+    (local.set $D (i32.and (local.get $m) (i32.const 7)))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jmp advance -- the source arm's only exit, and it must land where the
+    ;; transparent arm's jnb did or the two arms are not one diamond.
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0xEB))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.add (i32.add (local.get $pc) (i32.const 2))
+          (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1)))))
+          (local.get $adv))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+    ;; The shadow arm has to begin exactly here, or the `jnb` above jumps into
+    ;; the middle of code this decode never looked at.
+    (if (i32.ne (local.get $pc) (local.get $shadow))
+      (then (return (i32.const 0))))
+
+    ;; advance: inc S / add D,imm8 / dec C / jnz head
+    (local.set $p (local.get $adv))
+    (if (i32.ne (call $gl8 (local.get $p))
+                (i32.add (i32.const 0x40) (local.get $S)))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ne (call $gl8 (local.get $p)) (i32.const 0x83))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $p) (i32.const 1))))
+    (if (i32.ne (i32.shr_u (local.get $m) (i32.const 6)) (i32.const 3))
+      (then (return (i32.const 0))))
+    (if (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $D))
+      (then (return (i32.const 0))))
+    (local.set $dstep (call $sign_ext8
+      (call $gl8 (i32.add (local.get $p) (i32.const 2)))))
+    (local.set $p (i32.add (local.get $p) (i32.const 3)))
+    (local.set $C (i32.sub (call $gl8 (local.get $p)) (i32.const 0x48)))
+    (if (i32.ge_u (local.get $C) (i32.const 8))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ne (call $gl8 (local.get $p)) (i32.const 0x75))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.add (i32.add (local.get $p) (i32.const 2))
+          (call $sign_ext8 (call $gl8 (i32.add (local.get $p) (i32.const 1)))))
+          (local.get $head))
+      (then (return (i32.const 0))))
+    (local.set $exit_eip (i32.add (local.get $p) (i32.const 2)))
+
+    ;; Five distinct registers, none of them ESP. An alias would make one of
+    ;; the four cursors move when another one did, and the executor keeps them
+    ;; in locals, so an aliased match would run correct-looking wrong code.
+    (if (i32.eqz (call $ck_regs_distinct (local.get $S) (local.get $D)
+                       (local.get $C) (local.get $T) (local.get $L)))
+      (then (return (i32.const 0))))
+
+    (global.set $ck_lut16_matches
+      (i32.add (global.get $ck_lut16_matches) (i32.const 1)))
+    (call $te (i32.const 455) (i32.or
+      (i32.or (local.get $S) (i32.shl (local.get $D) (i32.const 4)))
+      (i32.or (i32.shl (local.get $C) (i32.const 8))
+        (i32.or (i32.shl (local.get $T) (i32.const 12))
+                (i32.shl (local.get $L) (i32.const 16))))))
+    (call $te_raw (local.get $head))
+    (call $te_raw (local.get $exit_eip))
+    (call $te_raw (local.get $dstep))
+    (call $te_raw (local.get $shadow))
+    (i32.const 1))
+
+  ;; ModRM that must be `[base]` with no displacement, no SIB, no disp32
+  ;; absolute, and $reg on the register side. Returns 0 for every other form.
+  (func $ck_mem0 (param $m i32) (param $reg i32) (result i32)
+    (local $rm i32)
+    (if (i32.shr_u (local.get $m) (i32.const 6)) (then (return (i32.const 0))))
+    (local.set $rm (i32.and (local.get $m) (i32.const 7)))
+    (if (i32.or (i32.eq (local.get $rm) (i32.const 4))
+                (i32.eq (local.get $rm) (i32.const 5)))
+      (then (return (i32.const 0))))
+    (i32.eq (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+            (local.get $reg)))
+
+  ;; All five register numbers distinct and none of them ESP.
+  (func $ck_regs_distinct (param $a i32) (param $b i32) (param $c i32)
+        (param $d i32) (param $e i32) (result i32)
+    (local $seen i32)
+    (if (i32.or (i32.or (i32.eq (local.get $a) (i32.const 4))
+                        (i32.eq (local.get $b) (i32.const 4)))
+                (i32.or (i32.eq (local.get $c) (i32.const 4))
+                        (i32.or (i32.eq (local.get $d) (i32.const 4))
+                                (i32.eq (local.get $e) (i32.const 4)))))
+      (then (return (i32.const 0))))
+    (local.set $seen (i32.or (i32.or
+        (i32.shl (i32.const 1) (local.get $a))
+        (i32.shl (i32.const 1) (local.get $b)))
+      (i32.or (i32.shl (i32.const 1) (local.get $c))
+        (i32.or (i32.shl (i32.const 1) (local.get $d))
+                (i32.shl (i32.const 1) (local.get $e))))))
+    (i32.eq (i32.popcnt (local.get $seen)) (i32.const 5)))
 
   ;; MechWarrior 3's menu compositor is one branchy RGB565 alpha row. Its
   ;; three alpha arms split the back-edge across four basic blocks, so the
@@ -3258,6 +3498,10 @@
               (local.set $done (i32.const 1))
               (br $decode)))
           (if (call $try_emit_rle_run (local.get $start_eip))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
+          (if (call $try_emit_ck_lut16_run (local.get $start_eip))
             (then
               (local.set $done (i32.const 1))
               (br $decode)))))

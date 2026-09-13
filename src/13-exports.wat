@@ -2582,6 +2582,17 @@
     (global.set $rle_run_enabled (local.get $flag)))
   (func (export "get_rle_run") (result i32) (global.get $rle_run_enabled))
 
+  ;; The colour-keyed LUT16 blit fold ($th_ck_lut16_run). Same decode-time
+  ;; rules as the three above. `matches` counts blocks the grammar accepted,
+  ;; `runs` dispatches of the executor, `px` pixels it actually blitted -- so
+  ;; a run that matched but never executed is visible as matches>0, runs==0.
+  (func (export "set_ck_lut16") (param $flag i32)
+    (global.set $ck_lut16_enabled (local.get $flag)))
+  (func (export "get_ck_lut16") (result i32) (global.get $ck_lut16_enabled))
+  (func (export "get_ck_lut16_matches") (result i32) (global.get $ck_lut16_matches))
+  (func (export "get_ck_lut16_runs") (result i32) (global.get $ck_lut16_runs))
+  (func (export "get_ck_lut16_px") (result i64) (global.get $ck_lut16_px))
+
   ;; TREE_FOLD ($th_tree_fold, src/07b-loop-match.wat). The general integer
   ;; expression fold; OFF by default. Decode-time, so the same rule as the
   ;; three above: set it before the first decode, and on every per-thread
