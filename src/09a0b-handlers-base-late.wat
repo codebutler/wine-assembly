@@ -443,8 +443,36 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
-  ;; LoadKeyboardLayoutA(pwszKLID, Flags) — pretend the requested layout was activated.
+  ;; LoadKeyboardLayoutA(pwszKLID, Flags). This browser machine exposes one
+  ;; installed layout, US English. Windows accepts an eight-hex-digit KLID and
+  ;; falls back to the system default when no matching layout is available.
   (func $handle_LoadKeyboardLayoutA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $p i32) (local $i i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    ;; Translate the caller pointer once, then validate exactly KL_NAMELENGTH:
+    ;; eight hexadecimal bytes followed by NUL.
+    (local.set $p (call $g2w (local.get $arg0)))
+    (block $valid (loop $digit
+      (br_if $valid (i32.ge_u (local.get $i) (i32.const 8)))
+      (if (i32.lt_s
+            (call $hex_digit_value
+              (i32.load8_u (i32.add (local.get $p) (local.get $i))))
+            (i32.const 0))
+        (then
+          (global.set $eax (i32.const 0))
+          (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+          (return)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $digit)))
+    (if (i32.load8_u offset=8 (local.get $p))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (global.set $eax (i32.const 0x04090409))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
