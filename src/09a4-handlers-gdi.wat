@@ -2639,8 +2639,9 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   (func $handle_CreateMetaFileW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $gdi_metafile_recording_dc_create))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (call $handle_CreateMetaFileA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; Enhanced metafile recording shares the canonical recording DC; Close
   ;; chooses the EMF serializer. File-backed recording is rejected explicitly
