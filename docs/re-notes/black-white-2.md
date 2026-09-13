@@ -2530,3 +2530,66 @@ NULL or whether `items` is valid and its *elements* are. Run 40's registers say
 the latter — `arg1 = items[ebp] = 0x2eccfc98` was a valid pointer whose first
 field was zero — so the likeliest remaining shape is a container of live objects
 that were never initialized, not a container that was never allocated.
+
+## The picker loop, and what the code actually is (runs 43-44)
+
+### The loop
+
+```
+009c1ad6  xor ebp, ebp
+009c1ad8  cmp [ebx+0xc], ebp        ; count
+009c1adb  jle 0x9c1b31
+009c1b40  mov ecx, [ebx+0x8]        ; items
+009c1b43  mov edi, [ecx+ebp*4]      ; element = items[ebp]
+009c1b62  call [edx+0x1c]           ; slot 7
+009c1b87  add ebp, 0x1
+009c1b8a  cmp ebp, [ebx+0xc]
+009c1b8d  jl 0x9c1b40
+```
+
+A plain `ebp++` walk of `items[0 .. [ebx+0xc])`. Run 42 counted **10** entries
+into slot 7, so elements 0-9 are processed and the **eleventh** is the one that
+never returns. Run 43 caught the loop returning with `EBP` = 1, 5, 9 at batches
+434575-434577 (`--trace-at` re-arms per batch, so it samples rather than logs
+every iteration) and then stops: container `EBX=0x36120780`, receiver
+`ESI=0x36120640`, elements at `0x2eccfca8`, `0x2eccfd48`, `0x2eccfda8`. Those
+addresses recur across runs — run 40's stack held the same `0x36120xxx` values —
+so they can be dumped directly.
+
+### It is Qhull, inside RenderWare Physics
+
+The binary carries
+
+```
+@@(#)$Id: //BW2/Libs/THIRDPARTY/Renderware/RWPhysics37.040623/Src/QHull/RwpQHullWrapper.c#3 $
+qhull precision error: initial simplex is not convex. Distance=%.2g
+qhull precision error: f%d is flipped (interior point is outside)
+qhull internal error (qh_infiniteloop): potential infinite loop detected
+```
+
+So this whole family is **Qhull**, the convex-hull/Delaunay library, used for
+physics hulls. That fits every structural reading so far: `0x9e17b0`'s 64-bit
+cross products with a `setge` are an orientation predicate, and it walks a
+linked list of facets or vertices to a sentinel. The `{capacity, count, items}`
+container grown by doubling at `0x9e8200` has the shape of Qhull's `setT`.
+(The specific function identities are inference from shape, not confirmed
+against a reference build — the wrapper path and the error strings are the hard
+evidence that it is Qhull at all.)
+
+**Why this matters for us specifically: Qhull is precision-sensitive.** Its
+whole error vocabulary is about coplanar, concave, flipped and non-convex
+results from floating-point comparisons near zero. We emulate x87, so a
+difference in precision or rounding is exactly the kind of thing that sends it
+down a degenerate path the same input would not take on real hardware — and a
+Qhull that bails leaves the sets it was building empty, which is the NULL head
+the walker then cannot escape. That the library ships its own
+`qh_infiniteloop` detector says the authors knew this failure mode.
+
+No `qhull ... error` text appears in any run's log, but that is weak evidence:
+Qhull writes diagnostics to its `qh ferr` stream and the RenderWare wrapper need
+not point that anywhere.
+
+**Next measurement:** `--trace-fpu` across the picker. Zero `[fpu]` lines would
+say the complaint is not an x87 status read and send the search back to the
+object graph; exceptions raised around the wedge would make precision the prime
+suspect and give a concrete emulator-side lead.
