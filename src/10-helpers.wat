@@ -3048,6 +3048,23 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
     (i32.const 0))
 
+  ;; Wide case-sensitive compare. Keep guest addresses intact and use gl16 for
+  ;; each code unit so a string may cross from the direct window into any
+  ;; translated guest page without assuming affine WASM backing.
+  (func $guest_wcscmp (param $s1 i32) (param $s2 i32) (result i32)
+    (local $i i32) (local $a i32) (local $b i32)
+    (block $d (loop $l
+      (local.set $a (call $gl16
+        (i32.add (local.get $s1) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $b (call $gl16
+        (i32.add (local.get $s2) (i32.shl (local.get $i) (i32.const 1)))))
+      (if (i32.ne (local.get $a) (local.get $b))
+        (then (return (i32.sub (local.get $a) (local.get $b)))))
+      (br_if $d (i32.eqz (local.get $a)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.const 0))
+
   ;; Compare a UTF-16LE string at WASM addr $wide_wa with a NUL-terminated
   ;; ASCII string at WASM addr $ascii_wa, case-insensitive.
   (func $wide_ascii_eq (param $wide_wa i32) (param $ascii_wa i32) (result i32)

@@ -5963,9 +5963,10 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 272: _wcsicmp — STUB: unimplemented
+  ;; 272: _wcsicmp — cdecl, case-insensitive UTF-16 comparison
   (func $handle__wcsicmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $guest_wcsicmp (local.get $arg0) (local.get $arg1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; 273: _wtoi — cdecl; wide string to int
@@ -5998,28 +5999,34 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; 275: wcscmp — STUB: unimplemented
+  ;; 275: wcscmp — cdecl, case-sensitive UTF-16 comparison
   (func $handle_wcscmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $guest_wcscmp (local.get $arg0) (local.get $arg1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; 276: wcsncpy
   (func $handle_wcsncpy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $v i32) (local $i i32)
+    (local $v i32) (local $i i32) (local $ended i32)
     (local.set $i (i32.const 0))
     (block $d (loop $l
       (br_if $d (i32.ge_u (local.get $i) (local.get $arg2)))
-      (local.set $v (call $gl16 (i32.add (local.get $arg1) (i32.shl (local.get $i) (i32.const 1)))))
+      (if (i32.eqz (local.get $ended))
+        (then
+          (local.set $v (call $gl16
+            (i32.add (local.get $arg1) (i32.shl (local.get $i) (i32.const 1)))))
+          (if (i32.eqz (local.get $v)) (then (local.set $ended (i32.const 1)))))
+        (else (local.set $v (i32.const 0))))
       (call $gs16 (i32.add (local.get $arg0) (i32.shl (local.get $i) (i32.const 1))) (local.get $v))
-      (br_if $d (i32.eqz (local.get $v)))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
     (global.set $eax (local.get $arg0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; 277: wcslen — STUB: unimplemented
+  ;; 277: wcslen — cdecl, length in UTF-16 code units
   (func $handle_wcslen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $eax (call $guest_wcslen (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; 278: memset(dest, ch, count) — cdecl
