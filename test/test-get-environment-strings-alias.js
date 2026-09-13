@@ -9,17 +9,23 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_get_environment_strings")
-        (param $ansi_suffix i32) (param $stack i32) (result i64)
+        (param $mode i32) (param $stack i32) (result i64)
     (global.set $esp (local.get $stack))
-    (if (local.get $ansi_suffix)
+    (if (i32.eq (local.get $mode) (i32.const 2))
       (then
-        (call $handle_GetEnvironmentStringsA
+        (call $handle_GetEnvironmentStringsW
           (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0)))
       (else
-        (call $handle_GetEnvironmentStrings
-          (i32.const 0) (i32.const 0) (i32.const 0)
-          (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (local.get $mode)
+          (then
+            (call $handle_GetEnvironmentStringsA
+              (i32.const 0) (i32.const 0) (i32.const 0)
+              (i32.const 0) (i32.const 0) (i32.const 0)))
+          (else
+            (call $handle_GetEnvironmentStrings
+              (i32.const 0) (i32.const 0) (i32.const 0)
+              (i32.const 0) (i32.const 0) (i32.const 0))))))
     (i64.or
       (i64.extend_i32_u (global.get $eax))
       (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
@@ -28,6 +34,16 @@ const extraWat = String.raw`
         (param $block i32) (param $stack i32) (result i64)
     (global.set $esp (local.get $stack))
     (call $handle_FreeEnvironmentStringsA
+      (local.get $block) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i64.or
+      (i64.extend_i32_u (global.get $eax))
+      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+
+  (func (export "test_free_environment_strings_w")
+        (param $block i32) (param $stack i32) (result i64)
+    (global.set $esp (local.get $stack))
+    (call $handle_FreeEnvironmentStringsW
       (local.get $block) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
@@ -47,8 +63,23 @@ function readEnvironmentBlock(wat, pointer) {
   throw new Error('environment block was not double-NUL terminated');
 }
 
+function readWideEnvironmentBlock(wat, pointer) {
+  const bytes = [];
+  let previous = -1;
+  for (let index = 0; index < 16384; index++) {
+    const low = wat.guest_read8(pointer + index * 2);
+    const high = wat.guest_read8(pointer + index * 2 + 1);
+    const codeUnit = low | (high << 8);
+    bytes.push(low, high);
+    if (codeUnit === 0 && previous === 0) return Buffer.from(bytes);
+    previous = codeUnit;
+  }
+  throw new Error('wide environment block was not double-NUL terminated');
+}
+
 (async () => {
-  for (const name of ['GetEnvironmentStrings', 'GetEnvironmentStringsA']) {
+  for (const name of ['GetEnvironmentStrings', 'GetEnvironmentStringsA',
+    'GetEnvironmentStringsW']) {
     const api = apiTable.find(entry => entry.name === name);
     assert(api, `${name} is exported`);
     assert.strictEqual(api.nargs, 0, `${name} has no arguments`);
@@ -76,6 +107,20 @@ function readEnvironmentBlock(wat, pointer) {
   assert.deepStrictEqual([...blocks[0].bytes.subarray(-2)], [0, 0],
     'the ANSI environment block ends with two NUL bytes');
 
+  const widePacked = wat.test_get_environment_strings(2, stack);
+  const widePointer = Number(widePacked & 0xffffffffn) >>> 0;
+  const wideEsp = Number(widePacked >> 32n) >>> 0;
+  assert(widePointer, 'GetEnvironmentStringsW returns the current process environment');
+  assert(!blocks.some(({ pointer }) => pointer === widePointer),
+    'the wide call returns its own independently owned block');
+  assert.strictEqual(wideEsp, stack + 4,
+    'GetEnvironmentStringsW pops only its return address');
+  const wideBytes = readWideEnvironmentBlock(wat, widePointer);
+  assert(wideBytes.toString('utf16le').includes('ALIAS_TEST=ansi-value\0'),
+    'the wide block contains the same process environment variable');
+  assert.deepStrictEqual([...wideBytes.subarray(-4)], [0, 0, 0, 0],
+    'the wide environment block ends with two WCHAR NULs');
+
   for (const { pointer } of blocks) {
     const packed = wat.test_free_environment_strings_a(pointer, stack);
     assert.strictEqual(Number(packed & 0xffffffffn), 1,
@@ -84,7 +129,13 @@ function readEnvironmentBlock(wat, pointer) {
       'FreeEnvironmentStringsA pops its pointer and return address');
   }
 
-  console.log('PASS  GetEnvironmentStrings and GetEnvironmentStringsA share ANSI block semantics');
+  const wideFreePacked = wat.test_free_environment_strings_w(widePointer, stack);
+  assert.strictEqual(Number(wideFreePacked & 0xffffffffn), 1,
+    'FreeEnvironmentStringsW releases the wide block');
+  assert.strictEqual(Number(wideFreePacked >> 32n) >>> 0, stack + 8,
+    'FreeEnvironmentStringsW pops its pointer and return address');
+
+  console.log('PASS  GetEnvironmentStrings A/W and legacy alias share encoded block semantics');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
