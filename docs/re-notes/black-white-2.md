@@ -3394,3 +3394,71 @@ happened at batch 435422 is gone by the time the process parks, so the watch and
 trace channels still have to be armed up front; the live session carries them
 (`--watch=0x2eb307d8 --watch-log`, `--trace-at=0x9de060`) so it is a superset of
 a one-shot run rather than a replacement for one.
+
+## Refuted: the node was never freed, and the pool is not involved at all
+
+Run 62 armed the two channels that between them cover the whole pool: a
+`--trace-at=0x9de060` on the node release (`ECX` is the node being released, so
+every free is named) and a `--watch=0x177c94c --watch-log` on the free-list head
+itself (so every push and every pop is one timestamped event).
+
+The answer is flat:
+
+```
+--- were any of the four ring nodes freed? ---
+  0x2eb310c0: 0 free(s)
+  0x2eb305a8: 0 free(s)
+  0x2eb30ff8: 0 free(s)
+  0x2eb307d8: 0 free(s)
+```
+
+290 frees, 145 of them logged with batch numbers, and not one of them is a node
+of the wedging ring. The "freed while the free list was empty, then popped
+again" story required `0x2eb307d8` to pass through `0x9de060`, and it never
+does. Every pool suspect is now eliminated:
+
+| suspect | verdict |
+|---|---|
+| `0x9c0c50` reset (`mov [ecx],0`) | 0 calls |
+| `0x9de1f0` ring teardown | 0 calls |
+| node free `0x9de060` | 290 calls, **none of them this node** |
+| re-construction `0x9de000`/`0x9de030` | would zero `+0x04`; it holds `0x2eb30fe4` |
+| another guest thread | run 60: no per-thread watch hit; all others parked |
+| the walker's own adjacent block | `0x9e1804` is `cmp`/`jbe`, no store |
+| blind aliasing write | neighbours `+0x04`/`+0x08`/`+0x10` all intact |
+
+So the zero at `0x2eb307d8+0` did not come from the pool, from the ring's own
+teardown, or from another thread. The list of things the *guest* could have done
+is empty, which moves the weight decisively onto the remaining possibility: the
+store that landed there is ours — a store whose effective address the emulator
+computed wrongly. That also explains the finding we could not place, that none
+of the four recorded `prev_eip` blocks contains a store to this node: if the
+address is wrong, the block *does* have a store, and a disassembly of it points
+somewhere else entirely.
+
+### The wedge is at batch 435909, ~490 batches after the break
+
+One of the 145 free-list changes is not like the others. Every push in the log
+reports `EIP: 0x009de091 prev_eip: 0x009de072` — inside the release function.
+The last one, at batch 435909, reports:
+
+```
+*** WATCHPOINT hit at batch 435909: [0x0177c94c] changed
+  Old: 0x2eb33154  New: 0x2eb33168  EIP: 0x009e1820  prev_eip: 0x009e1817
+```
+
+`0x9e1820` (`test ecx,ecx`) and `0x9e1817` (`cmp eax,[esp+0x14]`) are both
+inside the walker. The WASM watch notices a change at the *next* block
+dispatch, so this is the ordinary free of `0x2eb33168` — the value matches
+run 61's surviving free head exactly — observed from the first walker block that
+ran after it. Which is to say: the guest went into the walker right there and
+never came out.
+
+That gives the whole sequence a clock:
+
+| batch | event |
+|---|---|
+| 435416-435421 | the ring is built and closed |
+| 435422 | `0x2eb307d8->next` is zeroed by something that is not the pool |
+| 435423-435908 | ~490 batches of ordinary pool traffic, 303 walker calls returning |
+| 435909 | the 304th call — a point that tests "inside" — never returns |
