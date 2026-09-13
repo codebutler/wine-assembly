@@ -28,8 +28,13 @@
   }
 
   var half = series.slice(Math.floor(series.length / 2));
+  var oom = window.__memOom || { count: 0, first: null, last: null, bytesMax: 0 };
   return JSON.stringify({
     armed: window.__memSeriesArmed || 0,
+    // Allocation failures seen in this run. Zero here is a real negative, not
+    // an untested assumption -- the counter wraps console.log from before page
+    // load, and heap_oom_trace is never gated behind a flag.
+    oom: oom,
     samples: series.length,
     first: series[0] || null,
     last: series[series.length - 1] || null,
