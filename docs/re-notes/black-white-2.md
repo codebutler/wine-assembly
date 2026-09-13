@@ -4057,3 +4057,121 @@ the *sum* of its members (~370 MB) for a container 121 MB long.
 Fixed in df2f1f31: heap arena records count their live bytes, and a sparse
 allocation that would fail first hands back every retired arena reading zero --
 backing and address space both. Fixture: `test/test-heap-arena-release.js`.
+
+## Three heap fixes later the wall is at 430 MB, and it is not a heap bug
+
+`df2f1f31` was not enough on its own, and neither was the fix after it. Three
+things had to be true before the land loader's growth series could run:
+
+| commit | what was wrong |
+|---|---|
+| `df2f1f31` | abandoned steps stayed committed -- a free block is never merged with the one in the arena next door, so the series cost the sum of its members |
+| `d75e178e` | the sparse reserve cursor only moves *down*, and the reclaim can only raise it to the lowest **live** range, so the surviving 121 MB buffer at `0x164f0000` made the ~800 MB above it unreachable |
+| `bb910600` | backing released in the extension window (above `0x20000000`, only present at `--memory-mb=1024`) was never reused: `$virtual_hole_take` offered the extent and the caller then measured it against the **primary** pool's end and threw it away -- after the hole had already been removed from the list, so it was lost rather than deferred |
+
+Measured at the point `bb910600` fixed: pool 305.7 MB of 316 used with a 4.0 MB
+largest free extent, extension 151.5 MB of 512 used with a **243.8 MB free
+extent at `0x221de000` that nothing could reach**.
+
+With all three in, every step of the series is served and the run reaches
+**430571520 bytes (0x19aa0000)** before anything is refused -- and that is the
+*only* refused allocation in the whole run. State at the refusal:
+
+```
+virtual_maps: count=370 backing_top=0x30f54000 reservation_top=0x10a20000
+pool: 344 records, used 304.5MB of 316MB, largest free extent 4.6MB
+ext:   26 records, used 304.8MB of 512MB, largest free extent 206.1MB
+live: 609.3MB in 370 records -- one 273.8MB record, then 32.1, 21.9, 19.8, ...
+```
+
+Growing 273.8 MB to 430 MB while both exist wants ~1019 MB against the 828 MB
+of backing a `--memory-mb=1024` process has. So no further heap work reaches
+this: the question is whether the request is legitimate, and it is not.
+
+### CORRECTION: the growth series is not `HeapReAlloc`
+
+The section above says the loader grows the container with `HeapReAlloc`. That
+was inference from the record shape, not measurement. `--trace-api=HeapReAlloc`
+across a full run to the land click logs **two calls in the entire process**,
+both early and both small:
+
+```
+[API #55000] HeapReAlloc(0x02db2cc4, 0, 0x02e68fac, 0x000008f0) [ret=0x00ad9151]
+[API #92521] HeapReAlloc(0x02db2cc4, 0, 0x02dbe2a4, 0x00001100) [ret=0x00ad9151]
+```
+
+So the container is grown the C++ way -- allocate, copy, free -- and the API
+trace is not where to look for it.
+
+### Who asks for the 430 MB: `0x009e35e0`, reached from the list walk at `0x009d5430`
+
+A worktree-only diagnostic in `$heap_alloc` logged the marker, size, `eip`,
+`dbg_prev_eip` and eight EBP frames on every refusal (`$host_log_i32`, so no
+shared file had to be touched). Both refusals report the same stack:
+
+```
+0x0a11c0de  marker
+0x19aa0000  size
+0x00ad561b  eip      -- malloc / operator new
+0x00ad561b  prev_eip
+0x00ad5652  frame 1  -- CRT
+0x009d5440  frame 2  -- game
+0x24740308  (chain broken; 0x9e35e0 does `and esp,-8`)
+```
+
+`0x009d5440` is the return of `call 0x9e35e0` inside a linked-list walk:
+
+```
+009d5430  mov edx, [esi+0x8]
+009d5433  mov eax, [esp+0x10]
+009d5437  mov ecx, [eax+0xc]
+009d543a  push edx
+009d543b  call 0x9e35e0
+009d5440  mov esi, [esi]        ; next node
+009d5442  cmp esi, edi
+009d5444  jnz short 0x9d5430
+```
+
+`0x9e35e0` is a graph traversal: it zeroes six dwords of a local container at
+`[esp+0x74]`, hands that container to `0x9e22f0` for every node it reaches, and
+walks a vector-shaped `[esi+8]`/`[esi+0xc]` pair whose element count it computes
+as `([ecx+0xc] - [ecx+8]) >> 2`. A count derived by subtracting two pointers is
+exactly the shape that turns one bad pointer into a 430 MB request.
+
+### The dominant anomaly is a NULL spin: 23.9 million unmapped reads from one block
+
+`--fault-null` across the same run:
+
+```
+[fault] census: 23917897 unmapped access(es) from 48 eip(s)
+[fault]   eip=0x9e1e50 x23917314 addresses 0x0-0x4
+[fault]   eip=0x9e35e0 x127      addresses 0x4-0x247c830b
+[fault]   eip=0x9cef6f x84       addresses 0x48-0x78
+[fault]   eip=0x9cf060 x56       addresses 0x4c-0x58
+...
+```
+
+One block is 99.998% of it. `0x9e1e50` opens
+
+```
+009e1e50  push ebp / mov ebp,esp / and esp,-8 / sub esp,0x54
+009e1e59  mov eax, [ebp+0x8]     ; arg 1
+009e1e5e  mov ecx, [eax]         ; -> address 0x0
+009e1e64  mov ecx, [eax+0x4]     ; -> address 0x4
+```
+
+so the census's `addresses 0x0-0x4` says arg 1 is **NULL**, 23.9 million times.
+It has three call sites (`0x9e3108`, `0x9e311f`, `0x9e3a20`), all inside the
+same `0x9e3xxx` family as the allocator above.
+
+This is the same shape as the walker wedge recorded earlier in this file: on
+real hardware those reads are an access violation, and here `$g2w`'s NULL
+sentinel makes them a cheap zero, so a routine that should have died quietly
+instead runs on garbage until it asks for 430 MB.
+
+**Two things follow.** More memory would not have helped -- the request is a
+symptom, not a requirement. And the next measurement is whether the garbage is
+precision: these are the Qhull-family routines, `--trace-fpu` has still never
+been run across the land load, and zero `[fpu]` lines would send the search back
+to the object graph while exceptions around the traversal would make x87 the
+prime suspect.
