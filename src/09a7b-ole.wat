@@ -8994,15 +8994,17 @@
 
   ;; +164 is the IDataObject face built on demand from the cache; +172 is the
   ;; optional CommonDialog IPersistStreamInit face and +176 its IDispatch
-  ;; automation face.
+  ;; automation face.  The 32 property slots end at +436; the final dword
+  ;; records whether IPersistStreamInit was initialized by Load (1) or InitNew
+  ;; (2), whose initialization paths are mutually exclusive.
   (func $ole_create_static_handler (param $clsid i32) (result i32)
     (local $obj i32)
     ;; The trailing 32 (VARTYPE,value) pairs retain scalar automation
     ;; properties by DISPID. CommonDialog's persisted/default properties are
     ;; all in this compact range.
-    (local.set $obj (call $heap_alloc (i32.const 436)))
+    (local.set $obj (call $heap_alloc (i32.const 440)))
     (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 436))
+    (call $zero_memory (call $g2w (local.get $obj)) (i32.const 440))
     (call $gs32 (local.get $obj) (global.get $DX_VTBL_OLE_OBJECT))
     (call $gs32 (i32.add (local.get $obj) (i32.const 4)) (i32.const 1))
     (call $gs32 (i32.add (local.get $obj) (i32.const 8)) (i32.const 6))
@@ -9554,7 +9556,16 @@
     (global.set $eax (i32.const 1)) ;; S_FALSE
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IPersistStreamInit_Load (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (local.get $arg1)))
+    (local $root i32)
+    (local.set $root (i32.sub (local.get $arg0) (i32.const 172)))
+    (if (i32.eqz (local.get $arg1))
+      (then (global.set $eax (i32.const 0x80004003)))
+      (else
+        (if (i32.eq (call $gl32 (i32.add (local.get $root) (i32.const 436))) (i32.const 2))
+          (then (global.set $eax (i32.const 0x8000FFFF)))
+          (else
+            (call $gs32 (i32.add (local.get $root) (i32.const 436)) (i32.const 1))
+            (global.set $eax (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IPersistStreamInit_Save (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (local.get $arg1)))
@@ -9567,7 +9578,13 @@
     (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (local.get $arg1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IPersistStreamInit_InitNew (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $root i32)
+    (local.set $root (i32.sub (local.get $arg0) (i32.const 172)))
+    (if (i32.eq (call $gl32 (i32.add (local.get $root) (i32.const 436))) (i32.const 1))
+      (then (global.set $eax (i32.const 0x8000FFFF)))
+      (else
+        (call $gs32 (i32.add (local.get $root) (i32.const 436)) (i32.const 2))
+        (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; ---- CommonDialog IDispatch ----
