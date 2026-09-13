@@ -1240,3 +1240,50 @@ Encoder-only opcodes — `glBegin`/`glVertex*`, the client-array calls,
 design); and `set_count`/`get_count` armed from `--before-load` are the only way
 to ask a *browser-only* app which branch it took, since `--count` lives in
 `test/run.js` and nothing on the OpenGL path can run headless.
+
+## The map screen is a LOADING screen for most of its life, and ESC quits the app
+
+Measured 2026-09-13 across four `--headful` runs (runGP6-runGP9) of the same
+menu walk, all trying to get past the briefing to gameplay. Two readings in
+this file's earlier sections were wrong, and both wrong readings came from
+treating the Chapter One screen as a single thing.
+
+**It is a loading screen first and a prompt second.** runGP7's film has
+`f037-570s.png` showing the parchment map with the bar about a third across
+reading **LOADING**; the same run's `f075-1140s.png` is the identical screen
+with the bar full and reading **PRESS ANY KEY TO CONTINUE**. So a key pressed
+anywhere in that window is not being dropped by a flaky input path — the game
+is not waiting for one. The load duration is not stable either: runGP2
+finished it by ~560s and runGP7 took past 1100s on the same walk, so **no
+scheduled press time is reliable**, and the earlier conclusion that "the key
+path to that screen is flaky, it worked in runGP2 and failed in runGP3/runGP5"
+was a misreading of that variance. Press repeatedly at a wide cadence instead,
+or pace the press off the picture.
+
+**ESC on that screen backs out, and enough of them quit the program.**
+runGP8 alternated SPACE and ESC every 60s. Its log's last input before
+`--- Program exited ---` is the third ESC, fired at guest ~600s while the bar
+was still filling. The film corroborates it independently: the clip is 940x702
+while the app owns the screen and 940x736 once the desktop is showing, and
+every frame from `f045-690s.png` on is 940x736 with the `+ Add a game...`
+button in the corner. **That frame-size change is a free app-death detector**
+for any scripted run — check it before reading a run as a hang.
+
+SPACE is not destructive here: three of them fired in the same run and did
+nothing bad. So drive this screen with SPACE only, and do not add ESC "to skip
+the cinematic" — that is what killed three runs.
+
+**Allocation pressure over the same window, for the record.** runGP7 sampled
+every 2s for 1300s with `tools/page-probes/arm-memory-series.js`:
+**0 allocation failures**, verified by the in-page counter rather than by the
+absence of a log line (`profile-web-frames` only surfaces `--relay` matches, so
+grepping for `[heap] OOM` without asking for it proves nothing). wasm flat at
+its 512 MB floor, JS heap slope 4.9 MB/min = inside noise, DIB arena free pages
+constant at 15739. The sparse arena cursor rose as often as it fell — e.g.
+`0x3c752000 -> 0x4a7fb000 -> 0x39270000` in three consecutive samples — with a
+low-water mark of `0x32990000`, so the arena is churning address space and not
+accumulating it. **No evidence for `bigMemory: true` on this app.**
+
+**A run dying with Puppeteer's `Attempted to use detached Frame` is the box,
+not the app.** runGP9 hit it 170s in at a load average of 115 (another agent's
+90-minute B&W2 probe). Check `uptime` before reading anything into it.
