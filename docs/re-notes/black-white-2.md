@@ -2918,3 +2918,58 @@ exactly: element 11's `EDI` is `0x2eb30300`, which is the head the hexdump
 shows at `0x2ec301c0 = 0x2ec30008 + 11*0x28`, and element 1's is `0`, matching
 its record. Check which instruction last wrote a register before reading
 meaning into it.
+
+## The walker returns 303 times; a spiral search calls it, and only the last call hangs
+
+Tracing the walker's own entry (`0x9e17b0` is a function entry and so a legal
+`--trace-at` point, and at entry the stack still holds the arguments) changed
+the shape of this problem. The walker is not stuck inside one call for the
+whole run. It is called, it returns, and it is called again:
+
+```
+#14 EAX=0x2eb30990 EDX=0x2ec30620 ESI=0x0177c660 EDI=0x00000001  [esp+4]=0x2eb30990
+#15 EAX=0x2eb30990 EDX=0x2ec30620 ESI=0x0177c680 EDI=0x00000001  [esp+4]=0x2eb30990
+#16 EAX=0x2eb30990 EDX=0x2ec30620 ESI=0x0177c660 EDI=0x00000002  [esp+4]=0x2eb30990
+#17 EAX=0x2eb30990 EDX=0x2ec30620 ESI=0x0177c680 EDI=0x00000002  [esp+4]=0x2eb30990
+```
+
+Same list every time; `ESI` cycles a small table (`0x177c658`, `660`, `670`,
+`680`, `690`) and `EDI` climbs in pairs. That is the spiral at `0x9c4f87`
+(`mov esi, 0x177c658`) sweeping outward, calling slot 8 as a predicate — the
+call site is `call [eax+0x20]` followed by `test al,al` — and getting false
+back each time. Two heads dominate: `0x2eb30990` (38 of the traced calls) and
+`0x2eb30ff8` (25).
+
+So `0x9e17b0 = 303` is 303 completed predicate evaluations, not one long hang,
+and **only the final call fails to return**. `--trace-at` re-arms once per
+batch, so the last traced entry is the batch the guest never left, and it names
+the offender exactly:
+
+| | |
+|---|---|
+| head (arg1, after slot 8's thunk substitutes `[[arg1]]`) | `0x2eb30ff8` |
+| record (`EDX`) | `0x2ec30ad0` |
+| spiral counter `EDI` | `0xc` |
+
+`0x2ec30ad0` is `(0x2ec30ad0 - 0x2ec30008) / 0x28` = **record 69**. That
+retires blank records 0 and 1 as the story: the element array runs far past the
+sixteen entries decoded above, and the wedge is nowhere near them. It also
+explains the harmless part of the fault census — the walker is a do-while, so a
+genuinely empty list executes the body once, faults on `[0]`/`[0+4]`/`[0+8]`,
+then exits because `head == edx == 0`. Those single faults are the empty
+records; the 937 billion are one call that cannot leave.
+
+Why that one cannot leave follows from the loop shape already established: the
+exit test is `cmp head, edx` after `edx = [edx]`, `head` is non-zero here, and
+the census puts the faults at `edx = 0`. A zero cursor never equals a non-zero
+head, so **the chain from `0x2eb30ff8` contains a node whose next pointer is 0**
+— the ring does not close and the walk runs off the end.
+
+Node layout, read off a healthy chain (element 11's, at `0x2eb30300`) at a
+20-byte stride, which decodes cleanly and agrees with slot 10's
+`mov eax,[eax]` / `mov eax,[eax+8]` idiom:
+
+```
++0x00  next        +0x04  prev       +0x08  point*
++0x0c  ?           +0x10  owner record*   <- matches the record the head came from
+```
