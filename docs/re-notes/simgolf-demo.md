@@ -768,3 +768,238 @@ what would disappear first if that brokering drops commands.
 playable, but it is the difference between a slideshow and something that
 animates, and it is the same factor that would let the Miles mixer keep its
 0.74s ring fed. Nothing else measured on this app is worth more.
+
+## jgl's blitter is a MATRIX of loops, not one loop
+
+This section supersedes every "the hot loop is X" claim above it. Read it
+before optimizing anything in `jgl.dll`.
+
+### How this went wrong the first time
+
+A single profiling window put `jgl+0x10017b6f` at **9.65% of block entries**,
+top of the table. A superinstruction (H455 `CK_LUT16_RUN`, `a755708b`) was
+built for exactly that loop, is correct, is tested against the interpreter as
+oracle — and **moved the measured frame rate not at all**, because the next
+window put the same loop at 1.6% and something else at 51%.
+
+One window is not evidence about where an app spends its time.
+`tools/hot-loop-census.js` exists because of this: it takes N of the page-probe
+JSONs and prints each loop's share in *every* window with the spread between
+them. A region at 51% in one window and 2% in another is a scene, not a fold
+target.
+
+### The matrix
+
+`jgl.dll` does not have a blitter. It has a *generated family* of them: one of
+a few pixel-body grammars crossed with one of a few advance tails. Counted in
+the PE with `tools/find_bytes.js`:
+
+| pixel body | sites | shape |
+|---|---|---|
+| `xor T,T / mov T8,[S] / mov T16,[L+T*2] / mov [D],T16` | **36** | bare keyed LUT16, no second arm |
+| the same, plus a `cmp [S],0xF8 / jnb` shadow-blend arm | **8** | H455's grammar |
+| alpha-guarded channel-wise RGB565 blend | **2** | second cursor `EBX` = an alpha plane |
+
+and the 8 shadow-arm sites are themselves 2 tail families x a horizontal flip,
+which is what a sprite blitter matrix looks like from the inside:
+
+```
+              unit step (1:1)                fixed-point scaler (stretched)
+            ┌──────────────────────┐        ┌──────────────────────────────┐
+  normal    │ 0x10017b6f  inc esi  │        │ 0x100180df  adc esi,[mem]    │
+            │ 0x10017c58  inc esi  │        │ 0x10018267  adc esi,[mem]    │
+  h-flipped │ 0x10017d49  dec esi  │        │ 0x100183f9  sbb esi,[mem]    │
+            │ 0x10017e2c  dec esi  │        │ 0x10018592  sbb esi,[mem]    │
+            └──────────────────────┘        └──────────────────────────────┘
+   tail:  inc/dec esi / add edi,2      tail:  add dx,bx / adc|sbb esi,[mem]
+          dec edx / jnz head                  add edi,2 / sub ebx,0x10000 / jns
+```
+
+All eight share a **byte-identical 24-byte head**, `80 3e ff 73 24 33 c0 80 3e
+f8 73 0b 8a 06 66 8b 04 41 66 89 07 eb 12`. H455 matches the head and then
+insists on the unit-step tail with `inc`, so it covers **1 of the 8** — and
+declines the other seven correctly rather than silently. Accepting `0x48+S`
+(`dec`) beside `0x40+S` (`inc`) and carrying a signed source step takes it to
+2 of 8 for a few lines; the scaler tail is a separate tail matcher.
+
+The lesson generalizes past this app: **match a head grammar and an advance
+grammar separately.** A fold written as one rigid straight-line grammar covers
+one cell of a matrix its author never sees.
+
+### Measured: four independent browser windows
+
+`tools/hot-loop-census.js` over four windows, armed 90s / 180s / 270s / 233s
+into the run, ~76s of gameplay each, 1681 presents total. Shares are of *all*
+block entries in that window:
+
+| region | w1 | w2 | w3 | w4 | floor | spread |
+|---|---|---|---|---|---|---|
+| `jgl+0x100153a5` alpha-guarded blend | 51.6% | 49.5% | 28.0% | 53.8% | **28.0%** | 25.9pp |
+| `jgl+0x1000e7f9` bare keyed LUT16 | 0.0% | 14.2% | 41.3% | 9.5% | 0.0% | 41.3pp |
+| `jgl+0x10016eee` dest-indexed shadow | 11.2% | 14.0% | 9.1% | 13.6% | **9.1%** | 4.9pp |
+| `golf.exe+0x42c2d0` grid lookup (a function) | 8.5% | 7.6% | 4.1% | 8.3% | 4.1% | 4.4pp |
+| `jgl+0x100180df` scaled keyed LUT16 | 5.5% | 0.0% | 2.5% | 0.0% | 0.0% | 5.5pp |
+
+Frame rate and cost per frame, same windows: 6.27 / 4.94 / 6.28 / 4.78
+present/s at 1650k / 1913k / 2223k / 1762k ops per frame. Throughput is
+10.4 / 9.5 / 14.0 / 8.4 M ops/s — in and above CLAUDE.md's documented 7-9M
+house band, so the interpreter is not the anomaly; the app is doing a lot of
+ops.
+
+**The headline is the last column, and it is not any single row.** No one loop
+is stable: the blend loop swings 28-54%, the bare LUT16 swings 0-41%. But they
+are all the same family, and *together* they are
+
+```
+  w1 62.8%   w2 77.7%   w3 78.4%   w4 76.9%   of ALL block entries
+```
+
+So the thing to build is not a fold for the loop that led today's profile. It
+is one keyed-LUT16 fold family general enough to cover all three grammars,
+which is worth **63-78% of every frame** no matter what is on screen. Chasing
+the top row of a single window is what produced H455.
+
+### The three loops that actually cost frames
+
+Disassembled, with their measured block-entry share across the four windows:
+
+**1. `jgl+0x100153a5` — alpha-guarded blend, 28-54%, only 2 sites in the PE**
+
+```
+head:    cmp byte [esi],0xff / jnb advance      ; colour sentinel
+         cmp byte [ebx],0xff / jnb advance      ; ALPHA sentinel, second cursor
+         xor eax,eax / xor ebp,ebp
+         mov al,[ebx] / cmp al,0 / jz opaque
+blend:   ~45 ops, channel-wise RGB565: each of R/G/B is
+         shr/and 0xf8 / mul cl / shr 8 / add / shr 3 / shl / or dx,ax
+         mov [edi],dx / jmp advance
+opaque:  mov al,[esi] / mov ax,[ecx+eax*2] / mov [edi],ax
+advance: inc esi / inc ebx / add edi,2 / dec edx / jnz head
+```
+
+Per-pixel split, read straight off the block shares (head 14.52%, alpha cmp
+8.43%, third block 8.18%, opaque 7.72%): **~42% transparent, ~53% a plain
+LUT16 copy, ~3% the expensive blend.** So 97% of the pixels in the loop that
+dominates the frame are doing work H455 already knows how to do — they are
+just behind a guard it does not parse. This is the target.
+
+**2. `jgl+0x10016eee` — dest-indexed shadow, 9.1-14.0%, the most STABLE of the three**
+
+```
+cmp byte [esi],0xff / jnb advance
+cmp byte [esi],0xf8 / jnz normal
+mov bx,[edi] / mov bx,[ebp+ebx*2] / mov [edi],bx / jmp advance   ; dst-indexed
+normal:  mov al,[esi] / mov bx,[ecx+eax*2] / mov [edi],bx
+advance: inc esi / add edi,2 / dec edx / jnz head
+```
+
+Two things stop H455 here and both matter. There is **no `xor T,T`**, so the
+table index is `(EAX & 0xFFFFFF00) | b` and a fold must use the incoming high
+bits rather than assume zero. And the index register (`EAX`) is **not** the
+result register (`BX`), where H455 requires one register for both.
+
+**3. `jgl+0x1000e7f9` — bare keyed LUT16, 0-41%, two blocks per pixel**
+
+Nothing swings harder. It is absent from w1 and is the single biggest region
+in w3 at 41.3%, bigger there than the blend loop. Its body is the one with 36
+sites in the PE, so this is not one loop going hot — it is a whole family of
+generated blitters that some scenes use and others do not.
+
+```
+80 3e fe    cmp byte [esi],0xfe     ; sentinel 0xFE, not 0xFF
+73 0b       jnb advance
+33 c0       xor eax,eax
+8a 06       mov al,[esi]
+66 8b 04 41 mov ax,[ecx+eax*2]
+66 89 07    mov [edi],ax
+46 83 c7 02 advance: inc esi / add edi,2
+4a 75 e9             dec edx / jnz head
+```
+
+The simplest case in the whole family and the cheapest to fold: H455's grammar
+minus the shadow arm, with a different sentinel constant. The sentinel must be
+a *parameter*, not a literal — jgl uses both `0xFF` and `0xFE`.
+
+### What a fold on the real loop is worth, measured
+
+`tools/bench-loops.js --shapes=ck_blend16,...` prices `0x100153a5`
+transcribed verbatim from the DLL, with the pixel mix taken off the block
+shares rather than guessed (42% transparent, 55% plain LUT16, 3% blend):
+
+| shape | ns/iter | ops/iter | blocks/iter |
+|---|---|---|---|
+| `ck_blend16` (the measured mix) | 324.0 | 15.37 | 3.74 |
+| `ck_blend16_opaque` (every pixel cheap) | 368.1 | 18.00 | 4.00 |
+| `ck_blend16_allblend` (every pixel blends) | 1190.4 | 66.00 | 5.00 |
+| `ck_lut16` (loop 2's shape) | 217.7 | 12.12 | 3.75 |
+| `lut16_h3` — **already folded by H418** | **5.5** | **0.01** | **0.01** |
+
+The last row is the existence proof: a folded LUT16 row costs ~5.5ns a pixel
+today, against 324ns for this loop interpreted.
+
+**Project in ops, never in the ns column.** CLAUDE.md says why in so many
+words — this harness understates dispatch by construction, a periodic loop
+being perfectly BTB-predicted — and the ns figures here are 59x apart while
+the app-level effect is nothing like 59x. Op counts are load-immune and do
+carry over:
+
+```
+  per pixel today             15.37 ops
+  fold the two cheap arms,    0.97 x ~0  +  0.03 x 66   =  ~2.1 ops
+  bail on blend               ────────────────────────────────────
+                              removes ~86% of the loop's ops
+```
+
+Applied to the four windows' ops/frame that is roughly **1.8x** — w1 6.27 to
+~11 fps, w2 4.94 to ~8.8 fps.
+
+**The benchmark also found the ceiling, which was not the guess.** After such
+a fold the 3% of pixels that blend account for ~82% of everything left, at 66
+ops each. So declining the expensive arm — the instinct H455 was built on — is
+what caps the result here:
+
+| design | removes | w1 fps |
+|---|---|---|
+| fold two arms, bail into the blend | ~44% of all ops | ~11 |
+| fold the blend arm into the executor too | ~51% of all ops | ~12.8 |
+
+The blend is fixed arithmetic: three channels of shift / mask 0xf8 / `mul cl` /
+shift / add / shift, ~45 x86 operations that become perhaps 15 wasm ones with
+no dispatch at all. Per line of WAT it is worth *more* than the easy arms.
+
+Neither design reaches 30 fps, which needs a 233k-op frame against the ~930k
+this gets to. 30 fps is not available from folding alone; it needs the blit
+volume to come down (jgl moves 93-232k pixels a frame against a 940x736
+canvas).
+
+### Not a loop: `golf.exe+0x42c2d0`, 4.1-8.5%
+
+A bounds-checked 50x50 grid lookup (`cmp eax,0x32 / jge fail` twice, then
+`lea`-built index into a table at `0x537dc0`), entered ~38k times a frame. It
+is a *function*, so no loop fold reaches it; it is worth knowing about only
+because it is the largest non-jgl item and it says a measurable slice of the
+frame is terrain queries rather than blitting.
+
+### H455 is live, and the counters say so
+
+`tools/page-probes/read-handler-hist.js` now reports the decode-time fold
+counters (`722ebf77`), which is the difference between "the fold is broken" and
+"this scene does not run that loop" — a hot-block table alone cannot tell those
+apart, because in both cases the unfolded blocks are simply absent from the top
+of it. One 76.5-second window:
+
+```
+ck_lut16_matches = 264          264 blocks matched the grammar
+ck_lut16_runs    = 2,886,843    rows executed
+ck_lut16_px      = 18,690,017   pixels blitted, ~39k/frame
+```
+
+with w3's window reaching `matches=495  runs=8,762,654  px=43,856,214` and
+w2's only `8 / 73,550 / 287,220` — a 150x swing between scenes, which is the
+same instability every row of the table above shows.
+
+In w1, `0x10017b6f` shows up at 1.6% across 2 blocks —
+*because* it is folded: the head block is now entered once a row instead of
+four times a pixel, and the second block is the shadow arm's bail. The fold
+works. It is aimed at 1 of 8 sites of 1 of 3 grammars, in a scene where that
+grammar is not what is running.
