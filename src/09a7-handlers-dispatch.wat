@@ -1116,14 +1116,17 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   (func $handle_IShellFolder_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (local.get $arg0))))
-    (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (i32.ne (local.get $arg2) (i32.const 0))))
+    ;; IID_IShellFolder {000214E6-0000-0000-C000-000000000046}.
+    (global.set $eax (call $dx_query_interface_single
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0x000214E6) (i32.const 0)
+      (i32.const 0x000000C0) (i32.const 0x46000000)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IShellFolder_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 2))
+    (global.set $eax (call $dx_com_addref (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IShellFolder_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (global.set $eax (call $dx_com_release_basic (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IShellFolder_ParseDisplayName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0x80004001))
@@ -1247,14 +1250,17 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
   (func $handle_IEnumIDList_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (local.get $arg0))))
-    (global.set $eax (select (i32.const 0) (i32.const 0x80004003) (i32.ne (local.get $arg2) (i32.const 0))))
+    ;; IID_IEnumIDList {000214F2-0000-0000-C000-000000000046}.
+    (global.set $eax (call $dx_query_interface_single
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0x000214F2) (i32.const 0)
+      (i32.const 0x000000C0) (i32.const 0x46000000)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IEnumIDList_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 2))
+    (global.set $eax (call $dx_com_addref (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IEnumIDList_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (global.set $eax (call $dx_com_release_basic (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IEnumIDList_Next (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
