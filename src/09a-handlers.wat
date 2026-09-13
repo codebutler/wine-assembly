@@ -7713,22 +7713,34 @@ nW — STUB: unimplemented
 
   ;; SetProcessShutdownParameters(dwLevel, dwFlags) — record the process's
   ;; shutdown ordering so the matching Get* returns what was set. Explorer sets
-  ;; a low level so it shuts down after the apps it hosts.
+  ;; a low level so it shuts down after the apps it hosts. Win32 accepts levels
+  ;; through the system-reserved first-shutdown band (0x400-0x4ff), and the
+  ;; only defined flag is SHUTDOWN_NORETRY.
   (func $handle_SetProcessShutdownParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.or
+          (i32.gt_u (local.get $arg0) (i32.const 0x4ff))
+          (i32.ne (i32.and (local.get $arg1) (i32.const -2)) (i32.const 0)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return)))
     (global.set $shutdown_level (local.get $arg0))
     (global.set $shutdown_flags (local.get $arg1))
     (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; GetProcessShutdownParameters(lpdwLevel, lpdwFlags) — report stored values.
   (func $handle_GetProcessShutdownParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg0)
-      (then (i32.store (call $g2w (local.get $arg0)) (global.get $shutdown_level))))
-    (if (local.get $arg1)
-      (then (i32.store (call $g2w (local.get $arg1)) (global.get $shutdown_flags))))
-    (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return)))
+    (call $gs32 (local.get $arg0) (global.get $shutdown_level))
+    (call $gs32 (local.get $arg1) (global.get $shutdown_flags))
+    (global.set $eax (i32.const 1))
   )
 
   ;; The browser hosts one Win32 process. Accept its contextual pseudo-handle

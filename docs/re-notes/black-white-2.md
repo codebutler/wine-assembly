@@ -4857,3 +4857,62 @@ so a fold can hold it in a local and write back once.
 but together they are only ~12% of ops; matching statically-linked CRT functions
 would not have touched the dominant cost. `0x85b210` and the CRC32 at `0x9a8712`
 are game code, not library code.
+
+## Where the CPU actually goes, on an idle box (2026-09-13)
+
+Earlier measurements on this app were all taken at loadavg 400+. With the box
+idle (loadavg ~9) the emulator runs at **111% CPU** and still renders B&W2 at
+**0.40 presents/s**. So the speed question is ours, not the machine's, and
+`node --cpu-prof` over a 55s window answers it: **87.0% WASM / 13.0% JS**. The
+software rasterizer is not the bottleneck.
+
+Top self time (55,769ms total):
+
+| cost | ms | share |
+|---|---|---|
+| `$next` (threaded dispatch) | 9167 | **16.4%** |
+| `$fpu_exec_mem` | 4963 | 8.9% |
+| `$branch_end` (block transfer) | 3894 | 7.0% |
+| `$th_compute_ea_sib` | 1975 | 3.5% |
+| `$set_reg` / `$get_reg` | 2759 | 4.9% |
+| `$gs32`/`$gl32`/`$g2w`/`$guest_page_translate` | 5482 | 9.8% |
+| `$th_fpu_mem_ro` | 1128 | 2.0% |
+
+Grouped: **dispatch + block transfer is 23.4% of all CPU** - nearly a quarter
+spent deciding what to run rather than running it, which matches the project's
+own ~8ns/dispatch + ~9ns/transfer figures. x87 is 10.9%, address translation
+9.8%. There is no single bug here; this is the shape of an interpreter, and B&W2
+needs roughly 50-75M guest ops per frame.
+
+### One free JS win, taken
+
+`h.log` in `test/run.js` decoded the API name from guest memory on **every** API
+call - 904,207 of them in 55s - allocating a `Uint8Array` view and concatenating
+the string a character at a time, unconditionally, even under `--quiet-api`
+where nothing reads it. It was the largest single JS cost at 1403ms (2.5%) plus
+its share of 903ms of GC. Memoizing by guest pointer (the names are static
+strings in the image, and the memory is created with `initial === maximum` so the
+buffer is never detached) halved it to 697ms and took JS overhead from **13.0%
+to 8.3%** of CPU. GC left the top-18 list entirely.
+
+## `--skip-intro` is NOT a no-op - correcting the 2026-09-13 CORRECTION above
+
+The earlier note said the flag writes to a stack local and does nothing. Running
+both ways on an idle box shows it plainly does something, and the two failure
+modes are different:
+
+| | intro sample | presents | behaviour |
+|---|---|---|---|
+| without `--skip-intro` | `frame` climbing, `target: 20`, `finishFrame: 0xffffffff`, `completion` **151%** | 0.40/s | the Lionhead logo animation plays, correctly and fully - box fills with particles, tips over, resolves to the lion - but `completion` runs past 100% and `finishFrame` never clears, so it does not end on its own |
+| with `--skip-intro` | `frame: 1`, `target: 636`, `finishFrame: 0`, `completion: 0` | stops | intro is marked finished and the app moves to the post-title phase |
+
+So the write lands. What the earlier session read as "the flag does nothing" is
+the *second* row's aftermath: with the intro skipped the app sits on the title
+card and then enters a long compute phase, which at loadavg 400 looked like a
+hang. It is not hung - measured on the idle box it is at **88% CPU** and 2.7
+batches/s with a 200,000-block budget, i.e. ~370ms per batch. Blocks that long
+mean few, very long basic blocks: this is d3dx9_25's software math preparing the
+menu scene, not a wait.
+
+The intro playing to 151% completion without finishing is a separate real bug
+and is worth its own investigation; `--skip-intro` is the workaround.
