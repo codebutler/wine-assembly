@@ -85,6 +85,9 @@ const SCRIPT = (opt('guest-script', '') || '').split(',').filter(Boolean).map(sp
     hold: Math.max(0.1, Number(hold) || 0.4),
   };
   if (kind === 'click') { const [x, y] = rest.split(':').map(Number); return { ...act, x, y }; }
+  // fclick is the same press in FILM coordinates -- see the wait form below
+  // for why those are not the same numbers as a click's guest coordinates.
+  if (kind === 'fclick') { const [x, y] = rest.split(':').map(Number); return { ...act, x, y }; }
   if (kind === 'type') return { ...act, text: rest, hold: Math.max(0.05, Number(hold) || 0.3) };
   // key:VK[/CHAR] -- CHAR is the character code TranslateMessage would produce
   // (defaults to VK itself, which is already right for space, Return and the
@@ -544,6 +547,32 @@ async function main() {
     // sees a press that went down and up between two of its samples. The
     // default stays short so existing command lines behave the same; pass
     // a hold when the guest is slow.
+    // Press at FILM coordinates: the renderer's handlers already take canvas
+    // coordinates, and a film frame IS the canvas, so this is `step` with the
+    // guest->canvas transform left out. Reach for it whenever the point was
+    // measured off a --film frame, which is the only way to measure one for a
+    // guest that draws its own UI. Measured on Warcraft III: the walk's
+    // "Single Player at 805,165" was a film coordinate all along, and putting
+    // it through the transform pressed a different button -- the run opened
+    // Options and then spent twenty minutes there looking like a hang.
+    const fstep = (x, y, which) => page.evaluate((cx, cy, w) => {
+      if (w === 'move') sharedRenderer.handleMouseMove(cx, cy);
+      else if (w === 'down') sharedRenderer.handleMouseDown(cx, cy, 1);
+      else if (sharedRenderer.handleMouseUp) sharedRenderer.handleMouseUp(cx, cy, 1);
+    }, x, y, which);
+
+    const clickFilm = async (fx, fy, hold) => {
+      await fstep(fx, fy, 'move');
+      await wait(400);
+      await fstep(fx + 1, fy + 1, 'move');
+      await wait(400);
+      await fstep(fx + 1, fy + 1, 'down');
+      await wait(hold * 1000);
+      await fstep(fx + 1, fy + 1, 'up');
+      await wait(400);
+      console.log(`clicked film ${fx},${fy} (held ${hold}s)`);
+    };
+
     const clickGuest = async (gx, gy, hold) => {
       await step({ x: gx, y: gy, which: 'move' });
       await wait(400);
@@ -676,7 +705,12 @@ async function main() {
           // a single frame can catch a transient (rain, a cursor, a fade).
           if (near !== act.negate) { if (++hits >= 2) break; } else hits = 0;
         }
-        await wait(1000);
+        // Every poll is a CDP screenshot, and a screenshot is not free on the
+        // thread the guest runs on. At one a second a long wait measurably
+        // starves the emulator it is waiting for, so poll slowly -- nothing
+        // here needs sub-4s resolution and two agreeing samples still confirm
+        // inside ten seconds.
+        await wait(4000);
       }
       const met = hits >= 2;
       console.log(`wait ${act.x},${act.y} ${act.negate ? '!=' : '=='} `
@@ -690,6 +724,7 @@ async function main() {
       else if (act.at) await wait(act.at * 1000);
       if (act.kind === 'wait') await waitPixel(act);
       else if (act.kind === 'click') await clickGuest(act.x, act.y, act.hold);
+      else if (act.kind === 'fclick') await clickFilm(act.x, act.y, act.hold);
       else if (act.kind === 'type') await typeGuest(act.text, act.hold);
       else if (act.kind === 'key') {
         // Down, then the character, then up. A real keyboard produces all
