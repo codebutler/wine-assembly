@@ -2160,10 +2160,18 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
   )
 
-  ;; joyGetDevCapsA(uJoyID, lpCaps, cbCaps) — no joystick driver installed.
-  ;; Returning MMSYSERR_NODRIVER lets legacy games retain keyboard/mouse input.
+  ;; joyGetDevCapsA(uJoyID, lpCaps, cbCaps) — Win98 accepts IDs -1 and 0..15,
+  ;; requires lpCaps, and ignores an unusual cbCaps value. A well-formed probe
+  ;; reports no driver so legacy games retain keyboard/mouse input.
   (func $handle_joyGetDevCapsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 6))  ;; MMSYSERR_NODRIVER
+    (if (i32.or
+          (i32.eqz (local.get $arg1))
+          (i32.and
+            (i32.ne (local.get $arg0) (i32.const -1))
+            (i32.gt_u (local.get $arg0) (i32.const 15))))
+      (then (global.set $eax (i32.const 11)))  ;; MMSYSERR_INVALPARAM
+      (else (global.set $eax (i32.const 6)))  ;; MMSYSERR_NODRIVER
+    )
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 
