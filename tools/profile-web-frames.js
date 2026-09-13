@@ -555,7 +555,17 @@ async function main() {
     // "Single Player at 805,165" was a film coordinate all along, and putting
     // it through the transform pressed a different button -- the run opened
     // Options and then spent twenty minutes there looking like a hang.
-    const fstep = (x, y, which) => page.evaluate((cx, cy, w) => {
+    // Film -> backing store. Measured on Warcraft III: the canvas backing is
+    // 800x600 (the guest screen), its CSS box is 940x702, and --film clips the
+    // CSS box -- so a film frame is the guest screen scaled by 1.175, and the
+    // renderer's handlers take BACKING coordinates. Passing a film coordinate
+    // straight through therefore lands about 17% too far right and down, which
+    // is how a walk aimed at "Single Player" kept opening other things.
+    const fstep = (x, y, which) => page.evaluate((fx, fy, w) => {
+      const c = document.getElementById('screen');
+      const r = c.getBoundingClientRect();
+      const cx = Math.round(fx * (c.width / (r.width || c.width)));
+      const cy = Math.round(fy * (c.height / (r.height || c.height)));
       if (w === 'move') sharedRenderer.handleMouseMove(cx, cy);
       else if (w === 'down') sharedRenderer.handleMouseDown(cx, cy, 1);
       else if (sharedRenderer.handleMouseUp) sharedRenderer.handleMouseUp(cx, cy, 1);
