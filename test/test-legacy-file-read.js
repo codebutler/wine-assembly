@@ -2,9 +2,8 @@
 'use strict';
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const { readWatSourceClosure } = require('./wat-source-closure');
 
 const extraWat = String.raw`
   (func (export "test_legacy_read")
@@ -131,12 +130,10 @@ const extraWat = String.raw`
     'the successful retry pops the frame once');
   assert.strictEqual(reads, 2, 'one pending read is retried exactly once');
 
-  const root = path.join(__dirname, '..');
-  const kernel = fs.readFileSync(path.join(root, 'src', '09a-handlers.wat'), 'utf8');
-  const audio = fs.readFileSync(path.join(root, 'src', '09a3-handlers-audio.wat'), 'utf8');
-  assert.match(kernel, /\(func \$handle__hread[\s\S]*?\(call \$handle__lread/,
+  const source = readWatSourceClosure();
+  assert.match(source, /\(func \$handle__hread[\s\S]*?\(call \$handle__lread/,
     '_hread must delegate to the canonical _lread implementation');
-  assert.match(audio, /\(func \$handle_mmioRead[\s\S]*?\(call \$handle__hread/,
+  assert.match(source, /\(func \$handle_mmioRead[\s\S]*?\(call \$handle__hread/,
     'mmioRead must share the signed legacy-read adapter');
 
   console.log('PASS  legacy file-read APIs share EOF, failure, and lazy retry behavior');
