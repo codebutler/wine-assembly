@@ -2308,3 +2308,82 @@ the wedge was already retracted — the log shows the picker surviving two
 complete click cycles first — and the ruling-out of allocation failure holds
 only up to the profile screen, since the zero-OOM runs never reached a land and
 the probe's own source records that *the land* commits the whole 316MB pool.
+
+## The real wedge: a linked-list walk from a NULL head (run 39)
+
+With the `--fault-null` cap in place the full chain ran to completion instead of
+aborting, and the exit census is unambiguous:
+
+```
+[fault] census: 4533196660 unmapped access(es) from 4 eip(s)
+[fault]   eip=0x9e17d0 x4533196638 addresses 0x0-0x8
+[fault]   eip=0x9d4a87 x14          addresses 0x0-0x8
+[fault]   eip=0x9d4a69 x6           addresses 0x0-0x10
+[fault]   eip=0x9d4abd x2           addresses 0x0-0x0
+```
+
+**4.53 billion faults from one EIP.** The 12,675 reported by the run that died
+of the host OOM was simply how many had been flushed before it aborted, and the
+617,784 from the earlier session was the same artefact at a different EIP. Six
+faults per iteration over the addresses `{0x0, 0x4, 0x8}` puts the loop at
+about 755 million iterations.
+
+`0x9e17d0` is not a separate bug from `0x9e17b0` — it is the loop body inside
+it. The back edge is at the bottom of the same function:
+
+```
+009e1820  test ecx, ecx
+009e1822  mov edx, ebx          ; edx = node->next, read at 0x9e17d3
+009e1824  setge al
+009e1827  cmp [esp+0x20], edx   ; reached the end sentinel?
+009e182b  jz short 0x9e1831
+009e182d  test al, al
+009e182f  jnz short 0x9e17d0    ; loop
+```
+
+So the function walks a linked list — `ebx = [edx]` at `0x9e17d3` is
+`node->next`, `edx = ebx` at `0x9e1822` advances it — comparing two `{x, y}`
+pairs reached through `[edx+0x8]` and `[edx]` with a 64-bit cross product
+(`imul` at `0x9e17e7` and `0x9e17fa`, `setge` for the orientation). It is a
+geometric ordering predicate over an edge or point list, and it stops when the
+cursor reaches the sentinel held in `[esp+0x20]`.
+
+**With a NULL head it cannot stop.** `ebx = [NULL]` reads 0 through our NULL
+sentinel, so `edx` stays 0, never equals the sentinel, and the loop runs
+forever. On real hardware that first `mov ebx,[edx]` is an access violation and
+the game would crash or unwind; our `$g2w` miss returning zero converts a crash
+into a hang. That is worth remembering generally: **a NULL-sentinel read turns
+somebody else's segfault into our infinite loop**, and the symptom moves from a
+crash dump to a batch that never returns.
+
+### It is not our allocator
+
+The same run reported **zero** `[heap] OOM` lines, so the earlier hypothesis
+that a refused `malloc` leaves a NULL behind does not apply here. The list is
+empty for a reason further upstream.
+
+### One object, two vtable slots
+
+Both faulting entries are slots of the same vtable at `.rdata:0xd0bc30`:
+
+| slot | target | faulting EIPs |
+|---|---|---|
+| 7 | `0x9d4a30` | `0x9d4a69`, `0x9d4a87`, `0x9d4abd` |
+| 8 | `0x9d47b0` | tail-jumps to `0x9e17b0` → `0x9e17d0` |
+
+Slot 8 is a three-instruction thunk that dereferences twice before the tail
+call, so the argument the walker receives is `**arg1`:
+
+```
+009d47b0  mov eax, [esp+0x4]
+009d47b4  mov edx, [eax]
+009d47b6  mov eax, [edx]
+009d47b8  mov [esp+0x4], eax
+009d47bc  mov ecx, [ecx+0xc]
+009d47bf  jmp 0x9e17b0
+```
+
+The vtable is written by the constructor at `0x9d475e` (`mov dword [eax],
+0xd0bc30`, then `mov [eax+8], edx` and a `rep movsd` of 0xc dwords). A sibling
+vtable at `0xd0bc1c` is written at `0x9d3742` from a `push 0x30` allocation.
+Neither has been confirmed to run yet — that is the next measurement.
