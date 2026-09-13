@@ -781,16 +781,33 @@
 
   ;; SetConsoleCursorInfo(hConsole, lpConsoleCursorInfo) → BOOL
   (func $handle_SetConsoleCursorInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $p i32)
+    (local $p i32) (local $size i32)
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     (local.set $p (call $g2w (local.get $arg1)))
-    (global.set $console_cursor_size (i32.load (local.get $p)))
-    (global.set $console_cursor_visible (i32.load (i32.add (local.get $p) (i32.const 4))))
+    (local.set $size (i32.load (local.get $p)))
+    (if (i32.or (i32.lt_u (local.get $size) (i32.const 1))
+                (i32.gt_u (local.get $size) (i32.const 100)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (global.set $console_cursor_size (local.get $size))
+    (global.set $console_cursor_visible
+      (i32.ne (i32.load (i32.add (local.get $p) (i32.const 4))) (i32.const 0)))
     (global.set $eax (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
@@ -802,6 +819,13 @@
       (then
         (global.set $last_error (i32.const 6))
         (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg1)))
