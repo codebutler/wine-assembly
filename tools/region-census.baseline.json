@@ -1,10 +1,10 @@
 {
   "recorded": "2026-09-13",
   "note": "Per-file counts of raw literals inside declared regions. This is a RATCHET: counts may fall, never rise. `converted` regions must stay at 0.",
-  "total": 61,
+  "total": 60,
   "converted": [],
   "byFile": {
-    "src/09a-handlers.wat": 7,
+    "src/09a-handlers.wat": 6,
     "test/test-cross-thread-send.js": 7,
     "test/watx-compiler-alloc.test.js": 4,
     "src/10-helpers.wat": 3,
