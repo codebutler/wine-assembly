@@ -7673,9 +7673,26 @@
     (call $gs32 (i32.add (local.get $frame) (i32.const 36)) (local.get $version))
     (call $di_enum_dispatch))
 
-  ;; GetDeviceStatus — always OK
+  ;; GetDeviceStatus(rguidInstance). The browser-backed DirectInput root exposes
+  ;; exactly the system keyboard and mouse enumerated above. Match the complete
+  ;; GUID: Data1 alone is not a device identity.
   (func $handle_IDirectInput_GetDeviceStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $guid_wa i32)
+    (if (i32.eqz (local.get $arg1))
+      (then (global.set $eax (i32.const 0x80070057))) ;; DIERR_INVALIDPARAM
+      (else
+        (local.set $guid_wa (call $g2w (local.get $arg1)))
+        (global.set $eax
+          (select
+            (i32.const 0) ;; DI_OK
+            (i32.const 1) ;; DI_NOTATTACHED
+            (i32.or
+              (call $guid_words_equal (local.get $guid_wa)
+                (i32.const 0x6F1D2B60) (i32.const 0x11CFD5A0)
+                (i32.const 0x4544C7BF) (i32.const 0x00005453))
+              (call $guid_words_equal (local.get $guid_wa)
+                (i32.const 0x6F1D2B61) (i32.const 0x11CFD5A0)
+                (i32.const 0x4544C7BF) (i32.const 0x00005453)))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; RunControlPanel — no-op
