@@ -3308,3 +3308,55 @@ object at `0x177c940` carries the free head at `+0xc` and the live count at
 Note the free path takes critical section `0x1d90330` — the same section behind
 the "parked Enter ABANDONED" line — so if the free-list reading holds, that
 abandonment becomes worth timing properly rather than dismissing.
+
+## Refuted: the chain is not the free list
+
+Dumping the pool object settles it. `0x177c940` reads:
+
+```
++0x00 0x00000001   +0x04 0x00000001   +0x08 items 0x489d9f90
++0x0c FREE HEAD 0x2eb33168    +0x10 count 0x1c0 (448)    +0x14 max 0x7530 (30000)
+```
+
+(The `+0xc` free head and `+0x10` count match what `0x9de060` and `0x9de0a0`
+address as `[0x177c94c]` and `[0x177c950]`, so the field reading is confirmed by
+two independent uses.)
+
+Walking that free list — run 61's head spliced into run 57's pool image, sound
+because the path is deterministic and both runs report `0x9e17b0 = 303` /
+`0x9c1a90 = 1`, but a cross-run splice and labelled as one — gives a clean
+14-node list terminating at 0, and **none of `0x2eb310c0`, `0x2eb305a8`,
+`0x2eb30ff8`, `0x2eb307d8` is on it**.
+
+So the previous section's hypothesis is **withdrawn**. Supporting counts from
+the same run: `0x9de1f0` (whole-ring teardown) ran **0** times, and `0x9de060`
+(single-node release) ran 290 times. A node freed and left freed would be on
+that list; ours is not.
+
+### What that leaves
+
+The dead node is "live" by the pool's own bookkeeping, and only its `+0x00`
+is wrong. Its neighbours are intact and sensible — `+0x08 = 0x2ec74784` is a
+point 12 bytes from the previous node's, `+0x10 = 0x2ec30ad0` is the wedging
+face — which argues against a blind aliasing write (a stray `memcpy` would
+rarely land one dword and stop). A single dword set to exactly zero, in exactly
+the `next` slot, still looks like deliberate unlink code.
+
+Every cheap suspect is now eliminated by a hit count or by the dump:
+
+| suspect | verdict |
+|---|---|
+| `0x9c0c50` reset (`mov [ecx],0`) | 0 calls |
+| `0x9de1f0` ring teardown | 0 calls |
+| node free `0x9de060` | 290 calls, but node is not on the free list |
+| re-construction `0x9de000`/`0x9de030` | would zero `+0x04`; it holds `0x2eb30fe4` |
+| another guest thread | run 60: no per-thread watch hit, all others parked |
+| the walker's own adjacent block | `0x9e1804` is `cmp`/`jbe`, no store |
+
+One re-allocation path is *not* yet excluded and fits the evidence: freed while
+the free list was empty (`next = 0`), then popped again (`head = node->next = 0`,
+so the list empties cleanly and the node is live again), re-constructed, and
+partially re-linked — while the stale ring node `0x2eb30ff8` still points at it.
+That is a use-after-free of the ring, and it predicts `0x9de0a0`'s pop path runs
+between the two events. Testing it needs the *sequence* of frees and allocations
+around batch 435422, not another exit-time snapshot.
