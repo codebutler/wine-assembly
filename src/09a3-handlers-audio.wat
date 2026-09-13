@@ -2161,9 +2161,16 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 
-  ;; joySetCapture(hwnd, uJoyID, period, changed) — 4 args.
+  ;; joySetCapture(hwnd, uJoyID, period, changed) — 4 args. Win98 supports
+  ;; joystick IDs 0..15 and rejects a NULL notification window before trying
+  ;; the (absent) joystick driver.
   (func $handle_joySetCapture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 167))  ;; JOYERR_UNPLUGGED
+    (if (i32.or
+          (i32.eqz (local.get $arg0))
+          (i32.gt_u (local.get $arg1) (i32.const 15)))
+      (then (global.set $eax (i32.const 11)))  ;; MMSYSERR_INVALPARAM
+      (else (global.set $eax (i32.const 167)))  ;; JOYERR_UNPLUGGED
+    )
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
   )
 
