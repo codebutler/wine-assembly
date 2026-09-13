@@ -431,7 +431,7 @@
             (drop (call $wide_to_ansi
               (local.get $name) (local.get $path_owned) (i32.const 260)))
             (local.set $path (local.get $path_owned))))
-        (local.set $bmp (call $load_image_bitmap_file (call $g2w (local.get $path))))
+        (local.set $bmp (call $load_image_bitmap_file (call $g2w (local.get $path)) (i32.const 0)))
         (if (local.get $path_owned)
           (then (call $heap_free (local.get $path_owned)))))
       (else
