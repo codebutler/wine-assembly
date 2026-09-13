@@ -2702,3 +2702,56 @@ and `[record]` is its first node.
 disassembly:** was `0x2ec30008` ever written? Never written means whatever
 builds these rings skipped the first two. Written and later cleared means a
 lifetime bug, and `--watch-log` times it.
+
+## The record array is a 7000-entry pool, and six of the first thirteen are blank
+
+Dumping 512 bytes at `0x2ec30000` during the picker (run 48) decodes the whole
+structure. `0x2ec30000` is the heap block header (`0x000445d8` bytes),
+`0x2ec30004` is the entry count (`0x1b58` = 7000), and the records start at
+`0x2ec30008` with a `0x28` stride — which is exactly the
+`element->record = 0x2ec30008 + 0x28*id` arithmetic the elements show, so the
+records are **indexed by element id, not allocated per element**.
+
+`0x9d7690` builds these blocks: it calls `malloc(count*40 + 4)`, stores the
+count at `+0`, takes the array at `+4`, appends the block to a vector of blocks,
+and then links every record's first field to the next record `0x28` along,
+terminating the last one with zero (`0x9d7708`). So the first field doubles as a
+free-list `next` while a record is unused and as the edge-ring head once it is
+in use, and **a zero there is also what the tail of the free list looks like**.
+
+A filled record is `{listHead, 0, element*}`: record 11 at `0x2ec301c0` holds
+head `0x2eb30300` and back-pointer `0x2eccfd48`, which is element id 11's own
+address. Across ids 0..12:
+
+| | ids |
+|---|---|
+| filled | 3, 4, 7, 9, 10, 11, 12 |
+| empty | 0, 1, 2, 5, 6, 8 |
+
+**Record 0 was never written as a record at all.** Its `+8` — the slot that
+holds the element back-pointer in every filled record — is `0x44bb8000`, the
+float `1500.0`, repeated across `+8`..`+0x1c`. That is not a cleared record;
+it is a record that something else's data is sitting in.
+
+So the earlier reading of run 48's watchpoint sequence
+(`0 → 0x2ec30030 → 0x2eb30058 → … → 0x2eb30710 → 0`) as "built then cleared" is
+wrong, and is retracted: `0x2ec30030` is `record0 + 0x28`, which is precisely
+what `0x9d7690`'s initializer writes, and the later values are all in a second
+pool block (`0x2eb3xxxx`). That is free-list churn passing through record 0's
+`next` field, not an edge ring being pushed. The final zero is record 0 becoming
+the free-list tail again.
+
+**Elements 0 and 1 are the anomaly, and it is a straightforward one:** they are
+kind 2, so slot 7 and slot 8 both dereference their record, and their record was
+never filled. Kind 4 elements (ids 2 and 12) carry a NULL record pointer instead
+and are never dereferenced at all, so the blank records at those ids are
+expected.
+
+**A caution on the watchpoint's EIP.** `--watch` reports the block the guest was
+in when the change was observed, and that is only the writing block when the hit
+ends the batch. Run 49 filtered to the write of zero and reported
+`EIP=0x9e1804 ... EAX=0 ECX=0 EDX=0 EBX=0 EBP=0 ESI=0 EDI=0` — every register
+zero, inside the walker, which is the wedge's own steady state. The walker's
+only store is `mov [esp+0x14], eax` to a stack local, so it cannot have been the
+writer. Read a watch EIP as "where execution was", and corroborate it against
+what the named instruction actually writes before believing it.
