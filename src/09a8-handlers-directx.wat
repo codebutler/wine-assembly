@@ -4925,17 +4925,19 @@
     (global.set $eax (i32.const 0x88760005)) ;; DDERR_ALREADYINITIALIZED
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
+  (func $ddraw_surface_live (param $this i32) (result i32)
+    (local $entry i32)
+    (if (i32.eqz (local.get $this)) (then (return (i32.const 0))))
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (i32.eq (load.field DxObject type (local.get $entry)) (i32.const 2)))
+
   ;; Browser-backed surface memory remains allocated for a live surface. A
   ;; stale or foreign COM wrapper is not a surface and must not inherit DD_OK.
   (func $handle_IDirectDrawSurface_IsLost (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32)
-    (if (i32.eqz (local.get $arg0))
-      (then (global.set $eax (i32.const 0x88760082))) ;; DDERR_INVALIDOBJECT
-      (else
-        (local.set $entry (call $dx_from_this (local.get $arg0)))
-        (if (i32.eq (load.field DxObject type (local.get $entry)) (i32.const 2))
-          (then (global.set $eax (i32.const 0))) ;; DD_OK: memory retained
-          (else (global.set $eax (i32.const 0x88760082))))))
+    (global.set $eax
+      (if (result i32) (call $ddraw_surface_live (local.get $arg0))
+        (then (i32.const 0)) ;; DD_OK: memory retained
+        (else (i32.const 0x88760082)))) ;; DDERR_INVALIDOBJECT
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; Lock(this, lpDestRect, lpDDSD, dwFlags, hEvent) — 5 args
@@ -4995,9 +4997,13 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; Restore — always DD_OK
+  ;; A live browser-backed surface has retained memory, so restoring it is an
+  ;; idempotent success. Invalid/released wrappers cannot be restored.
   (func $handle_IDirectDrawSurface_Restore (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax
+      (if (result i32) (call $ddraw_surface_live (local.get $arg0))
+        (then (i32.const 0)) ;; DD_OK
+        (else (i32.const 0x88760082)))) ;; DDERR_INVALIDOBJECT
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; SetClipper(this, lpDDClipper) — the surface owns one clipper reference.
