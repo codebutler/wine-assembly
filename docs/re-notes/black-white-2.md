@@ -4402,3 +4402,71 @@ host-side d3d9 error (`QueueError: native render heap handoff rejected`,
 Before any more work on `0x9e17d0`/`0x9e1e50`, establish that there is something
 to fix there: compare the per-second rate of that block against a run that makes
 progress, rather than reading a large cumulative count as pathology.
+
+### AMENDMENT 2026-09-13: the two corrections above retract too much
+
+Both sections above were written before the crash was read properly, and they
+are wrong about two things. Keep their measurements; discard their conclusions.
+
+**1. The run does not end on a host d3d9 error.** `QueueError: native render
+heap handoff rejected` is thrown inside `cancel()` in `lib/d3d-command-stream.js`
+(the `_reclaimHeap` path, ~line 657), which only runs while the render worker is
+already being torn down. It is a symptom of the exit, not its cause. The actual
+ending, from the same log:
+
+```
+[fault] unmapped guest access 0x247c8307 from eip=0xad561b
+[heap] OOM: 430571520 bytes (0x19aa0000) — sparse arena: no guest address space left to reserve
+[C++ throw] .?AVbad_alloc@std@@ <- .?AVexception@@  obj 0x074fc980 at EIP 0x00ada813
+=== UNHANDLED EXCEPTION: CXX_EXCEPTION 0xe06d7363 ===
+[Exit] code=-529697949
+```
+
+`-529697949` is `0xE06D7363`, the MSVC C++ exception code. The guest asked for
+430MB, the arena refused, the CRT threw `std::bad_alloc`, and nothing caught it.
+
+**2. It is ONE allocation, not an accumulation.** 430,571,520 bytes in a single
+request. Every earlier story of the form "allocates per visited node until the
+heap refuses 430MB" is dead: nothing accumulates, one call computes an absurd
+size. So the question is not "what loops forever" but "what computed this
+number", and that is a much narrower question.
+
+**`0x9e35e0` is implicated after all, and the `--count` argument that cleared it
+was a misreading.** `--count` counts BASIC BLOCK entries, not function calls.
+`0x9e3750`/`0x9e3755` are blocks *inside* `0x9e35e0` (which spans
+`0x9e35e0`–`0x9e3cbe`), and `0x9e3755` only becomes a block entry when the `jz`
+at `0x9e373a` is taken. The function's own entry was never counted, so "the
+function ran 8 times" was never measured and should not have been written down.
+
+The caller chain from the OOM frame dump — innermost first — is
+`0x00ad561b` (CRT `malloc`) ← `0x00ad5652` (`operator new`) ← `0x009d5440`.
+`0x009d5440` is the return address of `call 0x9e35e0`, inside an outer
+circular-list walk:
+
+```
+009d5428  mov esi, [edi]        ; list head
+009d542a  cmp esi, edi
+009d542c  jz  short 0x9d5446    ; empty -> done
+009d5430  mov edx, [esi+0x8]
+009d5437  mov ecx, [eax+0xc]
+009d543b  call 0x9e35e0         ; <-- the 430MB allocation happens under here
+009d5440  mov esi, [esi]        ; next
+009d5444  jnz short 0x9d5430
+```
+
+So the star function and the walk are one call chain, and `call 0x9e1e50` sits
+at `0x9e3a20` *inside* `0x9e35e0`.
+
+**Where to look next.** The size is computed inside `0x9e35e0` from a pointer
+difference feeding a vector-growth helper. The candidate sites, each a
+`end - begin` subtraction ahead of a growth call: `sub ecx,eax` at `0x9e3b1c`
+and `0x9e3b51`, `sub ecx,edx` at `0x9e3b97`, `imul edx` at `0x9e3c11`, feeding
+`call 0x9e62f0` (`0x9e3b0d`, `0x9e3b40`), `call 0x9e6340` (`0x9e3b38`,
+`0x9e3b6b`) and `call 0x9e61a0` (`0x9e3be7`). `0x19aa0000` is the number to
+work back from.
+
+What survives unchanged from the corrections above: the NULL-sentinel spin is
+still not the mechanism (`0x9e1e50` faulted 66 times against 11,958,660 block
+entries, 0.0006%), ~3060 entries/s is a hot loop rather than a demonstrated
+runaway, and the earliest fault — `eip=0x9cef45` with `ebx` NULL, loaded from a
+local at `0x9cef4b` — is still upstream of everything here and still unexplained.
