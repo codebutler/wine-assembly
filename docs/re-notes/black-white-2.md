@@ -2755,3 +2755,71 @@ zero, inside the walker, which is the wedge's own steady state. The walker's
 only store is `mov [esp+0x14], eax` to a stack local, so it cannot have been the
 writer. Read a watch EIP as "where execution was", and corroborate it against
 what the named instruction actually writes before believing it.
+
+## The walker has no entry guard, so an empty list cannot be the wedge
+
+The reading above — "elements 0 and 1 are kind 2, their record was never
+filled, slot 7 survives the empty list and slot 8 spins on it" — names the
+right elements and the wrong mechanism, and the second half is retracted.
+Disassembling the walker's prologue is enough to see why:
+
+```
+009e17b0  sub esp, 0xc
+009e17b3  mov eax, [esp+0x14]      ; arg2
+009e17b7  mov ecx, [eax+0x4]
+009e17ba  mov eax, [eax]
+009e17bc  mov edx, [esp+0x10]      ; arg1 -> edx, the cursor
+009e17c0  push ebx / push ebp / push esi
+009e17c3  mov [esp+0x20], ecx
+009e17c7  mov [esp+0xc], eax
+009e17cb  push edi
+009e17cc  lea esp, [esp+0x0]       ; padding, falls straight through
+009e17d0  mov eax, [edx+0x8]       ; <-- loop body, no test of edx first
+...
+009e1822  mov edx, ebx             ; ebx = [edx], the next link
+009e1827  cmp [esp+0x20], edx
+009e182f  jnz short 0x9e17d0
+```
+
+There is no `test edx,edx` anywhere between the entry and the loop body: the
+prologue loads, pushes and falls through. So this is a do-while over a
+**circular** list, and the terminator it compares against is the head it was
+handed. Which settles the empty case: with head `0`, the first body pass reads
+through the NULL sentinel, `ebx = [0] = 0`, `edx = 0`, and `cmp head, edx`
+compares `0` with `0` — equal, so `jnz` is not taken and the walker *returns*.
+An empty list exits immediately here, exactly as it does in slot 7.
+
+**A spin therefore requires a non-zero head whose chain reaches zero** — a list
+that is truncated rather than empty, whose last node's `next` was never pointed
+back at the head. The run's own fault census agrees: `eip=0x9e17d0` faults at
+addresses `0x0`-`0x8`, which is `[edx+8]`, `[edx]`, `[eax]`, `[eax+4]`, `[ebx+8]`
+and `[ecx]` with `edx = 0`, i.e. the cursor is NULL *inside* the walk while the
+head that terminates it is not.
+
+That also explains why a NULL cursor is fatal here and harmless on real
+hardware in the other direction: on a real CPU `mov eax,[edx+8]` with `edx = 0`
+is an access violation and the game would crash, so the truncated list is a bug
+the game never sees on Windows. Under `$g2w`'s NULL sentinel the read returns
+`0`, the link stays `0`, and the exit test never matches the non-zero head —
+[the sentinel converts an access violation into an infinite loop](#).
+
+## --fault-null reports the block entry, not the faulting instruction
+
+Three of the five EIPs in run 51's fault census look impossible until you know
+this, and then they decode exactly. `0x9d4a69` is `mov eax, [esp+0x30]`, a
+stack access that can never be unmapped — but it is the *entry* of the block
+that continues into slot 7's loop head, and the addresses the census reports
+for it are `0x0`, `0x4` and `0x10`:
+
+```
+009d4a70  mov ecx, [esi]           ; esi = 0   -> 0x0
+009d4a72  mov edx, [ecx+0x4]       ; ecx = 0   -> 0x4
+009d4a75  mov ecx, [edx+0x10]      ; edx = 0   -> 0x10
+```
+
+Three dereferences, three reported addresses, in order. Likewise `0x9e17d0`'s
+`0x0`-`0x8` is the walker body with a NULL cursor. So read a `[fault]` EIP the
+way you now read a `--watch` EIP: it names the block, and the instruction is
+somewhere inside it. Counting the memory accesses in that block against the
+fault count is worth doing — where the two disagree, the block is not the one
+the linear disassembly suggests.
