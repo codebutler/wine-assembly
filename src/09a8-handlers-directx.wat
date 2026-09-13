@@ -4698,9 +4698,20 @@
         (global.set $eax (i32.const 0x887600FF)))) ;; DDERR_NOTFOUND
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; GetBltStatus — always DD_OK (blit is complete)
+  ;; Browser-backed blits complete before their handlers return, so either
+  ;; documented status query succeeds immediately on a live surface. Reject
+  ;; stale wrappers and malformed flags rather than extending that shortcut.
   (func $handle_IDirectDrawSurface_GetBltStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax
+      (if (result i32) (i32.eqz (call $ddraw_surface_live (local.get $arg0)))
+        (then (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (else
+          (if (result i32)
+              (i32.or
+                (i32.eq (local.get $arg1) (i32.const 1)) ;; DDGBS_CANBLT
+                (i32.eq (local.get $arg1) (i32.const 2))) ;; DDGBS_ISBLTDONE
+            (then (i32.const 0)) ;; DD_OK
+            (else (i32.const 0x80070057)))))) ;; DDERR_INVALIDPARAMS
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; GetCaps(this, lpDDSCaps)
