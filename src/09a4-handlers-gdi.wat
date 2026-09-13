@@ -2141,9 +2141,15 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; 370: UnrealizeObject — no-op for our immediate-mode GDI object model.
+  ;; 370: UnrealizeObject — palette mappings and brush origins are resolved
+  ;; immediately here, but only live brushes and palettes are valid targets.
   (func $handle_UnrealizeObject (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (local $type i32)
+    (local.set $type (call $gdi_object_type (local.get $arg0)))
+    (global.set $eax
+      (i32.or
+        (i32.eq (local.get $type) (i32.const 2))
+        (i32.eq (local.get $type) (i32.const 5))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
