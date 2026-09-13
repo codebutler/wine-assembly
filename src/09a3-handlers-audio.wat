@@ -1716,30 +1716,35 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
   )
 
+  ;; Keep the no-device result centralized so the capabilities, volume, and
+  ;; private-message front doors cannot disagree with auxGetNumDevs.
+  (func $aux_bad_device (result i32)
+    (i32.const 2)  ;; MMSYSERR_BADDEVICEID
+  )
+
   ;; auxGetDevCapsA(uDeviceID, lpCaps, cbCaps) — 3 args. MMSYSERR_BADDEVICEID (2).
   (func $handle_auxGetDevCapsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 2))  ;; MMSYSERR_BADDEVICEID — consistent with NumDevs=0
+    (global.set $eax (call $aux_bad_device))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 
-  ;; auxGetVolume(uDeviceID, lpdwVolume) — 2 args. Write 0 volume, return NOERROR.
-  ;; (MCM probes device 0 even after NumDevs=0; silent success keeps it moving.)
+  ;; auxGetVolume(uDeviceID, lpdwVolume) — 2 args. With no advertised aux
+  ;; devices every identifier, including AUX_MAPPER, is out of range.
   (func $handle_auxGetVolume (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg1)
-      (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $aux_bad_device))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
-  ;; auxSetVolume(uDeviceID, dwVolume) — 2 args. No-op, return NOERROR.
+  ;; auxSetVolume(uDeviceID, dwVolume) — 2 args.
   (func $handle_auxSetVolume (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $aux_bad_device))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
-  ;; auxOutMessage(uDeviceID, uMsg, dw1, dw2) — 4 args. No-op, return NOERROR.
+  ;; auxOutMessage(uDeviceID, uMsg, dw1, dw2) — 4 args. The API checks the
+  ;; device identifier before dispatching a driver-private message.
   (func $handle_auxOutMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $aux_bad_device))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
   )
 
