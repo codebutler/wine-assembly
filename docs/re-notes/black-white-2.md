@@ -4689,3 +4689,39 @@ loadavg 54 and had not finished.
 8 cores. Runs this session spanned loadavg 54 to 486; at 486 that is ~60x
 oversubscription, about 1.6% of a core per process, and the same build reached
 249 command submissions in 304s at load 54 against 7 in 310s at load ~450.
+
+## CORRECTION 2026-09-13: the PNG-size windows in "Driving to the menu" are ambiguous
+
+The table committed in `30702b5f` classifies screens by compressed-PNG byte count.
+Two of its windows match more than one screen, so a `waitfor` on them confirms
+whichever screen the app is already on and the next click is aimed at nothing.
+
+Sizes measured this session, software renderer, 640x480:
+
+| screen | bytes |
+|---|---|
+| blank | 2061 - 3133 |
+| BLACK & WHITE 2 logo title card | 220,352 |
+| legal / DEMO splash | 320,251 |
+| Select Profile + New Profile Name dialog | 339,904 - 339,972 |
+
+So the old `dismiss` window `300000-390000` covers the legal splash **and** the
+profile dialog, and the old `menu` window `385000-400000` matches neither - the
+drive sat on it for 900s and timed out with the profile dialog on screen the
+whole time. Do not trust a size window until a screenshot has been read at that
+size; the classifier is a hint, the picture is the evidence.
+
+## The button hold has to be a batch budget, not a wall-clock gap (2026-09-13)
+
+This box regularly sits at load ~300 with 400+ node processes against 8 cores,
+which leaves the probe about 2% of a core and ~3 batches/s. A 3-second
+down->up gap is then ~9 batches, which can be less than one guest frame, and the
+press is simply never polled - the run looks like "the click does nothing" and
+is really "the guest never got a turn between press and release". Wait on the
+`{"action":"ping"}` batch counter instead, so the hold means the same thing
+whatever else the machine is doing.
+
+Also: a hand-rolled press that sets `_mouseButtonsMask` and calls
+`_queueDirectInputMouseButton` directly is **not** equivalent to
+`renderer.handleMouseDown(x,y,0)`. It skips `_signalDirectInputDevice(2)` and
+the whole window-routing path. Use the real handler.
