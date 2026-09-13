@@ -3951,10 +3951,12 @@
 
   ;; DllUnregisterServer is implemented by each self-registering server: only
   ;; that module knows which registry entries it owns. A generic success would
-  ;; claim those persistent side effects happened when none did.
+  ;; claim those persistent side effects happened when none did. Delegate the
+  ;; shared absence to the canonical self-registration failure path.
   (func $handle_DllUnregisterServer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (call $handle_DllRegisterServer
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; DllRegisterServer: no generic registration implementation. A native DLL's
   ;; own export must perform its registration; never fabricate that success.
