@@ -192,6 +192,36 @@ const REPORT_EVAL = opt('report-eval', '');
 const TRACE_APIS = (opt('trace-api', '') || '').split(',').filter(Boolean);
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
+// Every profile directory this tool makes is named with this prefix, which is
+// also what makes an abandoned browser from a previous run identifiable: it is
+// the only string on a Chrome command line that says "this browser belongs to
+// profile-web-frames.js". Nothing else on the box uses it.
+const PROFILE_PREFIX = 'wine-assembly-frames-';
+
+// Kill any browser left over from an earlier run of this tool.
+//
+// The leak is not a missing `browser.close()` -- the finally block has always
+// had one. It is that the browser is a CHILD of this node process, and the two
+// ways a run actually ends skip that block entirely: `timeout N` sends SIGTERM,
+// and `pkill -f profile-web-frames` sends whatever it is asked to. Node dies,
+// Chrome is reparented to launchd and keeps its guest, its GPU context and its
+// several hundred MB. Killing the harness has therefore been ADDING a browser
+// to the box, not removing one, and the runs are serial so the survivors pile
+// up. A SIGKILL cannot be trapped at all, so a handler alone cannot close this;
+// the only complete fix is for the next launch to clean up after the last one.
+function killStaleBrowsers() {
+  const { execFileSync } = require('child_process');
+  let out = '';
+  try {
+    out = execFileSync('pgrep', ['-f', PROFILE_PREFIX], { encoding: 'utf8' });
+  } catch (_) { return 0; }               // pgrep exits 1 when nothing matches
+  const pids = out.split('\n').map(s => s.trim()).filter(Boolean)
+    .map(Number).filter(p => p > 0 && p !== process.pid);
+  for (const p of pids) { try { process.kill(p, 'SIGKILL'); } catch (_) {} }
+  if (pids.length) console.log(`killed ${pids.length} stale harness browser process(es)`);
+  return pids.length;
+}
+
 function mimeType(file) {
   if (file.endsWith('.html')) return 'text/html';
   if (file.endsWith('.js')) return 'text/javascript';
@@ -253,7 +283,8 @@ async function main() {
   const server = ORIGIN ? null : await startStaticServer();
   const port = server ? server.address().port : 0;
   const base = ORIGIN || `http://127.0.0.1:${port}`;
-  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'wine-assembly-frames-'));
+  killStaleBrowsers();
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), PROFILE_PREFIX));
   const browser = await puppeteer.launch({
     headless: !HEADFUL,
     executablePath: CHROME,
@@ -280,6 +311,16 @@ async function main() {
            '--use-angle=swiftshader']
         : ['--disable-gpu'])),
   });
+  // SIGTERM is what `timeout N` sends and what a plain `pkill` sends, and both
+  // are how these runs normally end. Without this the finally block never runs
+  // and the browser outlives the harness. SIGKILL is untrappable, so this is
+  // only half the fix -- killStaleBrowsers() above is the other half.
+  const reap = (sig) => {
+    try { const p = browser.process(); if (p) p.kill('SIGKILL'); } catch (_) {}
+    try { fs.rmSync(profile, { recursive: true, force: true }); } catch (_) {}
+    process.exit(sig === 'SIGINT' ? 130 : 143);
+  };
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => reap(sig));
   const problems = [];
   try {
     const page = await browser.newPage();
@@ -1043,7 +1084,14 @@ async function main() {
       for (const p of problems.slice(0, 5)) console.log('  ' + p);
     }
   } finally {
-    await browser.close();
+    // A guest that is blocking the main thread can make the graceful close hang
+    // for as long as it likes, and a hung close is the same leak by a different
+    // route -- so give it 10s and then take the process out.
+    await Promise.race([
+      browser.close().catch(() => {}),
+      new Promise(r => setTimeout(r, 10000)),
+    ]);
+    try { const p = browser.process(); if (p && !p.killed) p.kill('SIGKILL'); } catch (_) {}
     if (server) server.close();
     fs.rmSync(profile, { recursive: true, force: true });
   }
