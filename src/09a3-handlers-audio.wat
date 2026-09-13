@@ -2173,11 +2173,37 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
-  ;; SetProcessWorkingSetSize(hProcess, min, max) — fixed WASM memory cannot
-  ;; be trimmed by the host OS, so accept the advisory request as a no-op.
+  ;; SetProcessWorkingSetSize(hProcess, min, max). Fixed WASM memory cannot be
+  ;; paged by the host OS, so a well-formed request is advisory. Still validate
+  ;; the process and documented size relationship before reporting success.
   (func $handle_SetProcessWorkingSetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))  ;; TRUE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (if (i32.eqz (call $current_process_handle_valid (local.get $arg0)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return)))
+    ;; SIZE_T(-1), SIZE_T(-1) is the documented trim-working-set request.
+    (if (i32.and
+          (i32.eq (local.get $arg1) (i32.const -1))
+          (i32.eq (local.get $arg2) (i32.const -1)))
+      (then (global.set $eax (i32.const 1)) (return)))
+    ;; Otherwise minimum must be positive and no greater than maximum; the
+    ;; maximum itself must cover at least the documented thirteen 4 KiB pages.
+    (if (i32.or
+          (i32.or
+            (i32.eqz (local.get $arg1))
+            (i32.lt_u (local.get $arg2) (i32.const 0x0000d000)))
+          (i32.or
+            (i32.eq (local.get $arg1) (i32.const -1))
+            (i32.or
+              (i32.eq (local.get $arg2) (i32.const -1))
+              (i32.gt_u (local.get $arg1) (local.get $arg2)))))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return)))
+    (global.set $eax (i32.const 1)) ;; TRUE: advisory request accepted
   )
 
   ;; GetProcessWorkingSetSize(hProcess, *min, *max) — report the fixed guest
