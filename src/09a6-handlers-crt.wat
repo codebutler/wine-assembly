@@ -2339,7 +2339,7 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
         (return)))
     ;; Read old block size from header (ptr-4 in guest space)
-    (local.set $old_size (call $gl32 (i32.sub (local.get $arg0) (i32.const 4))))
+    (local.set $old_size (call $heap_block_size_unchecked (local.get $arg0)))
     (local.set $new_ptr (call $heap_alloc (local.get $arg1)))
     ;; Copy min(old_size, new_size) bytes
     (if (i32.gt_u (local.get $old_size) (local.get $arg1))

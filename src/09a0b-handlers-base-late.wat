@@ -1391,10 +1391,16 @@
 
   ;; 536: GlobalFlags(hMem) → flags/lock count.
   ;; Our GlobalAlloc returns a direct heap pointer and GlobalLock is identity,
-  ;; so there is no movable/discardable/lock-count state to report. Return 0,
-  ;; which is the normal unlocked/fixed-memory result.
+  ;; so there is no movable/discardable/lock-count state to report. A live
+  ;; allocation therefore returns 0, the normal unlocked/fixed-memory result;
+  ;; every other value returns GMEM_INVALID_HANDLE. The helper validates arena
+  ;; residency and exact block identity before touching the guest mapping.
   (func $handle_GlobalFlags (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (if (call $heap_global_block_size (local.get $arg0) (i32.const 0))
+      (then (global.set $eax (i32.const 0)))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0x8000)))) ;; GMEM_INVALID_HANDLE
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 

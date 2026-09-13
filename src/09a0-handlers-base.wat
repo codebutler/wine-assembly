@@ -2780,8 +2780,7 @@
         (then (local.set $old_usable (i32.const -1)))   ;; foreign: size unknown
         (else
           (local.set $old_usable
-            (i32.sub (i32.load (call $g2w (i32.sub (local.get $arg2) (i32.const 4))))
-                     (i32.const 4)))))
+            (call $heap_payload_size_unchecked (local.get $arg2)))))
       ;; HEAP_REALLOC_IN_PLACE_ONLY (0x10): the caller is telling us other
       ;; pointers into this block are still live, so moving it would corrupt
       ;; them. Satisfy it only when the block already has the room; Windows

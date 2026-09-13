@@ -1851,6 +1851,88 @@
       (i32.gt_u (local.get $end) (i32.atomic.load offset=8 (local.get $rec)))
       (i32.gt_u (local.get $end) (i32.load offset=4 (local.get $rec)))))
 
+  ;; Trusted heap-pointer size accessors. Global allocations reserve bit zero
+  ;; of the aligned header for provenance, so no allocator consumer may treat
+  ;; the raw dword as an extent. Callers that accept untrusted handles must use
+  ;; an arena/boundary validator before reaching these unchecked helpers.
+  (func $heap_block_size_unchecked (param $guest_ptr i32) (result i32)
+    (i32.and
+      (call $gl32 (i32.sub (local.get $guest_ptr) (i32.const 4)))
+      (i32.const -8)))
+
+  (func $heap_payload_size_unchecked (param $guest_ptr i32) (result i32)
+    (i32.sub (call $heap_block_size_unchecked (local.get $guest_ptr)) (i32.const 4)))
+
+  ;; GlobalAlloc uses the otherwise spare low bit of its aligned size header
+  ;; as process-wide provenance. The bit is not enough by itself: an aligned
+  ;; pointer into an application's payload can have any four bytes planted in
+  ;; front of it. Start at the authoritative arena base and follow every block
+  ;; extent, so only an exact allocation boundary can be accepted. $claim
+  ;; atomically clears the bit at that boundary; this is GlobalFree's
+  ;; cross-instance single-winner invalidation step.
+  ;;
+  ;; Returns the aligned block size (including its four-byte header), or zero
+  ;; for NULL, forged, malformed, non-Global, freed, or concurrently freed
+  ;; pointers. No untrusted guest address reaches g2w before heap_arena_find has
+  ;; proved that the containing arena is still resident.
+  (func $heap_global_block_size (param $guest_ptr i32) (param $claim i32) (result i32)
+    (local $block i32) (local $rec i32) (local $cur i32)
+    (local $allocated_end i32) (local $reserved_end i32)
+    (local $wa i32) (local $raw i32) (local $size i32) (local $next i32)
+    (if (i32.or
+          (i32.lt_u (local.get $guest_ptr) (i32.const 4))
+          (i32.ne (i32.and (local.get $guest_ptr) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (local.set $cur (i32.atomic.load (local.get $rec)))
+    (local.set $reserved_end (i32.load offset=4 (local.get $rec)))
+    (local.set $allocated_end (i32.atomic.load offset=8 (local.get $rec)))
+    (block $invalid
+      (loop $walk
+        (br_if $invalid (i32.ge_u (local.get $cur) (local.get $allocated_end)))
+        (br_if $invalid (i32.gt_u (local.get $cur) (local.get $block)))
+        (local.set $wa (call $g2w (local.get $cur)))
+        (local.set $raw (i32.atomic.load (local.get $wa)))
+        ;; Bit zero is GLOBAL_LIVE. Bits 1..2 remain reserved and therefore
+        ;; make a header malformed rather than being silently masked away.
+        (br_if $invalid (i32.and (local.get $raw) (i32.const 6)))
+        (local.set $size (i32.and (local.get $raw) (i32.const -8)))
+        (br_if $invalid (i32.lt_u (local.get $size) (i32.const 16)))
+        (local.set $next (i32.add (local.get $cur) (local.get $size)))
+        (br_if $invalid (i32.le_u (local.get $next) (local.get $cur)))
+        (br_if $invalid (i32.gt_u (local.get $next) (local.get $allocated_end)))
+        (br_if $invalid (i32.gt_u (local.get $next) (local.get $reserved_end)))
+        (if (i32.eq (local.get $cur) (local.get $block))
+          (then
+            (if (i32.eqz (i32.and (local.get $raw) (i32.const 1)))
+              (then (return (i32.const 0))))
+            (if (local.get $claim)
+              (then
+                (if (i32.ne
+                      (i32.atomic.rmw.cmpxchg (local.get $wa)
+                        (local.get $raw) (local.get $size))
+                      (local.get $raw))
+                  (then (return (i32.const 0))))))
+            (return (local.get $size))))
+        (br_if $invalid (i32.gt_u (local.get $next) (local.get $block)))
+        (local.set $cur (local.get $next))
+        (br $walk)))
+    (i32.const 0))
+
+  ;; Mark a freshly allocated block before its pointer is published by a
+  ;; Global* handler. The pointer came from heap_alloc/heap_realloc, but retain
+  ;; the arena check so a future caller cannot turn this helper into an unsafe
+  ;; g2w shortcut.
+  (func $heap_global_mark (param $guest_ptr i32)
+    (local $block i32)
+    (if (i32.eqz (local.get $guest_ptr)) (then (return)))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (if (call $heap_arena_find (local.get $block))
+      (then
+        (drop (i32.atomic.rmw.or (call $g2w (local.get $block)) (i32.const 1))))))
+
   ;; Free-list allocator. Each allocated block has a 4-byte size header at ptr-4.
   ;; Free blocks: [size:4][next_guest_ptr:4][...]. Min block = 16 bytes.
   ;; Falls back to bump allocation when no free block fits.
@@ -2022,17 +2104,34 @@
       (call $heap_free (i32.add (local.get $tail) (i32.const 4)))))
     (local.get $guest_ptr))
 
-  ;; heap_free: return block to free list
-  (func $heap_free (param $guest_ptr i32)
-    (local $block i32) (local $w i32) (local $size i32)
+  ;; Return a block to this instance's free list. require_global uses the exact
+  ;; arena walk above and atomically claims GLOBAL_LIVE before mutating the
+  ;; list, so two workers cannot both successfully GlobalFree the same handle.
+  (func $heap_free_impl (param $guest_ptr i32) (param $require_global i32) (result i32)
+    (local $block i32) (local $w i32) (local $raw i32) (local $size i32)
     (local $cur i32) (local $steps i32) (local $rec i32)
-    (if (i32.eqz (local.get $guest_ptr)) (then (return)))
+    (if (i32.eqz (local.get $guest_ptr)) (then (return (i32.const 0))))
     (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (if (local.get $require_global)
+      (then
+        (local.set $size
+          (call $heap_global_block_size (local.get $guest_ptr) (i32.const 1)))
+        (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))))
     (local.set $rec (call $heap_arena_find (local.get $block)))
-    (if (i32.eqz (local.get $rec)) (then (return)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
     (local.set $w (call $g2w (local.get $block)))
-    (local.set $size (i32.load (local.get $w)))
-    (if (call $heap_block_bad (local.get $block) (local.get $size)) (then (return)))
+    (if (i32.eqz (local.get $require_global))
+      (then
+        (local.set $raw (i32.atomic.load (local.get $w)))
+        ;; Generic frees retain the allocator's original strict aligned-size
+        ;; contract. A tagged block must be claimed through heap_global_free;
+        ;; otherwise an arbitrary corrupted odd size would become a plausible
+        ;; Global marker and bypass the malformed-header protection.
+        (if (i32.and (local.get $raw) (i32.const 7))
+          (then (return (i32.const 0))))
+        (local.set $size (local.get $raw))))
+    (if (call $heap_block_bad (local.get $block) (local.get $size))
+      (then (return (i32.const 0))))
     ;; Linking a block that is already on the list is what makes the list
     ;; cyclic: free(B) with head A, then free(A) again, and A->B->A. Real
     ;; programs do it -- WordPad's shutdown does -- so refuse the second link
@@ -2044,7 +2143,8 @@
     (block $checked (loop $scan
       (br_if $checked (i32.eqz (local.get $cur)))
       (br_if $checked (i32.gt_u (local.get $steps) (i32.const 64)))
-      (if (i32.eq (local.get $cur) (local.get $block)) (then (return)))
+      (if (i32.eq (local.get $cur) (local.get $block))
+        (then (return (i32.const 0))))
       (if (i32.eqz (call $heap_arena_find (local.get $cur))) (then (br $checked)))
       (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
       (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
@@ -2054,7 +2154,15 @@
     ;; Prepend to free list: store next = old head
     (i32.store (i32.add (local.get $w) (i32.const 4)) (global.get $free_list))
     (global.set $free_list (local.get $block))
-    (call $heap_arena_charge (local.get $rec) (i32.sub (i32.const 0) (local.get $size))))
+    (call $heap_arena_charge (local.get $rec) (i32.sub (i32.const 0) (local.get $size)))
+    (i32.const 1))
+
+  ;; Existing internal callers keep the same void, lock-free API.
+  (func $heap_free (param $guest_ptr i32)
+    (drop (call $heap_free_impl (local.get $guest_ptr) (i32.const 0))))
+
+  (func $heap_global_free (param $guest_ptr i32) (result i32)
+    (call $heap_free_impl (local.get $guest_ptr) (i32.const 1)))
 
 ;; DC record offsets: hdc, pen, brush, pos x/y, text/bk colors, bk mode,
   ;; text align, map mode, window origin/extents, viewport origin/extents,
@@ -2093,7 +2201,8 @@
   ;; Returns new guest pointer (or 0 on failure). Copies old data, frees old block.
   ;; flags: bit 6 = LMEM_ZEROINIT/GMEM_ZEROINIT
   (func $heap_realloc (param $old_ptr i32) (param $new_size i32) (param $flags i32) (result i32)
-    (local $new_ptr i32) (local $new_wa i32) (local $old_block_size i32) (local $old_data_size i32) (local $copy_size i32)
+    (local $new_ptr i32) (local $new_wa i32) (local $old_header i32)
+    (local $old_block_size i32) (local $old_data_size i32) (local $copy_size i32)
     ;; If old_ptr is NULL, just allocate
     (if (i32.eqz (local.get $old_ptr))
       (then
@@ -2103,7 +2212,9 @@
             (then (call $zero_memory (call $g2w (local.get $new_ptr)) (local.get $new_size))))))
         (return (local.get $new_ptr))))
     ;; Read old block size from header at [ptr-4] (includes 4-byte header)
-    (local.set $old_block_size (call $gl32 (i32.sub (local.get $old_ptr) (i32.const 4))))
+    (local.set $old_header
+      (call $gl32 (i32.sub (local.get $old_ptr) (i32.const 4))))
+    (local.set $old_block_size (i32.and (local.get $old_header) (i32.const -8)))
     (local.set $old_data_size (i32.sub (local.get $old_block_size) (i32.const 4)))
     ;; If already big enough, return same pointer
     (if (i32.le_u (local.get $new_size) (local.get $old_data_size))
@@ -2122,7 +2233,9 @@
         (i32.add (local.get $new_wa) (local.get $copy_size))
         (i32.sub (local.get $new_size) (local.get $copy_size)))))
     ;; Free old block
-    (call $heap_free (local.get $old_ptr))
+    (if (i32.and (local.get $old_header) (i32.const 1))
+      (then (drop (call $heap_global_free (local.get $old_ptr))))
+      (else (call $heap_free (local.get $old_ptr))))
     (local.get $new_ptr))
 
   ;; Active resource-lookup base/RVA. During a Load*/FindResource* handler call
@@ -5045,7 +5158,7 @@
     (local $size i32) (local $dst i32)
     (if (i32.or (i32.eqz (local.get $fmt)) (i32.eqz (local.get $src_g)))
       (then (return (i32.const 0))))
-    (local.set $size (i32.sub (call $gl32 (i32.sub (local.get $src_g) (i32.const 4))) (i32.const 4)))
+    (local.set $size (call $heap_payload_size_unchecked (local.get $src_g)))
     (local.set $dst (call $heap_alloc (local.get $size)))
     (if (i32.eqz (local.get $dst)) (then (return (i32.const 0))))
     (memory.copy (call $g2w (local.get $dst)) (call $g2w (local.get $src_g)) (local.get $size))
@@ -5452,9 +5565,7 @@
         (global.set $clipboard_binary_format (i32.const 8))
         (global.set $clipboard_binary_ptr (local.get $saved_dib))
         (global.set $clipboard_binary_len
-          (i32.sub
-            (call $gl32 (i32.sub (local.get $saved_dib) (i32.const 4)))
-            (i32.const 4)))
+          (call $heap_payload_size_unchecked (local.get $saved_dib)))
         (local.set $saved_dib (i32.const 0))))
     (if (local.get $saved_dib) (then (call $heap_free (local.get $saved_dib))))
     (call $heap_free (local.get $text_g))

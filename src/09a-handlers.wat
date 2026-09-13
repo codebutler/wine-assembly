@@ -5137,8 +5137,7 @@
       (then (global.set $eax (i32.const 0)))
       (else
         (global.set $eax
-          (i32.sub (call $gl32 (i32.sub (local.get $arg0) (i32.const 4)))
-                   (i32.const 4)))))
+          (call $heap_payload_size_unchecked (local.get $arg0)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
@@ -5157,14 +5156,25 @@
     ;; unspecified, and keeps GlobalAlloc deterministic; GMEM_ZEROINIT remains
     ;; satisfied as a strict subset of this behavior.
     (if (global.get $eax)
-      (then (call $zero_memory (call $g2w (global.get $eax)) (local.get $arg1))))
+      (then
+        (call $zero_memory (call $g2w (global.get $eax)) (local.get $arg1))
+        ;; Sizes are eight-byte aligned, so bit zero is process-wide
+        ;; GlobalAlloc provenance rather than part of the allocation extent.
+        (call $heap_global_mark (global.get $eax))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; 233: GlobalFree
   (func $handle_GlobalFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $heap_free (local.get $arg0))
-    (global.set $eax (i32.const 0))
+    ;; GlobalFree returns NULL only when it invalidated a live Global handle.
+    ;; NULL itself remains the documented no-op success case.
+    (if (i32.or
+          (i32.eqz (local.get $arg0))
+          (call $heap_global_free (local.get $arg0)))
+      (then (global.set $eax (i32.const 0)))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (local.get $arg0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
@@ -5182,15 +5192,37 @@
 
   ;; 236: GlobalReAlloc(hMem, dwBytes, uFlags)
   (func $handle_GlobalReAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; Claim the old handle before reallocating it. This closes the validation /
+    ;; mutation race with GlobalFree in another Worker. GlobalReAlloc requires
+    ;; a handle returned by GlobalAlloc/ReAlloc; unlike heap_realloc, NULL is
+    ;; not an allocation shortcut.
+    (if (i32.eqz
+          (call $heap_global_block_size (local.get $arg0) (i32.const 1)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
     (global.set $eax (call $heap_realloc (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    ;; Success publishes provenance on either the same or moved block. On OOM,
+    ;; Win32 leaves the original handle valid, so restore the marker there.
+    (if (global.get $eax)
+      (then (call $heap_global_mark (global.get $eax)))
+      (else (call $heap_global_mark (local.get $arg0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; 237: GlobalSize — usable bytes, from the four-byte heap header before the
-  ;; block. Same rule as $handle_LocalSize.
+  ;; 237: GlobalSize — usable bytes from a live Global allocation. The helper
+  ;; validates exact block identity before reading the tagged header.
   (func $handle_GlobalSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (i32.sub (call $gl32 (i32.sub (local.get $arg0) (i32.const 4))) (i32.const 4)))
+    (local $size i32)
+    (local.set $size
+      (call $heap_global_block_size (local.get $arg0) (i32.const 0)))
+    (if (local.get $size)
+      (then (global.set $eax (i32.sub (local.get $size) (i32.const 4))))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
@@ -9231,7 +9263,7 @@ SetColorAdjustment — validate and copy complete per-DC state.
           (i32.lt_u (local.get $arg2) (global.get $heap_ptr)))
       (then
         (global.set $eax (i32.sub
-          (call $gl32 (i32.sub (local.get $arg2) (i32.const 4)))
+          (call $heap_block_size_unchecked (local.get $arg2))
           (i32.const 4))))
       (else
         (global.set $eax (i32.const 0xFFFFFFFF))))  ;; not our allocation

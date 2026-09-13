@@ -11084,7 +11084,7 @@
           (i32.lt_u (local.get $arg1) (global.get $heap_ptr)))
       (then
         (global.set $eax (i32.sub
-          (call $gl32 (i32.sub (local.get $arg1) (i32.const 4)))
+          (call $heap_block_size_unchecked (local.get $arg1))
           (i32.const 4))))
       (else
         (global.set $eax (i32.const 0xFFFFFFFF))))

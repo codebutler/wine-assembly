@@ -3098,7 +3098,7 @@
     (call $gs32 (i32.add (local.get $obj) (i32.const 8)) (i32.const 1))
     (if (local.get $hglobal)
       (then
-        (local.set $size (i32.sub (call $gl32 (i32.sub (local.get $hglobal) (i32.const 4))) (i32.const 4)))
+        (local.set $size (call $heap_payload_size_unchecked (local.get $hglobal)))
         (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (local.get $hglobal))
         (call $gs32 (i32.add (local.get $obj) (i32.const 16)) (local.get $size))
         (call $gs32 (i32.add (local.get $obj) (i32.const 20)) (local.get $size))))
@@ -3331,7 +3331,7 @@
         (if (i32.eqz (local.get $hglobal))
           (then (call $heap_free (local.get $obj)) (return (i32.const 0))))
         (local.set $capacity
-          (i32.sub (call $gl32 (i32.sub (local.get $hglobal) (i32.const 4))) (i32.const 4)))
+          (call $heap_payload_size_unchecked (local.get $hglobal)))
         (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (local.get $hglobal))
         (call $gs32 (i32.add (local.get $obj) (i32.const 16)) (i32.const 0))
         (call $gs32 (i32.add (local.get $obj) (i32.const 20)) (local.get $capacity))
@@ -3339,7 +3339,7 @@
         (call $gs32 (i32.add (local.get $obj) (i32.const 32)) (i32.const 1)))
       (else
         (local.set $capacity
-          (i32.sub (call $gl32 (i32.sub (local.get $hglobal) (i32.const 4))) (i32.const 4)))
+          (call $heap_payload_size_unchecked (local.get $hglobal)))
         (call $gs32 (i32.add (local.get $obj) (i32.const 12)) (local.get $hglobal))
         (call $gs32 (i32.add (local.get $obj) (i32.const 16)) (local.get $capacity))
         (call $gs32 (i32.add (local.get $obj) (i32.const 20)) (local.get $capacity))
@@ -5961,7 +5961,7 @@
   (func $ole_copy_hglobal (param $src i32) (result i32)
     (local $size i32) (local $dst i32)
     (if (i32.eqz (local.get $src)) (then (return (i32.const 0))))
-    (local.set $size (i32.sub (call $gl32 (i32.sub (local.get $src) (i32.const 4))) (i32.const 4)))
+    (local.set $size (call $heap_payload_size_unchecked (local.get $src)))
     (local.set $dst (call $heap_alloc (local.get $size)))
     (if (local.get $dst)
       (then (memory.copy (call $g2w (local.get $dst)) (call $g2w (local.get $src)) (local.get $size))))
@@ -6235,7 +6235,7 @@
     (local $capacity i32) (local $limit i32) (local $i i32) (local $units i32)
     (local $ch i32) (local $next i32) (local $dst i32) (local $out i32)
     (if (i32.eqz (local.get $src)) (then (return (i32.const 0))))
-    (local.set $capacity (i32.sub (call $gl32 (i32.sub (local.get $src) (i32.const 4))) (i32.const 4)))
+    (local.set $capacity (call $heap_payload_size_unchecked (local.get $src)))
     (local.set $limit (select (i32.shr_u (local.get $capacity) (i32.const 1))
       (local.get $capacity) (local.get $source_unicode)))
     (block $measured (loop $measure
@@ -6303,7 +6303,7 @@
   (func $ole_unicode_to_ansi (param $src i32) (result i32)
     (local $capacity i32) (local $limit i32) (local $chars i32) (local $dst i32) (local $ch i32)
     (if (i32.eqz (local.get $src)) (then (return (i32.const 0))))
-    (local.set $capacity (i32.sub (call $gl32 (i32.sub (local.get $src) (i32.const 4))) (i32.const 4)))
+    (local.set $capacity (call $heap_payload_size_unchecked (local.get $src)))
     (local.set $limit (i32.shr_u (local.get $capacity) (i32.const 1)))
     (block $found (loop $scan
       (if (i32.ge_u (local.get $chars) (local.get $limit)) (then (return (i32.const 0))))
@@ -6545,9 +6545,9 @@
     (if (i32.eq (local.get $tymed) (i32.const 1)) ;; TYMED_HGLOBAL
       (then
         (local.set $source_size
-          (i32.sub (call $gl32 (i32.sub (local.get $source) (i32.const 4))) (i32.const 4)))
+          (call $heap_payload_size_unchecked (local.get $source)))
         (local.set $dest_size
-          (i32.sub (call $gl32 (i32.sub (local.get $dest) (i32.const 4))) (i32.const 4)))
+          (call $heap_payload_size_unchecked (local.get $dest)))
         (if (i32.lt_u (local.get $dest_size) (local.get $source_size))
           (then (return (i32.const 0x80030070)))) ;; STG_E_MEDIUMFULL
         (if (local.get $source_size)
@@ -8793,8 +8793,7 @@
     (local $dib_size i32) (local $total i32) (local $bytes i32) (local $p i32)
     (local $record i32) (local $handle i32) (local $pict i32) (local $width i32) (local $height i32)
     (if (i32.eqz (local.get $dib)) (then (return (i32.const 0))))
-    (local.set $dib_size (i32.sub
-      (call $gl32 (i32.sub (local.get $dib) (i32.const 4))) (i32.const 4)))
+    (local.set $dib_size (call $heap_payload_size_unchecked (local.get $dib)))
     (if (i32.lt_u (local.get $dib_size) (i32.const 40)) (then (return (i32.const 0))))
     (local.set $width (call $gl32 (i32.add (local.get $dib) (i32.const 4))))
     (local.set $height (call $gl32 (i32.add (local.get $dib) (i32.const 8))))
