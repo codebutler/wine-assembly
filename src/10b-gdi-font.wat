@@ -4,6 +4,9 @@
   ;; canonical GDI pixels. Registry record (64 bytes): active/path hash,
   ;; owned FNT WA/size, version, height/ascent/average/max width,
   ;; first/last/default char, weight/charset, face offset, leading values.
+  ;; Each owned strike allocation appends a normalized NUL-terminated path
+  ;; after the FNT payload. Size remains the FNT size; raw/synthetic copies
+  ;; append an empty path. Freeing the strike frees its identity as well.
   (global $GDI_BITMAP_FONT_TABLE i32 (region.addr $GDI_BITMAP_FONT_TABLE 0))
   (global $GDI_BITMAP_FONT_TABLE_SIZE i32 (region.size $GDI_BITMAP_FONT_TABLE))
   (global $GDI_BITMAP_FONT_COUNT i32 (i32.const 48))
@@ -113,6 +116,14 @@
     (i32.store (call $gdi_bitmap_font_stamp (local.get $best)) (i32.const 0))
     (local.get $best))
 
+  (func $gdi_bitmap_font_path_fold (param $ch i32) (result i32)
+    (if (i32.eq (local.get $ch) (i32.const 47))
+      (then (return (i32.const 92))))
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 65))
+          (i32.le_u (local.get $ch) (i32.const 90)))
+      (then (return (i32.add (local.get $ch) (i32.const 32)))))
+    (local.get $ch))
+
   (func $gdi_bitmap_font_path_hash (param $path i32) (result i32)
     (local $hash i32) (local $ch i32)
     (local.set $hash (i32.const 0x811C9DC5))
@@ -120,11 +131,7 @@
     (block $done (loop $scan
       (local.set $ch (i32.load8_u (local.get $path)))
       (br_if $done (i32.eqz (local.get $ch)))
-      (if (i32.eq (local.get $ch) (i32.const 47))
-        (then (local.set $ch (i32.const 92))))
-      (if (i32.and (i32.ge_u (local.get $ch) (i32.const 65))
-            (i32.le_u (local.get $ch) (i32.const 90)))
-        (then (local.set $ch (i32.add (local.get $ch) (i32.const 32)))))
+      (local.set $ch (call $gdi_bitmap_font_path_fold (local.get $ch)))
       (local.set $hash (i32.mul (i32.xor (local.get $hash) (local.get $ch))
         (i32.const 0x01000193)))
       (local.set $path (i32.add (local.get $path) (i32.const 1)))
@@ -611,13 +618,41 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
+  ;; Hashes are only a quick rejection, never complete file identity. Only
+  ;; installed state-1 strikes have path ownership; synthetic state-2 keys
+  ;; live in a different namespace and cannot be removed by a font filename.
+  (func $gdi_bitmap_font_matches_path (param $record i32) (param $path i32)
+        (param $hash i32) (result i32)
+    (local $owned i32) (local $i i32) (local $ch i32)
+    (if (i32.or (i32.ne (i32.load (local.get $record)) (i32.const 1))
+          (i32.ne (i32.load offset=4 (local.get $record)) (local.get $hash)))
+      (then (return (i32.const 0))))
+    (local.set $owned (i32.add (i32.load offset=8 (local.get $record))
+      (i32.load offset=12 (local.get $record))))
+    (block $different (loop $scan
+      (br_if $different (i32.ge_u (local.get $i) (i32.const 260)))
+      (local.set $ch (call $gdi_bitmap_font_path_fold
+        (i32.load8_u (i32.add (local.get $path) (local.get $i)))))
+      (br_if $different (i32.ne (local.get $ch)
+        (i32.load8_u (i32.add (local.get $owned) (local.get $i)))))
+      (if (i32.eqz (local.get $ch)) (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
+    (i32.const 0))
+
+  ;; Internal hash-only cleanup remains available for legacy raw parser users.
+  ;; Public file registration/removal and stock rollback always supply a path.
   (func $gdi_bitmap_font_remove_hash (param $hash i32) (result i32)
+    (call $gdi_bitmap_font_remove_matching (local.get $hash) (i32.const 0)))
+
+  (func $gdi_bitmap_font_remove_matching (param $hash i32) (param $path i32) (result i32)
     (local $i i32) (local $record i32) (local $removed i32)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $GDI_BITMAP_FONT_COUNT)))
       (local.set $record (call $gdi_bitmap_font_record (local.get $i)))
       (if (i32.and (i32.ne (i32.load (local.get $record)) (i32.const 0))
-            (i32.eq (i32.load offset=4 (local.get $record)) (local.get $hash)))
+            (if (result i32) (local.get $path)
+              (then (call $gdi_bitmap_font_matches_path (local.get $record) (local.get $path) (local.get $hash)))
+              (else (i32.eq (i32.load offset=4 (local.get $record)) (local.get $hash)))))
         (then
           (call $gdi_bitmap_font_unbind_record (local.get $record))
           (call $dib_free_wasm (i32.load offset=8 (local.get $record)))
@@ -629,11 +664,25 @@
 
   (func $gdi_bitmap_font_copy_strike (param $source i32) (param $available i32)
         (param $hash i32) (result i32)
+    (call $gdi_bitmap_font_copy_strike_mode (local.get $source) (local.get $available)
+      (local.get $hash) (i32.const 0)))
+
+  ;; 0: legacy eviction, 1: startup install without eviction, 2: validate only.
+  (func $gdi_bitmap_font_copy_strike_mode (param $source i32) (param $available i32)
+        (param $hash i32) (param $mode i32) (result i32)
+    (call $gdi_bitmap_font_copy_strike_to (local.get $source) (local.get $available)
+      (local.get $hash) (local.get $mode) (i32.const 0) (i32.const 0)))
+
+  ;; A nonzero destination is a private, zeroed staging registry. It has no
+  ;; LRU or HFONT bindings and must never evict a published strike.
+  (func $gdi_bitmap_font_copy_strike_to (param $source i32) (param $available i32)
+        (param $hash i32) (param $mode i32) (param $destination i32) (param $path i32) (result i32)
     (local $version i32) (local $size i32) (local $height i32)
     (local $first i32) (local $last i32) (local $count i32)
     (local $table i32) (local $entry_size i32) (local $face i32)
     (local $i i32) (local $entry i32) (local $width i32) (local $offset i32)
     (local $bytes i32) (local $record i32) (local $copy_guest i32) (local $copy i32)
+    (local $path_len i32)
     (if (i32.lt_u (local.get $available) (i32.const 118))
       (then (return (i32.const 0))))
     (local.set $version (i32.load16_u (local.get $source)))
@@ -688,21 +737,35 @@
         (then (return (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $glyphs)))
+    (if (i32.eq (local.get $mode) (i32.const 2)) (then (return (i32.const 1))))
     (local.set $i (i32.const 0))
     (block $slot_done (loop $slots
       (br_if $slot_done (i32.ge_u (local.get $i) (global.get $GDI_BITMAP_FONT_COUNT)))
       (local.set $record (call $gdi_bitmap_font_record (local.get $i)))
+      (if (local.get $destination)
+        (then (local.set $record (i32.add (local.get $destination)
+          (i32.mul (local.get $i) (global.get $GDI_BITMAP_FONT_STRIDE))))))
       (br_if $slot_done (i32.eqz (i32.load (local.get $record))))
       (local.set $record (i32.const 0))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $slots)))
-    (if (i32.eqz (local.get $record))
+    (if (i32.and (i32.eqz (local.get $destination))
+          (i32.and (i32.eqz (local.get $record)) (i32.eqz (local.get $mode))))
       (then (local.set $record (call $gdi_bitmap_font_evict))))
     (if (i32.eqz (local.get $record)) (then (return (i32.const 0))))
-    (local.set $copy_guest (call $dib_alloc (local.get $size)))
+    (if (local.get $path) (then (local.set $path_len (call $tt_strlen (local.get $path)))))
+    (local.set $copy_guest (call $dib_alloc
+      (i32.add (local.get $size) (i32.add (local.get $path_len) (i32.const 1)))))
     (if (i32.eqz (local.get $copy_guest)) (then (return (i32.const 0))))
     (local.set $copy (call $g2w (local.get $copy_guest)))
     (memory.copy (local.get $copy) (local.get $source) (local.get $size))
+    (local.set $i (i32.const 0))
+    (block $path_copied (loop $path_copy
+      (br_if $path_copied (i32.ge_u (local.get $i) (local.get $path_len)))
+      (i32.store8 (i32.add (i32.add (local.get $copy) (local.get $size)) (local.get $i))
+        (call $gdi_bitmap_font_path_fold (i32.load8_u (i32.add (local.get $path) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $path_copy)))
+    (i32.store8 (i32.add (local.get $copy) (i32.add (local.get $size) (local.get $path_len))) (i32.const 0))
     (i32.store (local.get $record) (i32.const 1))
     (i32.store offset=4 (local.get $record) (local.get $hash))
     (i32.store offset=8 (local.get $record) (local.get $copy))
@@ -722,25 +785,43 @@
     (i32.store offset=60 (local.get $record) (i32.or
       (i32.load16_u offset=76 (local.get $source))
       (i32.shl (i32.load16_u offset=78 (local.get $source)) (i32.const 16))))
-    (call $gdi_bitmap_font_touch (local.get $record))
+    ;; Startup publication touches only after every strike has been installed.
+    ;; A failed allocation can then discard new records without changing LRU.
+    (if (i32.and (i32.eqz (local.get $destination)) (i32.eqz (local.get $mode)))
+      (then (call $gdi_bitmap_font_touch (local.get $record))))
     (i32.const 1))
 
   (func $gdi_bitmap_font_parse_file (param $data i32) (param $size i32)
         (param $hash i32) (result i32)
+    (call $gdi_bitmap_font_parse_file_mode (local.get $data) (local.get $size)
+      (local.get $hash) (i32.const 0)))
+
+  ;; Strict modes reject the whole file on any malformed record. The validation
+  ;; pass counts strikes without touching the registry, allocator or LRU.
+  (func $gdi_bitmap_font_parse_file_mode (param $data i32) (param $size i32)
+        (param $hash i32) (param $mode i32) (result i32)
+    (call $gdi_bitmap_font_parse_file_to (local.get $data) (local.get $size)
+      (local.get $hash) (local.get $mode) (i32.const 0) (i32.const 0)))
+
+  (func $gdi_bitmap_font_parse_file_to (param $data i32) (param $size i32)
+        (param $hash i32) (param $mode i32) (param $destination i32) (param $path i32) (result i32)
     (local $ne i32) (local $p i32) (local $shift i32) (local $type i32)
     (local $count i32) (local $i i32) (local $offset i32) (local $length i32)
-    (local $loaded i32)
+    (local $loaded i32) (local $ok i32) (local $offset_units i32) (local $length_units i32)
     (if (i32.lt_u (local.get $size) (i32.const 2)) (then (return (i32.const 0))))
     (if (i32.or (i32.eq (i32.load16_u (local.get $data)) (i32.const 0x0200))
           (i32.eq (i32.load16_u (local.get $data)) (i32.const 0x0300)))
-      (then (return (call $gdi_bitmap_font_copy_strike
-        (local.get $data) (local.get $size) (local.get $hash)))))
+      (then (return (call $gdi_bitmap_font_copy_strike_to
+        (local.get $data) (local.get $size) (local.get $hash) (local.get $mode)
+        (local.get $destination) (local.get $path)))))
     (if (i32.or (i32.lt_u (local.get $size) (i32.const 64))
           (i32.ne (i32.load16_u (local.get $data)) (i32.const 0x5A4D)))
       (then (return (i32.const 0))))
     (local.set $ne (i32.load offset=60 (local.get $data)))
-    (if (i32.or (i32.gt_u (local.get $ne) (i32.sub (local.get $size) (i32.const 40)))
-          (i32.ne (i32.load16_u (i32.add (local.get $data) (local.get $ne))) (i32.const 0x454E)))
+    ;; i32.or is eager: never combine an offset bound with its unchecked load.
+    (if (i32.gt_u (local.get $ne) (i32.sub (local.get $size) (i32.const 40)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.load16_u (i32.add (local.get $data) (local.get $ne))) (i32.const 0x454E))
       (then (return (i32.const 0))))
     (local.set $p (i32.add (local.get $ne)
       (i32.load16_u (i32.add (local.get $data) (i32.add (local.get $ne) (i32.const 36))))))
@@ -750,41 +831,229 @@
     (if (i32.gt_u (local.get $shift) (i32.const 24)) (then (return (i32.const 0))))
     (local.set $p (i32.add (local.get $p) (i32.const 2)))
     (block $types_done (loop $types
-      (br_if $types_done (i32.gt_u (local.get $p) (i32.sub (local.get $size) (i32.const 8))))
+      (if (local.get $mode)
+        (then (if (i32.gt_u (local.get $p) (i32.sub (local.get $size) (i32.const 2)))
+          (then (return (i32.const 0)))))
+        (else (br_if $types_done (i32.gt_u (local.get $p) (i32.sub (local.get $size) (i32.const 8))))))
       (local.set $type (i32.load16_u (i32.add (local.get $data) (local.get $p))))
       (br_if $types_done (i32.eqz (local.get $type)))
+      (if (i32.gt_u (local.get $p) (i32.sub (local.get $size) (i32.const 8)))
+        (then (return (i32.const 0))))
       (local.set $count (i32.load16_u
         (i32.add (local.get $data) (i32.add (local.get $p) (i32.const 2)))))
       (local.set $p (i32.add (local.get $p) (i32.const 8)))
+      (if (local.get $mode)
+        (then (if (i32.gt_u (local.get $count)
+            (i32.div_u (i32.sub (local.get $size) (local.get $p)) (i32.const 12)))
+          (then (return (i32.const 0))))))
       (local.set $i (i32.const 0))
       (block $resources_done (loop $resources
         (br_if $resources_done (i32.ge_u (local.get $i) (local.get $count)))
         (if (i32.gt_u (local.get $p) (i32.sub (local.get $size) (i32.const 12)))
-          (then (return (local.get $loaded))))
+          (then (return (select (i32.const 0) (local.get $loaded) (local.get $mode)))))
         (if (i32.eq (i32.and (local.get $type) (i32.const 0x7FFF)) (i32.const 8))
           (then
-            (local.set $offset (i32.shl (i32.load16_u
-              (i32.add (local.get $data) (local.get $p))) (local.get $shift)))
-            (local.set $length (i32.shl (i32.load16_u
-              (i32.add (local.get $data) (i32.add (local.get $p) (i32.const 2)))) (local.get $shift)))
+            (if (i32.and (i32.ne (local.get $mode) (i32.const 0)) (i32.ne (local.get $type) (i32.const 0x8008)))
+              (then (return (i32.const 0))))
+            (local.set $offset_units (i32.load16_u (i32.add (local.get $data) (local.get $p))))
+            (local.set $length_units (i32.load16_u
+              (i32.add (local.get $data) (i32.add (local.get $p) (i32.const 2)))))
+            (if (local.get $mode)
+              (then (if (i32.or
+                  (i32.gt_u (local.get $offset_units) (i32.shr_u (local.get $size) (local.get $shift)))
+                  (i32.gt_u (local.get $length_units) (i32.shr_u (local.get $size) (local.get $shift))))
+                (then (return (i32.const 0))))))
+            (local.set $offset (i32.shl (local.get $offset_units) (local.get $shift)))
+            (local.set $length (i32.shl (local.get $length_units) (local.get $shift)))
+            (local.set $ok (i32.const 0))
             (if (i32.and (i32.lt_u (local.get $offset) (local.get $size))
                   (i32.and (i32.gt_u (local.get $length) (i32.const 0))
                     (i32.le_u (local.get $length) (i32.sub (local.get $size) (local.get $offset)))))
-              (then (local.set $loaded (i32.add (local.get $loaded)
-                (call $gdi_bitmap_font_copy_strike
+              (then (local.set $ok
+                (call $gdi_bitmap_font_copy_strike_to
                   (i32.add (local.get $data) (local.get $offset))
-                  (local.get $length) (local.get $hash))))))))
+                  (local.get $length) (local.get $hash) (local.get $mode)
+                  (local.get $destination) (local.get $path)))))
+            (if (i32.and (i32.ne (local.get $mode) (i32.const 0)) (i32.eqz (local.get $ok)))
+              (then (return (i32.const 0))))
+            (local.set $loaded (i32.add (local.get $loaded) (local.get $ok)))
+            ;; No startup file can fit more than the whole fixed registry.
+            ;; Stop validating repeated resources once that is established.
+            (if (i32.and (i32.eq (local.get $mode) (i32.const 2))
+                  (i32.gt_u (local.get $loaded) (global.get $GDI_BITMAP_FONT_COUNT)))
+              (then (return (i32.const 0))))))
         (local.set $p (i32.add (local.get $p) (i32.const 12)))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $resources)))
       (br $types)))
     (local.get $loaded))
 
+  (func $gdi_bitmap_font_discard_stage (param $stage i32)
+    (local $i i32) (local $record i32)
+    (block $done (loop $discard
+      (br_if $done (i32.ge_u (local.get $i) (global.get $GDI_BITMAP_FONT_COUNT)))
+      (local.set $record (i32.add (local.get $stage)
+        (i32.mul (local.get $i) (global.get $GDI_BITMAP_FONT_STRIDE))))
+      (if (i32.load (local.get $record))
+        (then (call $dib_free_wasm (i32.load offset=8 (local.get $record)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $discard)))
+    (call $dib_free_wasm (local.get $stage)))
+
+  ;; Failure-atomic explicit registration. Validation and every allocation
+  ;; precede retirement of the old path. This is not a shared-reader locking
+  ;; protocol: concurrent registry mutation still requires host serialization.
+  (func $gdi_bitmap_font_replace_file (param $data i32) (param $size i32)
+        (param $hash i32) (param $path i32) (result i32)
+    (local $expected i32) (local $loaded i32) (local $available i32)
+    (local $i i32) (local $j i32) (local $record i32) (local $state i32)
+    (local $stage_guest i32) (local $stage i32) (local $source i32)
+    (local $targets i32) (local $chosen i32) (local $candidate i32)
+    (local $used i32) (local $stamp i32) (local $best_stamp i32)
+    (local.set $expected (call $gdi_bitmap_font_parse_file_mode
+      (local.get $data) (local.get $size) (local.get $hash) (i32.const 2)))
+    (if (i32.eqz (local.get $expected)) (then (return (i32.const 0))))
+    ;; Existing installed fonts belonging to other paths are never victims.
+    ;; Retain legacy eviction of regenerable state-2 scalable strikes.
+    (block $counted (loop $capacity
+      (br_if $counted (i32.ge_u (local.get $i) (global.get $GDI_BITMAP_FONT_COUNT)))
+      (local.set $record (call $gdi_bitmap_font_record (local.get $i)))
+      (local.set $state (i32.load (local.get $record)))
+      (if (i32.or (i32.eqz (local.get $state))
+            (i32.or (i32.eq (local.get $state) (i32.const 2))
+              (call $gdi_bitmap_font_matches_path (local.get $record) (local.get $path) (local.get $hash))))
+        (then (local.set $available (i32.add (local.get $available) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $capacity)))
+    (if (i32.gt_u (local.get $expected) (local.get $available))
+      (then (return (i32.const 0))))
+    (local.set $stage_guest (call $dib_alloc
+      (i32.add (global.get $GDI_BITMAP_FONT_TABLE_SIZE)
+        (i32.mul (global.get $GDI_BITMAP_FONT_COUNT) (i32.const 4)))))
+    (if (i32.eqz (local.get $stage_guest)) (then (return (i32.const 0))))
+    (local.set $stage (call $g2w (local.get $stage_guest)))
+    (memory.fill (local.get $stage) (i32.const 0) (global.get $GDI_BITMAP_FONT_TABLE_SIZE))
+    (local.set $loaded (call $gdi_bitmap_font_parse_file_to
+      (local.get $data) (local.get $size) (local.get $hash) (i32.const 1) (local.get $stage) (local.get $path)))
+    (if (i32.ne (local.get $loaded) (local.get $expected))
+      (then
+        (call $gdi_bitmap_font_discard_stage (local.get $stage))
+        (return (i32.const 0))))
+    ;; Plan every destination before the first retirement. Prefer free/old
+    ;; path slots, then coldest scalable slots, without evicting them yet.
+    (local.set $targets (i32.add (local.get $stage) (global.get $GDI_BITMAP_FONT_TABLE_SIZE)))
+    (local.set $i (i32.const 0))
+    (block $planned_free (loop $free_slots
+      (br_if $planned_free (i32.or
+        (i32.ge_u (local.get $i) (global.get $GDI_BITMAP_FONT_COUNT))
+        (i32.eq (local.get $chosen) (local.get $loaded))))
+      (local.set $record (call $gdi_bitmap_font_record (local.get $i)))
+      (if (i32.or (i32.eqz (i32.load (local.get $record)))
+            (call $gdi_bitmap_font_matches_path (local.get $record) (local.get $path) (local.get $hash)))
+        (then
+          (i32.store (i32.add (local.get $targets) (i32.shl (local.get $chosen) (i32.const 2)))
+            (local.get $record))
+          (local.set $chosen (i32.add (local.get $chosen) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $free_slots)))
+    (block $planned (loop $victims
+      (br_if $planned (i32.eq (local.get $chosen) (local.get $loaded)))
+      (local.set $i (i32.const 0))
+      (local.set $candidate (i32.const 0))
+      (local.set $best_stamp (i32.const -1))
+      (block $scanned (loop $coldest
+        (br_if $scanned (i32.ge_u (local.get $i) (global.get $GDI_BITMAP_FONT_COUNT)))
+        (local.set $record (call $gdi_bitmap_font_record (local.get $i)))
+        (if (i32.eq (i32.load (local.get $record)) (i32.const 2))
+          (then
+            (local.set $j (i32.const 0)) (local.set $used (i32.const 0))
+            (block $checked (loop $selected
+              (br_if $checked (i32.ge_u (local.get $j) (local.get $chosen)))
+              (if (i32.eq (local.get $record)
+                    (i32.load (i32.add (local.get $targets) (i32.shl (local.get $j) (i32.const 2)))))
+                (then (local.set $used (i32.const 1)) (br $checked)))
+              (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $selected)))
+            (local.set $stamp (i32.load (call $gdi_bitmap_font_stamp (local.get $record))))
+            (if (i32.and (i32.eqz (local.get $used))
+                  (i32.le_u (local.get $stamp) (local.get $best_stamp)))
+              (then (local.set $candidate (local.get $record))
+                (local.set $best_stamp (local.get $stamp))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $coldest)))
+      (if (i32.eqz (local.get $candidate))
+        (then (call $gdi_bitmap_font_discard_stage (local.get $stage)) (return (i32.const 0))))
+      (i32.store (i32.add (local.get $targets) (i32.shl (local.get $chosen) (i32.const 2)))
+        (local.get $candidate))
+      (local.set $chosen (i32.add (local.get $chosen) (i32.const 1))) (br $victims)))
+    ;; No allocation or parsing below this point. Capacity was established
+    ;; while old registration, bindings, strike bytes and LRU were intact.
+    (drop (call $gdi_bitmap_font_remove_matching (local.get $hash) (local.get $path)))
+    (local.set $i (i32.const 0))
+    (block $published (loop $publish
+      (br_if $published (i32.ge_u (local.get $i) (local.get $loaded)))
+      (local.set $record (i32.load (i32.add (local.get $targets)
+        (i32.shl (local.get $i) (i32.const 2)))))
+      (if (i32.load (local.get $record))
+        (then
+          (call $gdi_bitmap_font_unbind_record (local.get $record))
+          (call $dib_free_wasm (i32.load offset=8 (local.get $record)))))
+      (local.set $source (i32.add (local.get $stage)
+        (i32.mul (local.get $i) (global.get $GDI_BITMAP_FONT_STRIDE))))
+      (memory.copy (local.get $record) (local.get $source) (global.get $GDI_BITMAP_FONT_STRIDE))
+      (call $gdi_bitmap_font_touch (local.get $record))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $publish)))
+    ;; The copied records now own their strike allocations; free only the
+    ;; staging table, never the transferred payloads.
+    (call $dib_free_wasm (local.get $stage))
+    (local.get $loaded))
+
+  ;; Explicit registration can stage asynchronous bytes before entering the
+  ;; parser. Render-time font ensure still uses the synchronous loader below.
+  ;; Bitmap-font identity paths obey MAX_PATH (260 bytes including NUL). Check each
+  ;; guest byte before reading: do not assume 260 bytes remain in the mapping,
+  ;; and do not scan an unterminated path into another mapped span.
+  (func $gdi_bitmap_font_path_length (param $guest i32) (result i32)
+    (local $path i32) (local $len i32) (local $at i32)
+    (if (i32.eqz (local.get $guest)) (then (return (i32.const -1))))
+    (local.set $path (call $g2w (local.get $guest)))
+    (block $done (loop $scan
+      (if (i32.ge_u (local.get $len) (i32.const 260)) (then (return (i32.const -1))))
+      (if (i32.lt_u (i32.add (local.get $guest) (local.get $len)) (local.get $guest))
+        (then (return (i32.const -1))))
+      (local.set $at (call $g2w (i32.add (local.get $guest) (local.get $len))))
+      (if (i32.or (i32.eq (local.get $at) (i32.const 0xF0))
+            (i32.or (i32.ne (local.get $at) (i32.add (local.get $path) (local.get $len)))
+              (i32.ge_u (local.get $at) (i32.shl (memory.size) (i32.const 16)))))
+        (then (return (i32.const -1))))
+      (if (i32.eqz (i32.load8_u (local.get $at))) (then (return (local.get $len))))
+      (local.set $len (i32.add (local.get $len) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
+
+  (func $gdi_bitmap_font_add_buffer (param $path_guest i32) (param $data_guest i32)
+      (param $size i32) (result i32)
+    (local $hash i32)
+    (if (i32.le_s (call $gdi_bitmap_font_path_length (local.get $path_guest)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (if (i32.or (i32.eqz (local.get $size))
+          (i32.gt_u (local.get $size) (i32.const 0x000F0000)))
+      (then (return (i32.const 0))))
+    (local.set $hash (call $gdi_bitmap_font_path_hash (call $g2w (local.get $path_guest))))
+    (call $gdi_bitmap_font_replace_file (call $g2w (local.get $data_guest))
+      (local.get $size) (local.get $hash) (call $g2w (local.get $path_guest))))
+
   (func $gdi_bitmap_font_add_resource (param $path_guest i32) (result i32)
-    (local $path i32) (local $hash i32) (local $handle i32) (local $size i32)
+    (local $length i32) (local $copy i32) (local $loaded i32)
+    (local.set $length (call $gdi_bitmap_font_path_length (local.get $path_guest)))
+    (if (i32.le_s (local.get $length) (i32.const 0)) (then (return (i32.const 0))))
+    ;; Snapshot identity before any host import can mutate the caller's path.
+    (local.set $copy (call $heap_alloc (i32.add (local.get $length) (i32.const 1))))
+    (if (i32.eqz (local.get $copy)) (then (return (i32.const 0))))
+    (memory.copy (call $g2w (local.get $copy)) (call $g2w (local.get $path_guest))
+      (i32.add (local.get $length) (i32.const 1)))
+    (local.set $loaded (call $gdi_bitmap_font_add_resource_path (call $g2w (local.get $copy))))
+    (call $heap_free (local.get $copy))
+    (local.get $loaded))
+
+  (func $gdi_bitmap_font_add_resource_path (param $path i32) (result i32)
+    (local $hash i32) (local $handle i32) (local $size i32)
     (local $data_guest i32) (local $data i32) (local $loaded i32)
-    (if (i32.eqz (local.get $path_guest)) (then (return (i32.const 0))))
-    (local.set $path (call $g2w (local.get $path_guest)))
     (local.set $hash (call $gdi_bitmap_font_path_hash (local.get $path)))
     (local.set $handle (call $host_fs_create_file (local.get $path)
       (i32.const 0x80000000) (i32.const 3) (i32.const 0x80) (i32.const 0)))
@@ -810,16 +1079,17 @@
     (drop (call $host_fs_close_handle (local.get $handle)))
     (if (i32.ne (i32.load (global.get $GDI_BITMAP_FONT_IO)) (local.get $size))
       (then (call $heap_free (local.get $data_guest)) (return (i32.const 0))))
-    (drop (call $gdi_bitmap_font_remove_hash (local.get $hash)))
-    (local.set $loaded (call $gdi_bitmap_font_parse_file
-      (local.get $data) (local.get $size) (local.get $hash)))
+    (local.set $loaded (call $gdi_bitmap_font_replace_file
+      (local.get $data) (local.get $size) (local.get $hash) (local.get $path)))
     (call $heap_free (local.get $data_guest))
     (local.get $loaded))
 
   (func $gdi_bitmap_font_remove_resource (param $path_guest i32) (result i32)
-    (if (i32.eqz (local.get $path_guest)) (then (return (i32.const 0))))
-    (call $gdi_bitmap_font_remove_hash
-      (call $gdi_bitmap_font_path_hash (call $g2w (local.get $path_guest)))))
+    (if (i32.le_s (call $gdi_bitmap_font_path_length (local.get $path_guest)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (call $gdi_bitmap_font_remove_matching
+      (call $gdi_bitmap_font_path_hash (call $g2w (local.get $path_guest)))
+      (call $g2w (local.get $path_guest))))
 
   (func $gdi_bitmap_font_ensure (param $path i32) (param $state_ptr i32)
         (result i32)
