@@ -2,11 +2,9 @@
 'use strict';
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
+const { readWatSourceClosure } = require('./wat-source-closure');
 
-const root = path.join(__dirname, '..');
-const handlers = fs.readFileSync(path.join(root, 'src', '09a-handlers.wat'), 'utf8');
+const handlers = readWatSourceClosure();
 const apiTable = require('../src/api_table.json');
 
 const api = apiTable.find(entry => entry.name === 'WaitForInputIdle');
