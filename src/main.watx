@@ -44,6 +44,7 @@
 (include "08b-dll-loader.wat")
 (include "08c-ne-loader.wat")
 (include "09a-handlers.wat")
+(include "09a0-handlers-base.wat")
 (include "09a1-comctl-handlers.wat")
 (include "09a2-handlers-console.wat")
 (include "09a3-handlers-audio.wat")
