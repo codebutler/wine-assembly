@@ -3194,3 +3194,50 @@ So the change was not made by the block that preceded it. The open
 possibilities are a write from another thread's slice, a host-side write, or a
 remap — and the next probe should photograph the whole node immediately after
 the change rather than reason further from the link alone.
+
+## B&W2 is multithreaded, which resolves the no-store prev_eip
+
+The contradiction above dissolves once the thread picture is read off the run
+log: **B&W2 spawns five guest threads**, all still active at exit.
+
+```
+[ThreadManager] CreateThread handle=0xe1000..0xe1004 start=0x899ab0
+[ThreadManager] Spawned thread 1..5 EIP=0x899ab0
+Threads (final state):
+  T1 h=0xe1000 state=active eip=0x881760 waitH=0xe0004 csPark/steal=0/0
+  T2 h=0xe1001 state=active eip=0x881760 waitH=0xe0005 csPark/steal=0/0
+  T3 h=0xe1002 state=active eip=0x89d1dc waitH=0x0   csPark/steal=2680/0
+  T4 h=0xe1003 state=active eip=0x881760 waitH=0xe000c csPark/steal=0/0
+  T5 h=0xe1004 state=active eip=0x881760 waitH=0xe0013 csPark/steal=0/0
+```
+
+So the walking thread is not the only writer in the machine. A store from
+another thread's instance does not halt main's instance at the store; main
+notices at its *next* block — which is the walker. That is exactly the shape of
+`prev_eip = 0x9e1804`, a block with no store in it.
+
+This is consistent with the structures being lock-protected by design: the node
+pool allocator `0x9de0a0` opens with `call [0xc12178]` on section `0x1d90330`,
+and `0x9c1400` takes one too. Rings that are mutated under a critical section
+are rings more than one thread touches.
+
+The log also carries a critical-section fault:
+
+```
+critical sections: 1 parked Enter(s) ABANDONED — the guest was dispatched
+  elsewhere (last at 0x075005c8) with the call's frame still on the stack
+critical sections: main parked 1x, stole 0, barged 0, released 0 it did not own
+```
+
+**Do not read that as the root cause yet.** The main thread is wedged inside the
+walker and may well be holding that section, in which case T3's 2680 parks and
+the abandoned `Enter` are a *consequence* of the wedge rather than its cause.
+Establishing direction needs the abandonment placed before or after batch
+435422, which the exit-time summary does not say.
+
+`thread-manager.js:2527-2541` already surfaces a worker-side hit as
+`[ThreadManager] T<n> WATCH ...` with that thread's own registers, and
+`set_watchpoint` is in `INHERITED_WASM_GLOBALS` (`lib/worker-imports.js`), so
+thread instances inherit the address when they spawn. Run 58 printed no such
+line — but the threads spawn during startup, so arm-before-spawn ordering has to
+be confirmed before that silence counts as evidence.
