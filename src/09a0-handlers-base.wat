@@ -1685,8 +1685,9 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_SetFileSecurityW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $file_security_not_supported (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $handle_SetFileSecurityA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   (func $handle_AllocateAndInitializeSid (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $sid i32) (local $out i32) (local $sid_wa i32)

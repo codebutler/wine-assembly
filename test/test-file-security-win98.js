@@ -29,17 +29,21 @@ const extraWat = String.raw`
     (global.set $esp (local.get $saved_esp))
     (global.get $eax))
 
-  (func $test_call_SetFileSecurity (param $wide i32) (result i32)
-    (local $saved_esp i32)
+  (func $test_call_SetFileSecurity (param $wide i32) (param $null_args i32) (result i32)
+    (local $saved_esp i32) (local $file i32) (local $descriptor i32)
+    (local.set $file
+      (select (i32.const 0) (i32.const 0x400000) (local.get $null_args)))
+    (local.set $descriptor
+      (select (i32.const 0) (i32.const 0x410000) (local.get $null_args)))
     (local.set $saved_esp (global.get $esp))
     (if (local.get $wide)
       (then
         (call $handle_SetFileSecurityW
-          (i32.const 0x400000) (i32.const 4) (i32.const 0x410000)
+          (local.get $file) (i32.const 4) (local.get $descriptor)
           (i32.const 0) (i32.const 0) (i32.const 0)))
       (else
         (call $handle_SetFileSecurityA
-          (i32.const 0x400000) (i32.const 4) (i32.const 0x410000)
+          (local.get $file) (i32.const 4) (local.get $descriptor)
           (i32.const 0) (i32.const 0) (i32.const 0))))
     (global.set $test_file_security_stack_delta
       (i32.sub (global.get $esp) (local.get $saved_esp)))
@@ -48,8 +52,9 @@ const extraWat = String.raw`
 
   (func (export "test_get_file_security") (param $wide i32) (result i32)
     (call $test_call_GetFileSecurity (local.get $wide)))
-  (func (export "test_set_file_security") (param $wide i32) (result i32)
-    (call $test_call_SetFileSecurity (local.get $wide)))
+  (func (export "test_set_file_security")
+        (param $wide i32) (param $null_args i32) (result i32)
+    (call $test_call_SetFileSecurity (local.get $wide) (local.get $null_args)))
   (func (export "test_file_security_needed") (result i32)
     (global.get $test_file_security_needed))
   (func (export "test_file_security_stack_delta") (result i32)
@@ -71,12 +76,14 @@ const extraWat = String.raw`
     assert.strictEqual(e.test_file_security_stack_delta(), 24,
       `GetFileSecurity${suffix} pops five stdcall arguments`);
 
-    assert.strictEqual(e.test_set_file_security(wide), 0,
-      `SetFileSecurity${suffix} does not claim an ACL was persisted`);
-    assert.strictEqual(e.test_last_error(), 120,
-      `SetFileSecurity${suffix} reports ERROR_CALL_NOT_IMPLEMENTED`);
-    assert.strictEqual(e.test_file_security_stack_delta(), 16,
-      `SetFileSecurity${suffix} pops three stdcall arguments`);
+    for (const [nullArgs, inputKind] of [[0, 'unmapped'], [1, 'NULL']]) {
+      assert.strictEqual(e.test_set_file_security(wide, nullArgs), 0,
+        `SetFileSecurity${suffix} rejects ${inputKind} inputs on Win98`);
+      assert.strictEqual(e.test_last_error(), 120,
+        `SetFileSecurity${suffix} reports ERROR_CALL_NOT_IMPLEMENTED for ${inputKind} inputs`);
+      assert.strictEqual(e.test_file_security_stack_delta(), 16,
+        `SetFileSecurity${suffix} pops three stdcall arguments for ${inputKind} inputs`);
+    }
   }
 
   const names = new Set(apiTable.map(api => api.name));
