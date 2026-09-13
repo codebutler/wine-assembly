@@ -1755,25 +1755,33 @@
           (i32.store offset=16 (local.get $rec)
             (call $console_input_event_flags (local.get $i))))
         (else
-          (i32.store offset=4 (local.get $rec)
-            (i32.eqz (i32.and
-              (call $console_input_event_flags (local.get $i))
-              (i32.const 0x80000000))))                         ;; bKeyDown
-          (i32.store16 offset=8 (local.get $rec)
-            (i32.and (call $console_input_event_flags (local.get $i))
-              (i32.const 0xFFFF)))                              ;; repeat
-          (i32.store16 offset=10 (local.get $rec) (call $console_input_vk (local.get $i)))
-          (i32.store16 offset=12 (local.get $rec)
-            (i32.and
-              (i32.shr_u (call $console_input_event_flags (local.get $i)) (i32.const 16))
-              (i32.const 0xFF)))                                ;; scan code
-          (i32.store16 offset=14 (local.get $rec)
-            (select
-              (call $console_input_char (local.get $i))
-              (i32.and (call $console_input_char (local.get $i)) (i32.const 0xFF))
-              (local.get $wide)))
-          (i32.store offset=16 (local.get $rec)
-            (call $console_input_control_state (local.get $i)))))
+          (if (i32.eq (local.get $type) (i32.const 1)) ;; KEY_EVENT
+            (then
+              (i32.store offset=4 (local.get $rec)
+                (i32.eqz (i32.and
+                  (call $console_input_event_flags (local.get $i))
+                  (i32.const 0x80000000))))                         ;; bKeyDown
+              (i32.store16 offset=8 (local.get $rec)
+                (i32.and (call $console_input_event_flags (local.get $i))
+                  (i32.const 0xFFFF)))                              ;; repeat
+              (i32.store16 offset=10 (local.get $rec) (call $console_input_vk (local.get $i)))
+              (i32.store16 offset=12 (local.get $rec)
+                (i32.and
+                  (i32.shr_u (call $console_input_event_flags (local.get $i)) (i32.const 16))
+                  (i32.const 0xFF)))                                ;; scan code
+              (i32.store16 offset=14 (local.get $rec)
+                (select
+                  (call $console_input_char (local.get $i))
+                  (i32.and (call $console_input_char (local.get $i)) (i32.const 0xFF))
+                  (local.get $wide)))
+              (i32.store offset=16 (local.get $rec)
+                (call $console_input_control_state (local.get $i))))
+            (else
+              ;; Other INPUT_RECORD unions already occupy the four raw dwords
+              ;; used by the internal ring. Preserve them byte-for-byte.
+              (memory.copy (i32.add (local.get $rec) (i32.const 4))
+                (i32.add (call $console_input_slot (local.get $i)) (i32.const 4))
+                (i32.const 16))))))
       (local.set $rec (i32.add (local.get $rec) (i32.const 20)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $fill)))
@@ -2312,8 +2320,60 @@
 
   ;; WriteConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsWritten) → BOOL
   (func $handle_WriteConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg3)
-      (then (i32.store (call $g2w (local.get $arg3)) (local.get $arg2))))
+    (local $source i32) (local $record i32) (local $slot i32)
+    (local $count i32) (local $limit i32) (local $i i32) (local $type i32)
+    (if (i32.ne (call $console_handle_resolve (local.get $arg0)) (i32.const 1))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.or (i32.eqz (local.get $arg3))
+          (i32.and (i32.ne (local.get $arg2) (i32.const 0))
+                   (i32.eqz (local.get $arg1))))
+      (then
+        (if (local.get $arg3)
+          (then (i32.store (call $g2w (local.get $arg3)) (i32.const 0))))
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $count (call $console_input_count))
+    (local.set $limit
+      (select (local.get $arg2)
+        (i32.sub (global.get $CONSOLE_INPUT_MAX) (local.get $count))
+        (i32.le_u (local.get $arg2)
+          (i32.sub (global.get $CONSOLE_INPUT_MAX) (local.get $count)))))
+    (local.set $source (call $g2w (local.get $arg1)))
+    (block $done (loop $write
+      (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
+      (local.set $record
+        (i32.add (local.get $source) (i32.mul (local.get $i) (i32.const 20))))
+      (local.set $slot (call $console_input_slot (i32.add (local.get $count) (local.get $i))))
+      (local.set $type (i32.load16_u (local.get $record)))
+      (i32.store (local.get $slot) (local.get $type))
+      (if (i32.eq (local.get $type) (i32.const 1)) ;; KEY_EVENT
+        (then
+          (i32.store offset=4 (local.get $slot) (i32.load16_u offset=14 (local.get $record)))
+          (i32.store offset=8 (local.get $slot) (i32.load16_u offset=10 (local.get $record)))
+          (i32.store offset=12 (local.get $slot) (i32.load offset=16 (local.get $record)))
+          (i32.store offset=16 (local.get $slot)
+            (i32.or
+              (i32.or
+                (i32.load16_u offset=8 (local.get $record))
+                (i32.shl (i32.load16_u offset=12 (local.get $record)) (i32.const 16)))
+              (select (i32.const 0x80000000) (i32.const 0)
+                (i32.eqz (i32.load offset=4 (local.get $record)))))))
+        (else
+          (memory.copy (i32.add (local.get $slot) (i32.const 4))
+            (i32.add (local.get $record) (i32.const 4)) (i32.const 16))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $write)))
+    (i32.store (global.get $CONSOLE_INPUT) (i32.add (local.get $count) (local.get $limit)))
+    (if (local.get $limit)
+      (then (drop (call $host_set_event (call $console_input_event)))))
+    (i32.store (call $g2w (local.get $arg3)) (local.get $limit))
+    (global.set $last_error (i32.const 0))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
