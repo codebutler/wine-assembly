@@ -2823,3 +2823,47 @@ way you now read a `--watch` EIP: it names the block, and the instruction is
 somewhere inside it. Counting the memory accesses in that block against the
 fault count is worth doing — where the two disagree, the block is not the one
 the linear disassembly suggests.
+
+## The element↔record pairing is computed, and the build pass disagrees with it
+
+Run 51 captured the whole element array and the whole head of the record pool
+in the same `--trace-at` hit, so for the first time the two can be read against
+each other instead of one at a time. Elements are 16 bytes at `0x2eccfc98`,
+`{record*, id, kind, 0}`, with `id` simply ascending; pool records are `0x28`
+apart from `0x2ec30008`.
+
+The pairing is **arithmetic, not allocation**: every kind-2 element's `record*`
+is exactly `0x2ec30008 + id*0x28`, checked on all seven of them. So "record
+index == element id" is a fact here, not an inference, and a blank record is
+not an unallocated one — the pool is preallocated at startup (7000 entries,
+from the init at `0x9d79f0`), and the record for element *i* exists whether or
+not anything ever filled it.
+
+Reading the two arrays against each other splits the records almost perfectly
+*against* the element kind:
+
+| records | `+8` back-pointer | element kind | element's `record*` |
+|---|---|---|---|
+| 2, 3, 6, 7, 12 | set (built) | 4 | NULL — never read |
+| 0, 1, 4, 14 | zero (never built) | 2 | points straight at the record |
+| 9, 10, 11 | set (built) | 2 | points at it — consistent |
+
+Two earlier readings die here:
+
+- **"Kind 4 elements carry a NULL record pointer and are never dereferenced, so
+  the blank records at those ids are expected"** is retracted. It has it
+  backwards: the records that *were* built are mostly the ones belonging to
+  kind-4 elements, which nothing will ever read, while the records that kind-2
+  elements point at are mostly the blank ones.
+- The filled/empty id list from the previous session (`filled 3,4,7,9,10,11,12`)
+  was read off record heads alone and is right about the heads, but it was
+  matched to the wrong elements. Record 4's head is set while its back-pointer
+  is zero; record 2's back-pointer is set while its head is zero. Head and
+  back-pointer are written by different things and must be read separately.
+
+So the wedge is not one element being special. **The build pass and the read
+pass disagree about which elements matter**, and the walker dies on a record
+the build pass skipped. Whether record 1 was never written or was written and
+then lost is the next thing to measure — and note that neither `--watch`'s EIP
+nor `--fault-null`'s can answer *who*, so the question to ask of a run is when
+a write lands, not where it came from.
