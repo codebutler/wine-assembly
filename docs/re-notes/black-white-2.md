@@ -4470,3 +4470,41 @@ still not the mechanism (`0x9e1e50` faulted 66 times against 11,958,660 block
 entries, 0.0006%), ~3060 entries/s is a hot loop rather than a demonstrated
 runaway, and the earliest fault — `eip=0x9cef45` with `ebx` NULL, loaded from a
 local at `0x9cef4b` — is still upstream of everything here and still unexplained.
+
+### CORRECTION 2026-09-13: `--skip-intro` writes to a stack local, not the intro object
+
+The mechanism documented in "Ending the intro on demand" is right; the probe's
+identification of the object it writes to is not. `tools/black-white-software-probe.js`
+takes the object from `ESI` on a trace at `0x00526d93`, but the exit test the
+section above disassembles is at `0x00529421`/`0x00529433`, and `ESI` at
+`0x526d93` is not the same value. Measured, from the one trace hit in a run:
+
+```
+[EIP] 0x00526d93 ... ESP=0x074d69f0 EBP=0x074d6bc0 ESI=0x074d6bdc EDI=0x00000031
+```
+
+`ESI` is `EBP+0x1c` — inside the stack frame, in the guest stack region
+(`0x07400000`–`0x07500000`). It is a local, not a heap-allocated sequence
+object. Two independent corroborations that the fields read off it are garbage:
+
+- `frame` stayed at **1** for the whole of a 560-second run, sampled every 5s.
+  A running intro increments it; a finished one does not sit at 1.
+- `target` reads **636**, against the 1787 frames this file documents.
+
+The probe still prints `Intro skip: { frame: 1, finishFrame: 0 }`, so the write
+*happens* — into `stack+0x24`. Nothing about the engine's intro state changes,
+and the skip is a no-op at best. It is not obviously harmless: the address it
+writes is a live stack slot.
+
+So do not read "Intro skip:" in a log as evidence the intro was ended, and do
+not use `--skip-intro` as the way to reach the menu until the object is taken
+from `ESI` at `0x00529433` (the engine's own exit test) rather than `0x526d93`.
+A run traced at `0x529433` for ten minutes took **zero** hits, so the intro tick
+was not executing at all in that window — which is its own open question, and
+means "the menu is an hour of intro away" is not established either.
+
+**Do not time anything on this box without reading `uptime` first.** These runs
+were made at load averages of 54, 208 and 394. The same build reached 249 d3d9
+submissions in 304s at load 54 and 19 submissions in 616s at load 394 — a 20x
+spread that is entirely the machine. Any "it stalls after N submissions"
+conclusion drawn without that number beside it is unsafe.
