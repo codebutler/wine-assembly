@@ -1552,7 +1552,7 @@
   (func $heap_alloc (param $size i32) (result i32)
     (local $need i32) (local $ptr i32)
     (local $prev_w i32) (local $cur i32) (local $cur_w i32)
-    (local $bsz i32) (local $rem i32) (local $steps i32)
+    (local $bsz i32) (local $rem i32) (local $steps i32) (local $from_free i32)
     ;; Refuse huge/overflowing allocations before adding the block header.
     (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))
       (then
@@ -1629,6 +1629,7 @@
                   (i32.load (i32.add (local.get $cur_w) (i32.const 4)))))
                 (else (global.set $free_list
                   (i32.load (i32.add (local.get $cur_w) (i32.const 4))))))))
+          (local.set $from_free (i32.const 1))
           (br $found)))
       (local.set $prev_w (local.get $cur_w))
       (local.set $cur (i32.load (i32.add (local.get $cur_w) (i32.const 4))))
@@ -1662,6 +1663,24 @@
       (i32.store (call $g2w (local.get $ptr)) (local.get $need))
       (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need)))
       (i32.atomic.store offset=8 (global.get $heap_arena_record) (global.get $heap_ptr)))
+    ;; A recycled block still holds whatever the last owner left in it -- and,
+    ;; at offset 4, this allocator's own free-list next pointer. Bump space is
+    ;; zero because every arena chunk is committed zeroed, so before this the
+    ;; same HeapAlloc handed back zeros early in a process and stale bytes once
+    ;; the free list filled up. Programs are written against the second half of
+    ;; that never happening: a Windows process that asks for a large block gets
+    ;; fresh committed pages, so a structure that is only written where it is
+    ;; used reads zero everywhere else. Black & White 2's land loader is one --
+    ;; its 128x128 spatial grid (16384 cells x 12 bytes) is populated lazily and
+    ;; never cleared, and served from recycled memory 2208 of its cells came
+    ;; back holding a free-list link where a NULL vector should be, after which
+    ;; the query at 0x9e5272 scanned guest address i*4 forever. Repairing those
+    ;; cells in a live wedged process moved EIP straight out of that loop, which
+    ;; is what makes this the fix rather than a guess.
+    (if (local.get $from_free)
+      (then (call $zero_memory
+        (i32.add (call $g2w (local.get $ptr)) (i32.const 4))
+        (i32.sub (local.get $need) (i32.const 4)))))
     ;; Return guest pointer past the size header
     (i32.add (local.get $ptr) (i32.const 4)))
 
