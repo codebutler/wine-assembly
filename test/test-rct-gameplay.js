@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -35,18 +36,13 @@ function frameStats(png) {
   return { width: png.width, height: png.height, colors: colors.size };
 }
 
-function pixelDiff(a, b, x0 = 0, y0 = 0, x1 = a.width, y1 = a.height) {
-  assert(a.width === b.width && a.height === b.height,
-    'cannot compare differently sized RCT frames');
-  let changed = 0;
-  for (let y = y0; y < y1; y++) {
-    for (let x = x0; x < x1; x++) {
-      const i = (y * a.width + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2]) changed++;
-    }
-  }
-  return changed;
+function changedPixels(a, b, x0 = 0, y0 = 0, x1 = a.width, y1 = a.height) {
+  const result = diffPng(a, b, {
+    includeAlpha: false,
+    region: { x: x0, y: y0, w: x1 - x0, h: y1 - y0 },
+  });
+  assert(!result.sizeMismatch, 'cannot compare differently sized RCT frames');
+  return result.changed;
 }
 
 async function main() {
@@ -93,8 +89,8 @@ async function main() {
     const b = readPng(frameBPath);
     const construction = readPng(constructionPath);
     const stats = frameStats(construction);
-    const simulationChanged = pixelDiff(a, b);
-    const panelChanged = pixelDiff(b, construction, 0, 32, 120, 446);
+    const simulationChanged = changedPixels(a, b);
+    const panelChanged = changedPixels(b, construction, 0, 32, 120, 446);
     assert(stats.width === 640 && stats.height === 480 && stats.colors > 100,
       `expected a detailed 640x480 park, got ${JSON.stringify(stats)}`);
     assert(simulationChanged > 10000,

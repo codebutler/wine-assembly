@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -46,15 +47,10 @@ function imageStats(png) {
   return { colors: colors.size, red, blue, orange };
 }
 
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height,
-    'cannot compare differently sized Jardinains frames');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2]) changed++;
-  }
-  return changed;
+function changedPixels(a, b) {
+  const result = diffPng(a, b, { includeAlpha: false });
+  assert(!result.sizeMismatch, 'cannot compare differently sized Jardinains frames');
+  return result.changed;
 }
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -122,7 +118,7 @@ async function main() {
     const ready = readPng(readyPath);
     const active = readPng(activePath);
     const stats = imageStats(active);
-    const changed = pixelDiff(ready, active);
+    const changed = changedPixels(ready, active);
     assert(active.width === 640 && active.height === 480,
       `expected a 640x480 game frame, got ${active.width}x${active.height}`);
     assert(stats.colors > 250 && stats.red > 5000 && stats.blue > 5000 &&

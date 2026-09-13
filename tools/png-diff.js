@@ -18,7 +18,9 @@
 // --tolerance=N ignores per-channel differences of N or less (JPEG-free canvas
 // output is exact, but GPU paths can differ by a unit of rounding).
 // --out=diff.png writes a map of the changed pixels: red where they differ,
-// the original dimmed where they do not.
+// the original dimmed where they do not. Importers can pass
+// `includeAlpha: false` when transparency is deliberately outside a test's
+// contract; the command-line comparator checks RGBA by default.
 
 const fs = require('fs');
 const { PNG } = require('pngjs');
@@ -30,6 +32,7 @@ function readPng(file) {
 function diffPng(fileA, fileB, options) {
   options = options || {};
   const tolerance = options.tolerance | 0;
+  const channelCount = options.includeAlpha === false ? 3 : 4;
   const a = typeof fileA === 'string' ? readPng(fileA) : fileA;
   const b = typeof fileB === 'string' ? readPng(fileB) : fileB;
   if (a.width !== b.width || a.height !== b.height) {
@@ -63,7 +66,7 @@ function diffPng(fileA, fileB, options) {
     for (let x = x0; x < x1; x++) {
       const i = (y * a.width + x) * 4;
       let delta = 0;
-      for (let c = 0; c < 4; c++) {
+      for (let c = 0; c < channelCount; c++) {
         const d = Math.abs(a.data[i + c] - b.data[i + c]);
         if (d > delta) delta = d;
       }

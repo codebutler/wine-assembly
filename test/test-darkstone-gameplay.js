@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -45,29 +46,10 @@ function imageStats(filename) {
   };
 }
 
-function pixelDiff(a, b) {
-  assert(a.width === b.width && a.height === b.height,
-    'Darkstone gameplay frames have different dimensions');
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-  }
-  return changed;
-}
-
-function regionDiff(a, b, x, y, width, height) {
-  assert(a.width === b.width && a.height === b.height,
-    'Darkstone gameplay frames have different dimensions');
-  let changed = 0;
-  for (let py = y; py < y + height; py++) {
-    for (let px = x; px < x + width; px++) {
-      const i = (py * a.width + px) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) changed++;
-    }
-  }
-  return changed;
+function changedPixels(a, b, region = null) {
+  const result = diffPng(a, b, region ? { region } : undefined);
+  assert(!result.sizeMismatch, 'Darkstone gameplay frames have different dimensions');
+  return result.changed;
 }
 
 async function stepTotal(session, count, chunk = 2) {
@@ -195,34 +177,35 @@ async function main() {
 
     await click(session, 400, 260, 10); // New Game
     const mode = await capture(session, '02-new-game');
-    assert(pixelDiff(menu.png, mode.png) > 5000, 'New Game did not change the menu');
+    assert(changedPixels(menu.png, mode.png) > 5000, 'New Game did not change the menu');
     await click(session, 400, 305, 14); // One Player
     const champions = await capture(session, '03-choose-champions');
-    assert(pixelDiff(mode.png, champions.png) > 50000,
+    assert(changedPixels(mode.png, champions.png) > 50000,
       'One Player did not open champion selection');
 
     await click(session, 145, 410, 14); // Create A Character
     const creator = await capture(session, '04-create-character');
-    assert(pixelDiff(champions.png, creator.png) > 30000,
+    assert(changedPixels(champions.png, creator.png) > 30000,
       'Create A Character did not open the character sheet');
     await click(session, 385, 480, 1); // Name field
     await keypressText(session, 'Codex');
     await capture(session, '05-character-named');
     await click(session, 425, 570, 14); // Create
     const created = await capture(session, '06-champion-created');
-    assert(pixelDiff(creator.png, created.png) > 20000,
+    assert(changedPixels(creator.png, created.png) > 20000,
       'Create did not add the champion');
 
     // Create leaves the new champion attached to the cursor; clicking its
     // roster icon again would cancel that pending placement.
     await tap(session, 530, 225); // Place CODEX in the first team slot.
     const selected = await capture(session, '07-champion-selected');
-    assert(pixelDiff(created.png, selected.png) > 10000,
+    assert(changedPixels(created.png, selected.png) > 10000,
       'The created champion was not selected');
     await session.send('mousemove:425:570');
     await stepTotal(session, 4);
     const persisted = await capture(session, '07b-champion-slot-persisted');
-    assert(regionDiff(created.png, persisted.png, 480, 180, 110, 95) > 4000,
+    assert(changedPixels(created.png, persisted.png,
+      { x: 480, y: 180, w: 110, h: 95 }) > 4000,
       'The champion did not remain in its team slot after moving the cursor');
     await click(session, 425, 570, 10); // OK
     const townA = await waitForTown(session);
@@ -233,7 +216,7 @@ async function main() {
     await session.send('di-keyup:39');
     await stepTotal(session, 4);
     const townB = await capture(session, '09-town-after-input');
-    const changed = pixelDiff(townA.png, townB.png);
+    const changed = changedPixels(townA.png, townB.png);
     assert(changed > 10000,
       `Darkstone town did not respond to camera input: ${changed} changed pixels`);
 

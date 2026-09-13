@@ -9,6 +9,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
@@ -50,22 +51,13 @@ function imageStats(filename) {
   return { width: png.width, height: png.height, nonBlack, colors: colors.size };
 }
 
-function pixelDiff(filenameA, filenameB, region = null) {
-  const a = PNG.sync.read(fs.readFileSync(filenameA));
-  const b = PNG.sync.read(fs.readFileSync(filenameB));
-  assert(a.width === b.width && a.height === b.height, 'cannot compare differently sized frames');
-  const box = region || { x: 0, y: 0, width: a.width, height: a.height };
-  let changed = 0;
-  for (let y = box.y; y < box.y + box.height; y++) {
-    for (let x = box.x; x < box.x + box.width; x++) {
-      const i = (y * a.width + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) {
-        changed++;
-      }
-    }
-  }
-  return changed;
+function changedPixels(filenameA, filenameB, region = null) {
+  const options = region
+    ? { region: { x: region.x, y: region.y, w: region.width, h: region.height } }
+    : undefined;
+  const result = diffPng(filenameA, filenameB, options);
+  assert(!result.sizeMismatch, 'cannot compare differently sized frames');
+  return result.changed;
 }
 
 function assert(condition, message) {
@@ -183,11 +175,11 @@ async function main() {
       `installed game level stayed blank: ${JSON.stringify(gameStats)}`);
 
     const playfield = { x: 0, y: 270, width: 640, height: 170 };
-    const ballDeltaAB = pixelDiff(ballPngA, ballPngB, playfield);
-    const ballDeltaBC = pixelDiff(ballPngB, ballPngC, playfield);
+    const ballDeltaAB = changedPixels(ballPngA, ballPngB, playfield);
+    const ballDeltaBC = changedPixels(ballPngB, ballPngC, playfield);
     assert(ballDeltaAB > 300 && ballDeltaBC > 300,
       `ball did not animate across successive gameplay frames: ${ballDeltaAB}, ${ballDeltaBC}`);
-    const paddleDelta = pixelDiff(readyPng, paddleLeftPng,
+    const paddleDelta = changedPixels(readyPng, paddleLeftPng,
       { x: 0, y: 420, width: 640, height: 60 });
     assert(paddleDelta > 1000, `paddle did not follow mouse movement: ${paddleDelta} changed pixels`);
 

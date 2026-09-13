@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -32,13 +33,10 @@ function countPixels(png, x0, y0, x1, y1, predicate) {
   return count;
 }
 
-function pixelDiff(a, b) {
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2]) changed++;
-  }
-  return changed;
+function changedPixels(a, b) {
+  const result = diffPng(a, b, { includeAlpha: false });
+  assert(!result.sizeMismatch, 'Total Annihilation gameplay frames have different dimensions');
+  return result.changed;
 }
 
 async function main() {
@@ -84,7 +82,7 @@ async function main() {
       (r, g, blue) => g > 35 && g > r * 1.1 && g > blue * 1.1);
     const resourceText = countPixels(b, 112, 0, 640, 28,
       (r, g, blue) => r > 120 && g > 90 && blue < 80);
-    const changed = pixelDiff(a, b);
+    const changed = changedPixels(a, b);
     assert(terrain > 90000, `battlefield terrain is missing (${terrain} green pixels)`);
     assert(minimap > 100, `battlefield minimap is missing (${minimap} green pixels)`);
     assert(resourceText > 100, `resource HUD is missing (${resourceText} yellow pixels)`);

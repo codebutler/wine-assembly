@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 const { startControlSession } = require('./control-session');
 
 const ROOT = path.join(__dirname, '..');
@@ -38,13 +39,11 @@ function pixelStats(png) {
   return { visible, gold, blue };
 }
 
-function pixelDiff(a, b) {
-  let changed = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2]) changed++;
-  }
-  return changed;
+function changedPixels(a, b) {
+  const result = diffPng(a, b, { includeAlpha: false });
+  assert.strictEqual(result.sizeMismatch, false,
+    'Captain Claw gameplay frames have different dimensions');
+  return result.changed;
 }
 
 async function main() {
@@ -86,7 +85,7 @@ async function main() {
     assert.strictEqual(after.width, 640);
     assert.strictEqual(after.height, 480);
     const stats = pixelStats(after);
-    const changed = pixelDiff(before, after);
+    const changed = changedPixels(before, after);
     assert(stats.visible > 120000, `La Roca scene is missing (${stats.visible} visible pixels)`);
     assert(stats.gold > 1500, `treasure and HUD are missing (${stats.gold} gold pixels)`);
     assert(stats.blue > 1000, `Claw/water scene detail is missing (${stats.blue} blue pixels)`);
