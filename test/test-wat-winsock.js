@@ -189,7 +189,14 @@ async function main() {
   check('htons/ntohs swap 16-bit values', () => {
     assert.strictEqual(wat.test_call_htons(8035) | 0, 0x631f);  // 0x1f63 swapped
     assert.strictEqual(wat.test_call_ntohs(0x6331) | 0, 0x3163);
-    assert.strictEqual(wat.test_call_htons(wat.test_call_ntohs(0x1234) | 0) | 0, 0x1234);
+    for (const value of [0, 1, 0xff, 0x1234, 0x8001, 0xffff]) {
+      const hostToNetwork = wat.test_call_htons(value) & 0xffff;
+      const networkToHost = wat.test_call_ntohs(value) & 0xffff;
+      assert.strictEqual(networkToHost, hostToNetwork,
+        `both directions use the same Intel/network byte swap for 0x${value.toString(16)}`);
+      assert.strictEqual(wat.test_call_ntohs(hostToNetwork) & 0xffff, value,
+        `ntohs reverses htons for 0x${value.toString(16)}`);
+    }
   });
 
   check('inet_addr parses dotted quads in network order', () => {

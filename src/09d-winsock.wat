@@ -1456,8 +1456,11 @@
 
   (func $handle_ntohs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $bswap16 (i32.and (local.get $arg0) (i32.const 0xFFFF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    ;; Intel host order is little-endian and TCP/IP order is big-endian, so
+    ;; both directions are the same involutive 16-bit byte swap.
+    (call $handle_htons
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr)))
 
   (func $handle_ntohl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
