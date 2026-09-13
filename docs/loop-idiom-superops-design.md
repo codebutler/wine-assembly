@@ -1483,9 +1483,24 @@ Using a block-entry share as a time share overstates any fold that targets
 and §17's app-level projections with the same suspicion and recompute them off
 ops before quoting.
 
-One measurement bounds all of it. SimGolf retires 1.75M blocks/s in the
-browser; the same primitives predict 24.4M. **The interpreter runs at a
-fourteenth of its own modelled speed**, so either the loaded box or the
-microbench's perfectly-predicted loop (CLAUDE.md's own warning) is worth more
-than every fold in this file combined. Measure that on a quiet box before
-building anything here.
+**Do not price a real app with this harness's primitives.** Doing so made
+SimGolf look like it retired 1.75M blocks/s against a predicted 24.4M, a
+"fourteenfold gap" that read like a defect. It is not one: SimGolf runs at
+**7.0M threaded ops/s**, which is exactly the ~7-9M CLAUDE.md documents for
+Diablo. A dispatch is ~8ns *inside a three-op perfectly-predicted loop*; in a
+2056-block working set it is ~140ns, and bench-loops says so itself ("it
+understates dispatch cost by construction"). The ~15x is the price of being a
+real program.
+
+Which leaves the only arithmetic that matters, and it needs no timing model at
+all — measured ops per frame, divided into measured ops per second:
+
+```
+    now:  7.0M ops/s / 1.69M ops/frame              =  4.15 fps   (measured)
+   fold:  7.0M ops/s / (1.69M - 1.10M jgl ops)      = 11.9  fps
+   30fps needs a frame to cost 233k ops             =  7.2x cut
+```
+
+So the keyed fold is worth ~2.9x here **and cannot reach 30 fps** — it removes
+59% of the ops and Amdahl does the rest. Anything targeting 30 fps has to come
+for the other 41% as well.

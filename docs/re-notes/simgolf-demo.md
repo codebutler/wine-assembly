@@ -652,7 +652,30 @@ Also load-immune and useful: at 3.0-3.75 block entries per pixel (the range
 frame** — well under the 940x736 canvas, so this is per-frame sprite work over
 a retained terrain, not a full redraw.
 
-### The gap that matters more than the fold
+### Confirmed on a second long window, and the throughput is NORMAL
+
+| window | span | presents | present/s | ops/frame | **ops/s** | loadavg |
+|---|---|---|---|---|---|---|
+| A | 46.8s | 230 | 4.91 | 1.419M | **6.96M** | 43-113 |
+| B | 67.0s | 278 | 4.15 | 1.688M | **7.00M** | 61-81 |
+
+**SimGolf's real frame rate is 4-5 fps.** Two windows, 508 presents, agreeing.
+
+And the last column kills the alarm in the next section. CLAUDE.md's Diablo
+measurement is "ops per second is flat at **~7-9M**" — a different app, a
+different day, the CLI harness rather than a browser. SimGolf comes back at
+6.96 and 7.00M. **The interpreter is running at its normal documented speed
+and this box is not costing it a factor of anything.** The two runs differ in
+ops/frame (1.42M vs 1.69M — different amounts of sprite on screen) and their
+frame rates differ in exact proportion, which is what a throughput-bound
+renderer looks like.
+
+So the arithmetic is simply: 7.0M ops/s ÷ 1.69M ops/frame = 4.15 fps. To reach
+30 fps SimGolf needs its frame to cost 233k ops instead of 1.69M — a 7x cut.
+A perfect jgl fold removes ~1.10M of those 1.69M ops, leaving 587k: **11.9
+fps**, which is the same ~11 the ops-share estimate gave. It is not 30.
+
+### RETRACTED: "the gap that matters more than the fold"
 
 `356.0k blocks/frame x 4.91 fps` = **1.75M blocks/s** (the snapshot's own
 `blocksPerSec` says 1.71M, so this is self-consistent). The same primitives
@@ -660,20 +683,29 @@ that price the table above predict `1e9 / 40.9ns` = **24.4M blocks/s**. The
 emulator is running at **one fourteenth** of what its own dispatch cost
 implies.
 
-That gap is worth more than any fold: closing even half of it beats 2.3x. Two
-candidate explanations, neither tested:
+Explanation 2 is the answer, and no quiet box was needed to find it: at 7.0M
+ops/s SimGolf is exactly on Diablo's documented ~7-9M, so there is no anomaly
+to explain. The "gap" was me pricing a real app with bench-loops' primitives,
+which is the error CLAUDE.md names in so many words — "**never quote a
+microbench % as an app %**". A dispatch is ~8ns *in a three-op loop that is
+perfectly BTB-predicted with everything in L1*; across a 2056-block working
+set it is ~140ns, and that ~15x is the normal cost of being a real program,
+not a defect. bench-loops says so itself: "it understates dispatch cost by
+construction".
 
-1. **The box.** Every measurement in this file was taken at loadavg 33-113
-   with 37 users on the machine. bench-loops is equally exposed, but a
-   single tight loop and a 2056-block working set are not equally exposed.
-2. **The microbench flatters itself**, exactly as CLAUDE.md warns: "it
-   understates dispatch cost by construction (a periodic loop is perfectly
-   BTB-predicted)". A real app with 2056 distinct hot blocks pays branch
-   mispredicts and cache misses that a 3-op loop never does.
+Two things I asserted while chasing this that are also wrong, recorded so they
+are not repeated:
 
-Until one of those is measured on a quiet box, **every fps projection in this
-file is a projection off a contaminated baseline**, and the fold's 2.3x is a
-ratio between two numbers that are both suspect in the same direction.
+- **"The emulator only got 30-55% of wall clock."** That came from dividing
+  `phaseMs.main` by `wallMs` in one snapshot. `phaseMs` is summed over the
+  240-step ring; `wallMs` is cumulative since page load. Different windows,
+  meaningless ratio. The profiler's own windowed figure is the right one and
+  says the opposite: **69-81% of wall clock** is inside >50ms guest tasks, so
+  the main thread is not being withheld at all.
+- **"Every fps projection here is off a contaminated baseline."** The ops/s
+  cross-check says the baseline is sound. Load affects wall-clock *latency*
+  figures in this file — frame-interval tails, long-task counts, the threads
+  page-fps comparison — but not the throughput the projections rest on.
 
 ## Measured browser frame rate: ~2-3 fps of gameplay, in BOTH backends (SUPERSEDED — see correction above)
 
