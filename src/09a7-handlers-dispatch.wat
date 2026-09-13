@@ -3786,9 +3786,12 @@
         (i32.store offset=8  (local.get $p) (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; 824: GetConsoleOutputCP() → UINT — returns output code page
+  ;; 824: GetConsoleOutputCP() → UINT. The page belongs to the console
+  ;; associated with this process, so a detached process fails with zero.
   (func $handle_GetConsoleOutputCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 437))  ;; CP 437 (OEM United States)
+    (global.set $eax
+      (select (global.get $console_output_cp) (i32.const 0)
+        (call $console_is_attached)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
 
 ;; SetupAPI/device notifications are optional for sndvol32. Fail the device
