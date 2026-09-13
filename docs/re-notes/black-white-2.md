@@ -4607,3 +4607,39 @@ even though it is not itself the thing that allocates.
 `[ecx+4]/[ecx+8]/[ecx+0xc]` to get begin/end/cap, and `[esp+0x14]` for the
 insert count. That names *which* of the three vectors runs away and what its
 size was on the way up, without waiting for the 430MB refusal at the end.
+
+### The 430MB crash may be harness-induced (2026-09-13, Claude)
+
+Before spending more time treating the 430MB allocation as a guest defect,
+check how the pointer was moved in the run that produced it.
+
+`test/run.js`'s `relmousemove` documentation already records the hazard:
+
+> A DirectInput game reads the whole delta accumulated since its last poll, and
+> headless frames are seconds apart, so one of these arrives as a single lump no
+> hand could produce. A 2D menu clamps it at the screen edge; a 3D scene feeds
+> it to a camera or a terrain pick and a value like -2000 can send the game into
+> an unbounded world query it never returns from.
+
+The drive harness that produced the 430MB run parked the pointer with
+`handleRelativeMouseMove(-3000, -3000)` before **every** click, to slam it into
+a corner and establish a known origin. On the menus that is invisible, because a
+2D menu clamps at the edge. The land picker is not a 2D menu, and the park ran
+immediately before the land click -- the last thing the run did before the
+allocation. An unbounded world query is exactly the shape that pushes ~10^8
+pointers into one of the three vectors in `0x9e32a0` and then asks for
+430,571,520 bytes.
+
+So the causal chain to test first is **harness -> lump delta -> unbounded terrain
+query -> vector growth -> bad_alloc**, not a spontaneous guest bug. That does not
+clear the guest (a real program should not answer a large mouse delta with an
+unbounded query, and the NULL sentinel may still be what makes the query
+unbounded rather than merely large), but it does mean a run that reproduces the
+crash while feeding -3000 deltas has not demonstrated anything about ordinary
+gameplay.
+
+Splitting the delta inside a single eval does **not** fix it: the guest polls
+once per frame, so sub-frame pieces re-accumulate into the same lump. Pace the
+steps on the wall clock, one control command per step, and let a frame pass in
+between. The scratch drive script now parks in 11 steps of (-64,-48) and glides
+to the target in 6, each its own control round trip.
