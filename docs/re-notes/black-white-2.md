@@ -4383,3 +4383,22 @@ Still true and still unexplained:
 
 Do not re-derive the float-precision hypothesis; §"integer predicate" above still
 stands and is independent of this correction.
+
+### ...and 11.9M is not even obviously a runaway
+
+Rate matters more than the raw count and the earlier framing ignored it.
+11958660 entries over 3908.070s is **~3060 entries per second**. The run retired
+460788 batches; at the measured mean of several hundred blocks per batch that is
+a few hundred million block entries total, so `0x9e1e50` is on the order of 3% of
+all block entries. That is a *hot loop*, which is what a terrain/edge query in a
+frame loop is supposed to look like. It is not by itself evidence of an unbounded
+walk.
+
+So the honest state is weaker than either previous claim: we have not shown the
+game hangs in this code at all. This run did not hang -- it ended at 3908s on a
+host-side d3d9 error (`QueueError: native render heap handoff rejected`,
+`lib/d3d-command-stream.js:658`), with the guest still executing.
+
+Before any more work on `0x9e17d0`/`0x9e1e50`, establish that there is something
+to fix there: compare the per-second rate of that block against a run that makes
+progress, rather than reading a large cumulative count as pathology.
