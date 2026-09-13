@@ -4489,9 +4489,59 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28)))) ;; 6 args
 
-  ;; DeleteAttachedSurface — no-op
+  ;; DeleteAttachedSurface(this, dwFlags, lpDDSAttachedSurface). Only explicit
+  ;; AddAttachedSurface relationships may be removed; DirectDraw-created flip
+  ;; chains in misc0 are implicit and cannot be detached through this method.
+  ;; Passing NULL removes every explicit child and releases the reference that
+  ;; AddAttachedSurface retained for each one.
+  (func $dx_surface_delete_attached
+      (param $parent_guest i32) (param $flags i32) (param $child_guest i32)
+      (result i32)
+    (local $parent i32) (local $child i32) (local $slot i32) (local $parent_id i32)
+    (call $d3dim_worker_fence)
+    (if (local.get $flags)
+      (then (return (i32.const 0x80070057)))) ;; DDERR_INVALIDPARAMS
+    (local.set $parent (call $dx_from_this (local.get $parent_guest)))
+    (if (i32.ne (load.field DxObject type (local.get $parent)) (i32.const 2))
+      (then (return (i32.const 0x88760082)))) ;; DDERR_INVALIDOBJECT
+    (local.set $parent_id
+      (i32.add (call $dx_slot_of (local.get $parent)) (i32.const 1)))
+    (if (local.get $child_guest)
+      (then
+        (local.set $child (call $dx_from_this (local.get $child_guest)))
+        (if (i32.ne (load.field DxObject type (local.get $child)) (i32.const 2))
+          (then (return (i32.const 0x88760082)))) ;; DDERR_INVALIDOBJECT
+        (if (i32.eq (load.field DxObject misc0 (local.get $parent))
+                    (local.get $child_guest))
+          (then (return (i32.const 0x88760014)))) ;; DDERR_CANNOTDETACHSURFACE
+        (if (i32.ne
+              (i32.load offset=4 (call $dx_surf_meta_ptr (local.get $child)))
+              (local.get $parent_id))
+          (then (return (i32.const 0x887601CC)))) ;; DDERR_SURFACENOTATTACHED
+        ;; Clear first: final Release may recycle this slot.
+        (i32.store offset=4 (call $dx_surf_meta_ptr (local.get $child)) (i32.const 0))
+        (drop (call $dx_surface_release (local.get $child_guest)))
+        (return (i32.const 0)))) ;; DD_OK
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $slot) (global.get $DX_MAX)))
+      (local.set $child (i32.add (global.get $DX_OBJECTS)
+        (i32.shl (local.get $slot) (i32.const 5))))
+      (if (i32.and
+            (i32.eq (load.field DxObject type (local.get $child)) (i32.const 2))
+            (i32.eq (i32.load offset=4 (call $dx_surf_meta_ptr (local.get $child)))
+              (local.get $parent_id)))
+        (then
+          (i32.store offset=4 (call $dx_surf_meta_ptr (local.get $child)) (i32.const 0))
+          (drop (call $dx_surface_release
+            (call $w2g (i32.add (global.get $COM_WRAPPERS)
+              (i32.shl (local.get $slot) (i32.const 3))))))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0)) ;; DD_OK
+
   (func $handle_IDirectDrawSurface_DeleteAttachedSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $dx_surface_delete_attached
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; Enumerate the directly attached surface.  Our flip-chain model links one
