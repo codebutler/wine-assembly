@@ -1512,6 +1512,7 @@ const TOGGLES = {
   rect_run: 'set_rect_run',
   ck_lut16: 'set_ck_lut16',
   ck_blend16: 'set_ck_blend16',
+  ck_shadow16: 'set_ck_shadow16',
 };
 
 // ---------------------------------------------------------------------------

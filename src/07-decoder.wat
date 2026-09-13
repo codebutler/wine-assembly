@@ -88,6 +88,14 @@
   (global $ck_blend16_runs    (mut i32) (i32.const 0))
   (global $ck_blend16_px      (mut i64) (i64.const 0))
 
+  ;; $th_ck_shadow16_run's keyed blit with a DEST-indexed middle arm
+  ;; (SimGolf's jgl.dll). Off switch is for A/B only; see
+  ;; $try_emit_ck_shadow16_run for the grammar and how it differs from 455's.
+  (global $ck_shadow16_enabled (mut i32) (i32.const 1))
+  (global $ck_shadow16_matches (mut i32) (i32.const 0))
+  (global $ck_shadow16_runs    (mut i32) (i32.const 0))
+  (global $ck_shadow16_px      (mut i64) (i64.const 0))
+
   ;; Decoder-time, nonterminal LUT spans. Unlike H418 these are not loops:
   ;; an indirect jump has already selected one suffix of a fully unrolled
   ;; renderer, and execution continues into the ordinary row tail afterwards.
@@ -796,6 +804,235 @@
     (call $te_raw (local.get $shadow))
     (i32.const 1))
 
+  ;; ---- the dest-indexed keyed blit fold ($th_ck_shadow16_run) ----------
+  ;; jgl+0x10016eee. Same family as $try_emit_ck_lut16_run above and matched
+  ;; the same way -- structurally, off raw x86 at a block start, extracting
+  ;; the registers rather than hashing the bytes -- because the arithmetic
+  ;; here is two table lookups and a store, which a grammar can authorize.
+  ;; (456 is hashed instead; its body is 45 instructions of channel-wise
+  ;; fixed point, which a grammar loose enough to write would not pin down.)
+  ;;
+  ;;   head:    cmp  byte [S], 0xFF
+  ;;            jnb  advance                  ; 0xFF = transparent
+  ;;            cmp  byte [S], 0xF8
+  ;;            jnz  plain                    ; == 0xF8 selects the shadow
+  ;;   shadow:  mov  W16, [D]                 ; read the DESTINATION pixel
+  ;;            mov  W16, [SL + W*2]          ; and remap it through a table
+  ;;            mov  [D], W16
+  ;;            jmp  advance
+  ;;   plain:   mov  T8, [S]
+  ;;            mov  W16, [L + T*2]           ; the ordinary palette lookup
+  ;;            mov  [D], W16
+  ;;                                          ; falls THROUGH into advance
+  ;;   advance: inc  S
+  ;;            add  D, imm8
+  ;;            dec  C
+  ;;            jnz  head
+  ;;
+  ;; Three differences from 455 and each one is load-bearing: there is no
+  ;; `xor T,T`, the second test is an equality (`jnz plain`) rather than a
+  ;; range (`jnb shadow`), and the arms are in the other order. Widening 455
+  ;; to cover all of that would leave a predicate that accepts bodies neither
+  ;; loop computes, so this is a sibling rather than a loosening.
+  ;;
+  ;; Seven registers, all held in the executor's locals, so all seven must be
+  ;; distinct and none may be ESP -- an alias would make one cursor move when
+  ;; another did and the fold would run correct-looking wrong code.
+  (func $try_emit_ck_shadow16_run (param $start_eip i32) (result i32)
+    (local $pc i32) (local $p i32) (local $m i32) (local $r i32)
+    (local $S i32) (local $D i32) (local $C i32) (local $T i32) (local $L i32)
+    (local $W i32) (local $SL i32)
+    (local $head i32) (local $adv i32) (local $plain i32) (local $exit_eip i32)
+    (local $dstep i32)
+    (if (i32.eqz (global.get $ck_shadow16_enabled)) (then (return (i32.const 0))))
+    (if (i32.or (global.get $code16) (global.get $d_addr16))
+      (then (return (i32.const 0))))
+    (if (global.get $d_seg) (then (return (i32.const 0))))
+    (local.set $head (global.get $d_pc))
+    (local.set $pc (local.get $head))
+
+    ;; cmp byte [S], 0xFF
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
+      (then (return (i32.const 0))))
+    (local.set $S (i32.and (local.get $m) (i32.const 7)))
+    (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2)))
+                (i32.const 0xFF))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jnb advance
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x73))
+      (then (return (i32.const 0))))
+    (local.set $adv (i32.add (i32.add (local.get $pc) (i32.const 2))
+      (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; cmp byte [S], 0xF8 -- the same S, or this is a different loop
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2)))
+                (i32.const 0xF8))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jnz plain. An equality test, so the shadow arm is exactly 0xF8 and
+    ;; 0xF9..0xFE fall to the plain arm -- the opposite of 455, where
+    ;; 0xF8..0xFE are all shadow. The executor reproduces this split.
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x75))
+      (then (return (i32.const 0))))
+    (local.set $plain (i32.add (i32.add (local.get $pc) (i32.const 2))
+      (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; --- shadow arm, which begins where the jnz fell through ---
+    ;; mov W16, [D]
+    (if (i32.or (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x66))
+                (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                        (i32.const 0x8B)))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (local.set $r (call $ck_mem0_reg (local.get $m)))
+    (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $W (local.get $r))
+    (local.set $D (i32.and (local.get $m) (i32.const 7)))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; mov W16, [SL + W*2] -- the dest-indexed lookup, index is W itself
+    (local.set $r (call $ck_lut16_load (local.get $pc) (local.get $W)
+                                       (local.get $W)))
+    (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $SL (local.get $r))
+    (local.set $pc (i32.add (local.get $pc) (global.get $ck_sib_len)))
+
+    ;; mov [D], W16 -- the same D the load came from
+    (if (i32.or (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x66))
+                (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                        (i32.const 0x89)))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (local.get $W)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $D))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jmp advance -- the shadow arm's only exit, and it must land where the
+    ;; transparent arm's jnb did or the two arms are not one diamond.
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0xEB))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.add (i32.add (local.get $pc) (i32.const 2))
+          (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1)))))
+          (local.get $adv))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+    ;; The plain arm has to begin exactly here, or the `jnz` above jumps into
+    ;; the middle of code this decode never looked at.
+    (if (i32.ne (local.get $pc) (local.get $plain))
+      (then (return (i32.const 0))))
+
+    ;; --- plain arm ---
+    ;; mov T8, [S]
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8A))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (local.set $r (call $ck_mem0_reg (local.get $m)))
+    (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $T (local.get $r))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; mov W16, [L + T*2] -- same W the shadow arm stores through
+    (local.set $r (call $ck_lut16_load (local.get $pc) (local.get $W)
+                                       (local.get $T)))
+    (if (i32.lt_s (local.get $r) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $L (local.get $r))
+    (local.set $pc (i32.add (local.get $pc) (global.get $ck_sib_len)))
+
+    ;; mov [D], W16
+    (if (i32.or (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x66))
+                (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                        (i32.const 0x89)))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (local.get $W)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $D))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+    ;; The plain arm FALLS THROUGH rather than jumping, so the advance block
+    ;; has to start exactly here as well as being the jnb/jmp target.
+    (if (i32.ne (local.get $pc) (local.get $adv))
+      (then (return (i32.const 0))))
+
+    ;; advance: inc S / add D,imm8 / dec C / jnz head
+    (local.set $p (local.get $adv))
+    (if (i32.ne (call $gl8 (local.get $p))
+                (i32.add (i32.const 0x40) (local.get $S)))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ne (call $gl8 (local.get $p)) (i32.const 0x83))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $p) (i32.const 1))))
+    (if (i32.ne (i32.shr_u (local.get $m) (i32.const 6)) (i32.const 3))
+      (then (return (i32.const 0))))
+    (if (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $D))
+      (then (return (i32.const 0))))
+    (local.set $dstep (call $sign_ext8
+      (call $gl8 (i32.add (local.get $p) (i32.const 2)))))
+    (local.set $p (i32.add (local.get $p) (i32.const 3)))
+    (local.set $C (i32.sub (call $gl8 (local.get $p)) (i32.const 0x48)))
+    (if (i32.ge_u (local.get $C) (i32.const 8))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ne (call $gl8 (local.get $p)) (i32.const 0x75))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.add (i32.add (local.get $p) (i32.const 2))
+          (call $sign_ext8 (call $gl8 (i32.add (local.get $p) (i32.const 1)))))
+          (local.get $head))
+      (then (return (i32.const 0))))
+    (local.set $exit_eip (i32.add (local.get $p) (i32.const 2)))
+
+    (if (i32.eqz (call $ck_regs_mask_ok
+          (i32.or
+            (i32.or
+              (i32.or (i32.shl (i32.const 1) (local.get $S))
+                      (i32.shl (i32.const 1) (local.get $D)))
+              (i32.or (i32.shl (i32.const 1) (local.get $C))
+                      (i32.shl (i32.const 1) (local.get $T))))
+            (i32.or
+              (i32.or (i32.shl (i32.const 1) (local.get $L))
+                      (i32.shl (i32.const 1) (local.get $W)))
+              (i32.shl (i32.const 1) (local.get $SL))))
+          (i32.const 7)))
+      (then (return (i32.const 0))))
+
+    (global.set $ck_shadow16_matches
+      (i32.add (global.get $ck_shadow16_matches) (i32.const 1)))
+    (call $te (i32.const 457) (i32.or
+      (i32.or
+        (i32.or (local.get $S) (i32.shl (local.get $D) (i32.const 4)))
+        (i32.or (i32.shl (local.get $C) (i32.const 8))
+                (i32.shl (local.get $T) (i32.const 12))))
+      (i32.or
+        (i32.or (i32.shl (local.get $L) (i32.const 16))
+                (i32.shl (local.get $W) (i32.const 20)))
+        (i32.shl (local.get $SL) (i32.const 24)))))
+    (call $te_raw (local.get $head))
+    (call $te_raw (local.get $exit_eip))
+    (call $te_raw (local.get $dstep))
+    (i32.const 1))
+
   ;; ---- the alpha-blended RGB565 blit fold ($th_ck_blend16_run) ---------
   ;;
   ;; jgl+0x100153a5, 210 bytes. tools/hot-loop-census.js measured this at
@@ -866,6 +1103,72 @@
     (call $te_raw (local.get $start_eip))
     (call $te_raw (local.get $exit_eip))
     (i32.const 1))
+
+  ;; Byte length the last $ck_lut16_load consumed. A second return value, in
+  ;; the style $rp_target/$rp_imm already use in this file.
+  (global $ck_sib_len (mut i32) (i32.const 0))
+
+  ;; `mov $w16, [base + $idx*2]` -- operand-size prefix, ModRM rm==4, SIB
+  ;; scale 2, $idx on the index side. Returns the base register, or -1.
+  ;;
+  ;; mod==1 with a ZERO disp8 is accepted alongside mod==0 because the two
+  ;; address identically and jgl's assembler emits both spellings of the same
+  ;; access -- 0x10016efb is `[ebp+ebx*2+0]` and 0x10016f07 is `[ecx+eax*2]`.
+  ;; The displacement is read and checked, never assumed.
+  (func $ck_lut16_load (param $pc i32) (param $w i32) (param $idx i32) (result i32)
+    (local $m i32) (local $sib i32) (local $mod i32) (local $base i32)
+    (if (i32.or (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x66))
+                (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                        (i32.const 0x8B)))
+      (then (return (i32.const -1))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (local.set $mod (i32.shr_u (local.get $m) (i32.const 6)))
+    (if (i32.gt_u (local.get $mod) (i32.const 1))
+      (then (return (i32.const -1))))
+    (if (i32.ne (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+                (local.get $w))
+      (then (return (i32.const -1))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (i32.const 4))
+      (then (return (i32.const -1))))
+    (local.set $sib (call $gl8 (i32.add (local.get $pc) (i32.const 3))))
+    (if (i32.ne (i32.shr_u (local.get $sib) (i32.const 6)) (i32.const 1))
+      (then (return (i32.const -1))))
+    (if (i32.ne (i32.and (i32.shr_u (local.get $sib) (i32.const 3)) (i32.const 7))
+                (local.get $idx))
+      (then (return (i32.const -1))))
+    (local.set $base (i32.and (local.get $sib) (i32.const 7)))
+    ;; base==5 with mod==0 is a disp32 absolute, not a register base.
+    (if (i32.and (i32.eq (local.get $base) (i32.const 5))
+                 (i32.eqz (local.get $mod)))
+      (then (return (i32.const -1))))
+    (if (local.get $mod)
+      (then
+        (if (call $gl8 (i32.add (local.get $pc) (i32.const 4)))
+          (then (return (i32.const -1))))
+        (global.set $ck_sib_len (i32.const 5)))
+      (else (global.set $ck_sib_len (i32.const 4))))
+    (local.get $base))
+
+  ;; A set of register numbers as a bitmask: $n members, all distinct, none
+  ;; of them ESP. The five-argument form below predates this and is kept
+  ;; because its call site reads better than a hand-built mask.
+  (func $ck_regs_mask_ok (param $seen i32) (param $n i32) (result i32)
+    (if (i32.and (local.get $seen) (i32.const 0x10))
+      (then (return (i32.const 0))))
+    (i32.eq (i32.popcnt (local.get $seen)) (local.get $n)))
+
+  ;; ModRM that must be `[base]` with no displacement, no SIB and no disp32
+  ;; absolute, with ANY register on the register side -- the register is the
+  ;; return value, or -1. Use this for a register's first sighting; use
+  ;; $ck_mem0 once it is known and has to be confirmed.
+  (func $ck_mem0_reg (param $m i32) (result i32)
+    (local $rm i32)
+    (if (i32.shr_u (local.get $m) (i32.const 6)) (then (return (i32.const -1))))
+    (local.set $rm (i32.and (local.get $m) (i32.const 7)))
+    (if (i32.or (i32.eq (local.get $rm) (i32.const 4))
+                (i32.eq (local.get $rm) (i32.const 5)))
+      (then (return (i32.const -1))))
+    (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7)))
 
   ;; ModRM that must be `[base]` with no displacement, no SIB, no disp32
   ;; absolute, and $reg on the register side. Returns 0 for every other form.
@@ -3584,6 +3887,10 @@
               (local.set $done (i32.const 1))
               (br $decode)))
           (if (call $try_emit_ck_blend16_run (local.get $start_eip))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
+          (if (call $try_emit_ck_shadow16_run (local.get $start_eip))
             (then
               (local.set $done (i32.const 1))
               (br $decode)))))

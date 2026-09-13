@@ -2630,6 +2630,15 @@
   (func (export "get_ck_blend16_runs") (result i32) (global.get $ck_blend16_runs))
   (func (export "get_ck_blend16_px") (result i64) (global.get $ck_blend16_px))
 
+  ;; The dest-indexed keyed blit fold ($th_ck_shadow16_run). Same decode-time
+  ;; off switch, same A/B caveat.
+  (func (export "set_ck_shadow16") (param $flag i32)
+    (global.set $ck_shadow16_enabled (local.get $flag)))
+  (func (export "get_ck_shadow16") (result i32) (global.get $ck_shadow16_enabled))
+  (func (export "get_ck_shadow16_matches") (result i32) (global.get $ck_shadow16_matches))
+  (func (export "get_ck_shadow16_runs") (result i32) (global.get $ck_shadow16_runs))
+  (func (export "get_ck_shadow16_px") (result i64) (global.get $ck_shadow16_px))
+
   ;; TREE_FOLD ($th_tree_fold, src/07b-loop-match.wat). The general integer
   ;; expression fold; OFF by default. Decode-time, so the same rule as the
   ;; three above: set it before the first decode, and on every per-thread

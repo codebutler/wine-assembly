@@ -2403,3 +2403,151 @@
         (global.set $flag_sign_shift (i32.const 31))
         (global.set $eip (local.get $exit_eip))))))
     (return_call $branch_end))
+
+  ;; 457: a whole colour-keyed sprite row whose middle arm is DEST-indexed.
+  ;; jgl+0x10016eee, measured by tools/hot-loop-census.js at 21.9% / 19.8% /
+  ;; 26.5% of all block entries across three independent browser windows --
+  ;; the largest stable item left in SimGolf after 455 and 456.
+  ;;
+  ;; Same family as 455, different arms, and the differences are the whole
+  ;; reason this is a second handler rather than a loosened first one:
+  ;;
+  ;;   455                              457
+  ;;   cmp [S],0xFF / jnb  adv          cmp [S],0xFF / jnb  adv
+  ;;   xor T,T                          --
+  ;;   cmp [S],0xF8 / jnb  shadow       cmp [S],0xF8 / jnz  plain
+  ;;   plain arm, then shadow           shadow arm, then plain
+  ;;   shadow DECLINED (bails)          shadow FOLDED
+  ;;
+  ;; The middle arm here reads the DESTINATION word and looks it up in a
+  ;; second table -- `dst = shadow[dst]`, the shape tools/find-ck-lut-nests.js
+  ;; classifies CK_LUT16_DST. That is what makes folding it worth the WAT:
+  ;; 455's bail arm is correct because its shadow pixels are rare, and in this
+  ;; loop they are not rare at all. The block census is unambiguous about it --
+  ;; the two head blocks were hit 1779405 and 1645927 times while the plain
+  ;; arm stayed cold, so ~92% of non-transparent pixels take this arm. A fold
+  ;; that declined it would decline almost the whole loop.
+  ;;
+  ;; PARTIAL-REGISTER WRITES ARE REPRODUCED, NOT NORMALIZED. `mov W16,[D]`
+  ;; writes only W's low half and `mov T8,[S]` only T's low byte, yet the SIB
+  ;; index that follows each one reads the FULL 32-bit register. Nothing in
+  ;; this loop ever clears those high bits -- 455 has an `xor T,T` and this
+  ;; one does not -- so the guest is relying on whatever the caller left
+  ;; there, and merging into the live value is the only faithful thing to do.
+  ;; Zero-extending instead would compute a different address on any entry
+  ;; whose high half is not already zero, which is precisely the case a fold
+  ;; must not silently "fix".
+  (func $th_ck_shadow16_run (param $op i32)
+    (local $tp i32) (local $head_eip i32) (local $exit_eip i32) (local $dstep i32)
+    (local $S i32) (local $D i32) (local $C i32) (local $T i32) (local $L i32)
+    (local $W i32) (local $SL i32)
+    (local $s i32) (local $d i32) (local $c i32) (local $t i32) (local $l i32)
+    (local $w i32) (local $sl i32)
+    (local $tok i32) (local $cost i32) (local $blocks i32) (local $px i32)
+    (local $capped i32) (local $c0 i32)
+    (local.set $tp (global.get $ip))
+    (local.set $head_eip (i32.load          (local.get $tp)))
+    (local.set $exit_eip (i32.load offset=4 (local.get $tp)))
+    (local.set $dstep    (i32.load offset=8 (local.get $tp)))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 12)))
+
+    (local.set $S  (i32.and                 (local.get $op)                   (i32.const 0xF)))
+    (local.set $D  (i32.and (i32.shr_u (local.get $op) (i32.const 4))  (i32.const 0xF)))
+    (local.set $C  (i32.and (i32.shr_u (local.get $op) (i32.const 8))  (i32.const 0xF)))
+    (local.set $T  (i32.and (i32.shr_u (local.get $op) (i32.const 12)) (i32.const 0xF)))
+    (local.set $L  (i32.and (i32.shr_u (local.get $op) (i32.const 16)) (i32.const 0xF)))
+    (local.set $W  (i32.and (i32.shr_u (local.get $op) (i32.const 20)) (i32.const 0xF)))
+    (local.set $SL (i32.and (i32.shr_u (local.get $op) (i32.const 24)) (i32.const 0xF)))
+    (local.set $s  (call $get_reg (local.get $S)))
+    (local.set $d  (call $get_reg (local.get $D)))
+    (local.set $c  (call $get_reg (local.get $C)))
+    (local.set $t  (call $get_reg (local.get $T)))
+    (local.set $l  (call $get_reg (local.get $L)))
+    (local.set $w  (call $get_reg (local.get $W)))
+    (local.set $sl (call $get_reg (local.get $SL)))
+
+    ;; The x86 is a do-while: the body runs before `dec C / jnz`, so C==0 on
+    ;; entry really is 2^32 pixels there. The cap below is what keeps that
+    ;; from hanging a batch; it must not be "corrected" to a zero-trip loop.
+    (block $done (loop $pxl
+      (local.set $tok (call $gl8 (local.get $s)))
+      (if (i32.ge_u (local.get $tok) (i32.const 0xFF))
+        (then
+          ;; transparent: the head's cmp/jnb, then the advance block.
+          (local.set $cost (i32.add (local.get $cost) (i32.const 6)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 2))))
+        (else
+          (if (i32.eq (local.get $tok) (i32.const 0xF8))
+            (then
+              ;; shadow arm: W16 = [D]; W16 = SL[W*2]; [D] = W16.
+              ;; Both loads merge into W's low half, and the index of the
+              ;; second is the full register the first one just produced.
+              (local.set $w (i32.or
+                (i32.and (local.get $w) (i32.const 0xFFFF0000))
+                (call $gl16 (local.get $d))))
+              (local.set $w (i32.or
+                (i32.and (local.get $w) (i32.const 0xFFFF0000))
+                (call $gl16 (i32.add (local.get $sl)
+                  (i32.shl (local.get $w) (i32.const 1))))))
+              (call $gs16 (local.get $d) (local.get $w))
+              ;; cmp/jnb + cmp/jnz + three movs and the jmp + the advance.
+              (local.set $cost (i32.add (local.get $cost) (i32.const 12)))
+              (local.set $blocks (i32.add (local.get $blocks) (i32.const 4))))
+            (else
+              ;; plain arm: T8 = [S]; W16 = L[T*2]; [D] = W16. The plain body
+              ;; FALLS THROUGH into the advance rather than jumping to it, so
+              ;; the decoder puts both in one block -- three blocks a pixel
+              ;; here against the shadow arm's four.
+              (local.set $t (i32.or
+                (i32.and (local.get $t) (i32.const 0xFFFFFF00))
+                (local.get $tok)))
+              (local.set $w (i32.or
+                (i32.and (local.get $w) (i32.const 0xFFFF0000))
+                (call $gl16 (i32.add (local.get $l)
+                  (i32.shl (local.get $t) (i32.const 1))))))
+              (call $gs16 (local.get $d) (local.get $w))
+              (local.set $cost (i32.add (local.get $cost) (i32.const 11)))
+              (local.set $blocks (i32.add (local.get $blocks) (i32.const 3)))))))
+
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (local.set $d (i32.add (local.get $d) (local.get $dstep)))
+      (local.set $c0 (local.get $c))
+      (local.set $c (i32.sub (local.get $c) (i32.const 1)))
+      (local.set $px (i32.add (local.get $px) (i32.const 1)))
+      (br_if $done (i32.eqz (local.get $c)))
+      (if (i32.gt_u (local.get $px) (i32.const 65536))
+        (then (local.set $capped (i32.const 1)) (br $done)))
+      (br $pxl)))
+
+    ;; Same billing contract as 420-424 and 455-456: what this dispatch
+    ;; swallowed has to come off both meters, or a batch buys more guest work
+    ;; with the fold on than off and the two arms stop being comparable.
+    (global.set $block_budget
+      (i32.sub (global.get $block_budget) (local.get $blocks)))
+    (global.set $steps (i32.sub (global.get $steps)
+      (i32.add (local.get $cost) (i32.const 1))))
+    (global.set $ck_shadow16_runs
+      (i32.add (global.get $ck_shadow16_runs) (i32.const 1)))
+    (global.set $ck_shadow16_px
+      (i64.add (global.get $ck_shadow16_px) (i64.extend_i32_u (local.get $px))))
+
+    (call $set_reg (local.get $S) (local.get $s))
+    (call $set_reg (local.get $D) (local.get $d))
+    (call $set_reg (local.get $C) (local.get $c))
+    (call $set_reg (local.get $T) (local.get $t))
+    (call $set_reg (local.get $W) (local.get $w))
+    ;; L and SL are read-only table bases; the loop never writes them.
+    (if (local.get $capped)
+      (then
+        ;; No flags: the head re-executes `cmp byte [S],0xFF` and overwrites
+        ;; whatever the last `dec C` left, exactly as the x86 does. Resuming
+        ;; at the head is only safe because the cap has made real progress
+        ;; first -- an immediate bail to the head would re-enter this handler
+        ;; on the same pixel and spin.
+        (global.set $eip (local.get $head_eip)))
+      (else
+        ;; The loop fell out of `dec C`, the last flag-setting instruction.
+        (call $set_flags_dec (local.get $c0) (local.get $c))
+        (global.set $flag_sign_shift (i32.const 31))
+        (global.set $eip (local.get $exit_eip))))
+    (return_call $branch_end))
