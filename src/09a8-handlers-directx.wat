@@ -4919,9 +4919,10 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; Initialize — no-op
+  ;; DirectDraw creates every surface already initialized. This COM-compliance
+  ;; method therefore always rejects a second initialization attempt.
   (func $handle_IDirectDrawSurface_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (i32.const 0x88760005)) ;; DDERR_ALREADYINITIALIZED
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IsLost — never lost
