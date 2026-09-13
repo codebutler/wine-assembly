@@ -15,7 +15,10 @@ const executed = [];
 const coloredVertices = count => {
   const vertices = [];
   for (let i = 0; i < count; i++) {
+    // position3, color4 (red channel carries the vertex ordinal), texcoord2,
+    // normal3, then whatever later attributes the layout has grown.
     vertices.push(i, 0, 0, i + 1, 0, 0, 1, 0, 0, 0, 0, 1);
+    while (vertices.length % Stream.VERTEX_FLOATS) vertices.push(0);
   }
   return vertices;
 };
@@ -346,5 +349,26 @@ assert.deepStrictEqual(brokerOps, [10, 12], 'main broker replays one ordered GL 
 assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.RESULT), 77);
 assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.STATUS), RPC.STATUS_RESP,
   'worker is acknowledged only after replay completes');
+
+// A query that writes into guest memory has to have written it by the time the
+// call returns, because the guest's very next instruction may read it. Warcraft
+// III queries GL_MAX_TEXTURE_UNITS_ARB and copies the answer into its renderer
+// two instructions later; while glGetIntegerv was merely buffered the copy read
+// the zero that was there before, the renderer concluded it had no texture
+// units, and the entire scene drew untextured with no error anywhere to say a
+// query had been answered late rather than wrongly.
+const querySubmissions = [];
+const queryEncoder = new Stream.Encoder({
+  getMemory: () => memory,
+  guestToWasm: pointer => pointer,
+  shared: false,
+  submit: batch => { querySubmissions.push(batch.commands); return 0; },
+});
+queryEncoder.call(10, stack, 0);           // glEnable: buffered
+assert.strictEqual(querySubmissions.length, 0, 'ordinary state calls stay buffered');
+queryEncoder.call(103, stack, 0);          // glGetIntegerv: must submit now
+assert.deepStrictEqual(querySubmissions, [2],
+  'glGetIntegerv flushes the pending batch so its answer is in guest memory on return');
+assert(Stream.BARRIERS.has(103), 'glGetIntegerv is a command-stream barrier');
 
 console.log('PASS buffered OpenGL ordering, overflow, barriers, and zero-copy textures');

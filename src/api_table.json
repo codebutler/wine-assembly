@@ -28938,5 +28938,26 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 899828546
+  },
+  {
+    "id": 3437,
+    "name": "glActiveTextureARB",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3001690250
+  },
+  {
+    "id": 3438,
+    "name": "glClientActiveTextureARB",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 74356229
+  },
+  {
+    "id": 3439,
+    "name": "glMultiTexCoord2fARB",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1145687812
   }
 ]

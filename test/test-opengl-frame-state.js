@@ -84,7 +84,7 @@ assert.deepStrictEqual(backend.depthMasks, [false, true],
   'Quake lightmap pass must restore depth writes');
 assert.deepStrictEqual(backend.blends, [[0, 0x0300], [0x0302, 0x0303]],
   'multiplicative lightmap blending must not leak into later alpha geometry');
-assert(frontend.enabled.has(GL.DEPTH_TEST) && frontend.enabled.has(GL.TEXTURE_2D),
+assert(frontend.enabled.has(GL.DEPTH_TEST) && frontend.textureUnitEnabled[0],
   'world depth and texture state remains enabled');
 assert(!frontend.enabled.has(GL.BLEND), 'lightmap blend state is disabled after its pass');
 assert.strictEqual(backend.updates.length, 1);

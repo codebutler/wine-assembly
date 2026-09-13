@@ -48,7 +48,7 @@ class FakeBackend {
 
 const backend = new FakeBackend();
 const gl = new FixedFunctionGL(backend);
-const triangle = new Float32Array(3 * 12);
+const triangle = new Float32Array(3 * require('../lib/gl-command-stream').VERTEX_FLOATS);
 for (const stack of Object.values(gl.matrices)) {
   stack.slice = () => { throw new Error('matrix-stack slice allocated'); };
 }
@@ -95,7 +95,9 @@ assert.strictEqual(mergedBackend.draws.length, 0, 'compatible packed draws remai
 merged.flushPendingDraw();
 assert.strictEqual(mergedBackend.draws.length, 1, 'adjacent compatible draws merge into one WebGL draw');
 assert.strictEqual(mergedBackend.draws[0].count, 6, 'merged draw contains both triangles');
-assert.strictEqual(mergedBackend.vertices.length, 6 * 12, 'merged interleaved upload is contiguous');
+assert.strictEqual(mergedBackend.vertices.length,
+  6 * require('../lib/gl-command-stream').VERTEX_FLOATS,
+  'merged interleaved upload is contiguous');
 const initialUniformCalls = mergedBackend.uniformCalls;
 merged.enqueuePacked(GL.TRIANGLES, triangle);
 merged.flushPendingDraw();
@@ -187,10 +189,38 @@ assert(Math.abs(matrixFrontend._matrix()[0] - 2 / 640) < 1e-8 &&
 gl.setEnabled(GL.POLYGON_OFFSET_FILL, true);
 assert.deepStrictEqual(backend.capabilities.at(-1), [GL.POLYGON_OFFSET_FILL, true],
   'polygon-offset fill follows desktop GL enable state');
-bridge.call(CALL_INDEX.gpuPresent, stack, 0);
+const savedRaf = global.requestAnimationFrame;
+delete global.requestAnimationFrame;
+bridge.call(CALL_INDEX.glFlush, stack, 0);
 assert.strictEqual(guestPresents, 1,
-  'generic GPU presentation contributes exactly one guest FPS sample');
+  'a single-buffer glFlush publishes exactly one guest frame');
 assert.strictEqual(bridge.contexts.get(1).layer.writeSeq, 1,
+  'a single-buffer glFlush advances its compositor sequence');
+const animationFrames = [];
+global.requestAnimationFrame = callback => { animationFrames.push(callback); return animationFrames.length; };
+bridge.call(CALL_INDEX.glFlush, stack, 0);
+bridge.call(CALL_INDEX.glFlush, stack, 0);
+// The publication itself is synchronous with the guest's flush: a
+// single-buffered context shares the window device context, and the GDI the
+// app draws on its next instructions has to land on top of this frame, not
+// under a copy made later in the animation frame.
+assert.strictEqual(guestPresents, 3,
+  'each glFlush publishes its front buffer synchronously');
+assert.strictEqual(bridge.contexts.get(1).layer.writeSeq, 3,
+  'each glFlush advances its compositor sequence');
+// Only the screen repaint is coalesced, which is what keeps intermediate
+// terrain passes from reaching the display as flicker.
+assert.strictEqual(animationFrames.length, 1,
+  'browser glFlush repaints are coalesced to one per animation frame');
+animationFrames.shift()();
+assert.strictEqual(guestPresents, 3,
+  'the animation-frame callback repaints and does not re-publish');
+if (savedRaf === undefined) delete global.requestAnimationFrame;
+else global.requestAnimationFrame = savedRaf;
+bridge.call(CALL_INDEX.gpuPresent, stack, 0);
+assert.strictEqual(guestPresents, 4,
+  'generic GPU presentation contributes its guest FPS sample');
+assert.strictEqual(bridge.contexts.get(1).layer.writeSeq, 4,
   'generic GPU presentation advances its compositor sequence');
 
 const contextCounts = [];

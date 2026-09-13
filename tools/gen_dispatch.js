@@ -213,6 +213,37 @@ const gpuApis = new Map([
   ['glTexGeni', 3],
   ['glTexGenf', 3],
   ['glTexGenfv', 3],
+  // SimGolf Terrain.dll's measured OpenGL 1.1 imports. Client arrays are
+  // compiled locally by GLCommandStream so guest pointers retain call-time semantics.
+  ['glEnableClientState', 1],
+  ['glArrayElement', 1],
+  ['glVertexPointer', 4],
+  ['glNormalPointer', 3],
+  ['glRotated', 8],
+  ['glVertex2fv', 1],
+  ['glMateriali', 3],
+  ['glFlush', 0],
+  ['glLineWidth', 1],
+  ['glTexCoord2fv', 1],
+  ['glTexParameteri', 3],
+  ['glVertex2i', 2],
+  ['gluBuild1DMipmaps', 6],
+  // Warcraft III turns the vertex-array path back off between its UI and
+  // world passes, so the disable half has to exist too.
+  ['glDisableClientState', 1],
+  // Warcraft III's world pass is indexed client arrays with colour and texture
+  // coordinates, and it queries integer limits before choosing its texture path.
+  ['glTexCoordPointer', 4],
+  ['glColorPointer', 4],
+  ['glDrawElements', 4],
+  ['glGetIntegerv', 2],
+  ['glReadBuffer', 1],
+  // ARB_multitexture, reached through wglGetProcAddress rather than the import
+  // table. Warcraft III's text pass depends on the per-unit client-array split
+  // these entry points select.
+  ['glActiveTextureARB', 1],
+  ['glClientActiveTextureARB', 1],
+  ['glMultiTexCoord2fARB', 3],
 ]);
 const gpuApiOrder = [...gpuApis.keys()];
 

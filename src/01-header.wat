@@ -1012,7 +1012,13 @@
   (data (region.addr $TT_FONT_STRING_STORAGE 0x60) "Wine-Assembly\00")
   (data (region.addr $TT_FONT_STRING_STORAGE 0x70) "WebGL fixed function\00")
   (data (region.addr $TT_FONT_STRING_STORAGE 0x88) "1.1 Wine-Assembly\00")
-  (data (region.addr $TT_FONT_STRING_STORAGE 0xA0) "\00")
+  ;; GL_EXTENSIONS. Only extensions the frontend really implements belong here.
+  ;; ARB_multitexture is two real fixed-function stages in the shader plus the
+  ;; per-unit client-array split; Warcraft III clears texture unit 1's
+  ;; coordinate array immediately before every string it draws, and on a
+  ;; single-unit implementation that clear lands on unit 0, so the menu renders
+  ;; its text as a drop shadow with no fill.
+  (data (region.addr $TT_FONT_STRING_STORAGE 0xA0) "GL_ARB_multitexture \00")
   ;; WinSock 1.1 ordinal imports used by Win9x DLLs. The DLL loader maps
   ;; supported ordinals to these normal API-table names.
   ;; Every `"text"` literal in this tree interns into one compiler-managed pool.

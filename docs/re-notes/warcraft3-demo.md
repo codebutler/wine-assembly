@@ -1131,3 +1131,112 @@ minutes of walking into a GL campaign briefing away.
 | threads | T6 `exited@0x418511` | no exits |
 | briefing film | byte-identical for 1000s+ | every frame different |
 | bar at 400s | LOADING, ~20% | **PRESS ANY KEY TO CONTINUE** |
+
+## SOLVED: the blank menu buttons, and the deferred `glGetIntegerv` behind them
+
+Two separate bugs stacked here, and the second one only became visible once the
+first was fixed.
+
+### 1. The single-unit path clears unit 0's texture coordinates
+
+`game.dll` draws every menu string twice over one font atlas — a black shadow
+pass and a coloured fill pass. Between them it calls its per-unit helper at
+`0x6f0c1330` twice, once with `(unit 0, pointer)` and once with `(unit 1, NULL)`;
+`tools/find-refs.js` shows the two call sites as `push 0; push 0; call` and
+`push 0; push 1; call`, unconditional. The helper reads its own texture-unit
+count from `[this+0xac]`:
+
+```
+6f0c1333  mov ecx, [ecx+0xac]
+6f0c1349  cmp ecx, 1 / jbe 0x6f0c1364     ; maxUnits<=1 skips glClientActiveTextureARB
+6f0c1385  push 0x8078 / call [...]        ; glEnableClientState
+6f0c1396  push 0x8078 / call [...]        ; glDisableClientState
+```
+
+With one unit the unit-1 call skips `glClientActiveTextureARB` and issues a
+plain `glDisableClientState(GL_TEXTURE_COORD_ARRAY)` — which takes unit 0's
+array with it. A UV census (`scratchpad/uvcensus.js`) caught it exactly:
+
+```
+[uv] tex61 col0,0,0,1 n78 u[0.002,0.322] v[0,0.059] zerouv=0/78    <- shadow
+[uv] tex61 col1,1,1,1 n78 u[0,0]         v[0,0]     zerouv=78/78   <- fill
+```
+
+The fill pass sampled the empty corner of the atlas and `glAlphaFunc(GEQUAL,
+0.0157)` discarded every fragment, so only the shadow survived — at
+`tools/png-crop.js --gain=6` the buttons read "Single Player" and "Battle.net"
+in pure black on dark blue.
+
+The fix is to give the frontend two real texture units: `GL_ARB_multitexture` in
+`GL_EXTENSIONS`, a `wglGetProcAddress` that hands back real dispatch thunks
+(`src/09a8b-handlers-opengl.wat`, opcode **50** — 49 is `wglDeleteContext`, and
+getting that wrong makes the guest call a null pointer at `game.dll+0xc1e4d`),
+`glActiveTextureARB` / `glClientActiveTextureARB` / `glMultiTexCoord2fARB`, and
+a 14-float vertex with per-unit client arrays, bindings, enables, environments
+and matrix stacks.
+
+`game.dll` resolves 34 extension entry points but only ever *calls* three of
+them — `glActiveTextureARB` (`[0x6f5b1c1c]`), `glClientActiveTextureARB`
+(`[0x6f5b1c0c]`) and `glUnlockArraysEXT` — so the NULLs the other 31 get back
+are harmless.
+
+### 2. `glGetIntegerv` was buffered, so the renderer believed it had zero units
+
+That fix alone made the labels appear **and the entire rest of the scene draw
+untextured**: flat green/cyan/grey polygons, blown-out white, glyphs as solid
+gold bars.
+
+`game.dll` has exactly one `glEnable(GL_TEXTURE_2D)` site (`0x6f0bb654`) and one
+`glDisable` site (`0x6f0bb632`), both inside the texture-stage setup function at
+`0x6f0bb5c0`. A host-side census of `OpenGLHostBridge.call` showed neither
+firing — `glEnable` arrived 175,000 times in two minutes and not once with
+`0x0DE1`. The emulator's own hit counters, armed from `--before-load` on one
+block entry per branch, said why:
+
+| block | meaning | hits |
+|---|---|---|
+| `0x6f0bb5c0` | stage setup entry | 103855 |
+| `0x6f0bb610` | per-stage loop head | **0** |
+| `0x6f0bb6b2` | "unit count is zero" skip | 61563 |
+
+`[this+0xac]` was zero. It is written once, at `0x6f0b8a16`:
+
+```
+6f0b8a16  mov eax, [0x6f5b1bb0]      ; the GL_MAX_TEXTURE_UNITS_ARB answer
+6f0b8a1b  cmp eax, 2 / jb ...        ; clamp to 2
+6f0b8a28  mov [esi+0xac], eax
+```
+
+and `0x6f5b1bb0` is filled by `glGetIntegerv(0x84E2, &global)` at `0x6f0bbebf`,
+a handful of instructions earlier. Reading the global at the end of a run gave
+**2** — the query was answered correctly, just *late*: opcode 103 was not in
+`BARRIERS` in `lib/gl-command-stream.js`, so the call was appended to the
+command batch and the guest ran on. The copy read the zero that was there
+before, the renderer concluded it had no texture units, and it never configured
+a texture stage again.
+
+**This is a pre-existing bug in the command stream, not a multitexture one.**
+Any guest that reads back a `glGetIntegerv` answer on the next instruction has
+been getting stale memory; Warcraft III is simply the first app in the corpus
+that does. One line fixes it, and `test/test-opengl-command-stream.js` now pins
+it.
+
+### Result
+
+`runDI/f002-090s.png`: the main menu reads **Single Player / Battle.net / Local
+Area Network / Options / Credits / Quit** over a fully textured rain-lit scene.
+
+**Reproduce:**
+
+```bash
+node tools/profile-web-frames.js --app=warcraft3_demo --seconds=90 \
+  --headful --query='?debug' --warmup=60 --film=/tmp/wc3:30
+```
+
+**Probes worth keeping in mind for the next one of these:** a bridge-level
+opcode histogram says which entry points the guest actually reaches (and the
+Encoder-only opcodes — `glBegin`/`glVertex*`, the client-array calls,
+`glClientActiveTextureARB`, `glMultiTexCoord2fARB` — will never appear there by
+design); and `set_count`/`get_count` armed from `--before-load` are the only way
+to ask a *browser-only* app which branch it took, since `--count` lives in
+`test/run.js` and nothing on the OpenGL path can run headless.
