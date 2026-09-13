@@ -79,10 +79,12 @@
       // PRESSURE, not just size. heap_oom_trace only fires once the allocation
       // has already failed; these say how close we are getting.
       //   virtualTop  guest-space top of the DOWNWARD-growing sparse
-      //               VirtualAlloc arena. This is the real exhaustion signal:
-      //               it descends monotonically as address space is consumed,
-      //               and B&W2 died with it at 0x164f0000. A run whose
-      //               virtualTop never moves is nowhere near the ceiling.
+      //               VirtualAlloc arena, and the real exhaustion signal --
+      //               B&W2 died with it at 0x164f0000. It is NOT monotonic:
+      //               measured on WC3 it descends as space is handed out and
+      //               rises again when it is released, so read its low-water
+      //               mark, not its travel. A cursor that barely moves is
+      //               nowhere near the ceiling.
       //   bumpFree    heap_end - heap_ptr, the per-INSTANCE bump chunk. It
       //               oscillates by design as chunks refill, so a small value
       //               here is normal and is NOT evidence of exhaustion --

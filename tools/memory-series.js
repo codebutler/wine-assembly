@@ -200,11 +200,17 @@ function report(data) {
     if (tops.length) {
       const hi = Math.max(...tops), lo = Math.min(...tops);
       console.log('');
-      console.log(`sparse arena cursor: 0x${hi.toString(16)} -> 0x${lo.toString(16)}` +
-        `  (descended ${((hi - lo) / MB).toFixed(1)} MB)`);
-      console.log('  This cursor only goes DOWN, so its travel is how much guest address space');
-      console.log('  the run consumed. A cursor that barely moved is nowhere near the ceiling,');
-      console.log('  and raising the memory size for that app would buy nothing.');
+      const start = tops[0], end = tops[tops.length - 1];
+      let rises = 0;
+      for (let i = 1; i < tops.length; i++) if (tops[i] > tops[i - 1]) rises++;
+      console.log(`sparse arena cursor: start 0x${start.toString(16)}  ` +
+        `low-water 0x${lo.toString(16)}  end 0x${end.toString(16)}`);
+      console.log(`  peak excursion ${((hi - lo) / MB).toFixed(1)} MB, and it rose again ` +
+        `${rises} of ${tops.length - 1} steps.`);
+      console.log('  The cursor descends as the arena hands out guest address space and rises');
+      console.log('  back when it is released, so the excursion is a HIGH-WATER MARK, not live');
+      console.log('  usage — a run that reclaims is not accumulating. What matters for a ceiling');
+      console.log('  decision is the low-water figure: how close the worst moment ever came.');
     }
   }
 
