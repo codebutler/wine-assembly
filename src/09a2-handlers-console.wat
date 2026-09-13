@@ -1036,14 +1036,46 @@
       (select (global.get $console_cp) (i32.const 0) (call $console_is_attached)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
 
+  ;; Validate a signed COORD and clip a linear fill to the end of the loaded
+  ;; screen buffer. -1 distinguishes an invalid starting cell from a valid
+  ;; zero-length fill.
+  (func $console_fill_limit (param $coord i32) (param $length i32) (result i32)
+    (local $x i32) (local $y i32) (local $start i32) (local $available i32)
+    (local.set $x
+      (i32.shr_s (i32.shl (local.get $coord) (i32.const 16)) (i32.const 16)))
+    (local.set $y (i32.shr_s (local.get $coord) (i32.const 16)))
+    (if (i32.or
+          (i32.or (i32.lt_s (local.get $x) (i32.const 0))
+                  (i32.lt_s (local.get $y) (i32.const 0)))
+          (i32.or (i32.ge_s (local.get $x) (global.get $console_width))
+                  (i32.ge_s (local.get $y) (global.get $console_height))))
+      (then (return (i32.const -1))))
+    (local.set $start
+      (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
+    (local.set $available
+      (i32.sub (i32.mul (global.get $console_width) (global.get $console_height))
+        (local.get $start)))
+    (select (local.get $length) (local.get $available)
+      (i32.le_u (local.get $length) (local.get $available))))
+
   ;; FillConsoleOutputCharacterW(hConsole, cCharacter, nLength, dwWriteCoord, lpNumberOfCharsWritten) → BOOL
   ;; Fills console buffer with a character starting at coord
   (func $handle_FillConsoleOutputCharacterW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $x i32) (local $y i32) (local $i i32) (local $off i32)
+    (local $x i32) (local $y i32) (local $i i32) (local $off i32) (local $limit i32)
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
         (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
+    (if (i32.eq (local.get $limit) (i32.const -1))
+      (then
+        (if (local.get $arg4)
+          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
@@ -1051,10 +1083,10 @@
     (local.set $y (i32.shr_u (local.get $arg3) (i32.const 16)))
     (local.set $i (i32.const 0))
     (block $done (loop $fill
-      (br_if $done (i32.ge_u (local.get $i) (local.get $arg2)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $off (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
-      (if (i32.lt_u (local.get $off) (i32.mul (global.get $console_width) (global.get $console_height)))
-        (then (i32.store16 (i32.add (global.get $console_text_base) (i32.mul (local.get $off) (i32.const 2))) (local.get $arg1))))
+      (i32.store16 (i32.add (global.get $console_text_base)
+        (i32.mul (local.get $off) (i32.const 2))) (local.get $arg1))
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (if (i32.ge_u (local.get $x) (global.get $console_width))
         (then (local.set $x (i32.const 0)) (local.set $y (i32.add (local.get $y) (i32.const 1)))))
@@ -1062,18 +1094,28 @@
       (br $fill)))
     ;; Write count to lpNumberOfCharsWritten
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
+      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
     (global.set $eax (i32.const 1))
-    (call $console_buffer_finish (i32.const 1))
+    (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   ;; FillConsoleOutputAttribute(hConsole, wAttribute, nLength, dwWriteCoord, lpNumberOfAttrsWritten) → BOOL
   (func $handle_FillConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $x i32) (local $y i32) (local $i i32) (local $off i32)
+    (local $x i32) (local $y i32) (local $i i32) (local $off i32) (local $limit i32)
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
         (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
+    (if (i32.eq (local.get $limit) (i32.const -1))
+      (then
+        (if (local.get $arg4)
+          (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
@@ -1081,19 +1123,19 @@
     (local.set $y (i32.shr_u (local.get $arg3) (i32.const 16)))
     (local.set $i (i32.const 0))
     (block $done (loop $fill
-      (br_if $done (i32.ge_u (local.get $i) (local.get $arg2)))
+      (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $off (i32.add (i32.mul (local.get $y) (global.get $console_width)) (local.get $x)))
-      (if (i32.lt_u (local.get $off) (i32.mul (global.get $console_width) (global.get $console_height)))
-        (then (i32.store16 (i32.add (global.get $console_attr_base) (i32.mul (local.get $off) (i32.const 2))) (local.get $arg1))))
+      (i32.store16 (i32.add (global.get $console_attr_base)
+        (i32.mul (local.get $off) (i32.const 2))) (local.get $arg1))
       (local.set $x (i32.add (local.get $x) (i32.const 1)))
       (if (i32.ge_u (local.get $x) (global.get $console_width))
         (then (local.set $x (i32.const 0)) (local.set $y (i32.add (local.get $y) (i32.const 1)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $fill)))
     (if (local.get $arg4)
-      (then (i32.store (call $g2w (local.get $arg4)) (local.get $arg2))))
+      (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
     (global.set $eax (i32.const 1))
-    (call $console_buffer_finish (i32.const 1))
+    (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   ;; The character-writing half of WriteConsole, shared by both spellings: the
