@@ -310,7 +310,12 @@ async function main() {
   assert.strictEqual(e.test_ole_release(guestStream), 0);
   assert.strictEqual(e.test_ole_release(malformedStream), 0);
 
-  for (const name of ['NdrDllRegisterProxy','NdrDllUnregisterProxy','DllRegisterServer']) {
+  for (const name of [
+    'NdrDllRegisterProxy',
+    'NdrDllUnregisterProxy',
+    'DllRegisterServer',
+    'DllUnregisterServer',
+  ]) {
     assert.throws(() => callApi(name, 1, 2, 3), WebAssembly.RuntimeError,
       `${name} must not claim unimplemented registry side effects succeeded`);
   }

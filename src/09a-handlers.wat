@@ -3949,11 +3949,12 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 28)))  ;; stdcall, 6 args
   )
 
-  ;; 914: DllUnregisterServer() — no-op, return S_OK
+  ;; DllUnregisterServer is implemented by each self-registering server: only
+  ;; that module knows which registry entries it owns. A generic success would
+  ;; claim those persistent side effects happened when none did.
   (func $handle_DllUnregisterServer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))  ;; S_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
-  )
+    (call $crash_unimplemented (local.get $name_ptr))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
 
   ;; DllRegisterServer: no generic registration implementation. A native DLL's
   ;; own export must perform its registration; never fabricate that success.
