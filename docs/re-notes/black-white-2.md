@@ -3991,3 +3991,69 @@ thread, and this run is the cooperative scheduler.
 
 The screen at the crash is still the land-selection menu (415832 bytes), so the
 load never got as far as drawing the world.
+
+## The NULL texture was our format gate: D3DFMT_A4R4G4B4
+
+Measured 2026-09-13 on a clean drive to the land with
+`--trace-api=IDirect3DDevice9_CreateTexture,IDirect3DDevice9_CreateCubeTexture,IDirect3D9_CheckDeviceFormat`
+plus `--count=0x938b6b,0x938b88,0x9389b0,0x9389d1`.
+
+The last API call before `[eip-zero] guest called through NULL at batch 1933113`
+is
+
+```
+IDirect3DDevice9_CreateTexture(dev=0x07f4e030, 0x20, 0x20, levels=1, usage=0,
+  format=0x1a, pool=1, ppTexture=0x2e4fba90) [ret=0x00938af9]
+```
+
+`ret=0x00938af9` is the instruction after `call [edx+0x5c]` at `0x00938af6` --
+the game's **own direct device call**, not D3DX -- and it is **not preceded by
+any CheckDeviceFormat**, so a truthful "no" is not a fallback this path takes.
+
+The object is built by `0x009389b0`, the create-from-memory constructor: it
+writes state 2 into `[esi+0x1d0]` on entry, inline-copies the literal
+`"<memory>"` (at `0x00d07c3c`, exactly one xref, `0x009389d1`) into `[esi+0x3c]`,
+stores 32/32/1/26 into `+0x14/+0x18/+0x20/+0x4`, and on success sets state **3**
+at `0x00938b6d` (block entry `0x00938b6b`); the failure arm is `0x00938b88`.
+The live object at the crash reads `f0=0` (texture NULL), `f4=0x1a`, `fc=1`,
+`f14=f18=0x20`, `f20=1`, `f1d0=2`, name `"<memory>"` -- and thirty instructions
+later `0x0093907b` calls through the NULL.
+
+Format census over the whole run to the land: DXT1 142, DXT3 107, A8R8G8B8 34,
+DXT5 20, L8 7, A8L8 4, R5G6B5 2, X8R8G8B8 1, **A4R4G4B4 1**. A one-format gap.
+
+Adding 26 to `$d3d9_texture_format_supported` and to the two-byte arm of
+`$d3d9_texture_texel_bytes` in `src/09ae-d3d9-resources.wat` fixes it: the two
+A4R4G4B4 creates (32x32 and 32x48) succeed, the hit counts come back
+`0x00938b6b = 30` against `0x00938b88 = 1`, and the `[eip-zero]` is gone.
+Fixture: `test/test-d3d9-texture-argb4444.js`.
+
+## Then the land load runs out of memory, and that was ours too
+
+Past the texture the run reaches batch 1979920 and dies differently:
+
+```
+[heap] OOM: 191365120 bytes (0xb680000) — sparse arena: no guest address space left to reserve
+[heap] OOM: 191338520 bytes (0xb679818) — bump arena full, low reserve and sparse arena both refused
+[C++ throw] .?AVbad_alloc@std@@ <- .?AVexception@@  obj 0x074fc980 at EIP 0x00ada813
+=== UNHANDLED EXCEPTION: CXX_EXCEPTION 0xe06d7363 ===
+```
+
+`--dump-virtual-maps` at that point: **390 map records, backing_top 0x1bb27000**
+(315 of the backing pool's 316 MB spent) and **reservation_top 0x164f0000** (923
+MB of guest address space consumed below 0x50000000). The last thirteen records
+are a 1.5x growth series carved contiguously downward --
+
+```
+0x100000 0x170000 0x220000 0x330000 0x4c0000 0x720000 0xab0000
+0x1010000 0x1810000 0x2410000 0x3620000 0x5120000 0x79b0000
+```
+
+-- one container the land loader grows by `HeapReAlloc`, which does free the old
+buffer. The leak is ours: a free block may not be merged with the one in the
+arena next door, so every abandoned step stayed committed and the series cost
+the *sum* of its members (~370 MB) for a container 121 MB long.
+
+Fixed in df2f1f31: heap arena records count their live bytes, and a sparse
+allocation that would fail first hands back every retired arena reading zero --
+backing and address space both. Fixture: `test/test-heap-arena-release.js`.
