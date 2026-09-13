@@ -28,6 +28,13 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $esp))
 
+  (func (export "test_call_version_ex_a") (param $stack i32) (param $info i32) (result i32)
+    (global.set $esp (local.get $stack))
+    (call $handle_GetVersionExA
+      (local.get $info) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $esp))
+
   (func (export "test_get_proc_system_windows_directory") (param $stack i32) (result i32)
     (local $name i32)
     (local.set $name (call $heap_alloc (i32.const 27)))
@@ -107,19 +114,34 @@ const extraWat = String.raw`
   const api = apiTable.find(entry => entry.name === 'GetVersionEx');
   assert(api, 'the historical unsuffixed GetVersionEx export exists');
   assert.strictEqual(api.nargs, 1, 'GetVersionEx has one stdcall argument');
+  const apiA = apiTable.find(entry => entry.name === 'GetVersionExA');
+  assert(apiA, 'GetVersionExA exists');
+  assert.strictEqual(apiA.nargs, 1, 'GetVersionExA has one stdcall argument');
 
   const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const stack = 0x074ff000;
   const info = wat.guest_alloc(148) >>> 0;
+  const infoA = wat.guest_alloc(148) >>> 0;
   const infoWasm = RegionMap.g2w(info, wat.get_image_base());
+  const infoAWasm = RegionMap.g2w(infoA, wat.get_image_base());
   const view = new DataView(memory.buffer);
+  new Uint8Array(memory.buffer, infoWasm, 148).fill(0xcc);
+  new Uint8Array(memory.buffer, infoAWasm, 148).fill(0xcc);
   view.setUint32(infoWasm, 148, true);
+  view.setUint32(infoAWasm, 148, true);
 
   assert.notStrictEqual(wat.test_get_proc_version_ex(stack) >>> 0, 0,
     'GetProcAddress(GetVersionEx) returns a callable thunk');
+  assert.strictEqual(wat.test_call_version_ex_a(stack, infoA) >>> 0, stack + 8,
+    'GetVersionExA pops its argument and return address');
+  assert.strictEqual(wat.get_eax(), 1, 'GetVersionExA succeeds');
   assert.strictEqual(wat.test_call_version_ex(stack, info) >>> 0, stack + 8,
     'GetVersionEx pops its argument and return address');
   assert.strictEqual(wat.get_eax(), 1, 'GetVersionEx succeeds');
+  assert.deepStrictEqual(
+    Buffer.from(new Uint8Array(memory.buffer, infoWasm, 148)),
+    Buffer.from(new Uint8Array(memory.buffer, infoAWasm, 148)),
+    'GetVersionEx exactly matches the ANSI structure fill');
   assert.strictEqual(view.getUint32(infoWasm + 4, true), 4, 'reports Windows 98 major version');
   assert.strictEqual(view.getUint32(infoWasm + 8, true), 10, 'reports Windows 98 minor version');
   assert.strictEqual(view.getUint32(infoWasm + 16, true), 1,

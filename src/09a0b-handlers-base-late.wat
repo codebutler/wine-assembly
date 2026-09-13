@@ -79,9 +79,9 @@
   ;; InstallShield 11 dynamically asks KERNEL32 for the historical unsuffixed
   ;; GetVersionEx export. Win9x resolves that spelling to the ANSI contract.
   (func $handle_GetVersionEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $version_info (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (call $handle_GetVersionExA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; 473: SetConsoleCtrlHandler(HandlerRoutine, Add) → BOOL
