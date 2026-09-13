@@ -733,6 +733,27 @@
       (i32.add (local.get $cursor) (local.get $size)))
     (local.get $cursor))
 
+  ;; Does [backing, backing+size) intersect the backing of any live record?
+  ;; The record table is the only authority on what is in use -- the hole list
+  ;; and the bump cursor are both derived claims, and a stale one of either is
+  ;; how one extent gets handed out twice.
+  (func $virtual_backing_conflicts
+      (param $backing i32) (param $size i32) (param $count i32) (result i32)
+    (local $i i32) (local $rec i32) (local $k i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $k (i32.load offset=8 (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $backing)
+              (i32.add (local.get $k) (i32.load offset=4 (local.get $rec))))
+            (i32.gt_u (i32.add (local.get $backing) (local.get $size)) (local.get $k)))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   (func $virtual_map_commit_locked
       (param $guest i32) (param $size i32) (param $protect i32) (result i32)
     (local $count i32) (local $backing_ptr i32) (local $guest_end i32)
@@ -837,8 +858,15 @@
       (if (i32.and
             (i32.and (i32.eq (local.get $guest) (local.get $map_end))
               (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
-            (i32.le_u (i32.add (local.get $backing_ptr) (local.get $size))
-              (region.end $VIRTUAL_BACKING_BASE)))
+            (i32.and
+              (i32.le_u (i32.add (local.get $backing_ptr) (local.get $size))
+                (region.end $VIRTUAL_BACKING_BASE))
+              ;; Growing onto the bump is only safe while the bump really is
+              ;; wilderness. If a live record already covers those bytes, fall
+              ;; through to the append path, which places this commit somewhere
+              ;; nothing else owns rather than aliasing two guest ranges.
+              (i32.eqz (call $virtual_backing_conflicts
+                (local.get $backing_ptr) (local.get $size) (local.get $count)))))
         (then
           (call $zero_memory (local.get $backing_ptr) (local.get $size))
           ;; Publish translations before the larger record size. A reader can
@@ -866,9 +894,25 @@
     ;; the extent is handed out exactly as it was released.
     (local.set $best (call $virtual_hole_take (local.get $size)))
     (if (local.get $best) (then (local.set $backing_ptr (local.get $best))))
-    (if (i32.gt_u
-          (i32.add (local.get $backing_ptr) (local.get $size))
-          (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
+    ;; A hole is only a hole while nothing live sits in it, and a bump cursor is
+    ;; only wilderness while nothing live sits above it. Both of those are
+    ;; bookkeeping claims about tables this function does not own alone, and
+    ;; when one of them is wrong the result is silent and catastrophic: two
+    ;; guest ranges published onto one extent, so a write through either address
+    ;; appears through the other. Black & White 2's land load is what that looks
+    ;; like from the outside -- guest 0x2e040000 and 0x2de00000 shared backing
+    ;; 0x18299000, so the loader's 128x128 spatial grid and the guest pool's
+    ;; free list of 32-byte blocks were the same bytes, and the grid query at
+    ;; 0x9e5272 read a free-list link as a vector length and scanned forever.
+    ;; The placement scan below already refuses to overlap a live record, so
+    ;; treat a conflicting candidate exactly like an exhausted pool and let it
+    ;; find somewhere real. Aliasing is never the cheaper answer.
+    (if (i32.or
+          (i32.gt_u
+            (i32.add (local.get $backing_ptr) (local.get $size))
+            (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
+          (call $virtual_backing_conflicts
+            (local.get $backing_ptr) (local.get $size) (local.get $count)))
       (then
         ;; Released non-top extents are holes in the live map, not reusable
         ;; bump space. Only on exhaustion, find a gap without moving any live
