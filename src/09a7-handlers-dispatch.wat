@@ -3369,11 +3369,18 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; timeBeginPeriod(uPeriod) — request timer resolution. No-op stub, returns
-  ;; TIMERR_NOERROR (0). Symmetric timeEndPeriod does the same.
+  ;; timeBeginPeriod(uPeriod) — browser scheduling has no host timer quantum
+  ;; to change, but the request must still be inside the range advertised by
+  ;; timeGetDevCaps. DirectX-era games normally request the 1 ms minimum.
   (func $handle_timeBeginPeriod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (if (i32.or
+          (i32.lt_u (local.get $arg0) (i32.const 1))
+          (i32.gt_u (local.get $arg0) (i32.const 1000000)))
+      (then (global.set $eax (i32.const 97))) ;; TIMERR_NOCANDO
+      (else (global.set $eax (i32.const 0)))) ;; TIMERR_NOERROR
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+  ;; timeEndPeriod is symmetric for valid requests. It is intentionally a
+  ;; host no-op until the guest tracks matching request counts.
   (func $handle_timeEndPeriod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
