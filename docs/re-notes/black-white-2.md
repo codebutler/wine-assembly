@@ -3887,3 +3887,60 @@ ever stored to that cell" never printed `Watchpoint armed at batch`, so the
 watch may never have been armed; tested separately it does track stores
 correctly (`armed 35c51fb8 val=117104 -> 118124 -> 119118`). The live-repair
 experiment is what settled the question.
+
+## CORRECTION (2026-09-13): it was not the heap either -- the map aliased
+
+The section above is right about *what* the bad record is -- a cell of the
+lazily populated grid, holding a free-list link where an empty vector belongs
+-- and wrong about where those bytes came from. `$heap_alloc` zeroing recycled
+blocks (`b81f8a54`) is a real improvement and changed the symptom by nothing:
+the run after it reproduced the wedge at the same `eip=0x9e5276`, the same
+`ebp=0x2e0f03e8`, the same `srcN=770376714`, and the same dirty-dword census
+(`dirty=8350/49152`, `mod32=363,254,6144,265,237,360,363,364`).
+
+What finally named it was reading the guest bytes as *addresses*:
+
+```
+2e040000: 138818 9c40 2de00028 0 0 0 0 0 0 0 2de00048 0
+2de00000: 138818 9c40 2de00028 0 0 0 0 0 0 0 2de00048 0
+2df40000:  75318 9c40 2df40014 0 0 2df40020 0 0 2df4002c 0 0 2df40038
+2e140000:  75318 9c40 2df40014 0 0 2df40020 0 0 2df4002c 0 0 2df40038
+```
+
+Two pairs of guest addresses 0x240000 and 0x200000 apart hold byte-identical
+data, and in each pair the self-referential pointers name the *lower* address.
+They are not copies. They are the same memory seen twice:
+
+```
+340: g=2e140000+100000 k=18199000     342: g=2df40000+100000 k=18199000
+341: g=2e040000+100000 k=18299000     343: g=2de00000+140000 k=18299000
+```
+
+Two `VIRTUAL_MAP_TABLE` records, two unrelated guest ranges, one backing
+extent. So the grid's cell array and the guest allocator's free list of
+32-byte blocks were literally the same bytes, and every cell the loader had
+not written read back whatever link the allocator had left at that offset --
+which is exactly the `{count = pointer, data = NULL}` shape, and exactly why
+the dirty dwords sat one per 32-byte block.
+
+This also explains why the earlier evidence pointed everywhere. The array's
+"stale" content is not stale at all: it is *live* memory belonging to someone
+else, being rewritten while the loop reads it. Nothing was ever handed back
+unzeroed, which is why neither `4a46d8a4` (MEM_DECOMMIT) nor `b81f8a54`
+(recycled heap blocks) moved it, and why repairing the cells by hand worked --
+it only had to hold until the query finished.
+
+The fix is `bec0e26e`: the backing pool's bump cursor and its released-extent
+list are claims *about* the record table, and when one goes stale the commit
+succeeds silently. `$virtual_backing_conflicts` asks the table itself, and a
+candidate extent that intersects a live record is treated like an exhausted
+pool -- the placement scan that already avoids live records finds somewhere
+else. `test/test-virtual-backing-no-alias.js` pins it.
+
+**Method note worth keeping.** Three fixes in, the thing that separated this
+from the previous two guesses was not a better hypothesis but a cheap
+invariant: enumerate the record table and check every pair for overlapping
+backing. That check costs one eval and would have named the bug on the first
+day. When guest memory contains data no guest code should have written there,
+ask whether it is the *same memory* as somewhere else before asking who wrote
+it.
