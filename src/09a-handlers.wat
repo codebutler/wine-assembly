@@ -6794,10 +6794,15 @@
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
-  ;; 309: InitCommonControlsEx — return 1 (success) — STUB: unimplemented
+  ;; 309: InitCommonControlsEx(lpInitCtrls). The browser's common-control
+  ;; classes are registered cumulatively and remain available once requested,
+  ;; but the Win98-era two-DWORD structure is still part of the API contract.
   (func $handle_InitCommonControlsEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; InitCommonControlsEx(lpInitCtrls) → BOOL. 1 arg stdcall. Return TRUE
-    (global.set $eax (i32.const 1))
+    (if (local.get $arg0)
+      (then
+        (global.set $eax
+          (i32.eq (call $gl32 (local.get $arg0)) (i32.const 8))))
+      (else (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
