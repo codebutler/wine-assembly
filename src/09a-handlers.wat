@@ -5958,9 +5958,70 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; 271: _splitpath — STUB: unimplemented
+  ;; Copy one byte range out of a guest path and terminate it. The four legacy
+  ;; _splitpath outputs have no size arguments; the caller owns their capacity.
+  (func $crt_splitpath_copy (param $dst i32) (param $src i32)
+                            (param $start i32) (param $end i32)
+    (local $i i32)
+    (if (i32.eqz (local.get $dst)) (then (return)))
+    (block $done (loop $copy
+      (br_if $done
+        (i32.ge_u (i32.add (local.get $start) (local.get $i)) (local.get $end)))
+      (call $gs8 (i32.add (local.get $dst) (local.get $i))
+        (call $gl8
+          (i32.add (local.get $src) (i32.add (local.get $start) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (call $gs8 (i32.add (local.get $dst) (local.get $i)) (i32.const 0)))
+
+  ;; 271: _splitpath(path, drive, dir, fname, ext) — cdecl
   (func $handle__splitpath (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $i i32) (local $ch i32) (local $drive_end i32)
+    (local $dir_end i32) (local $dot i32) (local $has_dot i32)
+    (local $end i32) (local $ext i32)
+    ;; A drive component is exactly the first two bytes when byte 1 is ':'.
+    (if (i32.and
+          (i32.ne (call $gl8 (local.get $arg0)) (i32.const 0))
+          (i32.eq (call $gl8 (i32.add (local.get $arg0) (i32.const 1)))
+                  (i32.const 0x3a)))
+      (then (local.set $drive_end (i32.const 2))))
+    (local.set $i (local.get $drive_end))
+    (block $done (loop $scan
+      (local.set $ch (call $gl8 (i32.add (local.get $arg0) (local.get $i))))
+      (br_if $done (i32.eqz (local.get $ch)))
+      ;; A DBCS trail byte is data even when it equals '.', '/' or '\\'.
+      (if (i32.and
+            (call $is_dbcs_lead_byte (local.get $ch))
+            (i32.ne
+              (call $gl8
+                (i32.add (local.get $arg0) (i32.add (local.get $i) (i32.const 1))))
+              (i32.const 0)))
+        (then
+          (local.set $i (i32.add (local.get $i) (i32.const 2)))
+          (br $scan)))
+      (if (i32.or (i32.eq (local.get $ch) (i32.const 0x2f))
+                  (i32.eq (local.get $ch) (i32.const 0x5c)))
+        (then
+          (local.set $dir_end (i32.add (local.get $i) (i32.const 1)))
+          (local.set $has_dot (i32.const 0)))
+        (else
+          (if (i32.eq (local.get $ch) (i32.const 0x2e))
+            (then
+              (local.set $dot (local.get $i))
+              (local.set $has_dot (i32.const 1))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.set $end (local.get $i))
+    (local.set $ext (select (local.get $dot) (local.get $end) (local.get $has_dot)))
+    (call $crt_splitpath_copy
+      (local.get $arg1) (local.get $arg0) (i32.const 0) (local.get $drive_end))
+    (call $crt_splitpath_copy
+      (local.get $arg2) (local.get $arg0) (local.get $drive_end) (local.get $dir_end))
+    (call $crt_splitpath_copy
+      (local.get $arg3) (local.get $arg0) (local.get $dir_end) (local.get $ext))
+    (call $crt_splitpath_copy
+      (local.get $arg4) (local.get $arg0) (local.get $ext) (local.get $end))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; 272: _wcsicmp — cdecl, case-insensitive UTF-16 comparison
