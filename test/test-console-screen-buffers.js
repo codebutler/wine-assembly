@@ -71,6 +71,14 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $esp (local.get $saved))
     (global.get $eax))
+  (func (export "test_largest_console_window") (param $handle i32) (result i32)
+    (local $saved i32)
+    (local.set $saved (global.get $esp))
+    (call $handle_GetLargestConsoleWindowSize
+      (local.get $handle) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.set $esp (local.get $saved))
+    (global.get $eax))
   (func (export "test_close_console_buffer") (param $handle i32) (result i32)
     (local $saved i32)
     (local.set $saved (global.get $esp))
@@ -233,6 +241,13 @@ const extraWat = String.raw`
     'case-insensitive CONIN$ did not open console input');
   assert.strictEqual(wat.test_create_file_a(allocText('CONOUT$')), 2,
     'CONOUT$ did not open active console output');
+  assert.strictEqual(wat.test_largest_console_window(2) >>> 0, coord(79, 37) >>> 0,
+    'largest window did not follow the 640x480 display and 8x12 console font');
+  wat.test_set_last_error(87);
+  assert.strictEqual(wat.test_largest_console_window(1), 0,
+    'console input handle was accepted as a screen buffer');
+  assert.strictEqual(wat.test_last_error(), 6,
+    'invalid largest-window handle did not set ERROR_INVALID_HANDLE');
   const wideConout = wat.guest_alloc(16) >>> 0;
   for (const [i, ch] of [...'ConOut$'].entries()) wat.guest_write16(wideConout + i * 2, ch.charCodeAt(0));
   wat.guest_write16(wideConout + 14, 0);
@@ -330,6 +345,8 @@ const extraWat = String.raw`
     'GetConsoleScreenBufferInfo omitted the independent viewport');
   assert.strictEqual(wat.test_set_console_size(first, coord(40, 20)), 1,
     'buffer did not shrink after its viewport');
+  assert.strictEqual(wat.test_largest_console_window(first) >>> 0, coord(79, 37) >>> 0,
+    'largest window incorrectly shrank with the private screen buffer');
   assert.strictEqual(wat.test_get_console_info(first, resizedInfo), 1);
   assert.strictEqual(wat.guest_read32(resizedInfo) >>> 0, coord(40, 20) >>> 0,
     'private buffer size did not change independently');
@@ -402,6 +419,11 @@ const extraWat = String.raw`
   assert.strictEqual(wat.guest_read32(inheritedInfo) >>> 0, coord(40, 20) >>> 0,
     'new buffer did not inherit the active display dimensions');
   assert.strictEqual(wat.test_close_console_buffer(inherited), 1);
+  wat.test_set_last_error(87);
+  assert.strictEqual(wat.test_largest_console_window(inherited), 0,
+    'closed screen-buffer handle still reported a largest window');
+  assert.strictEqual(wat.test_last_error(), 6,
+    'closed largest-window handle did not set ERROR_INVALID_HANDLE');
   const paintBeforeSecondWrite = paints;
   assert.strictEqual(wat.test_write_console(second, allocText('TWO'), 3), 1);
   assert.strictEqual(wat.test_active_console_buffer() >>> 0, first,

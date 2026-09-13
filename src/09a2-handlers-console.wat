@@ -920,7 +920,39 @@
 
   ;; GetLargestConsoleWindowSize(hConsole) → COORD (packed in eax)
   (func $handle_GetLargestConsoleWindowSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.or (global.get $console_width) (i32.shl (global.get $console_height) (i32.const 16))))
+    (local $screen_w i32) (local $screen_h i32)
+    (local $max_w i32) (local $max_h i32)
+    ;; This API accepts an output screen-buffer handle, not an input handle or
+    ;; an arbitrary integer. Failure is returned as the zero COORD.
+    (if (i32.eqz (call $console_buffer_record (local.get $arg0)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    ;; The maximum is a property of the current display and fixed console
+    ;; font, not the selected screen buffer. The browser console uses the same
+    ;; 8x12 cells and 8x28 non-client extents as $console_ensure_window.
+    (local.set $screen_w (call $screen_metric_w))
+    (local.set $screen_h (call $screen_metric_h))
+    (local.set $max_w (i32.const 1))
+    (local.set $max_h (i32.const 1))
+    (if (i32.gt_u (local.get $screen_w) (i32.const 8))
+      (then
+        (local.set $max_w
+          (i32.div_u (i32.sub (local.get $screen_w) (i32.const 8))
+            (global.get $CONSOLE_CELL_W)))))
+    (if (i32.gt_u (local.get $screen_h) (i32.const 28))
+      (then
+        (local.set $max_h
+          (i32.div_u (i32.sub (local.get $screen_h) (i32.const 28))
+            (global.get $CONSOLE_CELL_H)))))
+    (if (i32.gt_u (local.get $max_w) (i32.const 0x7FFF))
+      (then (local.set $max_w (i32.const 0x7FFF))))
+    (if (i32.gt_u (local.get $max_h) (i32.const 0x7FFF))
+      (then (local.set $max_h (i32.const 0x7FFF))))
+    (global.set $eax
+      (i32.or (local.get $max_w) (i32.shl (local.get $max_h) (i32.const 16))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; GetConsoleCP() → UINT. The code page belongs to the console associated
