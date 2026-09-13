@@ -121,6 +121,19 @@ for (const [name, hits] of [...perModule].sort((a, b) => b[1] - a[1])) {
 // that tools/bench-loops.js measures for the same loop shape and the result is
 // pixels blitted per frame — the number that says whether a per-pixel fold can
 // reach a target frame rate, with no timing in it anywhere.
+// Decode-time fold counters, when the probe carried them. A fold that matched
+// but never ran, or never matched at all, is the difference between "it is
+// broken" and "this scene does not execute that loop" -- and a hot-block table
+// alone cannot tell those apart, because in both cases the unfolded blocks are
+// simply absent from the top of it.
+if (hist.folds && Object.keys(hist.folds).length) {
+  console.log('');
+  console.log('decode-time folds:');
+  for (const [name, value] of Object.entries(hist.folds)) {
+    console.log(`  ${name.padEnd(24)} ${String(value).padStart(12)}`);
+  }
+}
+
 const times = hist.presentTimes;
 if (Array.isArray(times) && times.length && hist.armPerfMs && hist.nowMs) {
   const from = hist.armPerfMs, to = hist.nowMs;

@@ -39,7 +39,18 @@
   // armSnap + perf bracket the histogram window: every count below was taken
   // between them, so presents and wall time for THIS window are the two
   // differences, not the cumulative figures in either snapshot alone.
+  // Decode-time folds: did the grammar ever match, and did the executor ever
+  // run? A profile that only shows hot blocks cannot tell "the fold is broken"
+  // from "the fold is fine and this scene does not use that loop" -- these
+  // three counters separate them. Guarded per name so an older build, or a
+  // build without a given fold, still reports everything else.
+  var folds = {};
+  ['ck_lut16_matches', 'ck_lut16_runs', 'ck_lut16_px',
+   'rle_run_matches', 'lut_span_matches'].forEach(function (k) {
+    try { if (e['get_' + k]) folds[k] = String(e['get_' + k]()); } catch (_) {}
+  });
   return JSON.stringify({ perf: perf, armSnap: window.__histArmSnap || null,
+    folds: folds,
     presentTimes: frames, nowMs: nowMs, armPerfMs: window.__histArmPerfMs || 0,
     err: window.__histErr || null, armed: window.__histArmed || 0,
     ops: tot, handlers: H.slice(0, 30), blockHits: bt, distinct: B.length,
