@@ -2990,6 +2990,27 @@ Resource-aware Win98 emulator
     // while it is up; see the freeze in screenCanvasSize().
     let lastStageShare = 1;
 
+    // The display mode the guest set with ChangeDisplaySettings, or null.
+    // Exports are per-window (each guest instance has its own wasm), so this
+    // takes the first window that answers -- the display is one device and a
+    // second instance claiming a different mode is not a case that exists.
+    function displayModeSize(boardRenderer) {
+      if (!boardRenderer) return null;
+      for (const win of Object.values(boardRenderer.windows || {})) {
+        const e = win && win.wasm && win.wasm.exports;
+        if (!e || !e.get_display_mode_active) continue;
+        if (!(e.get_display_mode_active() | 0)) continue;
+        const w = e.get_display_mode_w() | 0;
+        const h = e.get_display_mode_h() | 0;
+        // A mode with a nonsense size is worse than no mode: it would size the
+        // backing store off a garbage read. Bound it the way the viewport path
+        // is bounded.
+        if (w < 320 || h < 200 || w > 4096 || h > 4096) continue;
+        return { w, h };
+      }
+      return null;
+    }
+
     function screenCanvasSize() {
       const canvas = document.getElementById('screen');
       const wrap = document.getElementById('screen-wrap');
@@ -3120,6 +3141,21 @@ Resource-aware Win98 emulator
           }
         }
       }
+      // A guest that changed the display mode has told us the size of the
+      // machine it thinks it is drawing on. SM_CXSCREEN already answers from
+      // that mode, so the app lays itself out for it, sizes its window to it
+      // and blits a frame of exactly that shape -- and a canvas derived from
+      // the browser viewport instead is some other shape, which is how
+      // SimGolf's 800x600 course ended up drawn into a surface that did not
+      // match it. Make the mode BE the logical desktop, the way a real mode
+      // change does, and let presentation scale it into the viewport (these
+      // apps carry keepAspect, so the scale is uniform and letterboxed).
+      //
+      // Deliberately AFTER the single-app growth rules above: a mode is the
+      // guest's own statement about the desktop size, not a window that
+      // outgrew one, so nothing should be widening it.
+      const modeSize = displayModeSize(boardRenderer);
+      if (modeSize) { w = modeSize.w; h = modeSize.h; }
       const dpr = Math.max(1, Number(window.devicePixelRatio) || 1);
       return { fullscreen, displayW, displayH, w, h, dpr };
     }

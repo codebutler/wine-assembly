@@ -54,10 +54,11 @@ function handlerNames() {
   return names;
 }
 
-const hist = JSON.parse(fs.readFileSync(file, 'utf8'));
+const { makeAttributor, readHist } = require('./hist-blocks');
+
+const hist = readHist(file);
 const names = handlerNames();
 
-const { makeAttributor } = require('./hist-blocks');
 const attribute = makeAttributor(hist, EXE_BASE);
 
 const ops = hist.ops || 0;

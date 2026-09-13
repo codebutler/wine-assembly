@@ -726,6 +726,20 @@
   ;; window geometry, which a maximized ordinary app matches.
   (func (export "get_display_fullscreen") (result i32)
     (global.get $display_fullscreen))
+  ;; The display mode the guest asked for with ChangeDisplaySettings, or 0
+  ;; when it never asked. This is the LOGICAL DESKTOP the app laid itself out
+  ;; for -- GetSystemMetrics(SM_CXSCREEN) already answers from here -- so the
+  ;; presentation layer sizes the screen canvas to it and scales that to the
+  ;; viewport, which is what real hardware does with a mode change. Without
+  ;; it the canvas keeps its viewport-derived size and the app draws an
+  ;; 800x600 frame into a surface that is some other shape.
+  ;; 0 when no mode is in effect; callers must check before using w/h.
+  (func (export "get_display_mode_active") (result i32)
+    (call $dx_display_mode_get))
+  (func (export "get_display_mode_w") (result i32)
+    (call $dx_display_w_get))
+  (func (export "get_display_mode_h") (result i32)
+    (call $dx_display_h_get))
   ;; The device window of a windowed Direct3D9 device, or 0. Tells the
   ;; compositor that the surface it is presenting is that window's client
   ;; area at (0,0) rather than a screen-coordinate DirectDraw primary.

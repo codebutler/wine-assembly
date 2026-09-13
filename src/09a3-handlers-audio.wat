@@ -1308,18 +1308,137 @@
   )
 
   ;; 812: ChangeDisplaySettingsA(lpDevMode, dwFlags) — 2 args stdcall.
-  ;; The mode itself is not honoured (the guest screen size is fixed), but the
-  ;; *intent* is recorded: CDS_FULLSCREEN (0x4) with a mode is an app taking
-  ;; the display, and a NULL lpDevMode is the documented "go back to the
-  ;; registry mode" call that ends it. That flag is the only explicit
+  ;;
+  ;; Two things are recorded. The *intent*: CDS_FULLSCREEN (0x4) with a mode is
+  ;; an app taking the display, and a NULL lpDevMode is the documented "go back
+  ;; to the registry mode" call that ends it. That flag is the only explicit
   ;; fullscreen signal a non-DirectDraw app gives, so the compositor uses it
   ;; instead of guessing from window geometry.
-  (func $handle_ChangeDisplaySettingsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $display_fullscreen
-      (i32.and (i32.ne (local.get $arg0) (i32.const 0))
-               (i32.ne (i32.and (local.get $arg1) (i32.const 0x4)) (i32.const 0))))
+  ;;
+  ;; And the *mode*. This used to answer DISP_CHANGE_SUCCESSFUL and drop the
+  ;; resolution on the floor, which is a lie an app then builds on. SimGolf is
+  ;; the case that names the cost: it creates a 640x480 window, maximizes it
+  ;; (so the renderer hands it the whole browser desktop, 940x734), asks for
+  ;; 800x600 here, is told yes, and renders its course with
+  ;; glViewport(0, 0, 800, 600). GL's origin is bottom-left, so the scene lands
+  ;; in the bottom-left 800x600 of a 940x734 drawable and the remaining L —
+  ;; 134 rows above, 140 columns right — is never written by anything. Its GDI
+  ;; interface meanwhile lays itself out against the real 940-wide client, so
+  ;; the two halves of one frame disagree about where the screen is.
+  ;;
+  ;; A mode is applied the same way IDirectDraw::SetDisplayMode applies one:
+  ;; the display state the screen metrics read, then the owning window resized
+  ;; to it, then the messages Windows sends. There is deliberately no second
+  ;; notion of "the current mode" here — SM_CXSCREEN has to give one answer.
+  (func $change_display_settings_core (param $devmode i32) (param $flags i32)
+    (local $fields i32) (local $w i32) (local $h i32) (local $bpp i32)
+    (local $changed i32) (local $target i32)
+    ;; Taking the display is decided by whether a MODE IS APPLIED, not by
+    ;; CDS_FULLSCREEN. That flag used to gate this, and reading it as "the app
+    ;; is going fullscreen" is a misreading of the API: CDS_FULLSCREEN means
+    ;; the mode is *temporary* -- do not write it to the registry, drop it when
+    ;; the process ends. dwFlags==0 is the permanent dynamic change, and it
+    ;; takes the display at least as hard. On a real machine both of them move
+    ;; the monitor, and the app's window then fills a screen that is now the
+    ;; size it asked for.
+    ;;
+    ;; SimGolf is what named the cost: jgl+0x100401e2 pushes `0` for dwFlags
+    ;; and a DEVMODE with dmFields 0x5C0000, so the old gate left
+    ;; $display_fullscreen at 0, lib/renderer.js never entered its exclusive
+    ;; path, and an 800x600 game sat in the corner of a 1280x872 desktop with
+    ;; Win98 wallpaper and icons around it. The guest was right about
+    ;; everything -- SM_CXSCREEN already reports the mode -- the compositor
+    ;; just never heard that the display had changed hands.
+    ;;
+    ;; Set below, once the mode has actually been accepted, so a DEVMODE that
+    ;; names no resolution and a mode no display has both leave it alone.
+    (if (i32.eqz (local.get $devmode))
+      (then (global.set $display_fullscreen (i32.const 0))))
     (global.set $eax (i32.const 0))  ;; DISP_CHANGE_SUCCESSFUL
+    ;; NULL lpDevMode is the documented "back to the registry mode" call, and
+    ;; it deliberately does NOT clear the display state here. That state is
+    ;; shared with IDirectDraw::SetDisplayMode, and a DirectDraw app that ends
+    ;; its own fullscreen through this spelling still owns a mode; tearing it
+    ;; down took Pinball's restored menu with it. RestoreDisplayMode is the
+    ;; call that ends a DirectDraw mode.
+    (if (i32.eqz (local.get $devmode)) (then (return)))
+    (local.set $fields (call $gl32 (i32.add (local.get $devmode) (i32.const 40))))
+    ;; DM_PELSWIDTH | DM_PELSHEIGHT. A DEVMODE that names neither is asking for
+    ;; something else (a refresh rate, an orientation) and leaves the mode be.
+    (if (i32.ne (i32.and (local.get $fields) (i32.const 0x00180000))
+                (i32.const 0x00180000))
+      (then (return)))
+    (local.set $w (call $gl32 (i32.add (local.get $devmode) (i32.const 108))))
+    (local.set $h (call $gl32 (i32.add (local.get $devmode) (i32.const 112))))
+    ;; Refuse a mode no display has rather than resizing the window to it.
+    (if (i32.or
+          (i32.or (i32.lt_u (local.get $w) (i32.const 64))
+                  (i32.gt_u (local.get $w) (i32.const 8192)))
+          (i32.or (i32.lt_u (local.get $h) (i32.const 64))
+                  (i32.gt_u (local.get $h) (i32.const 8192))))
+      (then
+        (global.set $eax (i32.const -2))  ;; DISP_CHANGE_BADMODE
+        (return)))
+    (local.set $bpp (call $dx_display_bpp_get))
+    (if (i32.ne (i32.and (local.get $fields) (i32.const 0x00040000)) (i32.const 0))
+      (then (local.set $bpp (call $gl32 (i32.add (local.get $devmode) (i32.const 104))))))
+    (if (i32.eqz (local.get $bpp)) (then (local.set $bpp (i32.const 32))))
+    (local.set $changed
+      (i32.or
+        (i32.eqz (call $dx_display_mode_get))
+        (i32.or (i32.ne (call $dx_display_w_get) (local.get $w))
+                (i32.ne (call $dx_display_h_get) (local.get $h)))))
+    (call $dx_display_w_set (local.get $w))
+    (call $dx_display_h_set (local.get $h))
+    (call $dx_display_bpp_set (local.get $bpp))
+    (call $dx_display_mode_set (i32.const 1))
+    ;; The mode is real and applied: the display is this app's now. Before the
+    ;; early return below, so a second call asking for the mode already in
+    ;; effect still says so rather than silently dropping the claim.
+    (global.set $display_fullscreen (i32.const 1))
+    (if (i32.eqz (local.get $changed)) (then (return)))
+    ;; The window that owns the display follows the mode, exactly as it does
+    ;; for a DirectDraw mode switch: an app that maximized before the switch is
+    ;; sitting on the pre-switch desktop, and every client-relative thing it
+    ;; does next — a GL viewport, a UI layout, a hit test — is computed from
+    ;; the size it is told it has.
+    (local.set $target (global.get $main_hwnd))
+    (if (i32.eqz (local.get $target)) (then (return)))
+    (call $host_move_window (local.get $target)
+      (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 0))
+    (call $defwndproc_do_nccalcsize (local.get $target))
+    ;; WM_DISPLAYCHANGE(bpp, w | h<<16), then the WM_MOVE/WM_SIZE pair the
+    ;; resize itself owes the app.
+    (drop (call $post_queue_push (local.get $target) (i32.const 0x007E)
+      (local.get $bpp)
+      (i32.or (i32.and (local.get $w) (i32.const 0xFFFF))
+              (i32.shl (local.get $h) (i32.const 16)))))
+    (drop (call $post_queue_push (local.get $target) (i32.const 0x0003)
+      (i32.const 0) (i32.const 0)))
+    (drop (call $post_queue_push (local.get $target) (i32.const 0x0005)
+      (i32.const 0)
+      (i32.or (i32.and (local.get $w) (i32.const 0xFFFF))
+              (i32.shl (local.get $h) (i32.const 16)))))
+    ;; And the window is dirty. A real mode switch throws the framebuffer away,
+    ;; and so does this one — resizing the drawable reallocates it — so an app
+    ;; that only redraws what it is asked to redraw has to be asked. SimGolf
+    ;; renders its course on demand: after the switch its GL buffer was empty
+    ;; and it had no reason to fill it again, so the whole course area stayed
+    ;; black behind a correctly placed interface.
+    (call $invalidate_hwnd (local.get $target)))
+
+  (func $handle_ChangeDisplaySettingsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $change_display_settings_core (local.get $arg0) (local.get $arg1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+  )
+
+  ;; ChangeDisplaySettingsExA(lpszDeviceName, lpDevMode, hwnd, dwFlags, lParam)
+  ;; — 5 args. The device name is ignored: there is one display. Warcraft III's
+  ;; OpenGL path takes the screen through this spelling rather than the short
+  ;; one, so both have to record the same fullscreen intent.
+  (func $handle_ChangeDisplaySettingsExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $change_display_settings_core (local.get $arg1) (local.get $arg3))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
   ;; EnumDisplaySettingsA(lpszDeviceName, iModeNum, lpDevMode) — 3 args stdcall.
@@ -1450,20 +1569,82 @@
   ;; active monitor. DISPLAY_DEVICEW is 0x348 bytes on 32-bit Windows:
   ;; cb, DeviceName[32], DeviceString[128], StateFlags, DeviceID[128],
   ;; DeviceKey[128]. SDL2 uses both enumeration levels during video startup.
+  ;; EnumDisplayDevicesA(lpDevice, iDevNum, lpDisplayDevice, dwFlags) — the
+  ;; ANSI twin of the handler below. DISPLAY_DEVICEA is 424 (0x1A8) bytes:
+  ;; cb, DeviceName[32], DeviceString[128], StateFlags, DeviceID[128],
+  ;; DeviceKey[128]. Warcraft III's OpenGL path enumerates adapters here before
+  ;; it will create a window.
+  (func $edd_fill_ansi (param $arg0 i32) (param $arg2 i32) (result i32)
+    (local $dst i32)
+    (local.set $dst (call $g2w (local.get $arg2)))
+    (if (i32.lt_u (i32.load (local.get $dst)) (i32.const 0x1A8))
+      (then (return (i32.const 0))))
+    (memory.fill (local.get $dst) (i32.const 0) (i32.const 0x1A8))
+    (i32.store (local.get $dst) (i32.const 0x1A8))
+    (if (i32.eqz (local.get $arg0))
+      (then
+        ;; DeviceName = "\\\\.\\DISPLAY1"
+        (i32.store offset=4  (local.get $dst) (i32.const 0x5C2E5C5C))
+        (i32.store offset=8  (local.get $dst) (i32.const 0x4C505349))
+        (i32.store offset=12 (local.get $dst) (i32.const 0x00315941))
+        ;; DeviceString = "Wine-Assembly Display"
+        (i32.store offset=36 (local.get $dst) (i32.const 0x656E6957))
+        (i32.store offset=40 (local.get $dst) (i32.const 0x7373412D))
+        (i32.store offset=44 (local.get $dst) (i32.const 0x6C626D65))
+        (i32.store offset=48 (local.get $dst) (i32.const 0x69442079))
+        (i32.store offset=52 (local.get $dst) (i32.const 0x616C7073))
+        (i32.store offset=56 (local.get $dst) (i32.const 0x00000079))
+        ;; DISPLAY_DEVICE_ATTACHED_TO_DESKTOP | PRIMARY_DEVICE.
+        (i32.store offset=164 (local.get $dst) (i32.const 0x5)))
+      (else
+        ;; DeviceName = "\\\\.\\DISPLAY1\\Monitor0"
+        (i32.store offset=4  (local.get $dst) (i32.const 0x5C2E5C5C))
+        (i32.store offset=8  (local.get $dst) (i32.const 0x4C505349))
+        (i32.store offset=12 (local.get $dst) (i32.const 0x5C315941))
+        (i32.store offset=16 (local.get $dst) (i32.const 0x696E6F4D))
+        (i32.store offset=20 (local.get $dst) (i32.const 0x30726F74))
+        ;; DeviceString = "Default Monitor"
+        (i32.store offset=36 (local.get $dst) (i32.const 0x61666544))
+        (i32.store offset=40 (local.get $dst) (i32.const 0x20746C75))
+        (i32.store offset=44 (local.get $dst) (i32.const 0x696E6F4D))
+        (i32.store offset=48 (local.get $dst) (i32.const 0x00726F74))
+        ;; DISPLAY_DEVICE_ACTIVE (same bit value as ATTACHED_TO_DESKTOP).
+        (i32.store offset=164 (local.get $dst) (i32.const 0x1))))
+    (i32.const 1)
+  )
+
+  (func $handle_EnumDisplayDevicesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $enum_display_devices_core
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
   (func $handle_EnumDisplayDevicesW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $enum_display_devices_core
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  ;; Both spellings land here: one display adapter with one monitor on it, the
+  ;; second and later iDevNum answering FALSE. Only the record layout differs —
+  ;; DISPLAY_DEVICEA is 0x1A8 bytes of ANSI, DISPLAY_DEVICEW 0x348 of UTF-16 —
+  ;; so the ANSI record is filled by $edd_fill_ansi and the wide one below.
+  ;; The stdcall cleanup is the same 4 arguments either way and happens here.
+  (func $enum_display_devices_core
+    (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $wide i32)
     (local $dst i32)
     (if (i32.or
           (i32.ne (local.get $arg1) (i32.const 0))
           (i32.eqz (local.get $arg2)))
       (then
         (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.eqz (local.get $wide))
+      (then
+        (global.set $eax (call $edd_fill_ansi (local.get $arg0) (local.get $arg2)))
         (return)))
     (local.set $dst (call $g2w (local.get $arg2)))
     (if (i32.lt_u (i32.load (local.get $dst)) (i32.const 0x348))
       (then
         (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
         (return)))
     (memory.fill (local.get $dst) (i32.const 0) (i32.const 0x348))
     (i32.store (local.get $dst) (i32.const 0x348))
@@ -1515,7 +1696,6 @@
         ;; DISPLAY_DEVICE_ACTIVE (same bit value as ATTACHED_TO_DESKTOP).
         (i32.store offset=324 (local.get $dst) (i32.const 0x1))))
     (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
   ;; 757: waveOutGetNumDevs() — return 1 (one audio device available)

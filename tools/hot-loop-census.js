@@ -31,7 +31,7 @@
 'use strict';
 
 const fs = require('fs');
-const { attributeBlocks } = require('./hist-blocks');
+const { attributeBlocks, readHist } = require('./hist-blocks');
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -51,24 +51,6 @@ const SHOW_BLOCKS = argv.includes('--blocks');
 const AS_JSON = argv.includes('--json');
 
 // ---- one window ------------------------------------------------------------
-
-// profile-web-frames.js prints the probe's JSON as one `report-eval: {...}`
-// line inside its own log, so the natural thing to do -- redirect the whole
-// run to a file -- produces something that is not JSON. Accept both, rather
-// than making every caller remember to filter the log first.
-function readHist(file) {
-  const text = fs.readFileSync(file, 'utf8');
-  try {
-    return JSON.parse(text);
-  } catch (err) {
-    const line = text.split('\n').find(l => l.startsWith('report-eval: '));
-    if (!line) {
-      throw new Error(`${file} is neither probe JSON nor a profile-web-frames ` +
-        `log carrying a "report-eval:" line (${err.message})`);
-    }
-    return JSON.parse(line.slice('report-eval: '.length));
-  }
-}
 
 function loadWindow(file) {
   const hist = readHist(file);
