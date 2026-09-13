@@ -802,22 +802,54 @@
     (local.set $cursor (i32.load offset=24 (global.get $VIRTUAL_MAP_STATE)))
     (select (local.get $cursor) (call $virtual_backing_ext_base) (local.get $cursor)))
 
-  ;; Bump $size bytes off the extension window, or 0 when there is none or it
-  ;; is full. Pure bump, no reuse: the extension exists because the primary
-  ;; pool ran out, and a guest that gets that far is growing, not churning.
-  ;; Released extents there become holes the best-fit pass below the primary
-  ;; high-water mark will never look at, which costs address space and never
-  ;; correctness.
+  ;; The end of whichever backing window an address sits in. A released extent
+  ;; in the extension window is a perfectly good candidate, and measuring it
+  ;; against the primary pool's end threw it away -- after $virtual_hole_take
+  ;; had already dropped it from the list, so it was lost rather than deferred.
+  (func $virtual_backing_limit (param $backing i32) (result i32)
+    (if (i32.ge_u (local.get $backing) (call $virtual_backing_ext_base))
+      (then (return (call $virtual_backing_ext_end))))
+    (region.end $VIRTUAL_BACKING_BASE))
+
+  ;; Take $size bytes off the extension window, or 0 when there is none or it
+  ;; has no room. Wilderness first, which keeps the untouched tail contiguous
+  ;; for the next large request; only when the bump is spent does it look for a
+  ;; gap between live records.
+  ;;
+  ;; It used to be a pure bump with no reuse at all, on the reasoning that a
+  ;; guest which gets this far is growing rather than churning. Black & White 2
+  ;; is the counterexample: its land loader churns hundreds of megabytes here,
+  ;; and at the 191 MB step the extension held a single free extent of 243 MB
+  ;; that nothing could reach, while the primary pool's largest was 4 MB.
   (func $virtual_backing_ext_take (param $size i32) (result i32)
-    (local $cursor i32) (local $end i32)
+    (local $cursor i32) (local $end i32) (local $cand i32) (local $count i32)
+    (local $i i32) (local $rec i32) (local $k i32) (local $k_end i32)
     (local.set $end (call $virtual_backing_ext_end))
     (if (i32.eqz (local.get $end)) (then (return (i32.const 0))))
     (local.set $cursor (call $virtual_backing_ext_cursor))
-    (if (i32.gt_u (local.get $size) (i32.sub (local.get $end) (local.get $cursor)))
-      (then (return (i32.const 0))))
-    (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
-      (i32.add (local.get $cursor) (local.get $size)))
-    (local.get $cursor))
+    (if (i32.le_u (local.get $size) (i32.sub (local.get $end) (local.get $cursor)))
+      (then
+        (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
+          (i32.add (local.get $cursor) (local.get $size)))
+        (return (local.get $cursor))))
+    ;; Spent. Slide a candidate up from the base past every live record; each
+    ;; collision moves it to that record's end, so the walk is monotone.
+    (local.set $cand (call $virtual_backing_ext_base))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (block $found (loop $gap
+      (if (i32.gt_u (local.get $size) (i32.sub (local.get $end) (local.get $cand)))
+        (then (return (i32.const 0))))
+      (br_if $found (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $k (i32.load offset=8 (local.get $rec)))
+      (local.set $k_end (i32.add (local.get $k) (i32.load offset=4 (local.get $rec))))
+      (if (i32.and (i32.lt_u (local.get $cand) (local.get $k_end))
+            (i32.gt_u (i32.add (local.get $cand) (local.get $size)) (local.get $k)))
+        (then (local.set $cand (local.get $k_end)) (local.set $i (i32.const 0)))
+        (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+      (br $gap)))
+    (local.get $cand))
 
   ;; Does [backing, backing+size) intersect the backing of any live record?
   ;; The record table is the only authority on what is in use -- the hole list
@@ -996,7 +1028,7 @@
     (if (i32.or
           (i32.gt_u
             (i32.add (local.get $backing_ptr) (local.get $size))
-            (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
+            (call $virtual_backing_limit (local.get $backing_ptr)))
           (call $virtual_backing_conflicts
             (local.get $backing_ptr) (local.get $size) (local.get $count)))
       (then
