@@ -2292,13 +2292,11 @@
 
   ;; 378: EnumFontFamiliesW(hdc, lpszFamily, proc, lParam) → INT.
   (func $handle_EnumFontFamiliesW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
-    (call $gdi_font_enum_start (local.get $arg2) (local.get $arg3)
-      (local.get $ret) (global.get $esp) (local.get $arg1)
-      (i32.const 1) (i32.const 0xFF))
-  )
+    ;; Same compatibility contract as EnumFontsW; the ExW form below is the
+    ;; distinct entry point that adds LOGFONT filters and a flags argument.
+    (call $handle_EnumFontsW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; 438: FillRgn(hdc, hrgn, hbrush) → BOOL
   (func $handle_FillRgn (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
