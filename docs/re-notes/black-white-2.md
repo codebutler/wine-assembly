@@ -3117,3 +3117,47 @@ That rules out "the builder never finished" and points at a node being released
 state fits a fresh constructor exactly: `+8` holds a point, `+0` and `+0xc` are
 zero. The free path to examine is `0x9de220`, called twice at the tail of the
 builder (`0x9e173d`, `0x9e1746`).
+
+## The ring was built correctly, then broken one batch later
+
+Watching the dead link itself (`--watch=0x2eb307d8 --watch-log`) gives its whole
+life history, and it overturns the "never linked" reading:
+
+| batch | old | new | note |
+|---|---|---|---|
+| 435416 | `0x00000000` | `0x2eb307ec` | pool ctor threading the free list — `ESI=0x177c940`, `EBX=0x7530`, `+20` stride |
+| 435420 | `0x2eb307ec` | `0x2eb30fa8` | |
+| 435421 | `0x2eb30fa8` | `0x2eb310c0` | **ring closed** — `0x2eb310c0` is the first node of run 57's walk |
+| 435422 | `0x2eb310c0` | `0x00000000` | **broken** |
+
+At batch 435421 the ring is complete and consistent with the walk:
+`0x2eb307d8 -> 0x2eb310c0 -> 0x2eb305a8 -> 0x2eb30ff8 -> 0x2eb307d8`. One batch
+later the closing link is zero. So this is not a build that stopped short — the
+quadrilateral was correct and something unlinked it.
+
+Two suspects die here. `0x9c0c50`, the reset that zeroes `[ecx]`, has a hit
+count of **0** for the whole run. And re-construction is out: `0x9de000`/
+`0x9de030` zero `+0x04` as well, but the dead node still carries
+`+0x04 = 0x2eb30fe4` at exit. Something wrote **only** the next field.
+
+### The watchpoint's EIP does not name the writer
+
+Worth knowing before trusting any `--watch` output: `checkWatchpoint(batch)` is
+called once per **batch** (`test/run.js:8890`), so the `EIP:`/`prev_eip:` it
+prints is wherever the guest happened to sit at the batch boundary — not the
+storing instruction. The comment at `test/run.js:4945` ("The writer's registers
+name the source of a bad store") describes an intent the per-batch call site
+does not deliver.
+
+That is exactly how run 58 came to report `EIP=0x009e1811` with every register
+zero for the fatal write. `0x9e1811` is inside the walker's null spin, and the
+walker's only store targets its own stack frame — it cannot be the writer. The
+reading is an artifact of sampling at a batch boundary.
+
+The harness can be made to answer properly without touching WASM:
+`--input=B:set-batch-size:1` (run.js:1736, 7822) makes a batch exactly one
+block, so the check runs per block and `prev_eip` names the block that just
+stored. The distortion has to be checked rather than assumed — the headless
+clock is `batch * TICK_MS_PER_BATCH`, so guest time races ahead at one block per
+batch — and the determinism fingerprint is the guard: every run from 42 onward
+reports `0x9c1a90 = 1` and `0x9e17b0 = 303`.
