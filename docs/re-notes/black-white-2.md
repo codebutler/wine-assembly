@@ -3516,9 +3516,35 @@ dialog's OK at ~(250,275) and the outer one's at ~(250,338):
 | `VK_RETURN` pushed onto `renderer.inputQueue` | no effect |
 | `di-mousedown`/`di-mouseup` (feeds `GetAsyncKeyState`) | no effect |
 | `mousemove` first, so `GetCursorPos` agrees, then each of the above | no effect |
+| `relmousemove` (DI relative delta) to position, then `di-mousedown`/`di-mouseup` | no effect |
 
-So the open question is not which path *should* work but which API the game
-actually polls, and that is a `--trace-api` census away.
+The census has now answered which APIs the game polls, and it rules out the
+first explanation that fit:
+
+- **`DirectInput8Create` is called** — the game does use DI8. The earlier "no
+  DirectInput device acquired" was inferred from `renderer._activeInputProfile`
+  being null, which evidently does not track DI8.
+- **`GetCursorPos` is called exactly once** in a whole 900s run, so every
+  attempt that positioned the cursor with `mousemove` was writing a coordinate
+  the game never reads.
+- **`GetAsyncKeyState(VK_LBUTTON)` is polled from the input block at
+  `0x526e8d` / `0x5293db`** — but only **8 times in 900 seconds**, in four
+  pairs. That is the finding that matters: a press injected as a 2000-batch
+  pulse has almost no chance of overlapping a poll, so "the button was ignored"
+  and "the button was never sampled" are not distinguishable by these runs.
+
+So the `relmousemove` + `di-mousedown/up` row above is a **weak** refutation,
+not a strong one. The next run holds the button down for 20000 batches and
+holds `VK_RETURN` through the DI keyboard path for the same span, and traces
+the DI lifecycle (`IDirectInput_CreateDevice`, `SetDataFormat`, `Acquire`,
+`GetDeviceState`, `GetDeviceData`) so that "the game never acquired a mouse
+device" stops being an inference.
+
+`$handle_IDirectInputDevice_GetDeviceState` (src/09a8-handlers-directx.wat:8102)
+is fully wired for a mouse — `lX`/`lY` from `$di_mouse_delta_take_x/y`, which
+`relmousemove` feeds, and `rgbButtons[0]` from `$host_get_mouse_buttons`, which
+`di-mousedown` feeds — so if the game does acquire a device, the harness can
+drive it.
 
 ### What the wedge actually blocks
 
