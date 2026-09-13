@@ -1823,9 +1823,18 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (call $handle_PostThreadMessageA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
-  ;; 688: WindowFromDC — STUB: unimplemented
+  ;; 688: WindowFromDC — return the live window bound to this display DC.
   (func $handle_WindowFromDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $binding i32) (local $hwnd i32)
+    (local.set $binding
+      (call $gdi_dc_get_field (local.get $arg0) (i32.const 92) (i32.const 0)))
+    (local.set $hwnd (i32.and (local.get $binding) (i32.const 0x7FFFFFFF)))
+    (if (i32.and
+          (i32.ne (local.get $hwnd) (i32.const 0))
+          (i32.ne (call $wnd_table_find (local.get $hwnd)) (i32.const -1)))
+      (then (global.set $eax (local.get $hwnd)))
+      (else (global.set $eax (i32.const 0))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
   ;; 689: CountClipboardFormats()
