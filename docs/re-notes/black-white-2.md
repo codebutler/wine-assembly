@@ -3057,3 +3057,63 @@ single reference, the slot-8 thunk `0x9d47b0` — so `head = [[element]]` =
 `0x9d79f0` — capacity *values* being used as addresses. Only the first 64 faults
 per EIP are printed, so this sample may be startup traffic unrelated to the
 wedge. Unresolved, and deliberately not on the critical path.
+
+## The nodes are half-edges, and the layout retraction above is itself retracted
+
+`0x9de000` and `0x9de030` are the node constructors. Both take a node from the
+30000-entry pool at `0x177c940` and zero all five fields; `0x9de030` then sets
+`+8` to its argument:
+
+```
+009de030  mov ecx, 0x177c940
+009de035  call 0x9de0a0          ; pool alloc
+009de044  mov [eax], ecx         ; +0x00 = 0
+009de046  mov [eax+0x4], ecx     ; +0x04 = 0
+009de049  mov [eax+0x8], edx     ; +0x08 = the point argument
+009de04c  mov [eax+0xc], ecx     ; +0x0c = 0
+009de04f  mov [eax+0x10], ecx    ; +0x10 = 0
+```
+
+The pool's element size is confirmed by its constructor `0x9d77d0`:
+`lea eax,[ebx+ebx*4]` then `lea ecx,[4+eax*4]` = `20*count + 4`, and the array
+base is `malloc+4` (the header dword holds the count). Every node address seen
+is `≡ 8 (mod 20)` from `0x2eb30000`, consistently.
+
+`0x9e1670` is the builder — a half-edge mesh split. It allocates four nodes
+(four `call 0x9de030` in a row) and wires them into a doubly-linked circular
+list, then walks the ring to stamp the face pointer:
+
+```
+009e16f1  mov [ebp+0x0], edi      ; next
+009e16f4  mov [edi], ebx          ; next
+009e16f6  mov [ebp+0x4], edx      ; prev
+009e1700  mov [ecx], eax
+009e1702  mov [eax], esi
+009e170b  mov [eax+0x4], edi      ; prev
+...
+009e1730  mov [eax+0x10], ebp     ; face
+009e1733  mov eax, [eax]
+009e1735  cmp eax, esi
+009e1737  jnz short 0x9e1730
+```
+
+So the layout is `+0x00 next, +0x04 prev, +0x08 point*, +0x10 face*` after all.
+**The retraction in the previous section was wrong and is withdrawn.** The
+pool-wide audit that motivated it compared a ring's length against the nodes
+carrying that face *within a 32KB dump of a 600KB pool*; rings whose other nodes
+fall outside the window read as absent, which is what produced "39 hops for 7
+nodes" and 548 apparent `next->prev != self`. A windowing artifact, not a layout
+error.
+
+### What that says about the open node
+
+Note `0x9e1730`'s loop has the same shape as the walker and terminates *only* by
+closing the ring — and it is what writes `+0x10`. The dead node `0x2eb307d8`
+carries `+0x10 = 0x2ec30ad0`, the wedging face. So it was a member of a closed
+ring when that stamp was written, and its `next` went to zero **afterwards**.
+
+That rules out "the builder never finished" and points at a node being released
+— or re-constructed — while still reachable from `0x2eb30ff8`. Its surviving
+state fits a fresh constructor exactly: `+8` holds a point, `+0` and `+0xc` are
+zero. The free path to examine is `0x9de220`, called twice at the tail of the
+builder (`0x9e173d`, `0x9e1746`).
