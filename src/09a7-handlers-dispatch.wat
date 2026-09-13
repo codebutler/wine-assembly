@@ -3372,17 +3372,22 @@
   ;; timeBeginPeriod(uPeriod) — browser scheduling has no host timer quantum
   ;; to change, but the request must still be inside the range advertised by
   ;; timeGetDevCaps. DirectX-era games normally request the 1 ms minimum.
+  (func $winmm_timer_period_valid (param $period i32) (result i32)
+    (i32.and
+      (i32.ge_u (local.get $period) (i32.const 1))
+      (i32.le_u (local.get $period) (i32.const 1000000))))
+
   (func $handle_timeBeginPeriod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.or
-          (i32.lt_u (local.get $arg0) (i32.const 1))
-          (i32.gt_u (local.get $arg0) (i32.const 1000000)))
+    (if (i32.eqz (call $winmm_timer_period_valid (local.get $arg0)))
       (then (global.set $eax (i32.const 97))) ;; TIMERR_NOCANDO
       (else (global.set $eax (i32.const 0)))) ;; TIMERR_NOERROR
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
-  ;; timeEndPeriod is symmetric for valid requests. It is intentionally a
-  ;; host no-op until the guest tracks matching request counts.
+  ;; timeEndPeriod is a host no-op for a valid matching resolution request,
+  ;; but still rejects values outside the device's advertised range.
   (func $handle_timeEndPeriod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (if (i32.eqz (call $winmm_timer_period_valid (local.get $arg0)))
+      (then (global.set $eax (i32.const 97))) ;; TIMERR_NOCANDO
+      (else (global.set $eax (i32.const 0)))) ;; TIMERR_NOERROR
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; timeGetDevCaps(lptc, cbtc) — fills TIMECAPS { wPeriodMin, wPeriodMax }.
