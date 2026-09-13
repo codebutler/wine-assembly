@@ -2,7 +2,8 @@
 
 ## Standalone bitmap-font recovery — 2026-09-13 (not merged)
 
-Candidate branch `codex/font-main-20260913`, based on main `adcc4e37`, isolates
+Candidate branch `codex/font-main-20260913`, initially based on `adcc4e37`
+and reconciled with main `a534fda6` in `4c8dec3b`, isolates
 failure-atomic bitmap-font replacement and owned, normalized full-path identity.
 It stages every strike and destination before publication, preserves old fonts
 on malformed input or allocation/capacity failure, and distinguishes colliding
@@ -19,6 +20,12 @@ in `e6bf89bd`, but the handler is still in another lane's dirty
 `src/09a3-handlers-audio.wat`. The owner was notified on the messageboard;
 no foreign changes were staged or imported. A fallback at parent `a09a9428`
 also fails compilation (unrelated `load_image_bitmap_file` argument mismatch).
+Both current-main failures repeated after reconciliation with `a534fda6`.
+
+The compatible recovery tree passes all 10 replacement groups and 7 identity
+groups. Its committed `80bc9a61` baseline reproduces the collision bug (one
+registration instead of two); the working fix passes. These are recovery-tree
+results, not evidence that standalone current main compiles or passes.
 
 Do not merge this candidate until the owning lanes commit their prerequisites,
 then reconcile current main and rerun the full build and native font tests.
