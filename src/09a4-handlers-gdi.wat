@@ -678,9 +678,14 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; SetAbortProc records no callback yet, but succeeds like a printer driver.
+  ;; Browser print submission is synchronous, so the callback is advisory and
+  ;; never needed while blocked in a spooler. It still requires the live print DC.
   (func $handle_SetAbortProc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (if (i32.and
+          (i32.ne (global.get $printer_hdc) (i32.const 0))
+          (i32.eq (local.get $arg0) (global.get $printer_hdc)))
+      (then (global.set $eax (i32.const 1)))
+      (else (global.set $eax (i32.const -1)))) ;; SP_ERROR
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
