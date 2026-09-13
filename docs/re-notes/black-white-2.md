@@ -3716,3 +3716,36 @@ interpreter speed, which is what land loading costs here.
 So the sequence that reaches gameplay is now known and reproducible; what is
 left between the land menu and the land is throughput, the same thing the
 `--cpu-prof` split above points at.
+
+### Why the land-load scan is not folded, and what folding it would take
+
+The scan at `0x9e5272` is exactly the shape a superop wants, and
+`tools/find-loops.js` does see it:
+
+```
+va 0x9e5272  n=6  .text  family=other
+  skeleton: cmp m,r; jz r; add r,i; add r,i; cmp r,m; jl r
+```
+
+But `tools/match-loops.js` declines it, and the runtime matcher could not have
+taken it either:
+
+- **`SCAN_RUN` exists only in the static tool.** `src/07b-loop-match.wat` has
+  no `SCAN` family at all — the runtime families are `COPY_RUN`, `FILL_RUN` and
+  `LUT_RUN`.
+- **The cycle spans two basic blocks.** The `jz 0x9e52e9` early exit terminates
+  a block, so the loop is `[cmp/jz]` + `[add/add/cmp/jl]`. `$loop_match_block`
+  only ever runs on a block that branches to *itself*, so this is invisible to
+  it by construction — the same blind spot §19's notes describe, and the reason
+  `multi-branch` is 1600 of BW2Demo.exe's 11724 declines (second only to
+  `call`'s 5670).
+
+Address-ordered runs (`$decode_run`, src/07-decoder.wat:5792) do lay the two
+blocks out contiguously, so the fall-through is cheap — but they do not merge
+the blocks, and a fold needs one block to rewrite.
+
+So folding this is Design B work (a multi-block cycle), not a new Design A
+predicate, and it should not be started on the strength of one app's load
+screen. The measurement that would justify it is a `--handler-hist` /
+`--hot-block-dump` census taken *during* the land load, which no run has yet
+because the load is only reachable through the click chain above.
