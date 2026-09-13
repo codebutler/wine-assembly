@@ -2401,12 +2401,12 @@
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
-  ;; 446: CreateICW — STUB: unimplemented
+  ;; 446: CreateICW(lpszDriver, lpszDevice, lpszOutput, lpdvmInit) → HDC
   (func $handle_CreateICW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; CreateICW(lpszDriver, lpszDevice, lpszOutput, lpdvmInit) → HDC
-    ;; 4 args stdcall. Returns an information context (IC) handle — use same as CreateCompatibleDC(0)
-    (global.set $eax (call $host_gdi_create_compat_dc (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
+    ;; The browser exposes one encoding-independent display information model.
+    (call $handle_CreateICA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; 718: CreateICA(lpszDriver, lpszDevice, lpszOutput, lpdvmInit) → HDC
