@@ -694,8 +694,12 @@
 
   ;; UpdateColors(hdc) — canonical surfaces store true-color results, so no
   ;; physical palette remap is required after realizing a logical palette.
+  ;; The public BOOL still succeeds only for a live device context.
   (func $handle_UpdateColors (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (global.set $eax
+      (i32.ne
+        (call $gdi_dc_state_entry (local.get $arg0) (i32.const 0))
+        (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
