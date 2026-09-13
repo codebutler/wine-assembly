@@ -3463,38 +3463,48 @@ That gives the whole sequence a clock:
 | 435423-435908 | ~490 batches of ordinary pool traffic, 303 walker calls returning |
 | 435909 | the 304th call — a point that tests "inside" — never returns |
 
-## Correction: it is `--control-stdin` that stalls the run, not the debug flags
+## Open: an interactive run stalls on the profile dialog, cause unknown
 
-An earlier revision of this section claimed a bare run never reaches the land
-menu because the debug flags pace the clock. The flags are not the variable.
-Measured, same box, same build:
+Runs 57-62 all reach the land-selection menu in about 750 seconds and wedge
+there. Three attempts to reach the same state with a control channel open did
+not, and two mechanisms proposed for that have been measured and refuted. What
+is actually established:
 
-| run | flags | batches/s | reached the land menu? |
-|---|---|---|---|
-| run 62 | trace-at + watch, no control | ~580 | yes, between 404s and 800s |
-| live A | none but `--count`, `--control-stdin` | ~2300 | no, 2400s |
-| live B | run 62's exact flags, `--control-stdin` | ~5700 | no, 1800s |
+| run | control-stdin | tick-ms | batches/s | reached the land menu? |
+|---|---|---|---|---|
+| run 62 | no | 200 (default) | ~580 | yes, between 404s and 800s |
+| live A | yes | 200 | ~2300 | no, 2400s |
+| live B | yes | 200 | ~5700 | no, 1800s |
+| live C | yes | 20 | ~6000 | no, 900s |
 
-The discriminator is `--control-stdin`, which both stalled runs share and run 62
-lacks. Its batches are roughly a tenth the size, so ten times as many of them
-retire per second — and the headless clock is `batch * TICK_MS_PER_BATCH` at a
-default 200ms, so guest time sprints about ten times faster relative to the work
-actually done. Live B's guest believed 23 days had passed where run 62's
-believed one. Both stalled runs sit in the message pump at `eip=0x7503488` on
-the "New Profile Name" dialog, which run 62 passes without any input at all —
-the probe has no input automation, so whatever advances that dialog is paced
-against something this distortion breaks.
+**Refuted: "the debug flags pace the clock."** Live B carries run 62's exact
+flags and still stalls.
 
-This is the [headless clock](../../CLAUDE.md) trap pointed the other way round:
-the documented failure is a timed animation that looks frozen because guest time
-crawls; here guest time sprints and a sequence never completes.
+**Refuted: "the headless clock races ahead."** Live C compensates with
+`--tick-ms-per-batch=20`, which puts guest time at ~120 guest-seconds per wall
+second against run 62's ~116 — equal pacing, same stall.
 
-Consequences for anything building on these notes:
+**Also wrong: reading batches/s as a cause.** An app spinning in a message pump
+retires tiny blocks, so a stalled run *produces* a high batch rate; the number is
+a symptom of the stall, not an explanation for it.
 
-- **Batch numbers are only comparable within one flag set.** Run 62's wedge at
-  batch 435909 and live B's 10.1M measure different things entirely.
-- **An interactive session has to pay for its control channel** with a matching
-  `--tick-ms-per-batch`, or it never gets to the state worth inspecting.
+What the stalled runs show is the **"New Profile Name" dialog**, drawn over the
+profile selector, with the main thread parked in the message pump at
+`eip=0x7503488`. Run 62 passes that dialog with **no input whatsoever** — the
+probe has no input automation in it at all — so whatever dismisses it is the
+game's own doing, and it is not happening under a control channel.
+
+Input does not reach it either. All three of these were delivered and none moved
+the dialog: `renderer.handleMouseDown/Up` on the OK button, `WM_LBUTTONDOWN`/`UP`
+posted to the main hwnd via the `input-message` control action, and `VK_RETURN`
+pushed onto `renderer.inputQueue`. `_activeInputProfile` is null, so the game has
+acquired no DirectInput device.
+
+The next measurement is the one that isolates it: the live script's exact flags
+with `--control-stdin` removed. If that reaches the menu, the control channel is
+the cause and the question becomes which of its seams matters; if it does not,
+the cause is one of the other differences from run 62 (`--output` location, the
+absent `--capture-every`).
 
 ### What the wedge actually blocks
 
