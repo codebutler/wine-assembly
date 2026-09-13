@@ -3589,7 +3589,77 @@ wall clock to be seen at all — and a press pulsed over 2000 batches does not.
 It also explains the 6/6 split on passing the profile dialog unattended: that
 is a race against a clock nothing in the flag set controls.
 
-**So the blocker for gameplay is throughput in the software D3D9 rasterizer,
-not input routing and not the `0x9e17b0` wedge.** The next measurement is a
-`node --cpu-prof` run of the probe's exact command line, to name what inside
-the backend the time goes to.
+**CORRECTION (same session, measured right after).** The share above is a
+sampling artifact and the "82% of wall clock" reading of it is wrong.
+`$handle_IDirect3DDevice9_DrawPrimitive` (src/09ad-handlers-d3d9.wat:1513)
+calls `$d3d_render_park`, which sets `yield_reason 16` and leaves EIP on the
+thunk so the call can be re-entered. Control commands are serviced *between*
+batches, and a parked guest is exactly what ends a batch — so the sampled EIP
+is at that thunk almost by construction. It says the guest parks there, not
+that the wall clock is spent there.
+
+What the wall clock is actually spent on, from `node --cpu-prof` over the
+probe's own command line (120s, two profiles: main thread and the D3D render
+worker):
+
+| thread | idle | top self time |
+|---|---|---|
+| main | 12.9% | `$next` 2.4s+1.5s+1.3s, `$branch_end`, `$decode_block`, `$fpu_exec_mem` — the guest interpreter — plus `d3d9-texture.js decode` at 5.2% |
+| render worker | **65%** | `$d3d_shader_vm_component` 9.8%, `$d3d_software_step` 8.8%, `$d3d_shader_vm_run`, `$d3d_shader_vm_texel`, `$d3d_shader_vm_sample_face_lod` |
+
+The rasterizer worker is **idle two thirds of the time**; the main thread is
+not. So the front end is **interpreter-bound**, not rasterizer-bound.
+
+And the frame rate is not "four frames in fifteen minutes" either. Counted
+directly off a 150s traced run:
+
+| call | count in ~150s |
+|---|---|
+| `BeginScene` | 80 |
+| `Present` | 162 lines |
+| `DrawPrimitive` | 312 |
+| `DrawIndexedPrimitive` | 0 |
+
+**≈0.53 frames per second, about four `DrawPrimitive` calls per frame.** That
+is slow but it is not a freeze, and it is fast enough to be clicked: a button
+held for five wall seconds spans two or three frames of mouse sampling.
+
+## The input path was right; the schedule unit was wrong
+
+Tracing the DirectInput lifecycle settles the input question. The game:
+
+```
+IDirectInput_CreateDevice(0x07f4e018, 0x00d063a8, ...)   ret=0x009afdc3
+IDirectInputDevice_SetDataFormat(0x07f4e020, 0x00d11b14) ret=0x009afdd7
+IDirectInputDevice_SetCooperativeLevel(..., 0x00000006)  ret=0x009afdef
+IDirectInputDevice_Acquire(0x07f4e020)                   ret=0x009afe3f
+IDirectInputDevice_GetDeviceData(..., cb=0x14, ...)      ret=0x009b0933   (repeatedly)
+```
+
+The two `.rdata` pointers name the device exactly:
+
+- `0x00d063a8` = `60 2b 1d 6f a0 d5 cf 11 bf c7 44 45 53 54 00 00` — the first
+  dword is `0x6F1D2B60`, which is **`GUID_SysMouse`** (`…61` would be the
+  keyboard).
+- `0x00d11b14` = `dwSize=24, dwObjSize=16, dwFlags=2 (DIDF_RELAXIS),
+  dwDataSize=16, dwNumObjs=7` — a **relative-axis** `DIMOUSESTATE`.
+
+So the device is an acquired relative mouse read in **buffered** mode through
+`GetDeviceData`, which is exactly the FIFO `relmousemove` and
+`di-mousedown`/`di-mouseup` feed (`renderer._queueDirectInputMouseButton`,
+test/run.js:7797). The harness has had the right path all along.
+
+What was wrong is the **schedule unit**. `--input` fires on batch numbers, and
+a guest that spins in a pump retires tiny batches — so in the hold run every
+event booked for batches 250000–600000 fired between 04:07 and 04:08, within
+the first minute of a 900-second run, hundreds of seconds before the profile
+dialog is even on screen. All eight captures came back at ~340KB for that
+reason alone. This is the same unit trap CLAUDE.md warns about for
+`--batch-size`, arriving through `--input`.
+
+At 0.53 fps the game samples the mouse about once every two seconds, so input
+has to be driven on the **wall clock** and held for seconds, not scheduled on
+batches and pulsed. `$S/bw-wallclick.sh` does that over `--control-stdin`:
+photograph every 30s, and when the capture size says the dialog is up, park the
+cursor with a large negative relative delta, walk it to the button, hold the
+button 5s, release.
