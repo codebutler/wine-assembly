@@ -5185,15 +5185,25 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
-  ;; 234: GlobalLock
+  ;; 234: GlobalLock — Global allocations are fixed direct pointers in this
+  ;; runtime, but the input must still be an exact live GlobalAlloc boundary.
   (func $handle_GlobalLock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
+    (if (call $heap_global_block_size (local.get $arg0) (i32.const 0))
+      (then (global.set $eax (local.get $arg0)))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
-  ;; 235: GlobalUnlock
+  ;; 235: GlobalUnlock — fixed blocks always have a zero lock count and the
+  ;; documented success result is TRUE. Movable handles are not represented.
   (func $handle_GlobalUnlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (if (call $heap_global_block_size (local.get $arg0) (i32.const 0))
+      (then (global.set $eax (i32.const 1)))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
@@ -7743,9 +7753,14 @@ nW — STUB: unimplemented
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
 
-  ;; 356: GlobalHandle — our GlobalLock returns ptr as-is, so GlobalHandle returns same value
+  ;; 356: GlobalHandle — GlobalLock is identity for our fixed direct-pointer
+  ;; representation, after exact live GlobalAlloc provenance validation.
   (func $handle_GlobalHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (local.get $arg0))
+    (if (call $heap_global_block_size (local.get $arg0) (i32.const 0))
+      (then (global.set $eax (local.get $arg0)))
+      (else
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
