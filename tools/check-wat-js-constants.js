@@ -11,6 +11,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { WAT_FILES } = require('../lib/wat-manifest');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -141,7 +142,13 @@ equal(one(threadManager, /csWa\s*-\s*(0x[0-9a-f]+|[0-9]+)\s*\+\s*\(e\.get_image_
 
 // OpenProcess handles are produced in WAT and interpreted by the scheduler.
 // They are not a memory-map global, so derive the tag from the producer body.
-const handlers = source('src/09a-handlers.wat');
+// Function ownership is deliberately free to move between WAT fragments. Read
+// the compiler-authoritative include closure so a source-organization cleanup
+// cannot silently disable this cross-language ABI check.
+const handlers = WAT_FILES
+  .filter(file => file.endsWith('.wat'))
+  .map(file => source(`src/${file}`))
+  .join('\n');
 const openProcessBody = handlers.slice(
   handlers.indexOf('(func $handle_OpenProcess'), handlers.indexOf('(func $handle_GetTickCount'));
 assert(openProcessBody.length > 0, 'cannot isolate $handle_OpenProcess');
