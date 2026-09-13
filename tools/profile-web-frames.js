@@ -25,6 +25,9 @@ const http = require('http');
 const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer');
+// Only for decoding the 1x1 clips the pixel-anchored wait takes; the film
+// path writes PNGs straight to disk and never parses one.
+const { PNG } = require('pngjs');
 
 const ROOT = path.join(__dirname, '..');
 const argv = process.argv.slice(2);
@@ -50,6 +53,20 @@ const CLICKS = (opt('guest-click', '') || '').split(',').filter(Boolean);
 // pacing is the emulated machine's progress, not this machine's load. A frame
 // wait still gives up after `--frame-wait-cap` seconds (default 240) so a guest
 // that stops presenting cannot hang the run.
+//
+// `wait:X:Y:RRGGBB@timeoutSec[:tol]` is the third pacing form and the only one
+// that is CLOSED LOOP: it polls the pixel at guest X,Y until it matches the
+// colour (or, with `!RRGGBB`, until it stops matching) and only then lets the
+// walk continue. It performs no input of its own. Reach for it when the screen
+// a walk depends on appears after a variable delay, which on this box is most
+// of them: measured on Warcraft III, the campaign map load took ~560s in one
+// run and past 1100s in another on the identical walk, and a first click that
+// lands before the menu exists sends every later click into the wrong screen.
+// Neither of the other two forms fixes that -- frames pace the emulated
+// machine, and this variance is in how much WORK a screen costs, not in how
+// much time passes. It gives up at its timeout rather than hanging the run,
+// and prints the colour it actually saw, which is what you need in order to
+// pick a better anchor next time.
 const SCRIPT = (opt('guest-script', '') || '').split(',').filter(Boolean).map(spec => {
   const [head, timing] = spec.split('@');
   const [at, hold] = (timing || '').split(':');
@@ -70,6 +87,20 @@ const SCRIPT = (opt('guest-script', '') || '').split(',').filter(Boolean).map(sp
   if (kind === 'key') {
     const [vk, ch] = rest.split('/').map(Number);
     return { ...act, vk, ch: Number.isFinite(ch) ? ch : vk };
+  }
+  // wait:X:Y:RRGGBB or wait:X:Y:!RRGGBB -- `at` is a TIMEOUT here rather than a
+  // delay, and `hold` is the per-channel tolerance.
+  if (kind === 'wait') {
+    const [x, y, colour] = rest.split(':');
+    const hex = String(colour).replace('!', '');
+    return {
+      kind, x: Number(x), y: Number(y),
+      negate: String(colour).startsWith('!'),
+      rgb: [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)),
+      timeout: Number(at) || 600,
+      tol: Number(hold) || 24,
+      frames: 0, at: 0,
+    };
   }
   throw new Error(`--guest-script: unknown action "${kind}" in ${spec}`);
 });
@@ -577,10 +608,67 @@ async function main() {
         + `${seen - start < n ? ` (gave up after ${FRAME_WAIT_CAP}s)` : ''}`);
     };
 
+    // Read one GUEST pixel. This goes through a 1x1 page screenshot rather
+    // than getImageData, because the screen canvas is a WebGL canvas for
+    // anything on the OpenGL path (Warcraft III is) and getContext('2d') on
+    // one of those returns null -- a probe that quietly reads null forever
+    // would turn every wait into its timeout and look like a stuck guest.
+    // The screenshot path is what the film already uses and is indifferent to
+    // the canvas type. Guest coordinates map through the same
+    // _exclusiveTransform clickGuest uses, then to CSS pixels via the canvas's
+    // own rect, since a screenshot clip is in CSS pixels and the backing store
+    // usually is not.
+    const readPixel = async (gx, gy) => {
+      const at = await page.evaluate((x, y) => {
+        const c = document.getElementById('screen');
+        if (!c || !c.width || !c.height) return null;
+        const t = sharedRenderer && sharedRenderer._exclusiveTransform;
+        const cx = t && t.srcW ? Math.round((t.dstX || 0) + ((x - (t.srcX || 0)) * t.dstW / t.srcW)) : x;
+        const cy = t && t.srcH ? Math.round((t.dstY || 0) + ((y - (t.srcY || 0)) * t.dstH / t.srcH)) : y;
+        const r = c.getBoundingClientRect();
+        return { x: r.x + cx * (r.width / c.width), y: r.y + cy * (r.height / c.height) };
+      }, gx, gy);
+      if (!at) return null;
+      try {
+        const buf = await page.screenshot({
+          clip: { x: at.x, y: at.y, width: 1, height: 1 },
+        });
+        const png = PNG.sync.read(Buffer.from(buf));
+        return [png.data[0], png.data[1], png.data[2]];
+      } catch (_) { return null; }
+    };
+
+    const hex = c => c === null ? 'n/a'
+      : '#' + c.map(v => v.toString(16).padStart(2, '0')).join('');
+
+    // Poll a guest pixel until it matches (or stops matching) a colour. This is
+    // the only pacing form that reacts to what is actually on screen; see the
+    // --guest-script comment at the top for why the clock is not usable here.
+    const waitPixel = async (act) => {
+      const deadline = Date.now() + act.timeout * 1000;
+      let seen = null, hits = 0;
+      while (Date.now() < deadline) {
+        seen = await readPixel(act.x, act.y);
+        if (seen) {
+          const near = seen.every((v, i) => Math.abs(v - act.rgb[i]) <= act.tol);
+          // Two consecutive agreeing samples, because these screens animate and
+          // a single frame can catch a transient (rain, a cursor, a fade).
+          if (near !== act.negate) { if (++hits >= 2) break; } else hits = 0;
+        }
+        await wait(1000);
+      }
+      const met = hits >= 2;
+      console.log(`wait ${act.x},${act.y} ${act.negate ? '!=' : '=='} `
+        + `${hex(act.rgb)} +/-${act.tol}: ${met ? 'met' : `TIMED OUT after ${act.timeout}s`}`
+        + `, saw ${hex(seen)}`);
+      return met;
+    };
+
     for (const act of SCRIPT) {
       if (act.frames) await waitFrames(act.frames);
       else if (act.at) await wait(act.at * 1000);
-      if (act.kind === 'click') await clickGuest(act.x, act.y, act.hold);
+      if (act.kind === 'wait') await waitPixel(act);
+      else if (act.kind === 'click') await clickGuest(act.x, act.y, act.hold);
       else if (act.kind === 'type') await typeGuest(act.text, act.hold);
       else if (act.kind === 'key') {
         // Down, then the character, then up. A real keyboard produces all
