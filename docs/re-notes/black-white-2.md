@@ -2593,3 +2593,76 @@ not point that anywhere.
 say the complaint is not an x87 status read and send the search back to the
 object graph; exceptions raised around the wedge would make precision the prime
 suspect and give a concrete emulator-side lead.
+
+## The empty list belongs to specific elements, not to the end of the array
+
+Run 46 put one `--trace-at` on `0x9d4a69`, the block entry inside vtable slot 7
+where `ESI` already holds `[[element]]` — the list head the walker spins on —
+and `EBX` still holds the element itself:
+
+| loop index | element | `[[element]]` |
+|---|---|---|
+| 1 | `0x2eccfca8` | **0** |
+| 5 | `0x2eccfd48` | `0x2eb30300` |
+| 9 | `0x2eccfda8` | `0x2eb30f6c` |
+
+Run 40's trap named element `0x2eccfc98` — index 0, sixteen bytes before index
+1 — so the first two elements are both empty and elements 5 and 9 are not.
+
+**This retires the off-by-one reading.** The question recorded earlier was
+whether the loop bound is larger than the array holds, so that the walk runs off
+into uninitialized slots. It does not: the empty elements are at the *front*,
+interleaved with populated ones, and the loop bound is never reached because the
+wedge happens first. Some elements carry a list and some carry nothing.
+
+`--trace-at` samples once per batch, so those three rows are three different
+batches of the same loop; they are not the only elements visited.
+
+**The run is deterministic once it is on this path.** Runs 42 and 46 returned
+byte-identical hit counts — `0x9e8200 = 1325`, `0x9c1a90 = 1`, `0x9d4a30 = 10`,
+`0x9e17b0 = 303` — and the same element addresses appear in runs 40, 43 and 46.
+Only *reaching* the path is unreliable, which is a separate problem (below). So
+these addresses can be dumped directly rather than hunted for again.
+
+## Slot 7 dereferences the empty list too — it just survives it
+
+`0x9d4a30` is a do-while: it loads `edi = [[arg1]]`, sets `esi = edi`, and runs
+the body before `cmp edi, esi / jnz` can stop it. With an empty list both are
+zero, so the loop body reads `[0]`, `[0+8]` and `[0+0x10]` once and then exits
+because `edi == esi`. That is exactly the census's small change:
+
+```
+[fault]   eip=0x9d4a87 x14 addresses 0x0-0x8
+[fault]   eip=0x9d4a69 x6  addresses 0x0-0x10
+[fault]   eip=0x9d4abd x2  addresses 0x0-0x0
+```
+
+So the empty list is *not* a state this code tolerates by design — on real
+hardware those reads are an access violation, not a cheap early exit. Slot 7
+merely gets out after one pass, while slot 8's walker (`0x9e17b0`) has no
+matching escape and spins. Both read the same field of the same object. The
+divergence between a crash and a hang is ours: `$g2w`'s NULL sentinel turns the
+faulting read into a zero, and a zero is a valid cursor.
+
+That is worth stating plainly, because it means **the wedge is a symptom with a
+one-line description: elements 0 and 1 should have a list and do not.** Nothing
+about the walker, the container, the grow path or Qhull's precision needs to be
+true for that to be the whole bug.
+
+## Two measurement traps this cost a run each
+
+**`dump-mem` at a pinned batch number cannot tell "not built yet" from
+"empty".** Run 45 dumped the picker's container at batches 434570-434580 and got
+four pages of zeros. The capture at the profile gate showed why: that run was
+still sitting on the "New Profile Name" dialog, 434570 meant nothing in it, and
+the container had never been allocated. Zeros from `dump-mem` are an honest
+report of an unmapped address — `--dump-vmap` says so in as many words — so
+they read exactly like a cleared structure. Every run that pins an input to a
+batch number now photographs the gate at batch 400000 first; if the dialog is
+still up there, nothing later in that run means anything.
+
+**The click that dismisses the profile dialog is not reliable.** The identical
+recipe reached the picker in runs 39, 42, 43 and 46 and stalled at the dialog in
+run 45. These runs use `--real-ticks`, so batch numbers drift with host load,
+and the box is regularly at load 11. Budget for a re-run rather than reading a
+diverged run's output as data.
