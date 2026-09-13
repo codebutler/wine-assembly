@@ -3554,3 +3554,42 @@ standing assumption in these notes. At 404s it is on the profile dialog; at
 with the row of land thumbnails along the bottom, rendered correctly. So the
 walker is not what stops the menu from appearing. The menu is up and drawn, and
 the wedge is in whatever the scene behind it queries.
+
+## The front end is not blocked, it is rasterizing: 82% of the run is in DrawPrimitive
+
+The eight `GetAsyncKeyState(VK_LBUTTON)` polls in 900 seconds are a symptom,
+not the disease. The probe's own `samples.ndjson` records the guest EIP every
+five seconds, and over a 900s run it reads:
+
+| EIP | samples (of 180) |
+|---|---|
+| `0x7503488` | 148 |
+| `0x7503490` | 11 |
+| everything else | 21 |
+
+`0x7503488` is in the thunk zone (`THUNK_BASE`, guest `0x07500000`), and a
+thunk is 8 bytes of `[name_rva, api_id]` (src/09b-dispatch.wat:126). Read out
+of a live instance over `--control-stdin`:
+
+```
+7503488 idx=1681 name_rva=0xcaca0010 api_id=2774
+7503490 idx=1682 name_rva=0xcaca0010 api_id=2775
+```
+
+`api_table.json[2774]` is **`IDirect3DDevice9_DrawPrimitive`**, 2775 is
+`DrawIndexedPrimitive`. So **the front end spends ~82% of its wall clock inside
+one D3D9 draw call in the software backend**, and the run is not parked at all:
+texture uploads keep climbing (`submitted 5:` goes 7 → 29 → 125 → 174 across
+the same window) while the EIP sits in `DrawPrimitive`.
+
+That explains every input result recorded above without needing a wrong input
+path. The menu samples the mouse once per rendered frame, and it renders about
+four frames in fifteen minutes, so a scripted press has to survive minutes of
+wall clock to be seen at all — and a press pulsed over 2000 batches does not.
+It also explains the 6/6 split on passing the profile dialog unattended: that
+is a race against a clock nothing in the flag set controls.
+
+**So the blocker for gameplay is throughput in the software D3D9 rasterizer,
+not input routing and not the `0x9e17b0` wedge.** The next measurement is a
+`node --cpu-prof` run of the probe's exact command line, to name what inside
+the backend the time goes to.
