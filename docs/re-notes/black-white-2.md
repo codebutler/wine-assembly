@@ -3462,3 +3462,37 @@ That gives the whole sequence a clock:
 | 435422 | `0x2eb307d8->next` is zeroed by something that is not the pool |
 | 435423-435908 | ~490 batches of ordinary pool traffic, 303 walker calls returning |
 | 435909 | the 304th call — a point that tests "inside" — never returns |
+
+## The debug flags are load-bearing: a bare run never reaches the land menu
+
+A live session was first tried with no debug flags at all, on the reasoning that
+`--count` is free and everything else costs speed. It ran its full 2400 seconds
+and never got near the wedge:
+
+```
+batch 5,496,011   eip=0x7503488   walker=0      (after 2400s)
+```
+
+EIP sat in the thunk zone — an API call — for the entire run, and every one of
+the forty polls a minute apart reported the same address. Compare run 62, which
+reached the wedge in about 750 seconds.
+
+The difference is batch *size*, not batch count. Both runs pass
+`--batch-size=200000`; the debug facilities (`--watch` is a per-block check in
+WASM, `--trace-at` likewise) cut batches short, so a "batch" under those flags
+is a small fraction of the work a bare batch retires. The headless clock is
+`batch * TICK_MS_PER_BATCH` with the default 200ms, so a bare run advances guest
+time enormously faster *per unit of work*: 5.5M batches is about 12 days of
+guest time for one boot's worth of work. Something in the menu sequence does not
+survive that, and the app settles into a wait.
+
+This is the [headless clock](../../CLAUDE.md) trap pointed the other way round —
+the usual failure is a timed animation that looks frozen because guest time
+crawls; here guest time sprints and a sequence never completes. Two consequences
+for anything that builds on these notes:
+
+- **Batch numbers are only comparable within one flag set.** Run 62's wedge at
+  435909 and a bare run's 5.5M measure different things entirely.
+- **Reproducing the wedge requires run 62's flags**, not a faster subset. The
+  live session therefore carries them and changes only `--seconds`, so the
+  process survives the wedge and can be interrogated.
