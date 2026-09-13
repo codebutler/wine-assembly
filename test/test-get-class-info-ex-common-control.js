@@ -7,21 +7,21 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_get_class_info_ex_a")
-      (param $name i32) (param $out i32) (result i32)
+      (param $instance i32) (param $name i32) (param $out i32) (result i32)
     (local $saved_esp i32)
     (local.set $saved_esp (global.get $esp))
     (call $handle_GetClassInfoExA
-      (i32.const 0) (local.get $name) (local.get $out)
+      (local.get $instance) (local.get $name) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $esp (local.get $saved_esp))
     (global.get $eax))
 
   (func (export "test_get_class_info_ex_w")
-      (param $name i32) (param $out i32) (result i32)
+      (param $instance i32) (param $name i32) (param $out i32) (result i32)
     (local $saved_esp i32)
     (local.set $saved_esp (global.get $esp))
     (call $handle_GetClassInfoExW
-      (i32.const 0) (local.get $name) (local.get $out)
+      (local.get $instance) (local.get $name) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $esp (local.get $saved_esp))
     (global.get $eax))
@@ -65,25 +65,39 @@ const extraWat = String.raw`
 
   const nameA = ansi('msctls_trackbar32');
   const outA = output();
-  assert.strictEqual(e.test_get_class_info_ex_a(nameA, outA), 1);
+  assert.strictEqual(e.test_get_class_info_ex_a(0, nameA, outA), 1);
   assertClass(nameA, outA, 19);
 
   const nameW = wide('msctls_trackbar32');
   const outW = output();
-  assert.strictEqual(e.test_get_class_info_ex_w(nameW, outW), 1);
+  assert.strictEqual(e.test_get_class_info_ex_w(0, nameW, outW), 1);
   assertClass(nameW, outW, 19);
 
   const progressA = ansi('msctls_progress32');
   const progressOutA = output();
-  assert.strictEqual(e.test_get_class_info_ex_a(progressA, progressOutA), 1);
+  assert.strictEqual(e.test_get_class_info_ex_a(0, progressA, progressOutA), 1);
   assertClass(progressA, progressOutA, 17);
 
   const progressW = wide('msctls_progress32');
   const progressOutW = output();
-  assert.strictEqual(e.test_get_class_info_ex_w(progressW, progressOutW), 1);
+  assert.strictEqual(e.test_get_class_info_ex_w(0, progressW, progressOutW), 1);
   assertClass(progressW, progressOutW, 17);
 
-  assert.strictEqual(e.test_get_class_info_ex_a(ansi('not_a_real_control'), output()), 0,
+  // Win98 COMCTL32 probes its own classes with the DLL HINSTANCE before it
+  // calls RegisterClass. Reporting the browser fallback here suppresses that
+  // native registration and leaves WinRAR with placeholder toolbar buttons.
+  const toolbarA = ansi('ToolbarWindow32');
+  const toolbarW = wide('ToolbarWindow32');
+  assert.strictEqual(e.test_get_class_info_ex_a(0x0063f000, toolbarA, output()), 0,
+    'an unregistered COMCTL class is not fabricated for a DLL instance');
+  assert.strictEqual(e.test_get_class_info_ex_w(0x0063f000, toolbarW, output()), 0,
+    'the wide COMCTL lookup has the same registration boundary');
+  const toolbarOut = output();
+  assert.strictEqual(e.test_get_class_info_ex_a(0, toolbarA, toolbarOut), 1,
+    'NULL hInstance keeps the browser system-class fallback');
+  assertClass(toolbarA, toolbarOut, 21);
+
+  assert.strictEqual(e.test_get_class_info_ex_a(0, ansi('not_a_real_control'), output()), 0,
     'unknown classes must still fail');
   console.log('PASS  GetClassInfoExA/W describe implemented trackbar and progress classes');
 })().catch(error => {

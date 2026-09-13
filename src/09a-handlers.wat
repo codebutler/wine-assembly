@@ -6850,7 +6850,17 @@
     ;; implemented common-control classes registered by InitCommonControls are
     ;; string-only; both expose the existing WAT wndproc markers.
     (local.set $class (call $builtin_ctrl_class_id_key (local.get $name_key)))
-    (if (i32.and (i32.eqz (local.get $class)) (i32.ge_u (local.get $name_key) (i32.const 0x10000))) (then (local.set $class (call $comctl_class_ctrl_id (local.get $name_key)))))
+    ;; COMCTL window classes are not predefined system classes. Its DllMain
+    ;; probes them with its own HINSTANCE before registering the native
+    ;; wndprocs, so fabricating a hit there makes the DLL skip registration.
+    ;; A NULL instance is the documented system-class query and remains the
+    ;; browser/WAT fallback when no native class record exists.
+    (if (i32.and
+          (i32.and (i32.eqz (local.get $class))
+                   (i32.ge_u (local.get $name_key) (i32.const 0x10000)))
+          (i32.eqz (local.get $hinstance)))
+      (then
+        (local.set $class (call $comctl_class_ctrl_id (local.get $name_key)))))
     (if (i32.eqz (local.get $class)) (then (return (i32.const 0))))
     (local.set $out (call $g2w (local.get $out_guest)))
     ;; CS_VREDRAW|CS_HREDRAW|CS_DBLCLKS|CS_GLOBALCLASS, as USER registers these.
