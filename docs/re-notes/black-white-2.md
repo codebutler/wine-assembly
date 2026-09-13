@@ -3749,3 +3749,69 @@ predicate, and it should not be started on the strength of one app's load
 screen. The measurement that would justify it is a `--handler-hist` /
 `--hot-block-dump` census taken *during* the land load, which no run has yet
 because the load is only reachable through the click chain above.
+
+### CORRECTION (2026-09-13): the land load never finishes -- the scan reads a NULL vector
+
+The section above is wrong where it calls `0x9e5272` "an O(n*m) scan at
+interpreter speed". It is an unbounded loop over corrupt data, and no amount of
+folding would make it terminate. The full shape, from the disassembly at
+`0x9e521f`:
+
+```
+009e5250  33 db          xor ebx, ebx            ; inner index = 0
+009e5252  39 5d 00       cmp [ebp+0x0], ebx      ; ebp = src vector: count@+0, data@+4
+009e5260  8b 56 04       mov edx, [esi+0x4]      ; esi = dst vector: cap@+0, count@+4, data@+8
+009e5269  8b 4d 04       mov ecx, [ebp+0x4]      ; ecx = src->data
+009e526c  8b 3c 99       mov edi, [ecx+ebx*4]    ; edi = src->data[i]
+009e526f  8b 4e 08       mov ecx, [esi+0x8]
+009e5272  39 39          cmp [ecx], edi          ; linear_find(dst, edi)
+009e5274  74 73          jz  0x9e52e9            ; already present -> next i
+009e5276  83 c0 01       add eax, 1
+009e5279  83 c1 04       add ecx, 4
+009e527c  3b 46 04       cmp eax, [esi+0x4]
+009e527f  7c f1          jl  0x9e5272
+...                                              ; not found: grow (malloc at 0xad425d,
+009e52e2  89 14 81       mov [ecx+eax*4], edx    ; capacity doubling) and push_back
+009e52e5  83 46 04 01    add dword [esi+0x4], 1
+009e52ec  3b 5d 00       cmp ebx, [ebp+0x0]      ; i < src->count
+009e52fd  83 c5 0c       add ebp, 0xc            ; next src vector (12-byte records)
+```
+
+So it is `dst = union(dst, src[k])` for a list of source vectors, with
+membership tested by linear search. Fine in principle. The problem is the
+source record it is on. Sampled live from the running probe at two points 45 s
+apart:
+
+```
+FRAME eip=9e5276 ebp=2e0f03e8 srcN=770376714 srcData=0 ebx=1268378 s30=3 dstN=92888 dstCap=131072
+FRAME eip=9e5272 ebp=2e0f03e8 srcN=770376714 srcData=0 ebx=1276274 s30=3 dstN=96437 dstCap=131072
+```
+
+`srcData = 0`. The source vector's data pointer is **NULL** and its count is
+`770376714` (`0x2DE9C64A`) -- a value in the same `0x2d`-`0x2f` range as every
+live heap pointer in this process, so a pointer is sitting in the count slot.
+A well-formed empty vector would read count 0; this record was never
+initialized, or was written with the wrong layout.
+
+The consequences follow mechanically. `mov ecx,[ebp+4]` makes `ecx` zero, so
+`mov edi,[ecx+ebx*4]` reads guest address `ebx*4` -- around `0x4D9C88` at the
+sampled index, which is *inside the mapped image*, so nothing faults and no
+diagnostic fires. Each dword of the EXE's own bytes is then deduplicated into
+`dst`, which grows without bound: 45905 entries when first sampled, 96437 an
+hour later, capacity already doubled to 131072. The loop exits when
+`ebx` reaches `770376714`, i.e. after ~770 million iterations whose inner scan
+is itself hundreds of thousands of elements by then. At the measured
+~8000 outer iterations per 40 s that is over 40 days, and the inner scan is
+still lengthening.
+
+**So: the land load does not complete, and it is not a throughput problem.**
+The `--handler-hist` census named at the end of the previous section would have
+measured a loop that should never have run. The open question is why the record
+at `0x2e0f03e8` is garbage -- who fills that array of 12-byte vector records,
+and what it read (or failed to read) beforehand. `s30=3` says three records
+remain in the outer walk, so the earlier ones were processed without wedging;
+this is one bad element, not a wholesale corruption.
+
+This also re-frames the two long-standing NULL-deref counts in the fault census
+(`eip=0x9e17d0` x937,819,405 at addresses `0x0`-`0x8`, and `0x9e8200`): the same
+family of symptom -- structures that should have been filled reading back NULL.
