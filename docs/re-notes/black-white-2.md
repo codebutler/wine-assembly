@@ -2465,3 +2465,68 @@ Since the cap landed there is no reason to use `=stop` here at all: plain
 `--fault-null` can no longer OOM the host, so the run goes all the way into the
 wedge and the exit census gives the totals. Use `=stop` only when the first
 fault is known to be the one you want.
+
+## The grow path's malloc never fails (run 42) — hypothesis retired
+
+Run 42 answered the question directly. `--trace-at=0x9e8220` captured every
+result the grow routine's `malloc` returned:
+
+```
+--- grow-path mallocs: total, then how many returned NULL ---
+330
+0
+```
+
+**330 allocations, none of them NULL.** So the unchecked store at `0x9e824c`
+never stores a NULL on this path, and the story that a failed `malloc` leaves
+`items` NULL behind a lying capacity — carried since `55d3f714` — is **retired
+for the picker**. It remains a real latent bug in the binary; it is simply not
+what happens here. Together with the zero `[heap] OOM` lines, allocation failure
+is now ruled out at both levels: ours and the guest CRT's.
+
+Hit counts from the same run:
+
+```
+0x009e8200 = 1325     (grow routine)
+0x009d4a30 = 10       (vtable slot 7)
+0x009e17b0 = 303      (the walker)
+0x009c1a90 = 1        (the picker loop that calls slot 7)
+```
+
+The picker loop runs **once**, and the walker is entered 303 times — 302 of
+which return. The 303rd is the one that never does, and it alone accounts for
+2,430,389,141 of the run's 2,430,395,741 faults.
+
+### A second faulting site, with attribution caveats
+
+`eip=0x9e8200` faulted 6578 times over `0x0-0xffffffff`, and the printed
+samples repeat a short cycle:
+
+```
+0x403, 0x3ff, 0x4, 0x0, 0x4, 0x0, 0x4, 0x403, 0x3ff, 0x4, 0x0, ...
+```
+
+`0x3ff`/`0x403` are four apart, and `0x0`/`0x4` alternate — two-field reads from
+a NULL base, and from a base of about `0x400`. Run 41's trap in the same routine
+had `EBP=0x3ff` and `EDI=0x400`: **a small integer near 1024 is being used as a
+pointer**, which reads like a count or size fetched from the wrong field.
+
+Treat the 6578 with caution. The block entered at `0x9e8200` contains exactly
+one memory read (`mov eax,[esi]` at `0x9e8204`), yet `--count` puts entries at
+1325 — fewer than the faults attributed to it. The documented caveat applies:
+the reported EIP is the block entry the threaded code last set, not the faulting
+instruction, so some of these faults belong to later blocks in the same routine
+(the copy loop at `0x9e8230` reads `[ecx+eax*4]` from the *old* items array).
+The count/fault mismatch is unexplained and should not be reasoned from until
+it is.
+
+### Where the next session should start
+
+The container is the thing to look at, and `0x9c1a90` running exactly once makes
+it cheap to catch: `--trace-at=0x9c1a90` prints `EBX`/`ESI` at that single
+entry, which gives the concrete container address, and a following
+`--input=N:dump-mem:` of `[ebx]`, `[ebx+4]`, `[ebx+8]` says whether `items` is
+NULL or whether `items` is valid and its *elements* are. Run 40's registers say
+the latter — `arg1 = items[ebp] = 0x2eccfc98` was a valid pointer whose first
+field was zero — so the likeliest remaining shape is a container of live objects
+that were never initialized, not a container that was never allocated.
