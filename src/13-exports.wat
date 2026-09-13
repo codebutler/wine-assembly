@@ -2593,6 +2593,16 @@
   (func (export "get_ck_lut16_runs") (result i32) (global.get $ck_lut16_runs))
   (func (export "get_ck_lut16_px") (result i64) (global.get $ck_lut16_px))
 
+  ;; The alpha-blended RGB565 blit fold ($th_ck_blend16_run). The off switch
+  ;; is decode-time like every other fold's, so an A/B has to run the two arms
+  ;; at different code addresses or clear the block cache between them.
+  (func (export "set_ck_blend16") (param $flag i32)
+    (global.set $ck_blend16_enabled (local.get $flag)))
+  (func (export "get_ck_blend16") (result i32) (global.get $ck_blend16_enabled))
+  (func (export "get_ck_blend16_matches") (result i32) (global.get $ck_blend16_matches))
+  (func (export "get_ck_blend16_runs") (result i32) (global.get $ck_blend16_runs))
+  (func (export "get_ck_blend16_px") (result i64) (global.get $ck_blend16_px))
+
   ;; TREE_FOLD ($th_tree_fold, src/07b-loop-match.wat). The general integer
   ;; expression fold; OFF by default. Decode-time, so the same rule as the
   ;; three above: set it before the first decode, and on every per-thread

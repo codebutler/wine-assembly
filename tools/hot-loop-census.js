@@ -52,8 +52,26 @@ const AS_JSON = argv.includes('--json');
 
 // ---- one window ------------------------------------------------------------
 
+// profile-web-frames.js prints the probe's JSON as one `report-eval: {...}`
+// line inside its own log, so the natural thing to do -- redirect the whole
+// run to a file -- produces something that is not JSON. Accept both, rather
+// than making every caller remember to filter the log first.
+function readHist(file) {
+  const text = fs.readFileSync(file, 'utf8');
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    const line = text.split('\n').find(l => l.startsWith('report-eval: '));
+    if (!line) {
+      throw new Error(`${file} is neither probe JSON nor a profile-web-frames ` +
+        `log carrying a "report-eval:" line (${err.message})`);
+    }
+    return JSON.parse(line.slice('report-eval: '.length));
+  }
+}
+
 function loadWindow(file) {
-  const hist = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const hist = readHist(file);
   const blocks = attributeBlocks(hist, EXE_BASE);
   // The present ring is the whole run; only the presents between the arm and
   // the read belong to these counts.

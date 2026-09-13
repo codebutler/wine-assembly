@@ -2117,6 +2117,168 @@
     (global.set $eip (local.get $exit_eip))
     (return_call $branch_end))
 
+  ;; One RGB565 channel of jgl's blend, as the x86 computes it:
+  ;;   mul cl -> AX = AL*CL ; shr ax,8 ; add ax,bp ; shr ax,3
+  ;; $sc and $dc arrive already masked to 0xF8 by the caller, which is the
+  ;; one place the three channels differ (>>7, >>2, <<3).
+  (func $ck_blend_chan (param $sc i32) (param $dc i32) (param $a i32) (result i32)
+    (i32.shr_u
+      (i32.and
+        (i32.add (i32.shr_u (i32.mul (local.get $dc) (local.get $a))
+                            (i32.const 8))
+                 (local.get $sc))
+        (i32.const 0xFFFF))
+      (i32.const 3)))
+
+  ;; jgl's whole alpha blend, src and dst RGB565, alpha 1..0xFE.
+  ;;
+  ;; The odd shifts are the binary's, not a tidied version: red takes
+  ;; (c >> 7) & 0xF8 rather than the (c >> 8) & 0xF8 the format would suggest,
+  ;; and blue's result can reach 0x3E and carry into green's low bit. That
+  ;; overflow is the guest's own behaviour and is reproduced, not corrected --
+  ;; the fold has to draw what the x86 draws, bug included.
+  (func $ck_blend565 (param $src i32) (param $dst i32) (param $a i32) (result i32)
+    (i32.and
+      (i32.or
+        (i32.or
+          (i32.shl (call $ck_blend_chan
+                     (i32.and (i32.shr_u (local.get $src) (i32.const 7)) (i32.const 0xF8))
+                     (i32.and (i32.shr_u (local.get $dst) (i32.const 7)) (i32.const 0xF8))
+                     (local.get $a))
+                   (i32.const 10))
+          (i32.shl (call $ck_blend_chan
+                     (i32.and (i32.shr_u (local.get $src) (i32.const 2)) (i32.const 0xF8))
+                     (i32.and (i32.shr_u (local.get $dst) (i32.const 2)) (i32.const 0xF8))
+                     (local.get $a))
+                   (i32.const 5)))
+        (call $ck_blend_chan
+          (i32.and (i32.shl (local.get $src) (i32.const 3)) (i32.const 0xF8))
+          (i32.and (i32.shl (local.get $dst) (i32.const 3)) (i32.const 0xF8))
+          (local.get $a)))
+      (i32.const 0xFFFF)))
+
+  ;; 456: a whole alpha-guarded RGB565 sprite row (SimGolf's jgl.dll).
+  ;;
+  ;; Matched from raw x86 by $try_emit_ck_blend16_run. This is the loop
+  ;; tools/hot-loop-census.js measured at 28-54% of ALL block entries across
+  ;; four independent browser windows -- the single largest item in the app.
+  ;;
+  ;; UNLIKE H455 THIS DECLINES NOTHING. H455 bails into its expensive arm, and
+  ;; benchmarking that decision (tools/bench-loops.js --shapes=ck_blend16) is
+  ;; what argued for folding all three arms here: with the two cheap arms
+  ;; folded and the blend left to the interpreter, the 3% of pixels that blend
+  ;; are ~82% of everything remaining, at 66 threaded ops each against 18 and
+  ;; 7. The expensive arm is worth more per line of WAT than the cheap ones,
+  ;; which is the opposite of the instinct H455 was built on. So the whole row
+  ;; runs here and the only exits are a spent count and the iteration cap.
+  (func $th_ck_blend16_run (param $op i32)
+    (local $tp i32) (local $head_eip i32) (local $exit_eip i32)
+    (local $s i32) (local $b i32) (local $d i32) (local $c i32)
+    (local $l i32) (local $x i32) (local $u i32)
+    (local $sb i32) (local $ab i32) (local $src i32) (local $dst i32)
+    (local $cost i32) (local $blocks i32) (local $px i32) (local $c0 i32)
+    (local $capped i32)
+    (local.set $tp (global.get $ip))
+    (local.set $head_eip (i32.load          (local.get $tp)))
+    (local.set $exit_eip (i32.load offset=4 (local.get $tp)))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
+
+    ;; The match is byte-exact, so the register allocation is part of it and
+    ;; there is nothing to unpack from $op: ESI source, EBX alpha, EDI dest,
+    ;; ECX palette, EDX count, EAX/EBP the scratch pair.
+    (local.set $s (call $get_reg (i32.const 6)))
+    (local.set $b (call $get_reg (i32.const 3)))
+    (local.set $d (call $get_reg (i32.const 7)))
+    (local.set $c (call $get_reg (i32.const 2)))
+    (local.set $l (call $get_reg (i32.const 1)))
+    (local.set $x (call $get_reg (i32.const 0)))
+    (local.set $u (call $get_reg (i32.const 5)))
+
+    (block $done (loop $pxl
+      (local.set $sb (call $gl8 (local.get $s)))
+      (if (i32.eq (local.get $sb) (i32.const 0xFF))
+        (then
+          ;; colour sentinel: the head jumps straight to the advance block
+          (local.set $cost (i32.add (local.get $cost) (i32.const 7)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 2))))
+        (else
+          (local.set $ab (call $gl8 (local.get $b)))
+          (if (i32.eq (local.get $ab) (i32.const 0xFF))
+            (then
+              ;; alpha sentinel: one block further in, same destination
+              (local.set $cost (i32.add (local.get $cost) (i32.const 9)))
+              (local.set $blocks (i32.add (local.get $blocks) (i32.const 3))))
+            (else
+              (local.set $src (call $gl16 (i32.add (local.get $l)
+                (i32.shl (local.get $sb) (i32.const 1)))))
+              (if (i32.eqz (local.get $ab))
+                (then
+                  ;; alpha 0: a plain LUT16 store. `xor ebp,ebp` is why U
+                  ;; ends at zero, and the two xors are why X is the clean
+                  ;; zero-extended table word.
+                  (call $gs16 (local.get $d) (local.get $src))
+                  (local.set $x (local.get $src))
+                  (local.set $u (i32.const 0))
+                  (local.set $cost (i32.add (local.get $cost) (i32.const 18)))
+                  (local.set $blocks (i32.add (local.get $blocks) (i32.const 4))))
+                (else
+                  (local.set $dst (call $gl16 (local.get $d)))
+                  (call $gs16 (local.get $d)
+                    (call $ck_blend565 (local.get $src) (local.get $dst)
+                          (local.get $ab)))
+                  ;; What the arm leaves in EAX/EBP is its blue channel and
+                  ;; the masked blue of the source -- the last thing each
+                  ;; register was written with before the store.
+                  (local.set $u (i32.and (i32.shl (local.get $src) (i32.const 3))
+                                         (i32.const 0xF8)))
+                  (local.set $x (call $ck_blend_chan
+                    (local.get $u)
+                    (i32.and (i32.shl (local.get $dst) (i32.const 3))
+                             (i32.const 0xF8))
+                    (local.get $ab)))
+                  (local.set $cost (i32.add (local.get $cost) (i32.const 66)))
+                  (local.set $blocks (i32.add (local.get $blocks) (i32.const 5)))))))))
+
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (local.set $b (i32.add (local.get $b) (i32.const 1)))
+      (local.set $d (i32.add (local.get $d) (i32.const 2)))
+      (local.set $c0 (local.get $c))
+      (local.set $c (i32.sub (local.get $c) (i32.const 1)))
+      (local.set $px (i32.add (local.get $px) (i32.const 1)))
+      (br_if $done (i32.eqz (local.get $c)))
+      ;; The x86 is a do-while, so C==0 on entry really is 2^32 pixels there
+      ;; and this must not "fix" it -- but it must not hang a batch either.
+      ;; Parking at the head is exactly equivalent and hands back a turn. The
+      ;; head is safe to resume at here, unlike in H455, because this handler
+      ;; has made a row's worth of progress before it can be reached.
+      (if (i32.gt_u (local.get $px) (i32.const 65536))
+        (then (local.set $capped (i32.const 1)) (br $done)))
+      (br $pxl)))
+
+    (global.set $block_budget
+      (i32.sub (global.get $block_budget) (local.get $blocks)))
+    (global.set $steps (i32.sub (global.get $steps)
+      (i32.add (local.get $cost) (i32.const 1))))
+    (global.set $ck_blend16_runs (i32.add (global.get $ck_blend16_runs) (i32.const 1)))
+    (global.set $ck_blend16_px
+      (i64.add (global.get $ck_blend16_px) (i64.extend_i32_u (local.get $px))))
+
+    (call $set_reg (i32.const 6) (local.get $s))
+    (call $set_reg (i32.const 3) (local.get $b))
+    (call $set_reg (i32.const 7) (local.get $d))
+    (call $set_reg (i32.const 2) (local.get $c))
+    (call $set_reg (i32.const 0) (local.get $x))
+    (call $set_reg (i32.const 5) (local.get $u))
+    ;; ECX is pushed and popped around the blend arm, so the palette pointer
+    ;; survives the row and needs no write-back.
+    (if (local.get $capped)
+      (then (global.set $eip (local.get $head_eip)))
+      (else
+        (call $set_flags_dec (local.get $c0) (local.get $c))
+        (global.set $flag_sign_shift (i32.const 31))
+        (global.set $eip (local.get $exit_eip))))
+    (return_call $branch_end))
+
   ;; 455: a whole colour-keyed LUT16 sprite row (SimGolf's jgl.dll).
   ;; Matched from raw x86 by $try_emit_ck_lut16_run, which documents the
   ;; four-block diamond this replaces. Per pixel the interpreter pays two or

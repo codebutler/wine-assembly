@@ -81,6 +81,13 @@
   (global $ck_lut16_runs    (mut i32) (i32.const 0))
   (global $ck_lut16_px      (mut i64) (i64.const 0))
 
+  ;; $th_ck_blend16_run's alpha-blended RGB565 blit fold (SimGolf's jgl.dll).
+  ;; Off switch is for A/B only; see $try_emit_ck_blend16_run.
+  (global $ck_blend16_enabled (mut i32) (i32.const 1))
+  (global $ck_blend16_matches (mut i32) (i32.const 0))
+  (global $ck_blend16_runs    (mut i32) (i32.const 0))
+  (global $ck_blend16_px      (mut i64) (i64.const 0))
+
   ;; Decoder-time, nonterminal LUT spans. Unlike H418 these are not loops:
   ;; an indirect jump has already selected one suffix of a fully unrolled
   ;; renderer, and execution continues into the ordinary row tail afterwards.
@@ -787,6 +794,77 @@
     (call $te_raw (local.get $exit_eip))
     (call $te_raw (local.get $dstep))
     (call $te_raw (local.get $shadow))
+    (i32.const 1))
+
+  ;; ---- the alpha-blended RGB565 blit fold ($th_ck_blend16_run) ---------
+  ;;
+  ;; jgl+0x100153a5, 210 bytes. tools/hot-loop-census.js measured this at
+  ;; 28.0% / 49.5% / 51.6% / 53.8% of ALL block entries across four
+  ;; independent browser windows -- the largest single item in SimGolf, and
+  ;; the only one that is hot in every window.
+  ;;
+  ;; MATCHED BY EXACT BODY HASH, not by grammar, following the
+  ;; $try_emit_rgb565_alpha_run precedent. The two are matched the same way
+  ;; for the same reason: the body is ~45 instructions of channel-wise
+  ;; fixed-point arithmetic whose result the executor reproduces as closed-form
+  ;; WAT, so a grammar loose enough to be worth writing would also accept
+  ;; bodies that compute something else. A few sampled $gl32 words reject
+  ;; almost everything for the cost of four loads, and the FNV-1a over all 210
+  ;; bytes is what actually authorizes the arithmetic.
+  ;;
+  ;; The hash constant came from `node tools/pe-fnv.js <jgl.dll> 0x100153a5 210`.
+  ;; jgl's SECOND copy of this loop, at 0x100150e2, hashes differently
+  ;; (0xdeb3be69) -- same instructions, different rel32 displacements inside --
+  ;; and is deliberately NOT accepted here: it is a different byte sequence and
+  ;; this fold's licence is byte-exactness. Adding it means proving it
+  ;; separately, not widening the test.
+  (func $try_emit_ck_blend16_run (param $start_eip i32) (result i32)
+    (local $p i32) (local $end i32) (local $hash i32) (local $exit_eip i32)
+    (if (i32.eqz (global.get $ck_blend16_enabled)) (then (return (i32.const 0))))
+
+    ;; Cheap structural rejects first, so a normal block pays four loads and
+    ;; not a 210-byte hash loop.
+    ;;   +0x000  80 3e ff 0f   cmp byte [esi],0xff / jnb rel32
+    ;;   +0x004  83 bd 00 00
+    ;;   +0x008  80 3b ff 0f   cmp byte [ebx],0xff / jnb rel32
+    ;;   +0x00c  83 b4 00 00
+    ;;   +0x010  00 00 33 c0   (tail of that rel32) / xor eax,eax
+    ;;   +0x014  33 ed 8a 03   xor ebp,ebp / mov al,[ebx]
+    (if (i32.ne (call $gl32 (local.get $start_eip)) (i32.const 0x0fff3e80))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $start_eip) (i32.const 8)))
+                (i32.const 0xff3b8000))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $start_eip) (i32.const 0x10)))
+                (i32.const 0xc0330000))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $start_eip) (i32.const 0x14)))
+                (i32.const 0x038aed33))
+      (then (return (i32.const 0))))
+
+    (local.set $p (local.get $start_eip))
+    (local.set $end (i32.add (local.get $start_eip) (i32.const 210)))
+    (local.set $hash (i32.const 0x811c9dc5))
+    (loop $hash_bytes
+      (local.set $hash
+        (i32.mul
+          (i32.xor (local.get $hash) (call $gl8 (local.get $p)))
+          (i32.const 0x01000193)))
+      (local.set $p (i32.add (local.get $p) (i32.const 1)))
+      (br_if $hash_bytes (i32.lt_u (local.get $p) (local.get $end))))
+    (if (i32.ne (local.get $hash) (i32.const 0x978734ed))
+      (then (return (i32.const 0))))
+
+    ;; The body ends `dec edx / jnz head`, so the fall-through is the byte
+    ;; after the loop and there is nothing to search for.
+    (local.set $exit_eip (local.get $end))
+
+    (global.set $ck_blend16_matches
+      (i32.add (global.get $ck_blend16_matches) (i32.const 1)))
+    ;; No operand: the register allocation is part of the byte-exact match.
+    (call $te (i32.const 456) (i32.const 0))
+    (call $te_raw (local.get $start_eip))
+    (call $te_raw (local.get $exit_eip))
     (i32.const 1))
 
   ;; ModRM that must be `[base]` with no displacement, no SIB, no disp32
@@ -3502,6 +3580,10 @@
               (local.set $done (i32.const 1))
               (br $decode)))
           (if (call $try_emit_ck_lut16_run (local.get $start_eip))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
+          (if (call $try_emit_ck_blend16_run (local.get $start_eip))
             (then
               (local.set $done (i32.const 1))
               (br $decode)))))
