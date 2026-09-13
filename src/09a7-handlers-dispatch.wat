@@ -1148,9 +1148,86 @@
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 0))))
     (global.set $eax (i32.const 0x80004001))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+  ;; Validate the single-item private PIDLs created above. Return 1 for a
+  ;; filesystem path, 2 for a virtual CSIDL root, or 0 for a foreign/malformed
+  ;; ITEMIDLIST. Besides protecting the comparison, checking the terminating
+  ;; zero-sized SHITEMID means equality covers the complete list we own.
+  (func $shell_private_pidl_kind (param $pidl i32) (result i32)
+    (local $wa i32) (local $cb i32) (local $tag i32)
+    (local $capacity i32) (local $i i32)
+    (if (i32.eqz (local.get $pidl)) (then (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $pidl)))
+    (local.set $cb (i32.load16_u (local.get $wa)))
+    (local.set $tag (i32.load offset=2 align=1 (local.get $wa)))
+    (if (i32.and
+          (i32.eq (local.get $tag) (i32.const 0x50564157)) ;; WAVP
+          (i32.eq (local.get $cb) (i32.const 10)))
+      (then
+        (if (i32.eqz (i32.load16_u offset=10 (local.get $wa)))
+          (then (return (i32.const 2))))))
+    (if (i32.or
+          (i32.ne (local.get $tag) (i32.const 0x50464157)) ;; WAFP
+          (i32.or (i32.lt_u (local.get $cb) (i32.const 8))
+                  (i32.gt_u (local.get $cb) (i32.const 266))))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.load16_u (i32.add (local.get $wa) (local.get $cb)))
+                (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $capacity (i32.sub (local.get $cb) (i32.const 6)))
+    (block $invalid
+      (loop $scan
+        (br_if $invalid (i32.ge_u (local.get $i) (local.get $capacity)))
+        (if (i32.eqz
+              (i32.load8_u
+                (i32.add (i32.add (local.get $wa) (i32.const 6)) (local.get $i))))
+          (then
+            (if (local.get $i) (then (return (i32.const 1))))
+            (return (i32.const 0))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
+
+  ;; CompareIDs returns the ordering as a signed value in HRESULT_CODE. The
+  ;; Win98 desktop folder's default rule is name order. Our relative PIDLs
+  ;; contain either a case-insensitive Win32 filesystem path or a stable CSIDL
+  ;; identity, so those private fields are the canonical names to compare.
   (func $handle_IShellFolder_CompareIDs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (local $left_kind i32) (local $right_kind i32) (local $cmp i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    ;; This minimal folder defines only column zero (name). Upper SHCIDS flags
+    ;; do not change the canonical comparison of our one-field PIDLs.
+    (if (i32.ne (i32.and (local.get $arg1) (i32.const 0xFFFF)) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+        (return)))
+    (local.set $left_kind (call $shell_private_pidl_kind (local.get $arg2)))
+    (local.set $right_kind (call $shell_private_pidl_kind (local.get $arg3)))
+    (if (i32.or (i32.eqz (local.get $left_kind)) (i32.eqz (local.get $right_kind)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+        (return)))
+    (if (i32.ne (local.get $left_kind) (local.get $right_kind))
+      (then
+        ;; Namespace roots sort before filesystem children.
+        (global.set $eax
+          (select (i32.const 0x0000FFFF) (i32.const 1)
+            (i32.gt_u (local.get $left_kind) (local.get $right_kind))))
+        (return)))
+    (if (i32.eq (local.get $left_kind) (i32.const 1))
+      (then
+        (local.set $cmp
+          (call $guest_stricmp
+            (i32.add (local.get $arg2) (i32.const 6))
+            (i32.add (local.get $arg3) (i32.const 6)))))
+      (else
+        (local.set $cmp
+          (i32.sub
+            (i32.load offset=6 align=1 (call $g2w (local.get $arg2)))
+            (i32.load offset=6 align=1 (call $g2w (local.get $arg3)))))))
+    (global.set $eax
+      (if (result i32) (i32.lt_s (local.get $cmp) (i32.const 0))
+        (then (i32.const 0x0000FFFF))
+        (else (i32.gt_s (local.get $cmp) (i32.const 0))))))
   (func $handle_IShellFolder_CreateViewObject (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
     (global.set $eax (i32.const 0x80004001))
