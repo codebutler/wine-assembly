@@ -869,6 +869,160 @@ function ckLut16(tEvery, sEvery) {
 SHAPES.ck_lut16 = ckLut16(8, 8);
 SHAPES.ck_lut16_opaque = ckLut16(0, 0);
 
+// ---- SimGolf's real hot loop -------------------------------------------
+// jgl.dll+0x100153a5, verbatim: the 210 bytes between the head and the far
+// end of its `jnz`, copied out with `node tools/dump_va.js jgl.dll
+// 0x100153a5 210`. Every branch in it is self-relative within that range, so
+// it relocates anywhere.
+//
+// THIS IS THE LOOP THAT OWNS THE FRAME. tools/hot-loop-census.js measured it
+// at 51.6% / 49.5% / 53.8% of all block entries across three independent
+// browser windows -- spread 4.3pp, i.e. it is hot no matter what is on
+// screen, which is exactly what nothing else in jgl is. It is transcribed
+// rather than hand-written because a hand-written approximation of a
+// 45-operation blend is an approximation of the thing being priced.
+//
+//   head:    cmp byte [esi],0xff / jnb advance        colour sentinel
+//            cmp byte [ebx],0xff / jnb advance        ALPHA sentinel (2nd cursor)
+//            xor eax,eax / xor ebp,ebp
+//            mov al,[ebx] / cmp al,0 / jz opaque
+//   blend:   ~45 ops, channel-wise RGB565, three x (shr/and 0xf8, mul cl,
+//            shr 8, add, shr 3, shl, or dx,ax), through push ecx/push edx
+//   opaque:  mov al,[esi] / mov ax,[ecx+eax*2] / mov [edi],ax
+//   advance: inc esi / inc ebx / add edi,2 / dec edx / jnz head
+const CK_BLEND16 = [
+  0x80, 0x3e, 0xff, 0x0f, 0x83, 0xbd, 0x00, 0x00, 0x00, 0x80, 0x3b, 0xff,
+  0x0f, 0x83, 0xb4, 0x00, 0x00, 0x00, 0x33, 0xc0, 0x33, 0xed, 0x8a, 0x03,
+  0x3c, 0x00, 0x0f, 0x84, 0x9d, 0x00, 0x00, 0x00, 0x8a, 0x06, 0x66, 0x8b,
+  0x2c, 0x41, 0x66, 0x8b, 0x07, 0x51, 0x52, 0x66, 0x8b, 0xd5, 0xc1, 0xe2,
+  0x10, 0x66, 0x8b, 0xc8, 0xc1, 0xe1, 0x10, 0x8a, 0x0b, 0x66, 0xc1, 0xed,
+  0x07, 0x66, 0x81, 0xe5, 0xf8, 0x00, 0x66, 0xc1, 0xe8, 0x07, 0x24, 0xf8,
+  0xf6, 0xe1, 0x66, 0xc1, 0xe8, 0x08, 0x66, 0x03, 0xc5, 0x66, 0xc1, 0xe8,
+  0x03, 0x66, 0xc1, 0xe0, 0x0a, 0x66, 0x0b, 0xd0, 0x8b, 0xc1, 0xc1, 0xe8,
+  0x10, 0x8b, 0xea, 0xc1, 0xed, 0x10, 0x66, 0xc1, 0xed, 0x02, 0x66, 0x81,
+  0xe5, 0xf8, 0x00, 0x66, 0xc1, 0xe8, 0x02, 0x66, 0x25, 0xf8, 0x00, 0xf6,
+  0xe1, 0x66, 0xc1, 0xe8, 0x08, 0x66, 0x03, 0xc5, 0x66, 0xc1, 0xe8, 0x03,
+  0x66, 0xc1, 0xe0, 0x05, 0x66, 0x0b, 0xd0, 0x8b, 0xc1, 0xc1, 0xe8, 0x10,
+  0x8b, 0xea, 0xc1, 0xed, 0x10, 0x66, 0xc1, 0xe5, 0x03, 0x66, 0x81, 0xe5,
+  0xf8, 0x00, 0x66, 0xc1, 0xe0, 0x03, 0x66, 0x25, 0xf8, 0x00, 0xf6, 0xe1,
+  0x66, 0xc1, 0xe8, 0x08, 0x66, 0x03, 0xc5, 0x66, 0xc1, 0xe8, 0x03, 0x66,
+  0x0b, 0xd0, 0x66, 0x89, 0x17, 0x5a, 0x59, 0xeb, 0x09, 0x8a, 0x06, 0x66,
+  0x8b, 0x04, 0x41, 0x66, 0x89, 0x07, 0x46, 0x43, 0x83, 0xc7, 0x02, 0x4a,
+  0x0f, 0x85, 0x2e, 0xff, 0xff, 0xff,
+];
+
+// The guest's own arithmetic, re-executed in JS so `verify` can check a blend
+// pixel rather than only the two easy arms. Written instruction for
+// instruction against the disassembly -- the odd-looking shifts (`shr bp,7`
+// for red, `and al,0xf8` 8-bit for red but `and ax,0xf8` 16-bit for green)
+// are what the binary does, not a tidied version of it.
+function ckBlendPixel(srcColour, dstColour, alpha) {
+  const lo16 = v => v & 0xFFFF;
+  let bp = lo16(srcColour), ax = lo16(dstColour), dx = 0;
+  // red: bp/ax >> 7, mask, scale by alpha, recombine, land at bit 10
+  bp = lo16(bp >>> 7) & 0xf8;
+  ax = lo16(ax >>> 7);
+  ax = (ax & 0xFF00) | ((ax & 0xFF) & 0xf8);   // and al,0xf8
+  ax = lo16((ax & 0xFF) * alpha);              // mul cl -> AX = AL*CL
+  ax = lo16(ax >>> 8);
+  ax = lo16(ax + bp);
+  ax = lo16(ax >>> 3);
+  dx = lo16(dx | lo16(ax << 10));
+  // green
+  bp = lo16(srcColour) >>> 2 & 0xf8;
+  ax = lo16(lo16(dstColour) >>> 2) & 0xf8;
+  ax = lo16((ax & 0xFF) * alpha);
+  ax = lo16(ax >>> 8);
+  ax = lo16(ax + bp);
+  ax = lo16(ax >>> 3);
+  dx = lo16(dx | lo16(ax << 5));
+  // blue
+  bp = lo16(lo16(srcColour) << 3) & 0xf8;
+  ax = lo16(lo16(dstColour) << 3) & 0xf8;
+  ax = lo16((ax & 0xFF) * alpha);
+  ax = lo16(ax >>> 8);
+  ax = lo16(ax + bp);
+  ax = lo16(ax >>> 3);
+  return lo16(dx | ax);
+}
+
+// transparentPct / blendPct are the measured per-pixel mix. The defaults come
+// from the block-entry shares of the loop's own five blocks in a real browser
+// window (head 14.52%, alpha cmp 8.43%, third block 8.18%, opaque 7.72%),
+// which is the only honest place to get them: a fold's value depends entirely
+// on how often the arm it declines is taken.
+function ckBlend16(transparentPct, blendPct) {
+  const srcByte = i => (i % 100) < transparentPct ? 0xFF : ((i * 43 + 11) % 0xFF);
+  const alphaByte = i => {
+    if ((i % 100) < transparentPct) return 0x00;
+    return (i % 100) < (100 - blendPct) ? 0x00 : (1 + (i * 29) % 0xFE);
+  };
+  const lutAt = j => ((((j * 17) & 0xF800) | ((j * 29) & 0x07E0) |
+    ((j * 7) & 0x001F)) ^ 0x39E7) & 0xFFFF;
+  const dst0 = i => (i * 37 + 5) & 0xFFFF;
+  return {
+    describe: `jgl+0x100153a5 verbatim: alpha-guarded RGB565 blend ` +
+      `(${transparentPct}% transparent, ${blendPct}% blend, rest plain LUT16)`,
+    real: 'SimGolf: 49.5-53.8% of ALL block entries across three browser windows',
+    emit(a) {
+      const n = Math.floor(a.bufBytes / 4);
+      const src = a.buf, alpha = src + n, dst = alpha + n, lut = a.lut;
+      return {
+        iters: n,
+        bytesTouched: n * 4,
+        code: CK_BLEND16,
+        setup(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          for (let i = 0; i < 256; i++) dv.setUint16(g2w(lut) + i * 2, lutAt(i), true);
+          for (let i = 0; i < n; i++) {
+            mem[g2w(src) + i] = srcByte(i);
+            mem[g2w(alpha) + i] = alphaByte(i);
+            dv.setUint16(g2w(dst) + i * 2, dst0(i), true);
+          }
+          e.set_esi(src); e.set_ebx(alpha); e.set_edi(dst); e.set_ecx(lut);
+          e.set_edx(n); e.set_eax(0); e.set_ebp(0);
+        },
+        verify(e, mem, g2w) {
+          const dv = new DataView(mem.buffer);
+          // One index of each arm, so a transcription error in the blend
+          // cannot hide behind two arms that happen to be right.
+          const arms = { transparent: -1, opaque: -1, blend: -1 };
+          for (let i = 0; i < Math.min(n, 400); i++) {
+            const s = srcByte(i), al = alphaByte(i);
+            const arm = (s === 0xFF || al === 0xFF) ? 'transparent'
+              : (al === 0 ? 'opaque' : 'blend');
+            if (arms[arm] < 0) arms[arm] = i;
+          }
+          // The degenerate mixes deliberately omit arms, so check the arms
+          // this mix actually produces and require that at least one existed.
+          if (Object.values(arms).every(i => i < 0)) return 'no pixels classified';
+          for (const [arm, i] of Object.entries(arms)) {
+            if (i < 0) continue;
+            const got = dv.getUint16(g2w(dst) + i * 2, true);
+            const want = arm === 'transparent' ? dst0(i)
+              : arm === 'opaque' ? lutAt(srcByte(i))
+              : ckBlendPixel(lutAt(srcByte(i)), dst0(i), alphaByte(i));
+            if (got !== want) {
+              return `${arm} dst16[${i}]=0x${got.toString(16)} want 0x${want.toString(16)}`;
+            }
+          }
+          if (e.get_edx() !== 0) return `edx=${e.get_edx()}, expected 0`;
+          if (e.get_esi() !== src + n || e.get_ebx() !== alpha + n ||
+              e.get_edi() !== dst + n * 2) {
+            return 'source/alpha/destination cursors did not finish';
+          }
+          return null;
+        },
+      };
+    },
+  };
+}
+// The measured mix, and the two degenerate ends for contrast: what the loop
+// costs when every pixel takes the cheap arm, and when every pixel blends.
+SHAPES.ck_blend16 = ckBlend16(42, 3);
+SHAPES.ck_blend16_opaque = ckBlend16(0, 0);
+SHAPES.ck_blend16_allblend = ckBlend16(0, 100);
+
 const TOGGLES = {
   tree_fold: 'set_tree_fold',
   lut_superops: 'set_loop_lut_emit',
