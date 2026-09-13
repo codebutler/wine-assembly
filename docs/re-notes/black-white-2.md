@@ -3161,3 +3161,36 @@ stored. The distortion has to be checked rather than assumed — the headless
 clock is `batch * TICK_MS_PER_BATCH`, so guest time races ahead at one block per
 batch — and the determinism fingerprint is the guard: every run from 42 onward
 reports `0x9c1a90 = 1` and `0x9e17b0 = 303`.
+
+### Correction: the watchpoint EIP *is* meaningful, and that makes it evidence
+
+The previous section called the watchpoint's EIP a batch-boundary artifact. That
+is wrong and is withdrawn. `--watch` is not JS sampling: `src/13-exports.wat`
+lines 96-102 compare the watched location at **every block dispatch** and
+`br $halt` the instant it differs, ending the batch right there. JS's once-per-
+batch `checkWatchpoint` is precise enough precisely because the batch was cut
+short. So `prev_eip` names the block that just ran and `EIP` the block about to
+run.
+
+Which turns the reading into a problem rather than an excuse. For the fatal
+write the harness reports:
+
+```
+435422  0x2eb310c0 -> 0x00000000   EIP: 0x009e1811  prev_eip: 0x009e1804
+```
+
+`0x9e1804` is `cmp [esp+0x14],eax` / `jbe 0x9e1811` — a two-instruction block
+inside the walker with **no store in it**, and the walker's only store in the
+whole function (`mov [esp+0x14],eax` at `0x9e17e9`) targets its own stack frame
+at `ESP=0x074fcee8`. The block that immediately preceded the change cannot have
+written the node.
+
+An unmapped-region explanation is available but does not survive the fault
+census: if `0x2eb307d8` had stopped translating, the walker's own read of
+`[edx]` would fault at `0x2eb307d8`, and the census for `eip=0x9e17d0` spans
+only `0x0-0x8`. The address is mapped and the zero is a real value in memory.
+
+So the change was not made by the block that preceded it. The open
+possibilities are a write from another thread's slice, a host-side write, or a
+remap — and the next probe should photograph the whole node immediately after
+the change rather than reason further from the link alone.
