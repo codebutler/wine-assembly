@@ -2266,13 +2266,11 @@
 
   ;; EnumFontFamiliesA(hdc, lpszFamily, proc, lParam) → INT.
   (func $handle_EnumFontFamiliesA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
-    (call $gdi_font_enum_start (local.get $arg2) (local.get $arg3)
-      (local.get $ret) (global.get $esp) (local.get $arg1)
-      (i32.const 0) (i32.const 0xFF))
-  )
+    ;; Win32 gives this compatibility entry point the same arguments and
+    ;; callback walk as EnumFontsA; EnumFontFamiliesExA is the richer API.
+    (call $handle_EnumFontsA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; 377: EnumFontFamiliesExW(hdc, lpLogfont, proc, lParam, flags) → INT.
   (func $handle_EnumFontFamiliesExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
