@@ -2387,3 +2387,64 @@ The vtable is written by the constructor at `0x9d475e` (`mov dword [eax],
 0xd0bc30`, then `mov [eax+8], edx` and a `rep movsd` of 0xc dwords). A sibling
 vtable at `0xd0bc1c` is written at `0x9d3742` from a `push 0x30` allocation.
 Neither has been confirmed to run yet — that is the next measurement.
+
+## Where the NULL comes into the picker (run 40, `--fault-null=stop`)
+
+Trapping on the first fault instead of the billionth costs one short run and
+names the instruction and registers outright. It fired at batch 435392, just
+after the Enter that opens the land picker:
+
+```
+*** CRASH at batch 435392: unreachable
+  EIP=0x009d4a69 EAX=0x36120184 ECX=0x00000000 EDX=0x009e8249 EBX=0x2eccfc98
+  ESP=0x074fcf7c EBP=0x36120188 ESI=0x00000000 EDI=0x00000000
+  009d4a70  mov ecx, [esi]      <-- faults, ESI = 0
+```
+
+`ESI` is set at the entry of vtable slot 7:
+
+```
+009d4a38  mov ebx, [esp+0x1c]   ; arg1
+009d4a3c  mov eax, [ebx]
+009d4a45  mov edi, [eax]        ; edi = **arg1
+009d4a62  mov esi, edi
+```
+
+so **`ESI = **arg1`**, the same double dereference slot 8's thunk performs. Only
+the innermost load is zero: `EBX` (=`arg1`) is `0x2eccfc98` and the `mov
+edi,[eax]` did not fault, so `[arg1]` is a valid object and it is that object's
+**first field — the list head — that is NULL**.
+
+The caller is a virtual dispatch, and the stack return address names it:
+
+```
+009c1b40  mov ecx, [ebx+0x8]     ; items of a {capacity, count, items} container
+009c1b43  mov edi, [ecx+ebp*4]   ; edi = items[ebp]
+009c1b5a  mov ecx, [esi+0x28]    ; receiver
+009c1b5d  mov edx, [ecx]         ; vptr
+009c1b62  call [edx+0x1c]        ; slot 7 = 0x9d4a30
+```
+
+So the picker loops over `items[ebp]` of a container and asks each element for
+its geometry. `[ebx+0x8]` is the same `items` field the grow routine at
+`0x9e8200` writes.
+
+### The next suspect, and why the existing diagnostic cannot see it
+
+`0x9e8200` stores `malloc`'s result into `items` **unchecked** at `0x9e824c` and
+raises the recorded capacity anyway at `0x9e8250`, so a failed allocation leaves
+`items` NULL behind a capacity that says otherwise. The zero `[heap] OOM` lines
+do **not** rule that out here: `0x9e821b` calls `0xad425d` → `0xad41b9`, the
+demo's own statically linked MSVCRT `malloc`, which suballocates memory it
+already owns. `$host_heap_oom_trace` only covers our `$heap_alloc` and is blind
+to a guest CRT running out inside its own arena.
+
+`EDX` holding `0x009e8249` at the fault — an address inside that very routine —
+is consistent with it having run recently on this stack, though a stale register
+is weak evidence on its own.
+
+`0x9e8220` is the call-return landing of that `malloc`, so `EAX` there is every
+result the grow path receives. That is one `--trace-at` address (two or more
+force `BATCH_SIZE=1` and the run never arrives), and it is the measurement that
+decides whether the NULL is an allocation failure our diagnostics cannot see or
+something the game never built.
