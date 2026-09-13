@@ -3241,3 +3241,70 @@ Establishing direction needs the abandonment placed before or after batch
 thread instances inherit the address when they spawn. Run 58 printed no such
 line — but the threads spawn during startup, so arm-before-spawn ordering has to
 be confirmed before that silence counts as evidence.
+
+## `next == 0` is the signature of a FREED node, not a corrupted link
+
+The node release `0x9de060` settles what a zero next pointer means here:
+
+```
+009de060  push esi
+009de061  mov esi, ecx
+009de063  test esi, esi / jz done
+009de067  push 0x1d90330
+009de06c  call [0xc12178]          ; EnterCriticalSection
+009de072  mov eax, [0x177c94c]     ; free-list head
+009de077  mov [esi], eax           ; node->next = free-list head
+009de079  sub dword [0x177c950], 1 ; pool count--
+009de085  mov [0x177c94c], esi     ; free head = node
+009de08b  call [0xc1217c]          ; LeaveCriticalSection
+```
+
+Freeing a node **writes its `next`** to the old free-list head, which is `0`
+when the free list is empty. So `next == 0` is not a broken link — it is what a
+freed node looks like. And `0x9de1f0` is a whole-ring teardown built on it:
+
+```
+009de200  mov esi, [ecx]        ; save cur->next
+009de202  call 0x9de060         ; release cur
+009de207  cmp esi, edi
+009de209  mov ecx, esi
+009de20b  jnz short 0x9de200
+009de20f  mov dword [ebx], 0x0  ; clear the head pointer
+```
+
+This reframes the whole wedge. The walker may not be walking a broken polygon at
+all — it may be walking the **free list**, having been handed a head that was
+already returned to the pool. A free list terminates at 0, which is exactly the
+"ring that never closes". The very first write the watchpoint saw supports this:
+`0 -> 0x2eb307ec` from the pool constructor at `0x9d7830`, a `+20` step, is
+free-list threading.
+
+It also explains, without special pleading, why `prev_eip` never named a storing
+block in runs 58 and 60: the free happened well before the halt, so no block
+adjacent to the change stored anything.
+
+### Corrections this supersedes
+
+- The cross-thread reading is **withdrawn**. Run 60 armed the watch before the
+  threads spawn (`set_watchpoint` is in `INHERITED_WASM_GLOBALS`) and produced
+  **no** `[ThreadManager] T<n> WATCH` line, and `--trace-sched` shows T1/T2/T4/T5
+  parked on wait handles for the entire run with T3 pinned at `0x89d1dc`
+  "unchanged for 50000 batches". No guest thread was mutating geometry.
+- Attribution via `prev_eip` is **not reliable here** and the earlier claim that
+  it names the storing block is withdrawn as applied to this case. None of the
+  four recorded `prev_eip` blocks contains a store to the node — including
+  hit #2, whose `EIP=0x9de220` store targets `ECX=0x2ec30468`, a face record,
+  not the node.
+
+### The test
+
+Decidable offline from one dump: if the chain is the free list, then
+`0x2eb310c0`, `0x2eb305a8`, `0x2eb30ff8` and `0x2eb307d8` are reachable by
+following `+0` from the free-list head at `[0x177c94c]`. If they are not, the
+free-list reading is wrong and the ring really was corrupted in place. The pool
+object at `0x177c940` carries the free head at `+0xc` and the live count at
+`+0x10`, so a 64-byte dump reads both directly.
+
+Note the free path takes critical section `0x1d90330` — the same section behind
+the "parked Enter ABANDONED" line — so if the free-list reading holds, that
+abandonment becomes worth timing properly rather than dismissing.
