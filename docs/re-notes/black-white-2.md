@@ -4916,3 +4916,86 @@ menu scene, not a wait.
 
 The intro playing to 151% completion without finishing is a separate real bug
 and is worth its own investigation; `--skip-intro` is the workaround.
+
+## CPU by phase, and the correction that makes the earlier profiles readable
+
+Two things were wrong in the 2026-09-13 profiling notes above, and they have the
+same root: **one `node --cpu-prof` profile of one window was treated as a
+profile of the program.**
+
+**1. The D3D9 software rasterizer is WAT, not JS.** `lib/d3d9-software-backend.js`
+is an 888-line *driver* - it sizes contexts, binds state and walks draws - and
+every pixel is rasterized by `$d3d_software_step` in `src/09ah-d3d-software.wat`
+(2x2 quad lanes, edge functions, the whole inner loop). The note that "all CLI
+rasterization is the JS software backend" is wrong; `--d3d9-renderer=software`
+selects a wasm rasterizer.
+
+**2. `--cpu-prof` could not see it in any case.** `test/run.js:2047`
+(`createD3DRenderWorker`) puts that rasterizer on a `worker_thread`, and a V8
+profile - `--cpu-prof` or an `inspector.Session` - only ever samples the thread
+it was opened on. So a main-thread profile reports the rasterizer at **0.0%** no
+matter how much of the machine it is using, and "87% WASM / 13% JS" was a
+statement about the interpreter thread alone.
+
+Measured 2026-09-13 on an idle-ish box (loadavg 10-22), a name-section build
+(`build-compile-wat.js --names`, so wasm frames carry WAT names), two 25s cold
+runs and one 30s in-process profile of the live probe already in the rendering
+phase. Read with `node tools/wasm-phase-profile.js`, which buckets self time by
+subsystem, and `thread-cpu.sh`-style `ps -M` deltas for the thread split.
+
+### Phase 1-2: boot, and the post-title `--skip-intro` grind
+
+| subsystem | boot 25s | post-title grind 25s |
+|---|---|---|
+| interp dispatch (`$next`, `$branch_end`, decode, cache) | 24.0% | 24.1% |
+| x87 (`$fpu_exec_mem`, `$th_fpu_mem_ro`, `$fpu_tag_phys`) | 23.0% | 20.5% |
+| interp handlers (`$th_*`, `$do_*`) | 20.1% | 19.9% |
+| JS | 11.2% | 11.4% |
+| address translation (`$g2w`, `$gs32`, `$gl32`) | 8.2% | 8.6% |
+| regs/flags | 7.1% | 6.6% |
+| **D3D9 rasterizer** | **0.0%** | **0.0%** |
+| GDI rasterizer | 0.1% | 0.2% |
+
+These two phases are the same program: a pure x86 interpreter workload that is
+**half dispatch-and-flags overhead and a quarter x87**, drawing nothing at all.
+A 25s cold run never leaves this shape, which is why every short benchmark so
+far has agreed with every other one and none of them described rendering.
+
+### Phase 3: actually rendering (live probe, 0.7 presents/s, 16 draws/s)
+
+Per-thread CPU over one 30s window, `ps -M` deltas (154% of one core total):
+
+| thread | share of process | of a core |
+|---|---|---|
+| main (interpreter + the JS D3D driver) | 51.5% | 79.5% |
+| render `WorkerThread` (the WAT rasterizer) | 33.0% | 50.9% |
+| 4x V8 background compile/GC | 15.5% | ~24% |
+
+and *within* the main thread, by self time: **JS 52.3% / wasm 47.7%** - nothing
+like the 89/11 of the other phases. The JS half is the D3D9 driver
+(`call [d3d9-host.js]` 7.7%, `drawImage` 1.9%, `decode [d3d9-texture.js]` 1.3%,
+`gpu_gl_call` 1.4%) plus `main [run.js]` 11.4% and **12.8% idle**.
+
+### Why it is slow is not "ops per frame"
+
+The interpreter and the rasterizer **take turns**; neither saturates a core.
+`$d3d_render_park` (`src/09ad-handlers-d3d9.wat:2303`) parks the *whole main
+instance* on `yield_reason 16` until the worker finishes the token, and
+`mainExecutionSuspended` (`test/run.js:5140`) holds it there across
+`ctx.waitD3DRender(token)`. Live, that is visible directly: sampling the running
+probe returns `yield: 16` with EIP in the thunk zone (`0x7503488`) in 5 of 6
+samples, and **`get_last_run_blocks()` is 126-3496 against a 200,000-block
+budget** - batches are ending on the render park, not on their budget.
+
+So the earlier figure of "~50-75M guest ops per frame" was invalid twice over:
+it divided a boot-phase op count (which includes the 20.6M-iteration
+self-checksum) by an intro-phase present rate, and it attributed the whole frame
+cost to guest instructions when a third of it is the rasterizer thread and a
+quarter is the JS driver. **Do not quote batches/s in this phase either**: 3624
+batches/s at ~126 blocks each is ~460K blocks/s, not the ~5.3M blocks/s the same
+emulator does when a batch runs to budget - the per-batch host cost is being paid
+~3600 times a second for 126 blocks of work.
+
+The lever this points at is **overlap**, not interpreter throughput: while the
+guest is parked on `yield_reason 16` the main thread does nothing, and while the
+guest interprets, the render worker is idle half the time.
