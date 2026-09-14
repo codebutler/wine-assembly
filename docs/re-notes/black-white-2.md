@@ -5802,3 +5802,51 @@ mouse tutorial -> land picker -> the green island at 135,378):
   `0x2528000`, origBase `0x400000`, so original VA `0x004e800a`). `<ord>` means
   the name pointer is an ordinal import, so the crash line cannot name it, and
   that drive ran `--quiet-api`. Naming it is the next step.
+
+### The new blocker, named: `IDirect3DDevice9::StretchRect` (2026-09-13)
+
+drive18 re-ran the same path with `--trace-api` (note: `--extra=` cannot lift
+`--quiet-api` -- `tools/black-white-software-probe.js` passes that itself, and
+drive17 was silent for exactly that reason. `--trace-api` is a separate path and
+is unaffected by `--quiet-api`). The dying call is
+
+```
+[API #7310607] IDirect3DDevice9_StretchRect(0x07f4e030, 0x4af3ffec, 0x00000000,
+                                            0x4a2b0004, 0x00000000, 0x00000000)
+               [esp=0x074fc974 ret=0x02610010]
+*** CRASH at batch 1418042: unreachable
+```
+
+Both rects NULL, filter `D3DTEXF_NONE`. `$handle_IDirect3DDevice9_StretchRect`
+in `src/09ad-handlers-d3d9.wat` is still a `$crash_unimplemented` stub.
+
+The caller is `d3dx9_25.dll` (`ret=0x02610010`, original VA `0x004e8010`), in a
+`D3DXLoadSurfaceFromSurface`-shaped sequence that runs immediately before it:
+
+```
+IDirect3DSurface9_GetDesc(0x4af3ffec, ...)        ; fmt 0x15 = D3DFMT_A8R8G8B8
+IDirect3DSurface9_GetDevice(0x4af3ffec, ...)
+IDirect3DDevice9_CreateTexture(dev, 0x200, 0x200, 1, 0, 0x15, 2, ...)
+IDirect3DTexture9_GetSurfaceLevel(0x4a3c0004, 0, ...)
+IDirect3DSurface9_LockRect(0x4af3ffec, ..., 0)
+IDirect3DDevice9_CreateRenderTarget(dev, 0x200, 0x200, 0x15, 0, 0, 1, ...)
+IDirect3DDevice9_StretchRect(dev, 0x4af3ffec, NULL, 0x4a2b0004, NULL, 0)
+```
+
+so it is a 512x512 A8R8G8B8 surface-to-surface blit into a freshly created,
+lockable render target -- same size, same format, no stretch and no filter.
+
+### What the land actually renders before it gets there
+
+The API trace shows the land **drawing**, not stalling: a per-frame loop of five
+`IDirect3DStateBlock9_Apply` (from `d3dx9`'s effect passes, `ret=0x02636f*`)
+then `SetViewport` / `SetRenderState(0xa8, 0xf)` / two `SetStreamSource` /
+`SetIndices` / `SetVertexDeclaration` / two
+`DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0xc60, 0x613, 0x11e8, 0x32e)` --
+1555 vertices and 814 triangles per draw -- repeating steadily, then
+`SetRenderTarget` / `SetDepthStencilSurface` / `EndScene`. 7.3M API calls by
+this point. This is terrain being rendered into a texture.
+
+**Handed to the d3d9 lane.** `src/09ad-handlers-d3d9.wat` and
+`src/09ae-d3d9-resources.wat` carry another agent's uncommitted work, so this
+stub is not mine to fill.
