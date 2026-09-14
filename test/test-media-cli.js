@@ -12,6 +12,7 @@ const {
 } = require('../lib/media-cli');
 const { splitArgs, prepareLaunch, runnerArgsFor } = require('../tools/run-media');
 const { hasPageScript } = require('./browser-runtime-scripts');
+const { resolveRunSlice } = require('../lib/apps');
 
 (async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wine-media-cli-test-'));
@@ -64,9 +65,10 @@ const { hasPageScript } = require('./browser-runtime-scripts');
       'mounted-media processes should prefer an explicit executable path, then the selected media drive');
     assert.match(runSource, /ctx\.vfs\.materialize\(guestExe\)[\s\S]*?await capturedLaunch\.materialize/,
       'a provider-backed ShellExecute child must be resident before CLI capture exports it');
-    const browserShellSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'browser-shell.js'), 'utf8');
-    assert.match(browserShellSource, /case 'cue:speed-demons':[\s\S]*?return compatDispatch \? 500 : 500000/,
-      'the browser should give the measured Win16 installer copy loop a non-stalling quantum');
+    assert.strictEqual(resolveRunSlice('cue:speed-demons', false), 500000,
+      'the app registry should give the measured Win16 installer copy loop a non-stalling quantum');
+    assert.strictEqual(resolveRunSlice('cue:speed-demons', true), 500,
+      'the same media policy should retain the compatibility-dispatch cap');
     assert.match(mediaHarnessSource, /const \{ spawn \} = require\('child_process'\)/);
     assert.doesNotMatch(mediaHarnessSource, /spawnSync/,
       'the media parent must keep its event loop live for --control-stdin commands');

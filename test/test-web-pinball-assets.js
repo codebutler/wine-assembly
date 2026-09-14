@@ -38,7 +38,8 @@ const sourcesHtml = fs.readFileSync(path.join(ROOT, 'sources.html'), 'utf8');
 const sourcesMd = fs.readFileSync(path.join(ROOT, 'test', 'binaries', 'SOURCES.md'), 'utf8');
 const exportsWat = fs.readFileSync(path.join(ROOT, 'src', '13-exports.wat'), 'utf8');
 const windowHandlersWat = fs.readFileSync(path.join(ROOT, 'src', '09a5-handlers-window.wat'), 'utf8');
-const { APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS, appFileUrl } =
+const { APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS,
+  appFileUrl, resolveRunSlice } =
   require('../lib/apps');
 const { DLL_PATHS } = require('../lib/dll-registry');
 const deployAssets = new Set(Object.values(DLL_PATHS));
@@ -403,16 +404,25 @@ assert(webApp.includes('Starting run slice=${runSlice}'), 'web launcher should l
 assert(!/function selectedRunSlice\(appKey\)\s*\{\s*return 100000;\s*\}/.test(webApp), 'slice dropdown should not be ignored');
 assert(webApp.includes("document.getElementById('slice-size-select')"), 'slice picker should drive the run-loop slice size');
 assert(webApp.includes('function hasWasmTailCalls()'), 'auto slice should detect no-tail-call browser dispatch');
-assert(/case 'jazz2_demo':[\s\S]{0,700}?return workerMode \? 100000 : 1000;/.test(webApp),
-  'Jazz 2 should use 100k only after its guest Worker is confirmed');
+assert.deepStrictEqual(APPS.jazz2_demo.runSlice,
+  { cooperative: 1000, worker: 100000 },
+  'Jazz 2 should own its cooperative and Worker scheduling policy');
+assert(webApp.includes('resolveRunSlice: window.wineApps.resolveRunSlice'),
+  'the page should inject the app-registry scheduler into the browser shell');
 assert(webApp.includes('selectedRunSlice(runSliceAppKey, !!wine.guestWorker)'),
   'browser launch should choose the auto slice from the backend that actually started');
 assert(webApp.includes('app.runSliceAppKey || app.name, !!app.wine.guestWorker'),
   'live auto-slice updates should preserve the Worker/cooperative distinction');
-assert(webApp.includes('return compatDispatch ? 100 : 25000;'), 'auto slice should cap Spider/card games for no-tail-call browsers');
-assert(webApp.includes('return compatDispatch ? 500 : 100000;'), 'auto slice should cap default apps for no-tail-call browsers');
+assert.strictEqual(resolveRunSlice('spider', true), 100,
+  'auto slice should cap Spider/card games for no-tail-call browsers');
+assert.strictEqual(resolveRunSlice('notepad', true), 500,
+  'auto slice should cap default apps for no-tail-call browsers');
 assert(webApp.includes('return compatDispatch ? Math.min(selected, autoSlice) : selected;'), 'manual slice should be clamped in no-tail-call browsers');
-assert(!/case 'winamp':\s*return 1;/.test(webApp), 'Winamp auto slice should not rely on slice=1 startup masking');
+assert.strictEqual(resolveRunSlice('winamp', false), 100000,
+  'Winamp auto slice should not rely on slice=1 startup masking');
+assert(!/case ['"](?:jazz2_demo|spider|cue:speed-demons)['"]/.test(
+  fs.readFileSync(path.join(ROOT, 'lib', 'browser-shell.js'), 'utf8')),
+  'browser-shell should not carry app-specific scheduling identities');
 assert(webApp.includes('function unlockRunningAudio()'), 'web canvas input should explicitly unlock running app audio');
 assert(/unlockRunningAudio\(\);[\s\S]{0,400}?const \{ x: cx, y: cy \} = mouseButtonPoint\(e, pointerLocked\(\)\);/.test(webApp), 'mouse input should resume audio before resolving locked guest coordinates');
 assert(/unlockRunningAudio\(\);\s*const \{ x: cx, y: cy \} = eventPointFromClient/.test(webApp), 'touch input should resume audio before guest dispatch');

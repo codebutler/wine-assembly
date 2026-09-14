@@ -9,6 +9,7 @@
 
 const assert = require('assert');
 const { createBrowserShell } = require('../lib/browser-shell.js');
+const { APPS, resolveRunSlice } = require('../lib/apps.js');
 
 let selected = 'auto';
 global.document = {
@@ -20,9 +21,18 @@ global.window = {};
 global.WineAssembly = { supportsWasmTailCalls: () => true };
 
 const shell = createBrowserShell({
-  apps: {},
+  apps: APPS,
+  resolveRunSlice,
   screenCanvasSize: () => ({ width: 800, height: 600 }),
 });
+
+assert.deepStrictEqual(APPS.jazz2_demo.runSlice,
+  { cooperative: 1000, worker: 100000 },
+  'the app registry owns Jazz scheduling rather than the browser shell');
+assert.strictEqual(resolveRunSlice('notepad', false, false), 100000,
+  'unconfigured tail-call apps retain the generic cooperative budget');
+assert.strictEqual(resolveRunSlice('notepad', true, false), 500,
+  'unconfigured compatibility-dispatch apps retain the generic cap');
 
 assert.strictEqual(shell.selectedRunSlice('jazz2_demo'), 1000,
   'the default and cooperative Jazz path stays at 1k');
@@ -39,6 +49,11 @@ assert.strictEqual(shell.selectedRunSlice('cue:speed-demons', false), 500000,
 assert.strictEqual(shell.selectedRunSlice(
   'iso:sidmeieralphacentauriclassic-windows95', false), 500000,
   'the exact SMAC disc feeds synchronous Quick Start terrain generation');
+assert.strictEqual(shell.selectedRunSlice('spider', false), 25000,
+  'the shared card-game profile remains app-owned');
+assert.strictEqual(shell.selectedRunSlice('spider', false),
+  shell.selectedRunSlice('freecell', false),
+  'card games share one registry scheduling policy');
 
 selected = '10000';
 assert.strictEqual(shell.selectedRunSlice('jazz2_demo', true), 10000,

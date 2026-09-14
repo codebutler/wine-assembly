@@ -2362,6 +2362,7 @@ Resource-aware Win98 emulator
     // log pane, and what to tidy up once the last guest is gone.
     const shell = window.browserShell.createBrowserShell({
       apps,
+      resolveRunSlice: window.wineApps.resolveRunSlice,
       debugMode: DEBUG_MODE,
       screenCanvasSize: () => screenCanvasSize(),
       appendDebugLog: text => appendDebugLog(text),
