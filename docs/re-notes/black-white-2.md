@@ -5557,3 +5557,72 @@ no mapping covers does not fault here: `$g2w` absorbs it into `NULL_SENTINEL`,
 which reads 0. A point silently at the origin makes the orientation test answer
 confidently and wrongly, forever. That is what `--fault-null` exists to find,
 and it is exactly the failure already recorded for this app at `0x9e17d0`.
+
+### ROOT CAUSE: `0x9e1e50` dereferences a NULL argument 53.8 million times (2026-09-13)
+
+`--fault-null` on the 2 GB drive, with the loop's branch targets counted at the
+same time. The census at exit:
+
+```
+[fault] census: 53814535 unmapped access(es) from 50 eip(s)
+[fault]   eip=0x9e1e50 x53813954 addresses 0x0-0x4     <-- a NULL dereference
+[fault]   eip=0x9e35e0 x126      addresses 0x4-0x247c830b
+[fault]   eip=0x9cef6f x84       addresses 0x48-0x78
+[fault]   eip=0x9cf060 x56       addresses 0x4c-0x58
+[fault]   eip=0x9ddf80 x35       addresses 0x0-0x8
+[fault]   eip=0x9cf661 x32       addresses 0x74-0x78
+   ... 44 more, all under 32 ...
+```
+
+and the branch counts:
+
+```
+0x009e35e0 = 41            the function
+0x009e3c7a = 26906977      "0x9e1e50 said reject" -> push to the OTHER vector
+0x009e3caf = 26906976      "[[esi+0x20]+8] == 0"  -> push back to the WORKLIST
+0x009e3c31 = 2   0x009e3c58 = 1
+0x009e3a4d = 3   0x009e3a57 = 3   0x009e3af1 = 3   0x009e3bf9 = 3
+0x009e3b27 = 3   0x009e3b3d = 3   0x009e3b5c = 3   0x009e3b70 = 3
+0x009e3a65 = 0   0x009e3a83 = 0   0x009e3bb6 = 0
+```
+
+**53,813,954 is exactly 2 x 26,906,977.** Two faulting reads on every single
+pass of the loop, at the one place the pass makes its decision.
+
+`0x9e1e50`'s entry block is
+
+```
+009e1e59  mov eax,[ebp+0x8]    ; arg1
+009e1e5e  mov ecx,[eax]        ; <-- fault at 0x0
+009e1e64  mov ecx,[eax+0x4]    ; <-- fault at 0x4
+```
+
+so **arg1 is NULL**. The call site at `0x9e3a20` pushes `ebx` then `edi`, so
+arg1 is `edi`, loaded at `0x9e39f9` as `[&vec[i] + 0xc]` -- field +0xc of the
+24-byte worklist element. `$g2w` absorbs both reads into `NULL_SENTINEL`,
+`0x9e1e50` reads a point at the origin, and returns the same wrong answer every
+time. The loop then does one of two things and nothing else: 26.9M passes take
+the reject branch at `0x9e3c7a`, and 26.9M take the `[[esi+0x20]+8] == 0`
+early-out at `0x9e3caf`, whose block pushes the element **back onto the very
+vector being walked** (`lea ecx,[esp+0x74]; call 0x531330` at `0x9e3ca6`).
+
+That closes the loop on itself: each pass consumes one element and appends one,
+`size()` is re-read from `end` every pass, and the queue grows forever. The ring
+splices -- the work a flip loop is supposed to do -- ran **three times each**.
+Nothing is being flipped. The allocator, the arena ceiling and the vector were
+never the bug; a null pointer in a worklist element is.
+
+**Where to look next.** Two candidates for who wrote the NULL into +0xc:
+
+1. the element built in the first pass and pushed at `0x9e37e9`, whose +0xc
+   comes from the `esi` chased at `0x9e3780`/`0x9e3787` through `[esi]` and
+   `[eax+8]`;
+2. the earlier fault cluster -- `0x9cef45`, `0x9cef6d/6f`, `0x9cf044/060`,
+   `0x9cf630/63b/650`, `0x9cf661`, `0x9cf67b`, `0x9cf6d8` -- which read fields
+   `0x28`-`0x78` off a NULL object *before* any of this, in the same subsystem.
+   Those come first chronologically and are only ~200 faults, so they are the
+   cheaper thread to pull and the likelier origin.
+
+Note also `eip=0x9e35e0 x126 addresses 0x4-0x247c830b`: an upper address of
+`0x247c830b` is not a small-offset null deref, it is a *wild* pointer being
+walked. That is the circular-list walk at `0x9e3601`/`0x9e3606`.
