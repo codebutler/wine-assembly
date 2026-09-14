@@ -863,8 +863,19 @@ TouchControls.destroy();
     [[0x58,'board-tl','arrow-left'],[0xBE,'board-tr','arrow-right']]);
   assert(!app.touchControls.buttons.some(b=>b.label==='Nudge'),
     'no word-pill nudges left in the bottom rails');
-  assert.strictEqual(app.touchControls.buttons.find(b=>b.vk===0x71).pos,'bl',
+  const newGame=app.touchControls.buttons.find(b=>b.vk===0x71);
+  assert.strictEqual(newGame.pos,'bl',
     'the one action button comes off the picture into the empty rail');
+  // ...and it is a CHIP, not a word-pill. 115px of "New game" could not fit
+  // the 90px landscape gutter and hung off the bezel 8px from the left
+  // flipper. The icon field already beats label in _addButton, so this is one
+  // app's button changing shape and not every app's pill becoming a glyph.
+  assert.strictEqual(newGame.chip,true);
+  assert.strictEqual(newGame.icon,'restart');
+  assert.strictEqual(newGame.label,undefined,'no word left to overflow');
+  assert.strictEqual(newGame.title,'New game','the name survives for a screen reader');
+  assert(!app.touchControls.buttons.some(b=>b.chip&&!b.icon),
+    'a chip with no glyph would render as a blank circle');
 
   // `real` is a renderer already built and primed with a true viewport; pass
   // one wherever the presented rect is not simply the window rect, since the
@@ -1018,6 +1029,18 @@ TouchControls.destroy();
       < presented.x + (405 - v.cropX) * k,
       'the right nudge stays off the score panel beside the table');
     const tx = table.x, tw = table.w;
+    // The destructive control, measured against the thing it must not be
+    // confused with. 40px wide in a 90.7px gutter, so it clears the bezel and
+    // the left flipper zone by the same amount -- and the gutter is off the
+    // picture entirely, which the 115px pill never managed.
+    const ng = byLabel('New game');
+    assert(ng.classList.contains('tc-chip'),'it renders as a chip');
+    assert.strictEqual(ng._tcHeight,40,'and stacks at the chips\' height');
+    assert.strictEqual(ng.innerHTML.indexOf('<svg'),0,'a glyph, not the words');
+    const ngW = 40, ngX = parseFloat(ng.style.left);
+    assert(Number.isFinite(ngX) ? ngX >= 0 : true, 'never hangs off the left bezel');
+    assert(table.x - (Number.isFinite(ngX) ? ngX + ngW : ngW) > 20,
+      'and keeps a real margin from the left flipper zone');
     // Item 5b: no captions in landscape. A caption names an invisible zone, so
     // it has to be next to it; the side gutters this used to fall back to are
     // next to nothing, and the phone reported them as "all wrong".
