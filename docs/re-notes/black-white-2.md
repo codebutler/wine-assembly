@@ -5048,3 +5048,45 @@ What is still open is the input: whether the vertices being walked are sane and
 our predicate disagrees with the hardware, or the structure itself is corrupt
 before the walk begins. `$SCRATCH/bw-hullwalk.sh` dumps the node ring and the
 query point off a live instance for exactly that question.
+
+### The counter split that settles "infinite loop" vs "slow work"
+
+Armed live on the running instance (`exports.set_count(slot, addr)`), sampled a
+minute apart at the land-selection screen:
+
+| slot | address | what | 18:18 | 18:19 | 18:21 |
+|---|---|---|---|---|---|
+| 0 | `0x009e1b80` | inner edge-ring walk | 3,206,893 | 12,813,130 | 30,485,086 |
+| 1 | `0x009c37f0` | orientation predicate | 9,634,410 | 38,453,116 | 91,468,984 |
+| 2 | `0x009e1c90` | line-walk driver loop head | **194** | **194** | **194** |
+| 3 | `0x009d5430` | the 430MB list walk | **39** | **39** | **39** |
+
+The driver stops dead at 194 while the ring underneath it climbs by ten million
+a minute. That is one call that never returns -- not a triangulation doing a lot
+of legitimate point locations, which would advance the driver too.
+
+It is also **not** every visit to the land screen. A later run reached the same
+screen and ran the same code 41 times, finished, and stayed responsive, so the
+runaway depends on the data that particular load built, which fits the backing
+aliasing this loader has already produced once (see the comment in
+`$virtual_map_commit_locked` about guest `0x2e040000` and `0x2de00000` sharing
+backing `0x18299000`).
+
+### The 430MB allocation: found and fixed
+
+`$virtual_map_commit_locked` opened with a size guard against the **primary**
+sparse pool (`$VIRTUAL_BACKING_BASE_SIZE`, 316MB). B&W2 runs with `bigMemory`,
+so this host also has a 512MB extension window above the declared map, and
+`$virtual_backing_ext_take` exists to serve exactly a request the primary pool
+cannot hold -- but the guard refused 430,511,656 before anything looked at the
+window that fits it. Fixed by bounding against the largest window
+(`$virtual_backing_max_extent`); `test/test-virtual-commit-over-pool-size.js`
+pins the exact request.
+
+### Practical note: this box kills the run
+
+Two probes died mid-session with no guest error, no exit summary and
+`PROBE EXIT=0` -- the host had ~64MB of free RAM at the time (several agent
+sessions plus Chrome). A B&W2 probe holds a 1GB shared memory, so it is the
+first thing to go. A run that stops without a diagnostic line is a host OOM
+kill, not a guest crash; check `vm_stat` before reading anything into it.
