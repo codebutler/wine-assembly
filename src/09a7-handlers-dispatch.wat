@@ -3387,12 +3387,14 @@
       (else (global.set $eax (i32.const 0)))) ;; TIMERR_NOERROR
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   ;; timeEndPeriod is a host no-op for a valid matching resolution request,
-  ;; but still rejects values outside the device's advertised range.
+  ;; but still rejects values outside the device's advertised range. Microsoft
+  ;; specifies the same one-UINT ABI and range result for Begin and End, so the
+  ;; no-host-quantum model has one canonical implementation for both front
+  ;; doors. The delegated handler performs the one stdcall cleanup.
   (func $handle_timeEndPeriod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.eqz (call $winmm_timer_period_valid (local.get $arg0)))
-      (then (global.set $eax (i32.const 97))) ;; TIMERR_NOCANDO
-      (else (global.set $eax (i32.const 0)))) ;; TIMERR_NOERROR
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (call $handle_timeBeginPeriod
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; timeGetDevCaps(lptc, cbtc) — fills TIMECAPS { wPeriodMin, wPeriodMax }.
   ;; We claim 1 ms min resolution and ~1000 s max, matching what real NT returns.
