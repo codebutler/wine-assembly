@@ -6222,3 +6222,29 @@ into a sticky queue error that ends rendering for the rest of the run. Even
 after the binding question is answered, an unservable draw should cost that
 draw and not the device — otherwise the next gap found this way costs another
 35-minute drive to reach.
+
+## CORRECTION: fragmentation was a risk, not the wall (2026-09-14)
+
+The section above ("Past the texture wall, the next one is arena
+FRAGMENTATION") overstates its evidence, and the next person to read it should
+not go and rewrite the allocator on the strength of it.
+
+What is true: at pick+1900s the downward bump was spent (`cursor=0x8470000`
+against a `0x08400000` floor), 733 MB of the arena was free in 1085 holes, and
+the largest placeable run was 1008 KB. Those numbers are measured and they do
+describe a real hazard.
+
+What is not true is that anything failed because of it. `bump_fits` and
+`gap_fits` are the probe asking whether a **hypothetical** 430 MB reservation
+— the size B&W2 requested in an earlier session — could be placed right now.
+Both went false at pick+1400s, and the load kept going: records climbed from
+3565 at pick+1700s to 4055 at pick+1900s, every one of them served by
+`$virtual_reserve_gap` out of those small holes. The load then *finished*
+allocating, and the run died in the render loop on D3D9, which is the wall
+recorded in the next section.
+
+So the honest statement is: **the gap search carried the whole tail of the
+land load out of sub-megabyte holes, and did it without a single failure.**
+Fragmentation is a risk for whatever asks for something large later — gameplay
+may well do that — and it is worth the allocator work eventually. It is not
+what is stopping B&W2 today, and it should not be prioritised as if it were.
