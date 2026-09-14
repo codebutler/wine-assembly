@@ -1003,3 +1003,54 @@ In w1, `0x10017b6f` shows up at 1.6% across 2 blocks —
 four times a pixel, and the second block is the shadow arm's bail. The fold
 works. It is aimed at 1 of 8 sites of 1 of 3 grammars, in a scene where that
 grammar is not what is running.
+
+## 2026-09-13: the cost was never the interpreter — it was our rasterizer's format gate
+
+A CPU profile under real play (`--guest-key=0x27@2:16`, symbols verified in
+sync with the shipped wasm) attributed the frame like this:
+
+| share | function |
+|---|---|
+| 27.1% | `$gdi_raster_stretch_blt` |
+| 17.3% | `$gdi_raster_read_blt_source` |
+| 16.9% | `$gdi_raster_write` |
+| 4.6% | **`$next` — the entire interpreter** |
+| 3.7% | `$gdi_raster_channel_mask` |
+| 2.1% | `_writePixelUnchecked` (JS) |
+
+~71% in the WAT rasterizer against 4.6% for the emulator. **Every guest-loop
+fold built for this app — H455, H456, H457 — could only ever touch a few
+percent of its cost.** That is the reframe: the app is not interpreter-bound.
+
+The reason is a format gate, not an algorithm. SimGolf's per-frame chain is
+`StretchBlt(0x0031000a <- 0x0031000b)`, `StretchBlt(0x00310007 <- 0x0031000a)`,
+`BitBlt(0x00310001 <- 0x00310007)` — every surface 800x600, so all three are
+same-size copies. The bulk SRCCOPY path accepted only 32bpp on both sides or
+palette-matched 8bpp; everything else fell to a loop that resolves each pixel
+to a COLORREF and back through six non-inlined calls. `tools/bench-gdi-blit.js`
+priced that: an 800x600 SRCCOPY with source and destination the same size cost
+**1.68ms at 32bpp and 40.89ms at 24bpp — 24x for the format alone**.
+
+Fixed in `2101a16f` (divisions per blit from O(area) to O(1)) and `183867b1`
+(bulk path for every equal format, one `memory.copy` per scanline when the blit
+is unscaled in x). Measured in the browser on two worktrees differing by exactly
+that second commit, `--headful --warmup=240 --seconds=25`:
+
+| | before | after |
+|---|---|---|
+| guest presents/s | 7.28 | **18.9** (two runs: 18.90, 18.94) |
+| page fps | 13.2 | **60.0** (the compositor ceiling) |
+| frames over 33ms | 37.0% | **0.0%** |
+| long tasks >50ms | 123 (mean 186ms, max 262ms) | **none observed** |
+| pixels through putImageData | 44.6M | 130.6M |
+
+Two cautions for whoever measures next. `snapshot().guestFps` is a 2s/5-sample
+estimate and recorded a 3.3x spread across six snapshots of one build — read
+`window.WinePerf.guestFrames` (a ring of raw timestamps) and compute the rate
+yourself. And the 240s warmup is load-bearing: without it the sample lands on
+an idle menu and `profile-web-frames.js` says so ("the screen never changed").
+
+The "before" arm also died three times out of four during that 4-minute warmup
+("Attempted to use detached Frame"), leaving an orphaned Chrome each time,
+while the "after" arm completed every attempt. Not investigated, so not
+claimed as a finding — but if you are baselining the old behaviour, expect it.
