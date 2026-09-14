@@ -632,8 +632,18 @@
             (if (i32.eqz (local.get $pixel)) (then
               (if (i32.or (i32.ne (local.get $mod) (i32.const 0)) (i32.ne (local.get $shift) (i32.const 0)))
                 (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
-              (if (i32.and (i32.and (i32.eq (local.get $bank) (i32.const 4)) (i32.eqz (local.get $index))) (i32.ne (local.get $sel) (i32.const 15)))
-                (then (return (call $d3d_ir_fail (i32.const 16) (local.get $start)))))
+              ;; oPos must be COMPLETELY written by the end of the shader, not
+              ;; by any one instruction. Requiring a full xyzw mask here
+              ;; refused the ordinary vs_1_1 transform, which is four separate
+              ;; dp4s -- oPos.x, oPos.y, oPos.z, oPos.w against four rows of
+              ;; the clip matrix. Black & White 2 writes every one of its
+              ;; vertex shaders that way, so this rule refused 107 of the 137
+              ;; shaders it creates at the main menu, the game silently fell
+              ;; back to fixed-function vertex processing for all of them, and
+              ;; the world painted flat. The completeness requirement itself is
+              ;; real and is enforced at the end of the scan, where $position
+              ;; is now the union of the masks rather than a flag.
+              ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/dx9-graphics-reference-asm-vs-registers-output-1-1
               ;; FRC is a restricted vs_1_1 macro, not the later full-vector op.
               (if (i32.and (i32.eq (local.get $op) (i32.const 19))
                     (i32.and (i32.ne (local.get $sel) (i32.const 2)) (i32.ne (local.get $sel) (i32.const 3))))
@@ -665,8 +675,12 @@
             (if (i32.and (i32.eqz (local.get $pixel)) (i32.eq (local.get $bank) (i32.const 3))) (then
               (if (i32.or (i32.ne (local.get $op) (i32.const 1)) (i32.ne (local.get $sel) (i32.const 1)))
                 (then (return (call $d3d_ir_fail (i32.const 6) (local.get $start)))))))
+            ;; Accumulate which components of oPos have been written, the way
+            ;; $d3d_ir_scan20 already does, so a shader that fills it across
+            ;; several instructions is accepted and one that leaves a
+            ;; component unwritten is still refused.
             (if (i32.and (i32.eqz (local.get $pixel)) (i32.and (i32.eq (local.get $bank) (i32.const 4)) (i32.eqz (local.get $index))))
-              (then (local.set $position (i32.const 1))))
+              (then (local.set $position (i32.or (local.get $position) (local.get $sel)))))
             (if (i32.eqz (local.get $bank))
               (then (local.set $newtemps (i64.or (local.get $newtemps) (i64.shl (i64.extend_i32_u (local.get $sel))
                 (i64.extend_i32_u (i32.shl (local.get $index) (i32.const 2)))))))))
@@ -845,7 +859,10 @@
             (i32.and (i32.ne (local.get $op) (i32.const 81)) (i32.ne (local.get $op) (i32.const 65))))))))
       (local.set $n (i32.add (local.get $n) (i32.const 1)))
       (local.set $at (i32.add (local.get $at) (local.get $arity))) (br $instructions)))
-    (if (i32.and (i32.eqz (local.get $pixel)) (i32.eqz (local.get $position)))
+    ;; All four components, not merely "something wrote oPos" -- the same
+    ;; condition $d3d_ir_scan20 ends on. A shader that writes only oPos.xyz
+    ;; leaves w undefined and the projection divide is then meaningless.
+    (if (i32.and (i32.eqz (local.get $pixel)) (i32.ne (local.get $position) (i32.const 15)))
       (then (return (call $d3d_ir_fail (i32.const 10) (local.get $start)))))
     (global.set $d3d_ir_length (local.get $at)) (local.get $n))
   ;; Private VS2.0 prerequisite. Same normalized IR ABI; relative bit8 means
