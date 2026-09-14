@@ -1573,8 +1573,12 @@
   ;; horizontal dropout rule chooses one of them; modes 1 and 5 exclude a
   ;; terminal stub by requiring both bounding contours to continue through
   ;; the neighbouring centre scan lines.
-  (func $tt_horizontal_edges_form_stub (param $edges i32) (param $first i32)
-        (param $second i32) (param $sample i32) (result i32)
+  ;; The horizontal and vertical dropout rules ask the same endpoint question;
+  ;; only the coordinate measured against the scan line changes. sample_y=1
+  ;; selects y for horizontal spans, while 0 selects x for vertical spans.
+  (func $tt_edges_form_stub (param $edges i32) (param $first i32)
+        (param $second i32) (param $sample i32) (param $sample_y i32)
+        (result i32)
     (local $a i32) (local $b i32) (local $ax i32) (local $ay i32)
     (local $bx i32) (local $by i32) (local $ae i32) (local $be i32)
     (local.set $a (i32.add (local.get $edges)
@@ -1598,7 +1602,10 @@
               (i32.and (i32.eq (local.get $ax) (local.get $bx))
                 (i32.eq (local.get $ay) (local.get $by)))
               (i32.lt_s (call $tt_abs
-                  (i32.sub (local.get $ay) (local.get $sample)))
+                  (i32.sub
+                    (select (local.get $ay) (local.get $ax)
+                      (local.get $sample_y))
+                    (local.get $sample)))
                 (i32.const 64)))
           (then (return (i32.const 1))))
         (local.set $be (i32.add (local.get $be) (i32.const 1)))
@@ -1640,9 +1647,9 @@
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 1))
           (i32.eq (local.get $scan_type) (i32.const 5)))
       (then
-        (if (call $tt_horizontal_edges_form_stub (local.get $edges)
+        (if (call $tt_edges_form_stub (local.get $edges)
               (local.get $start_edge) (local.get $end_edge)
-              (local.get $sample))
+              (local.get $sample) (i32.const 1))
           (then (return)))))
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 4))
           (i32.eq (local.get $scan_type) (i32.const 5)))
@@ -1672,40 +1679,6 @@
   ;; Rule 2b/3b is the vertical counterpart to tt_add_center_span's
   ;; horizontal dropout rule. The bitmap is column-major and top-down, so the
   ;; lower of two adjacent pixel centres has the larger row index.
-  (func $tt_vertical_edges_form_stub (param $edges i32) (param $first i32)
-        (param $second i32) (param $sample i32) (result i32)
-    (local $a i32) (local $b i32) (local $ax i32) (local $ay i32)
-    (local $bx i32) (local $by i32) (local $ae i32) (local $be i32)
-    (local.set $a (i32.add (local.get $edges)
-      (i32.mul (local.get $first) (i32.const 32))))
-    (local.set $b (i32.add (local.get $edges)
-      (i32.mul (local.get $second) (i32.const 32))))
-    (block $not_stub (loop $a_ends
-      (br_if $not_stub (i32.ge_s (local.get $ae) (i32.const 2)))
-      (local.set $ax (i32.load (i32.add (local.get $a)
-        (i32.mul (local.get $ae) (i32.const 8)))))
-      (local.set $ay (i32.load offset=4 (i32.add (local.get $a)
-        (i32.mul (local.get $ae) (i32.const 8)))))
-      (local.set $be (i32.const 0))
-      (block $next_a (loop $b_ends
-        (br_if $next_a (i32.ge_s (local.get $be) (i32.const 2)))
-        (local.set $bx (i32.load (i32.add (local.get $b)
-          (i32.mul (local.get $be) (i32.const 8)))))
-        (local.set $by (i32.load offset=4 (i32.add (local.get $b)
-          (i32.mul (local.get $be) (i32.const 8)))))
-        (if (i32.and
-              (i32.and (i32.eq (local.get $ax) (local.get $bx))
-                (i32.eq (local.get $ay) (local.get $by)))
-              (i32.lt_s (call $tt_abs
-                  (i32.sub (local.get $ax) (local.get $sample)))
-                (i32.const 64)))
-          (then (return (i32.const 1))))
-        (local.set $be (i32.add (local.get $be) (i32.const 1)))
-        (br $b_ends)))
-      (local.set $ae (i32.add (local.get $ae) (i32.const 1)))
-      (br $a_ends)))
-    (i32.const 0))
-
   (func $tt_add_vertical_dropout (param $bitmap i32) (param $height i32)
         (param $column i32) (param $bottom i32)
         (param $y_start i32) (param $y_end i32)
@@ -1755,9 +1728,9 @@
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 1))
           (i32.eq (local.get $scan_type) (i32.const 5)))
       (then
-        (if (call $tt_vertical_edges_form_stub (local.get $edges)
+        (if (call $tt_edges_form_stub (local.get $edges)
               (local.get $start_edge) (local.get $end_edge)
-              (local.get $sample))
+              (local.get $sample) (i32.const 0))
           (then (return)))))
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 4))
           (i32.eq (local.get $scan_type) (i32.const 5)))
