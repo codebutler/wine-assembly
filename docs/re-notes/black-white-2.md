@@ -6084,3 +6084,67 @@ while the land streams in behind it), so the record count and the scheduler
 line are the only live signals until the screen changes. Whoever picks this up
 should read `records=` in the probe's sample line first and the frame captures
 second.
+
+## Past the texture wall, the next one is arena FRAGMENTATION (2026-09-14)
+
+With the R5G6B5 render target widened, drive26 runs the land load four times
+further than any drive before it and then meets a different wall. It is worth
+naming precisely, because the numbers look like exhaustion and are not.
+
+At pick+1900s, with the load still progressing and no faults:
+
+```
+records=4055 live=0x2efd6000 cursor=0x8470000 bump_fits=false
+largest_hole=0xfc000@0x49614000 gap_fits=false
+```
+
+and a direct walk of the record table (`scratchpad/bw-toparena.js`) says why:
+
+```
+n=4055 above_band=811
+highest=[0x7eda0000+0x8000 0x7eda8000+0x8000 0x7edb0000+0x8000
+         0x7edb8000+0x48000 0x7ee00000+0x8000 0x7ef00000+0x8000]
+holes=1085 top5=[0x49614000+0xfc000 0x49325000+0xfb000 0x49987000+0xf9000
+                 0x3c360000+0xf0000 0x42390000+0xf0000]
+free_total=0x2db7b000
+```
+
+**733 MB is free and the largest placeable run is 1008 KB.** The arena runs
+`0x08400000`..`0x7F000000` with `0x50000000`..`0x60000000` excluded, so there
+is about 1.5 GB usable; B&W2's land load holds 754 MB live across 4055 ranges.
+It fits twice over. What it cannot do is place anything larger than a megabyte.
+
+### Why
+
+`$virtual_reserve_down` is a one-way downward bump from `VIRTUAL_ALLOC_TOP_INIT`,
+with `$virtual_reserve_gap` as the fallback that slides a candidate down past
+the live ranges. Over this load the bump descended the whole 1.9 GB arena —
+811 of the 4055 records sit above the excluded band, the highest at
+`0x7ef00000`, right under the ceiling — and arrived at `0x8470000`, 448 KB
+above the `0x08400000` floor, at about pick+1700s. Every reservation after
+that goes through the gap search.
+
+The gap search is not the problem either. The problem is what it has to work
+with: the guest frees ranges *interleaved* with ones it keeps, so the 733 MB
+it gave back is 1085 separate holes averaging ~690 KB, and adjacent frees have
+already been coalesced in the walk above — these really are not contiguous.
+
+So the shape to remember is: **the bump is spent, a third of the arena is
+free, and none of it is in a piece big enough to matter.** A larger memory
+does not fix this; `backing_avail` sat unchanged at `0x5dec2000` of
+`0x73c00000` the entire time, so backing was never the constraint. Neither is
+the 2 GB ceiling from `cc6796c0` — that work was needed for the *committed*
+side and is orthogonal.
+
+### What would
+
+Placement policy. The allocator never reuses the space below its cursor except
+through a fallback that inherits whatever fragmentation the guest produced.
+Real Windows fragments the same way and survives it because it has a 2 GB user
+space and coalesces; ours has 1.5 GB usable and a bump that only goes one way.
+Options, cheapest first: let the bump wrap and re-descend once it hits the
+floor (holes below it are reusable and it never looks); keep a free list of
+released ranges and best-fit into it before touching the bump at all.
+
+Do not read this as "B&W2 needs a bigger arena". It needs the arena it already
+has to be usable twice.
