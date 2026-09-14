@@ -6670,18 +6670,24 @@ even settled:
 count=85  mask=0x20  element=00000001,02050002
 ```
 
-`0x20` is the `stream != 0` rule, and it is the *only* bit set — no element
-type, no offset, no method, no usage is ever the problem. Decoding the element
-it kept:
+`0x20` is the `stream != 0` rule. Decoding the element it kept:
 
 ```
 $ node tools/d3d9-decl-decode.js '01 00 00 00 02 00 05 02 ff 00 00 00 11 00 00 00'
 [0] stream 1 offset   0 FLOAT3    DEFAULT  TEXCOORD2   <-- REFUSED: stream 1 (only stream 0 is modelled)
 ```
 
-So the earlier guess — `UBYTE4`/`FLOAT16` skinning elements — was wrong, and
-usefully so: every element type B&W2 declares is one the renderer already
-handles. What it does that we do not model is put some of them in **stream 1**.
+**That reading was incomplete, and the next sample corrected it.** At 85
+refusals the mask was `0x20` alone; by 124, once the land had begun loading, it
+was `0xa0` — `stream != 0` *and* `type > 4`. So both rules fire, and the
+`UBYTE4`/`SHORT`/`FLOAT16` guess was not wrong after all, merely not the first
+thing to break. Multi-stream is what the *menus* trip over; the element types
+arrive with the land. A fix needs both, and a reading taken before the land
+loads would have shipped half of it.
+
+(The counters keep only the *first* offending element, which is why the second
+rule has a bit but no element here. That is a limit of the instrument, not a
+finding.)
 
 Three separate silent failures are chained here, which is why this took a whole
 session to see:
@@ -6709,7 +6715,9 @@ HRESULTs. The visible symptom is 61% of the world simply missing.
   `+1720`/`+1724`/`+1728` triple, and a `SetStreamSource` that honours the
   index;
 * `$d3d9_declaration_create` to accept `stream < 16` and keep the stream index
-  per element;
+  per element, **and** to accept the element types above `D3DCOLOR` that the
+  `0x80` bit reports — which `lib/d3d9-software-backend.js` must then decode,
+  since its `packed[base+c]` handles only `D3DCOLOR` and 32-bit floats;
 * the draw descriptor in `lib/d3d9-host.js` to snapshot every stream the
   declaration references, not just one, and to carry a per-attribute stream
   index alongside the existing offset;
