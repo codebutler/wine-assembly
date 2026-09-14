@@ -758,9 +758,42 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 502: HeapCompact — STUB: unimplemented
+  ;; 502: HeapCompact(hHeap, dwFlags) — 2 args stdcall. Returns the size of the
+  ;; largest committed FREE block, which is a real number here: $heap_alloc's
+  ;; free list is a chain of {size, next} headers, so walk it and report the
+  ;; largest usable span. There is no coalescing pass to run — this allocator
+  ;; merges on free — so the walk is the whole of the work, and reporting a
+  ;; made-up number would be worse than the crash it replaces: a caller uses
+  ;; this answer to decide whether its next allocation can succeed.
+  ;; The walk carries $heap_alloc's own three guards (a step cap, arena
+  ;; validation, and the block-header sanity check), because a corrupt link
+  ;; here would hang the emulator inside one WASM call exactly as it would
+  ;; there. Black & White 2's CRT calls this while loading a land.
   (func $handle_HeapCompact (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $cur i32) (local $bsz i32) (local $largest i32) (local $steps i32)
+    (if (i32.eqz (call $heap_api_handle_valid (local.get $arg0)))
+      (then
+        (global.set $last_error (i32.const 6))  ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $cur (global.get $free_list))
+    (block $done (loop $walk
+      (br_if $done (i32.eqz (local.get $cur)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br_if $done (i32.gt_u (local.get $steps) (i32.const 65536)))
+      (br_if $done (i32.eqz (call $heap_arena_find (local.get $cur))))
+      (local.set $bsz (i32.load (call $g2w (local.get $cur))))
+      (br_if $done (call $heap_block_bad (local.get $cur) (local.get $bsz)))
+      ;; The 4-byte header is not part of what a caller could allocate.
+      (if (i32.gt_u (i32.sub (local.get $bsz) (i32.const 4)) (local.get $largest))
+        (then (local.set $largest (i32.sub (local.get $bsz) (i32.const 4)))))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (br $walk)))
+    ;; Zero means "no free block", not failure, so clear the error either way.
+    (global.set $last_error (i32.const 0))
+    (global.set $eax (local.get $largest))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
   ;; 503: HeapWalk — STUB: unimplemented
