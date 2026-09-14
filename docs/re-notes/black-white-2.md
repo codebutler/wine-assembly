@@ -6294,3 +6294,59 @@ Pinned by `test/test-d3d9-unbound-sampler.js`, which also asserts the property
 whose absence cost the whole run: a bound draw still works **after** an unbound
 one. A draw that succeeds in isolation proves nothing about a queue whose error
 is sticky.
+
+## The blocker behind that one: a pixel shader reads v1 (2026-09-14)
+
+drive29 proved the sampler fix — zero `missing pixel sampler` in a whole land
+load, and the queue still clean at 8651 submitted where the old build was
+already dead at 9032 with 558,381 failures behind it. It then stopped on the
+**next** refusal in the very same shader:
+
+```
+QueueError: D3D9 software: only pixel diffuse0 and texture0..5 linkage is implemented
+```
+
+The register is `v1`, the specular input, and the shader that reads it is three
+instructions:
+
+```
+81 d0 [2:0  255:0 255:0 255:0 255:1065353216]   def c0, (0,0,0,1)
+1  d0 [0:0  1:1]                                mov r0, v1
+1  d0 [0:0  2:0]                                mov r0, c0
+```
+
+PS1.1 is entitled to read `v1`. Whether it has a *value* depends on the draw,
+so the question is not "is this legal" but "does anything produce one". Hooking
+`_submit` in the live process answered it: **58 of 464 shaded draws read `v1`,
+and every one of them is fixed-function vertex processing with no COLOR2
+attribute, fixed-function specular off and lighting off.** Nothing writes
+`oD1`, so `v1` is an interpolant with no source — undefined, exactly as an
+unbound sampler's result is.
+
+The conservative value costs nothing to produce, and the native side was
+already willing: `$d3d_shader_vm_run` bounds bank 1 to index < 2, and
+`$d3d_shader_vm_context` `memory.fill`s the entire context, so an input
+register nothing writes reads `(0,0,0,0)` on every lane. The refusal lived
+only in `lib/d3d9-software-backend.js`, and it now fires only when a producer
+actually exists — a COLOR2 attribute, `fixedFunction.specular`, or a vertex
+shader whose IR writes destination bank 5 index 1. In that case serving zero
+would be a lie about a real specular colour rather than a reading of an
+undefined one, which is a different thing from being unimplemented.
+
+Pinned by `test/test-d3d9-unwritten-specular.js`, which asserts both
+directions, including that a bound vertex shader is not by itself a producer —
+only one that writes `oD1` is.
+
+### Two refusals in one shader is a pattern, not a coincidence
+
+Both blockers are the same mistake: a state D3D9 calls UNDEFINED was treated as
+an error, and the sticky queue turned "this draw is wrong" into "this device is
+finished". They were found one drive apart only because the first one hid the
+second.
+
+So the next drive stops paying that rate. A diagnostic poller records each
+distinct queue error and clears it, letting one run enumerate every remaining
+blocker instead of stopping at the first. Its frames are then *not* what the
+guest would see — the refused draws are still lost — so the census is the
+output and the picture is not. That distinction matters when reading its
+screenshots later.
