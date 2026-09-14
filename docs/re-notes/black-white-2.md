@@ -6803,3 +6803,50 @@ means the refusals do not stop the menus from looking finished.
   `stream 1` rather than blaming the FVF, and that stream 16 is refused.
 
 Retired along the way: the claim that `+1808..2067` was free device state.
+
+## Blocker #4, verified live — and blocker #5 behind it
+
+drive37 ran the same script as drive36 against the fixed build, so the two are
+directly comparable at every offset past the land-picker click:
+
+| | drive36 (unfixed) | drive37 (fixed) |
+|---|---|---|
+| pick+100s | `declrej=124/mask=0xa0` records=417 | `declrej=0/mask=0x0` records=416 |
+| pick+300s | `124/0xa0` records=441 | `0/0x0` records=443 |
+| pick+500s | `124/0xa0` records=466 | `0/0x0` records=471 |
+| pick+700s | `124/0xa0` records=516 | `0/0x0` records=516 |
+
+Same progression, same screens, one counter moving and one not. Both element
+slots stay empty too, so nothing is being refused and merely uncounted.
+
+**The next wall was one gate further along.** At pick+800s the error census
+caught `D3D9 software: invalid fixed position format`. `fixedPrograms` in
+`lib/d3d9-software-backend.js` required a fixed-function position to be FLOAT3
+or FLOAT4 — and the land's is `SHORT4 POSITION0`, the very element the
+declaration gate had just stopped refusing. So the declaration was accepted
+and the draw built from it was thrown away instead.
+
+Everything after that in the census is the same error propagating, and it is
+worth recognising the shape: `earlier render command failed`, then `render
+worker exited`, then `render worker stopped`. The queue's error is sticky, so
+one refused draw takes the frame and eventually the worker with it, and the
+error *count* climbs while only one thing is actually wrong. Read the first
+entry in `ctx.bwErrors.order`, not the count.
+
+The rule is now "any declared type that carries three components", which costs
+nothing to support because the fetch loop already expands every type into a
+float4 register. Still refused, deliberately and loudly:
+
+- **D3DCOLOR, UBYTE4, UBYTE4N as a position.** A byte quadruple is a colour or
+  an index set; `lib/d3d9-host.js`'s `convertColor` has also already permuted
+  D3DCOLOR's bytes by the time the backend sees them, so reading one as a
+  coordinate would be silently wrong rather than merely odd.
+- **Anything with fewer than three components** (SHORT2, FLOAT2, …).
+- **POSITIONT in anything but FLOAT4.** Its fourth component is a real
+  reciprocal w that the rasterizer divides by.
+
+`test/test-d3d9-fixed-position-types.js` pins it: the same triangle spelled
+FLOAT3, FLOAT4, SHORT4, SHORT4N and FLOAT16_4 must rasterize identical pixels,
+plus the four refusals above. Its corners are the clip volume's edges on
+purpose — SHORT4N lands a half-ULP short of them, which covers the same pixels,
+while a component read at the wrong scale or offset misses by a whole triangle.
