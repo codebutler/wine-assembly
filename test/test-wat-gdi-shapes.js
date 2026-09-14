@@ -322,6 +322,24 @@ async function main() {
     assert.deepStrictEqual(bytes.slice(t.bits, t.bits + t.stride * t.height), before);
   });
 
+  // The XOR round trip above cannot tell a dotted border from a filled block:
+  // any symmetric pattern toggles back. Pin which pixels are actually touched,
+  // so walking the border instead of testing every interior pixel stays
+  // observably identical. R2_NOT over a black surface gives white.
+  check('DrawFocusRect touches only the border, on alternating parity', () => {
+    const t = target(8, 6, 24, false);
+    bytes.fill(0, t.bits, t.bits + t.stride * t.height);
+    assert.strictEqual(wat.test_gdi_focus_rect_desc(t.hdc, t.desc, 1, 1, 7, 5), 1);
+    assert.deepStrictEqual(rows(t), [
+      '........',
+      '.W.W.W..',
+      '......W.',
+      '.W......',
+      '..W.W.W.',
+      '........',
+    ]);
+  });
+
   check('line uses integer Bresenham coverage and excludes its endpoint', () => {
     const t = target(9, 7);
     const red = object(1, 0, 1, 0x000000FF);

@@ -1211,26 +1211,46 @@
     (if (i32.or (i32.le_s (local.get $x1) (local.get $x0))
           (i32.le_s (local.get $y1) (local.get $y0)))
       (then (return (i32.const 1))))
-    (local.set $y (local.get $y0))
-    (block $rows_done (loop $rows
-      (br_if $rows_done (i32.ge_s (local.get $y) (local.get $y1)))
-      (local.set $x (local.get $x0))
-      (block $cols_done (loop $cols
-        (br_if $cols_done (i32.ge_s (local.get $x) (local.get $x1)))
-        (local.set $edge (i32.or
-          (i32.or (i32.eq (local.get $x) (local.get $x0))
-            (i32.eq (local.get $x) (i32.sub (local.get $x1) (i32.const 1))))
-          (i32.or (i32.eq (local.get $y) (local.get $y0))
-            (i32.eq (local.get $y) (i32.sub (local.get $y1) (i32.const 1))))))
-        (if (i32.and (local.get $edge)
-              (i32.eqz (i32.and (i32.add (local.get $x) (local.get $y)) (i32.const 1))))
-          (then (local.set $wrote (i32.or (local.get $wrote)
-            (call $gdi_shape_put_pixel (local.get $hdc) (local.get $desc)
-              (local.get $x) (local.get $y) (i32.const 0) (i32.const 6))))))
-        (local.set $x (i32.add (local.get $x) (i32.const 1)))
-        (br $cols)))
+    ;; Only the border is dotted, so walk the border rather than the area: the
+    ;; old loop tested every interior pixel to reject it, which is O(w*h) work
+    ;; for O(w+h) output. ROP2 6 is XOR and is not idempotent, so each edge
+    ;; pixel must still be written exactly once -- the vertical pass therefore
+    ;; skips the first and last rows the horizontal pass already covered, and
+    ;; each pass guards against a one-pixel-thin rectangle where the two edges
+    ;; are the same line.
+    (call $gdi_clip_row_reset)
+    (local.set $x (local.get $x0))
+    (block $top_done (loop $top_row
+      (br_if $top_done (i32.ge_s (local.get $x) (local.get $x1)))
+      (if (i32.eqz (i32.and (i32.add (local.get $x) (local.get $y0)) (i32.const 1)))
+        (then (local.set $wrote (i32.or (local.get $wrote)
+          (call $gdi_shape_put_pixel (local.get $hdc) (local.get $desc)
+            (local.get $x) (local.get $y0) (i32.const 0) (i32.const 6))))))
+      (local.set $y (i32.sub (local.get $y1) (i32.const 1)))
+      (if (i32.gt_s (local.get $y) (local.get $y0))
+        (then
+          (if (i32.eqz (i32.and (i32.add (local.get $x) (local.get $y)) (i32.const 1)))
+            (then (local.set $wrote (i32.or (local.get $wrote)
+              (call $gdi_shape_put_pixel (local.get $hdc) (local.get $desc)
+                (local.get $x) (local.get $y) (i32.const 0) (i32.const 6))))))))
+      (local.set $x (i32.add (local.get $x) (i32.const 1)))
+      (br $top_row)))
+    (local.set $y (i32.add (local.get $y0) (i32.const 1)))
+    (block $sides_done (loop $sides
+      (br_if $sides_done (i32.ge_s (local.get $y) (i32.sub (local.get $y1) (i32.const 1))))
+      (if (i32.eqz (i32.and (i32.add (local.get $x0) (local.get $y)) (i32.const 1)))
+        (then (local.set $wrote (i32.or (local.get $wrote)
+          (call $gdi_shape_put_pixel (local.get $hdc) (local.get $desc)
+            (local.get $x0) (local.get $y) (i32.const 0) (i32.const 6))))))
+      (local.set $x (i32.sub (local.get $x1) (i32.const 1)))
+      (if (i32.gt_s (local.get $x) (local.get $x0))
+        (then
+          (if (i32.eqz (i32.and (i32.add (local.get $x) (local.get $y)) (i32.const 1)))
+            (then (local.set $wrote (i32.or (local.get $wrote)
+              (call $gdi_shape_put_pixel (local.get $hdc) (local.get $desc)
+                (local.get $x) (local.get $y) (i32.const 0) (i32.const 6))))))))
       (local.set $y (i32.add (local.get $y) (i32.const 1)))
-      (br $rows)))
+      (br $sides)))
     (if (local.get $wrote)
       (then (call $gdi_geometry_present (local.get $hdc) (local.get $desc)
         (local.get $x0) (local.get $y0) (local.get $x1) (local.get $y1))))
@@ -4954,6 +4974,12 @@
         (memory.copy (local.get $snapshot_desc) (local.get $src) (i32.const 80))
         (i32.store (local.get $snapshot_desc) (local.get $snapshot))
         (local.set $src (local.get $snapshot_desc))))
+    ;; The destination row's clip span is resolved once per row from here on.
+    ;; $gdi_raster_clip_visible_row caches it keyed on (hdc, desc, y), and
+    ;; nothing invalidates that cache when a DC's clip changes -- so every
+    ;; consumer resets at entry, exactly as the glyph rasterizer does. Inside
+    ;; one blit the clip cannot change, which is what makes this sound.
+    (call $gdi_clip_row_reset)
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_u (local.get $y) (local.get $dh_abs)))
       (local.set $x (i32.const 0))
@@ -4987,7 +5013,7 @@
         (if (i32.and
               (i32.ne (call $gdi_raster_pixel_ptr
                 (local.get $dst) (local.get $tx) (local.get $ty)) (i32.const 0))
-              (call $gdi_raster_clip_visible
+              (call $gdi_raster_clip_visible_row
                 (local.get $hdc) (local.get $dst) (local.get $tx) (local.get $ty)))
           (then
             (local.set $d (call $gdi_raster_read (local.get $dst) (local.get $tx) (local.get $ty)))
@@ -5076,6 +5102,9 @@
       (local.get $pattern) (local.get $brush) (local.get $rop3)))
     (if (i32.ge_s (local.get $fast) (i32.const 0)) (then (return (local.get $fast))))
     (local.set $y (select (i32.sub (local.get $h) (i32.const 1)) (i32.const 0) (local.get $start)))
+    ;; Per-row clip span; see the note in $gdi_raster_stretch_blt for why the
+    ;; reset belongs here and why one blit is a safe scope for the cache.
+    (call $gdi_clip_row_reset)
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.or (i32.lt_s (local.get $y) (i32.const 0))
         (i32.ge_s (local.get $y) (local.get $h))))
@@ -5087,7 +5116,7 @@
               (i32.ne (call $gdi_raster_pixel_ptr (local.get $dst)
                 (i32.add (local.get $dx) (local.get $x))
                 (i32.add (local.get $dy) (local.get $y))) (i32.const 0))
-              (call $gdi_raster_clip_visible (local.get $hdc) (local.get $dst)
+              (call $gdi_raster_clip_visible_row (local.get $hdc) (local.get $dst)
                 (i32.add (local.get $dx) (local.get $x))
                 (i32.add (local.get $dy) (local.get $y))))
           (then
