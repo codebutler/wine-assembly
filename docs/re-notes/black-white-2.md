@@ -5659,3 +5659,55 @@ appears in the whole run. The divergent loop's re-queue condition is
 yet, try again", so whether that pool ever produces under the cooperative
 scheduler is worth one `--trace-sched` run before assuming the geometry is at
 fault.
+
+### This is a stalled job system, not a geometry bug (2026-09-13)
+
+Both 2 GB drives end with the same thread picture, and it is the same picture in
+a 631-second run and a 357-second one:
+
+```
+T1 h=0xe1000 eip=0x881760 yield=1 waitH=0xe0004  csPark 0
+T2 h=0xe1001 eip=0x881760 yield=1 waitH=0xe0005  csPark 0
+T3 h=0xe1002 eip=0x89d1dc yield=0 waitH=0        csPark 2408 / 2420
+T4 h=0xe1003 eip=0x881760 yield=1 waitH=0xe000c  csPark 0
+T5 h=0xe1004 eip=0x881760 yield=1 waitH=0xe0013  csPark 0
+held critical sections at exit (1): 0x020108a8 owner=main lock=0 recursion=1
+```
+
+T3's EIP is inside a **busy-wait on a done flag**:
+
+```
+0089d1b7  mov esi,ecx
+0089d1b9  fdiv dword [esi+0xc]     ; a timeout, scaled
+0089d1bd  call 0xad5ae4            ; read the clock
+0089d1c4  mov al,[esi+0x4]         ; the DONE flag
+0089d1c9  jnz 0x89d1e4             ; already done -> return
+0089d1cc  mov ebx,[0xc12180]
+0089d1d2  mov ecx,[esi+0x8]
+0089d1d7  call [eax]               ; virtual: pump / do a slice
+0089d1da  call ebx                 ; the stored function pointer
+0089d1dc  mov al,[esi+0x4]         ; re-read DONE            <-- T3 sits here
+0089d1e1  jz 0x89d1d2              ; not done -> go round again
+```
+
+So the shape of the whole stall is now three layers of waiting, and none of them
+is geometry:
+
+1. **T1, T2, T4 and T5 are parked on event handles** (`0xe0004`, `0xe0005`,
+   `0xe000c`, `0xe0013`) with `yield=1` -- the worker pool waiting to be given
+   a job. Nothing ever signals them.
+2. **T3 busy-waits** for a done flag one of them would set.
+3. **Main** is in `0x9e35e0`'s worklist loop re-queueing every element whose
+   `[[esi+0x20]+8]` is still an empty vector -- "the result is not ready yet,
+   try again" -- 26.9 million times, which is the allocation that kills the run.
+
+`lock=0 recursion=1` on the held section is a *normally* held section, not a
+corrupted one, so the critical-section bookkeeping is not itself broken; T3's
+2408 parks accumulated along the way and then stopped, which is what a thread
+that has stopped making progress looks like.
+
+**The next question is who was supposed to signal `0xe0004`/`0xe0005`/
+`0xe000c`/`0xe0013` and did not.** That is an event/wait question --
+`--trace-api=CreateEventA,SetEvent,ResetEvent,WaitForSingleObject,WaitForMultipleObjects`
+-- and it is a much smaller surface than 50 NULL dereferences. The NULLs and the
+divergent loop are both downstream of a job that never ran.
