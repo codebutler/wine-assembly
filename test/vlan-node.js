@@ -54,6 +54,7 @@ async function makeNode(wasm, wire, ip) {
     assert(p, 'guest_alloc failed');
     return p;
   };
+  assert.strictEqual(wat.test_call_WSAStartup(0x0101, alloc(400)) | 0, 0);
 
   return {
     ip, wat, wire, memory, wa, alloc,

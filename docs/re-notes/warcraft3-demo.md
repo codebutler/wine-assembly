@@ -1399,3 +1399,37 @@ ops/block figures — 4.7 to 8.5 — say this is block-transfer-bound, not
 op-bound: tiny blocks, so the per-block cost dominates, which is exactly the
 regime the fold/region work targets. The two app-specific levers, in order of
 size, are a host-side `ijlRead` and cheaper block transfer. Neither is a bug.
+
+### The silent tail is not quadratic either (measured 2026-09-14)
+
+After the loading bar stops at ~96% the screen is byte-identical for minutes
+(`png-diff` f040 vs f045: 0 of 307200 pixels) while the guest keeps computing —
+36.6% of block entries in Game.dll, concentrated in the FPU-heavy cluster
+`Game.dll+0x6f0b6885..0x6f0b68a6` plus `0x6f0c12d0`. Disassembled from its entry
+`0x6f0b6875`, it walks the pointer array at `[esi+0x564]` backwards accumulating
+`(2 or 4) * [obj+0x18] * [obj+0x14]` into `[esi+0x68]` — width x height x
+bytes-per-pixel over a texture/surface list, ~36% of the slots NULL — then
+`fild word [ebp-8] / fmul dword [0x6f4ee4e4] / call 0x6f4278fc`.
+
+The obvious hypothesis is that this total is recomputed over a list that keeps
+growing, i.e. quadratic in texture count. **It is not.** Live counters on the
+loop body (`0x617885`) and its exit (`0x6178a9`) at this run's load base:
+
+```
+node tools/ctl.js -s :8124 eval 'exports.clear_counts(); exports.set_count(0,0x617885); exports.set_count(1,0x6178a9)'
+```
+
+Three cumulative reads, minutes apart:
+
+| body | exits | avg trip |
+|---|---|---|
+| 2,911,896 | 1,586 | 1836.0 |
+| 5,071,032 | 2,762 | 1836.0 |
+| 13,738,788 | 7,483 | 1836.0 |
+
+Flat to one decimal across a 4.7x increase in calls, so the incremental average
+between any two samples is also 1836. The list is a **fixed ~1836-entry array**
+and each call is constant work; the tail is simply a great many calls to it. As
+with the `0x6f0deb60` scan earlier in this file, the shape that reads as O(n^2)
+in a disassembly measured out linear — which is the third time in this
+investigation. Disassembly proposes; counters decide.

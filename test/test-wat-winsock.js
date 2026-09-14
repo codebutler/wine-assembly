@@ -233,11 +233,12 @@ async function main() {
 
   // ---- socket creation and validation --------------------------------
 
-  check('socket rejects unsupported families and types', () => {
+  check('socket accepts UDP and rejects unsupported families and types', () => {
     wat.test_vsock_reset();
     assert.strictEqual(wat.test_call_socket(23, SOCK_STREAM, 0) | 0, INVALID_SOCKET);
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, WSAEAFNOSUPPORT);
-    assert.strictEqual(wat.test_call_socket(AF_INET, SOCK_DGRAM, 0) | 0, INVALID_SOCKET);
+    assert.notStrictEqual(wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0, INVALID_SOCKET);
+    assert.strictEqual(wat.test_call_socket(AF_INET, 3, 0) | 0, INVALID_SOCKET);
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, WSAESOCKTNOSUPPORT);
   });
 
@@ -596,6 +597,42 @@ async function main() {
     assert.strictEqual(wat.test_call_setsockopt(s, 6, 1, val, 4) | 0, 0, 'TCP_NODELAY');
     assert.strictEqual(wat.test_call_setsockopt(s, 0xffff, 0x1234, val, 4) | 0, SOCKET_ERROR);
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, 10042, 'WSAENOPROTOOPT');
+  });
+
+  check('setsockopt enables UDP broadcast', () => {
+    wat.test_vsock_reset();
+    const s = wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0;
+    const val = alloc(4);
+    new DataView(memory.buffer, wa(val), 4).setUint32(0, 1, true);
+    assert.strictEqual(
+      wat.test_call_setsockopt(s, 0xffff, 0x0020, val, 4) | 0,
+      0,
+      'SO_BROADCAST',
+    );
+  });
+
+  check('getsockopt reports the effective UDP receive buffer', () => {
+    wat.test_vsock_reset();
+    const s = wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0;
+    const val = alloc(4);
+    const len = alloc(4);
+    const valueView = new DataView(memory.buffer, wa(val), 4);
+    const lenView = new DataView(memory.buffer, wa(len), 4);
+    lenView.setUint32(0, 4, true);
+    assert.strictEqual(wat.test_call_getsockopt(s, 0xffff, 0x1002, val, len) | 0, 0);
+    assert.strictEqual(valueView.getUint32(0, true), 16384, 'SO_RCVBUF');
+    assert.strictEqual(lenView.getUint32(0, true), 4, 'integer option length');
+  });
+
+  check('getsockname reports a UDP socket bound to a wildcard address', () => {
+    wat.test_vsock_reset();
+    const s = wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0;
+    assert.strictEqual(wat.test_call_bind(s, sockaddr('0.0.0.0', 7787), 16) | 0, 0);
+    const name = alloc(16);
+    const len = alloc(4);
+    new DataView(memory.buffer, wa(len), 4).setUint32(0, 16, true);
+    assert.strictEqual(wat.test_call_getsockname(s, name, len) | 0, 0);
+    assert.deepStrictEqual(readSockaddr(name), { family: AF_INET, port: 7787, ip: ROOM_HOST });
   });
 
   check('ioctlsocket rejects unsupported commands', () => {

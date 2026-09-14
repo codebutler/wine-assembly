@@ -2,7 +2,8 @@
   ;; Virtual LAN Winsock core — docs/virtual-lan-party.md, Slices 1-2
   ;;
   ;; A room-scoped socket switch. Guest AF_INET/SOCK_STREAM sockets are
-  ;; genuine byte streams. Two sockets inside one process meet directly in
+  ;; genuine byte streams, and SOCK_DGRAM sockets preserve one UDP datagram
+  ;; per wire frame. Two sockets inside one process meet directly in
   ;; VSOCK_TABLE; a socket whose peer lives in another process meets it
   ;; over the frame wire further down this file. No host socket or TAP
   ;; device is involved either way, and addresses live only inside the
@@ -19,8 +20,8 @@
   ;;                    4 connected / 5 closed / 6 connecting (SYN sent,
   ;;                    waiting for the remote process to answer)
   ;;   +4   family      AF_INET
-  ;;   +8   type        SOCK_STREAM
-  ;;   +12  proto       0 or IPPROTO_TCP
+  ;;   +8   type        SOCK_STREAM or SOCK_DGRAM
+  ;;   +12  proto       0, IPPROTO_TCP, or IPPROTO_UDP
   ;;   +16  local_ip    host byte order, 0 = INADDR_ANY
   ;;   +20  local_port  host byte order
   ;;   +24  remote_ip   host byte order
@@ -57,8 +58,8 @@
     (field state       i32)      ;; +0    0 free / 1 created / 2 bound / 3 listening
                                  ;;       4 connected / 5 closed / 6 connecting
     (field family      i32)      ;; +4    AF_INET
-    (field type        i32)      ;; +8    SOCK_STREAM
-    (field proto       i32)      ;; +12   0 or IPPROTO_TCP
+    (field type        i32)      ;; +8    SOCK_STREAM or SOCK_DGRAM
+    (field proto       i32)      ;; +12   0, IPPROTO_TCP, or IPPROTO_UDP
     (field local_ip    i32)      ;; +16   host byte order, 0 = INADDR_ANY
     (field local_port  i32)      ;; +20   host byte order
     (field remote_ip   i32)      ;; +24   host byte order
@@ -427,6 +428,10 @@
   (func $vsock_write_ready (param $idx i32) (result i32)
     (local $rec i32) (local $peer i32)
     (local.set $rec (call $vsock_rec (local.get $idx)))
+    (if (i32.eq (load.field VSock type (local.get $rec)) (i32.const 2))
+      (then (return (i32.or
+        (i32.eq (load.field VSock state (local.get $rec)) (i32.const 1))
+        (i32.eq (load.field VSock state (local.get $rec)) (i32.const 2))))))
     (if (i32.ne (load.field VSock state (local.get $rec)) (i32.const 4))
       (then (return (i32.const 0))))
     (if (i32.and (load.field VSock flags (local.get $rec)) (i32.const 2))
@@ -542,6 +547,33 @@
       (br $scan)))
     (i32.const -1))
 
+  ;; Find the datagram socket that owns an inbound destination. UDP has no
+  ;; connection record: the sender carried by the current datagram is kept in
+  ;; remote_ip/remote_port until recvfrom consumes it. A full one-datagram
+  ;; receive slot applies lossless wire backpressure instead of merging packet
+  ;; boundaries into the stream ring.
+  (func $vsock_find_udp (param $dip i32) (param $dport i32) (result i32)
+    (local $i i32) (local $rec i32) (local $lip i32)
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $VSOCK_MAX)))
+      (local.set $rec (call $vsock_rec (local.get $i)))
+      (if (i32.and
+            (i32.and
+              (i32.eq (load.field VSock state (local.get $rec)) (i32.const 2))
+              (i32.eq (load.field VSock type (local.get $rec)) (i32.const 2)))
+            (i32.eq (load.field VSock local_port (local.get $rec)) (local.get $dport)))
+        (then
+          (local.set $lip (load.field VSock local_ip (local.get $rec)))
+          (if (i32.or
+                (i32.eq (local.get $dip) (i32.const -1))
+                (i32.or (i32.eqz (local.get $lip))
+                        (i32.eq (local.get $lip) (local.get $dip))))
+            (then (return (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
+
   ;; Accept an inbound SYN into the matching listener's backlog.
   ;; Returns 1 once the frame has been consumed, either by opening a
   ;; connection or by refusing it.
@@ -602,9 +634,38 @@
   (func $vsock_deliver (param $type i32) (param $sip i32) (param $sport i32)
                        (param $dip i32) (param $dport i32) (param $plen i32) (result i32)
     (local $idx i32) (local $rec i32)
-    ;; Not ours: the wire is a broadcast segment, so silently ignore.
-    (if (i32.eqz (call $vsock_is_local_addr (local.get $dip)))
+    ;; Not ours: the wire is a broadcast segment, so silently ignore. Limited
+    ;; broadcast is meaningful only for datagrams and is accepted below.
+    (if (i32.and
+          (i32.ne (local.get $type) (i32.const 6))
+          (i32.eqz (call $vsock_is_local_addr (local.get $dip))))
       (then (return (i32.const 1))))
+    (if (i32.eq (local.get $type) (i32.const 6))
+      (then
+        (if (i32.and
+              (i32.ne (local.get $dip) (i32.const -1))
+              (i32.eqz (call $vsock_is_local_addr (local.get $dip))))
+          (then (return (i32.const 1))))
+        (local.set $idx (call $vsock_find_udp (local.get $dip) (local.get $dport)))
+        ;; UDP silently discards a datagram for an unopened port. A matching
+        ;; socket with an unread datagram is different: keep this frame queued
+        ;; so packet boundaries and ordering survive the bounded receive slot.
+        (if (i32.lt_s (local.get $idx) (i32.const 0))
+          (then (return (i32.const 1))))
+        (local.set $rec (call $vsock_rec (local.get $idx)))
+        (if (load.field VSock rx_len (local.get $rec))
+          (then (return (i32.const 0))))
+        (if (i32.eqz (call $vsock_alloc_ring (local.get $idx)))
+          (then (return (i32.const 0))))
+        (if (i32.gt_u (local.get $plen) (global.get $VSOCK_RX_CAP))
+          (then (return (i32.const 1))))
+        (store.field VSock remote_ip (local.get $rec) (local.get $sip))
+        (store.field VSock remote_port (local.get $rec) (local.get $sport))
+        (call $vsock_ring_write (local.get $idx)
+          (i32.add (global.get $vsock_frame_buf) (global.get $VLN_HDR))
+          (local.get $plen))
+        (call $vsock_async_post (local.get $idx) (i32.const 0x01) (i32.const 0))
+        (return (i32.const 1))))
     (if (i32.eq (local.get $type) (i32.const 1))
       (then (return (call $vsock_deliver_syn (local.get $sip) (local.get $sport)
                       (local.get $dip) (local.get $dport)))))
@@ -756,13 +817,18 @@
         (call $vsock_set_error (i32.const 10047))          ;; WSAEAFNOSUPPORT
         (global.set $eax (i32.const -1))
         (return)))
-    (if (i32.ne (local.get $arg1) (i32.const 1))          ;; SOCK_STREAM only
+    (if (i32.and (i32.ne (local.get $arg1) (i32.const 1))
+                 (i32.ne (local.get $arg1) (i32.const 2)))
       (then
         (call $vsock_set_error (i32.const 10044))          ;; WSAESOCKTNOSUPPORT
         (global.set $eax (i32.const -1))
         (return)))
-    (if (i32.and (i32.ne (local.get $arg2) (i32.const 0))
-                 (i32.ne (local.get $arg2) (i32.const 6))) ;; IPPROTO_TCP
+    (if (i32.and
+          (i32.ne (local.get $arg2) (i32.const 0))
+          (i32.ne (local.get $arg2)
+            (if (result i32) (i32.eq (local.get $arg1) (i32.const 2))
+              (then (i32.const 17))                       ;; IPPROTO_UDP
+              (else (i32.const 6)))))                     ;; IPPROTO_TCP
       (then
         (call $vsock_set_error (i32.const 10043))          ;; WSAEPROTONOSUPPORT
         (global.set $eax (i32.const -1))
@@ -1113,6 +1179,23 @@
       (load.field VSock remote_port (local.get $rec)))
     (global.set $eax (i32.const 0)))
 
+  ;; getsockname(s, name, namelen) — the socket's bound room address.
+  (func $handle_getsockname (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                            (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32) (local $rec i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $idx (call $vsock_index (local.get $arg0)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then
+        (call $vsock_set_error (i32.const 10038))          ;; WSAENOTSOCK
+        (global.set $eax (i32.const -1))
+        (return)))
+    (local.set $rec (call $vsock_rec (local.get $idx)))
+    (call $vsock_write_sockaddr (local.get $arg1) (local.get $arg2)
+      (load.field VSock local_ip (local.get $rec))
+      (load.field VSock local_port (local.get $rec)))
+    (global.set $eax (i32.const 0)))
+
   ;; send(s, buf, len, flags) — a partial count is a legal TCP result.
   (func $handle_send (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1179,6 +1262,98 @@
     (if (i32.gt_u (local.get $n) (local.get $space)) (then (local.set $n (local.get $space))))
     (call $vsock_ring_write (local.get $peer) (local.get $arg1) (local.get $n))
     (global.set $eax (local.get $n)))
+
+  ;; sendto(s, buf, len, flags, to, tolen) — one UDP datagram is one frame.
+  ;; The dispatcher supplies five named arguments; the sixth remains at
+  ;; [ESP+24] until this handler performs the six-argument stdcall cleanup.
+  (func $handle_sendto (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32) (local $rec i32) (local $to_len i32)
+    (local $dip i32) (local $dport i32)
+    (local.set $to_len (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (local.set $idx (call $vsock_index (local.get $arg0)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then (call $vsock_set_error (i32.const 10038))
+        (global.set $eax (i32.const -1)) (return)))
+    (local.set $rec (call $vsock_rec (local.get $idx)))
+    (if (i32.ne (load.field VSock type (local.get $rec)) (i32.const 2))
+      (then (call $vsock_set_error (i32.const 10044))
+        (global.set $eax (i32.const -1)) (return)))
+    (if (i32.eqz (call $vsock_read_sockaddr (local.get $arg4) (local.get $to_len)))
+      (then (call $vsock_set_error (i32.const 10047))
+        (global.set $eax (i32.const -1)) (return)))
+    (local.set $dip (global.get $vsock_sa_ip))
+    (local.set $dport (global.get $vsock_sa_port))
+    (if (i32.and (i32.ne (local.get $dip) (i32.const -1))
+                 (i32.eqz (call $vsock_addr_in_room (local.get $dip))))
+      (then (call $vsock_set_error (i32.const 10051))
+        (global.set $eax (i32.const -1)) (return)))
+    (if (i32.gt_u (local.get $arg2) (global.get $VLN_MAX_PAYLOAD))
+      (then (call $vsock_set_error (i32.const 10040))       ;; WSAEMSGSIZE
+        (global.set $eax (i32.const -1)) (return)))
+    ;; Winsock implicitly binds an unbound datagram socket on its first send.
+    (if (i32.eq (load.field VSock state (local.get $rec)) (i32.const 1))
+      (then
+        (store.field VSock local_ip (local.get $rec) (global.get $vsock_local_ip))
+        (store.field VSock local_port (local.get $rec) (call $vsock_alloc_port))
+        (store.field VSock state (local.get $rec) (i32.const 2))))
+    (if (i32.ne (load.field VSock state (local.get $rec)) (i32.const 2))
+      (then (call $vsock_set_error (i32.const 10022))
+        (global.set $eax (i32.const -1)) (return)))
+    (if (i32.eqz (call $vsock_emit (i32.const 6)
+          (load.field VSock local_ip (local.get $rec))
+          (load.field VSock local_port (local.get $rec))
+          (local.get $dip) (local.get $dport)
+          (local.get $arg1) (local.get $arg2)))
+      (then
+        (if (i32.eqz (load.field VSock mode (local.get $rec)))
+          (then (call $vsock_block (i32.const 28)) (return)))
+        (call $vsock_set_error (i32.const 10035))
+        (global.set $eax (i32.const -1)) (return)))
+    (global.set $eax (local.get $arg2)))
+
+  ;; recvfrom(s, buf, len, flags, from, fromlen) — consume exactly one frame.
+  (func $handle_recvfrom (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                         (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32) (local $rec i32) (local $from_len i32)
+    (local $available i32) (local $n i32)
+    (local.set $from_len (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (local.set $idx (call $vsock_index (local.get $arg0)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then (call $vsock_set_error (i32.const 10038))
+        (global.set $eax (i32.const -1)) (return)))
+    (local.set $rec (call $vsock_rec (local.get $idx)))
+    (if (i32.ne (load.field VSock type (local.get $rec)) (i32.const 2))
+      (then (call $vsock_set_error (i32.const 10044))
+        (global.set $eax (i32.const -1)) (return)))
+    (call $vsock_pump)
+    (local.set $available (load.field VSock rx_len (local.get $rec)))
+    (if (local.get $available)
+      (then
+        (call $vsock_write_sockaddr (local.get $arg4) (local.get $from_len)
+          (load.field VSock remote_ip (local.get $rec))
+          (load.field VSock remote_port (local.get $rec)))
+        (local.set $n (local.get $available))
+        (if (i32.gt_u (local.get $n) (local.get $arg2))
+          (then (local.set $n (local.get $arg2))))
+        (drop (call $vsock_ring_read (local.get $idx) (local.get $arg1) (local.get $n)))
+        ;; A short receive discards the rest of this datagram, never exposes it
+        ;; as a second packet. Winsock reports WSAEMSGSIZE in that case.
+        (if (i32.lt_u (local.get $n) (local.get $available))
+          (then
+            (store.field VSock rx_len (local.get $rec) (i32.const 0))
+            (store.field VSock rx_head (local.get $rec) (i32.const 0))
+            (call $vsock_set_error (i32.const 10040))
+            (global.set $eax (i32.const -1))
+            (return)))
+        (global.set $eax (local.get $n))
+        (return)))
+    (if (i32.eqz (load.field VSock mode (local.get $rec)))
+      (then (call $vsock_block (i32.const 28)) (return)))
+    (call $vsock_set_error (i32.const 10035))
+    (global.set $eax (i32.const -1)))
 
   ;; recv(s, buf, len, flags) — returns any available prefix, 0 at EOF.
   (func $handle_recv (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
@@ -1415,6 +1590,55 @@
     (call $vsock_set_error (i32.const 10022))
     (global.set $eax (i32.const -1)))
 
+  ;; getsockopt(s, level, optname, optval, optlen). Buffer sizes report the
+  ;; switch's effective bounded capacities; callers such as Unreal read these
+  ;; back after requesting a larger kernel buffer.
+  (func $handle_getsockopt (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
+                           (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $idx i32) (local $need i32) (local $value i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $idx (call $vsock_index (local.get $arg0)))
+    (if (i32.lt_s (local.get $idx) (i32.const 0))
+      (then
+        (call $vsock_set_error (i32.const 10038))
+        (global.set $eax (i32.const -1))
+        (return)))
+    (if (i32.or (i32.eqz (local.get $arg3)) (i32.eqz (local.get $arg4)))
+      (then
+        (call $vsock_set_error (i32.const 10014))           ;; WSAEFAULT
+        (global.set $eax (i32.const -1))
+        (return)))
+    (local.set $need (i32.const 4))
+    (if (i32.eq (local.get $arg1) (i32.const 0xFFFF))       ;; SOL_SOCKET
+      (then
+        (if (i32.eq (local.get $arg2) (i32.const 0x1002))   ;; SO_RCVBUF
+          (then (local.set $value (global.get $VSOCK_RX_CAP)))
+          (else
+            (if (i32.eq (local.get $arg2) (i32.const 0x1001)) ;; SO_SNDBUF
+              (then (local.set $value (global.get $VLN_MAX_PAYLOAD)))
+              (else
+                (if (i32.or
+                      (i32.eq (local.get $arg2) (i32.const 0x0020)) ;; SO_BROADCAST
+                      (i32.eq (local.get $arg2) (i32.const 0x0004))) ;; SO_REUSEADDR
+                  (then (local.set $value (i32.const 1)))
+                  (else
+                    (call $vsock_set_error (i32.const 10042))
+                    (global.set $eax (i32.const -1))
+                    (return))))))))
+      (else
+        (call $vsock_set_error (i32.const 10042))           ;; WSAENOPROTOOPT
+        (global.set $eax (i32.const -1))
+        (return)))
+    (if (i32.lt_u (i32.load (call $g2w (local.get $arg4))) (local.get $need))
+      (then
+        (i32.store (call $g2w (local.get $arg4)) (local.get $need))
+        (call $vsock_set_error (i32.const 10014))
+        (global.set $eax (i32.const -1))
+        (return)))
+    (i32.store (call $g2w (local.get $arg3)) (local.get $value))
+    (i32.store (call $g2w (local.get $arg4)) (local.get $need))
+    (global.set $eax (i32.const 0)))
+
   ;; setsockopt(s, level, optname, optval, optlen)
   (func $handle_setsockopt (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                            (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1431,10 +1655,12 @@
     (if (i32.eq (local.get $arg1) (i32.const 0xFFFF))      ;; SOL_SOCKET
       (then
         (if (i32.or
-              (i32.or (i32.eq (local.get $arg2) (i32.const 0x0004))   ;; SO_REUSEADDR
-                      (i32.eq (local.get $arg2) (i32.const 0x1001)))  ;; SO_SNDBUF
-              (i32.or (i32.eq (local.get $arg2) (i32.const 0x1002))   ;; SO_RCVBUF
-                      (i32.eq (local.get $arg2) (i32.const 0x0080)))) ;; SO_LINGER
+              (i32.eq (local.get $arg2) (i32.const 0x0020))           ;; SO_BROADCAST
+              (i32.or
+                (i32.or (i32.eq (local.get $arg2) (i32.const 0x0004)) ;; SO_REUSEADDR
+                        (i32.eq (local.get $arg2) (i32.const 0x1001))) ;; SO_SNDBUF
+                (i32.or (i32.eq (local.get $arg2) (i32.const 0x1002)) ;; SO_RCVBUF
+                        (i32.eq (local.get $arg2) (i32.const 0x0080))))) ;; SO_LINGER
           (then
             (global.set $eax (i32.const 0))
             (return)))))
@@ -2065,11 +2291,11 @@
     ;; ceiling. WinSock 1.1 clients reject a success that reports 2.2 here.
     (i32.store16 (local.get $wa) (i32.and (local.get $arg0) (i32.const 0xFFFF)))
     (i32.store16 (i32.add (local.get $wa) (i32.const 2)) (i32.const 0x0202))
-    ;; This implementation has 64 stream-socket records and no UDP transport.
+    ;; Stream and datagram sockets share the same 64-record table.
     (i32.store16 (i32.add (local.get $wa) (i32.const 390))
       (global.get $VSOCK_MAX))                                  ;; iMaxSockets
-    (i32.store16 (i32.add (local.get $wa) (i32.const 392)) (i32.const 0))
-                                                               ;; iMaxUdpDg
+    (i32.store16 (i32.add (local.get $wa) (i32.const 392))
+      (global.get $VLN_MAX_PAYLOAD))                            ;; iMaxUdpDg
     (i32.store (i32.add (local.get $wa) (i32.const 396)) (i32.const 0))
                                                                ;; lpVendorInfo
     (global.set $wsa_started (i32.add (global.get $wsa_started) (i32.const 1)))

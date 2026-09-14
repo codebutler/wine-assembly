@@ -30043,5 +30043,33 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2580651135
+  },
+  {
+    "id": 3580,
+    "name": "sendto",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2223612394
+  },
+  {
+    "id": 3581,
+    "name": "recvfrom",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2287937341
+  },
+  {
+    "id": 3582,
+    "name": "getsockopt",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3713548348
+  },
+  {
+    "id": 3583,
+    "name": "getsockname",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2609806812
   }
 ]
