@@ -6406,3 +6406,80 @@ Artifact: the first world frame is `frame-1263.png` in drive30's probe
 directory (also copied to this session's scratchpad as
 `bw2-first-world-frame.png`); probe directories under `/var/folders` are
 reaped, so copy it somewhere durable before relying on it.
+
+### The darkness is answered: the substitutions are used, and the scene is lit anyway
+
+The measurement the section above asked for was taken, by a different and
+better route than forcing the substitutions to white: count which draws
+actually take them. Over 239 shaded draws in one land pass —
+
+```
+clean    157    9702prim x54, 2048prim x27, 2prim x27, 72prim x14, 48prim x11, ...
+unbound   55    9702prim x55
+v1        27    2048prim x27
+both       0
+```
+
+— both substitutions are taken by the *largest* draws in the scene. The
+9702-primitive terrain draw submits in two variants, roughly half with its
+texture bound and half without, and the 2048-primitive draw is the one reading
+v1. A later drive then rendered a properly lit, textured sea surface with a
+dawn sky, cloud banding and light shafts (252,832 bytes against a 415,906-byte
+menu) **with the error census still reading 0/0**.
+
+So this is stronger than "the fixes are not implicated": the draws that take
+the conservative value are the ones painting the picture, and the picture is
+lit and textured. The earlier dark frame was the last frame before the worker
+died, not what the substitutions produce.
+
+### The third blocker's fatality, exactly — and fixed
+
+The mechanism is more specific than "the worker catches the throw", and the
+specific part is where the bug was. In `lib/d3d-command-stream.js`'s
+`createCommandReceiver`:
+
+1. The draw throws. `drain()` catches it, marks `stream.failed = true` for that
+   device, and replies `'failed'` for that command. The worker survives this.
+2. The producer, which has not yet been told (the failure is asynchronous),
+   submits the next frame.
+3. `receive()` tests `|| stream.failed` and **throws** `PROTOCOL`.
+4. That throw escapes `receive()` into `lib/d3d-render-worker.js`'s top-level
+   message handler, which treats any throw as fatal: `shutdownNeutral()`, the
+   event loop empties, the thread exits.
+5. Every later command on **every** device that worker serves reports
+   `render worker stopped`.
+
+Measured: the draw failed at command 8917, the worker was gone by 8918, and the
+run's remaining 587 commands had nothing to run on — 21 minutes of a live guest
+still loading records into a renderer that had already exited, with the frame
+byte-identical throughout.
+
+Fixed in `5b9b0d43`: a command arriving on an already-failed stream is answered
+per command (`'consumed'` then `'failed'`, since the producer rejects a
+completion it never consumed) instead of thrown. The stream stays failed, so
+nothing runs against undefined state, and recovery is still a device reset — a
+new generation rebuilds the stream — which is only reachable while the worker
+is alive to receive it. Malformed and out-of-order descriptors still throw,
+including on a failed stream. Pinned by
+`test/test-d3d9-worker-survives-draw-failure.js`.
+
+**This does not on its own make B&W2 render past the bad draw.** The device's
+stream stays poisoned until a generation bump, so the `-1` itself still has to
+be fixed. What the fix buys is that the worker, and every other device on it,
+survives to be diagnosed — and that the run keeps going instead of freezing.
+
+### Capturing the draw that gets `-1`
+
+Hooking `_submit` records the wrong draw. A software draw retires
+asynchronously: `_execute()` settles the consumer's completion promise into
+`_retire(entry, error)`, which is where the queue's sticky `this.error` is
+first set, and `submit()` only rethrows it on the *next* submit. So a `_submit`
+hook sees the innocent draw that came after — and with an error census clearing
+`queue.error` every second it sees almost nothing at all (measured: 0 payloads
+against 285 cleared errors). The eight draw shapes recorded that way in drive31
+are therefore **not** the failing draw and should not be reasoned from.
+
+Hook `_retire` instead: it still holds `entry.command.payload` when it is
+called, and nulls `entry.command` a few lines in. `tools/d3d9-replay-payload.js`
+replays such a capture standalone in about a second, so the rasterizer's
+refusal can be studied repeatedly instead of once per 35-minute drive.
