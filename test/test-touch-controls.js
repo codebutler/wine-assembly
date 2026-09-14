@@ -885,13 +885,17 @@ TouchControls.destroy();
     const presented={x:0,y:3,w:375,h:433};
     setup({left:0,top:0,right:375,bottom:710,width:375,height:710},presented,'zoom');
     const left=byLabel('Nudge left'), right=byLabel('Nudge right');
-    // Inside the picture's top corners, which is where the black is.
-    assert.strictEqual(parseFloat(left.style.left),6);
-    assert.strictEqual(parseFloat(left.style.top),9);
-    assert.strictEqual(parseFloat(right.style.left),375-6-52);
-    assert.strictEqual(parseFloat(right.style.top),9);
+    // Inside the picture's top corners, which is where the black is. Here the
+    // table is 375 wide, so the measured circle would be 66px across and the
+    // 52px cap wins -- and 52 sits inside the triangle with room to spare, so
+    // the placement is the circle's measured centre either way.
     assert.strictEqual(parseFloat(left.style.width),52,
       'generous: 52px against Apple\'s 44px minimum, and it floats over black');
+    const cxP=0.0886*375, cyP=presented.y+0.0767*433;
+    assert.strictEqual(parseFloat(left.style.left),cxP-26);
+    assert.strictEqual(parseFloat(left.style.top),cyP-26);
+    assert.strictEqual(parseFloat(right.style.left),375-cxP-26);
+    assert.strictEqual(parseFloat(right.style.top),cyP-26);
     // Captions in the letterbox UNDER the table -- below its last row, above
     // the screen's bottom, and horizontally over the zone each one names.
     const tableBottom=presented.y+presented.h;
@@ -913,39 +917,76 @@ TouchControls.destroy();
     TouchControls.destroy();
   }
 
-  // LANDSCAPE 710x375. The table is fitted to the height and fills it, so
-  // there is no band under it at all -- the captions go to the gutter on
-  // their own side, which is the only place left that covers no playfield.
+  // LANDSCAPE 710x375. The framing here is the WHOLE 641x481 scene -- score
+  // panel and all -- fitted to the short edge, which in landscape is the
+  // HEIGHT: measured off the real renderer, dst y 0 h 375 on a 375-tall
+  // screen, so no black bar above or below, and the 105px left over goes to
+  // the gutters, where a phone held sideways has room to spare. Cropping to
+  // the table here would throw the score away to buy width nobody is short of.
   {
-    const presented={x:204,y:0,w:302,h:375};
+    // Win98Renderer._computeSingleAppZoom('fit'), 710x375 at DPR 3.
+    const presented={x:105.3,y:0,w:499.7,h:375};
     const r=setup({left:0,top:0,right:710,bottom:375,width:710,height:375},
-      presented,'zoom');
+      presented,'fit');
+    // Everything below is anchored to the TABLE inside that scene, not to the
+    // scene: crop x 23..383 of 641, y 32..448 of 481.
+    const k=presented.w/641, ky=presented.h/481;
+    const tx=presented.x+23*k, tw=360*k, ty=32*ky, th=416*ky;
+    const near=(a,b,what)=>assert(Math.abs(a-b)<0.5,`${what}: ${a} != ${b}`);
     const left=byLabel('Nudge left'), right=byLabel('Nudge right');
-    assert.strictEqual(parseFloat(left.style.left),204+6);
-    assert.strictEqual(parseFloat(right.style.left),204+302-6-52);
-    assert.strictEqual(parseFloat(left.style.top),6);
-    for (const cap of TouchControls._captions) {
-      assert.strictEqual(cap.hidden,false);
-      const x=parseFloat(cap.style.left);
-      assert(x<presented.x||x>presented.x+presented.w,
-        `caption at ${x} is over the playfield (${presented.x}..${presented.x+presented.w})`);
-      assert(parseFloat(cap.style.top)<375,'on the screen');
+    // The nudges are INSIDE the black triangles, measured -- not hugging the
+    // corner at a fixed 52px, which is what put them on the artwork here.
+    // Source geometry: crop corner (23,32), artwork edge x = 92 - (y-35)/6 on
+    // the left and its mirror on the right, so the inscribed circle is centre
+    // (54.9, 63.9) radius 31.9 -- see lib/apps.js.
+    const src=(sx,sy)=>({x:presented.x+sx*k,y:sy*ky});
+    const fitted=2*0.0885*tw;
+    assert(fitted>=44,`the fitted circle is ${fitted}px, under the 44px floor`);
+    // 23 + 31.9 on the left; the crop's right edge is 23+360 = 383, and the
+    // right triangle is the mirror (its artwork edge starts at 313, so it is
+    // 70px of black against the left's 69 -- the symmetric fraction sits a
+    // pixel further from the artwork on that side, which is the safe way).
+    for (const [el,sx] of [[left,54.9],[right,383-31.9]]) {
+      const size=parseFloat(el.style.width);
+      near(size,fitted,'the nudge is sized to the triangle, not to 52');
+      const c=src(sx,63.9);
+      near(parseFloat(el.style.left)+size/2,c.x,'nudge centre x');
+      near(parseFloat(el.style.top)+size/2,c.y,'nudge centre y');
+      // Entirely inside the black: left of (or right of) the artwork edge at
+      // every row the circle covers, and below the crop's own top edge.
+      const cx=parseFloat(el.style.left)+size/2, cy=parseFloat(el.style.top)+size/2;
+      const r=size/2;
+      assert(cy-r>=ty-0.5,'below the table\'s top edge');
+      for (let sy=35;sy<=155;sy++) {
+        const edge=el===left?92-(sy-35)/6:313+(sy-35)/6;
+        const py=sy*ky, dx=Math.abs(py-cy)<r?Math.sqrt(r*r-(py-cy)*(py-cy)):0;
+        const ex=presented.x+edge*k;
+        if (el===left) assert(cx+dx<=ex+0.5,`left nudge crosses the artwork at row ${sy}`);
+        else assert(cx-dx>=ex-0.5,`right nudge crosses the artwork at row ${sy}`);
+      }
     }
-    // Left flipper to the left gutter, right flipper and plunger to the right.
-    assert(parseFloat(caption('Flipper')[0].style.left)<presented.x);
-    assert(parseFloat(caption('Flipper')[1].style.left)>presented.x+presented.w);
-    assert(parseFloat(caption('Launch')[0].style.left)>presented.x+presented.w);
-    assert.notStrictEqual(parseFloat(caption('Flipper')[1].style.top),
-      parseFloat(caption('Launch')[0].style.top),
-      'two captions in one gutter stack, they do not overlap');
+    assert(parseFloat(right.style.left)+parseFloat(right.style.width)<presented.x+405*k,
+      'the right nudge stays off the score panel beside the table');
+    // Item 5b: no captions in landscape. A caption names an invisible zone, so
+    // it has to be next to it; the side gutters this used to fall back to are
+    // next to nothing, and the phone reported them as "all wrong".
+    for (const cap of TouchControls._captions) {
+      assert.strictEqual(cap.hidden,true,'no captions in landscape');
+      assert.strictEqual(cap.style.left,'','and no stale placement left behind');
+    }
+    // The flipper split follows the table, not the scene.
+    near(parseFloat(TouchControls._zones[1].style.left),tx+tw/2,
+      'right flipper zone starts at the table\'s midline');
     // Item 5: one framing in landscape. No chip...
     assert.strictEqual(TouchControls._modeEl.hidden,true,
       'nothing to toggle between in landscape');
-    // ...and a renderer left in Fit is put into it.
-    r.viewMode='fit';
+    // ...and a renderer left on the table crop is put back onto the whole
+    // scene. This is the correction to the first attempt, which forced the
+    // crop here: landscape pinball should not show just the table.
+    r.viewMode='zoom';
     TouchControls.layoutZones();
-    assert.strictEqual(r.viewMode,'zoom',
-      'landscape presents the table crop, which fills the height with no bars');
+    assert.strictEqual(r.viewMode,'fit',
+      'landscape presents the whole window, fitted to the height, no bars');
     TouchControls.destroy();
   }
 
@@ -978,9 +1019,11 @@ TouchControls.destroy();
     const panelLeft = presented.x + 405 * k;
     const right = TouchControls._widgets.find(w => w.getAttribute('aria-label') === 'Nudge right');
     const x = parseFloat(right.style.left);
-    assert(Math.abs(x - (tableRight - 6 - 52)) < 0.5,
-      `right nudge at ${x} should hug the TABLE's corner (${tableRight - 58})`);
-    assert(x + 52 < panelLeft, 'and stay off the score panel');
+    const size = parseFloat(right.style.width);
+    const want = presented.x + (383 - 31.9) * k - size / 2;
+    assert(Math.abs(x - want) < 0.5,
+      `right nudge at ${x} should sit in the TABLE's black triangle (${want})`);
+    assert(x + size < panelLeft, 'and stay off the score panel');
     // The flipper split follows the table too, not the scene.
     const mid = parseFloat(TouchControls._zones[1].style.left);
     assert(Math.abs(mid - (tableLeft + (tableRight - tableLeft) / 2)) < 0.5,
@@ -1055,8 +1098,10 @@ TouchControls.destroy();
     // Consequence 2: the nudges anchor to the table's own top corners.
     const nudge = name => parseFloat(
       TouchControls._widgets.find(w => w.getAttribute('aria-label') === name).style.top);
-    near(nudge('Nudge left'), 144.3333, 'left nudge top');
-    near(nudge('Nudge right'), 144.3333, 'right nudge top');
+    // 138.33 (the table's top) + 0.0767 * 433.33 (the measured circle's centre)
+    // - 26 (half of the 52px cap, which wins at this size).
+    near(nudge('Nudge left'), 145.57, 'left nudge top');
+    near(nudge('Nudge right'), 145.57, 'right nudge top');
     TouchControls.destroy();
   }
 }
@@ -1271,12 +1316,21 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   assert.strictEqual(corners.br.style.transform, '', 'no gutter, no shift');
   assert.strictEqual(corners.bl.style.transform, '');
 
-  // A gutter narrower than the cluster must not slide it off the bezel.
+  // A gutter narrower than the cluster cannot centre it, so the cluster hugs
+  // the bezel instead of staying at its inset over the picture -- and lands ON
+  // the bezel, never past it. This is what keeps Pinball's "New game" pill out
+  // of the left flipper zone in landscape, where the pill is 115px and the
+  // gutter 105: at its 18px inset it reached 10px into the zone.
   presented = { x: 40, y: 0, w: 600, h: 375 };
   TouchControls.layoutZones();
   settle();
-  assert.strictEqual(corners.bl.style.transform, '');
-  assert.strictEqual(corners.br.style.transform, '');
+  assert.strictEqual(corners.bl.style.transform, 'translateX(-18px)',
+    'content flush with the left bezel: 0 (left) + 18 (padding) - 18');
+  assert.strictEqual(shiftOf(corners.bl) + base.bl.left + 18, 0,
+    'exactly the bezel, not past it');
+  assert.strictEqual(corners.br.style.transform, 'translateX(18px)');
+  assert.strictEqual(shiftOf(corners.br) + base.br.left + base.br.width - 18, 667,
+    'and the right cluster flush with the right bezel');
 
   // Portrait has no side gutters to centre in at all.
   presented = { x: 0, y: 100, w: 375, h: 300 };
@@ -1285,6 +1339,10 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   TouchControls.layoutZones();
   assert.strictEqual(corners.bl.style.transform, '');
   assert.strictEqual(corners.br.style.transform, '');
+  // A real browser's getBoundingClientRect follows the transform this layout
+  // just cleared; the fake one only follows `settle`, so say so, or the next
+  // block measures a box that is still carrying the previous shift.
+  settle();
 
   // Fill: renderer.setViewMode only SCHEDULES the repaint that recomputes the
   // presentation viewport, so laying out inline places the controls against the
