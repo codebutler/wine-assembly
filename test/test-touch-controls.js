@@ -879,6 +879,39 @@ TouchControls.destroy();
   const byLabel=(name)=>TouchControls._widgets.find(w=>w.getAttribute('aria-label')===name);
   const caption=(text)=>TouchControls._captions.filter(c=>c.textContent===text);
 
+  // Both nudge circles lie inside the black triangle at their end of the
+  // table's top edge, whatever framing is presenting that table. `table` is the
+  // crop in client px (x 23..383, y 32..448 of the window, so 360x416 source).
+  // The artwork's own edge was measured row by row off a rendered frame: x goes
+  // 92 -> 72 on the left and 313 -> 333 on the right between rows 35 and 155,
+  // one pixel out per six rows. Anything the layout does has to keep the whole
+  // disc on the black side of that line -- at EVERY row it covers, not just at
+  // its centre, which is the part a corner-hug placement got wrong.
+  const nudgesInBlack=(table,what)=>{
+    const kx=table.w/360, ky=table.h/416;
+    const near=(a,b,msg)=>assert(Math.abs(a-b)<0.5,`${what} ${msg}: ${a} != ${b}`);
+    const fitted=2*0.0885*table.w;
+    for (const [name,sx] of [['Nudge left',54.9],['Nudge right',383-31.9]]) {
+      const el=byLabel(name);
+      const size=parseFloat(el.style.width);
+      near(size,Math.max(44,Math.min(fitted,52)),`${name} is sized to the triangle`);
+      near(parseFloat(el.style.left)+size/2,table.x+(sx-23)*kx,`${name} centre x`);
+      near(parseFloat(el.style.top)+size/2,table.y+(63.9-32)*ky,`${name} centre y`);
+      const cx=parseFloat(el.style.left)+size/2, cy=parseFloat(el.style.top)+size/2;
+      const r=size/2;
+      assert(cy-r>=table.y-0.5,`${what} ${name} is above the table's top edge`);
+      const onLeft=name==='Nudge left';
+      for (let sy=35;sy<=155;sy++) {
+        const edge=onLeft?92-(sy-35)/6:313+(sy-35)/6;
+        const py=table.y+(sy-32)*ky;
+        const dx=Math.abs(py-cy)<r?Math.sqrt(r*r-(py-cy)*(py-cy)):0;
+        const ex=table.x+(edge-23)*kx;
+        if (onLeft) assert(cx+dx<=ex+0.5,`${what} ${name} crosses the artwork at row ${sy}`);
+        else assert(cx-dx>=ex-0.5,`${what} ${name} crosses the artwork at row ${sy}`);
+      }
+    }
+  };
+
   // PORTRAIT 375x710. The table spans the full width (the crop is wider than
   // the board area is tall), so the letterbox is all at the foot.
   {
@@ -932,39 +965,8 @@ TouchControls.destroy();
     // scene: crop x 23..383 of 641, y 32..448 of 481.
     const k=presented.w/641, ky=presented.h/481;
     const tx=presented.x+23*k, tw=360*k, ty=32*ky, th=416*ky;
-    const near=(a,b,what)=>assert(Math.abs(a-b)<0.5,`${what}: ${a} != ${b}`);
-    const left=byLabel('Nudge left'), right=byLabel('Nudge right');
-    // The nudges are INSIDE the black triangles, measured -- not hugging the
-    // corner at a fixed 52px, which is what put them on the artwork here.
-    // Source geometry: crop corner (23,32), artwork edge x = 92 - (y-35)/6 on
-    // the left and its mirror on the right, so the inscribed circle is centre
-    // (54.9, 63.9) radius 31.9 -- see lib/apps.js.
-    const src=(sx,sy)=>({x:presented.x+sx*k,y:sy*ky});
-    const fitted=2*0.0885*tw;
-    assert(fitted>=44,`the fitted circle is ${fitted}px, under the 44px floor`);
-    // 23 + 31.9 on the left; the crop's right edge is 23+360 = 383, and the
-    // right triangle is the mirror (its artwork edge starts at 313, so it is
-    // 70px of black against the left's 69 -- the symmetric fraction sits a
-    // pixel further from the artwork on that side, which is the safe way).
-    for (const [el,sx] of [[left,54.9],[right,383-31.9]]) {
-      const size=parseFloat(el.style.width);
-      near(size,fitted,'the nudge is sized to the triangle, not to 52');
-      const c=src(sx,63.9);
-      near(parseFloat(el.style.left)+size/2,c.x,'nudge centre x');
-      near(parseFloat(el.style.top)+size/2,c.y,'nudge centre y');
-      // Entirely inside the black: left of (or right of) the artwork edge at
-      // every row the circle covers, and below the crop's own top edge.
-      const cx=parseFloat(el.style.left)+size/2, cy=parseFloat(el.style.top)+size/2;
-      const r=size/2;
-      assert(cy-r>=ty-0.5,'below the table\'s top edge');
-      for (let sy=35;sy<=155;sy++) {
-        const edge=el===left?92-(sy-35)/6:313+(sy-35)/6;
-        const py=sy*ky, dx=Math.abs(py-cy)<r?Math.sqrt(r*r-(py-cy)*(py-cy)):0;
-        const ex=presented.x+edge*k;
-        if (el===left) assert(cx+dx<=ex+0.5,`left nudge crosses the artwork at row ${sy}`);
-        else assert(cx-dx>=ex-0.5,`right nudge crosses the artwork at row ${sy}`);
-      }
-    }
+    nudgesInBlack({x:tx,y:ty,w:tw,h:th},'landscape Fit');
+    const right=byLabel('Nudge right');
     assert(parseFloat(right.style.left)+parseFloat(right.style.width)<presented.x+405*k,
       'the right nudge stays off the score panel beside the table');
     // Item 5b: no captions in landscape. A caption names an invisible zone, so
@@ -975,18 +977,70 @@ TouchControls.destroy();
       assert.strictEqual(cap.style.left,'','and no stale placement left behind');
     }
     // The flipper split follows the table, not the scene.
+    const near=(a,b,what)=>assert(Math.abs(a-b)<0.5,`${what}: ${a} != ${b}`);
     near(parseFloat(TouchControls._zones[1].style.left),tx+tw/2,
       'right flipper zone starts at the table\'s midline');
-    // Item 5: one framing in landscape. No chip...
-    assert.strictEqual(TouchControls._modeEl.hidden,true,
-      'nothing to toggle between in landscape');
-    // ...and a renderer left on the table crop is put back onto the whole
-    // scene. This is the correction to the first attempt, which forced the
-    // crop here: landscape pinball should not show just the table.
+    // Item 5: landscape ARRIVES in Fit -- the whole scene, fitted to the
+    // height. The layout named that framing and the overlay put the renderer
+    // in it on the way into this orientation.
+    assert.strictEqual(r.viewMode,'fit',
+      'landscape lands on the whole window, fitted to the height, no bars');
+    // ...but the chip is there, and it is a chip, not a label: "pinball
+    // landscape is missing fit/fill button". The default is applied on the
+    // EDGE into landscape, so a tap is not undone by the next 250ms poll.
+    assert.strictEqual(TouchControls._modeEl.hidden,false,
+      'the Fit/Fill chip is offered in landscape too');
     r.viewMode='zoom';
     TouchControls.layoutZones();
-    assert.strictEqual(r.viewMode,'fit',
-      'landscape presents the whole window, fitted to the height, no bars');
+    assert.strictEqual(r.viewMode,'zoom',
+      'a mode chosen in landscape STAYS chosen -- the default does not fight it');
+    TouchControls.destroy();
+  }
+
+  // LANDSCAPE FILL, 710x375 -- what the chip switches to. The renderer's
+  // contain branch grows the table crop back out toward the hole it goes in,
+  // so the source is 23,16 360x447 rather than the crop's own 23,32 360x416,
+  // and it still lands dstY 0 dstH 375: Fill costs no top or bottom bar
+  // either. Everything is mapped through the viewport, so the table inside
+  // that grown source is found the same way in both modes.
+  {
+    const { Win98Renderer } = require('../lib/renderer');
+    const r = new Win98Renderer({ width: 641, height: 757, getContext() { return {}; } });
+    r.singleAppMode = true;
+    r.presentationCanvas = { width: 2130, height: 1125 };
+    r.mobileCrop = app.mobileCrop;
+    r.touchOverlay = { getBoardArea: () => ({ x: 204 / 710, y: 0, w: 302 / 710, h: 1 }) };
+    r.scheduleRepaint = () => {};
+    r.setViewMode('zoom');
+    const v = r._computeSingleAppZoom([{ hwnd: 0x10001, x: 0, y: 0, w: 641, h: 481,
+      visible: true, className: 'SpaceCadet' }]).viewport;
+    assert.strictEqual(v.dstY, 0, 'Fill starts at the top of the output');
+    assert.strictEqual(v.dstH, v.outputH, 'and ends at the bottom: no bars in Fill');
+    r._exclusiveFullscreen = true;
+    r._exclusivePresentationViewport = v;
+    const presented = { x: v.dstX / 3, y: v.dstY / 3, w: v.dstW / 3, h: v.dstH / 3 };
+    r.getPresentedRectClient = () => presented;
+    TouchControls.install({ document, renderer: r }); TouchControls.setRenderer(r);
+    TouchControls.setLayout(app.touchControls);
+    TouchControls.el._rect = { left: 0, top: 0, right: 710, bottom: 375, width: 710, height: 375 };
+    TouchControls.layoutZones();
+    // Arriving sideways lands on the layout's named framing...
+    assert.strictEqual(r.viewMode, 'fit', 'a new app arrives in landscape Fit');
+    // ...and the chip then reaches the other one and KEEPS it. This is the
+    // whole difference between a default and a lock, and it is the bug the
+    // first version would have had: the 250ms poll would undo every tap.
+    assert.strictEqual(TouchControls._modeEl.hidden, false, 'chip still offered');
+    TouchControls.setViewMode('zoom');
+    TouchControls.layoutZones();
+    assert.strictEqual(r.viewMode, 'zoom', 'Fill in landscape stays Fill');
+    const table = TouchControls._cropRectClient(presented);
+    nudgesInBlack(table, 'landscape Fill');
+    for (const cap of TouchControls._captions) {
+      assert.strictEqual(cap.hidden, true, 'captions stay hidden in landscape Fill too');
+    }
+    // The zones are on the table in this framing as much as in the other one.
+    assert(Math.abs(parseFloat(TouchControls._zones[1].style.left)
+      - (table.x + table.w / 2)) < 0.5, 'the flipper split is the table midline');
     TouchControls.destroy();
   }
 
