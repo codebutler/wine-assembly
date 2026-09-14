@@ -5626,3 +5626,36 @@ never the bug; a null pointer in a worklist element is.
 Note also `eip=0x9e35e0 x126 addresses 0x4-0x247c830b`: an upper address of
 `0x247c830b` is not a small-offset null deref, it is a *wild* pointer being
 walked. That is the circular-list walk at `0x9e3601`/`0x9e3606`.
+
+### The earlier NULL cluster, traced (2026-09-13)
+
+`--trace-at=0x9cef45 --trace-at-mem=esp+0x50:4` on the same drive. The object
+the `0x9cef*` faults read through is the local at `[esp+0x50]`, loaded into EBX
+at `0x9cef4b`, and it is **usually valid and occasionally zero** -- 1 of the
+first 20 entries (`#3`, `mem{esp+0x50=0x00000000}`), which matches the 16
+faults the census counts against that EIP. ESP and EBP are identical on every
+hit (`0x074fcd38` / `0x074fcdec`), so these are passes of one loop inside one
+call, walking a list whose entries come from `[ebx+0xc]` (`0x9cef3b`) and
+`[esp+0x88]`.
+
+This matters beyond the read, because `0x9cef72` **stores** through it:
+
+```
+009cef6f  mov ecx,[ebx+0x48]
+009cef72  mov [ebx+ecx*4+0x4c],eax   ; write to NULL -- goes nowhere
+009cef7e  mov [ebx+eax*4+0x4c],edi
+009cef82  mov [ebx+0x64],edi
+```
+
+so when EBX is zero the guest believes it recorded something it did not. This
+is an x87 sweep (`fld qword [ebx+0x28]` compared against `[esp+0x40]` through
+`fucomip`), i.e. an event/interval list over doubles, and losing a write into
+it is exactly the kind of thing that leaves a later structure half-built.
+
+Also worth recording: the app spawns **five worker threads at startup**, all at
+`start=0x899ab0` (handles `0xe1000`-`0xe1004`), and no further thread traffic
+appears in the whole run. The divergent loop's re-queue condition is
+`[[esi+0x20]+8] == 0` -- an empty vector -- which reads exactly like "not ready
+yet, try again", so whether that pool ever produces under the cooperative
+scheduler is worth one `--trace-sched` run before assuming the geometry is at
+fault.
