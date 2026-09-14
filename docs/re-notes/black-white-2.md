@@ -6483,3 +6483,66 @@ Hook `_retire` instead: it still holds `entry.command.payload` when it is
 called, and nulls `entry.command` a few lines in. `tools/d3d9-replay-payload.js`
 replays such a capture standalone in about a second, so the rasterizer's
 refusal can be studied repeatedly instead of once per 35-minute drive.
+
+## The third blocker was four NaN floats in the game's own vertex data
+
+`native raster execution failed (-1)` is not a rasterizer bug in the sense the
+name suggests. The captured draw (command 9233 of 9233, fixed-function, no
+shaders, `primitive 4 count=28 stride=24`, 56 vertices / 84 indices, one 256x256
+texture) contains exactly four non-finite values in its 1344-byte vertex buffer:
+**the Y coordinate of vertices 48, 49, 50 and 51 — one quad's worth**. Every
+other value in the batch is ordinary, and all positions have `w ~= 2254`.
+
+Replacing those four floats with zero and replaying the identical capture makes
+the draw succeed. That is the whole of the refusal; nothing else in the draw is
+wrong.
+
+`$d3d_software_prepare_step`'s vertex-store loop tested
+`|x|,|y|,|z|,|w| <= FLT_MAX` and branched to `$failure`, which collapses into
+the same bare `-1` as every other refusal in the file. That is the wrong
+granularity twice over. A non-finite position is a property of ONE vertex, and
+real hardware does not fail a draw call for it: every ordering comparison
+against NaN is false, so the triangle covers no samples and the rest of the
+batch rasterizes normally. And because the producer's queue error is sticky
+(`lib/d3d-command-stream.js`), refusing cost the whole run's rendering, not one
+quad.
+
+The fix marks the vertex in the first reserved word of its 144-byte record
+(`+132`, already `memory.fill`ed to zero) and has `$d3d_software_clip_range`
+skip any triangle whose three inputs include a marked one. `test/test-d3d9-nan-vertex.js`
+pins both halves: the draw survives, and the tainted triangle really is absent
+rather than rasterized as garbage.
+
+### How the hunt went wrong, and the reading that fixed it
+
+The refusal was first localized to `$d3d_software_compact` — its only failure
+return is `$heap_shrink` returning 0 — and then to the arena walk, after the
+size check was shown to pass (`need = 12,560` against a block header of
+`86,144`). **All of that was wrong**, and the tell was in the dump the whole
+time: `setup@160` was still non-zero. `prepare_step` frees the setup block and
+zeroes that field immediately *before* calling `compact`, so a live setup
+pointer proves the draw never reached compaction. The live `vertexCursor@8=48`
+against `n=56` names the failing stage exactly — the vertex-shading loop, at the
+packet holding vertices 48-51.
+
+Two durable lessons, both now built into `tools/d3d9-replay-payload.js`:
+
+* **Read the cursors before the theory.** A context field that has *not* been
+  cleared is as informative as one that has; `setup != 0` and
+  `vertexCursor < n` between them ruled out the clipper and the compactor in one
+  reading.
+* **Check the payload's own floats first.** `--describe` now prints a
+  `nonfinite:` census over the slots the declared attributes call FLOAT — for
+  this draw, `v48[1] v49[1] v50[1] v51[1]`, which is the answer in one line.
+  `--bisect` also walks `HEAP_ARENAS` and re-runs `$heap_arena_find` /
+  `$heap_block_bad` in JS, so that hypothesis can be settled rather than argued.
+
+### Still open: where B&W2's NaN comes from
+
+The rasterizer fix is right on its own merits — real D3D9 does not fail a draw
+call for a NaN vertex — but a game writing NaN into one quad of its land mesh is
+a separate question, and it may well be ours. `--fault-null=raise` is the flag
+for it: an unmapped read absorbed into the NULL sentinel reads 0, and `0/0` is
+NaN. B&W2 already has one known sentinel-absorbed address (`0x9e17d0`). Nothing
+here has confirmed that link; it is the next thing to measure if the land mesh
+turns out to have holes in it.
