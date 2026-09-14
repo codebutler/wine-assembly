@@ -7286,3 +7286,65 @@ No rebuild and no restart: the probe's `--control-stdin` `eval` channel has
 
 Both are how "the input pump is not running" and "the time is in d3dx9" were
 measured against a live land build rather than inferred from a new run.
+
+## Blocker #10: nine POSITION semantics on one stream (drive48/49)
+
+After the land click every `PRESENT` failed. The census over the queue's own
+error list — installed live over the `eval` channel — reads
+
+```
+{"n":2,"cleared":76,
+ "first":["QueueError: D3D9 software: only one position/diffuse/PSIZE and six UV linkages are implemented",
+          "QueueError: earlier render command failed"]}
+```
+
+so there is **one** real error and 76 copies of its shadow: a command queue's
+error is sticky, and after a single refused draw every later command —
+including every present — is rejected with *earlier render command failed*.
+Reading the count tells you nothing; only `order[0]` names the cause.
+
+The refused draw was captured whole by the drive's `_retire` hook
+(`scratchpad/bw-retire-capture.js`, `BW_DUMP=`) and is the terrain pass:
+
+```
+primitive 5 (triangle strip)  count 2467  stride 100
+  v0 POSITION0 FLOAT3 @0    v1 POSITION1 FLOAT3 @12   v2 POSITION5 FLOAT3 @24
+  v3 POSITION6 FLOAT3 @36   v4 POSITION7 FLOAT3 @48   v5 POSITION8 FLOAT3 @60
+  v6 POSITION2 FLOAT2 @72   v7 POSITION3 SHORT4 @80   v8 POSITION4 FLOAT3 @88
+  vs_1_1 (0xfffe0101), 71 instructions, dcl_position v0..v6
+  ps_1_1 (0xffff0101), 10 instructions
+  textures 256x256, 256x256, 128x128
+```
+
+Nine attributes, **all usage POSITION**, usageIndex 0..8. That is legal D3D9
+and it is what B&W2 does: it packs position, the height-grid neighbours and
+the blend weights into one stream and lets the vertex program decide what each
+one means. Our linkage did not — it insisted every attribute land in a lane it
+recognized (POSITION0, COLOR0/1, PSIZE, TEXCOORD0..5) and refused everything
+else, so `POSITION1` had nowhere to go.
+
+**The rule that was wrong:** a programmable vertex program reads its inputs by
+*register*. The semantic only decides which attribute feeds which register —
+after that the shader does the interpreting, and the lane a value travels in is
+ours to choose. So in `lib/d3d9-software-backend.js` any semantic without a
+fixed lane now gets its own appended ABI5 lane, exactly as NORMAL and COLOR1
+already did, with `registers[slot]` carrying the VS register through
+`extraMap`. Fixed function keeps the narrow slot map, because there the
+semantic *is* the meaning. The eleven-lane native cap still stands — and B&W2's
+draw needs exactly eleven (position + the diffuse/UV base pair + eight extras).
+`test/test-d3d9-generic-vertex-semantics.js` pins both ends: the colour is read
+from POSITION6, a semantic with no lane of its own, and a tenth generic
+semantic is still refused.
+
+**What it fixed and what it did not.** drive49 (same route, same build plus the
+linkage) reaches the land picker with `errors=0/0`, `failed 0` and 513 presents
+where drive48 had every present throwing. But the *picture* is unchanged —
+`png-diff` puts drive48's and drive49's land-picker frames 0.27% apart, in one
+32x31 box — because the preview pane was already rendering. The refused draw
+was breaking the queue, not the preview.
+
+So blocker #10 is fixed and it is not what stands between the picker and
+gameplay. That is still the input stall above: measured again on drive49, the
+poll entry `0x9b0880` and all four of its call sites count **zero** over 45s
+while `0xa4da46` counts 144 DrawPrimitive returns, the game's cursor sits at
+`399,569` and `bw-aim.sh` cannot move it by a pixel in six tries.
