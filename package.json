@@ -30,7 +30,7 @@
     "v86": "0.5.432"
   },
   "optionalDependencies": {
-    "@kmamal/gl": "^9.1.0",
-    "@kmamal/sdl": "^0.11.13"
+    "@node-3d/glfw": "^7.3.1",
+    "@node-3d/webgl": "^6.0.1"
   }
 }
