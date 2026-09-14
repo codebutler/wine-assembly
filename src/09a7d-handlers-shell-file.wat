@@ -2244,10 +2244,9 @@
     (if (local.get $arg1) (then
       (local.set $len (call $guest_strlen (local.get $arg1)))
       (if (local.get $len) (then
-        (local.set $copy (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+        (local.set $copy (call $guest_strdup (local.get $arg1)))
         (global.set $eax (i32.const 8))  ;; ERROR_NOT_ENOUGH_MEMORY
         (if (local.get $copy) (then
-          (call $guest_strcpy (local.get $copy) (local.get $arg1))
           ;; Index 1 onwards: a leading separator is the root, never a component.
           (local.set $i (i32.const 1))
           (block $done (loop $walk

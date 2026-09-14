@@ -181,16 +181,7 @@
 
   ;; 722: _strdup(str) — cdecl, allocate copy of string
   (func $handle__strdup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $wa i32) (local $len i32)
-    (local.set $wa (call $g2w (local.get $arg0)))
-    ;; strlen
-    (local.set $len (i32.const 0))
-    (block $d (loop $l
-      (br_if $d (i32.eqz (i32.load8_u (i32.add (local.get $wa) (local.get $len)))))
-      (local.set $len (i32.add (local.get $len) (i32.const 1))) (br $l)))
-    (local.set $len (i32.add (local.get $len) (i32.const 1))) ;; include NUL
-    (global.set $eax (call $heap_alloc (local.get $len)))
-    (memory.copy (call $g2w (global.get $eax)) (local.get $wa) (local.get $len))
+    (global.set $eax (call $guest_strdup (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 

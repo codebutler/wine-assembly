@@ -7979,12 +7979,9 @@ nW — STUB: unimplemented
   ;; 356: GlobalHandle — GlobalLock is identity for our fixed direct-pointer
   ;; representation, after exact live GlobalAlloc provenance validation.
   (func $handle_GlobalHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (call $heap_global_block_size (local.get $arg0) (i32.const 0))
-      (then (global.set $eax (local.get $arg0)))
-      (else
-        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+    (call $handle_GlobalLock
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
 ctl32 can route an ANSI status-bar string through ExtTextOutW
