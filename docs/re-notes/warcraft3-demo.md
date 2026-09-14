@@ -1433,3 +1433,67 @@ and each call is constant work; the tail is simply a great many calls to it. As
 with the `0x6f0deb60` scan earlier in this file, the shape that reads as O(n^2)
 in a disassembly measured out linear — which is the third time in this
 investigation. Disassembly proposes; counters decide.
+
+## The load does not end at the chapter card (2026-09-14)
+
+The loading bar reaching ~96% and the screen freezing is **not** a hang: the map
+screen eventually swaps to the Chapter One card with `PRESS ANY KEY TO
+CONTINUE`. Total from the Prologue click to that card on this box, at 640x480
+headless: ~40 minutes.
+
+Getting past it, and what is behind it:
+
+| step | how | result |
+|---|---|---|
+| dismiss the chapter card | hover `mousemove 320,428`, then `mousedown`/`mouseup` in one `ctl pipe` burst | in-engine cinematic letterbox (ornate bars top and bottom) |
+| skip the cinematic | `cmd di-keydown:27` / `di-keyup:27` (Esc) | **no effect** |
+| open the menu | `cmd di-keydown:121` (F10) | **no effect** |
+
+`ctl mousemove` needs the comma form `mousemove 320,428`; `mousemove 320 428`
+is rejected with `need coordinates as X,Y` and no hover happens, so the click
+that follows is silently discarded. That is the same failure mode as the two
+input rules above and looks identical from outside.
+
+### Behind the letterbox it is still loading, not rendering
+
+Two captures ~2 minutes and ~80,000 batches apart are **byte-identical** (0 of
+307200 pixels), while the guest keeps running (batch 546k -> 625k). The
+letterbox frame is drawn and the area between the bars is pure black.
+
+A 60-second handler/block sample there:
+
+```
+ops 829,667,044   block entries 83,752,886   distinct blocks 12,945
+9.9 ops/block
+```
+
+12,945 distinct blocks and a top block at only 3.5% is a broad working set --
+an engine doing real work, not a spin loop. And the top block names what the
+work is. `Game.dll+0x6f05ee72` sits inside the function at `0x6f05ee50`:
+
+```
+6f05ee50  push ebp / mov ebp,esp / sub esp,8
+6f05ee56  cmp edx,4 ; jb 0x6f05ef68        ; tail for < 4 bytes
+6f05ee5e  mov esi,[eax] / not esi          ; crc = ~seed
+6f05ee6c  shr edx,2                        ; 4 bytes per iteration
+6f05ee72  movzx eax,word [ecx+2] ...       ; load 8 bytes as four words
+6f05ee97  mov esi,[0x6f4eee08+edx*4]       ; table lookup
+```
+
+and `0x6f4eee08` is the standard CRC-32 (IEEE) table -- `00000000 77073096
+ee0e612c 990951ba`. So this is a table-driven CRC32 unrolled four bytes per
+iteration. Its blocks (`0x6f05ee72`, `0x6f05eff2`, `0x6f05eff5`, `0x6f05f000`)
+are **6.95% of all block entries** from the top-40 alone.
+
+CRC32 over asset bytes at this point in a Blizzard title is MPQ/asset integrity
+checking. The conclusion is that dismissing the chapter card starts a *second*
+load phase, with the cinematic letterbox already on screen, and the black is
+"the scene has not been built yet" rather than a dead renderer.
+
+That makes two host-side interception candidates on this app, both pure
+functions over a byte range with a fixed ABI:
+
+- `ijl15.dll!ijlRead` at orig `0x600333d0` -- ~40% of the first load phase
+- `Game.dll+0x6f05ee50` CRC32 -- ~7% of the post-card phase
+
+Neither is a bug; both are guest work an emulator can do natively instead.
