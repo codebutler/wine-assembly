@@ -892,6 +892,28 @@
       background: #000;
     }
     body.page-fullscreen { overflow: hidden; }
+    /* The desktop's teal must not survive anywhere an app has the screen, and
+       "anywhere" includes the strips the CANVAS never reaches: the safe-area
+       inset behind the notch and the home indicator, and the rubber-band area
+       an overscroll exposes. Those are painted from the VIEWPORT background,
+       which CSS takes from <body> only while <html> has none of its own -- so
+       html deliberately has no background rule in this stylesheet, and adding
+       one would break this by turning the body's black back into a box.
+       Stated as its own rule rather than left to the sized blocks above,
+       because those also carry width/height and a future edit that narrows
+       their selectors would take the colour with it. The debug build has the
+       same requirement: the teal is wrong behind a game either way. */
+       #screen-wrap is in here for the same reason one step further in: it is
+       teal by default (it IS the desktop), and only the .no-debug spelling of
+       exclusive-fullscreen was painting it black -- so a ?debug session, or
+       any letterbox the canvas does not cover, still had the desktop showing
+       around a full-screen game. Measured in the browser: body
+       "single-app app-running exclusive-fullscreen" gave body #008080 and
+       #screen-wrap #008080 before this rule. */
+    body.page-fullscreen,
+    body.exclusive-fullscreen,
+    body.page-fullscreen #screen-wrap,
+    body.exclusive-fullscreen #screen-wrap { background: #000; }
     body.page-fullscreen #screen-wrap {
       position: fixed;
       inset: 0;
@@ -942,36 +964,51 @@
        tap on the canvas, so without this there is no way back out. Sits inside
        the safe area so the notch and the home indicator never cover it. */
     #page-fullscreen-exit { display: none; }
+    /* Same chip as the keyboard and Fit/Fill pair the touch overlay puts in
+       the opposite corner: 40x40, the same translucent dark fill, the same
+       hairline, the same blur, and the same 16px/18px inset from the safe
+       area, so the two corners read as one set of controls rather than as an
+       app's furniture plus a stray browser button. It is deliberately the
+       only one at the TOP -- leaving is not something to do by accident while
+       reaching for the keyboard. */
     body.page-fullscreen #page-fullscreen-exit {
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       position: fixed;
-      top: calc(4px + env(safe-area-inset-top));
-      right: calc(4px + env(safe-area-inset-right));
+      top: calc(16px + env(safe-area-inset-top, 0px));
+      right: calc(18px + env(safe-area-inset-right, 0px));
       z-index: 40;
-      width: 30px;
-      height: 30px;
+      width: 40px;
+      height: 40px;
       padding: 0;
-      color: #fff;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(255, 255, 255, 0.5);
-      border-radius: 15px;
-      font: 14px/1 sans-serif;
-      opacity: 0.5;
+      color: rgba(255, 255, 255, 0.9);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+      background: rgba(18, 20, 26, 0.36);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 999px;
+      font: 600 15px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
       cursor: pointer;
       -webkit-tap-highlight-color: transparent;
     }
-    /* 30px is under Apple's 44px minimum, and this is the only way out of a
-       full-screen game on a phone -- a miss reads as a dead button, which is
-       exactly how it was reported. Grow the TARGET without growing the chip:
-       the pseudo-element hit-tests as part of the button, so a 46px square
-       takes the touch while the visible circle stays 30px and covers no more
-       of the picture than it did. */
+    /* 40px is still under Apple's 44px minimum -- so are the overlay's own
+       chips -- and this is the only way out of a full-screen game on a phone,
+       where a miss reads as a dead button and was reported as one. Grow the
+       TARGET without growing the chip: the pseudo-element hit-tests as part
+       of the button, so a 56px square takes the touch while the visible
+       circle covers no more of the picture than a chip does. Never shrink
+       this; test/test-web-single-app-quit.js checks a point 5px outside the
+       circle still lands on the button. */
     body.page-fullscreen #page-fullscreen-exit::before {
       content: '';
       position: absolute;
       inset: -8px;
     }
-    body.page-fullscreen #page-fullscreen-exit:active { opacity: 1; }
+    body.page-fullscreen #page-fullscreen-exit:active {
+      background: rgba(255, 255, 255, 0.28);
+    }
     /* The guest window already has its own close control. Page fullscreen
        here is only Safari toolbar management, not a second app to dismiss. */
     body.windowed-phone #page-fullscreen-exit { display: none; }
@@ -1746,6 +1783,7 @@ Resource-aware Win98 emulator
     function enterPageFullscreen() {
       if (document.body.classList.contains('page-fullscreen')) return;
       document.body.classList.add('page-fullscreen');
+      syncFullscreenThemeColor();
       const renderer = sharedRenderer || (wine && wine.renderer);
       if (renderer) {
         renderer._requestedBrowserFullscreen = true;
@@ -1785,6 +1823,7 @@ Resource-aware Win98 emulator
         !body.classList.contains('exclusive-fullscreen');
       body.classList.toggle('windowed-phone', windowed);
       syncFullscreenChipLabel();
+      syncFullscreenThemeColor();
       if (!windowed) return;
       // Freeze the orientation decision during keyboard entry: a portrait
       // keyboard can make the remaining viewport wider than it is tall.
@@ -1973,6 +2012,7 @@ Resource-aware Win98 emulator
         event.stopPropagation();
       }
       document.body.classList.remove('page-fullscreen');
+      syncFullscreenThemeColor();
       const renderer = sharedRenderer || (wine && wine.renderer);
       if (renderer) {
         renderer._requestedBrowserFullscreen = false;
@@ -2060,6 +2100,35 @@ Resource-aware Win98 emulator
       chip.setAttribute('aria-label', label);
     }
     window.syncFullscreenChipLabel = syncFullscreenChipLabel;
+
+    // The teal strip behind the iPhone's status bar. Reported as "when in full
+    // screen need to make sure teal bg dont show through (Even as page bg css
+    // or smth) ... as it currently shwos through behind iphone status bar",
+    // and the guess in the brackets is close but not it: every fullscreen rule
+    // in the stylesheet already paints #000, and because <html> carries no
+    // background of its own, the body's background PROPAGATES to the viewport
+    // canvas -- safe-area strips and overscroll included. Do not "fix" that by
+    // giving html a colour; an html background stops the propagation and the
+    // body's black would then paint only the body box, which is the bug this
+    // is not.
+    //
+    // What is left over is <meta name="theme-color">. Safari paints its own
+    // chrome-adjacent strips with that colour, and it said #008080 in every
+    // mode, so the one surface the page does not own was teal by instruction.
+    // Flip it to black while an app has the screen and back to the desktop's
+    // teal when the desktop is what is on screen -- windowed included, because
+    // a windowed app genuinely is sitting on the Win98 desktop.
+    const DESKTOP_THEME_COLOR = '#008080';
+    function syncFullscreenThemeColor() {
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (!meta) return;
+      const body = document.body;
+      const immersive = body.classList.contains('page-fullscreen') ||
+        body.classList.contains('exclusive-fullscreen');
+      const want = immersive ? '#000000' : DESKTOP_THEME_COLOR;
+      if (meta.getAttribute('content') !== want) meta.setAttribute('content', want);
+    }
+    window.syncFullscreenThemeColor = syncFullscreenThemeColor;
 
     // What each app is made of, and which ones get a desktop icon: lib/apps.js.
     // The CLI reads the same table, so `run.js --app=sol` mounts exactly the

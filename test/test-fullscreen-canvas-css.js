@@ -335,6 +335,7 @@ function collect(rules, chain, property) {
         line: rule.line,
         order: rule.order,
         spec,
+        prop: property,
         value: winner.value,
         important: winner.important,
       });
@@ -352,7 +353,7 @@ function rank(a, b) {
 }
 
 function describe(hit) {
-  return `(${hit.spec.join(',')}) ${hit.selector} { height: ${hit.value}` +
+  return `(${hit.spec.join(',')}) ${hit.selector} { ${hit.prop || 'height'}: ${hit.value}` +
     `${hit.important ? ' !important' : ''} }  [index.html:${hit.line}]`;
 }
 
@@ -497,8 +498,79 @@ function main() {
     }
   }
 
+  // --- the desktop teal ----------------------------------------------------
+  //
+  // "when in full screen need to make sure teal bg dont show through (Even as
+  // page bg css or smth) ... as it currently shwos through behind iphone
+  // status bar". The strip behind the notch is not drawn by the canvas and not
+  // by any box in this stylesheet: it is the VIEWPORT background, which CSS
+  // takes from <body> -- but only for as long as <html> has no background of
+  // its own. Give html one and the propagation stops, the body's black becomes
+  // a mere box, and the safe-area strips go back to whatever html says. So two
+  // things are pinned here: every fullscreen mode resolves body to a
+  // non-teal background, and html is left without one on purpose.
+  // The Win98 desktop colour, in every spelling the stylesheet could use it.
+  const TEAL = /(^|[^0-9a-f])(#008080|#088)\b|\bteal\b|rgba?\(\s*0\s*,\s*128\s*,\s*128\b/i;
+  const BG = ['background', 'background-color'];
+  const htmlChain = [node('html')];
+  for (const prop of BG) {
+    const hit = winnerFor(rules, htmlChain, prop).winner;
+    assert(!hit,
+      `index.html:${hit && hit.line} gives <html> a ${prop}. That stops the body's ` +
+      `background propagating to the viewport, so the body's black becomes a mere box ` +
+      `and the safe-area strip behind the iPhone's status bar goes back to whatever ` +
+      `html says. Style body instead.\n  ${hit && describe(hit)}`);
+  }
+  // Only the modes where the BODY is the immersive surface. Real element
+  // fullscreen puts #screen-wrap over everything and paints its own ::backdrop
+  // (black, above), so the body behind it is never seen -- and that path is
+  // not the iPhone's, which has no element Fullscreen API at all.
+  const IMMERSIVE = SCENARIOS.filter(s =>
+    s.body.includes('page-fullscreen') || s.body.includes('exclusive-fullscreen'));
+  assert(IMMERSIVE.length >= 6, 'the fullscreen body modes are gone from SCENARIOS');
+  let bgChecks = 0;
+  for (const scenario of IMMERSIVE) {
+    const bodyChain = [node('html'), node('body', { classes: scenario.body })];
+    let winner = null;
+    for (const prop of BG) {
+      const hit = winnerFor(rules, bodyChain, prop).winner;
+      if (hit && (!winner || rank(winner, hit) < 0)) winner = hit;
+    }
+    assert(winner,
+      `${scenario.name}: nothing paints the body at all, so the viewport background is ` +
+      `the browser default rather than the app's black`);
+    assert(!TEAL.test(winner.value),
+      `${scenario.name}: the body resolves to ${winner.value} -- the Win98 desktop's teal ` +
+      `behind a full-screen app. It is the viewport background, so it shows in the ` +
+      `safe-area strips the canvas never reaches (the notch, the home indicator) and in ` +
+      `the overscroll rubber-band, which is exactly how it was reported.\n` +
+      `  WINNER ${describe(winner)}`);
+    bgChecks++;
+  }
+  // ...and the other direction, which is the part an over-eager fix breaks: a
+  // WINDOWED app on the phone really is sitting on the Win98 desktop, and its
+  // surround is supposed to be teal.
+  for (const body of [['no-debug'], ['no-debug', 'single-app', 'app-running', 'windowed-phone']]) {
+    const chain = [node('html'), node('body', { classes: body })];
+    let winner = null;
+    for (const prop of BG) {
+      const hit = winnerFor(rules, chain, prop).winner;
+      if (hit && (!winner || rank(winner, hit) < 0)) winner = hit;
+    }
+    assert(winner && TEAL.test(winner.value),
+      `body.${body.join('.')} should keep the desktop teal -- a windowed app is ON the ` +
+      `Win98 desktop -- but resolves to ${winner && winner.value}`);
+  }
+  // The page's own answer for the strip Safari paints rather than the page:
+  // theme-color must not be hard-coded teal, and the script must flip it.
+  assert(/name="theme-color"/.test(HTML), 'the theme-color meta is gone');
+  assert(/syncFullscreenThemeColor/.test(HTML),
+    'nothing flips <meta name="theme-color"> when an app takes the screen, so Safari ' +
+    'keeps painting its status-bar strip with the desktop teal');
+
   console.log(`PASS  full-screen canvas cascade: ${checks} canvas/mode pairs keep a non-zero ` +
-    `height and absolute placement; no !important geometry reaches #touch-cursor`);
+    `height and absolute placement; ${bgChecks} modes keep the desktop teal off the ` +
+    `viewport background; no !important geometry reaches #touch-cursor`);
 }
 
 main();
