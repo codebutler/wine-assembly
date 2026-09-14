@@ -5090,3 +5090,27 @@ Two probes died mid-session with no guest error, no exit summary and
 sessions plus Chrome). A B&W2 probe holds a 1GB shared memory, so it is the
 first thing to go. A run that stops without a diagnostic line is a host OOM
 kill, not a guest crash; check `vm_stat` before reading anything into it.
+
+### What actually triggers it: picking a land
+
+Measured 2026-09-13 on the fixed build, with the counters armed at boot:
+
+* **Arriving at the land picker is not the trigger.** Counters read `0,0,0` on
+  arrival and the D3D op census keeps climbing (submitted op-5 2617 -> 2624,
+  op-12 267 -> 270 over ten seconds), with EIP wandering `0x009ede00`-`0x009ee4d0`,
+  the CRT at `0x00ad8ff9`, `0x00a78cd0` and the API thunk zone. The screen is
+  static because the scene is static, not because the guest stopped.
+* **Clicking a land thumbnail is the trigger.** Within a minute of the click the
+  draw rate falls to **0.0 submissions per second** and stays there, and every
+  sampled EIP is in the geometry family -- `0x009c37f0`, `0x009c4c80`,
+  `0x009e1950`, `0x009e1b78`, `0x009ddfb0`. Nothing is presented again.
+
+So the walk and the 430 MB allocation are the same event seen twice: selecting a
+land runs a triangulation walk that does not terminate, and whether it shows up
+as an allocation or as a spin depends on whether the caller is recording the
+path it walks.
+
+One consequence for driving: the land picker draws no cursor at all (an aim
+there changes 0 of 8000 pixels, where the same aim on the menu and the tutorial
+draws both cursor and hover highlight), so a click on that screen cannot be
+verified optically the way every earlier click was.
