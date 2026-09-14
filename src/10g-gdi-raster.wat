@@ -4793,6 +4793,7 @@
     (local $surface_size64 i64) (local $snapshot_size64 i64)
     (local $brush i32) (local $sample i32) (local $pixel_pattern i32) (local $fast i32)
     (local $source_background i32) (local $mono_key i32)
+    (local $x_step_int i32) (local $x_step_rem i32) (local $x_acc i32) (local $sx_idx i32)
     (if (i32.or (i32.eqz (call $gdi_raster_surface_valid (local.get $dst)))
           (i32.or (i32.eqz (local.get $dw)) (i32.eqz (local.get $dh))))
       (then (return (i32.const 0))))
@@ -4846,6 +4847,12 @@
       (i32.lt_s (local.get $sw) (i32.const 0))))
     (local.set $src_y_step (select (i32.const -1) (i32.const 1)
       (i32.lt_s (local.get $sh) (i32.const 0))))
+    ;; floor(x*sw/dw) over x = 0..dw-1 is a linear map, so the source column
+    ;; needs no division per pixel: carry the whole part and accumulate the
+    ;; remainder. Exact for every ratio, downscales (sw > dw) included.
+    ;; $dw_abs is nonzero because a zero $dw returned above.
+    (local.set $x_step_int (i32.div_u (local.get $sw_abs) (local.get $dw_abs)))
+    (local.set $x_step_rem (i32.rem_u (local.get $sw_abs) (local.get $dw_abs)))
     ;; Negative extents reverse traversal from the inclusive origin supplied by
     ;; the caller. Paint passes sx=width-1, sw=-width for an exact mirror.
     (local.set $dst_x0 (local.get $dx))
@@ -4883,12 +4890,33 @@
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_u (local.get $y) (local.get $dh_abs)))
       (local.set $x (i32.const 0))
+      ;; Neither the destination row nor the source row depends on x, so they
+      ;; are computed once per row rather than once per pixel -- $uy carries a
+      ;; division with it.
+      (local.set $ty (i32.add (local.get $dst_y0)
+        (i32.mul (local.get $y) (local.get $dst_y_step))))
+      (local.set $uy (i32.add (local.get $src_y0)
+        (i32.mul (local.get $src_y_step)
+          (i32.div_u (i32.mul (local.get $y) (local.get $sh_abs))
+            (local.get $dh_abs)))))
+      (local.set $sx_idx (i32.const 0))
+      (local.set $x_acc (i32.const 0))
       (block $cols_done (loop $cols
         (br_if $cols_done (i32.ge_u (local.get $x) (local.get $dw_abs)))
         (local.set $tx (i32.add (local.get $dst_x0)
           (i32.mul (local.get $x) (local.get $dst_x_step))))
-        (local.set $ty (i32.add (local.get $dst_y0)
-          (i32.mul (local.get $y) (local.get $dst_y_step))))
+        ;; Read this pixel's source column, then step for the next one. The
+        ;; advance sits at the top of the body, which every iteration passes
+        ;; through exactly once, so the several `br $cols` continue paths below
+        ;; cannot desynchronise it from $x.
+        (local.set $ux (i32.add (local.get $src_x0)
+          (i32.mul (local.get $src_x_step) (local.get $sx_idx))))
+        (local.set $sx_idx (i32.add (local.get $sx_idx) (local.get $x_step_int)))
+        (local.set $x_acc (i32.add (local.get $x_acc) (local.get $x_step_rem)))
+        (if (i32.ge_u (local.get $x_acc) (local.get $dw_abs))
+          (then
+            (local.set $x_acc (i32.sub (local.get $x_acc) (local.get $dw_abs)))
+            (local.set $sx_idx (i32.add (local.get $sx_idx) (i32.const 1)))))
         (if (i32.and
               (i32.ne (call $gdi_raster_pixel_ptr
                 (local.get $dst) (local.get $tx) (local.get $ty)) (i32.const 0))
@@ -4914,14 +4942,6 @@
             (local.set $s (i32.const 0))
             (if (local.get $src)
               (then
-                (local.set $ux (i32.add (local.get $src_x0)
-                  (i32.mul (local.get $src_x_step)
-                    (i32.div_u (i32.mul (local.get $x) (local.get $sw_abs))
-                      (local.get $dw_abs)))))
-                (local.set $uy (i32.add (local.get $src_y0)
-                  (i32.mul (local.get $src_y_step)
-                    (i32.div_u (i32.mul (local.get $y) (local.get $sh_abs))
-                      (local.get $dh_abs)))))
                 (local.set $s (call $gdi_raster_read_blt_source
                   (local.get $hdc) (local.get $src_hdc) (local.get $dst) (local.get $src)
                   (local.get $ux) (local.get $uy)

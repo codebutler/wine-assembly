@@ -17,9 +17,9 @@
 // real case, where the whole map is the identity), and mirrored blits where an
 // off-by-one in an accumulator would still look plausible.
 //
-// A candidate rewrite was measured and NOT adopted -- see
-// tools/bench-gdi-blit.js -- but the rule it had to preserve is worth keeping
-// under test either way.
+// Both of those reductions are now in the generic path, so this test is what
+// stands between them and a silently-wrong picture: remove the remainder carry
+// from the column walk and 'upscale 3->7' fails here.
 
 'use strict';
 

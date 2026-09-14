@@ -39,6 +39,7 @@ const opt = (name, dflt) => {
   return hit ? hit.slice(name.length + 3) : dflt;
 };
 const REPS = Number(opt('reps', 5));
+const BATCH = Number(opt('batch', 20));
 const JSON_OUT = argv.includes('--json');
 
 const SRCCOPY = 0x00CC0020;
@@ -93,14 +94,22 @@ const SRCCOPY = 0x00CC0020;
     // One untimed pass so the JIT has tiered up before the first sample.
     wat.test_gdi_raster_stretch_blt(dst.desc, 0, 0, shape.dw, shape.dh,
       src.desc, 0, 0, shape.sw, shape.sh, 0, SRCCOPY);
+    // Time a BATCH per sample, not one blit. A single 800x600 blit is a few
+    // tens of ms, which is the same order as one GC pause or another process's
+    // spike on a shared box -- measured 2026-09-13, single-blit samples of one
+    // unchanged build ranged 27-43ms and could not separate two builds at all.
+    // Batching raises the signal above that floor; the reported figure is
+    // still per blit.
     const times = [];
     for (let r = 0; r < REPS; r++) {
       const t0 = process.hrtime.bigint();
-      const ok = wat.test_gdi_raster_stretch_blt(dst.desc, 0, 0, shape.dw, shape.dh,
-        src.desc, 0, 0, shape.sw, shape.sh, 0, SRCCOPY);
+      for (let b = 0; b < BATCH; b++) {
+        const ok = wat.test_gdi_raster_stretch_blt(dst.desc, 0, 0, shape.dw, shape.dh,
+          src.desc, 0, 0, shape.sw, shape.sh, 0, SRCCOPY);
+        if (!ok) { console.error(`FAIL: ${shape.name} returned 0`); process.exit(1); }
+      }
       const t1 = process.hrtime.bigint();
-      if (!ok) { console.error(`FAIL: ${shape.name} returned 0`); process.exit(1); }
-      times.push(Number(t1 - t0) / 1e6);
+      times.push(Number(t1 - t0) / 1e6 / BATCH);
     }
     times.sort((a, b) => a - b);
     const median = times[times.length >> 1];
@@ -110,7 +119,7 @@ const SRCCOPY = 0x00CC0020;
   }
 
   if (JSON_OUT) { console.log(JSON.stringify(results, null, 2)); return; }
-  console.log(`GDI blit microbenchmark -- ${REPS} reps, median of each shape`);
+  console.log(`GDI blit microbenchmark -- ${REPS} reps x ${BATCH} blits, median per blit`);
   console.log('(a primitive price, NOT an app percentage)\n');
   const w = Math.max(...results.map(r => r.shape.length));
   for (const r of results) {
