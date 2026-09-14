@@ -5711,3 +5711,33 @@ that has stopped making progress looks like.
 `--trace-api=CreateEventA,SetEvent,ResetEvent,WaitForSingleObject,WaitForMultipleObjects`
 -- and it is a much smaller surface than 50 NULL dereferences. The NULLs and the
 divergent loop are both downstream of a job that never ran.
+
+### NEGATIVE: the thread picture is normal. Do not re-run this. (2026-09-13)
+
+`--trace-sched=5000` on the 2 GB drive settles the job-system theory from the
+previous section, against it. The state
+
+```
+M:run@0x7503488  T1:wait(0xe0004)@0x881760  T2:wait(0xe0005)@0x881760
+                 T3:run@0x89d1dc            T4:wait(0xe000c)@0x881760
+                 T5:wait(0xe0013)@0x881760
+```
+
+is reached at **batch 30,352** and is unchanged for the rest of the run -- which
+covers the intro, the main menu, the mouse tutorial, the land picker and the
+land load. The game renders every one of those screens in exactly this state.
+Four workers parked on their job events and T3 in its poll loop is what this app
+looks like **idle**, not what it looks like stuck. T3's ~2400 critical-section
+parks are the cost of that poll loop, not evidence of a deadlock.
+
+So the stall is not the job system, and the held section (`owner=main lock=0
+recursion=1`) is main's, held across its own runaway loop -- a consequence, not
+a cause.
+
+What survives from that drive is the ordering fact, from `--fault-null=raise`:
+the run dies at the **very first** unmapped read, `0x28 from eip=0x9cef45`, with
+every `0x9e35e0` counter still at zero. The `0x9cef*` NULL cluster genuinely
+comes first, before the divergent loop is ever entered, and the object behind it
+is a local (`[esp+0x50]`) that is valid on most passes and zero on a few --
+the shape of a lookup that came back empty rather than a pointer that was
+scribbled over.
