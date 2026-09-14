@@ -6972,3 +6972,94 @@ a coordinate *unless a vertex shader unpacks it* — which is what the game
 intends and what a refused shader prevents. The host's element decode was
 checked against D3DVERTEXELEMENT9 and matches, and the FVF path emits
 different registers, so it is a real guest declaration and not a decode bug.
+
+## Blocker #8, verified live, and what the picker does next (2026-09-14)
+
+drive44 is drive43's script on the build carrying both the blocker #6 fix
+(`374269af`) and the dead-`oD1` allowance in `lib/d3d9-software-backend.js`.
+The two runs are the control for each other: every counter matches up to the
+land click -- 63 made / 74 refused at the main menu, 178 / 124 at the land
+picker, 198 / 128 at pick+10s, 217 / 129 at pick+50s -- so the *only*
+difference between them is whether the dead write killed the render worker.
+
+| | drive43 | drive44 |
+|---|---|---|
+| pick+45s | `errors=0/0` | `errors=0/0` |
+| pick+50s | **`errors=1/1`**, queue dead | `errors=0/0` |
+| pick+465s | (gone) | `errors=0/0`, still presenting |
+
+So blocker #8 was the whole of that failure.
+
+### The picture
+
+The land-selection screen now draws a fully textured, lit 3D scene -- a burning
+Greek village with trees, terrain and smoke, 77,017 distinct colours in one
+640x480 frame -- where before `374269af` the world painted flat grey. This is
+the first time B&W2's 3D content has rendered in this lane with the render
+queue still alive at the end of it.
+
+### The refusals that remain, split by profile
+
+Read live off drive44 at the land picker through the counters built last
+session (`get_d3d9_shader_refused_{vs11,vs20,ps1x,ps20,other}`):
+
+```
+vs11=2  vs20=45  ps1x=13  ps20=69  other=0     (129 refusals)
+```
+
+**ps_2_0 is the largest single bucket and has no front end anywhere** --
+`0xffff0200` appears nowhere in `src/`. vs_2_0 is second and already has
+`$d3d_shader_ir_compile20` and `$d3d_shader_vm_compile_vs20` with a dozen
+passing `test-d3d-vs20-*` tests, reachable only from tests behind a deliberate
+"development-only foundation, not public shader-profile admission" gate
+(`09ag-d3d-shader-vm.wat:380`). Opening vs_2_0 alone buys little, because a
+draw needs both stages and B&W2's 2.0 vertex shaders are paired with 2.0 pixel
+shaders.
+
+Note that we already report `PixelShaderVersion = 0xffff0101` and
+`VertexShaderVersion = 0xfffe0101` in `$d3d9_fill_caps`, so the game is being
+*told* 1.1 and creates 2.0 shaders anyway. It is not reading our caps for these.
+
+The 15 refusals in the **1.x** buckets are the more interesting number: those
+are profiles the front end implements and refuses anyway, so each is a gap
+inside a compiler we have rather than a profile we lack. The first-refused-word
+census keeps one word per stage and both of B&W2's are 2.0, so it cannot see
+them at all -- `$d3d9_shader_tally` now also records the first validator error
+and offset in each 1.x bucket (`get_d3d9_shader_err_vs11{,_at}`,
+`get_d3d9_shader_err_ps1x{,_at}`). Unread as of this writing: drive44 predates
+the export.
+
+### What the land picker does after the pick, measured
+
+The pick is not ignored and the game is not wedged. Counting draw categories
+that use a shader (`.../true/true/...`), the whole history of drive44 is:
+
+```
+t=  5s   0
+t=372s  24        <- pick+~60s
+t=377s 131
+t=383s 144
+... flat for the next 700 seconds
+```
+
+144 draws of `4/814/true/true/512x512:10` and
+`4/814/true/true/128x128:1/512x256:10` in an eleven-second burst, and then the
+game returns to redrawing the picker forever (op-5 climbing steadily,
+`SetFVF` from `ret=0x009333e4` in a loop, `errors=0/0`, main-thread EIP parked
+in the thunk zone at `0x07500008`). Memory climbs slowly and evenly --
+`records` 374 -> 459 over 465 s -- with no runaway.
+
+Three further inputs were tried on the live run and none started a land:
+
+| input | result |
+|---|---|
+| ENTER | no change at all |
+| click the vignette at (320,180) | 396 of 307,200 pixels differ, a 47x16 box inside the thumbnail strip |
+| double click the thumbnail at (135,378) | shader draws 144 -> **154** |
+
+The last one matters: the clicks *are* reaching the game and the island preview
+re-renders for each. So the picker is responsive, the pick registers, and the
+811-primitive burst is the selected island's preview being drawn -- not a land
+load that stalls. Whatever confirms the selection has not been found yet, and
+the screen shows no text or button anywhere, which is the thing to explain
+next.
