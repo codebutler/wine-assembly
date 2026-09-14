@@ -6727,3 +6727,79 @@ HRESULTs. The visible symptom is 61% of the world simply missing.
 
 `SetStreamSourceFreq` is still `$crash_unimplemented`, so instancing is a
 separate question and B&W2 has not asked for it.
+
+## Blocker #4, fixed: both rules, with the land's element named
+
+drive36 read both refusal slots at once and settled the question the 07:45
+entry got half right:
+
+| slot | reason | element (raw dwords) | decoded |
+|---|---|---|---|
+| 1 | `0x20` stream!=0 | `00000001,02050002` | stream 1 offset 0 FLOAT3 DEFAULT TEXCOORD2 |
+| 2 | `0x80` type>4 | `00000000,00000007` | stream 0 offset 0 **SHORT4** DEFAULT POSITION0 |
+
+So the land's vertex positions are `SHORT4` — 16-bit heightfield coordinates,
+which is what a terrain mesh would naturally use, and not the UBYTE4/FLOAT16
+skinning data guessed earlier. The menus trip the stream rule; the land trips
+both. 124 refusals by the land-picker screen, 405 by 25 minutes into the world.
+
+What the world actually looks like on the unfixed build, for the record: at
+pick+1100s B&W2 is in the world (cinematic letterbox bars, curved horizon, a
+sunrise glow on it) and essentially nothing else is drawn. The land-selection
+screen before it renders completely — a burning village inside a vignette,
+animated fire, the island picker below — which is worth knowing, because it
+means the refusals do not stop the menus from looking finished.
+
+### The fix, in four parts
+
+1. **Element types.** `lib/d3d9-software-backend.js` grew a 17-entry
+   `DECL_TYPES` table (FLOAT1..4, D3DCOLOR, UBYTE4, SHORT2/4, UBYTE4N,
+   SHORT2N/4N, USHORT2N/4N, UDEC3, DEC3N, FLOAT16_2/4), each with a component
+   count, a byte size and a reader; the validation and the fetch loop both go
+   through it instead of a `type===4 ? byte/255 : float32` ternary. D3DCOLOR
+   keeps its `/255` read because `lib/d3d9-host.js`'s `convertColor()` has
+   already swapped bytes 0 and 2 in the buffer — UBYTE4 and UBYTE4N must not
+   get that swizzle, which is the one trap in the table.
+2. **16 stream bindings.** The device state held one `{buffer, offset, stride}`
+   triple at +1720/+1724/+1728. It now holds sixteen 16-byte records at
+   **+25340** (buffer, offset, stride, and the byte pointer the last draw
+   computed), addressed by `$d3d9_stream_slot`, and the state allocation grew
+   from 25340 to 25596 bytes. **Not** at +1808, which looked free and is not:
+   `$d3d9_sampler_offset` computes `1808 + stage*64` for stages 0..3 and owns
+   every byte through 2063. A computed offset is invisible to a grep for the
+   literal — check that helper before claiming a gap. Putting the table there
+   broke `test-d3d9-color-surfaces`, `-software-bridge` and `-pipeline-web`
+   with `native binding rejected: d3d_software_bind_texture_mips`, which names
+   the samplers if you already know what happened and nothing if you do not.
+3. **The refusals lifted.** `$handle_IDirect3DDevice9_SetStreamSource` binds
+   any index below 16 (and calls `$crash_unimplemented` for a non-zero index
+   arriving while a state block records, since blocks capture stream 0 only);
+   `GetStreamSource` reads any index back; `$d3d9_declaration_create` accepts
+   `stream < 16` and `type <= 16`; device teardown unbinds all 16.
+   `$d3d9_draw_buffer` publishes a byte pointer per stream and the table's
+   address at descriptor+60. Only stream 0 can fail the draw — a stream left
+   bound by an earlier draw and unused by this declaration must cost nothing.
+4. **One interleaved buffer.** `lib/d3d9-host.js` decodes the declaration
+   first, learns which streams it names, and gathers them into a single
+   vertex buffer whose stride is the sum of theirs, rewriting each attribute's
+   offset. The backends never learn about streams at all. That is deliberate:
+   a backend reading one array at one stride cannot get multi-stream subtly
+   wrong, and every path through that function already copied.
+
+### Tests
+
+- `test/test-d3d9-decl-types.js` — ten D3DDECLTYPEs each encode a known colour
+  and must render the pixels that colour renders to **as a FLOAT4**. Comparing
+  against the FLOAT4 render rather than a literal keeps the test about the
+  decode, so a wrong scale factor or a permuted component fails rather than
+  passes; the narrow types (SHORT2, UDEC3, DEC3N) also pin the components they
+  do not write against the register default.
+- `test/test-d3d9-multi-stream.js` — drives the real guest handlers:
+  `CreateVertexDeclaration` with a stream-1 element, `SetStreamSource(1,...)`,
+  `DrawPrimitive`. The same triangle with its colour moved to a second buffer
+  at a **different stride** (12 and 4 against the interleaved 16) must produce
+  the same pixel. It also checks `GetStreamSource(1)` reads back what was
+  bound, that a declaration naming an unbound stream paints nothing and says
+  `stream 1` rather than blaming the FVF, and that stream 16 is refused.
+
+Retired along the way: the claim that `+1808..2067` was free device state.
