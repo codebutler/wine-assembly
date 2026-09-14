@@ -1497,3 +1497,53 @@ functions over a byte range with a fixed ABI:
 - `Game.dll+0x6f05ee50` CRC32 -- ~7% of the post-card phase
 
 Neither is a bug; both are guest work an emulator can do natively instead.
+
+### CORRECTION: phase 2 is a steady-state loop, not progress
+
+The "second load phase" reading above was based on one histogram window. A
+second window, **13 minutes later**, is the same window:
+
+| | window 1 | window 2 (+13 min) |
+|---|---|---|
+| ops | 829,667,044 | 877,865,592 |
+| block entries | 83,752,886 | 89,148,816 |
+| distinct blocks | 12,945 | 12,770 |
+| top block | `0x6f05ee72` 3.49% | `0x6f05ee72` 3.43% |
+| 2nd/3rd | `0x6f462568` / `0x6f462533` | same |
+
+Same blocks, same ranking, same shares, and the screen is byte-identical across
+the whole interval (three captures, 0 of 307200 pixels). Work that is *making
+progress* moves through different code as it moves through different asset
+types. This does not. **It is a loop, not a load**, and the earlier "the black
+is an unbuilt scene" conclusion is withdrawn.
+
+What the loop is doing is a running frame loop. `0x6f462547` is a dirty-bitmask
+sweep:
+
+```
+6f462533  mov edx,[edi+0x98] / mov ebx,[edx+eax*4]   ; word i of a flag array
+6f46253e  jz 0x6f462568                              ; skip empty words
+6f462545  test bl,1 / jz ... / call 0x6f461ae0        ; per set bit, index (i<<5)+bit
+6f462555  shr ebx,1 / inc esi / jnz 0x6f462545
+6f462562  mov [ecx+eax*4],ebx                        ; clear the word
+6f46256e  jb 0x6f462533                              ; next word
+```
+
+-- "service every pending item, then clear the flags", which is a per-frame
+update pass, not an asset loader. So the engine is ticking and presenting
+nothing new.
+
+The CRC32 at 6.95% is real and still the largest single named cost here, but it
+is now better read as work inside a repeating tick than as one-shot integrity
+checking.
+
+**Open question, not yet measured:** what the cinematic is waiting for. The
+leading candidate is audio -- WC3 campaign cinematics are trigger-scripted and
+gated on voice-line playback position, and a sound that never reports progress
+would hold the trigger forever while the frame loop keeps running exactly like
+this. Time is not a candidate: at 200 ms/batch the headless clock runs *ahead*
+of wall time, so a timer wait would complete early, not late.
+
+Status after ~73 minutes of run: main menu -> profile -> campaign -> Prologue ->
+(40 min) chapter card -> cinematic letterbox -> here. Non-cinematic gameplay
+with the console visible has still not been reached.
