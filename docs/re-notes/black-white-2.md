@@ -6248,3 +6248,49 @@ land load out of sub-megabyte holes, and did it without a single failure.**
 Fragmentation is a risk for whatever asks for something large later — gameplay
 may well do that — and it is worth the allocator work eventually. It is not
 what is stopping B&W2 today, and it should not be prioritised as if it were.
+
+## The fix for it: an unbound sampler reads transparent black (2026-09-14)
+
+drive27's filtered API trace closed the diagnosis. The two calls immediately
+before the first failure are d3dx9's own, back to back:
+
+```
+[API #11091470] IDirect3DDevice9_SetPixelShader(0x07f4e030, 0x4e206174)  <- a PS that samples t2
+[API #11091472] IDirect3DDevice9_SetTexture(0x07f4e030, 0x00000002, 0x00000000)
+D3D9 software: missing pixel sampler2
+```
+
+So the guest deliberately draws with an unbound sampler. That is not a gap in
+the guest and not a binding failure on our side: it is the ordinary effect
+framework case of a texture parameter the application never assigned. D3D9
+calls the result of sampling such a stage UNDEFINED and leaves the device
+usable. We called it fatal.
+
+`lib/d3d9-software-backend.js` now serves an unbound sampled stage as a shared
+1x1 transparent-black texture. Transparent black is the conservative reading of
+undefined — it contributes nothing to the `dp3`/`mad` this shader does with it,
+so a substituted stage cannot manufacture light or colour that was never there.
+
+Three properties of the fix are load-bearing, and two of them were found by
+writing the test rather than by reasoning:
+
+- **The substitution happens where the stage is bound, not in the snapshot.**
+  A first cut wrote the substitute into `snapshot.textures[stage]` and threw
+  `TypeError: Cannot add property 2, object is not extensible` —
+  `Stream.copyPayload` freezes the payload it hands the backend. A drive
+  launched on that cut would have traded `missing pixel sampler2` for a
+  TypeError at the identical draw and proved nothing.
+- **The fixed-function lowering must not see it.** `fixedPrograms` reads
+  `snapshot.textures[i]` to decide which stages are active and whether a stage
+  needs a cube transform; a stage that gains a texture at bind time must not
+  gain one there, or the lowering changes shape for a stage the guest left
+  empty.
+- **The native shader VM keeps its strict contract.** It still returns `-3`
+  for a TEX with no sampler, as `test/test-d3d-shader-vm.js` pins, and simply
+  never sees the unbound state. The policy was relaxed in exactly one of the
+  three layers that held it.
+
+Pinned by `test/test-d3d9-unbound-sampler.js`, which also asserts the property
+whose absence cost the whole run: a bound draw still works **after** an unbound
+one. A draw that succeeds in isolation proves nothing about a queue whose error
+is sticky.
