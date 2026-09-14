@@ -5241,3 +5241,53 @@ harmless once the dialog does go. The one that landed also carried the game
 through **New Game and the mouse tutorial**, so the run arrived at the land
 picker while the driver was still waiting for a main menu that had already gone
 by. Check the picture, not only the PNG size window, after a retry loop.
+
+### With the aliasing fixed, the wall is the arena's size (2026-09-13)
+
+Re-driven on the build carrying `4d025525`, sampling the map table every five
+seconds from the land click:
+
+```
+before  records=357  live=0x157ca000  cursor=0x2d6c0000  largest_hole=0x252c0000  overlaps=0
+pick+5s records=367  live=0x2beaa000  cursor=0x16fe0000  largest_hole=0x0ebe0000  overlaps=0
+pick+10 records=348  live=0x27b6a000  cursor=0x0b960000  largest_hole=0x0f3c0000  overlaps=0
+pick+60 records=348  live=0x3137a000  cursor=0x0b960000  largest_hole=0x05bb0000  overlaps=0
+pick+70 PROBE GONE
+```
+
+Two things to take from it.
+
+**The aliasing fix holds on the app.** `backing_overlaps` is 0 at every sample,
+where the same walk on the previous build went to ten within fifteen seconds.
+
+**And the crash is unchanged**: byte-for-byte the same `[heap] OOM: 430571520
+bytes (0x19aa0000) - sparse arena: no guest address space left to reserve`,
+followed by the same `bad_alloc` and `[Exit] code=-529697949`. At the moment it
+happens the arena holds 785 MB of live mappings in 348 records, the downward
+reserve cursor is already at `0x0B960000` with 55 MB of floor under it, and the
+largest free run anywhere in the 1148 MB arena is 91 MB. 363 MB free with no run
+big enough for a 430 MB request is a **capacity** problem, not a placement one --
+no allocator can serve that out of this arena, so nothing about fragmentation,
+reclaim or hole coalescing was ever going to fix it.
+
+What was actually wrong is that the arena stopped at `0x50000000` because the
+DIB guest arena starts there, which gave away the 752 MB between that and the
+top of Win32 user space to avoid the 63 MB DIB range and sixteen words of static
+system-DLL pseudo handles at `0x5D110000`. `ee44e655` runs the arena to
+`0x7F000000` and declares `0x50000000..0x60000000` as a band no reservation may
+land in, which both placement paths step over.
+
+The band has to exclude the DIB range because `$g2w` answers it from its own
+affine range before the page table is consulted -- a mapping there would be
+silently aliased, the same class of bug the direct window causes. It has to
+exclude the handles for a different reason: they are not memory, they exist to
+be compared, and `GetModuleHandle` hands them to guest code that may read
+through the result, so a real mapping under one turns "nothing there" into
+plausible bytes.
+
+**Backing is the next number to watch, and it is close.** 785 MB of live
+mappings against 828 MB of backing on this host (316 MB primary pool plus the
+512 MB extension window a 1 GB memory provides) leaves 43 MB. The memory is
+created at 16384 pages because that is the import's declared maximum, not
+because anything measured says 1 GB; a shared memory of 32768, 49152 and 65536
+pages all construct fine under Node 24 on this box.
