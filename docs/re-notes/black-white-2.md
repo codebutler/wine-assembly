@@ -5438,3 +5438,74 @@ does not, `(where - begin) / 24` is the distance between two unrelated
 allocations divided by 24 -- which is exactly why the number grew with the
 arena. `--trace-at=0x9e4370` with `--trace-at-mem=ecx+0x4:4,ecx+0x8:4,esp+0x4:4`
 reads all three at the function entry, before any push, and answers it directly.
+
+### CORRECTION: `where` is `end()`. The vector is fine; the loop is not. (2026-09-13)
+
+`--trace-at=0x9e4370` with `--trace-at-mem=ecx+0x4:4,ecx+0x8:4` answered the
+comparison the previous section set up, and the answer kills that section's
+hypothesis. **`where` is not a stray pointer.** The third argument is at
+`[esp+8]` at function entry (`[esp+0xc]` is read only *after* `push ebx`), and
+it equals `end` on every single one of the 11 traced calls:
+
+| # | begin `[ecx+4]` | end `[ecx+8]` | `where` `[esp+8]` | size = (end-begin)/24 |
+|---|---|---|---|---|
+| 3 | 0x4d5794e0 | 0x4d579510 | = end | 2 |
+| 4 | 0x4d579260 | 0x4d579338 | = end | 9 |
+| 5 | 0x4d5790a0 | 0x4d579490 | = end | 42 |
+| 6 | 0x4c4b1db4 | 0x4c4b317c | = end | 211 |
+| 7 | 0x4c4bbe64 | 0x4c4c2254 | = end | 1066 |
+| 8 | 0x4bfd0004 | 0x4c070054 | = end | 27310 |
+| 9 | 0x41f30004 | 0x455410a4 | = end | 2362204 |
+| 10 | 0x29de0004 | 0x35459814 | = end | 7975254 |
+| 11 | 0x18c20004 | 0x29dd641c | = end | 11958657 |
+
+Every `end - begin` divides by 24 exactly. This is a well-formed
+`v.insert(v.end(), 1, x)` -- a push_back -- into a vector that really does hold
+tens of millions of elements. So **the arena did not widen the number; the
+number was going to grow past any arena.** A 4 GB memory would only move the
+OOM a few seconds later.
+
+**The defect is a worklist loop that feeds itself and never converges.**
+`0x9e35e0`'s main loop, entered from `0x9e39b3`:
+
+```
+009e39b3  mov esi,[esp+0x74]        ; vec.begin
+009e39b9  mov edi,[esp+0x84]
+009e39c0  jnz 0x9e39c6              ; begin == 0 -> size 0
+009e39c6  mov ecx,[esp+0x78]        ; vec.end
+009e39ca  sub ecx,esi
+009e39cc  imul 0x2aaaaaab / sar edx,2   ; size() = (end-begin)/24
+009e39dd  cmp [esp+0x18],eax        ; i < size() ?
+009e39e1  jge 0x9e3cbe              ; ...exit
+009e39e7  mov eax,[esp+0x20]        ; byte cursor
+009e39eb  add edx,[esp+0x74]        ; &vec[i]
+          ... body: 0x9e1e50 predicate, 0x9e1c30, 0x9e1590, 0x9e63a0 ...
+          ... body appends to the SAME vector via 0x5313ab -> 0x9e4370 ...
+009e3caf  add dword [esp+0x18],1    ; ++i
+009e3cb4  add dword [esp+0x20],0x18 ; cursor += 24
+009e3cb9  jmp 0x9e39b3
+```
+
+`size()` is re-read from `end` **every iteration**, so this is a queue, not a
+range: the body pushes new work onto the tail of the very vector being walked,
+and the loop stops only when an iteration adds nothing. Measured on the 2 GB
+drive:
+
+```
+Hit counts:
+  0x009e4370 = 53        (insert helper)
+  0x00522570 = 53
+  0x009e40a0 = 10
+  0x009e35e0 = 41        (the function is entered 41 times)
+  0x009d5430 = 39        (the outer list walk)
+  0x009e3caf = 26906976  (the ++i landing -- 26.9 MILLION iterations)
+```
+
+26.9M iterations against 41 calls is ~656,000 per call, and the queue is still
+growing when the heap gives out at 40,361,984 elements. On real hardware this
+loop terminates. It diverges here, so **something the body computes comes back
+wrong under emulation and keeps re-queueing work.** The body's decision points
+are the `test al,al` on `0x9e1e50` at `0x9e3a25` (reject -> `0x9e3c7a`), the
+pointer-identity tests at `0x9e3a45`/`0x9e3a4f`, and the `[edi+0xc] == 0` test
+at `0x9e3a68`. That is where to look next -- not at the allocator, and not at
+the arena size.
