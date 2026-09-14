@@ -1,6 +1,12 @@
   ;; ============================================================
   ;; SIMPLE BUILT-IN CONTROL WNDPROCS
   ;; ============================================================
+  ;; This is the former tail of 09c3-controls.wat and stays immediately after
+  ;; that fragment in main.watx. The adjacency preserves the original
+  ;; top-level form order (and therefore function indices); shared state
+  ;; layouts/accessors remain in 09c3-controls.wat, while the larger Edit,
+  ;; ListBox, ComboBox, ListView, TrackBar, Tooltip, and Toolbar wndprocs remain
+  ;; in 09c3-wndprocs.wat.
 
   ;; ---- Shared text-buffer helper for state structs ----
   ;;

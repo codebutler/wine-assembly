@@ -5,8 +5,11 @@
 // class, not a word in the allocation. The build gate therefore has to prove
 // both halves of the migration: every access names the variant chosen for its
 // function, and every named layout still matches the allocation that wndproc
-// really makes. These plants exercise the structural cases that a line regex
-// silently missed: multiline forms and hexadecimal memarg offsets.
+// really makes. The simple wndprocs now live in the manifest fragment directly
+// after their layouts/accessors, so the allocation-drift plants also prove the
+// gate follows that relationship across a source boundary. These plants
+// exercise structural cases that a line regex silently missed: multiline forms
+// and hexadecimal memarg offsets.
 
 const assert = require('assert');
 const fs = require('fs');
