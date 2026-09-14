@@ -24,12 +24,15 @@ const sigs = require('../lib/host-import-sigs.generated.json').sigs;
 const { REGIONS } = require('../lib/region-map.generated.js');
 
 const GUEST_BASE = REGIONS.GUEST_BASE.base;
-const DIRECT_END = 0x08000000; // region.end $DIRECT_WINDOW, the span $g2w tests
 const OLD_FLOOR = 0x10000000;
 const BW2_REQUEST = 0x19AA0000;
 
 const extraWat = `
   (func (export "test_floor") (result i32) (call $virtual_alloc_min))
+  ;; The span the fast path covers, asked of the compiler rather than written
+  ;; down: it is a declaration, not an ABI, and a copied literal would keep
+  ;; passing after it moved.
+  (func (export "test_direct_end") (result i32) (region.end $DIRECT_WINDOW))
   (func (export "test_set_cursor") (param $v i32)
     (i32.store offset=8 (global.get $VIRTUAL_MAP_STATE) (local.get $v))
     (global.set $virtual_alloc_top (local.get $v)))
@@ -46,12 +49,14 @@ const extraWat = `
       filename === '13-exports.wat' ? `${source}\n${extraWat}\n` : source);
   const module = await WebAssembly.compile(wasmBytes);
 
+  let DIRECT_END = 0;
   const boot = async (imageBase) => {
     const memory = new WebAssembly.Memory({ initial: 16384, maximum: 16384, shared: true });
     const host = { memory };
     for (const [n, s] of Object.entries(sigs)) host[n] = s.results?.length ? () => 0 : () => {};
     const e = (await WebAssembly.instantiate(module, { host })).exports;
     e.init_thread(0, imageBase, 0, 0, 0, 0, 0);
+    DIRECT_END = e.test_direct_end() >>> 0;
     return e;
   };
 
