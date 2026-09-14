@@ -7424,3 +7424,45 @@ The consequence for this app is worth stating plainly: **any single validator
 gap ends rendering for the whole run**, tens of minutes of load included. When
 a B&W2 drive shows a frozen picture, read `ctx.bwErrors.order[0]` before
 believing anything about the guest.
+
+## The flyover is render-bound: ~6 seconds per draw call
+
+drive51 (both linkage fixes in) reached the land at **pick+1567s** — 26 minutes
+after the land click — with `errors=0/0`, `failed 0` and no refused draw at any
+point in the load. That is the first drive where nothing in the vertex-linkage
+validator refused anything, so the numbers below are what the renderer costs
+when it is *working*, not what a poisoned queue looks like.
+
+What follows the land is the cinematic flyover, and it advances about **one
+frame per five to ten minutes**. That is not a stall, and it is not the guest:
+
+| measurement | value |
+|---|---|
+| DRAW commands submitted | 10 per 60s wall (~6s per draw call) |
+| guest thread CPU | 0.0% |
+| software-rasterizer worker CPU | 20.9% of one core |
+| box load average | 53 |
+| guest basic blocks retired | 13,964 in 90s (155/s, 727 distinct) |
+| top hot blocks | all in `d3dx9_25` (base `0x2528000`, size `0x253000`) around `+0x10e2xx` |
+
+The guest is *waiting*, not working — a hundred-odd blocks a second is a poll
+loop, and the whole histogram sits in `d3dx9_25`. The wall clock is being spent
+in the render worker, single-threaded, against a box several other agents are
+also using. So the cost model for a B&W2 land run is: **minutes of load per
+minute of guest time, then seconds of rasterizer per draw call.** Quote draws
+per second, not frames per second, when sizing a drive.
+
+Two smaller facts from the same run, both worth not re-deriving:
+
+* **ESC does not skip the flyover.** `handleKeyDown(27)` held for 150 batches
+  changes nothing but the next lighting step.
+* **The input poll stays at zero for the whole flyover.** Counter slot 0 on
+  the poll entry `0x9b0880` reads 0 from the land click through the cinematic;
+  the first nonzero sample is the moment the game hands control back, which is
+  a cheaper "is it playable yet" test than looking at the picture.
+
+Also measured, and open: of 241 shaders made this run, **131 were refused** —
+`vs20=45` and `ps20=69`, which is blocker #7 (no vs_2_0 gate, no ps_2_0 front
+end), plus `vs11=2,err6@1459`. Those refusals do not poison the queue the way
+a refused *draw* does, so the land still renders; what they cost the picture
+has not been measured.

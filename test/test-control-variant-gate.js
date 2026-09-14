@@ -14,10 +14,12 @@ const path = require('path');
 const { analyzeSources, SOURCE_FILES } = require('../tools/control-variant-gate');
 
 const ROOT = path.join(__dirname, '..');
-const rel = 'src/09c3-controls.wat';
+const layoutsRel = 'src/09c3-controls.wat';
+const wndprocsRel = 'src/09c3-controls0-basic-wndprocs.wat';
 const liveSources = new Map(SOURCE_FILES.map((file) =>
   [file, fs.readFileSync(path.join(ROOT, file), 'utf8')]));
-const source = liveSources.get(rel);
+const layoutSource = liveSources.get(layoutsRel);
+const wndprocSource = liveSources.get(wndprocsRel);
 let checks = 0;
 
 function check(cond, message) {
@@ -39,7 +41,7 @@ function analyze(overrides = new Map()) {
   })));
 }
 
-function expectError(label, planted, pattern, targetRel = rel) {
+function expectError(label, planted, pattern, targetRel = layoutsRel) {
   const result = analyze(new Map([[targetRel, planted]]));
   check(result.errors.some((error) => pattern.test(error)),
     `${label}: expected ${pattern}, got:\n${result.errors.join('\n')}`);
@@ -48,6 +50,8 @@ function expectError(label, planted, pattern, targetRel = rel) {
 const baseline = analyze();
 check(baseline.sourceCount === SOURCE_FILES.length,
   `all ${SOURCE_FILES.length} manifest sources were analyzed`);
+check(SOURCE_FILES.indexOf(wndprocsRel) === SOURCE_FILES.indexOf(layoutsRel) + 1,
+  'simple control wndprocs immediately follow their state layouts in the manifest');
 if (process.env.CONTROL_VARIANT_EXPECT_FINDINGS === '1') {
   check(baseline.errors.length > 0, 'pre-conversion source exposes expected live findings');
 } else {
@@ -55,29 +59,32 @@ if (process.env.CONTROL_VARIANT_EXPECT_FINDINGS === '1') {
 }
 check(baseline.total > 500, `live source has a substantive attributed-site set (got ${baseline.total})`);
 
-const buttonInitMatch = /        ;; Allocate ButtonState\n(        \(local\.set \$state \(call \$heap_alloc \(i32\.const (\d+)\)\)\)\n        \(local\.set \$state_w \(call \$g2w \(local\.get \$state\)\)\))/.exec(source);
+const buttonInitMatch = /        ;; Allocate ButtonState\n(        \(local\.set \$state \(call \$heap_alloc \(i32\.const (\d+)\)\)\)\n        \(local\.set \$state_w \(call \$g2w \(local\.get \$state\)\)\))/.exec(wndprocSource);
 check(buttonInitMatch !== null, 'found the ButtonState allocation block');
 const buttonStateInit = buttonInitMatch[1];
 const allocSize = Number(buttonInitMatch[2]);
 const driftSize = allocSize + 4;
 expectError('allocator-drift',
-  replaceOnce(source, buttonStateInit,
+  replaceOnce(wndprocSource, buttonStateInit,
     buttonStateInit.replace(`(i32.const ${allocSize})`, `(i32.const ${driftSize})`),
     'ButtonState allocation block'),
   new RegExp(`ButtonState allocator \\$button_wndproc requests ${driftSize} bytes.*` +
-    `layout is ${allocSize} bytes`));
+    `layout is ${allocSize} bytes`),
+  wndprocsRel);
 
 expectError('multiline-raw',
-  replaceOnce(source, buttonStateInit, `${buttonStateInit}\n` +
+  replaceOnce(wndprocSource, buttonStateInit, `${buttonStateInit}\n` +
     '        (drop (i32.load offset=8\n' +
     '          (local.get $state_w)))', 'ButtonState allocation block'),
-  /\$button_wndproc: hand-spelled offset off a control-state base/);
+  /\$button_wndproc: hand-spelled offset off a control-state base/,
+  wndprocsRel);
 
 expectError('hex-raw',
-  replaceOnce(source, buttonStateInit, `${buttonStateInit}\n` +
+  replaceOnce(wndprocSource, buttonStateInit, `${buttonStateInit}\n` +
     '        (drop (i32.load offset=0x8 (local.get $state_w)))',
     'ButtonState allocation block'),
-  /\$button_wndproc: hand-spelled offset off a control-state base/);
+  /\$button_wndproc: hand-spelled offset off a control-state base/,
+  wndprocsRel);
 
 const exportsRel = 'src/13-exports.wat';
 const exportsSource = liveSources.get(exportsRel);
@@ -97,32 +104,33 @@ expectError('cross-file-raw',
   exportsRel);
 
 expectError('renamed-provenance-raw',
-  replaceOnce(source, buttonStateInit, `${buttonStateInit}\n` +
+  replaceOnce(wndprocSource, buttonStateInit, `${buttonStateInit}\n` +
     '        (local.set $opaque_guest (call $wnd_get_state_ptr (local.get $hwnd)))\n' +
     '        (local.set $opaque_linear (call $g2w (local.get $opaque_guest)))\n' +
     '        (drop (i32.load offset=8 (local.get $opaque_linear)))',
     'ButtonState allocation block'),
-  /\$button_wndproc: hand-spelled offset off a control-state base/);
+  /\$button_wndproc: hand-spelled offset off a control-state base/,
+  wndprocsRel);
 
 const imageStore =
   '    (store.field.memarg ButtonState image_type (local.get $sw) (local.get $type))';
 expectError('multiline-wrong-variant',
-  replaceOnce(source, imageStore,
+  replaceOnce(layoutSource, imageStore,
     '    (store.field.memarg\n' +
     '      ListBoxState\n' +
     '      count (local.get $sw) (local.get $type))', 'button image store'),
   /\$btn_set_image is attributed to ButtonState but reaches ListBoxState/);
 
-const buttonLayoutStart = source.indexOf('  (layout ButtonState\n');
-const staticComment = source.indexOf('\n\n  ;; Static (ctrl_class 3)', buttonLayoutStart);
+const buttonLayoutStart = layoutSource.indexOf('  (layout ButtonState\n');
+const staticComment = layoutSource.indexOf('\n\n  ;; Static (ctrl_class 3)', buttonLayoutStart);
 check(buttonLayoutStart >= 0 && staticComment > buttonLayoutStart, 'found the ButtonState layout');
-const buttonLayout = source.slice(buttonLayoutStart, staticComment);
+const buttonLayout = layoutSource.slice(buttonLayoutStart, staticComment);
 const buttonLayoutClose = buttonLayout.lastIndexOf('))');
 check(buttonLayoutClose >= 0, 'found the ButtonState layout closing field');
 const expandedButtonLayout = buttonLayout.slice(0, buttonLayoutClose) + ')\n' +
   '    (field accidental i32))' + buttonLayout.slice(buttonLayoutClose + 2);
 expectError('layout-drift',
-  replaceOnce(source, buttonLayout, expandedButtonLayout, 'ButtonState layout'),
+  replaceOnce(layoutSource, buttonLayout, expandedButtonLayout, 'ButtonState layout'),
   new RegExp(`ButtonState allocator \\$button_wndproc requests ${allocSize} bytes.*` +
     `layout is ${driftSize} bytes`));
 
@@ -131,7 +139,7 @@ const textView =
   '    (field text_buf_ptr i32)       ;; +0   guest ptr\n' +
   '    (field text_len     i32))      ;; +4   chars, no NUL; ends at +8';
 expectError('partial-view-drift',
-  replaceOnce(source, textView,
+  replaceOnce(layoutSource, textView,
     '  (layout ControlTextState\n' +
     '    (field text_buf_ptr i32)       ;; +0   guest ptr\n' +
     '    (field text_len     u16))', 'ControlTextState layout'),

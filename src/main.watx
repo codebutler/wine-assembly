@@ -80,6 +80,7 @@
 (include "09c0-window-table.wat")
 (include "09c2-treeview.wat")
 (include "09c3-controls.wat")
+(include "09c3-controls0-basic-wndprocs.wat")
 (include "09c3-wndprocs.wat")
 (include "09c3a-dialog-runtime.wat")
 (include "09c3b-scrollbar.wat")
