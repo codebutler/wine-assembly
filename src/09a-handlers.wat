@@ -5146,22 +5146,21 @@
   )
 
   ;; SHQueryValueExA/W(hKey, pszValue, pdwReserved, pdwType, pvData, pcbData)
-  ;; SHLWAPI's registry read. It differs from RegQueryValueEx only in that it
-  ;; expands a REG_EXPAND_SZ result and reports it as REG_SZ; the registry
-  ;; here stores no unexpanded strings, so the read is the same read.
-  ;; Explorer reaches this through SHELL32 ordinal 509.
+  ;; SHLWAPI exposes the same six-argument query contract modeled by
+  ;; RegQueryValueEx: the spelling changes the DLL front door, not the value
+  ;; name/data encoding or byte-count/error result. Keep the public symbol for
+  ;; imports (Explorer also reaches A through SHELL32 ordinal 509), but let the
+  ;; canonical Reg handler perform the one host query and stdcall cleanup.
   (func $handle_SHQueryValueExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_query_value_ex
-      (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (call $handle_RegQueryValueExA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr))
   )
 
   (func $handle_SHQueryValueExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $reg_query_value_ex
-      (local.get $arg0) (local.get $arg1) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (call $handle_RegQueryValueExW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; RegSetValueEx{A,W}(hKey, lpValueName, Reserved, dwType, lpData, cbData)
