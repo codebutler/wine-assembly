@@ -6612,3 +6612,51 @@ our own refusal — which is what drive34 traces, with no source change needed.
 Note that a silent NULL here is exactly the failure shape the fail-fast-stub
 rule exists to prevent: the call reports an error the game ignores, and the
 consequence surfaces thousands of draws later as a picture with holes in it.
+
+### What blocker #4 is not (drive34)
+
+Four things were plausible and three are now dead, by measurement rather than
+argument. Recording them so the next session does not re-run them:
+
+* **The game never calls `SetFVF(0)`.** Its FVFs are `0x142` (×13,966),
+  `0x144` (×4,575), `0x42` (×2,963), `0x1c4` (×600), `0x2` (×463) and
+  `0x152`/`0x102` (×115 each) — every one of them accepted by the
+  `position`/`texCount` test in `lib/d3d9-host.js`.
+* **The declarations it binds are real objects of ours.** Read live out of the
+  running guest at `0x7ebc8884`: magic `d3d90002` at +12, device `07f4e030` at
+  +8 (matching), refcount 1, 0x50 bytes of elements. So `CreateVertexDeclaration`
+  succeeds at least often — and `$heap_alloc` does hand out `0x7exxxxxx`
+  addresses, which is worth knowing before dismissing a pointer as foreign.
+* **The state-block path cannot be zeroing the pair.** `$d3d9_declaration_bind`
+  records `(declaration, 0)` while a block is recording, which would lose an
+  FVF — except `$d3d9_recording_guard` calls `$crash_unimplemented` when
+  `SetFVF` arrives during recording, and nothing trapped in a 25-minute run.
+* One decoded element array (`0x0253dbd0`) is `POSITION0 FLOAT3` plus
+  `TEXCOORD0..7 FLOAT4`, stream 0, 4-byte aligned, method DEFAULT — entirely
+  inside what the renderer models.
+
+What *is* established: 48,043 of the `SetVertexDeclaration(NULL)` calls come
+from a single engine thunk at `0x009333f0`
+
+```
+009333f0  mov edx, [esp+0x4]        ; the declaration argument
+009333f4  mov eax, [ecx+0x1a0]      ; the device
+009333fa  mov ecx, [eax]
+009333fc  push edx
+009333fd  push eax
+009333fe  call [ecx+0x15c]          ; IDirect3DDevice9::SetVertexDeclaration
+00933404  ret 0x4
+```
+
+and its smallest caller, `0x00a9cad0`, passes a declaration **stored in the
+game's own object** at `[ecx+0x188]`. A NULL in that field is exactly what a
+failed `CreateVertexDeclaration` leaves behind — and that refusal was
+unreadable, because it returns `D3DERR_INVALIDCALL` with `*out` at 0 and keeps
+no record of itself.
+
+So `$d3d9_declaration_create` now counts its refusals and keeps the rule that
+fired plus the first offending element, read out through
+`get_d3d9_decl_reject_count` / `_mask` / `_element` / `_element_hi`, and
+`tools/d3d9-decl-decode.js` turns that element into the rule in English. A
+count of zero falsifies the declaration theory outright and sends the hunt back
+to draw ordering; anything else names the element type to widen.
