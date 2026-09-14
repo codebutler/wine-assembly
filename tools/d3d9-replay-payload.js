@@ -79,7 +79,37 @@ const describe = () => {
   lines.push(`clip:      ${clip ? `mask=0x${(clip.mask >>> 0).toString(16)}` : 'none'}`);
   lines.push(`viewport:  ${payload.viewport ? JSON.stringify(payload.viewport) : 'default'}`);
   if (elided.length) lines.push(`elided:    ${elided.join(', ')}`);
+  // Check this FIRST on any refusal. The rasterizer's per-vertex finite test is
+  // the one failure path whose cause is visible in the payload alone, and it is
+  // what Black & White 2's third blocker turned out to be: four NaN floats in a
+  // 1344-byte vertex buffer, every other value ordinary.
+  lines.push(`nonfinite: ${nonFinite().join(' ') || 'none'}`);
   return lines.join('\n');
+};
+
+// Which source vertices carry a NaN or an infinity, and in which float slot.
+// Reported per vertex rather than per byte, because a whole quad going bad at
+// once (B&W2: vertices 48-51, all in slot 1) says something a total does not.
+const nonFinite = () => {
+  const bytes = payload.vertices, stride = payload.stride;
+  if (!bytes || !stride) return [];
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const hits = [];
+  for (let i = 0; i * stride + stride <= bytes.byteLength; i++) {
+    const slots = [];
+    for (let k = 0; (k + 1) * 4 <= stride; k++) {
+      // A colour or packed attribute is not a float, so a "bad float" reading
+      // of one is meaningless -- only slots the declared attributes call FLOAT
+      // are checked. type 1..4 are FLOAT1..FLOAT4 in the capture's encoding.
+      const at = k * 4;
+      const attribute = (payload.attributes || []).find(a =>
+        a.type >= 1 && a.type <= 4 && at >= a.offset && at < a.offset + a.type * 4);
+      if (!attribute) continue;
+      if (!Number.isFinite(view.getFloat32(i * stride + at, true))) slots.push(k);
+    }
+    if (slots.length) hits.push(`v${i}[${slots.join(',')}]`);
+  }
+  return hits;
 };
 
 // $d3d_software_step collapses every refusal into a single -1, so the message
@@ -134,6 +164,58 @@ function bisect(device, payload, exports, memory) {
         + ` (indices ${indices} x ${mask ? 13 : 7}); post-clip vertex slots ${mask ? 16 : 12},`
         + ` fan bound ${mask ? 15 : 9}`);
     }
+    // $d3d_software_compact's ONLY failure is $heap_shrink returning 0, and
+    // that has three causes with very different meanings: the requested size
+    // is larger than the block ($need > $old), the arena walk cannot find the
+    // block, or its header is malformed. The block header is one word below
+    // the context, so all of it can be computed here.
+    {
+      const point = (words[(ctx + 100) >> 2] >>> 0) & 8 ? 1 : 0;
+      const capacity = Math.floor((emitted + 6) / 7);
+      const bytes = 288 + capacity * (point ? 1050 : 1022);
+      const need = Math.max(16, (bytes + 11) & -8);
+      const old = words[(ctx - 4) >> 2] >>> 0;
+      console.log(`  compact: emitted=${emitted} -> capacity=${capacity} bytes=${bytes}`
+        + ` need=${need} blockHeader@ctx-4=${old} reserved@196=${words[(ctx + 196) >> 2] >>> 0}`);
+      console.log(`  heap_shrink would ${need > old ? 'REFUSE (need > old)'
+        : 'accept on size; a refusal is then the arena walk or a bad header'}`);
+
+      // Which of the other two, then. $heap_shrink works on the GUEST block
+      // address -- heap_shrink(w2g(ctx), bytes) -- and both remaining checks
+      // ($heap_arena_find and $heap_block_bad) are pure reads of the arena
+      // table, so they can be re-run here exactly rather than guessed at.
+      // There is no w2g export, but the context lives in the guest heap, which
+      // is inside the direct window -- so the translation is the constant
+      // GUEST_BASE - image_base, both of which can be asked for by name.
+      const REGIONS = require(path.join(__dirname, '..', 'lib', 'region-map.generated.js'));
+      const arenas = REGIONS.BASE.HEAP_ARENAS;
+      const offset = REGIONS.GUEST_BASE - (exports.get_image_base() >>> 0);
+      const block = (ctx - 4 - offset) >>> 0;      // the guest block header
+      const count = words[arenas >> 2] >>> 0;
+      console.log(`  arenas:  count=${count} block(guest)=0x${block.toString(16)}`
+        + ` aligned=${(block & 7) === 0} end=0x${((block + old) >>> 0).toString(16)}`);
+      let found = null;
+      for (let i = 0; i < Math.min(count, 1024); i++) {
+        const rec = arenas + 16 + i * 16;
+        const base = words[rec >> 2] >>> 0;
+        if (!base) continue;
+        const limit = words[(rec + 4) >> 2] >>> 0, end = words[(rec + 8) >> 2] >>> 0;
+        const holds = block >>> 0 >= base && block >>> 0 < end;
+        if (holds) found = { base, limit, end };
+        console.log(`    [${i}] base=0x${base.toString(16)} limit@4=0x${limit.toString(16)}`
+          + ` end@8=0x${end.toString(16)} live@12=${words[(rec + 12) >> 2] >>> 0}`
+          + (holds ? '  <-- holds the block' : ''));
+      }
+      if (!found) console.log('  verdict: $heap_arena_find REFUSES -- no arena contains the block');
+      else {
+        const blockEnd = (block + old) >>> 0;
+        const over8 = blockEnd > found.end, over4 = blockEnd > found.limit;
+        console.log(`  verdict: arena found; heap_block_bad: size ${old < 16 || (old & 7)
+          ? 'BAD' : 'ok'}, end>rec[8] ${over8}, end>rec[4] ${over4}`
+          + (over8 || over4 ? '  -- REFUSED here' : '  -- passes; shrink should succeed'));
+      }
+    }
+
     const raw = words[(ctx + 200) >> 2] >>> 0;
     if (raw) {
       // The first few post-vertex-shading positions. A w at or below zero, or
