@@ -25,13 +25,17 @@ const extraWat = String.raw`
           (i32.const 0) (i32.const 0) (i32.const 0))))
     (global.get $eip))
 
-  (func (export "test_null_directplay_enumerate") (result i64)
+  (func (export "test_null_directplay_enumerate") (param $ansi i32) (result i64)
     (global.set $eip (i32.const 0))
     (global.set $esp (i32.const 0x074FF000))
     (call $gs32 (global.get $esp) (i32.const 0))
-    (call $handle_DirectPlayEnumerateA
-      (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0) (i32.const 0))
+    (if (local.get $ansi)
+      (then (call $handle_DirectPlayEnumerateA
+        (i32.const 0) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0)))
+      (else (call $handle_DirectPlayEnumerate
+        (i32.const 0) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0))))
     (i64.or
       (i64.extend_i32_u (global.get $eax))
       (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
@@ -260,11 +264,13 @@ const extraWat = String.raw`
     runCallback();
   }
 
-  const nullResult = e.test_null_directplay_enumerate();
-  assert.strictEqual(Number(nullResult & 0xffffffffn) >>> 0, 0x80070057,
-    'a NULL callback returns DPERR_INVALIDPARAMS');
-  assert.strictEqual(Number(nullResult >> 32n) >>> 0, 0x074ff00c,
-    'invalid-parameter return still consumes the two-argument frame');
+  for (const ansi of [0, 1]) {
+    const nullResult = e.test_null_directplay_enumerate(ansi);
+    assert.strictEqual(Number(nullResult & 0xffffffffn) >>> 0, 0x80070057,
+      'a NULL callback returns DPERR_INVALIDPARAMS');
+    assert.strictEqual(Number(nullResult >> 32n) >>> 0, 0x074ff00c,
+      'invalid-parameter return still consumes the two-argument frame');
+  }
 
   const writeAnsi = value => {
     const pointer = e.guest_alloc(value.length + 1) >>> 0;

@@ -149,10 +149,6 @@
     (select (local.get $a) (local.get $b)
       (i32.lt_s (local.get $a) (local.get $b))))
 
-  (func $tth_abs (param $a i32) (result i32)
-    (select (i32.sub (i32.const 0) (local.get $a)) (local.get $a)
-      (i32.lt_s (local.get $a) (i32.const 0))))
-
   (func $tth_clamp_declared (param $value i32) (param $hard i32) (result i32)
     (if (i32.le_s (local.get $value) (i32.const 0))
       (then (return (i32.const 0))))
@@ -558,7 +554,7 @@
       (then (return (local.get $value))))
     (local.set $sign (select (i32.const -1) (i32.const 1)
       (i32.lt_s (local.get $value) (i32.const 0))))
-    (local.set $v (call $tth_abs (local.get $value)))
+    (local.set $v (call $tt_abs (local.get $value)))
     (local.set $phase (global.get $tth_round_phase))
     (local.set $threshold (global.get $tth_round_threshold))
     (local.set $result (i32.add (local.get $phase)
@@ -1194,7 +1190,7 @@
     (local.set $a (call $tth_pop))
     (if (global.get $tth_error) (then (return (i32.const 0))))
     (if (i32.eq (local.get $op) (i32.const 0x64))
-      (then (return (call $tth_push (call $tth_abs (local.get $a))))))
+      (then (return (call $tth_push (call $tt_abs (local.get $a))))))
     (if (i32.eq (local.get $op) (i32.const 0x65))
       (then (return (call $tth_push (i32.sub (i32.const 0) (local.get $a))))))
     (if (i32.eq (local.get $op) (i32.const 0x66))
@@ -1222,7 +1218,7 @@
     (local.set $sign (select (i32.const -1) (i32.const 1)
       (i32.lt_s (local.get $distance) (i32.const 0))))
     (if (i32.lt_s
-          (call $tth_abs (i32.sub (call $tth_abs (local.get $distance))
+          (call $tt_abs (i32.sub (call $tt_abs (local.get $distance))
             (global.get $tth_sw_value)))
           (global.get $tth_sw_cut))
       (then (return (i32.mul (local.get $sign) (global.get $tth_sw_value)))))
@@ -1236,7 +1232,7 @@
     (local $direction i32)
     (local.set $direction (select (local.get $original) (local.get $distance)
       (i32.ne (local.get $original) (i32.const 0))))
-    (if (i32.lt_s (call $tth_abs (local.get $distance))
+    (if (i32.lt_s (call $tt_abs (local.get $distance))
           (global.get $tth_min_dist))
       (then (return (select
         (i32.sub (i32.const 0) (global.get $tth_min_dist))
@@ -1285,7 +1281,7 @@
             (i32.sub (i32.const 0) (local.get $distance)))))
         (if (i32.and (local.get $op) (i32.const 0x04))
           (then
-            (if (i32.gt_s (call $tth_abs
+            (if (i32.gt_s (call $tt_abs
                   (i32.sub (local.get $distance) (local.get $original)))
                   (global.get $tth_cvt_cut))
               (then (local.set $distance (local.get $original)))))))
@@ -1403,7 +1399,7 @@
           (global.get $tth_dvx) (global.get $tth_dvy)))
         (if (i32.and (local.get $op) (i32.const 1))
           (then
-            (if (i32.gt_s (call $tth_abs
+            (if (i32.gt_s (call $tt_abs
                   (i32.sub (local.get $value) (local.get $current)))
                   (global.get $tth_cvt_cut))
               (then (local.set $value (local.get $current))))

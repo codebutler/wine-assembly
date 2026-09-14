@@ -3749,13 +3749,13 @@
     (global.set $eip (local.get $callback))
     (global.set $steps (i32.const 0)))
 
-  ;; The unsuffixed ordinal is the legacy ANSI export on Win98.
+  ;; The unsuffixed ordinal is the legacy ANSI export on Win98.  It is the
+  ;; same two-argument ABI as DirectPlayEnumerateA, so the A handler is the
+  ;; canonical front door and owns the single stdcall cleanup.
   (func $handle_DirectPlayEnumerate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $ret_addr i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-    (call $directplay_enumerate_ansi
-      (local.get $arg0) (local.get $arg1) (local.get $ret_addr)))
+    (call $handle_DirectPlayEnumerateA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_DirectPlayEnumerateA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
     (local.set $ret_addr (call $gl32 (global.get $esp)))
