@@ -6850,3 +6850,125 @@ FLOAT3, FLOAT4, SHORT4, SHORT4N and FLOAT16_4 must rasterize identical pixels,
 plus the four refusals above. Its corners are the clip volume's edges on
 purpose — SHORT4N lands a half-ULP short of them, which covers the same pixels,
 while a component read at the wrong scale or offset misses by a whole triangle.
+
+## Blocker #6: every vertex shader refused, and nothing said so
+
+With the world rendering, the terrain was still flat grey. A draw census in
+the live world — `scratchpad/bw-draw-census.js`, one signature string per
+retired draw — measured **2,039 draws in 45 seconds and zero vertex shaders**.
+Every draw was fixed-function. The most common signature, 651 of the 2,039,
+was `vs-fixed | ps | tex512x512 | op4/2/1 | unlit | prim4 | 0.0:7`: a
+declaration containing `SHORT4 POSITION0` and nothing else, no texcoord, a
+512x512 texture bound, and a real pixel shader.
+
+That combination cannot be what the game meant. A pixel shader samples a
+texture at coordinates something has to produce, and with no TEXCOORD element
+and no vertex shader, `fixedPrograms` hands it the register default — one
+constant coordinate for every pixel, one texel sampled, the triangle painted
+flat. Which is exactly what the terrain looked like.
+
+So the draws were not wrong; the shaders were missing. A refused
+`CreateVertexShader` is silent in precisely the way a refused declaration was:
+the game gets NULL, binds nothing, and the draw quietly falls back to
+fixed-function vertex processing with a declaration that was written for a
+shader. Counting it rather than inferring it is what `$d3d9_shader_made` /
+`$d3d9_shader_refused` and the per-stage first-refused version words exist
+for. At the main menu:
+
+```
+shaders=30made/107refused/vs=0xfffe0101,err16@519/ps=0xffff0200,err0
+```
+
+Two different findings in one line, and conflating them would have sent the
+next session to the wrong file:
+
+- **Pixel:** `0xffff0200` is ps_2_0 and the error is 0, meaning the version
+  gate refused the profile outright. `0xffff0200` appears nowhere in `src/`.
+  That is a front end to build, not a gate to widen.
+- **Vertex:** `0xfffe0101` is vs_1_1 — the profile we *do* accept — failing
+  with `$d3d_ir_error` 16 ("unsupported") at dword 519. So those shaders
+  passed the version gate and died inside `$d3d_shader_ir_compile`.
+
+This retired a hypothesis that had been reasoned from the code rather than
+measured: that `CreateVertexShader`'s hardcoded `0xfffe0101` was refusing
+vs_2_0 shaders. The counter said vs_1_1, so it was not.
+
+### Reading dword 519
+
+The offset alone names nothing, so the refusal began recording the token at
+it — and that came back `0x00000009`, which looked impossible: opcode 9 is
+`dp4`, the token's length field is 0, and as a source parameter its bit 31 is
+clear. Two traps sat behind that.
+
+The first was in the capture. Sizing the copy by scanning linearly for
+`0x0000ffff` is wrong: B&W2's shaders open with a 135-dword `COMMENT` holding
+the HLSL constant table (`CTAB`), and that blob contains a word equal to
+`0x0000ffff`, so the copy stopped at dword 383 of a stream whose error is at
+519. The validator's own scan skips comments properly; a linear search does
+not. Copy a fixed window and let the reader find END.
+
+The second was the reading. The 1.x scan advances by *arity*, not by the
+token's length field, so a length of 0 is normal in SM1 and "length < arity"
+was never the failure. `tools/d3d9-shader-dump.js` (written for this) settled
+it in one command:
+
+```
+  31 @ 516: mov  r0, v0
+  32 @ 519: dp4  oPos.x, r0, c10     [520] 0xc0010000  mask .x
+  33 @ 523: dp4  oPos.y, r0, c11     [524] 0xc0020000  mask .y
+  34 @ 527: dp4  oPos.z, r0, c12     [528] 0xc0040000  mask .z
+  37 @ 539: dp4  oPos.w, r0, c13     [540] 0xc0080000  mask .w
+```
+
+The textbook vs_1_1 transform: four dp4s against four rows of the clip matrix.
+`$d3d_ir_scan` required a write to oPos (bank 4, index 0) to carry a full
+`xyzw` mask **in one instruction**, so it refused the first one.
+
+### The fix (374269af)
+
+Completeness is a real requirement — an `oPos.w` nobody wrote makes the
+projection divide meaningless — but it belongs at the end of the shader, not
+on any single instruction. `$position` is now the union of the write masks and
+the final check compares it against 15, which is what `$d3d_ir_scan20` has
+always done for VS2.0. The two scans now agree.
+
+Measured on the fixed build at the same main menu:
+
+| | before | after |
+|---|---|---|
+| shaders made | 30 | 63 |
+| refused | 107 | 74 |
+| first refused vertex | `0xfffe0101` err 16 @519 | `0xfffe0200` err 0 |
+
+The vs_1_1 refusals are gone entirely, and what is left is the profile gate
+refusing **vs_2_0** — the hypothesis that was wrong as a diagnosis of blocker
+#6 and is correct as the next one.
+
+`test/test-d3d-vs11-split-position.js` pins the rule from both sides: every
+partition of `xyzw` across instructions is accepted (four singles, xyz+w,
+x+yzw, xy+zw, w-first, mixed opcodes, overlapping masks, one full write) and
+every partition that leaves a component out is refused with the position
+error. It also checks that a write to oFog — bank 4 *index 1* — does not count
+towards oPos, which is the mistake a union keyed on the bank alone would make.
+
+## Blocker #7 (open): the 2.0 profiles
+
+Both stages now stop at the same place, and they are not the same amount of
+work:
+
+- **vs_2_0.** `$d3d_shader_ir_compile20` and `$d3d_shader_vm_compile_vs20`
+  exist, have a dozen passing `test-d3d-vs20-*` tests behind them, and are
+  called **only from tests** — no shipped path ever compiles vs_2_0.
+  `$d3d9_shader_create` hardcodes `0xfffe0101` and refuses anything else. So
+  this is a gate to open and a path to wire, not a compiler to write.
+- **ps_2_0.** `0xffff0200` exists nowhere in `src/`. There is no front end at
+  all.
+
+One more failing draw class is recorded from drive38 (pick+1700s) and is
+probably the same story: a declaration with `POSITION0` as **D3DCOLOR** at
+offset 0, DIFFUSE type 4 at 4, TEXCOORD0 type 4 at 8, TEXCOORD1 FLOAT2 at 12,
+TEXCOORD2 type 4 at 20, stride 24. That is self-consistent and meaningless as
+a coordinate *unless a vertex shader unpacks it* — which is what the game
+intends and what a refused shader prevents. The host's element decode was
+checked against D3DVERTEXELEMENT9 and matches, and the FVF path emits
+different registers, so it is a real guest declaration and not a decode bug.
