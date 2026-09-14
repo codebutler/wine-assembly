@@ -5741,3 +5741,64 @@ comes first, before the divergent loop is ever entered, and the object behind it
 is a local (`[esp+0x50]`) that is valid on most passes and zero on a few --
 the shape of a lookup that came back empty rather than a pointer that was
 scribbled over.
+
+## SOLVED: the land stall was an emulator FPU bug, not geometry (2026-09-13)
+
+Fixed in `74f1e10c`. `$fpu_compare_eflags_unord` in `src/06-fpu.wat` published
+FCOMI/FUCOMI's result through lazy-flag modes 2 and 3, where **PF is the parity
+of the low byte of `flag_res`**. The equal case stored `flag_res = 0`, whose
+parity is even, so PF came out **set**. MSVC compiles `if (a == b)` on doubles
+as
+
+```
+fucomip st,st(1) ; lahf ; test ah,0x44 ; jp not_equal
+```
+
+which works only because an equal compare leaves ZF=1 with PF **clear**:
+`ah & 0x44` is then `0x40`, one bit, odd parity, and the JP is not taken. With
+PF set it read `0x44`, even parity, and the JP was taken -- so **every double
+equality in every guest took the not-equal branch**, with nothing wrong
+anywhere near it.
+
+In this app that is the gate in front of the list insert at `0x9cef29` (the
+`call 0x9cd6b0` with `lea eax,[esp+0x54]`). The insert never ran, so the list
+head at `[esp+0x50]` stayed at the zero it is initialized to at `0x9ced0b` /
+`0x9ced1d`, `0x9cef45` dereferenced NULL, and everything documented in the
+sections above followed from that: the `0x9cef*` fault cluster, then the
+worklist loop at `0x9e35e0` re-queueing itself 26,906,976 times because
+`0x9e1e50` read `[NULL]` and `[NULL+4]` twice per pass, then the 968 MB
+`vector<24-byte T>` and the OOM.
+
+The fix publishes ZF/PF/CF through lazy-flag **mode 9** (exact raw: CF in
+`flag_a` bit 0, PF in bit 1, independent of `flag_res`), so all four cases --
+less, equal, greater, unordered -- set the three flags x87 defines and leave
+OF/SF clear. `test/test-x87-compare-eflags.js` covers FCOMIP and FUCOMIP across
+less / equal / greater / unordered / `0==0` / `-0==+0`, asserting the raw bits
+and running the guest idiom end to end through SETP.
+
+Everything the arena work chased -- the 430 MB and 968 MB ranges, the 2 GB
+memory, the sparse-backing ladder -- was downstream of this one flag.
+
+### What the land load does now
+
+First drive on the fixed build (drive16, same UI path: profile -> main menu ->
+mouse tutorial -> land picker -> the green island at 135,378):
+
+- **Zero** `[fault]` lines in the entire run with `--fault-null` armed. The
+  53.8M reads at `0x9e1e50` and the earlier `0x9cef45` cluster are both gone.
+- No runaway allocation. `records=` climbs from 383 to 394 over the 55 s after
+  the pick and the backing pool stays at `backing_avail=0x5dfd2000/0x73c00000`
+  -- flat, where the old drives committed the whole pool and asked for more.
+- The run then stops on a different wall:
+
+```
+=== UNIMPLEMENTED API: <ord> ===
+  EIP: 0x02610000  ESP: 0x074fc974  EBP: 0x074fca0c
+  EDX: 0x02429ca4  EBX: 0x074fcb34  ESI: 0x074fcb38  EDI: 0x074fcb30
+```
+
+  The caller block ends in `call [edx+0x88]` -- vtable slot 34 -- and the
+  return address `0x02610010` puts it inside `d3dx9_25.dll` (loaded at
+  `0x2528000`, origBase `0x400000`, so original VA `0x004e800a`). `<ord>` means
+  the name pointer is an ordinal import, so the crash line cannot name it, and
+  that drive ran `--quiet-api`. Naming it is the next step.
