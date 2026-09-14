@@ -6350,3 +6350,59 @@ blocker instead of stopping at the first. Its frames are then *not* what the
 guest would see — the refused draws are still lost — so the census is the
 output and the picture is not. That distinction matters when reading its
 screenshots later.
+
+## B&W2 renders its world (2026-09-14)
+
+drive30 carried both fixes through a whole land load with the error census
+reporting `0/0` the entire way — no `missing pixel sampler`, no v1 refusal —
+and then the picker repainted for the first time in this lane: the capture went
+from 415,914 bytes of land-selection screen to 126,290 bytes of **a curved
+horizon under a sky gradient, with a warm glow at the skyline**. The draw census
+shows shapes that had never appeared before, which is the corroboration that
+this is the engine and not a menu:
+
+```
+4/9702/false/true                       9702 primitives, pixel shader
+4/2048/true/true/256x256:9/512x512:1    2048 primitives, both shaders, two textures
+4/48/false/true/1024x1024:1/1024x1024:1
+```
+
+Two things this does **not** yet establish, and neither should be skipped when
+the next session reads this:
+
+- **It is the last frame before rendering stopped, not a live scene.** The
+  render worker died at that moment (below).
+- **The darkness is unexplained.** Both fixes serve zero for undefined state,
+  and a land shader that multiplies by either would darken exactly like this.
+  Pre-dawn lighting and an unfinished first frame are equally consistent with
+  the picture. This is the one way the fixes could be producing a plausible
+  wrong answer, so it needs a measurement — sample the colour the land pass
+  writes with the substitutions forced to white and see whether the scene
+  changes — not an assumption.
+
+## The third blocker: one bad draw kills the render worker
+
+```
+D3D9 software: native raster execution failed (-1)   at submitted 8917
+QueueError: render worker exited                     at 8918
+QueueError: render worker stopped                    everything after
+```
+
+Unlike the first two this is not a policy refusal. `$d3d_software_step` returns
+`-1` from a single `$failure` label covering `$d3d_software_clip_range` and
+`$d3d_software_compact` (`src/09ah-d3d-software.wat`), and the clipper's own
+bound is `count > (user_mask ? 15 : 9)` output vertices — so whether the draw
+sets user clip planes is the first thing to check.
+
+The *fatality* is separate from the bug. `lib/d3d-render-worker.js` catches the
+throw, calls `shutdownNeutral()`, and the worker's event loop then has nothing
+left to keep it alive, so the thread exits and every later command reports
+"render worker stopped". That is the third distinct mechanism by which one
+unservable draw ends rendering for a whole run — after the sticky queue error
+and the refusals themselves. Worth fixing as its own thing: a draw the
+rasterizer rejects should cost that draw.
+
+Artifact: the first world frame is `frame-1263.png` in drive30's probe
+directory (also copied to this session's scratchpad as
+`bw2-first-world-frame.png`); probe directories under `/var/folders` are
+reaped, so copy it somewhere durable before relying on it.
