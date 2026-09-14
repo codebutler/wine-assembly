@@ -7063,3 +7063,69 @@ re-renders for each. So the picker is responsive, the pick registers, and the
 load that stalls. Whatever confirms the selection has not been found yet, and
 the screen shows no text or button anywhere, which is the thing to explain
 next.
+
+## Blocker #9: the terrain pass consumes specular (2026-09-14)
+
+Blocker #8 was fixed by allowing a *dead* `oD1` write through. The payload
+drive44 captured says the land pass's own draw is not that case. Decoded from
+`bw44-specular-fail.json` (a copy of the run's `bw40fail.0.json`):
+
+- the draw is `primitive 4, primitiveCount 2048, stride 12`, one attribute
+  `{register:0, usage:0, usageIndex:0, type:2, offset:0}`, `textures: []`
+- its vertex shader is vs_1_1, 11 instructions, ending `mov oD1.xyzw`
+  (destination word `0xd00f0001` -> bank 5 index 1, mask 15)
+- its pixel shader is ps_1_1, 3 instructions: `mov r0.xyz, v1`
+  (`0x80070000` <- `0x90e40001`, bank 1 index 1) then `mov r0.w, c0.w`
+  (`0xa0ff0000`)
+
+So the land is painted **by** the interpolated specular colour. Serving zero
+would paint it black, which is why the `consumesSpecular` allowance correctly
+did not cover it and why the refusal was right until the value could be
+carried. This is the ABI extension deliberately deferred in the #8 fix.
+
+### The fix: a second colour varying
+
+`src/09ah-d3d-software.wat`'s vertex snapshot grows from **144 to 160 bytes**,
+with `specularOverW float4` at +144. It is carried unconditionally: the VS
+context bank is zero-filled before every packet, so a shader that never writes
+`oD1` lands four zeroes there -- exactly what the pixel VM served for an
+unwritten `v1` before the varying existed.
+
+The VM context is `7 banks * 128 registers * 64 bytes` starting at +32, which
+fixes both ends of the linkage:
+
+| register | address |
+|---|---|
+| VS `oD1` = bank 5 index 1 | `32 + (5*128+1)*64` = **41056** |
+| PS `v1` = bank 1 index 1 | `8224 + 64` = **8288** |
+
+Every derived constant moves with the stride, and each one is arithmetic on the
+snapshot size rather than a magic number:
+
+| what | was | is |
+|---|---|---|
+| workspace per vertex (POINT / plain) | 148 / 144 | 164 / 160 |
+| clip scratch b/ma stride | 288 | 320 |
+| emitted block (7 x stride) | 1008 | 1120 |
+| retained per index (7 x stride + 14) | 1022 | 1134 |
+| ... POINT (+28) | 1050 | 1162 |
+| allocation bound per index / base | 1052 / 4080 | 1164 / 4464 |
+| scratch bytes (12 / 16 slots) | 3552 / 4736 | 3936 / 5248 |
+| clipped bound delta | 1280 | 1408 |
+
+One trap: `(i32.const 144)` appears 26 times in that file and **one of them is
+not the stride** -- line 324's `(i32.add (i32.const 144) (i32.shl $bank 2))` is
+the context's VSctx/PSctx pointer array and must not change.
+
+`lib/d3d9-software-backend.js` drops both halves of the #8 compromise. The
+`oD1` output rule is now plainly `bank===5 && index>1` (oD2 does not exist),
+and the `v1` linkage rule refuses only a producer the vertex lowering *drops* --
+a COLOR2 attribute or fixed-function specular lighting with no `oD1` write to
+carry it. `vs` there is the lowered program, so that question is measured per
+draw rather than assumed for the fixed-function path.
+
+`test/test-d3d9-specular-varying.js` pins the linkage with B&W2's own pixel
+shader (`mov r0.xyz, v1` / `mov r0.w, c0.w`) rendered twice: with a vertex
+shader writing `oD1` from a green COLOR0 attribute every pixel is
+`(0,255,0,255)`, and with the `oD1` write removed every pixel is black. The
+control is the point -- it proves the colour travelled through the varying.
