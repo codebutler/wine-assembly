@@ -293,6 +293,39 @@
     (call $g2w_miss (local.get $ga))
   )
 
+  ;; The lowest guest address a sparse VirtualAlloc reservation may occupy.
+  ;;
+  ;; It used to be the flat $VIRTUAL_ALLOC_MIN, which is not a fact about
+  ;; anything. The real constraint is that a sparse mapping must not land inside
+  ;; the direct window, because $g2w answers a direct-window address from the
+  ;; image's affine delta above and never consults the page table at all. That
+  ;; window ends at guest (region.end $DIRECT_WINDOW) + image_base - GUEST_BASE,
+  ;; which for the usual 0x400000 image is 0x083EE000 -- so the constant was
+  ;; holding back 124 MB of guest address space that nothing else could use.
+  ;;
+  ;; Black & White 2 is what made that matter. At the land picker its reserve
+  ;; cursor stands at 0x289F0000 and the land loader asks for one 430 MB
+  ;; (0x19AA0000) reservation; that lands at 0x0EF50000, 18 MB below the old
+  ;; floor and 100 MB above this one. It was refused, operator new returned
+  ;; null, and the unhandled std::bad_alloc ended the process.
+  ;;
+  ;; Capped at the old constant rather than simply derived: an image based high
+  ;; enough to push the direct window past it would *raise* the floor, and the
+  ;; code-page bitmap that records decoded pages below the floor covers exactly
+  ;; 0x10000000 pages' worth. Raising the floor is a separate change with its
+  ;; own correctness argument to make; lowering it needs none.
+  (func $virtual_alloc_min (result i32)
+    (local $end i32)
+    (local.set $end
+      (i32.and
+        (i32.add
+          (i32.sub (i32.add (region.end $DIRECT_WINDOW) (global.get $image_base))
+                   (global.get $GUEST_BASE))
+          (i32.const 0xFFFF))
+        (i32.const 0xFFFF0000)))
+    (select (local.get $end) (global.get $VIRTUAL_ALLOC_MIN)
+      (i32.lt_u (local.get $end) (global.get $VIRTUAL_ALLOC_MIN))))
+
   ;; Translate a complete guest span only when one affine mapping contains it.
   ;; Unlike translating two endpoints, this proves that every byte between them
   ;; uses the same guest->WASM delta. Return NULL_SENTINEL when the span crosses

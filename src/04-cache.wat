@@ -67,7 +67,7 @@
     ;; it independently rather than widening generated_code_* across hundreds
     ;; of megabytes of ordinary heap/framebuffer writes.
     (if (i32.and
-          (i32.ge_u (local.get $ga) (global.get $VIRTUAL_ALLOC_MIN))
+          (i32.ge_u (local.get $ga) (call $virtual_alloc_min))
           (i32.lt_u (local.get $ga) (global.get $VIRTUAL_ALLOC_TOP_INIT)))
       (then
         (local.set $page (i32.and (local.get $ga) (i32.const 0xFFFFF000)))

@@ -23,7 +23,11 @@ const regions = require('../lib/region-map.generated');
 
 const MB = 1024 * 1024;
 const IMAGE_BASE = 0x400000;
-const ALLOC_MIN = 0x10000000;
+// The arena's floor is not a constant: it is the first 64KB boundary past the
+// direct window, which moves with the image base (see $virtual_alloc_min). The
+// module is asked for it rather than a number being written down here, because
+// every scenario below is "a tenant this far above the floor" or "a cursor one
+// page above the floor" and a stale copy would silently stop testing that.
 const ALLOC_TOP = 0x50000000;
 
 const extraWat = `
@@ -37,6 +41,7 @@ const extraWat = `
     (call $zero_memory (global.get $GUEST_PAGE_TABLE) (global.get $GUEST_PAGE_TABLE_SIZE))
     (i32.store offset=4 (global.get $VIRTUAL_MAP_STATE) (global.get $VIRTUAL_BACKING_BASE))
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT)))
+  (func (export "test_gap_floor") (result i32) (call $virtual_alloc_min))
   (func (export "test_gap_cursor") (result i32)
     (i32.load offset=8 (global.get $VIRTUAL_MAP_STATE)))
   (func (export "test_gap_set_cursor") (param $v i32)
@@ -88,7 +93,12 @@ const extraWat = `
   //    beneath it, and hundreds of megabytes free overhead.
   {
     const e = await boot();
-    const low = 0x164f0000;
+    const ALLOC_MIN = e.test_gap_floor() >>> 0;
+    // 106 MB of address space under the tenant, which is less than the 191 MB
+    // asked for next -- the whole point of the case. Measured against the floor
+    // rather than written as 0x164f0000, so it stays "cannot fit beneath it"
+    // whatever the floor is.
+    const low = ALLOC_MIN + 106 * MB;
     assert(e.test_gap_commit(low, 121 * MB), 'the long-lived low buffer');
     e.test_gap_set_cursor(low);
     const got = e.test_gap_reserve(191 * MB) >>> 0;
@@ -104,6 +114,7 @@ const extraWat = `
   //    top with tenants and the placement lands under all of them.
   {
     const e = await boot();
+    const ALLOC_MIN = e.test_gap_floor() >>> 0;
     const tenants = [];
     for (let i = 0; i < 6; i++) {
       const base = ALLOC_TOP - (i + 1) * 32 * MB;
@@ -122,6 +133,7 @@ const extraWat = `
   // 3. A bare MEM_RESERVE nothing has committed is still an owner.
   {
     const e = await boot();
+    const ALLOC_MIN = e.test_gap_floor() >>> 0;
     e.test_gap_bare_reserve(0x40000000, 64 * MB);
     e.test_gap_set_cursor(ALLOC_MIN + 0x10000);
     const got = e.test_gap_reserve(48 * MB) >>> 0;
@@ -134,6 +146,7 @@ const extraWat = `
   //    the sticky floor says something is spoken for without saying what.
   {
     const e = await boot();
+    const ALLOC_MIN = e.test_gap_floor() >>> 0;
     e.test_gap_set_floor(0x30000000);
     e.test_gap_set_cursor(ALLOC_MIN + 0x10000);
     assert.strictEqual(e.test_gap_reserve(64 * MB) >>> 0, 0,
@@ -143,8 +156,9 @@ const extraWat = `
   // 5. A request bigger than the whole arena is still refused.
   {
     const e = await boot();
+    const ALLOC_MIN = e.test_gap_floor() >>> 0;
     e.test_gap_set_cursor(ALLOC_MIN + 0x10000);
-    assert.strictEqual(e.test_gap_reserve(0x40000000 + 0x1000000) >>> 0, 0,
+    assert.strictEqual(e.test_gap_reserve(ALLOC_TOP - ALLOC_MIN + 0x1000000) >>> 0, 0,
       'a request larger than the arena fails rather than wrapping');
   }
 

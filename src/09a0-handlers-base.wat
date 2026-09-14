@@ -2835,7 +2835,7 @@
         (return)))
     (if (local.get $arg0)
       (then
-        (if (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
+        (if (i32.ge_u (local.get $arg0) (call $virtual_alloc_min))
           (then
             ;; Commit into a sparse high guest reserve.
             (global.set $eax (call $virtual_map_commit_protect
@@ -2883,12 +2883,12 @@
     ;; are zero on Windows, so the backing has to be cleared now. See
     ;; $virtual_map_decommit_zero for the app that proved this matters.
     (if (i32.and
-          (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
+          (i32.ge_u (local.get $arg0) (call $virtual_alloc_min))
           (i32.ne (i32.and (local.get $arg2) (i32.const 0x4000)) (i32.const 0)))
       (then (call $virtual_map_decommit_zero (local.get $arg0) (local.get $arg1))))
     (if (i32.and
           (i32.and
-            (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
+            (i32.ge_u (local.get $arg0) (call $virtual_alloc_min))
             (i32.eqz (local.get $arg1)))
           (i32.ne (i32.and (local.get $arg2) (i32.const 0x8000)) (i32.const 0)))
       (then

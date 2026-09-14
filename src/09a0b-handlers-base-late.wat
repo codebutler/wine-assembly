@@ -1214,7 +1214,7 @@
             (global.set $last_error (i32.const 87))
             (global.set $eax (i32.const 0)))
           (else
-            (if (i32.ge_u (local.get $arg0) (global.get $VIRTUAL_ALLOC_MIN))
+            (if (i32.ge_u (local.get $arg0) (call $virtual_alloc_min))
               (then
                 (local.set $old (call $virtual_map_protect
                   (local.get $arg0) (local.get $arg1) (local.get $arg2))))

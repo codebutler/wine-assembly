@@ -610,7 +610,7 @@
       (local.set $base (i32.load
         (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
           (i32.shl (local.get $i) (i32.const 3)))))
-      (if (i32.and (i32.ge_u (local.get $base) (global.get $VIRTUAL_ALLOC_MIN))
+      (if (i32.and (i32.ge_u (local.get $base) (call $virtual_alloc_min))
             (i32.lt_u (local.get $base) (local.get $min)))
         (then (local.set $min (local.get $base))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -622,7 +622,7 @@
       (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
         (i32.shl (local.get $i) (i32.const 4))))
       (local.set $base (i32.load (local.get $rec)))
-      (if (i32.and (i32.ge_u (local.get $base) (global.get $VIRTUAL_ALLOC_MIN))
+      (if (i32.and (i32.ge_u (local.get $base) (call $virtual_alloc_min))
             (i32.lt_u (local.get $base) (local.get $min)))
         (then (local.set $min (local.get $base))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -694,14 +694,14 @@
     (if (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE))
       (then (return (i32.const 0))))
     (if (i32.gt_u (local.get $size)
-          (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (global.get $VIRTUAL_ALLOC_MIN)))
+          (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (call $virtual_alloc_min)))
       (then (return (i32.const 0))))
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
     (local.set $cand
       (i32.and (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (local.get $size))
         (i32.const 0xFFFF0000)))
     (block $done (loop $slide
-      (br_if $done (i32.lt_u (local.get $cand) (global.get $VIRTUAL_ALLOC_MIN)))
+      (br_if $done (i32.lt_u (local.get $cand) (call $virtual_alloc_min)))
       (br_if $done (i32.gt_u (local.get $cand) (global.get $VIRTUAL_ALLOC_TOP_INIT)))
       (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
       (br_if $done (i32.gt_u (local.get $steps) (i32.const 20000)))
@@ -742,7 +742,7 @@
       ;; A size larger than the cursor wraps the subtraction into a high address
       ;; that passes the floor test, so test the subtraction, not its result.
       (if (i32.or (i32.lt_u (local.get $top) (local.get $size))
-                  (i32.lt_u (local.get $new_top) (global.get $VIRTUAL_ALLOC_MIN)))
+                  (i32.lt_u (local.get $new_top) (call $virtual_alloc_min)))
         (then (return (call $virtual_reserve_gap (local.get $size)))))
       (br_if $done
         (i32.eq (local.get $seen)
@@ -1486,7 +1486,7 @@
       (local.set $end (i32.load offset=4 (local.get $rec)))
       (if (i32.and
             (i32.and
-              (i32.ge_u (local.get $base) (global.get $VIRTUAL_ALLOC_MIN))
+              (i32.ge_u (local.get $base) (call $virtual_alloc_min))
               (i32.eq (i32.atomic.load offset=8 (local.get $rec)) (local.get $end)))
             (i32.and
               (i32.eqz (i32.atomic.load offset=12 (local.get $rec)))
