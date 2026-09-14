@@ -2271,6 +2271,87 @@
     (call $console_buffer_finish (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
+  ;; Shared ReadConsoleOutputCharacterA/W body. The low-level character APIs
+  ;; walk consecutive cells, wrapping rows, but never expose attributes or
+  ;; advance the selected buffer's cursor.
+  (func $console_read_output_character
+        (param $handle i32) (param $buffer_g i32) (param $length i32)
+        (param $coord i32) (param $count_g i32) (param $wide i32)
+    (local $limit i32) (local $start i32) (local $dst i32) (local $count i32)
+    (local $i i32) (local $ch i32)
+    (if (i32.eqz (call $console_buffer_enter (local.get $handle)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return)))
+    ;; lpNumberOfCharsRead is required. A zero-length call still reports zero,
+    ;; but need not dereference lpCharacter because it transfers no cells.
+    (if (i32.eqz (local.get $count_g))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (return)))
+    (call $gs32 (local.get $count_g) (i32.const 0))
+    (local.set $limit (call $console_fill_limit (local.get $coord) (local.get $length)))
+    (if (i32.eq (local.get $limit) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (return)))
+    (if (i32.and (i32.ne (local.get $limit) (i32.const 0))
+          (i32.eqz (local.get $buffer_g)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (call $console_buffer_finish (i32.const 0))
+        (return)))
+    (if (local.get $limit)
+      (then
+        (call $console_cells_ensure)
+        (local.set $dst (call $g2w (local.get $buffer_g)))
+        (local.set $start
+          (i32.add
+            (i32.mul (i32.shr_s (local.get $coord) (i32.const 16))
+              (global.get $console_width))
+            (i32.extend16_s (local.get $coord))))
+        (block $done (loop $read
+          (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
+          (local.set $ch
+            (i32.load16_u
+              (i32.add (global.get $console_text_base)
+                (i32.shl (i32.add (local.get $start) (local.get $i))
+                  (i32.const 1)))))
+          (if (local.get $wide)
+            (then
+              (i32.store16
+                (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 1)))
+                (local.get $ch)))
+            (else
+              ;; Match the runtime's existing console-code-page narrowing in
+              ;; ReadConsoleOutputA: ANSI output exposes the low byte.
+              (i32.store8 (i32.add (local.get $dst) (local.get $i))
+                (local.get $ch))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $read)))
+        (local.set $count (local.get $limit))))
+    (call $gs32 (local.get $count_g) (local.get $count))
+    (global.set $eax (i32.const 1))
+    (call $console_buffer_finish (i32.const 0)))
+
+  (func $handle_ReadConsoleOutputCharacterA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $console_read_output_character
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+
+  (func $handle_ReadConsoleOutputCharacterW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $console_read_output_character
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+
   ;; ScrollConsoleScreenBufferW(hConsole, lpScrollRectangle, lpClipRectangle, dwDestinationOrigin, lpFill) → BOOL
   (func $handle_ScrollConsoleScreenBufferW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $scroll i32) (local $clip i32) (local $fill i32)

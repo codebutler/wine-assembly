@@ -29086,5 +29086,19 @@
     "convention": "stdcall",
     "hash": 1561565041,
     "handler": "d3d8_not_available_7"
+  },
+  {
+    "id": 3457,
+    "name": "ReadConsoleOutputCharacterA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1175175905
+  },
+  {
+    "id": 3458,
+    "name": "ReadConsoleOutputCharacterW",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 940289239
   }
 ]

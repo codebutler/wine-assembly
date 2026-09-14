@@ -4999,3 +4999,52 @@ emulator does when a batch runs to budget - the per-batch host cost is being pai
 The lever this points at is **overlap**, not interpreter throughput: while the
 guest is parked on `yield_reason 16` the main thread does nothing, and while the
 guest interprets, the render worker is idle half the time.
+
+## The land-selection screen does not OOM -- it spins in a triangulation walk
+
+Measured 2026-09-13 on a run driven to the land picker (`--skip-intro`, ENTER on
+the profile dialog, click New Game at 170,444, then left alone for 25 minutes).
+
+The screen paints the burning-village picture and the eight island thumbnails and
+then **stops presenting entirely**: two frames 10 minutes apart differ by 0 of
+307200 pixels. The process is not idle and not parked -- `get_last_run_blocks()`
+returns the full 200,000 budget with `yield_reason` 0, i.e. every batch is spent
+running guest code that never reaches a present.
+
+Sampled EIP lands in one small family of functions, all in the exe:
+
+| VA | what it is |
+|---|---|
+| `0x009c37f0` | integer 2D orientation predicate: sign of `(b.y-a.y)*(c.x-a.x)` vs `(c.y-a.y)*(b.x-a.x)`, compared as full 64-bit products (one-operand `imul`, high word in EDX, low compared unsigned) |
+| `0x009c4c80` | three of those predicates = "is the query point inside this wedge" |
+| `0x009ddfb0` | `mov eax,[ecx+8]; ret` -- a node's vertex pointer |
+| `0x009e1950` | **the loop**: `do { esi = esi->next } while (!inside(q, esi))`, no iteration guard |
+| `0x009e1b20`/`0x009e1b78` | one function: advance the walk, returns 0..3; its own `[esp+0x24]` list walk exits only on the end sentinel or an orientation flip |
+| `0x009e1c30` | the driver: locate, then `call 0x9e1b20` / `cmp eax,3 / ja` back -- a line walk through a triangulation |
+
+Live hit counters (`set_count` on a running instance, then `get_count`) put
+`0x009e1b80` at **~115,000 iterations per second, forever** -- over 170 million
+in one sitting. `0x009c37f0` runs at ~345,000/s. So this is a point-location /
+line-walk over a 2D triangulation that never finds its target and never exits.
+
+Two things this rules out:
+
+* **Not the NULL sentinel.** The run carried `--fault-null` and logged **zero**
+  unmapped accesses. The lists being walked are real mapped memory.
+* **Not the `imul` high word.** `$th_imul32` / `$th_imul_m32` compute the signed
+  64-bit product and place the high half in EDX correctly, and `$fpu_to_i32`
+  already returns x87's `0x80000000` integer-indefinite on out-of-range rather
+  than a clamp, so coordinates converted from floats have the right shape.
+
+**The 430MB `operator new` from the earlier session is the same bug wearing a
+different hat.** Its call site `0x009d5430` is a list walk in the same family
+(it calls `0x009e35e0`, which opens with a circular-list walk, and `0x009d4080`
+calls the same `0x009c4c80` predicate). 430,511,656 is 8 x 53,813,957 -- an odd
+element count, which is what an unbounded `push_back` in a non-terminating walk
+looks like, not a sized allocation. One run records the walk and explodes; one
+run does not and spins.
+
+What is still open is the input: whether the vertices being walked are sane and
+our predicate disagrees with the hardware, or the structure itself is corrupt
+before the walk begins. `$SCRATCH/bw-hullwalk.sh` dumps the node ring and the
+query point off a live instance for exactly that question.
