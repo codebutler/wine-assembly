@@ -5509,3 +5509,51 @@ are the `test al,al` on `0x9e1e50` at `0x9e3a25` (reject -> `0x9e3c7a`), the
 pointer-identity tests at `0x9e3a45`/`0x9e3a4f`, and the `[edi+0xc] == 0` test
 at `0x9e3a68`. That is where to look next -- not at the allocator, and not at
 the arena size.
+
+### What the loop is, and why its arithmetic is not the bug (2026-09-13)
+
+`0x9e35e0` reads as a **constrained edge-insertion over a quad-edge planar
+subdivision** -- a Delaunay-style flip loop:
+
+- It opens by walking a circular list (`esi = [esi+4]` until back at the head)
+  checking `[esi+0xc]`; if no node has one, it calls `0x9e32a0` and returns 1.
+- A first bounded pass (`for i < [esp+0x20]`) walks `[edx+eax*4]` node arrays,
+  rejects duplicates against the constraint's own endpoints at `[esp+0x30]` /
+  `[esp+0x34]`, calls `0x9edb80` to find an index, reads the neighbours
+  `[esi+edi*4]` and `[esi+ebx*4]` at `0x9e3758`/`0x9e375f`, and pushes what it
+  finds onto the worklist through `0x531330`.
+- The main loop then drains that worklist, and its body splices rings
+  (`[eax+0xc] = 0` / `[ecx+0xc] = 0` at `0x9e3b30` and `0x9e3b63`, then
+  `0x9e6340`) and pushes replacements back on. That is a flip.
+
+A flip loop terminates because each flip strictly reduces the number of edges
+crossing the constraint. It only fails to terminate when the geometric
+predicate is *inconsistent* -- when it can answer "crosses" about an edge it
+just uncrossed.
+
+**The predicates are exact integer arithmetic, and we compute them correctly.**
+`0x9c37f0`, called at `0x9e37bd`, is a textbook orientation test:
+
+```
+009c380d  sub eax,ecx        ; by - ay
+009c380f  sub edx,esi        ; cx - ax
+009c3811  imul edx           ; edx:eax = (by-ay)*(cx-ax)     64-bit signed
+009c3821  mov edi,edx        ; hi1
+009c3823  imul ecx           ; edx:eax = (cy-ay)*(bx-ax)
+009c3829  cmp edi,edx        ; hi compare, signed (jl/jg)
+009c382f  cmp [esp+0x10],ecx ; lo compare, unsigned (jbe)
+```
+
+and the cross-product compare at `0x9e3c11`/`0x9e3c23` inside the loop body is
+the same idiom. Both are one-operand `imul r/m32`, which `$th_imul32`
+(`src/05-alu.wat:1118`) implements as a full `i64.mul` of two sign-extended
+operands with `i64.shr_s` into EDX -- correct, including the flags. No rounding,
+no x87, nothing for the emulator to get wrong. **So the divergence cannot come
+from the arithmetic; it has to come from the inputs.**
+
+Every coordinate reaching those predicates is chased through pointers --
+`[esi+0x14]` node arrays, `[eax]`, `[edi+0xc]`, ring links. A guest read that
+no mapping covers does not fault here: `$g2w` absorbs it into `NULL_SENTINEL`,
+which reads 0. A point silently at the origin makes the orientation test answer
+confidently and wrongly, forever. That is what `--fault-null` exists to find,
+and it is exactly the failure already recorded for this app at `0x9e17d0`.
