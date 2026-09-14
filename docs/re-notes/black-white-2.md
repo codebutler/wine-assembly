@@ -7382,3 +7382,45 @@ Two practical consequences: **a B&W2 land run needs an hour-scale wall budget**
 the flyover barely started), and *no screen change for tens of minutes is not
 evidence of a hang here* — the VA record count climbing (387 → 510 over 14
 minutes) is the progress signal to read instead.
+
+### Blocker #11: a FLOAT2 NORMAL, and why one refusal ends a whole run
+
+drive50 went the whole way: the land loaded, the cinematic flew down to the
+village, and input came back — `bw-aim.sh` put the game's own cursor on
+`400,300` exactly, the first time B&W2 has been aimable in-game. Then the
+picture froze with the camera parked, and the frozen picture was not a freeze:
+
+```
+t=5079s  QueueError: D3D9 software: invalid NORMAL/specular input
+t=5302s  QueueError: render worker exited   → 50,253 commands failed after it
+```
+
+The refused draw (`scratchpad/bw49fail.0.json`) is small and ordinary — a
+68-primitive strip, stride 32, `vs_1_1`:
+
+```
+v0 POSITION0 FLOAT3 @0   v1 NORMAL0 FLOAT2 @12   v2 TEXCOORD0 SHORT2 @20
+v3 COLOR0 D3DCOLOR @24   v4 TEXCOORD1 SHORT2 @28
+```
+
+A **FLOAT2 normal**. Under fixed function that is meaningless — a normal is
+lit, so its type has to make sense as one — but a vertex program just reads
+four floats out of the lane and decides for itself. So the type rule now
+applies only when the draw is fixed function, pinned by the village case in
+`test/test-d3d9-generic-vertex-semantics.js`.
+
+**Why a single refusal is fatal, and it is by design.** 5b9b0d43 stopped the
+worker-side escalation (a throw escaping the worker's message handler used to
+shut the thread down). The host-side one is still there and is deliberate:
+`_retireFailedWorker` in `lib/d3d9-host.js` — *"a poisoned stream cannot be
+reset behind the worker's live device. Retire the shared worker instead,
+explicitly losing every device"* — runs on the next device release once
+`queue.error` is set, cancels the consumer and terminates the worker. After
+that every command answers `render worker stopped`, on every device, for the
+rest of the process, and no error text is ever printed because the shutdown is
+a clean one.
+
+The consequence for this app is worth stating plainly: **any single validator
+gap ends rendering for the whole run**, tens of minutes of load included. When
+a B&W2 drive shows a frozen picture, read `ctx.bwErrors.order[0]` before
+believing anything about the guest.
