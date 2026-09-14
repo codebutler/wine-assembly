@@ -615,8 +615,8 @@ for (const mode of ['fit', 'zoom']) {
 // portrait, so portrait must come out byte-identical to having no field at all.
 {
   const ski = require('../lib/apps').APPS.ski32;
-  assert.deepStrictEqual(ski.mobileZoom, { landscape: 1.5 },
-    'SkiFree asks for 1.5x in landscape and nothing in portrait');
+  assert.deepStrictEqual(ski.mobileZoom, { landscape: 1.25 },
+    'SkiFree asks for 1.25x in landscape and nothing in portrait');
   assert.strictEqual(ski.mobileCrop, undefined,
     'a crop would be Fill-only, and the complaint is about the view the player lands on');
 
@@ -626,12 +626,12 @@ for (const mode of ['fit', 'zoom']) {
   // aspect that matches is a picture that reaches every edge.
   const land = makeRenderer(667, 375, 667, 375);
   land.singleAppZoom = ski.mobileZoom;
-  assert.deepStrictEqual(land.singleAppBackingSize(667, 375), { w: 445, h: 250 },
+  assert.deepStrictEqual(land.singleAppBackingSize(667, 375), { w: 534, h: 300 },
     'the landscape stage is divided by the zoom');
-  assert(Math.abs((445 / 250) / (667 / 375) - 1) < 0.005,
+  assert(Math.abs((534 / 300) / (667 / 375) - 1) < 0.005,
     'the zoomed desktop keeps the viewport aspect, so nothing letterboxes');
-  assert.strictEqual(Math.round(31 * 667 / 445), 46,
-    'a 31 guest-px skier presents at 46 CSS px in landscape, not 31');
+  assert.strictEqual(Math.round(31 * 667 / 534), 39,
+    'a 31 guest-px skier presents at 39 CSS px in landscape, not 31');
 
   // PORTRAIT: identical to the same renderer with no `mobileZoom` at all --
   // asserted against the unzoomed result rather than against a number typed
@@ -640,8 +640,8 @@ for (const mode of ['fit', 'zoom']) {
     {},                                                                  // fresh launch
     { 1: win(0, 0, 400, 711, { _singleAppNaturalSize: { w: 400, h: 711 } }) },
     // ...and after a rotation OUT of landscape, where the window the guest
-    // made on the 445x250 zoomed desktop is the natural size on record.
-    { 1: win(0, 0, 400, 711, { _singleAppNaturalSize: { w: 250, h: 250 } }) },
+    // made on the 534x300 zoomed desktop is the natural size on record.
+    { 1: win(0, 0, 400, 711, { _singleAppNaturalSize: { w: 300, h: 300 } }) },
   ]) {
     const zoomed = makeRenderer(400, 711, 375, 667);
     const none = makeRenderer(400, 711, 375, 667);
@@ -671,11 +671,11 @@ for (const mode of ['fit', 'zoom']) {
   };
   assert.deepStrictEqual(
     trip([[400, 711], [667, 375], [400, 711]], { w: 400, h: 711 }),
-    ['400x711', '445x250', '400x711'],
+    ['400x711', '534x300', '400x711'],
     'portrait -> landscape -> portrait comes back to the portrait desktop');
   assert.deepStrictEqual(
-    trip([[667, 375], [400, 711], [667, 375]], { w: 250, h: 250 }),
-    ['445x250', '400x711', '445x250'],
+    trip([[667, 375], [400, 711], [667, 375]], { w: 300, h: 300 }),
+    ['534x300', '400x711', '534x300'],
     'landscape -> portrait -> landscape comes back to the landscape desktop');
 
   // Untouched without the field, and never applied to a native fullscreen
