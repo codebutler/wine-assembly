@@ -1012,11 +1012,20 @@
     (i32.const -1)
   )
 
+  ;; fclose(FILE*) and _close(fd) are distinct CRT contracts: a real FILE*
+  ;; owns stream buffering while a descriptor does not. This minimal CRT has
+  ;; no stream buffer or descriptor table -- fopen/_open both expose the same
+  ;; raw VFS handle -- so only their final close/result translation is shared.
+  ;; Keep the public handlers separate so richer FILE/descriptor state can be
+  ;; added later without making one ABI front door an alias of the other.
+  (func $crt_close_unbuffered_handle (param $handle i32) (result i32)
+    (if (result i32) (call $host_fs_close_handle (local.get $handle))
+      (then (i32.const 0))
+      (else (i32.const -1)))
+  )
+
   (func $handle_fclose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (call $host_fs_close_handle (local.get $arg0))
-        (then (i32.const 0))
-        (else (i32.const -1))))
+    (global.set $eax (call $crt_close_unbuffered_handle (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
@@ -1171,10 +1180,7 @@
   )
 
   (func $handle__close (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (call $host_fs_close_handle (local.get $arg0))
-        (then (i32.const 0))
-        (else (i32.const -1))))
+    (global.set $eax (call $crt_close_unbuffered_handle (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
