@@ -9,9 +9,9 @@
 //
 // WHAT IS SAMPLED AND WHY EACH ONE IS HERE:
 //   wasmBytes  the guest's linear memory. FIXED at launch -- the import says
-//              (memory 8192 16384 shared) but host.js creates it with
-//              initial === maximum, so it never grows: 512MB, or 1GB for an
-//              app with bigMemory set in lib/apps.js. It is here as the
+//              (memory 8192 32768 shared) but host.js creates it with
+//              initial === maximum, so it never grows: 512MB, or as much as
+//              2GB for an app with bigMemory set in lib/apps.js. It is here as the
 //              denominator and to catch a second instance being launched, NOT
 //              as a leak signal; virtualTop below is the exhaustion signal.
 //   jsHeap     performance.memory.usedJSHeapSize. Chrome only, and it is

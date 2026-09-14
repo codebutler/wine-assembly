@@ -21,7 +21,7 @@
 //
 // 1. "The run got OOM-killed, so we leak." The guest's linear memory is FIXED
 //    at launch -- host.js creates it with initial === maximum, 512MB for every
-//    app and 1GB only for one that sets bigMemory in lib/apps.js -- so wasmMB
+//    app and up to 2GB for one that sets bigMemory in lib/apps.js -- so wasmMB
 //    is a floor the run starts at, not something that grows. One tab still
 //    costs ~1GB at a GC peak, which is enough to be OOM-killed on a loaded box
 //    with nothing whatsoever wrong. Read the JS heap for leaks and the sparse
