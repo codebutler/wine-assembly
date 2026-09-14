@@ -154,6 +154,7 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
   const rapidPagesFramePath = path.join(temp, 'winrar-rapid-pages.png');
   const mainFramePath = path.join(temp, 'winrar-main-after-settings.png');
   const commandsFramePath = path.join(temp, 'winrar-commands.png');
+  const driveFramePath = path.join(temp, 'winrar-drive-menu.png');
   try {
     const wasm = compileSrcWasm();
     await WebAssembly.compile(wasm);
@@ -236,7 +237,9 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
         `32:png:${rapidPagesFramePath},40:dlg-click:2,` +
         `45:dump-windows:settings-closed,46:png:${mainFramePath},` +
         `50:mousedown:95:51,51:mouseup:95:51,` +
-        `60:png:${commandsFramePath},70:mousedown:500:400,71:mouseup:500:400`,
+        `60:png:${commandsFramePath},70:mousedown:500:400,71:mouseup:500:400,` +
+        `75:mousedown:42:51,76:mouseup:42:51,78:mousemove:100:91,` +
+        `85:png:${driveFramePath},90:mousedown:500:400,91:mouseup:500:400`,
       `--png=${installedFramePath}`,
     ], {
       cwd: ROOT,
@@ -321,6 +324,18 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       245, 65, 288, 378);
     assert(widenedMenuGray > 9000,
       `WinRAR Commands menu remained clipped (${widenedMenuGray} gray extension pixels)`);
+    assert(fs.existsSync(driveFramePath),
+      'WinRAR did not capture its owner-drawn Change drive cascade');
+    const drivePng = PNG.sync.read(fs.readFileSync(driveFramePath));
+    // File > Change drive is rebuilt by WinRAR as two MF_OWNERDRAW items. The
+    // cascade background alone is not evidence: before WM_MEASUREITEM and
+    // WM_DRAWITEM dispatch it was a correctly sized but completely blank gray
+    // box. Exclude its frame and require ink in both measured item rows.
+    const cDriveInk = darkCountInRect(drivePng, 262, 86, 290, 101);
+    const dDriveInk = darkCountInRect(drivePng, 262, 105, 290, 121);
+    assert(cDriveInk > 20 && dDriveInk > 20,
+      `WinRAR owner-drawn C:/D: rows stayed blank ` +
+        `(${cDriveInk} first-row ink, ${dDriveInk} second-row ink)`);
 
     // Exercise WinRAR's real BROWSEINFOA caller rather than only the shell
     // dialog internals. The startup Settings sheet is already visible behind
@@ -374,7 +389,9 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       installedWhite > 35000 && installedBlue > 3000,
     `installed WinRAR file manager is not visibly rendered (${installedTeal} teal, ${installedGray} gray, ${installedWhite} white, ${installedBlue} blue)`);
 
-    console.log(`PASS  WinRAR 3.10 installer and installed file manager render (${installedGray} gray, ${installedWhite} white, ${installedBlue} blue pixels)`);
+    console.log(`PASS  WinRAR 3.10 installer and installed file manager render ` +
+      `(${installedGray} gray, ${installedWhite} white, ${installedBlue} blue pixels; ` +
+      `owner-draw drive rows ${cDriveInk}/${dDriveInk} ink)`);
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
   }

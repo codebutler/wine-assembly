@@ -58,7 +58,8 @@
   ;; Keep those second-level popup handles in a small heap-backed binding list
   ;; and paint their canonical MNUD state in place of the resource placeholder.
   ;; Binding: next, parent blob, top index, child index, HMENU, paint blob,
-  ;;           owned copies of seed labels.
+  ;;           owned copies of seed labels, cached owner-draw measurements,
+  ;;           owner HWND.
   (global $resource_submenu_bindings (mut i32) (i32.const 0))
 
   ;; --------- MENU_DATA_TABLE accessors ---------
@@ -832,11 +833,18 @@
   ;; public handle remains the MNUD object; this copy exists only because the
   ;; menu compositor consumes the common resource/dynamic blob representation.
   (func $resource_submenu_binding_refresh (param $hmenu i32)
-    (local $bw i32) (local $old i32)
+    (local $bw i32) (local $old i32) (local $measurements i32)
     (local.set $bw (call $resource_submenu_binding_find_handle (local.get $hmenu)))
     (if (i32.eqz (local.get $bw)) (then (return)))
     (local.set $old (i32.load offset=20 (local.get $bw)))
     (if (local.get $old) (then (call $heap_free (local.get $old))))
+    ;; Item insertion/removal/replacement invalidates every cached index and
+    ;; itemData value. Re-measure lazily when geometry is next queried.
+    (local.set $measurements (i32.load offset=28 (local.get $bw)))
+    (if (local.get $measurements)
+      (then
+        (call $heap_free (local.get $measurements))
+        (i32.store offset=28 (local.get $bw) (i32.const 0))))
     (i32.store offset=20 (local.get $bw)
       (call $dynamic_menu_make_popup_blob (local.get $hmenu))))
 
@@ -876,6 +884,8 @@
             (then (call $heap_free (i32.load offset=20 (local.get $bw)))))
           (if (i32.load offset=24 (local.get $bw))
             (then (call $heap_free (i32.load offset=24 (local.get $bw)))))
+          (if (i32.load offset=28 (local.get $bw))
+            (then (call $heap_free (i32.load offset=28 (local.get $bw)))))
           (if (local.get $prev_w)
             (then (i32.store (local.get $prev_w) (local.get $next)))
             (else (global.set $resource_submenu_bindings (local.get $next))))
@@ -900,6 +910,8 @@
             (then (call $heap_free (i32.load offset=20 (local.get $bw)))))
           (if (i32.load offset=24 (local.get $bw))
             (then (call $heap_free (i32.load offset=24 (local.get $bw)))))
+          (if (i32.load offset=28 (local.get $bw))
+            (then (call $heap_free (i32.load offset=28 (local.get $bw)))))
           (local.set $hmenu (i32.load offset=16 (local.get $bw)))
           (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
           (if (local.get $sw)
@@ -915,7 +927,8 @@
       (br $scan))))
 
   (func $resource_submenu_bind
-        (param $parent_w i32) (param $top i32) (param $child i32) (result i32)
+        (param $parent_w i32) (param $top i32) (param $child i32)
+        (param $hwnd i32) (result i32)
     (local $bw i32) (local $hdr i32) (local $count i32) (local $i i32)
     (local $it i32) (local $flags i32) (local $mf i32) (local $label_len i32)
     (local $label_bytes i32) (local $labels i32) (local $label_at i32)
@@ -975,7 +988,7 @@
         (i32.add (local.get $label_at) (i32.add (local.get $label_len) (i32.const 1))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $seed)))
-    (local.set $binding (call $heap_alloc (i32.const 28)))
+    (local.set $binding (call $heap_alloc (i32.const 36)))
     (if (i32.eqz (local.get $binding))
       (then
         (if (local.get $labels) (then (call $heap_free (local.get $labels))))
@@ -989,9 +1002,168 @@
     (i32.store offset=16 (local.get $bw) (local.get $hmenu))
     (i32.store offset=20 (local.get $bw) (i32.const 0))
     (i32.store offset=24 (local.get $bw) (local.get $labels))
+    (i32.store offset=28 (local.get $bw) (i32.const 0))
+    (i32.store offset=32 (local.get $bw) (local.get $hwnd))
     (global.set $resource_submenu_bindings (local.get $binding))
     (call $resource_submenu_binding_refresh (local.get $hmenu))
     (local.get $hmenu))
+
+  ;; Cached Win98 MEASUREITEM dimensions for one item in a resource-backed
+  ;; mutable cascade. The packed result is height:width; ordinary items and
+  ;; unbound resource menus retain the classic 20px row and no width override.
+  ;; A mutation drops the whole cache because both positions and itemData can
+  ;; change in one InsertMenuItem/SetMenuItemInfo call.
+  (func $resource_submenu_item_dimensions
+        (param $parent_w i32) (param $top i32) (param $child i32)
+        (param $index i32) (result i32)
+    (local $bw i32) (local $hmenu i32) (local $sw i32) (local $item i32)
+    (local $measurements i32) (local $mw i32) (local $mis i32) (local $misw i32)
+    (local $width i32) (local $height i32)
+    (local.set $bw (call $resource_submenu_binding_find_key
+      (call $w2g (local.get $parent_w)) (local.get $top) (local.get $child)))
+    (if (i32.eqz (local.get $bw)) (then (return (i32.const 0x00140000))))
+    (local.set $hmenu (i32.load offset=16 (local.get $bw)))
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (i32.or
+          (i32.eqz (local.get $sw))
+          (i32.or
+            (i32.lt_s (local.get $index) (i32.const 0))
+            (i32.ge_u (local.get $index) (i32.load offset=4 (local.get $sw)))))
+      (then (return (i32.const 0x00140000))))
+    (local.set $item (i32.add (local.get $sw)
+      (i32.add (i32.const 16) (i32.mul (local.get $index) (i32.const 16)))))
+    (if (i32.eqz (i32.and (i32.load (local.get $item)) (i32.const 0x0100)))
+      (then (return (i32.const 0x00140000))))
+    (local.set $measurements (i32.load offset=28 (local.get $bw)))
+    (if (i32.eqz (local.get $measurements))
+      (then
+        ;; 64 MNUD slots x {measured, width, height}.
+        (local.set $measurements (call $heap_alloc (i32.const 768)))
+        (if (i32.eqz (local.get $measurements))
+          (then (return (i32.const 0x00140000))))
+        (call $zero_memory (call $g2w (local.get $measurements)) (i32.const 768))
+        (i32.store offset=28 (local.get $bw) (local.get $measurements))))
+    (local.set $mw (i32.add (call $g2w (local.get $measurements))
+      (i32.mul (local.get $index) (i32.const 12))))
+    (if (i32.load (local.get $mw))
+      (then
+        (return (i32.or
+          (i32.and (i32.load offset=4 (local.get $mw)) (i32.const 0xFFFF))
+          (i32.shl (i32.load offset=8 (local.get $mw)) (i32.const 16))))))
+    (local.set $mis (call $heap_alloc (i32.const 24)))
+    (if (i32.eqz (local.get $mis))
+      (then (return (i32.const 0x00140000))))
+    (local.set $misw (call $g2w (local.get $mis)))
+    (i32.store           (local.get $misw) (i32.const 1)) ;; ODT_MENU
+    (i32.store offset=4  (local.get $misw) (i32.const 0))
+    (i32.store offset=8  (local.get $misw) (i32.load offset=4 (local.get $item)))
+    (i32.store offset=12 (local.get $misw) (i32.const 0))
+    (i32.store offset=16 (local.get $misw) (i32.const 20))
+    (i32.store offset=20 (local.get $misw) (i32.load offset=8 (local.get $item)))
+    (drop (call $wnd_send_message
+      (i32.load offset=32 (local.get $bw)) (i32.const 0x002C)
+      (i32.const 0) (local.get $mis)))
+    (local.set $width (i32.load offset=12 (local.get $misw)))
+    (local.set $height (i32.load offset=16 (local.get $misw)))
+    (call $heap_free (local.get $mis))
+    (if (i32.or
+          (i32.lt_s (local.get $width) (i32.const 0))
+          (i32.gt_s (local.get $width) (i32.const 4096)))
+      (then (local.set $width (i32.const 0))))
+    (if (i32.or
+          (i32.lt_s (local.get $height) (i32.const 1))
+          (i32.gt_s (local.get $height) (i32.const 255)))
+      (then (local.set $height (i32.const 20))))
+    (i32.store          (local.get $mw) (i32.const 1))
+    (i32.store offset=4 (local.get $mw) (local.get $width))
+    (i32.store offset=8 (local.get $mw) (local.get $height))
+    (i32.or (i32.and (local.get $width) (i32.const 0xFFFF))
+      (i32.shl (local.get $height) (i32.const 16))))
+
+  (func $resource_submenu_ownerdraw_width
+        (param $parent_w i32) (param $top i32) (param $child i32)
+        (param $count i32) (result i32)
+    (local $i i32) (local $width i32) (local $candidate i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $candidate (i32.and
+        (call $resource_submenu_item_dimensions
+          (local.get $parent_w) (local.get $top) (local.get $child) (local.get $i))
+        (i32.const 0xFFFF)))
+      (if (i32.gt_u (local.get $candidate) (local.get $width))
+        (then (local.set $width (local.get $candidate))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    ;; USER supplies the checkmark gutter around an owner-measured menu item.
+    (select (i32.add (local.get $width) (i32.const 40)) (i32.const 0)
+      (i32.ne (local.get $width) (i32.const 0))))
+
+  (func $resource_submenu_item_height
+        (param $parent_w i32) (param $top i32) (param $child i32)
+        (param $index i32) (result i32)
+    (i32.shr_u
+      (call $resource_submenu_item_dimensions
+        (local.get $parent_w) (local.get $top) (local.get $child) (local.get $index))
+      (i32.const 16)))
+
+  ;; Hand an owner-draw menu row to the owning guest wndproc. hDC is the same
+  ;; canonical screen overlay the normal menu painter uses, so guest GDI calls
+  ;; write directly into the pixels the compositor presents.
+  (func $resource_submenu_draw_item
+        (param $parent_w i32) (param $top i32) (param $child i32)
+        (param $index i32) (param $hdc i32)
+        (param $left i32) (param $top_y i32) (param $right i32) (param $bottom i32)
+        (param $selected i32) (result i32)
+    (local $bw i32) (local $hmenu i32) (local $sw i32) (local $item i32)
+    (local $flags i32) (local $state i32) (local $dis i32) (local $disw i32)
+    (local.set $bw (call $resource_submenu_binding_find_key
+      (call $w2g (local.get $parent_w)) (local.get $top) (local.get $child)))
+    (if (i32.eqz (local.get $bw)) (then (return (i32.const 0))))
+    (local.set $hmenu (i32.load offset=16 (local.get $bw)))
+    (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
+    (if (i32.or
+          (i32.eqz (local.get $sw))
+          (i32.or
+            (i32.lt_s (local.get $index) (i32.const 0))
+            (i32.ge_u (local.get $index) (i32.load offset=4 (local.get $sw)))))
+      (then (return (i32.const 0))))
+    (local.set $item (i32.add (local.get $sw)
+      (i32.add (i32.const 16) (i32.mul (local.get $index) (i32.const 16)))))
+    (local.set $flags (i32.load (local.get $item)))
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x0100)))
+      (then (return (i32.const 0))))
+    (local.set $state
+      (i32.or
+        (i32.or
+          (select (i32.const 0x0001) (i32.const 0)
+            (i32.ne (local.get $selected) (i32.const 0)))
+          (select (i32.const 0x0002) (i32.const 0)
+            (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))))
+        (i32.or
+          (select (i32.const 0x0004) (i32.const 0)
+            (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0)))
+          (select (i32.const 0x0008) (i32.const 0)
+            (i32.ne (i32.and (local.get $flags) (i32.const 8)) (i32.const 0))))))
+    (local.set $dis (call $heap_alloc (i32.const 48)))
+    (if (i32.eqz (local.get $dis)) (then (return (i32.const 0))))
+    (local.set $disw (call $g2w (local.get $dis)))
+    (i32.store           (local.get $disw) (i32.const 1)) ;; ODT_MENU
+    (i32.store offset=4  (local.get $disw) (i32.const 0))
+    (i32.store offset=8  (local.get $disw) (i32.load offset=4 (local.get $item)))
+    (i32.store offset=12 (local.get $disw) (i32.const 1)) ;; ODA_DRAWENTIRE
+    (i32.store offset=16 (local.get $disw) (local.get $state))
+    (i32.store offset=20 (local.get $disw) (local.get $hmenu))
+    (i32.store offset=24 (local.get $disw) (local.get $hdc))
+    (i32.store offset=28 (local.get $disw) (local.get $left))
+    (i32.store offset=32 (local.get $disw) (local.get $top_y))
+    (i32.store offset=36 (local.get $disw) (local.get $right))
+    (i32.store offset=40 (local.get $disw) (local.get $bottom))
+    (i32.store offset=44 (local.get $disw) (i32.load offset=8 (local.get $item)))
+    (drop (call $wnd_send_message
+      (i32.load offset=32 (local.get $bw)) (i32.const 0x002B)
+      (i32.const 0) (local.get $dis)))
+    (call $heap_free (local.get $dis))
+    (i32.const 1))
 
   ;; Install (or replace) a menu blob for a window. Allocates heap
   ;; memory, memcpys the source bytes, stores the guest pointer in
@@ -1455,9 +1627,11 @@
 
   (func $menu_submenu_width (export "menu_submenu_width")
         (param $hwnd i32) (param $tidx i32) (param $cidx i32) (result i32)
-    (local $blob i32) (local $hdr i32) (local $hdc i32) (local $bound i32)
+    (local $blob i32) (local $parent_blob i32) (local $hdr i32)
+    (local $hdc i32) (local $bound i32) (local $width i32) (local $owner_width i32)
     (local.set $blob (call $menu_dropdown_blob_w (local.get $hwnd)))
     (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (local.set $parent_blob (local.get $blob))
     (local.set $hdr (call $child_sub_hdr_w
                       (local.get $blob) (local.get $tidx) (local.get $cidx)))
     (if (i32.eqz (local.get $hdr)) (then (return (i32.const 0))))
@@ -1466,7 +1640,33 @@
     (if (i32.ne (local.get $bound) (i32.const -1))
       (then (local.set $blob (local.get $bound))))
     (local.set $hdc (call $gdi_menu_overlay_ensure))
-    (call $menu_header_width (local.get $blob) (local.get $hdr) (local.get $hdc)))
+    (local.set $width
+      (call $menu_header_width (local.get $blob) (local.get $hdr) (local.get $hdc)))
+    (local.set $owner_width (call $resource_submenu_ownerdraw_width
+      (local.get $parent_blob) (local.get $tidx) (local.get $cidx)
+      (i32.load (local.get $hdr))))
+    (select (local.get $owner_width) (local.get $width)
+      (i32.gt_u (local.get $owner_width) (local.get $width))))
+
+  (func $menu_submenu_height (export "menu_submenu_height")
+        (param $hwnd i32) (param $tidx i32) (param $cidx i32) (result i32)
+    (local $blob i32) (local $hdr i32) (local $count i32)
+    (local $i i32) (local $height i32)
+    (local.set $blob (call $menu_dropdown_blob_w (local.get $hwnd)))
+    (if (i32.eqz (local.get $blob)) (then (return (i32.const 0))))
+    (local.set $hdr (call $child_sub_hdr_w
+      (local.get $blob) (local.get $tidx) (local.get $cidx)))
+    (if (i32.eqz (local.get $hdr)) (then (return (i32.const 0))))
+    (local.set $count (i32.load (local.get $hdr)))
+    (local.set $height (i32.const 4))
+    (block $done (loop $rows
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $height (i32.add (local.get $height)
+        (call $resource_submenu_item_height
+          (local.get $blob) (local.get $tidx) (local.get $cidx) (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $rows)))
+    (local.get $height))
 
   (func $submenu_item_w (param $blob_w i32) (param $tidx i32)
                         (param $cidx i32) (param $sidx i32) (result i32)
@@ -2104,13 +2304,15 @@
   (func $menu_paint_submenu
         (param $hwnd i32) (param $tidx i32) (param $cidx i32)
         (param $dx i32) (param $dy i32) (param $hover_sidx i32)
-    (local $blob i32) (local $hdr i32) (local $count i32) (local $i i32)
-    (local $hdc i32) (local $iy i32) (local $it i32) (local $flags i32)
+    (local $blob i32) (local $parent_blob i32) (local $hdr i32)
+    (local $count i32) (local $i i32)
+    (local $hdc i32) (local $iy i32) (local $ih i32) (local $it i32) (local $flags i32)
     (local $label_wa i32) (local $label_len i32)
     (local $sc_wa i32) (local $sc_len i32) (local $dh i32) (local $dw i32)
     (local $bound i32)
     (local.set $blob (call $menu_dropdown_blob_w (local.get $hwnd)))
     (if (i32.eqz (local.get $blob)) (then (return)))
+    (local.set $parent_blob (local.get $blob))
     (local.set $hdr (call $child_sub_hdr_w
                       (local.get $blob) (local.get $tidx) (local.get $cidx)))
     (if (i32.eqz (local.get $hdr)) (then (return)))
@@ -2124,8 +2326,9 @@
     (local.set $hdc (call $gdi_menu_overlay_ensure))
     (if (i32.eqz (local.get $hdc)) (then (return)))
     (local.set $dw
-      (call $menu_header_width (local.get $blob) (local.get $hdr) (local.get $hdc)))
-    (local.set $dh (i32.add (i32.mul (local.get $count) (i32.const 20)) (i32.const 4)))
+      (call $menu_submenu_width (local.get $hwnd) (local.get $tidx) (local.get $cidx)))
+    (local.set $dh
+      (call $menu_submenu_height (local.get $hwnd) (local.get $tidx) (local.get $cidx)))
     (drop (call $host_gdi_fill_rect (local.get $hdc)
             (local.get $dx) (local.get $dy)
             (i32.add (local.get $dx) (local.get $dw))
@@ -2147,6 +2350,8 @@
       (local.set $it (i32.add (local.get $hdr)
                        (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 28)))))
       (local.set $flags (i32.load offset=16 (local.get $it)))
+      (local.set $ih (call $resource_submenu_item_height
+        (local.get $parent_blob) (local.get $tidx) (local.get $cidx) (local.get $i)))
       (if (i32.and (local.get $flags) (i32.const 0x01))
         (then
           (drop (call $host_gdi_fill_rect (local.get $hdc)
@@ -2161,7 +2366,7 @@
               (drop (call $host_gdi_fill_rect (local.get $hdc)
                       (i32.add (local.get $dx) (i32.const 2)) (local.get $iy)
                       (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 2)))
-                      (i32.add (local.get $iy) (i32.const 20))
+                      (i32.add (local.get $iy) (local.get $ih))
                       (i32.const 14)))
               (drop (call $host_gdi_set_text_color (local.get $hdc) (i32.const 0xFFFFFF))))
             (else
@@ -2180,7 +2385,7 @@
                   (call $paint_rect (i32.add (local.get $dx) (i32.const 20))
                                     (local.get $iy)
                                     (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 20)))
-                                    (i32.add (local.get $iy) (i32.const 20)))
+                                    (i32.add (local.get $iy) (local.get $ih)))
                   (i32.const 0x24) (i32.const 0)))
           (local.set $sc_len (i32.load offset=12 (local.get $it)))
           (if (local.get $sc_len)
@@ -2192,14 +2397,23 @@
                       (call $paint_rect (i32.add (local.get $dx) (i32.const 20))
                                         (local.get $iy)
                                         (i32.add (local.get $dx) (i32.sub (local.get $dw) (i32.const 20)))
-                                        (i32.add (local.get $iy) (i32.const 20)))
+                                        (i32.add (local.get $iy) (local.get $ih)))
                       (i32.const 0x26) (i32.const 0)))))
+          (if (i32.ne (i32.and (local.get $flags) (i32.const 0x08)) (i32.const 0))
+            (then
+              (drop (call $resource_submenu_draw_item
+                (local.get $parent_blob) (local.get $tidx) (local.get $cidx)
+                (local.get $i) (local.get $hdc)
+                (local.get $dx) (local.get $iy)
+                (i32.add (local.get $dx) (local.get $dw))
+                (i32.add (local.get $iy) (local.get $ih))
+                (i32.eq (local.get $i) (local.get $hover_sidx))))))
           (if (i32.load offset=24 (local.get $it))
             (then
               (call $menu_draw_submenu_arrow
                 (local.get $hdc) (local.get $dx) (local.get $dw) (local.get $iy)
                 (i32.eq (local.get $i) (local.get $hover_sidx)))))))
-      (local.set $iy (i32.add (local.get $iy) (i32.const 20)))
+      (local.set $iy (i32.add (local.get $iy) (local.get $ih)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
@@ -2407,25 +2621,21 @@
 
   (func $menu_hittest_submenu
         (param $hwnd i32) (param $tidx i32) (param $cidx i32)
-        (param $dx i32) (param $dy i32)
-        (param $click_x i32) (param $click_y i32) (result i32)
+    (param $dx i32) (param $dy i32)
+    (param $click_x i32) (param $click_y i32) (result i32)
     (local $blob i32) (local $hdr i32) (local $count i32) (local $sidx i32)
-    (local $iy0 i32) (local $it i32) (local $flags i32) (local $dh i32)
-    (local $dw i32) (local $hdc i32) (local $bound i32)
+    (local $iy0 i32) (local $row_h i32) (local $it i32)
+    (local $flags i32) (local $dh i32) (local $dw i32)
     (local.set $blob (call $menu_dropdown_blob_w (local.get $hwnd)))
     (if (i32.eqz (local.get $blob)) (then (return (i32.const -1))))
     (local.set $hdr (call $child_sub_hdr_w
                       (local.get $blob) (local.get $tidx) (local.get $cidx)))
     (if (i32.eqz (local.get $hdr)) (then (return (i32.const -1))))
-    (local.set $bound (call $resource_submenu_blob_w
-      (local.get $blob) (local.get $tidx) (local.get $cidx)))
-    (if (i32.ne (local.get $bound) (i32.const -1))
-      (then (local.set $blob (local.get $bound))))
     (local.set $count (i32.load (local.get $hdr)))
-    (local.set $dh (i32.add (i32.mul (local.get $count) (i32.const 20)) (i32.const 4)))
-    (local.set $hdc (call $gdi_menu_overlay_ensure))
+    (local.set $dh
+      (call $menu_submenu_height (local.get $hwnd) (local.get $tidx) (local.get $cidx)))
     (local.set $dw
-      (call $menu_header_width (local.get $blob) (local.get $hdr) (local.get $hdc)))
+      (call $menu_submenu_width (local.get $hwnd) (local.get $tidx) (local.get $cidx)))
     ;; The box's own 2px border counts as inside. It used not to, and the left
     ;; border is precisely the column the pointer crosses when it slides right
     ;; out of the parent item: entering a cascade at its first two columns
@@ -2440,9 +2650,15 @@
     (if (i32.ge_s (local.get $click_y) (i32.add (local.get $dy) (local.get $dh)))
       (then (return (i32.const -1))))
     (local.set $iy0 (i32.add (local.get $dy) (i32.const 2)))
-    (local.set $sidx (i32.div_s (i32.sub (local.get $click_y) (local.get $iy0))
-                                 (i32.const 20)))
-    (if (i32.lt_s (local.get $sidx) (i32.const 0)) (then (return (i32.const -1))))
+    (block $row_found (loop $rows
+      (br_if $row_found (i32.ge_u (local.get $sidx) (local.get $count)))
+      (local.set $row_h (call $resource_submenu_item_height
+        (local.get $blob) (local.get $tidx) (local.get $cidx) (local.get $sidx)))
+      (br_if $row_found
+        (i32.lt_s (local.get $click_y) (i32.add (local.get $iy0) (local.get $row_h))))
+      (local.set $iy0 (i32.add (local.get $iy0) (local.get $row_h)))
+      (local.set $sidx (i32.add (local.get $sidx) (i32.const 1)))
+      (br $rows)))
     (if (i32.ge_s (local.get $sidx) (local.get $count)) (then (return (i32.const -1))))
     (local.set $it (i32.add (local.get $hdr)
                      (i32.add (i32.const 4) (i32.mul (local.get $sidx) (i32.const 28)))))
@@ -3179,7 +3395,8 @@
               (i32.eqz (i32.load offset=24 (local.get $item))))
           (then (return (i32.const 0))))
         (return (call $resource_submenu_bind
-          (local.get $blob) (local.get $top) (local.get $pos)))))
+          (local.get $blob) (local.get $top) (local.get $pos)
+          (local.get $hwnd)))))
     (if (i32.or
           (i32.lt_s (local.get $pos) (i32.const 0))
           (i32.ge_u (local.get $pos) (call $menu_bar_count (local.get $hwnd))))
