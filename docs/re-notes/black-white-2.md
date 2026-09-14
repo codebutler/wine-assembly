@@ -5374,3 +5374,67 @@ The run ended the same way as every previous one: `bad_alloc` out of the CRT at
 `0x00ada813`, unhandled, `[Exit] code=-529697949`. The `QueueError: native
 render heap handoff rejected` after it is the render worker being torn down, as
 the amendment above already established -- not a cause.
+
+### The call chain, and what the number is made of (2026-09-13)
+
+The OOM line prints stack call-site candidates and they name the whole path.
+From `bw-software-probe-2yaYY6`, innermost first:
+
+```
+requested from eip=0x00ad561b frames=[0x00ad5652 <- 0x009d5440 <- 0x00000087]
+stack call sites: 0x00ad5630 0x00ad5652 0x00ad567d 0x00ad41d6 0x00522687
+                  0x009e43c4 0x005313be 0x009e3caf 0x009e07e6 0x009d5440 ...
+```
+
+So: the outer list walk at `0x9d5430` calls `0x9e35e0`, which reaches
+`0x5313ab`, which calls **`0x9e4370`**, which calls `0x522570` -> `0x522669`
+-> `operator new` -> `malloc`. Read it in that order; the EBP chain alone
+cannot, because `0x9e35e0` is frameless (everything is `[esp+N]`) and the walk
+jumps straight from `operator new` to `0x9d5440`.
+
+**`0x9e4370` is `vector<T>::insert` for a 24-byte T, and the size is an element
+count, not a byte count.** Both measured sizes divide by 24 exactly:
+`430571520 / 24 = 17940480` and `968687616 / 24 = 40361984`.
+
+```
+009e4370  push ebx
+009e4371  mov ebx,[esp+0xc]     ; `where` -- the insertion position (arg at [esp+4] on entry)
+009e4377  mov edi,ecx           ; this
+009e4379  mov esi,[edi+0x4]     ; begin
+009e437e  jz  0x9e439c          ; begin == 0 -> index 0
+009e4380  mov ecx,[edi+0x8]     ; end
+009e4383  sub ecx,esi           ; end - begin
+009e4385  imul 0x2aaaaaab / sar edx,2      ; / 24 -> size()
+009e43a0  mov ecx,ebx
+009e43a2  sub ecx,esi           ; `where` - begin        <-- THE SUBTRACTION
+009e43a4  imul 0x2aaaaaab / sar edx,2      ; / 24 -> the INDEX of `where`
+009e43bf  call 0x522570         ; insert(where, 1, value)
+```
+
+and the allocation itself, inside `0x522570`:
+
+```
+00522669  cmp ecx,eax
+0052266b  jnb 0x522678
+0052266d  mov ecx,esi
+0052266f  call 0x9e40a0         ; -> [this+4]
+00522674  mov ecx,eax
+00522676  add ecx,edi
+00522678  lea ebx,[ecx+ecx*2]   ; *3
+0052267b  add ebx,ebx           ; *6
+0052267d  add ebx,ebx           ; *12
+0052267f  add ebx,ebx           ; *24
+00522681  push ebx
+00522682  call 0xad41b9         ; operator new(count * 24)
+```
+
+`0x9e3bb6` -- the erase/insert pair the previous guess pointed at -- ran **zero**
+times in this run, against `0x9e35e0` = 41 and `0x9d5430` = 39, so that path is
+not involved at all. Do not go back to it.
+
+**The one question left is a comparison, not a theory.** `where` is supposed to
+point between `begin` and `end` of the very vector being inserted into. If it
+does not, `(where - begin) / 24` is the distance between two unrelated
+allocations divided by 24 -- which is exactly why the number grew with the
+arena. `--trace-at=0x9e4370` with `--trace-at-mem=ecx+0x4:4,ecx+0x8:4,esp+0x4:4`
+reads all three at the function entry, before any push, and answers it directly.
