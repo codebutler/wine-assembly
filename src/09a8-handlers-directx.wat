@@ -9229,15 +9229,27 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
-  (func $dp_set_membership
-      (param $member_id i32) (param $group_id i32) (param $add i32) (result i32)
+  ;; Player membership and group shortcuts share one bitset, but they are not
+  ;; interchangeable identities.  DirectPlay keeps separate player/group ID
+  ;; lists, and public methods report the invalid ID in its own namespace.
+  ;; Checking the creator object here also prevents one process-local
+  ;; IDirectPlay instance from mutating another instance's name table.
+  (func $dp_update_membership
+      (param $owner i32) (param $group_id i32) (param $member_id i32)
+      (param $member_type i32) (param $add i32) (result i32)
     (local $member i32) (local $group i32) (local $bits i32) (local $bit i32)
-    (local.set $member (call $dp_find_entity (local.get $member_id) (i32.const -1)))
-    (local.set $group (call $dp_find_entity (local.get $group_id) (i32.const 0)))
-    (if (i32.or
-          (i32.or (i32.eqz (local.get $member)) (i32.eqz (local.get $group)))
-          (i32.eq (local.get $member) (local.get $group)))
-      (then (return (i32.const 0))))
+    (local.set $group
+      (call $dp_owned_entity
+        (local.get $owner) (local.get $group_id) (i32.const 0)))
+    (if (i32.eqz (local.get $group))
+      (then (return (i32.const 0x8877009B)))) ;; DPERR_INVALIDGROUP
+    (local.set $member
+      (call $dp_owned_entity
+        (local.get $owner) (local.get $member_id) (local.get $member_type)))
+    (if (i32.eqz (local.get $member))
+      (then (return (call $dp_invalid_entity (local.get $member_type)))))
+    (if (i32.eq (local.get $member) (local.get $group))
+      (then (return (i32.const 0x8877009B)))) ;; a group cannot contain itself
     (local.set $bit (call $dp_group_bit (local.get $group)))
     (local.set $bits (call $gl32 (i32.add (local.get $member) (i32.const 16))))
     (call $gs32 (i32.add (local.get $member) (i32.const 16))
@@ -9245,7 +9257,19 @@
         (i32.or (local.get $bits) (local.get $bit))
         (i32.and (local.get $bits) (i32.xor (local.get $bit) (i32.const -1)))
         (local.get $add)))
-    (i32.const 1))
+    (i32.const 0))
+
+  ;; All four IDirectPlay3 membership methods are three-argument stdcall
+  ;; front doors over the typed state transition above.  Keep the HRESULT and
+  ;; stack epilogue together so their error paths cannot drift apart.
+  (func $dp_handle_membership
+      (param $owner i32) (param $group_id i32) (param $member_id i32)
+      (param $member_type i32) (param $add i32)
+    (global.set $eax
+      (call $dp_update_membership
+        (local.get $owner) (local.get $group_id) (local.get $member_id)
+        (local.get $member_type) (local.get $add)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $dp_destroy_entity (param $id i32) (param $type i32) (result i32)
     (local $entry i32) (local $i i32) (local $scan i32) (local $bit i32)
@@ -9729,10 +9753,9 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   (func $handle_IDirectPlay3_AddPlayerToGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
-        (call $dp_set_membership (local.get $arg2) (local.get $arg1) (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $dp_handle_membership
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 1) (i32.const 1)))
   (func $handle_IDirectPlay3_Close (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_close_owner (local.get $arg0))
     (global.set $eax (i32.const 0))
@@ -9759,10 +9782,9 @@
       (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (local.get $arg3))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
   (func $handle_IDirectPlay3_DeletePlayerFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
-        (call $dp_set_membership (local.get $arg2) (local.get $arg1) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $dp_handle_membership
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 1) (i32.const 0)))
   (func $handle_IDirectPlay3_DestroyGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
       (select (i32.const 0) (i32.const 0x80070057)
@@ -9933,17 +9955,18 @@
   (func $handle_IDirectPlay3_SetSessionDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IDirectPlay3_AddGroupToGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
-        (call $dp_set_membership (local.get $arg2) (local.get $arg1) (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $dp_handle_membership
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 1)))
   (func $handle_IDirectPlay3_CreateGroupInGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32) (local $flags i32) (local $hr i32) (local $id i32)
     (local.set $size (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
     (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
-    (if (i32.eqz (call $dp_find_entity (local.get $arg1) (i32.const 0)))
+    (if (i32.eqz
+          (call $dp_owned_entity
+            (local.get $arg0) (local.get $arg1) (i32.const 0)))
       (then
-        (global.set $eax (i32.const 0x80070057))
+        (global.set $eax (i32.const 0x8877009B)) ;; DPERR_INVALIDGROUP
         (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
         (return)))
     (local.set $hr
@@ -9954,18 +9977,19 @@
       (then
         (local.set $id (call $gl32 (local.get $arg2)))
         (call $dp_bind_entity (local.get $id) (local.get $arg0) (i32.const 0))
-        (if (i32.eqz
-              (call $dp_set_membership (local.get $id) (local.get $arg1) (i32.const 1)))
+        (local.set $hr
+          (call $dp_update_membership
+            (local.get $arg0) (local.get $arg1) (local.get $id)
+            (i32.const 0) (i32.const 1)))
+        (if (local.get $hr)
           (then
-            (drop (call $dp_destroy_entity (local.get $id) (i32.const 0)))
-            (local.set $hr (i32.const 0x80070057))))))
+            (drop (call $dp_destroy_entity (local.get $id) (i32.const 0)))))))
     (global.set $eax (local.get $hr))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
   (func $handle_IDirectPlay3_DeleteGroupFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
-        (call $dp_set_membership (local.get $arg2) (local.get $arg1) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $dp_handle_membership
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0)))
   (func $handle_IDirectPlay3_EnumConnections (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $guid i32) (local $guid_wa i32) (local $conn i32) (local $dpname i32) (local $dpname_wa i32) (local $label i32) (local $label_wa i32)
     (local.set $ret_addr (call $gl32 (global.get $esp)))

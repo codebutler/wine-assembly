@@ -9,6 +9,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (export "test_dp_assign_owner" (func $dp_assign_group_owner))
   (export "test_dp_owner" (func $dp_group_owner))
+  (export "test_dp_bind_entity" (func $dp_bind_entity))
   (func (export "test_start_directplay_enumerate")
       (param $ansi i32) (param $callback i32) (param $context i32) (result i32)
     (global.set $esp (i32.const 0x074FF000))
@@ -70,18 +71,31 @@ const extraWat = String.raw`
       (local.get $data) (i32.const 0))
     (global.get $eax))
 
-  (func (export "test_dp_player_membership")
-      (param $group i32) (param $player i32) (param $add i32) (result i32)
+  (func (export "test_dp_membership")
+      (param $owner i32) (param $group i32) (param $member i32)
+      (param $member_type i32) (param $add i32) (result i64)
     (global.set $esp (i32.const 0x074FF000))
     (call $gs32 (global.get $esp) (i32.const 0))
-    (if (local.get $add)
-      (then (call $handle_IDirectPlay3_AddPlayerToGroup
-        (i32.const 0) (local.get $group) (local.get $player)
-        (i32.const 0) (i32.const 0) (i32.const 0)))
-      (else (call $handle_IDirectPlay3_DeletePlayerFromGroup
-        (i32.const 0) (local.get $group) (local.get $player)
-        (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (if (local.get $member_type)
+      (then
+        (if (local.get $add)
+          (then (call $handle_IDirectPlay3_AddPlayerToGroup
+            (local.get $owner) (local.get $group) (local.get $member)
+            (i32.const 0) (i32.const 0) (i32.const 0)))
+          (else (call $handle_IDirectPlay3_DeletePlayerFromGroup
+            (local.get $owner) (local.get $group) (local.get $member)
+            (i32.const 0) (i32.const 0) (i32.const 0)))))
+      (else
+        (if (local.get $add)
+          (then (call $handle_IDirectPlay3_AddGroupToGroup
+            (local.get $owner) (local.get $group) (local.get $member)
+            (i32.const 0) (i32.const 0) (i32.const 0)))
+          (else (call $handle_IDirectPlay3_DeleteGroupFromGroup
+            (local.get $owner) (local.get $group) (local.get $member)
+            (i32.const 0) (i32.const 0) (i32.const 0))))))
+    (i64.or
+      (i64.extend_i32_u (global.get $eax))
+      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
 
   (func (export "test_dp_set_player_name")
       (param $player i32) (param $name i32) (result i32)
@@ -325,6 +339,12 @@ const extraWat = String.raw`
   const groupId = e.guest_read32(groupOut) >>> 0;
   const player1 = e.guest_read32(player1Out) >>> 0;
   const player2 = e.guest_read32(player2Out) >>> 0;
+  const membership = (owner, group, member, memberType, add) => {
+    const packed = e.test_dp_membership(owner, group, member, memberType, add);
+    assert.strictEqual(Number(packed >> 32n) >>> 0, 0x074ff010,
+      'every DirectPlay membership result consumes its three-argument stdcall frame');
+    return Number(packed & 0xffffffffn) >>> 0;
+  };
   assert(groupId && player1 && player2, 'created DirectPlay entities receive nonzero IDs');
   assert.strictEqual(new Set([groupId, player1, player2]).size, 3,
     'created DirectPlay entities receive unique IDs');
@@ -529,7 +549,7 @@ const extraWat = String.raw`
     assert.strictEqual(e.guest_read32(stack + 4) >>> 0, player1,
       'SPECTATOR filtering returns only the flagged player');
   });
-  assert.strictEqual(e.test_dp_player_membership(groupId, player1, 1), 0,
+  assert.strictEqual(membership(0, groupId, player1, 1, 1), 0,
     'AddPlayerToGroup records local membership');
   runEntityEnum(2, groupId, continueCallback, 0, 0, 1, stack => {
     assert.strictEqual(e.guest_read32(stack + 4) >>> 0, player1,
@@ -554,6 +574,38 @@ const extraWat = String.raw`
       'EnumGroupsInGroup reports the linked child');
   });
 
+  assert.strictEqual(membership(0, groupId, childId, 0, 0), 0,
+    'DeleteGroupFromGroup removes a group shortcut');
+  runEntityEnum(3, groupId, continueCallback, 0, 0, 0);
+  assert.strictEqual(membership(0, groupId, childId, 0, 1), 0,
+    'AddGroupToGroup restores a group shortcut');
+  runEntityEnum(3, groupId, continueCallback, 0, 0, 1);
+
+  assert.strictEqual(membership(0, groupId, groupId, 0, 1), 0x8877009b,
+    'a group cannot be added to itself');
+  assert.strictEqual(membership(0, player1, childId, 0, 1), 0x8877009b,
+    'a player ID in the parent position reports DPERR_INVALIDGROUP');
+  assert.strictEqual(membership(0, groupId, player1, 0, 1), 0x8877009b,
+    'AddGroupToGroup requires a group ID for the child');
+  assert.strictEqual(membership(0, groupId, childId, 1, 1), 0x88770096,
+    'AddPlayerToGroup requires a player ID for the member');
+  assert.strictEqual(membership(0, groupId, 0xdeadbeef, 0, 0), 0x8877009b,
+    'DeleteGroupFromGroup reports an unknown child as DPERR_INVALIDGROUP');
+  assert.strictEqual(membership(0, groupId, 0xdeadbeef, 1, 0), 0x88770096,
+    'DeletePlayerFromGroup reports an unknown member as DPERR_INVALIDPLAYER');
+
+  e.test_dp_bind_entity(player1, 0x12345678, 0);
+  assert.strictEqual(membership(0, groupId, player1, 1, 0), 0x88770096,
+    'one DirectPlay object cannot remove another object\'s player');
+  e.test_dp_bind_entity(player1, 0, 0);
+  runEntityEnum(2, groupId, continueCallback, 0, 0, 1,
+    null);
+
+  e.test_dp_bind_entity(groupId, 0x12345678, 0);
+  assert.strictEqual(membership(0, groupId, player1, 1, 0), 0x8877009b,
+    'one DirectPlay object cannot mutate another object\'s group');
+  e.test_dp_bind_entity(groupId, 0, 0);
+
   const carol = makeName('Carol', 'Carol renamed', 0x61);
   assert.strictEqual(e.test_dp_set_player_name(player1, carol.name), 0,
     'SetPlayerName replaces the retained name');
@@ -564,7 +616,7 @@ const extraWat = String.raw`
       'SetPlayerName retained its own replacement copy');
   });
 
-  assert.strictEqual(e.test_dp_player_membership(groupId, player1, 0), 0,
+  assert.strictEqual(membership(0, groupId, player1, 1, 0), 0,
     'DeletePlayerFromGroup removes local membership');
   runEntityEnum(2, groupId, continueCallback, 0, 0, 0);
   assert.strictEqual(e.test_dp_destroy(player1, 1), 0,
