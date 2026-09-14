@@ -6546,3 +6546,69 @@ for it: an unmapped read absorbed into the NULL sentinel reads 0, and `0/0` is
 NaN. B&W2 already has one known sentinel-absorbed address (`0x9e17d0`). Nothing
 here has confirmed that link; it is the next thing to measure if the land mesh
 turns out to have holes in it.
+
+## The NaN-cull fix, verified live (drive33)
+
+One run, one question: with `$d3d_software_prepare_step` marking a non-finite
+vertex instead of refusing the draw, does the world pass get all the way
+through? It does, and by a wide margin.
+
+| | drive32 (before) | drive33 (after) |
+|---|---|---|
+| draws submitted | died at 8,917 | **199,783** |
+| draws failed | 1, then the run's rendering ended | **0** |
+| render queue errors | sticky, whole run | **0/0**, start to finish |
+| time in the world | — | **over an hour** (pick+4100s, still clean) |
+| refusal payloads dumped | 1 | **none** |
+
+Menus were also the fastest yet — profile → main menu → mouse tutorial → land
+picker in 4.5 minutes. The letterbox over the world is B&W2's own cinematic
+bars, not a render-target defect: the black regions are exactly rows 0-59 and
+420-479, a 640x360 frame inside 640x480, and the land picker before it filled
+the full frame.
+
+One prediction in that run was wrong and is worth recording as such. Guest
+address space grows about one `VIRTUAL_MAP_TABLE` record per second and never
+shrinks, and when the largest free hole fell to ~40 MB it looked like a
+reservation failure was minutes away. It was not: the hole then sat flat at
+`0x11d0000` for the rest of the run. Address-space growth is a real trend with
+two real ceilings (`MAX_VIRTUAL_MAPS = 8192`, and `g2w`'s linear scan), but it
+is not a countdown, and it belongs to the virtual-alloc lane rather than this
+one.
+
+## Blocker #4: 316,572 world draws have no vertex declaration at all
+
+The same run that renders cleanly also prints `D3D9 FVF 0 is not implemented`
+**316,572 times** — against 199,783 draws that did reach the rasterizer. So
+roughly 61% of the world's geometry is missing, and none of it is visible in
+any error count.
+
+That invisibility is the first thing to understand about this blocker.
+`lib/d3d9-host.js:529` throws when the program's declaration slot (`program+8`)
+and its FVF slot (`program+12`) are *both* zero; the bridge catches the throw,
+returns -1, and the draw never enters the command stream. The render queue
+therefore reports `failed: 0` truthfully, `errors=0/0` truthfully, and the draw
+census never counts the draw at all. A log line is the only trace.
+
+The first such line lands exactly at the land load (`run.log:1610`, immediately
+after the land-picker sample). Menus are clean.
+
+Two candidate causes, not yet separated by measurement:
+
+* **`$d3d9_declaration_create` refused it.** `src/09ae-d3d9-resources.wat:410`
+  returns NULL *silently* — eax is set to `D3DERR_INVALIDCALL` and `*out` stays
+  0 — for any element the renderer does not model: `stream != 0`,
+  `offset & 3`, `type > 4` (so every `UBYTE4`, `SHORT2/4`, `FLOAT16_2/4`
+  element, which is what skinned and compressed meshes are made of),
+  `method != 0`, `usage > 13`, `usageIndex > 15`, more than 16 elements, or a
+  duplicate `(usage, usageIndex)` pair. The guest then binds NULL and every
+  draw using that declaration is dropped.
+* **The game calls `SetFVF(0)`.** `$handle_IDirect3DDevice9_SetFVF` clears the
+  bound declaration before storing the FVF, so an `SetFVF(0)` would leave both
+  slots zero on its own.
+
+The return value settles it — `0x8876086c` out of `CreateVertexDeclaration` is
+our own refusal — which is what drive34 traces, with no source change needed.
+Note that a silent NULL here is exactly the failure shape the fail-fast-stub
+rule exists to prevent: the call reports an error the game ignores, and the
+consequence surfaces thousands of draws later as a picture with holes in it.
