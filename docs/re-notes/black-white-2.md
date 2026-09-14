@@ -5923,3 +5923,53 @@ The open question is whether that phase terminates. `--trace-sched=N` is the
 cheap way to ask — it prints the main thread's EIP on a heartbeat, so a flat
 five minutes reads either as progress through a long load or as a spin on one
 address, without spending another twenty-minute drive to find out.
+
+## The land load does not stall — the main thread dies and the workers keep running (2026-09-14)
+
+Given a long enough clock, the "flat" phase after the HeapCompact wall resolves
+into something specific, and it is not a slow load. At batch 6,015,963 the
+**main thread calls through NULL and stops**. The four worker threads go on
+being scheduled, so the process stays up and every symptom above follows from
+that: the sparse map freezes at 593 records / `0x1c6ce000` because nothing is
+allocating any more, the GPU queue drains to `submitted == completed` with
+`pending: 0` because nothing is submitting, and the captures are byte-stable at
+the land picker because nobody presents. `--trace-sched=400000` shows it
+directly — `M:run@0x7503488` for millions of batches, then `M:run@0x0` forever
+after, with `T3:run@0x89d1dc` unchanged the whole run.
+
+The whole run took exactly **four** unmapped-access faults, and they are the
+crash:
+
+```
+[fault] unmapped guest access 0x1d0 from eip=0x938fc0
+[fault] unmapped guest access 0x0   from eip=0x938fe5
+[fault] unmapped guest access 0x0   from eip=0xa9203a
+[fault] unmapped guest access 0x48  from eip=0xa9203a
+[eip-zero] guest called through NULL at batch 6015963
+  dbg_prev_eip=0x00a9203a
+```
+
+The chain, all in `BW2Demo.exe` at its preferred base (runtime VA == original
+VA), read back from the disassembly and the stack dump:
+
+| VA | code | what it means |
+|---|---|---|
+| `0x00a9d4b0` | `call 0x933910` with `(0x200, 0x200, 1, 1, 0x17, 4)` on `[g_0x1d6d92c+0x2c]`, then `mov [esi+0x80], eax` | create a 512x512 resource and store it |
+| `0x00933910` | `new(0x22c)` → ctor `0x9392f0` → Init `0x9389b0`; on `al == 0` returns 0 | the factory |
+| `0x00a9d54c` | `push 0` / `push [esi+0x80]` / `call 0xa92030` | uses it, unchecked |
+| `0x00a92030` | `mov ecx,[esp+8]` (= NULL) / `call 0x938fc0` | |
+| `0x00938fc0` | `mov eax,[esi+0x1d0]` … `mov eax,[esi]` | the two `esi == 0` faults |
+| `0x00a9203a` | `mov ecx,[eax]` then `call [ecx+0x48]` | vtable slot 18 through NULL |
+
+The `new` succeeded: a NULL there would have faulted inside `0x9389b0` at
+`cmp [esi],ebx`, and there is no such fault in the log. So `Init` at
+`0x9389b0` returned false, which means **a D3D9 resource creation failed**, and
+the guest stores the NULL without checking it. `0x938fc0` is the accessor for
+that resource — it reads a state word at `+0x1d0` (Init sets it to 2) and hands
+back `[this]`, the raw COM pointer — which is why a failed creation surfaces
+1,500 instructions later as a call through a null vtable rather than at the
+creation site.
+
+`--fault-null` is what makes this legible at all. Without it the sentinel
+absorbs all four reads, the call through zero is the only visible event, and
+the run looks like an emulator bug in whatever ran last.
