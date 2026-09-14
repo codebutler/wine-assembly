@@ -5850,3 +5850,45 @@ this point. This is terrain being rendered into a texture.
 **Handed to the d3d9 lane.** `src/09ad-handlers-d3d9.wat` and
 `src/09ae-d3d9-resources.wat` carry another agent's uncommitted work, so this
 stub is not mine to fill.
+
+## Do not run this game out of /private/tmp (2026-09-14)
+
+A drive that had been reaching the land load died ten seconds in, with a clean
+`ExitProcess(0)` through the CRT and no crash of any kind. The cause was not
+the emulator. macOS's periodic tmp cleaner had run at midnight and deleted
+every file under `/private/tmp/black-white-full.ntZDCF` that had not been read
+in three days. The directory tree survived intact, which is what makes this
+read as an emulator bug rather than a missing install: `find -type d` still
+lists `Data/Text`, `Data/landscape`, `Audio/SFX/...`, and only `find -type f`
+shows the damage — 45 files left of 366, and the 20MB EXE plus a handful of
+`.vep` files the last land load happened to touch were all that remained.
+
+The visible symptom is one line in an `--trace-api` log, a long way before the
+exit:
+
+```
+[API #142312] CreateFileA(path=".\Data\Text\\BW2Text.bin", ...) => h:0xffffffff
+[API #142313] WSACleanup()
+... ~4000 DeleteCriticalSection / HeapFree calls ...
+[API #146307] ExitProcess(0x00000000)
+```
+
+BW2Demo.exe treats its text bundle as mandatory and shuts down in an orderly
+way when it is missing, so nothing in the run names the file that was not
+there. Read the `=> h:0xffffffff` on the last `CreateFileA` before the
+teardown cascade; a clean `[Exit] code=0` during startup on this app is almost
+always a missing asset, not a guest crash.
+
+**The durable copy is in the repo**, and it is complete (366 files, 884MB,
+including the 432MB `Data/Everything.stuff` and the three seeded DLLs):
+
+```
+test/binaries/win98-games-a-d/Black and White 2-DX9-D3D/installed
+```
+
+Pass it explicitly — `tools/black-white-software-probe.js --game=<that path>`,
+or `--exe=<that path>/BW2Demo.exe` for a bare `run.js`. The probe's built-in
+default still points at the `/private/tmp` extraction, which is now gone and
+will be gone again for any new one: files under `/private/tmp` are reaped once
+they go three days without a read, and a long investigation reads the same few
+assets over and over while the rest of the install ages out underneath it.
