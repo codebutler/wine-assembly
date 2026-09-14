@@ -811,6 +811,22 @@
       (then (return (call $virtual_backing_ext_end))))
     (region.end $VIRTUAL_BACKING_BASE))
 
+  ;; The largest single commit any one backing window could ever hold. Not the
+  ;; sum: a commit lands on one window's contiguous bytes or it is split, so a
+  ;; request bigger than both windows is the only one that can never be served.
+  ;; The primary pool's size is the wrong bound on a host that created the 1GB
+  ;; memory -- Black & White 2's land loader asks for 430 MB in one piece, which
+  ;; fits the 512 MB extension window with room to spare and was refused before
+  ;; anything looked at it, as an unhandled bad_alloc at the land picker.
+  (func $virtual_backing_max_extent (result i32)
+    (local $ext i32)
+    (local.set $ext (call $virtual_backing_ext_end))
+    (if (i32.eqz (local.get $ext))
+      (then (return (global.get $VIRTUAL_BACKING_BASE_SIZE))))
+    (local.set $ext (i32.sub (local.get $ext) (call $virtual_backing_ext_base)))
+    (select (local.get $ext) (global.get $VIRTUAL_BACKING_BASE_SIZE)
+      (i32.gt_u (local.get $ext) (global.get $VIRTUAL_BACKING_BASE_SIZE))))
+
   ;; Take $size bytes off the extension window, or 0 when there is none or it
   ;; has no room. Wilderness first, which keeps the untouched tail contiguous
   ;; for the next large request; only when the bump is spent does it look for a
@@ -880,7 +896,7 @@
     (local $extended i32) (local $high_water i32)
     (local $candidate i32) (local $gap_end i32) (local $best i32)
     (local $best_size i32) (local $j i32) (local $covered i32) (local $ext i32)
-    (if (i32.gt_u (local.get $size) (global.get $VIRTUAL_BACKING_BASE_SIZE))
+    (if (i32.gt_u (local.get $size) (call $virtual_backing_max_extent))
       (then (return (i32.const 0))))
     (local.set $guest_end (i32.add (local.get $guest) (local.get $size)))
     (if (i32.lt_u (local.get $guest_end) (local.get $guest)) (then (return (i32.const 0))))
