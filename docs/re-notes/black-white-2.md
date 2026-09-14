@@ -5329,3 +5329,48 @@ same WAT booted on both memories, the 792 MB working set committed, and the
 top of the 2 GB memory written and read back, because `memory.size << 16` is
 `0x80000000` there and one signed comparison anywhere in that arithmetic would
 lose the whole window.
+
+## The allocation size is not a data size: it tracks the arena (2026-09-13)
+
+The 2 GB re-drive (`bw-software-probe-nrKzCO`) settles what `0x19AA0000` is.
+
+Same build, same click, same code path, two different guest memories:
+
+| memory | arena the reserve walks | the size the guest asked for |
+|---|---|---|
+| 1 GB  | ceiling `0x7F000000`, 828 MB of backing  | `0x19AA0000` = 430,571,520 |
+| 2 GB  | ceiling `0x7F000000`, 1852 MB of backing | `0x39BD0000` = 968,687,616 |
+
+**A data size cannot depend on how much memory the host gave the process.** The
+number moved by 2.25x when nothing about the land, the click or the code
+changed -- only how far apart the allocator was free to place things. That is
+the signature of a `end - begin` subtraction across two pointers that are not
+from the same allocation: widen the arena and the difference widens with it.
+
+This confirms the amendment above ("it is ONE allocation, not an accumulation;
+one call computes an absurd size") and turns its open question into a
+*falsifiable* one. The candidate sites named there -- `sub ecx,eax` at
+`0x9e3b1c` and `0x9e3b51`, `sub ecx,edx` at `0x9e3b97`, `imul edx` at
+`0x9e3c11`, feeding `call 0x9e62f0` / `0x9e6340` / `0x9e61a0` -- can now be
+tested by arithmetic rather than by argument: the operands of the right one
+differ by exactly `0x19AA0000` on a 1 GB memory and `0x39BD0000` on a 2 GB one,
+and both differences are the distance between two live sparse mappings.
+
+Two more things the 2 GB run establishes:
+
+**The land load genuinely got further.** It survived 250 s past the pick
+against 110 s, peaked at 1.33 GB of live mappings against 792 MB, and the
+record table stayed clean throughout (`backing_overlaps=0`). So the earlier
+ceilings were real limits and raising them was not wasted -- but the next rung
+of the same series is 968 MB, and no i32 address space wins that race. **Stop
+buying rungs.** The defect is the computed size.
+
+**The block-entry counts are unchanged in shape**: `0x9e17d0` = 14741 against
+`0x9e35e0` = 41, `0x9e3601` = 147, `0x9e32a0` = 36, `0x9d5430` = 39 -- the same
+~40 traversals of the outer list, one of which computes a nonsense size. Nothing
+here is running away.
+
+The run ended the same way as every previous one: `bad_alloc` out of the CRT at
+`0x00ada813`, unhandled, `[Exit] code=-529697949`. The `QueueError: native
+render heap handoff rejected` after it is the render worker being torn down, as
+the amendment above already established -- not a cause.
