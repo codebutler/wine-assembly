@@ -33,7 +33,7 @@ function spawn(name, args, watch) {
   return state;
 }
 
-async function waitFor(state, re, what, timeoutMs = 420000) {
+async function waitFor(state, re, what, timeoutMs = 300000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (state.hits.has(re)) return;
@@ -48,7 +48,7 @@ const common = ip => [
   '--quiet-api', '--quiet-blocks', '--trace-net',
   '--trace-api=WSAStartup,socket,setsockopt,getsockopt,getsockname,bind,ioctlsocket,sendto,recvfrom,select,WSAGetLastError,closesocket',
   '--control-stdin', '--vlan-max-waits=100000000',
-  '--max-batches=100000000', '--max-seconds=360',
+  '--max-batches=100000000', '--max-seconds=280',
 ];
 
 async function main() {
