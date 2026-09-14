@@ -6683,6 +6683,42 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
+  ;; SetKeyboardState(LPBYTE lpKeyState[256]) → BOOL — 1 arg stdcall.
+  ;; Only the high bit of each entry contributes to our modeled down state;
+  ;; toggle bits remain intentionally unmodeled. The host setter updates the
+  ;; same async-key backing consumed by subsequent keyboard-state queries.
+  (func $handle_SetKeyboardState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $state i32) (local $i i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $state (call $g2w_affine_span (local.get $arg0) (i32.const 256)))
+    (if (i32.eq (local.get $state) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (block $done (loop $keys
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 256)))
+      (call $host_set_key_down_state (local.get $i)
+        (i32.and (i32.load8_u (i32.add (local.get $state) (local.get $i)))
+                 (i32.const 0x80)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $keys)))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; AttachThreadInput(idAttach, idAttachTo, fAttach) is deliberately not
+  ;; modeled yet: input queues remain per emulated thread. Resolve the import
+  ;; and fail honestly so callers that treat attachment as optional (including
+  ;; UT2003's viewport setup) can continue without a fatal unknown API.
+  (func $handle_AttachThreadInput (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
   ;; 303: GetParent — STUB: unimplemented
   ;; GetParent(hwnd) — 1 arg stdcall, return parent hwnd or 0
   (func $handle_GetParent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6853,6 +6889,20 @@
     ;; implemented common-control classes registered by InitCommonControls are
     ;; string-only; both expose the existing WAT wndproc markers.
     (local.set $class (call $builtin_ctrl_class_id_key (local.get $name_key)))
+    ;; RICHEDIT is a predefined system class after RICHED32 has initialized,
+    ;; just like EDIT from the caller's point of view. Unreal's Window.dll
+    ;; queries it with a NULL instance before registering a superclass. The
+    ;; browser already implements both Win9x RichEdit generations; make their
+    ;; class metadata discoverable through the same WNDPROC marker contract.
+    (if (i32.and (i32.eqz (local.get $class))
+                 (i32.ge_u (local.get $name_key) (i32.const 0x10000)))
+      (then
+        (local.set $class (call $richedit_class_version_key (local.get $name_key)))
+        (if (i32.eq (local.get $class) (i32.const 1))
+          (then (local.set $class (i32.const 24)))
+          (else
+            (if (i32.eq (local.get $class) (i32.const 2))
+              (then (local.set $class (i32.const 25))))))))
     ;; COMCTL window classes are not predefined system classes. Its DllMain
     ;; probes them with its own HINSTANCE before registering the native
     ;; wndprocs, so fabricating a hit there makes the DLL skip registration.
@@ -9130,6 +9180,19 @@ SetColorAdjustment — validate and copy complete per-DC state.
   )
 
 ;; IME stubs — we never inject IME composition, so Immm* are no-ops.
+  ;; ImmCreateContext() / ImmDestroyContext(hIMC). This plain en-US machine
+  ;; exposes no IME and therefore cannot allocate a meaningful input context;
+  ;; keep creation, acquisition and destruction internally consistent.
+  (func $handle_ImmCreateContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (drop (local.get $name_ptr)) ;; no per-call context is manufactured
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  (func $handle_ImmDestroyContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (drop (local.get $arg0)) ;; NULL is the only context we expose
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
   ;; ImmAssociateContext(hWnd, hIMC) → prev HIMC (we always return 0 — no previous)
   (func $handle_ImmAssociateContext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0))

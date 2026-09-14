@@ -175,7 +175,7 @@
   ;; guest code begins. Reserve the tail of the auxiliary-wrapper region
   ;; rather than overlapping VSOCK_TABLE at 0x07FFE000.
   (global $DX_VTBL_REGISTRY i32 (region.addr $DX_VTBL_REGISTRY 0))
-  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 67))
+  (global $DX_VTBL_REGISTRY_COUNT i32 (i32.const 68))
 
   ;; Vtable blocks — arrays of thunk guest-addrs, one per interface type.
   ;; Must be in guest-reachable memory (above image_base), so allocated from heap.
@@ -262,8 +262,9 @@
   (global $DX_VTBL_D3DTEX9   (mut i32) (i32.const 0))
   (global $DX_VTBL_D3DSURF9  (mut i32) (i32.const 0))
   (global $DX_VTBL_D3DSWAP9  (mut i32) (i32.const 0))
-  ;; D3D8 capability-only factory; appended after every established vtable.
+  ;; D3D8 factory/device; appended after every established vtable.
   (global $DX_VTBL_D3D8      (mut i32) (i32.const 0))
+  (global $DX_VTBL_D3DDEV8   (mut i32) (i32.const 0))
 
   (func $dx_vtable_registry_reset
     (i32.store (global.get $DX_VTBL_REGISTRY) (i32.const 0)))
@@ -355,7 +356,8 @@
     (global.set $DX_VTBL_DS3DLISTENER (i32.load offset=256 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_DPLAY4 (i32.load offset=260 (global.get $DX_VTBL_REGISTRY)))
     (global.set $DX_VTBL_DPLAYLOBBY3 (i32.load offset=264 (global.get $DX_VTBL_REGISTRY)))
-    (global.set $DX_VTBL_D3D8 (i32.load offset=268 (global.get $DX_VTBL_REGISTRY))))
+    (global.set $DX_VTBL_D3D8 (i32.load offset=268 (global.get $DX_VTBL_REGISTRY)))
+    (global.set $DX_VTBL_D3DDEV8 (i32.load offset=272 (global.get $DX_VTBL_REGISTRY))))
 
   (func $dx_sync_thread_vtables_if_needed
     (if (i32.eqz (global.get $DX_VTBL_DDRAW))
@@ -7874,8 +7876,12 @@
     (call $di_enum_dispatch))
 
   ;; GetProperty / SetProperty. DirectInput encodes predefined properties as
-  ;; small REFGUID values; DIPROP_BUFFERSIZE is (REFGUID)1 and its value is the
-  ;; DIPROPDWORD.dwData at +16. Keep the configured queue capacity in misc1.
+  ;; small REFGUID values. DIPROP_BUFFERSIZE is (REFGUID)1 and DIPROP_AXISMODE
+  ;; is (REFGUID)2; both carry their value in DIPROPDWORD.dwData at +16 and
+  ;; apply to the whole device. Keep queue capacity in misc1 and the uncommon
+  ;; absolute-axis selection in an emulator-owned device flag (relative is the
+  ;; default for our mouse path and therefore zero).
+  (global $DIDEV_AXIS_ABSOLUTE i32 (i32.const 0x00000800))
   (func $di_valid_device_dword_property (param $header i32) (result i32)
     (if (result i32) (i32.eqz (local.get $header))
       (then (i32.const 0))
@@ -7896,14 +7902,24 @@
         (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
-    (if (i32.ne (local.get $arg1) (i32.const 1)) ;; DIPROP_BUFFERSIZE
+    (if (i32.and
+          (i32.ne (local.get $arg1) (i32.const 1)) ;; DIPROP_BUFFERSIZE
+          (i32.ne (local.get $arg1) (i32.const 2))) ;; DIPROP_AXISMODE
       (then
         (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (call $gs32 (i32.add (local.get $arg2) (i32.const 16))
-      (i32.load offset=12 (local.get $entry)))
+    (if (i32.eq (local.get $arg1) (i32.const 1))
+      (then
+        (call $gs32 (i32.add (local.get $arg2) (i32.const 16))
+          (i32.load offset=12 (local.get $entry))))
+      (else
+        (call $gs32 (i32.add (local.get $arg2) (i32.const 16))
+          (i32.ne
+            (i32.and (load.field DxObject flags (local.get $entry))
+                     (global.get $DIDEV_AXIS_ABSOLUTE))
+            (i32.const 0)))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
@@ -7914,14 +7930,33 @@
         (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
-    (if (i32.ne (local.get $arg1) (i32.const 1)) ;; DIPROP_BUFFERSIZE
+    (if (i32.and
+          (i32.ne (local.get $arg1) (i32.const 1)) ;; DIPROP_BUFFERSIZE
+          (i32.ne (local.get $arg1) (i32.const 2))) ;; DIPROP_AXISMODE
       (then
         (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (i32.store offset=12 (local.get $entry)
-      (call $gl32 (i32.add (local.get $arg2) (i32.const 16))))
+    (if (i32.eq (local.get $arg1) (i32.const 1))
+      (then
+        (i32.store offset=12 (local.get $entry)
+          (call $gl32 (i32.add (local.get $arg2) (i32.const 16)))))
+      (else
+        (if (i32.gt_u
+              (call $gl32 (i32.add (local.get $arg2) (i32.const 16)))
+              (i32.const 1))
+          (then
+            (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (return)))
+        (store.field DxObject flags (local.get $entry)
+          (i32.or
+            (i32.and (load.field DxObject flags (local.get $entry))
+                     (i32.const 0xFFFFF7FF))
+            (i32.mul
+              (call $gl32 (i32.add (local.get $arg2) (i32.const 16)))
+              (global.get $DIDEV_AXIS_ABSOLUTE))))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 

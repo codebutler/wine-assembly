@@ -83,6 +83,18 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_get_class_info_ex_w(0, progressW, progressOutW), 1);
   assertClass(progressW, progressOutW, 17);
 
+  const richA = ansi('RICHEDIT');
+  const richOutA = output();
+  assert.strictEqual(e.test_get_class_info_ex_a(0, richA, richOutA), 1,
+    'Win98 RICHEDIT is discoverable as a system class');
+  assertClass(richA, richOutA, 24);
+
+  const richW = wide('RichEdit20W');
+  const richOutW = output();
+  assert.strictEqual(e.test_get_class_info_ex_w(0, richW, richOutW), 1,
+    'RichEdit 2.0 is discoverable through the Unicode query too');
+  assertClass(richW, richOutW, 25);
+
   // Win98 COMCTL32 probes its own classes with the DLL HINSTANCE before it
   // calls RegisterClass. Reporting the browser fallback here suppresses that
   // native registration and leaves WinRAR with placeholder toolbar buttons.
@@ -99,7 +111,7 @@ const extraWat = String.raw`
 
   assert.strictEqual(e.test_get_class_info_ex_a(0, ansi('not_a_real_control'), output()), 0,
     'unknown classes must still fail');
-  console.log('PASS  GetClassInfoExA/W describe implemented trackbar and progress classes');
+  console.log('PASS  GetClassInfoExA/W describe implemented common controls and RichEdit classes');
 })().catch(error => {
   console.error(error.stack || error.message);
   process.exit(1);

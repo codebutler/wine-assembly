@@ -29038,24 +29038,21 @@
     "name": "IDirect3D8_CheckDeviceType",
     "nargs": 6,
     "convention": "stdcall",
-    "hash": 2350223267,
-    "handler": "d3d8_not_available_6"
+    "hash": 2350223267
   },
   {
     "id": 3451,
     "name": "IDirect3D8_CheckDeviceFormat",
     "nargs": 7,
     "convention": "stdcall",
-    "hash": 3100169444,
-    "handler": "d3d8_not_available_7"
+    "hash": 3100169444
   },
   {
     "id": 3452,
     "name": "IDirect3D8_CheckDeviceMultiSampleType",
     "nargs": 6,
     "convention": "stdcall",
-    "hash": 2912315158,
-    "handler": "d3d8_not_available_6"
+    "hash": 2912315158
   },
   {
     "id": 3453,
@@ -29063,7 +29060,7 @@
     "nargs": 6,
     "convention": "stdcall",
     "hash": 539478727,
-    "handler": "d3d8_not_available_6"
+    "handler": "IDirect3D8_CheckDeviceType"
   },
   {
     "id": 3454,
@@ -29084,8 +29081,7 @@
     "name": "IDirect3D8_CreateDevice",
     "nargs": 7,
     "convention": "stdcall",
-    "hash": 1561565041,
-    "handler": "d3d8_not_available_7"
+    "hash": 1561565041
   },
   {
     "id": 3457,
@@ -29100,5 +29096,945 @@
     "nargs": 5,
     "convention": "stdcall",
     "hash": 940289239
+  },
+  {
+    "id": 3459,
+    "name": "IDirect3DDevice8_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2274963518
+  },
+  {
+    "id": 3460,
+    "name": "IDirect3DDevice8_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1618809869,
+    "handler": "dx_com_addref"
+  },
+  {
+    "id": 3461,
+    "name": "IDirect3DDevice8_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 118345642,
+    "handler": "IDirect3DDevice9_Release"
+  },
+  {
+    "id": 3462,
+    "name": "IDirect3DDevice8_TestCooperativeLevel",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2204512498,
+    "handler": "IDirect3DDevice9_TestCooperativeLevel"
+  },
+  {
+    "id": 3463,
+    "name": "IDirect3DDevice8_GetAvailableTextureMem",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3598714638,
+    "handler": "IDirect3DDevice9_GetAvailableTextureMem"
+  },
+  {
+    "id": 3464,
+    "name": "IDirect3DDevice8_ResourceManagerDiscardBytes",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 147369041
+  },
+  {
+    "id": 3465,
+    "name": "IDirect3DDevice8_GetDirect3D",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1340701197,
+    "handler": "IDirect3DDevice9_GetDirect3D"
+  },
+  {
+    "id": 3466,
+    "name": "IDirect3DDevice8_GetDeviceCaps",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2831584404
+  },
+  {
+    "id": 3467,
+    "name": "IDirect3DDevice8_GetDisplayMode",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3516556900
+  },
+  {
+    "id": 3468,
+    "name": "IDirect3DDevice8_GetCreationParameters",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2438660234,
+    "handler": "IDirect3DDevice9_GetCreationParameters"
+  },
+  {
+    "id": 3469,
+    "name": "IDirect3DDevice8_SetCursorProperties",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1984109428,
+    "handler": "IDirect3DDevice9_SetCursorProperties"
+  },
+  {
+    "id": 3470,
+    "name": "IDirect3DDevice8_SetCursorPosition",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1739610770,
+    "handler": "IDirect3DDevice9_SetCursorPosition"
+  },
+  {
+    "id": 3471,
+    "name": "IDirect3DDevice8_ShowCursor",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 388198418,
+    "handler": "IDirect3DDevice9_ShowCursor"
+  },
+  {
+    "id": 3472,
+    "name": "IDirect3DDevice8_CreateAdditionalSwapChain",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1621309208,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3473,
+    "name": "IDirect3DDevice8_Reset",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3788986756,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3474,
+    "name": "IDirect3DDevice8_Present",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3714648088,
+    "handler": "IDirect3DDevice9_Present"
+  },
+  {
+    "id": 3475,
+    "name": "IDirect3DDevice8_GetBackBuffer",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 223551102
+  },
+  {
+    "id": 3476,
+    "name": "IDirect3DDevice8_GetRasterStatus",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3200551372,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3477,
+    "name": "IDirect3DDevice8_SetGammaRamp",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2783148868,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3478,
+    "name": "IDirect3DDevice8_GetGammaRamp",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 448199784,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3479,
+    "name": "IDirect3DDevice8_CreateTexture",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 1964702792
+  },
+  {
+    "id": 3480,
+    "name": "IDirect3DDevice8_CreateVolumeTexture",
+    "nargs": 9,
+    "convention": "stdcall",
+    "hash": 926183362,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3481,
+    "name": "IDirect3DDevice8_CreateCubeTexture",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 2700944367,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3482,
+    "name": "IDirect3DDevice8_CreateVertexBuffer",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 439129281
+  },
+  {
+    "id": 3483,
+    "name": "IDirect3DDevice8_CreateIndexBuffer",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 3504262981
+  },
+  {
+    "id": 3484,
+    "name": "IDirect3DDevice8_CreateRenderTarget",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2322883540,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3485,
+    "name": "IDirect3DDevice8_CreateDepthStencilSurface",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3192033169,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3486,
+    "name": "IDirect3DDevice8_CreateImageSurface",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2873297261,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3487,
+    "name": "IDirect3DDevice8_CopyRects",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1283737735,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3488,
+    "name": "IDirect3DDevice8_UpdateTexture",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2356546403,
+    "handler": "IDirect3DDevice9_UpdateTexture"
+  },
+  {
+    "id": 3489,
+    "name": "IDirect3DDevice8_GetFrontBuffer",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3208304276,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3490,
+    "name": "IDirect3DDevice8_SetRenderTarget",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1419859574
+  },
+  {
+    "id": 3491,
+    "name": "IDirect3DDevice8_GetRenderTarget",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2347784738
+  },
+  {
+    "id": 3492,
+    "name": "IDirect3DDevice8_GetDepthStencilSurface",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 871659523,
+    "handler": "IDirect3DDevice9_GetDepthStencilSurface"
+  },
+  {
+    "id": 3493,
+    "name": "IDirect3DDevice8_BeginScene",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 842277522,
+    "handler": "IDirect3DDevice9_BeginScene"
+  },
+  {
+    "id": 3494,
+    "name": "IDirect3DDevice8_EndScene",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4129172654,
+    "handler": "IDirect3DDevice9_EndScene"
+  },
+  {
+    "id": 3495,
+    "name": "IDirect3DDevice8_Clear",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1759131038,
+    "handler": "IDirect3DDevice9_Clear"
+  },
+  {
+    "id": 3496,
+    "name": "IDirect3DDevice8_SetTransform",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 165644481,
+    "handler": "IDirect3DDevice9_SetTransform"
+  },
+  {
+    "id": 3497,
+    "name": "IDirect3DDevice8_GetTransform",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 222810493,
+    "handler": "IDirect3DDevice9_GetTransform"
+  },
+  {
+    "id": 3498,
+    "name": "IDirect3DDevice8_MultiplyTransform",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 629378055,
+    "handler": "IDirect3DDevice9_MultiplyTransform"
+  },
+  {
+    "id": 3499,
+    "name": "IDirect3DDevice8_SetViewport",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3502540837,
+    "handler": "IDirect3DDevice9_SetViewport"
+  },
+  {
+    "id": 3500,
+    "name": "IDirect3DDevice8_GetViewport",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3441776185,
+    "handler": "IDirect3DDevice9_GetViewport"
+  },
+  {
+    "id": 3501,
+    "name": "IDirect3DDevice8_SetMaterial",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3912735686,
+    "handler": "IDirect3DDevice9_SetMaterial"
+  },
+  {
+    "id": 3502,
+    "name": "IDirect3DDevice8_GetMaterial",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4055840242,
+    "handler": "IDirect3DDevice9_GetMaterial"
+  },
+  {
+    "id": 3503,
+    "name": "IDirect3DDevice8_SetLight",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3527016057,
+    "handler": "IDirect3DDevice9_SetLight"
+  },
+  {
+    "id": 3504,
+    "name": "IDirect3DDevice8_GetLight",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 644116149,
+    "handler": "IDirect3DDevice9_GetLight"
+  },
+  {
+    "id": 3505,
+    "name": "IDirect3DDevice8_LightEnable",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3264853404,
+    "handler": "IDirect3DDevice9_LightEnable"
+  },
+  {
+    "id": 3506,
+    "name": "IDirect3DDevice8_GetLightEnable",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2585190238,
+    "handler": "IDirect3DDevice9_GetLightEnable"
+  },
+  {
+    "id": 3507,
+    "name": "IDirect3DDevice8_SetClipPlane",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 834500665,
+    "handler": "IDirect3DDevice9_SetClipPlane"
+  },
+  {
+    "id": 3508,
+    "name": "IDirect3DDevice8_GetClipPlane",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 933882477,
+    "handler": "IDirect3DDevice9_GetClipPlane"
+  },
+  {
+    "id": 3509,
+    "name": "IDirect3DDevice8_SetRenderState",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 303452452,
+    "handler": "IDirect3DDevice9_SetRenderState"
+  },
+  {
+    "id": 3510,
+    "name": "IDirect3DDevice8_GetRenderState",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3118405840,
+    "handler": "IDirect3DDevice9_GetRenderState"
+  },
+  {
+    "id": 3511,
+    "name": "IDirect3DDevice8_BeginStateBlock",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3688497880,
+    "handler": "IDirect3DDevice9_BeginStateBlock"
+  },
+  {
+    "id": 3512,
+    "name": "IDirect3DDevice8_EndStateBlock",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4274330284,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3513,
+    "name": "IDirect3DDevice8_ApplyStateBlock",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2828484225,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3514,
+    "name": "IDirect3DDevice8_CaptureStateBlock",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1988280067,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3515,
+    "name": "IDirect3DDevice8_DeleteStateBlock",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 318331532,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3516,
+    "name": "IDirect3DDevice8_CreateStateBlock",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2605493951,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3517,
+    "name": "IDirect3DDevice8_SetClipStatus",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3485032123,
+    "handler": "IDirect3DDevice9_SetClipStatus"
+  },
+  {
+    "id": 3518,
+    "name": "IDirect3DDevice8_GetClipStatus",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1922325591,
+    "handler": "IDirect3DDevice9_GetClipStatus"
+  },
+  {
+    "id": 3519,
+    "name": "IDirect3DDevice8_GetTexture",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2993431354,
+    "handler": "IDirect3DDevice9_GetTexture"
+  },
+  {
+    "id": 3520,
+    "name": "IDirect3DDevice8_SetTexture",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 823753022,
+    "handler": "IDirect3DDevice9_SetTexture"
+  },
+  {
+    "id": 3521,
+    "name": "IDirect3DDevice8_GetTextureStageState",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3204463305,
+    "handler": "IDirect3DDevice9_GetTextureStageState"
+  },
+  {
+    "id": 3522,
+    "name": "IDirect3DDevice8_SetTextureStageState",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4187755405,
+    "handler": "IDirect3DDevice9_SetTextureStageState"
+  },
+  {
+    "id": 3523,
+    "name": "IDirect3DDevice8_ValidateDevice",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1344734333,
+    "handler": "IDirect3DDevice9_ValidateDevice"
+  },
+  {
+    "id": 3524,
+    "name": "IDirect3DDevice8_GetInfo",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3838137839,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3525,
+    "name": "IDirect3DDevice8_SetPaletteEntries",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2059378358,
+    "handler": "IDirect3DDevice9_SetPaletteEntries"
+  },
+  {
+    "id": 3526,
+    "name": "IDirect3DDevice8_GetPaletteEntries",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4038539978,
+    "handler": "IDirect3DDevice9_GetPaletteEntries"
+  },
+  {
+    "id": 3527,
+    "name": "IDirect3DDevice8_SetCurrentTexturePalette",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3308476018,
+    "handler": "IDirect3DDevice9_SetCurrentTexturePalette"
+  },
+  {
+    "id": 3528,
+    "name": "IDirect3DDevice8_GetCurrentTexturePalette",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1016990758,
+    "handler": "IDirect3DDevice9_GetCurrentTexturePalette"
+  },
+  {
+    "id": 3529,
+    "name": "IDirect3DDevice8_DrawPrimitive",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3418259996,
+    "handler": "IDirect3DDevice9_DrawPrimitive"
+  },
+  {
+    "id": 3530,
+    "name": "IDirect3DDevice8_DrawIndexedPrimitive",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 2871229341
+  },
+  {
+    "id": 3531,
+    "name": "IDirect3DDevice8_DrawPrimitiveUP",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 97250913,
+    "handler": "IDirect3DDevice9_DrawPrimitiveUP"
+  },
+  {
+    "id": 3532,
+    "name": "IDirect3DDevice8_DrawIndexedPrimitiveUP",
+    "nargs": 9,
+    "convention": "stdcall",
+    "hash": 1914345240,
+    "handler": "IDirect3DDevice9_DrawIndexedPrimitiveUP"
+  },
+  {
+    "id": 3533,
+    "name": "IDirect3DDevice8_ProcessVertices",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1378116341,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3534,
+    "name": "IDirect3DDevice8_CreateVertexShader",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1792827398
+  },
+  {
+    "id": 3535,
+    "name": "IDirect3DDevice8_SetVertexShader",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 695249972
+  },
+  {
+    "id": 3536,
+    "name": "IDirect3DDevice8_GetVertexShader",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3813930656,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3537,
+    "name": "IDirect3DDevice8_DeleteVertexShader",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 4034325037
+  },
+  {
+    "id": 3538,
+    "name": "IDirect3DDevice8_SetVertexShaderConstant",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2014196192,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3539,
+    "name": "IDirect3DDevice8_GetVertexShaderConstant",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 735411796,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3540,
+    "name": "IDirect3DDevice8_GetVertexShaderDeclaration",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3660895412,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3541,
+    "name": "IDirect3DDevice8_GetVertexShaderFunction",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2861618696,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3542,
+    "name": "IDirect3DDevice8_SetStreamSource",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 575740666
+  },
+  {
+    "id": 3543,
+    "name": "IDirect3DDevice8_GetStreamSource",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 383615190,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3544,
+    "name": "IDirect3DDevice8_SetIndices",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4141015676
+  },
+  {
+    "id": 3545,
+    "name": "IDirect3DDevice8_GetIndices",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3745483496,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3546,
+    "name": "IDirect3DDevice8_CreatePixelShader",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3536493694,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3547,
+    "name": "IDirect3DDevice8_SetPixelShader",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1547886344,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3548,
+    "name": "IDirect3DDevice8_GetPixelShader",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2971286924,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3549,
+    "name": "IDirect3DDevice8_DeletePixelShader",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1816459635,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3550,
+    "name": "IDirect3DDevice8_SetPixelShaderConstant",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 15167756,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3551,
+    "name": "IDirect3DDevice8_GetPixelShaderConstant",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2587698088,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3552,
+    "name": "IDirect3DDevice8_GetPixelShaderFunction",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2366535732,
+    "handler": "d3d8_unimplemented"
+  },
+  {
+    "id": 3553,
+    "name": "IDirect3DDevice8_DrawRectPatch",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 81763005,
+    "handler": "IDirect3DDevice9_DrawRectPatch"
+  },
+  {
+    "id": 3554,
+    "name": "IDirect3DDevice8_DrawTriPatch",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2247490054,
+    "handler": "IDirect3DDevice9_DrawTriPatch"
+  },
+  {
+    "id": 3555,
+    "name": "IDirect3DDevice8_DeletePatch",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 122876676,
+    "handler": "IDirect3DDevice9_DeletePatch"
+  },
+  {
+    "id": 3556,
+    "name": "SetKeyboardState",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3316150447
+  },
+  {
+    "id": 3557,
+    "name": "AttachThreadInput",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3287305840
+  },
+  {
+    "id": 3558,
+    "name": "ImmCreateContext",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3047755729
+  },
+  {
+    "id": 3559,
+    "name": "ImmDestroyContext",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3149735391
+  },
+  {
+    "id": 3560,
+    "name": "IDirect3DTexture8_QueryInterface",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4242466775,
+    "handler": "IDirect3DTexture9_QueryInterface"
+  },
+  {
+    "id": 3561,
+    "name": "IDirect3DTexture8_AddRef",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3591650492,
+    "handler": "IDirect3DTexture9_AddRef"
+  },
+  {
+    "id": 3562,
+    "name": "IDirect3DTexture8_Release",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2980451421,
+    "handler": "IDirect3DTexture9_Release"
+  },
+  {
+    "id": 3563,
+    "name": "IDirect3DTexture8_GetDevice",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 970201654,
+    "handler": "IDirect3DTexture9_GetDevice"
+  },
+  {
+    "id": 3564,
+    "name": "IDirect3DTexture8_SetPrivateData",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 1331451619,
+    "handler": "IDirect3DTexture9_SetPrivateData"
+  },
+  {
+    "id": 3565,
+    "name": "IDirect3DTexture8_GetPrivateData",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 869310719,
+    "handler": "IDirect3DTexture9_GetPrivateData"
+  },
+  {
+    "id": 3566,
+    "name": "IDirect3DTexture8_FreePrivateData",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1452733229,
+    "handler": "IDirect3DTexture9_FreePrivateData"
+  },
+  {
+    "id": 3567,
+    "name": "IDirect3DTexture8_SetPriority",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1302739848,
+    "handler": "IDirect3DTexture9_SetPriority"
+  },
+  {
+    "id": 3568,
+    "name": "IDirect3DTexture8_GetPriority",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1663674724,
+    "handler": "IDirect3DTexture9_GetPriority"
+  },
+  {
+    "id": 3569,
+    "name": "IDirect3DTexture8_PreLoad",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2484445301,
+    "handler": "IDirect3DTexture9_PreLoad"
+  },
+  {
+    "id": 3570,
+    "name": "IDirect3DTexture8_GetType",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4124610548,
+    "handler": "IDirect3DTexture9_GetType"
+  },
+  {
+    "id": 3571,
+    "name": "IDirect3DTexture8_SetLOD",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1783400895,
+    "handler": "IDirect3DTexture9_SetLOD"
+  },
+  {
+    "id": 3572,
+    "name": "IDirect3DTexture8_GetLOD",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3861651691,
+    "handler": "IDirect3DTexture9_GetLOD"
+  },
+  {
+    "id": 3573,
+    "name": "IDirect3DTexture8_GetLevelCount",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3590895817,
+    "handler": "IDirect3DTexture9_GetLevelCount"
+  },
+  {
+    "id": 3574,
+    "name": "IDirect3DTexture8_GetLevelDesc",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1003565251,
+    "handler": "IDirect3DTexture9_GetLevelDesc"
+  },
+  {
+    "id": 3575,
+    "name": "IDirect3DTexture8_GetSurfaceLevel",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3248007479,
+    "handler": "IDirect3DTexture9_GetSurfaceLevel"
+  },
+  {
+    "id": 3576,
+    "name": "IDirect3DTexture8_LockRect",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 949906089,
+    "handler": "IDirect3DTexture9_LockRect"
+  },
+  {
+    "id": 3577,
+    "name": "IDirect3DTexture8_UnlockRect",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3706881002,
+    "handler": "IDirect3DTexture9_UnlockRect"
+  },
+  {
+    "id": 3578,
+    "name": "IDirect3DTexture8_AddDirtyRect",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 2625173155,
+    "handler": "IDirect3DTexture9_AddDirtyRect"
   }
 ]

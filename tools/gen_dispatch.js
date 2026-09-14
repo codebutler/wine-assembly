@@ -59,6 +59,7 @@ const namedApiIds = [
   ['IDirect3DStateBlock9_QueryInterface', 'API_ID_IDirect3DStateBlock9_BASE'],
   ['IDirect3DQuery9_QueryInterface', 'API_ID_IDirect3DQuery9_BASE'],
   ['IDirect3DCubeTexture9_QueryInterface', 'API_ID_IDirect3DCubeTexture9_BASE'],
+  ['IDirect3DTexture8_QueryInterface', 'API_ID_IDirect3DTexture8_BASE'],
 ];
 
 out.push('  ;; Named API ids consumed by hand-written dispatch fast paths.');
@@ -409,7 +410,7 @@ comInterfaces.push({ prefix: 'IDirectSound3DListener', global: 'DX_VTBL_DS3DLIST
 comInterfaces.push({ prefix: 'IDirectPlay4', global: 'DX_VTBL_DPLAY4', extends: 'IDirectPlay3' });
 comInterfaces.push({ prefix: 'IDirectPlayLobby3', global: 'DX_VTBL_DPLAYLOBBY3', extends: 'IDirectPlayLobby2' });
 
-// D3D8 capability-only factory.  Keep it at the absolute registry tail so no
+// D3D8 factory and device. Keep them at the absolute registry tail so no
 // established worker-thread vtable offset moves.
 const { vtableGlobals: d3d8Vtables } = require('./d3d8-methods');
 for (const v of d3d8Vtables) comInterfaces.push(v);

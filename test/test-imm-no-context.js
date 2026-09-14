@@ -6,6 +6,24 @@ const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_call_ImmCreateContext") (result i64)
+    (global.set $esp (i32.const 0x00300000))
+    (call $handle_ImmCreateContext
+      (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i64.or
+      (i64.extend_i32_u (global.get $eax))
+      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+
+  (func (export "test_call_ImmDestroyContext") (param $himc i32) (result i64)
+    (global.set $esp (i32.const 0x00300000))
+    (call $handle_ImmDestroyContext
+      (local.get $himc) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i64.or
+      (i64.extend_i32_u (global.get $eax))
+      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+
   (func (export "test_call_ImmGetContext") (param $hwnd i32) (result i64)
     (global.set $esp (i32.const 0x00300000))
     (call $handle_ImmGetContext
@@ -29,7 +47,19 @@ const extraWat = String.raw`
 (async () => {
   const { exports: e } = await bootRenderHarness({ extraWat });
 
-  let packed = e.test_call_ImmGetContext(0x10001);
+  let packed = e.test_call_ImmCreateContext();
+  assert.strictEqual(Number(packed & 0xffffffffn), 0,
+    'the no-IME machine does not fabricate an input context');
+  assert.strictEqual(Number(packed >> 32n), 0x00300004,
+    'ImmCreateContext pops only the return address');
+
+  packed = e.test_call_ImmDestroyContext(0x494d4301);
+  assert.strictEqual(Number(packed & 0xffffffffn), 0,
+    'a fabricated input context cannot be destroyed');
+  assert.strictEqual(Number(packed >> 32n), 0x00300008,
+    'ImmDestroyContext pops its one stdcall argument');
+
+  packed = e.test_call_ImmGetContext(0x10001);
   assert.strictEqual(Number(packed & 0xffffffffn), 0,
     'the plain en-US machine exposes no input context');
   assert.strictEqual(Number(packed >> 32n), 0x00300008,

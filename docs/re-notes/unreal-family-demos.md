@@ -24,7 +24,7 @@ enforced by `tools/install-unreal-demo.js`.
 | --- | --- | ---: | --- |
 | Unreal Special Edition | InstallShield bootstrap launched `_INS*.MP`; license and destination flow completed | 191 MB, `System/Unreal.exe` SHA-256 `5fbc5853a8669a802446ac12e102351053bc6a5ce9f554b03483eb634269f408` | Software launch loads `SoftDrv`, opens `WindowsViewport0`, initializes the game engine/player, and renders the playable intro |
 | Unreal Tournament 348 | Unreal `System/Setup.exe` completed | 104 MB, `System/UnrealTournament.exe` | Reaches the renderer-selection wizard |
-| UT2003 2206 | Unreal `System/Setup.exe` completed with the shipped `MSVCR70.dll` | 344 MB, `System/UT2003.exe` SHA-256 `97e027dc9765f048beacfa461bc93c71ba1831cd3e8dff0cd7d71c1b478f88a2` | Its pre-renderer D3D8 calls now complete through the capability facade; a later C++ exception still occurs before `OpenGLDrv` loads |
+| UT2003 2206 | Unreal `System/Setup.exe` completed with the shipped `MSVCR70.dll` | 344 MB, `System/UT2003.exe` SHA-256 `97e027dc9765f048beacfa461bc93c71ba1831cd3e8dff0cd7d71c1b478f88a2` | The D3D8 wrapper now renders the animated intro, main menu, and interactive Instant Action map-selection screen in a real browser WebGL backend |
 | UT2004 new demo | Unreal `System/Setup.exe` completed with the shipped `MSVCR71.dll` | 525 MB, `System/UT2004.exe` SHA-256 `2a95e2fa8c22ae94eb1c361fdb49ea8ec44c5e2a93faa00831308c01e951db8d` | Uses the same pre-renderer D3D8 probe; further post-probe launch diagnosis remains |
 
 Seeding the bundled Visual C++ runtimes matters. Without `MSVCR70.dll`, the
@@ -65,11 +65,24 @@ Game -> New Game -> Easy -> player setup, entered the first-person level with
 HUD active, and produced distinct before/after movement frames, so interactive
 gameplay is verified rather than inferred from the intro.
 
-An explicit UT2003 `-d3d -window` run still stops during capability probing:
-it calls `Direct3DCreate8`, `GetDeviceCaps`, and `CheckDeviceFormat` for DXT3;
-the facade deliberately returns `D3DERR_NOTAVAILABLE`, the game releases the
-factory, and `CreateDevice` is never called. Direct3D gameplay therefore needs
-a real `IDirect3DDevice8` translation layer, not merely a renderer flag.
+The initial capability facade has since grown into a deliberately bounded D3D8
+translation layer over the D3D9 backend. It preserves the exact 97-slot device
+and 19-slot texture ABIs, translates D3D8 presentation parameters, textures,
+vertex/index buffers and fixed-function declarations, retains D3D8's
+`BaseVertexIndex` from `SetIndices` for indexed draws, and adapts the implicit
+swap-chain argument of `GetBackBuffer`. Unsupported methods remain explicit
+failures rather than silent successes.
+
+An authentic `-d3d -window -nosound` browser run renders the publisher intro,
+the full UT2003 main menu, and the live `Instant Action | Select Map` screen
+with the Antalus preview. The no-sound flag isolates graphics from the separate
+missing Vorbis `ov_open` import. The CLI software D3D backend reaches the same
+engine loop without an unimplemented API but rejects its GPU draw opcode; the
+browser WebGL backend is therefore the authoritative graphics verification.
+Interactive gameplay is not yet claimed: repeated headful Chrome runs became
+unstable while automating the final Play click, although the setup UI remained
+live and animated. Captures are `/private/tmp/ut2003-d3d8-headful-film/f007-080s.png`
+and `/private/tmp/ut2003-d3d8-instant-keyboard.png`.
 
 ## UT3 API analysis
 

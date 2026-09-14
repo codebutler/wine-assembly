@@ -499,7 +499,24 @@ const extraWat = `
     'GetProperty returns DIPROP_BUFFERSIZE');
   assert.strictEqual(wat.guest_read32(property + 16), 2,
     'GetProperty round-trips the configured queue capacity');
-  assert.strictEqual(wat.test_di_get_property(mouse, 2, property) >>> 0, 0x80004001,
+  assert.strictEqual(wat.test_di_set_buffer_size(mouse, 2, property) >>> 0, 0x80070057,
+    'DIPROP_AXISMODE rejects the buffer value 2 as invalid');
+  wat.guest_write32(property + 16, 1); // DIPROPAXISMODE_ABS
+  assert.strictEqual(wat.test_di_set_buffer_size(mouse, 2, property) >>> 0, 0,
+    'SetProperty accepts absolute DIPROP_AXISMODE for the whole device');
+  wat.guest_write32(property + 16, 0xfeedface);
+  assert.strictEqual(wat.test_di_get_property(mouse, 2, property) >>> 0, 0,
+    'GetProperty accepts DIPROP_AXISMODE');
+  assert.strictEqual(wat.guest_read32(property + 16), 1,
+    'GetProperty round-trips absolute axis mode');
+  wat.guest_write32(property + 16, 0); // DIPROPAXISMODE_REL
+  assert.strictEqual(wat.test_di_set_buffer_size(mouse, 2, property) >>> 0, 0,
+    'SetProperty accepts relative DIPROP_AXISMODE used by UT2003');
+  wat.guest_write32(property + 16, 0xfeedface);
+  assert.strictEqual(wat.test_di_get_property(mouse, 2, property) >>> 0, 0);
+  assert.strictEqual(wat.guest_read32(property + 16), 0,
+    'GetProperty round-trips relative axis mode');
+  assert.strictEqual(wat.test_di_get_property(mouse, 3, property) >>> 0, 0x80004001,
     'an unmodeled DirectInput property fails honestly with DIERR_UNSUPPORTED');
   wat.guest_write32(property + 12, 1); // DIPH_BYOFFSET is invalid for buffer size
   assert.strictEqual(wat.test_di_get_property(mouse, 1, property) >>> 0, 0x80070057,

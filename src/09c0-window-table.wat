@@ -1040,11 +1040,10 @@
   ;; and RichEdit20W are the Riched20/RichEdit 2.0+ classes. Return 0 for a
   ;; non-RichEdit name, 1 for 1.0, and 2 for 2.0+. Comparisons are ASCII
   ;; case-insensitive because USER class lookup is case-insensitive.
-  (func $richedit_class_version (param $class_name i32) (result i32)
-    (local $name_w i32) (local $tail i32)
-    (if (i32.lt_u (local.get $class_name) (i32.const 0x10000))
+  (func $richedit_class_version_key (param $name_w i32) (result i32)
+    (local $tail i32)
+    (if (i32.lt_u (local.get $name_w) (i32.const 0x10000))
       (then (return (i32.const 0))))
-    (local.set $name_w (call $g2w (local.get $class_name)))
     (if (i32.ne
           (i32.or (i32.load (local.get $name_w)) (i32.const 0x20202020))
           (i32.const 0x68636972)) ;; "rich"
@@ -1069,6 +1068,14 @@
     ;; Preserve the historical edit-like fallback for other rich* aliases,
     ;; but bound them to the conservative 1.0 message contract.
     (i32.const 1))
+
+  ;; Public callers hold a guest pointer; class-table/system-class callers
+  ;; already hold the translated byte-string key. Keep one comparison body so
+  ;; ANSI and narrowed-Unicode GetClassInfo queries identify the same class.
+  (func $richedit_class_version (param $class_name i32) (result i32)
+    (if (i32.lt_u (local.get $class_name) (i32.const 0x10000))
+      (then (return (i32.const 0))))
+    (call $richedit_class_version_key (call $g2w (local.get $class_name))))
 
   ;; First child of $parent in slot order (z-order proxy). 0 if none.
   ;; parent=0 means "find first top-level window".

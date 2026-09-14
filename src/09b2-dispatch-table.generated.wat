@@ -13,6 +13,7 @@
   (global $API_ID_IDirect3DStateBlock9_BASE i32 (i32.const 3348))
   (global $API_ID_IDirect3DQuery9_BASE i32 (i32.const 3357))
   (global $API_ID_IDirect3DCubeTexture9_BASE i32 (i32.const 3369))
+  (global $API_ID_IDirect3DTexture8_BASE i32 (i32.const 3560))
 
   ;; ============================================================
   ;; CONSTANT API STUBS — GENERATED, do not edit
@@ -1749,7 +1750,7 @@
       (then
         (call $dispatch_api_table_page_12 (i32.sub (local.get $api_id) (i32.const 3072)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
-    (if (i32.lt_u (local.get $api_id) (i32.const 3457))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3579))
       (then
         (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
@@ -15173,8 +15174,130 @@
   )
 
   (func $dispatch_api_table_page_13 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; api ids 3328..3456
+    ;; api ids 3328..3578
     (block $fallback
+    (block $api_250
+    (block $api_249
+    (block $api_248
+    (block $api_247
+    (block $api_246
+    (block $api_245
+    (block $api_244
+    (block $api_243
+    (block $api_242
+    (block $api_241
+    (block $api_240
+    (block $api_239
+    (block $api_238
+    (block $api_237
+    (block $api_236
+    (block $api_235
+    (block $api_234
+    (block $api_233
+    (block $api_232
+    (block $api_231
+    (block $api_230
+    (block $api_229
+    (block $api_228
+    (block $api_227
+    (block $api_226
+    (block $api_225
+    (block $api_224
+    (block $api_223
+    (block $api_222
+    (block $api_221
+    (block $api_220
+    (block $api_219
+    (block $api_218
+    (block $api_217
+    (block $api_216
+    (block $api_215
+    (block $api_214
+    (block $api_213
+    (block $api_212
+    (block $api_211
+    (block $api_210
+    (block $api_209
+    (block $api_208
+    (block $api_207
+    (block $api_206
+    (block $api_205
+    (block $api_204
+    (block $api_203
+    (block $api_202
+    (block $api_201
+    (block $api_200
+    (block $api_199
+    (block $api_198
+    (block $api_197
+    (block $api_196
+    (block $api_195
+    (block $api_194
+    (block $api_193
+    (block $api_192
+    (block $api_191
+    (block $api_190
+    (block $api_189
+    (block $api_188
+    (block $api_187
+    (block $api_186
+    (block $api_185
+    (block $api_184
+    (block $api_183
+    (block $api_182
+    (block $api_181
+    (block $api_180
+    (block $api_179
+    (block $api_178
+    (block $api_177
+    (block $api_176
+    (block $api_175
+    (block $api_174
+    (block $api_173
+    (block $api_172
+    (block $api_171
+    (block $api_170
+    (block $api_169
+    (block $api_168
+    (block $api_167
+    (block $api_166
+    (block $api_165
+    (block $api_164
+    (block $api_163
+    (block $api_162
+    (block $api_161
+    (block $api_160
+    (block $api_159
+    (block $api_158
+    (block $api_157
+    (block $api_156
+    (block $api_155
+    (block $api_154
+    (block $api_153
+    (block $api_152
+    (block $api_151
+    (block $api_150
+    (block $api_149
+    (block $api_148
+    (block $api_147
+    (block $api_146
+    (block $api_145
+    (block $api_144
+    (block $api_143
+    (block $api_142
+    (block $api_141
+    (block $api_140
+    (block $api_139
+    (block $api_138
+    (block $api_137
+    (block $api_136
+    (block $api_135
+    (block $api_134
+    (block $api_133
+    (block $api_132
+    (block $api_131
+    (block $api_130
+    (block $api_129
     (block $api_128
     (block $api_127
     (block $api_126
@@ -15304,7 +15427,7 @@
     (block $api_2
     (block $api_1
     (block $api_0
-      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $api_76 $api_77 $api_78 $api_79 $api_80 $api_81 $api_82 $api_83 $api_84 $api_85 $api_86 $api_87 $api_88 $api_89 $api_90 $api_91 $api_92 $api_93 $api_94 $api_95 $api_96 $api_97 $api_98 $api_99 $api_100 $api_101 $api_102 $api_103 $api_104 $api_105 $api_106 $api_107 $api_108 $api_109 $api_110 $api_111 $api_112 $api_113 $api_114 $api_115 $api_116 $api_117 $api_118 $api_119 $api_120 $api_121 $api_122 $api_123 $api_124 $api_125 $api_126 $api_127 $api_128 $fallback (local.get $api_id))
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $api_76 $api_77 $api_78 $api_79 $api_80 $api_81 $api_82 $api_83 $api_84 $api_85 $api_86 $api_87 $api_88 $api_89 $api_90 $api_91 $api_92 $api_93 $api_94 $api_95 $api_96 $api_97 $api_98 $api_99 $api_100 $api_101 $api_102 $api_103 $api_104 $api_105 $api_106 $api_107 $api_108 $api_109 $api_110 $api_111 $api_112 $api_113 $api_114 $api_115 $api_116 $api_117 $api_118 $api_119 $api_120 $api_121 $api_122 $api_123 $api_124 $api_125 $api_126 $api_127 $api_128 $api_129 $api_130 $api_131 $api_132 $api_133 $api_134 $api_135 $api_136 $api_137 $api_138 $api_139 $api_140 $api_141 $api_142 $api_143 $api_144 $api_145 $api_146 $api_147 $api_148 $api_149 $api_150 $api_151 $api_152 $api_153 $api_154 $api_155 $api_156 $api_157 $api_158 $api_159 $api_160 $api_161 $api_162 $api_163 $api_164 $api_165 $api_166 $api_167 $api_168 $api_169 $api_170 $api_171 $api_172 $api_173 $api_174 $api_175 $api_176 $api_177 $api_178 $api_179 $api_180 $api_181 $api_182 $api_183 $api_184 $api_185 $api_186 $api_187 $api_188 $api_189 $api_190 $api_191 $api_192 $api_193 $api_194 $api_195 $api_196 $api_197 $api_198 $api_199 $api_200 $api_201 $api_202 $api_203 $api_204 $api_205 $api_206 $api_207 $api_208 $api_209 $api_210 $api_211 $api_212 $api_213 $api_214 $api_215 $api_216 $api_217 $api_218 $api_219 $api_220 $api_221 $api_222 $api_223 $api_224 $api_225 $api_226 $api_227 $api_228 $api_229 $api_230 $api_231 $api_232 $api_233 $api_234 $api_235 $api_236 $api_237 $api_238 $api_239 $api_240 $api_241 $api_242 $api_243 $api_244 $api_245 $api_246 $api_247 $api_248 $api_249 $api_250 $fallback (local.get $api_id))
     ) ;; 3328: DirectXSetup
       (call $handle_DirectXSetup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
@@ -15672,16 +15795,16 @@
       (call $handle_IDirect3D8_GetAdapterDisplayMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3450: IDirect3D8_CheckDeviceType
-      (call $handle_d3d8_not_available_6 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3D8_CheckDeviceType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3451: IDirect3D8_CheckDeviceFormat
-      (call $handle_d3d8_not_available_7 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3D8_CheckDeviceFormat (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3452: IDirect3D8_CheckDeviceMultiSampleType
-      (call $handle_d3d8_not_available_6 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3D8_CheckDeviceMultiSampleType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3453: IDirect3D8_CheckDepthStencilMatch
-      (call $handle_d3d8_not_available_6 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3D8_CheckDeviceType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3454: IDirect3D8_GetDeviceCaps
       (call $handle_IDirect3D8_GetDeviceCaps (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -15690,7 +15813,373 @@
       (call $handle_IDirect3D8_GetAdapterMonitor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3456: IDirect3D8_CreateDevice
-      (call $handle_d3d8_not_available_7 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3D8_CreateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3457: ReadConsoleOutputCharacterA
+      (call $handle_ReadConsoleOutputCharacterA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3458: ReadConsoleOutputCharacterW
+      (call $handle_ReadConsoleOutputCharacterW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3459: IDirect3DDevice8_QueryInterface
+      (call $handle_IDirect3DDevice8_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3460: IDirect3DDevice8_AddRef
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3461: IDirect3DDevice8_Release
+      (call $handle_IDirect3DDevice9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3462: IDirect3DDevice8_TestCooperativeLevel
+      (call $handle_IDirect3DDevice9_TestCooperativeLevel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3463: IDirect3DDevice8_GetAvailableTextureMem
+      (call $handle_IDirect3DDevice9_GetAvailableTextureMem (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3464: IDirect3DDevice8_ResourceManagerDiscardBytes
+      (call $handle_IDirect3DDevice8_ResourceManagerDiscardBytes (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3465: IDirect3DDevice8_GetDirect3D
+      (call $handle_IDirect3DDevice9_GetDirect3D (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3466: IDirect3DDevice8_GetDeviceCaps
+      (call $handle_IDirect3DDevice8_GetDeviceCaps (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3467: IDirect3DDevice8_GetDisplayMode
+      (call $handle_IDirect3DDevice8_GetDisplayMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3468: IDirect3DDevice8_GetCreationParameters
+      (call $handle_IDirect3DDevice9_GetCreationParameters (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3469: IDirect3DDevice8_SetCursorProperties
+      (call $handle_IDirect3DDevice9_SetCursorProperties (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3470: IDirect3DDevice8_SetCursorPosition
+      (call $handle_IDirect3DDevice9_SetCursorPosition (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3471: IDirect3DDevice8_ShowCursor
+      (call $handle_IDirect3DDevice9_ShowCursor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3472: IDirect3DDevice8_CreateAdditionalSwapChain
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3473: IDirect3DDevice8_Reset
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3474: IDirect3DDevice8_Present
+      (call $handle_IDirect3DDevice9_Present (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3475: IDirect3DDevice8_GetBackBuffer
+      (call $handle_IDirect3DDevice8_GetBackBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3476: IDirect3DDevice8_GetRasterStatus
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3477: IDirect3DDevice8_SetGammaRamp
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3478: IDirect3DDevice8_GetGammaRamp
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3479: IDirect3DDevice8_CreateTexture
+      (call $handle_IDirect3DDevice8_CreateTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3480: IDirect3DDevice8_CreateVolumeTexture
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3481: IDirect3DDevice8_CreateCubeTexture
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3482: IDirect3DDevice8_CreateVertexBuffer
+      (call $handle_IDirect3DDevice8_CreateVertexBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3483: IDirect3DDevice8_CreateIndexBuffer
+      (call $handle_IDirect3DDevice8_CreateIndexBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3484: IDirect3DDevice8_CreateRenderTarget
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3485: IDirect3DDevice8_CreateDepthStencilSurface
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3486: IDirect3DDevice8_CreateImageSurface
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3487: IDirect3DDevice8_CopyRects
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3488: IDirect3DDevice8_UpdateTexture
+      (call $handle_IDirect3DDevice9_UpdateTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3489: IDirect3DDevice8_GetFrontBuffer
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3490: IDirect3DDevice8_SetRenderTarget
+      (call $handle_IDirect3DDevice8_SetRenderTarget (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3491: IDirect3DDevice8_GetRenderTarget
+      (call $handle_IDirect3DDevice8_GetRenderTarget (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3492: IDirect3DDevice8_GetDepthStencilSurface
+      (call $handle_IDirect3DDevice9_GetDepthStencilSurface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3493: IDirect3DDevice8_BeginScene
+      (call $handle_IDirect3DDevice9_BeginScene (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3494: IDirect3DDevice8_EndScene
+      (call $handle_IDirect3DDevice9_EndScene (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3495: IDirect3DDevice8_Clear
+      (call $handle_IDirect3DDevice9_Clear (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3496: IDirect3DDevice8_SetTransform
+      (call $handle_IDirect3DDevice9_SetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3497: IDirect3DDevice8_GetTransform
+      (call $handle_IDirect3DDevice9_GetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3498: IDirect3DDevice8_MultiplyTransform
+      (call $handle_IDirect3DDevice9_MultiplyTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3499: IDirect3DDevice8_SetViewport
+      (call $handle_IDirect3DDevice9_SetViewport (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3500: IDirect3DDevice8_GetViewport
+      (call $handle_IDirect3DDevice9_GetViewport (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3501: IDirect3DDevice8_SetMaterial
+      (call $handle_IDirect3DDevice9_SetMaterial (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3502: IDirect3DDevice8_GetMaterial
+      (call $handle_IDirect3DDevice9_GetMaterial (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3503: IDirect3DDevice8_SetLight
+      (call $handle_IDirect3DDevice9_SetLight (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3504: IDirect3DDevice8_GetLight
+      (call $handle_IDirect3DDevice9_GetLight (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3505: IDirect3DDevice8_LightEnable
+      (call $handle_IDirect3DDevice9_LightEnable (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3506: IDirect3DDevice8_GetLightEnable
+      (call $handle_IDirect3DDevice9_GetLightEnable (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3507: IDirect3DDevice8_SetClipPlane
+      (call $handle_IDirect3DDevice9_SetClipPlane (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3508: IDirect3DDevice8_GetClipPlane
+      (call $handle_IDirect3DDevice9_GetClipPlane (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3509: IDirect3DDevice8_SetRenderState
+      (call $handle_IDirect3DDevice9_SetRenderState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3510: IDirect3DDevice8_GetRenderState
+      (call $handle_IDirect3DDevice9_GetRenderState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3511: IDirect3DDevice8_BeginStateBlock
+      (call $handle_IDirect3DDevice9_BeginStateBlock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3512: IDirect3DDevice8_EndStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3513: IDirect3DDevice8_ApplyStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3514: IDirect3DDevice8_CaptureStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3515: IDirect3DDevice8_DeleteStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3516: IDirect3DDevice8_CreateStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3517: IDirect3DDevice8_SetClipStatus
+      (call $handle_IDirect3DDevice9_SetClipStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3518: IDirect3DDevice8_GetClipStatus
+      (call $handle_IDirect3DDevice9_GetClipStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3519: IDirect3DDevice8_GetTexture
+      (call $handle_IDirect3DDevice9_GetTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3520: IDirect3DDevice8_SetTexture
+      (call $handle_IDirect3DDevice9_SetTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3521: IDirect3DDevice8_GetTextureStageState
+      (call $handle_IDirect3DDevice9_GetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3522: IDirect3DDevice8_SetTextureStageState
+      (call $handle_IDirect3DDevice9_SetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3523: IDirect3DDevice8_ValidateDevice
+      (call $handle_IDirect3DDevice9_ValidateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3524: IDirect3DDevice8_GetInfo
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3525: IDirect3DDevice8_SetPaletteEntries
+      (call $handle_IDirect3DDevice9_SetPaletteEntries (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3526: IDirect3DDevice8_GetPaletteEntries
+      (call $handle_IDirect3DDevice9_GetPaletteEntries (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3527: IDirect3DDevice8_SetCurrentTexturePalette
+      (call $handle_IDirect3DDevice9_SetCurrentTexturePalette (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3528: IDirect3DDevice8_GetCurrentTexturePalette
+      (call $handle_IDirect3DDevice9_GetCurrentTexturePalette (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3529: IDirect3DDevice8_DrawPrimitive
+      (call $handle_IDirect3DDevice9_DrawPrimitive (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3530: IDirect3DDevice8_DrawIndexedPrimitive
+      (call $handle_IDirect3DDevice8_DrawIndexedPrimitive (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3531: IDirect3DDevice8_DrawPrimitiveUP
+      (call $handle_IDirect3DDevice9_DrawPrimitiveUP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3532: IDirect3DDevice8_DrawIndexedPrimitiveUP
+      (call $handle_IDirect3DDevice9_DrawIndexedPrimitiveUP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3533: IDirect3DDevice8_ProcessVertices
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3534: IDirect3DDevice8_CreateVertexShader
+      (call $handle_IDirect3DDevice8_CreateVertexShader (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3535: IDirect3DDevice8_SetVertexShader
+      (call $handle_IDirect3DDevice8_SetVertexShader (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3536: IDirect3DDevice8_GetVertexShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3537: IDirect3DDevice8_DeleteVertexShader
+      (call $handle_IDirect3DDevice8_DeleteVertexShader (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3538: IDirect3DDevice8_SetVertexShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3539: IDirect3DDevice8_GetVertexShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3540: IDirect3DDevice8_GetVertexShaderDeclaration
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3541: IDirect3DDevice8_GetVertexShaderFunction
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3542: IDirect3DDevice8_SetStreamSource
+      (call $handle_IDirect3DDevice8_SetStreamSource (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3543: IDirect3DDevice8_GetStreamSource
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3544: IDirect3DDevice8_SetIndices
+      (call $handle_IDirect3DDevice8_SetIndices (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3545: IDirect3DDevice8_GetIndices
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3546: IDirect3DDevice8_CreatePixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3547: IDirect3DDevice8_SetPixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3548: IDirect3DDevice8_GetPixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3549: IDirect3DDevice8_DeletePixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3550: IDirect3DDevice8_SetPixelShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3551: IDirect3DDevice8_GetPixelShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3552: IDirect3DDevice8_GetPixelShaderFunction
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3553: IDirect3DDevice8_DrawRectPatch
+      (call $handle_IDirect3DDevice9_DrawRectPatch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3554: IDirect3DDevice8_DrawTriPatch
+      (call $handle_IDirect3DDevice9_DrawTriPatch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3555: IDirect3DDevice8_DeletePatch
+      (call $handle_IDirect3DDevice9_DeletePatch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3556: SetKeyboardState
+      (call $handle_SetKeyboardState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3557: AttachThreadInput
+      (call $handle_AttachThreadInput (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3558: ImmCreateContext
+      (call $handle_ImmCreateContext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3559: ImmDestroyContext
+      (call $handle_ImmDestroyContext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3560: IDirect3DTexture8_QueryInterface
+      (call $handle_IDirect3DTexture9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3561: IDirect3DTexture8_AddRef
+      (call $handle_IDirect3DTexture9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3562: IDirect3DTexture8_Release
+      (call $handle_IDirect3DTexture9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3563: IDirect3DTexture8_GetDevice
+      (call $handle_IDirect3DTexture9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3564: IDirect3DTexture8_SetPrivateData
+      (call $handle_IDirect3DTexture9_SetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3565: IDirect3DTexture8_GetPrivateData
+      (call $handle_IDirect3DTexture9_GetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3566: IDirect3DTexture8_FreePrivateData
+      (call $handle_IDirect3DTexture9_FreePrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3567: IDirect3DTexture8_SetPriority
+      (call $handle_IDirect3DTexture9_SetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3568: IDirect3DTexture8_GetPriority
+      (call $handle_IDirect3DTexture9_GetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3569: IDirect3DTexture8_PreLoad
+      (call $handle_IDirect3DTexture9_PreLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3570: IDirect3DTexture8_GetType
+      (call $handle_IDirect3DTexture9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3571: IDirect3DTexture8_SetLOD
+      (call $handle_IDirect3DTexture9_SetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3572: IDirect3DTexture8_GetLOD
+      (call $handle_IDirect3DTexture9_GetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3573: IDirect3DTexture8_GetLevelCount
+      (call $handle_IDirect3DTexture9_GetLevelCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3574: IDirect3DTexture8_GetLevelDesc
+      (call $handle_IDirect3DTexture9_GetLevelDesc (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3575: IDirect3DTexture8_GetSurfaceLevel
+      (call $handle_IDirect3DTexture9_GetSurfaceLevel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3576: IDirect3DTexture8_LockRect
+      (call $handle_IDirect3DTexture9_LockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3577: IDirect3DTexture8_UnlockRect
+      (call $handle_IDirect3DTexture9_UnlockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3578: IDirect3DTexture8_AddDirtyRect
+      (call $handle_IDirect3DTexture9_AddDirtyRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; fallback
     (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3328)))
@@ -15872,4 +16361,6 @@
       (global.get $DX_VTBL_DPLAYLOBBY2) (i32.const 15) (i32.const 3400) (i32.const 19)))
     ;; IDirect3D8: 16 methods starting at api_id 3441
     (global.set $DX_VTBL_D3D8 (call $init_com_vtable (i32.const 3441) (i32.const 16)))
+    ;; IDirect3DDevice8: 97 methods starting at api_id 3459
+    (global.set $DX_VTBL_D3DDEV8 (call $init_com_vtable (i32.const 3459) (i32.const 97)))
   )
