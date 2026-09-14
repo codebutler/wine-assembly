@@ -7185,3 +7185,104 @@ the confirm is probably in it.
   end we do claim — error 6 is the unsupported-operand class, raised from ten
   sites in `09af-d3d-shader-ir.wat`. Two shaders, and naming which site needs
   the blob dumped at that offset.
+
+## The land picker does not ignore the mouse — it stops reading it (drive47/48)
+
+The previous section's hypothesis — *"the screen's text and cursor layer is
+missing, and the confirm is probably in it"* — is wrong, and the measurement
+that replaces it is simple: **after the land click B&W2 stops calling
+`IDirectInputDevice::GetDeviceData` altogether**, for tens of minutes, and
+during that time nothing it draws changes either. A cursor that cannot move
+and a screen that never changes are one symptom, not two.
+
+### The ring, and why a full ring is the symptom and not the cause
+
+`DI_MOUSE_INPUT_STATE` (`node tools/region-layout.js`; head at +8, tail at +12,
+64-entry ring at +16, the two motion-overflow words at +272/+276) sat at
+`head=156 tail=220` — exactly 64 events, the capacity — unchanged across
+minutes, in **both** drive47 and drive48, at the same point in the same
+scripted route. Emptying it by hand (`head := tail`) and injecting one move
+queued two events that were still there 25 s later, while 120 `DrawPrimitive`s
+went by. Nothing was draining it.
+
+The device itself is healthy: `this = 0x07f4e020` is DX slot 4, `DxObject.misc0
+== 2` (mouse, `09a8-handlers-directx.wat:72`), `flags = 0x705` so
+`$DIDEV_ACQUIRED` is set, and `DIPROP_BUFFERSIZE` gave it a capacity of 512.
+`$handle_IDirectInputDevice_GetDeviceData` would have delivered.
+
+### Who was supposed to call it
+
+The poll lives at `0x009b08e7`:
+
+```
+009b0880  push ebp ... mov esi, ecx        ; the input manager, a static
+009b08a7  cmp [esi+0x176], bl              ; foreground bookkeeping
+009b08e7  mov edx, [0x1d7a72c]             ; the mouse device pointer
+009b08ef  jz  0x9b0bb7                     ; ...none? skip
+009b08f5  test [esi+0x178], 0x1            ; input enabled?
+009b0930  call [eax+0x28]                  ; GetDeviceData(dev, 0x14, buf, &n, 0)
+```
+
+Both gates were open live — `[0x1d7a72c] = 0x07f4e020` and `[esi+0x178] = 5`.
+The function simply never ran: hit counters armed on the entry `0x9b0880`, on
+the two inner blocks, and on **all four** of its call sites (`0x520cc5`,
+`0x526143`, `0x56da4d`, `0x5f9573`, found with `tools/xrefs.js`) all read zero
+over 20 s while `0xa4da46` — the return of the D3D9 `DrawPrimitive` call — read
+232. (`tools/find_fn.js` puts the entry at `0x9b08f4`; that is 116 bytes too
+far in. The real entry is the one after the `cc` run at `0x9b087a`, and it is
+the only address with any xrefs.)
+
+### It resumes by itself, and what comes back with it
+
+Left alone, the game starts polling again: `GetDeviceData` went 206 → 258 in
+the trace, the ring drained to `head == tail`, and a 40-event click burst was
+consumed whole. What also changes at that moment is the *shape* of the frame.
+The picker's draw census is 2D quads; after the resume it gains entries like
+
+```
+5/4894/true/true/256x256:9/1024x1024:1      ; 4894 triangles, VS+PS, two textures
+4/2061/true/true/256x256:9/1024x1024:1
+4/1714/true/true/256x256:9/1024x1024:1
+```
+
+and the EXE's hot block becomes `0x00ac3350`, a walk over a **1024-wide
+height grid** (`mov dx,[edi+edx*2]` with `shl edx,0xa`). The hot code during
+the stall is `d3dx9_25.dll` (loaded at `0x2528000`, origBase `0x400000`, so
+module VA = hit − `0x2128000`). So the stall is the land being built, not a
+hang, and it is followed by terrain rendering — 45 draws/s against 0.1
+presents/s, i.e. ~500 draws per frame.
+
+### Aiming at the picker: read the game's cursor, do not guess it
+
+The game keeps its own cursor, and the host pointer is unrelated to it. The
+input manager is the **static object at `0x1d733e8`** (it is the `this` the
+call site at `0x526143` loads: `mov ecx, 0x1d733e8`), and a diff across one
+injected move names three fields:
+
+| offset | meaning |
+|---|---|
+| `+0xc4` / `+0xc8` | cursor X / Y |
+| `+0xe0` / `+0xe4` | previous frame's copy |
+| `+0xf8` / `+0xfc` | the delta last applied |
+| `+0x178` bit 0 | input-enabled gate read at `0x9b08f5` |
+
+X clamps at −1 on the left, and Y has been read as high as 569 in a 640x480
+window, so the cursor space is **not** the window's. `scratchpad/bw-aim.sh`
+closes the loop on those two fields — read, move by the difference, read
+again — and lands the cursor on an exact pixel in three or four steps where a
+single lump of relative deltas never did. That is the only way to know where a
+click will land, and it is how a click was put precisely on the playable
+island thumbnail (`130,375`) and confirmed consumed (`head == tail`).
+
+### The live instrumentation these findings came from
+
+No rebuild and no restart: the probe's `--control-stdin` `eval` channel has
+`exports`, so a **running** B&W2 can be asked for
+
+- per-address hit counts — `exports.set_count(slot, addr)` / `get_count` /
+  `clear_counts` (the address must be a basic-block entry), and
+- a hot-block profile — `reset_handler_hist()`, `set_handler_hist_enabled(1)`,
+  then walk `get_hot_block_hist_base()` as `{eip, count}` pairs.
+
+Both are how "the input pump is not running" and "the time is in d3dx9" were
+measured against a live land build rather than inferred from a new run.
