@@ -137,6 +137,64 @@ const SRC = path.join(ROOT, 'src');
       [0xF800, 0x07E0, 0x001F]);
   });
 
+  // The bulk SRCCOPY path copies the STORED representation rather than
+  // resolving each pixel to a COLORREF and back, so it may only run when the
+  // two surfaces agree on what a stored value means. Equal depth is enough for
+  // 24/32bpp, which are BGR(X) by definition; 16bpp additionally needs equal
+  // channel masks, or a word means a different colour on the far side.
+  check('bulk SRCCOPY moves 16- and 24-bpp scanlines and declines mismatched masks', () => {
+    const shades = (s, seed) => {
+      for (let y = 0; y < s.height; y++) {
+        for (let x = 0; x < s.width; x++) {
+          const p = address(s, x, y);
+          for (let b = 0; b < (s.bpp >> 3); b++) bytes[p + b] = (seed + x * 5 + y * 37 + b * 91) & 0xff;
+        }
+      }
+    };
+    const row = (s, y) => Array.from(bytes.slice(address(s, 0, y), address(s, 0, y) + s.width * (s.bpp >> 3)));
+
+    // 24bpp, unscaled: the whole scanline is one copy.
+    const src24 = surface(9, 4, 24, true);
+    const dst24 = surface(9, 4, 24, true);
+    shades(src24, 3);
+    wat.test_gdi_fast_reset();
+    assert.strictEqual(wat.test_gdi_raster_stretch_blt(
+      dst24.desc, 0, 0, 9, 4, src24.desc, 0, 0, 9, 4, 0, 0x00CC0020), 1);
+    assert(wat.test_gdi_fast_count(2) > 0, '24-bpp 1:1 StretchBlt did not use the bulk path');
+    for (let y = 0; y < 4; y++) assert.deepStrictEqual(row(dst24, y), row(src24, y));
+
+    // 24bpp, scaled: same path, per pixel, and still byte-exact per sample.
+    const big24 = surface(18, 8, 24, true);
+    assert.strictEqual(wat.test_gdi_raster_stretch_blt(
+      big24.desc, 0, 0, 18, 8, src24.desc, 0, 0, 9, 4, 0, 0x00CC0020), 1);
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 18; x++) {
+        assert.strictEqual(packed(big24, x, y), packed(src24, x >> 1, y >> 1),
+          `scaled 24bpp dest(${x},${y})`);
+      }
+    }
+
+    // 16bpp with the same masks on both sides: exact words, not a lossy
+    // unpack/repack round trip.
+    const src16 = surface(7, 3, 16, true, [0xF800, 0x07E0, 0x001F]);
+    const dst16 = surface(7, 3, 16, true, [0xF800, 0x07E0, 0x001F]);
+    shades(src16, 11);
+    wat.test_gdi_fast_reset();
+    assert.strictEqual(wat.test_gdi_raster_stretch_blt(
+      dst16.desc, 0, 0, 7, 3, src16.desc, 0, 0, 7, 3, 0, 0x00CC0020), 1);
+    assert(wat.test_gdi_fast_count(2) > 0, '16-bpp 1:1 StretchBlt did not use the bulk path');
+    for (let y = 0; y < 3; y++) assert.deepStrictEqual(row(dst16, y), row(src16, y));
+
+    // 16bpp RGB555 <- RGB565 must NOT take it; the colours have to be
+    // converted, which is what $gdi_raster_read/$gdi_raster_write do.
+    const dst555 = surface(7, 3, 16, true);
+    wat.test_gdi_fast_reset();
+    assert.strictEqual(wat.test_gdi_raster_stretch_blt(
+      dst555.desc, 0, 0, 7, 3, src16.desc, 0, 0, 7, 3, 0, 0x00CC0020), 1);
+    assert.strictEqual(wat.test_gdi_fast_count(2), 0,
+      'mismatched 16-bpp channel masks must decline the bulk path');
+  });
+
   check('all 256 ROP3 truth tables match bitwise P:S:D evaluation', () => {
     const p = 0xB4C31A, s = 0x5AD2E1, d = 0x8E7156;
     for (let rop = 0; rop < 256; rop++) {

@@ -24,8 +24,14 @@
 // Shapes cover the cases the code paths actually split on: a 1:1 "stretch"
 // (SimGolf's real per-frame chain is StretchBlt 800x600 <- 800x600), a
 // non-integer upscale and downscale (where the source-column walk is not
-// trivial), and 32bpp vs 24bpp (32bpp has a fast path, 24bpp does not, so a
-// change to the generic loop should move the 24bpp rows and leave 32bpp flat).
+// trivial), and one row per pixel width, because the bulk path picks its
+// inner loop by bytes-per-pixel.
+//
+// The 8bpp row is a CONTROL, not a measurement of the 8bpp bulk path: these
+// surfaces carry no colour table, so $gdi_raster_palettes_match declines and
+// the blit falls to the generic per-pixel loop. It is here to show that loop
+// is unchanged. An 8bpp bulk number needs real palettised bitmaps, which is
+// what test/test-wat-gdi-raster.js covers.
 
 'use strict';
 
@@ -80,6 +86,8 @@ const SRCCOPY = 0x00CC0020;
   }
 
   const SHAPES = [
+    { name: '1:1 800x600 8bpp (control: generic path)', sw: 800, sh: 600, dw: 800, dh: 600, bpp: 8 },
+    { name: '1:1 800x600 16bpp', sw: 800, sh: 600, dw: 800, dh: 600, bpp: 16 },
     { name: '1:1 800x600 24bpp', sw: 800, sh: 600, dw: 800, dh: 600, bpp: 24 },
     { name: '1:1 800x600 32bpp', sw: 800, sh: 600, dw: 800, dh: 600, bpp: 32 },
     { name: 'upscale 517x389->800x600 24bpp', sw: 517, sh: 389, dw: 800, dh: 600, bpp: 24 },
