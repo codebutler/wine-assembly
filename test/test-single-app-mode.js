@@ -603,6 +603,65 @@ for (const mode of ['fit', 'zoom']) {
   })();
 }
 
+// MAGNIFICATION: `mobileZoom` shrinks the guest's desktop so the single-app
+// fit scales the picture back out. SkiFree is the case it exists for -- it
+// draws a 31x23 guest-pixel skier on any desktop, so a phone-sized desktop at
+// 1:1 renders a 31 CSS px skier and "more screen" only ever means more snow.
+{
+  const ski = require('../lib/apps').APPS.ski32;
+  assert.strictEqual(ski.mobileZoom, 1.5, 'SkiFree asks for 1.5x magnification');
+  assert.strictEqual(ski.mobileCrop, undefined,
+    'a crop would be Fill-only, and the complaint is about the view the player lands on');
+
+  // Both orientations, both axes by the same factor. `w/zoom` and `h/zoom`
+  // keep the viewport's aspect, which is what stops this producing the teal
+  // gutters a letterbox would: body.single-app canvas is object-fit:contain,
+  // so an aspect that matches is a picture that reaches every edge.
+  const cases = [
+    // [what screenCanvasSize() derived from the viewport, zoomed desktop]
+    [[667, 375], [445, 250]],   // landscape 667x375 CSS
+    [[400, 711], [267, 474]],   // portrait 375x667 CSS, after the 400px floor
+  ];
+  for (const [[w, h], [zw, zh]] of cases) {
+    const renderer = makeRenderer(w, h, w, h);
+    renderer.singleAppZoom = ski.mobileZoom;
+    assert.deepStrictEqual(renderer.singleAppBackingSize(w, h), { w: zw, h: zh },
+      `${w}x${h} desktop is divided by the zoom`);
+    assert(Math.abs((zw / zh) / (w / h) - 1) < 0.005,
+      'the zoomed desktop keeps the viewport aspect, so nothing letterboxes');
+    // What the player actually asked about: how big the skier comes out.
+    const skierCssPx = Math.round(31 * w / zw);
+    assert(skierCssPx >= 43 && skierCssPx <= 47,
+      `a 31 guest-px skier presents at ${skierCssPx} CSS px, not 31`);
+  }
+
+  // The natural-size growth is skipped, not merely preceded, for a zoomed app.
+  // A window sized on the PORTRAIT zoomed desktop would otherwise grow the
+  // landscape desktop straight back past the viewport on the next rotation and
+  // undo the magnification.
+  const rotated = makeRenderer(667, 375, 667, 375);
+  rotated.singleAppZoom = ski.mobileZoom;
+  rotated.windows = { 1: win(0, 0, 267, 474, { _singleAppNaturalSize: { w: 267, h: 474 } }) };
+  assert.deepStrictEqual(rotated.singleAppBackingSize(667, 375), { w: 445, h: 250 },
+    'a natural size chosen on the other orientation does not re-grow the desktop');
+
+  // Untouched without the field, and never applied to a native fullscreen
+  // surface, whose size is the guest's own statement about its display.
+  const plain = makeRenderer(667, 375, 667, 375);
+  assert.deepStrictEqual(plain.singleAppBackingSize(667, 375), { w: 667, h: 375 });
+  plain.singleAppZoom = 1.5;
+  plain._exclusiveFullscreen = true;
+  assert.deepStrictEqual(plain.singleAppBackingSize(667, 375), { w: 667, h: 375 },
+    'an exclusive-fullscreen guest owns its own display size');
+
+  // And the shell has to hand the factor to the renderer before the desktop is
+  // measured -- syncTouchControls() ends by calling resizeCanvas().
+  assert(/sharedRenderer\.singleAppZoom\s*=/.test(shellSource),
+    'the shell should publish the running app\'s mobileZoom to the renderer');
+  assert(shellSource.includes('mobileZoom: (typeof app.mobileZoom'),
+    'and carry it on the running-app record the sync reads');
+}
+
 // The page half: screenCanvasSize() is what actually grows, and it measures
 // against the size it just derived from the viewport -- not against the canvas
 // as it stands, which would already have been grown and cancel the rule out.
