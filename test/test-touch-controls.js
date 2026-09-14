@@ -866,8 +866,11 @@ TouchControls.destroy();
   assert.strictEqual(app.touchControls.buttons.find(b=>b.vk===0x71).pos,'bl',
     'the one action button comes off the picture into the empty rail');
 
-  const setup=(hostRect,presented,viewMode)=>{
-    const r={mobileCrop:app.mobileCrop,viewMode,
+  // `real` is a renderer already built and primed with a true viewport; pass
+  // one wherever the presented rect is not simply the window rect, since the
+  // stand-in below can only answer "fractions of the whole window".
+  const setup=(hostRect,presented,viewMode,real)=>{
+    const r=real||{mobileCrop:app.mobileCrop,viewMode,
       getPresentedRectClient:()=>presented,
       setViewMode(m){ this.viewMode = m==='zoom'?'zoom':'fit'; return true; }};
     TouchControls.install({document,renderer:r}); TouchControls.setRenderer(r);
@@ -952,23 +955,69 @@ TouchControls.destroy();
 
   // LANDSCAPE 710x375. The framing here is the WHOLE 641x481 scene -- score
   // panel and all -- fitted to the short edge, which in landscape is the
-  // HEIGHT: measured off the real renderer, dst y 0 h 375 on a 375-tall
-  // screen, so no black bar above or below, and the 105px left over goes to
-  // the gutters, where a phone held sideways has room to spare. Cropping to
-  // the table here would throw the score away to buy width nobody is short of.
+  // HEIGHT: dst y 0 h 375 on a 375-tall screen, so no black bar above or
+  // below, and what is left over goes to the gutters, where a phone held
+  // sideways has room to spare. Cropping to the table here would throw the
+  // score away to buy width nobody is short of.
+  //
+  // The scale is set by the trimmed height, not by the window's: the app's
+  // fitTrim names 32 dead rows on top and 33 at the foot (every column black,
+  // measured off the presented canvas), so the fit is against 416 rows rather
+  // than 481. The horizontal trim is not spent on scale at all -- the width is
+  // not the scarce axis here, so those columns come back as content and the
+  // presented source is 0,32 641x416. Built on the real renderer, because a
+  // presented rect that no longer equals the window rect is precisely what
+  // this trim introduces and a hand-written one would assume it away.
   {
-    // Win98Renderer._computeSingleAppZoom('fit'), 710x375 at DPR 3.
-    const presented={x:105.3,y:0,w:499.7,h:375};
-    const r=setup({left:0,top:0,right:710,bottom:375,width:710,height:375},
-      presented,'fit');
+    const { Win98Renderer } = require('../lib/renderer');
+    const rr = new Win98Renderer({ width: 641, height: 757, getContext() { return {}; } });
+    rr.singleAppMode = true;
+    rr.presentationCanvas = { width: 2130, height: 1125 };
+    rr.mobileCrop = app.mobileCrop;
+    rr.touchOverlay = { getBoardArea: () => ({ x: 204 / 710, y: 0, w: 302 / 710, h: 1 }) };
+    rr.scheduleRepaint = () => {};
+    rr.setViewMode('fit');
+    const v = rr._computeSingleAppZoom([{ hwnd: 0x10001, x: 0, y: 0, w: 641, h: 481,
+      visible: true, className: 'SpaceCadet' }]).viewport;
+    assert.strictEqual(v.cropY, 32, 'the dead top rows are not part of the fit');
+    assert.strictEqual(v.cropH, 416, 'nor the dead bottom ones');
+    assert.strictEqual(v.dstY, 0, 'Fit starts at the top of the output');
+    assert.strictEqual(v.dstH, v.outputH, 'and ends at the bottom: no bars in Fit');
+    assert.strictEqual(v.dstH / v.cropH > v.outputH / 481, true,
+      'and the trim BUYS scale rather than merely moving the picture');
+    // cropBase stays the untrimmed window, which is what lets every app-level
+    // fraction (the nudges, the zones) survive the trim untouched.
+    assert.deepStrictEqual(
+      { x: v.cropBase.x, y: v.cropBase.y, w: v.cropBase.w, h: v.cropBase.h },
+      { x: 0, y: 0, w: 641, h: 481 });
+    // A second top-level window hands the whole thing back. The fractions are
+    // of the union rect, and with a dialog in it that rect is no longer the
+    // one they were measured against -- and a dialog is the one moment the
+    // user needs to see every row the app drew, trimmed margin included.
+    {
+      const withDialog = rr._computeSingleAppZoom([
+        { hwnd: 0x10001, x: 0, y: 0, w: 641, h: 481, visible: true, className: 'SpaceCadet' },
+        { hwnd: 0x10002, x: 180, y: 160, w: 280, h: 150, visible: true, className: '#32770' },
+      ]).viewport;
+      assert.strictEqual(withDialog.cropY, 0, 'no trim while a dialog is up');
+      assert.strictEqual(withDialog.cropH, 481, 'the whole window comes back');
+    }
+    rr._exclusiveFullscreen = true;
+    rr._exclusivePresentationViewport = v;
+    const presented = { x: v.dstX / 3, y: v.dstY / 3, w: v.dstW / 3, h: v.dstH / 3 };
+    rr.getPresentedRectClient = () => presented;
+    const r = setup({left:0,top:0,right:710,bottom:375,width:710,height:375},
+      presented,'fit', rr);
     // Everything below is anchored to the TABLE inside that scene, not to the
     // scene: crop x 23..383 of 641, y 32..448 of 481.
-    const k=presented.w/641, ky=presented.h/481;
-    const tx=presented.x+23*k, tw=360*k, ty=32*ky, th=416*ky;
-    nudgesInBlack({x:tx,y:ty,w:tw,h:th},'landscape Fit');
+    const table = TouchControls._cropRectClient(presented);
+    nudgesInBlack(table,'landscape Fit');
+    const k = presented.w / v.cropW;
     const right=byLabel('Nudge right');
-    assert(parseFloat(right.style.left)+parseFloat(right.style.width)<presented.x+405*k,
+    assert(parseFloat(right.style.left)+parseFloat(right.style.width)
+      < presented.x + (405 - v.cropX) * k,
       'the right nudge stays off the score panel beside the table');
+    const tx = table.x, tw = table.w;
     // Item 5b: no captions in landscape. A caption names an invisible zone, so
     // it has to be next to it; the side gutters this used to fall back to are
     // next to nothing, and the phone reported them as "all wrong".

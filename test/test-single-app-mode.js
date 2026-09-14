@@ -298,7 +298,18 @@ function win(x, y, w, h, extra) {
     assert.deepStrictEqual([game.w,game.h],[641,481],
       'phone rotation does not resize a native exclusive game');
     const normal = renderer._computeExclusiveView(game).viewport;
-    assert.deepStrictEqual([normal.cropW,normal.cropH],[641,481]);
+    // Normal shows the whole SCENE, which is not the whole window: the app
+    // paints a black margin around it, and mobileCrop.fitTrim names it (23
+    // dead columns left, 32 right, 32 dead rows top, 33 bottom -- every
+    // column of them black, scanned off the presented canvas). Fit is sized
+    // against what is left, so in landscape, where the height is the scarce
+    // axis, the table comes out 481/416 = 15.6% bigger for free. The offset
+    // is reported too, or every crop fraction would be read against the
+    // wrong origin.
+    assert.deepStrictEqual([normal.cropX,normal.cropY,normal.cropW,normal.cropH],
+      [23,32,586,416]);
+    assert.deepStrictEqual([normal.cropBase.w,normal.cropBase.h],[641,481],
+      'the fractions still count from the untrimmed window');
     renderer.setViewMode('zoom');
     const table = renderer._computeExclusiveView(game).viewport;
     // The table's own bounding box in the 641x481 scene, measured off a
