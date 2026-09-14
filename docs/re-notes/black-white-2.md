@@ -6660,3 +6660,62 @@ fired plus the first offending element, read out through
 `tools/d3d9-decl-decode.js` turns that element into the rule in English. A
 count of zero falsifies the declaration theory outright and sends the hunt back
 to draw ordering; anything else names the element type to widen.
+
+### Blocker #4, answered: B&W2 uses more than one vertex stream
+
+The refusal counters name it in one reading, taken before the main menu had
+even settled:
+
+```
+count=85  mask=0x20  element=00000001,02050002
+```
+
+`0x20` is the `stream != 0` rule, and it is the *only* bit set — no element
+type, no offset, no method, no usage is ever the problem. Decoding the element
+it kept:
+
+```
+$ node tools/d3d9-decl-decode.js '01 00 00 00 02 00 05 02 ff 00 00 00 11 00 00 00'
+[0] stream 1 offset   0 FLOAT3    DEFAULT  TEXCOORD2   <-- REFUSED: stream 1 (only stream 0 is modelled)
+```
+
+So the earlier guess — `UBYTE4`/`FLOAT16` skinning elements — was wrong, and
+usefully so: every element type B&W2 declares is one the renderer already
+handles. What it does that we do not model is put some of them in **stream 1**.
+
+Three separate silent failures are chained here, which is why this took a whole
+session to see:
+
+1. `$handle_IDirect3DDevice9_SetStreamSource` binds the buffer only when the
+   stream index is zero (`(if (i32.eqz (local.get $arg1)) ...)`). A
+   `SetStreamSource(1, ...)` sets `eax` to `D3DERR_INVALIDCALL` and stores
+   nothing. The device state has room for exactly one stream: `+1720` buffer,
+   `+1724` offset, `+1728` stride.
+2. `$d3d9_declaration_create` then refuses any declaration mentioning stream 1,
+   returning `D3DERR_INVALIDCALL` with `*out` left at 0 — with, until now, no
+   record that it happened.
+3. The game stores that NULL in its own object at `[ecx+0x188]`, binds it
+   through the thunk at `0x009333f0`, and draws. `lib/d3d9-host.js` drops the
+   draw because neither a declaration nor an FVF is set, and reports it as
+   `D3D9 FVF 0 is not implemented` — a message about FVFs, for a problem that
+   has nothing to do with FVFs.
+
+None of the three moves any error counter, and the guest checks none of the
+HRESULTs. The visible symptom is 61% of the world simply missing.
+
+**What the fix needs**, in order:
+
+* per-stream device state (buffer, offset, stride) instead of the single
+  `+1720`/`+1724`/`+1728` triple, and a `SetStreamSource` that honours the
+  index;
+* `$d3d9_declaration_create` to accept `stream < 16` and keep the stream index
+  per element;
+* the draw descriptor in `lib/d3d9-host.js` to snapshot every stream the
+  declaration references, not just one, and to carry a per-attribute stream
+  index alongside the existing offset;
+* `lib/d3d9-software-backend.js` to fetch attribute *j* from its own stream at
+  that stream's stride — today `packed[base+c]` reads one `snapshot.stride` for
+  everything.
+
+`SetStreamSourceFreq` is still `$crash_unimplemented`, so instancing is a
+separate question and B&W2 has not asked for it.
