@@ -583,3 +583,74 @@
     (call $g2w (i32.load offset=40 (local.get $src))) (i32.load offset=52 (local.get $src)))
   (i32.store offset=68 (local.get $dst) (i32.add (i32.load offset=68 (local.get $dst)) (i32.const 1)))
   (global.set $eax (i32.const 0)))
+
+;; StretchRect needs TWO ordered backend calls, and the park protocol carries
+;; one token, so the phase has to be remembered across the re-entry a park
+;; causes. Stage 0 downloads the source (the backend owns its pixels -- the
+;; guest just rendered into it); stage 1 copies CPU-side and uploads the
+;; destination through the same 0x30015 path UpdateSurface uses. A park in
+;; stage 0 re-enters with the stage still 0, so the poll lands on the readback
+;; it belongs to; a park in stage 1 re-enters with stage 1 and skips the
+;; readback rather than re-issuing it and polling the wrong operation.
+(global $d3d9_stretch_stage (mut i32) (i32.const 0))
+
+;; Only the shape guests actually ask for is implemented: whole surface to
+;; whole surface, same size, same format, no filter. Everything else --
+;; a real stretch, a format conversion, a sub-rectangle -- crashes instead of
+;; returning a picture that is silently wrong, because a blit that lands but
+;; is the wrong size reads as a texturing bug a long way from here.
+;; Black & White 2's land loader is the caller: d3dx9_25's
+;; D3DXLoadSurfaceFromSurface copies the 512x512 A8R8G8B8 terrain render
+;; target into a freshly created one with NULL rects and D3DTEXF_NONE.
+(func $d3d9_color_stretch (param $device i32) (param $source i32) (param $srcrect i32)
+  (param $dest i32) (param $dstrect i32) (param $filter i32) (param $name_ptr i32)
+  (local $src i32) (local $dst i32) (local $storage i32) (local $desc i32) (local $result i32)
+  (global.set $eax (i32.const 0x8876086c))
+  (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
+  (local.set $storage (call $d3d9_color_storage (local.get $source)))
+  (if (local.get $storage) (then (local.set $source (local.get $storage))))
+  (local.set $storage (call $d3d9_color_storage (local.get $dest)))
+  (if (local.get $storage) (then (local.set $dest (local.get $storage))))
+  (if (i32.or (i32.ne (local.get $srcrect) (i32.const 0))
+    (i32.or (i32.ne (local.get $dstrect) (i32.const 0)) (i32.ne (local.get $filter) (i32.const 0))))
+    (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
+  (if (i32.or (i32.eqz (call $d3d9_is_color_surface (local.get $source)))
+    (i32.eqz (call $d3d9_is_color_surface (local.get $dest))))
+    (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
+  ;; Same surface, a locked surface, a foreign device or a non-DEFAULT pool are
+  ;; all D3DERR_INVALIDCALL on real hardware, not gaps in this implementation.
+  (if (i32.eq (local.get $source) (local.get $dest)) (then (return)))
+  (local.set $src (call $g2w (local.get $source)))
+  (local.set $dst (call $g2w (local.get $dest)))
+  (if (i32.or (i32.ne (i32.load offset=8 (local.get $src)) (local.get $device))
+    (i32.ne (i32.load offset=8 (local.get $dst)) (local.get $device))) (then (return)))
+  (if (i32.or (i32.load offset=56 (local.get $src)) (i32.load offset=56 (local.get $dst))) (then (return)))
+  (if (i32.or (i32.load offset=60 (local.get $src)) (i32.load offset=60 (local.get $dst))) (then (return)))
+  (if (i32.ne (i32.load offset=64 (local.get $dst)) (i32.const 1)) (then (return)))
+  (if (i32.or (i32.ne (i32.load offset=20 (local.get $src)) (i32.load offset=20 (local.get $dst)))
+    (i32.or (i32.ne (i32.load offset=24 (local.get $src)) (i32.load offset=24 (local.get $dst)))
+      (i32.ne (i32.load offset=28 (local.get $src)) (i32.load offset=28 (local.get $dst)))))
+    (then (call $crash_unimplemented (local.get $name_ptr)) (return)))
+  (if (i32.eqz (global.get $d3d9_stretch_stage)) (then
+    (if (i32.eqz (call $d3d9_color_sync (local.get $source) (i32.const 0))) (then (return)))
+    (global.set $d3d9_stretch_stage (i32.const 1))))
+  (memory.copy (call $g2w (i32.load offset=40 (local.get $dst)))
+    (call $g2w (i32.load offset=40 (local.get $src))) (i32.load offset=52 (local.get $src)))
+  (local.set $result (if (result i32) (global.get $d3d_render_token)
+    (then (call $d3d_render_poll))
+    (else
+      (local.set $desc (call $d3d9_gpu_descriptor (local.get $device)))
+      (i32.store offset=24 (local.get $desc) (local.get $dest))
+      (i32.store offset=28 (local.get $desc) (call $g2w (i32.load offset=40 (local.get $dst))))
+      (i32.store offset=32 (local.get $desc) (i32.load offset=48 (local.get $dst)))
+      (i32.store offset=36 (local.get $desc) (i32.const 0))
+      (i32.store offset=44 (local.get $desc) (i32.const 0))
+      (i32.store offset=48 (local.get $desc) (i32.load offset=20 (local.get $dst)))
+      (i32.store offset=52 (local.get $desc) (i32.load offset=24 (local.get $dst)))
+      (i32.store offset=56 (local.get $desc) (i32.load offset=28 (local.get $dst)))
+      (call $host_gpu_gl_call (i32.const 0x30015) (local.get $desc) (i32.const 0)))))
+  (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
+  (global.set $d3d9_stretch_stage (i32.const 0))
+  (if (i32.eq (local.get $result) (i32.const 1)) (then
+    (i32.store offset=68 (local.get $dst) (i32.add (i32.load offset=68 (local.get $dst)) (i32.const 1)))
+    (global.set $eax (i32.const 0)))))

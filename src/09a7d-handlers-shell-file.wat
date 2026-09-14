@@ -2230,6 +2230,47 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
+  ;; SHCreateDirectoryExA(hwnd, pszPath, psa) — 3 args stdcall. Creating every
+  ;; missing component of the path, not just the last one, is the whole reason a
+  ;; program reaches for this instead of CreateDirectoryA, so walk the string and
+  ;; create each prefix in turn. A prefix that already exists fails its own
+  ;; create and is not an error here — only the leaf decides the result.
+  ;; Returns a Win32 error code, NOT a BOOL: 0, ERROR_ALREADY_EXISTS or
+  ;; ERROR_ACCESS_DENIED. Black & White 2 makes its profile directory this way
+  ;; once a land starts loading.
+  (func $handle_SHCreateDirectoryExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $len i32) (local $copy i32) (local $i i32) (local $ch i32) (local $made i32)
+    (global.set $eax (i32.const 161))  ;; ERROR_BAD_PATHNAME
+    (if (local.get $arg1) (then
+      (local.set $len (call $guest_strlen (local.get $arg1)))
+      (if (local.get $len) (then
+        (local.set $copy (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+        (global.set $eax (i32.const 8))  ;; ERROR_NOT_ENOUGH_MEMORY
+        (if (local.get $copy) (then
+          (call $guest_strcpy (local.get $copy) (local.get $arg1))
+          ;; Index 1 onwards: a leading separator is the root, never a component.
+          (local.set $i (i32.const 1))
+          (block $done (loop $walk
+            (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+            (local.set $ch (call $gl8 (i32.add (local.get $copy) (local.get $i))))
+            (if (i32.or (i32.eq (local.get $ch) (i32.const 92)) (i32.eq (local.get $ch) (i32.const 47))) (then
+              (call $gs8 (i32.add (local.get $copy) (local.get $i)) (i32.const 0))
+              (drop (call $host_fs_create_directory (call $g2w (local.get $copy)) (i32.const 0)))
+              (call $gs8 (i32.add (local.get $copy) (local.get $i)) (local.get $ch))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $walk)))
+          (local.set $made (call $host_fs_create_directory (call $g2w (local.get $copy)) (i32.const 0)))
+          (call $heap_free (local.get $copy))
+          (global.set $eax (if (result i32) (local.get $made)
+            (then (i32.const 0))
+            (else (if (result i32)
+              (i32.ne (call $host_fs_get_file_attributes
+                (call $g2w (local.get $arg1)) (i32.const 0)) (i32.const -1))
+              (then (i32.const 183))    ;; ERROR_ALREADY_EXISTS
+              (else (i32.const 5))))))))))))  ;; ERROR_ACCESS_DENIED
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+  )
+
   ;; 468: IsBadCodePtr(lpfn) — 1 arg stdcall. Despite its name, Windows defines
   ;; this as a one-byte readability probe, not an execute-permission test.
   (func $handle_IsBadCodePtr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
