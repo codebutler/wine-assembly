@@ -5973,3 +5973,60 @@ creation site.
 `--fault-null` is what makes this legible at all. Without it the sentinel
 absorbs all four reads, the call through zero is the only visible event, and
 the run looks like an emulator bug in whatever ran last.
+
+## Named: a 512x512 R5G6B5 **render-target** texture we refuse (2026-09-14)
+
+`Init` at `0x9389b0` ends in `call [edx+0x5c]` on `[[g_0x1d6d92c+0x2c]+0x1a0]`
+— vtable slot 23 of `IDirect3DDevice9`, which is `CreateTexture` — with
+`ppTexture = esi`, the object's first field, exactly the `[this]` the accessor
+at `0x938fc0` hands back. A `--trace-api` filtered to the `Create*` methods
+catches it:
+
+```
+[API #4027600] IDirect3DDevice9_CreateTexture(dev, 0x200, 0x200, 1, 1, 0x17, 0, ...) [ret=0x00938af9]
+```
+
+512x512, one level, **`Usage = D3DUSAGE_RENDERTARGET`**, `Format = 0x17`
+(`D3DFMT_R5G6B5`), `Pool = D3DPOOL_DEFAULT`. `$d3d9_texture_create_kind` in
+`src/09ae-d3d9-resources.wat` refuses exactly that shape:
+
+```wat
+(if (i32.and (local.get $usage) (i32.const 1)) (then
+  (if (local.get $pool) (then (return)))
+  (if (i32.ne (local.get $usage) (i32.const 1)) (then (return)))
+  (if (i32.and (i32.ne (local.get $format) (i32.const 21))
+               (i32.ne (local.get $format) (i32.const 22))) (then (return)))))
+```
+
+A render target must be `A8R8G8B8` (21) or `X8R8G8B8` (22); 23 returns
+`D3DERR_INVALIDCALL`, the guest stores the NULL unchecked, and 2.8 million API
+calls later the main thread calls through a null vtable. The format itself is
+not the problem — `$d3d9_texture_format_supported` accepts 23, and
+`lib/d3d9-host.js` already unpacks R5G6B5 texel data — it is specifically
+**render-target storage** that is 32-bit only.
+
+The whole census of what `BW2Demo.exe` creates for itself, over a full land
+load (d3dx9's own asset loads excluded by filtering on `ret=0x0093…`):
+
+| levels | usage | format | pool | count | we accept |
+|---:|---|---|---|---:|---|
+| 1 | 0 | `0x1a` A4R4G4B4 | MANAGED | 20 | yes |
+| 1 | `RENDERTARGET` | `0x15` A8R8G8B8 | DEFAULT | 6 | yes |
+| 0 | 0 | DXT5 | MANAGED | 4 | yes |
+| 1 | 0 | `0x32` L8 | MANAGED | 3 | yes |
+| 1 | `RENDERTARGET` | `0x17` R5G6B5 | DEFAULT | **1** | **no** |
+
+One call in 34. The game does not negotiate the format — `0xa9d4b0` pushes
+`0x17` as an immediate — so there is no fallback to find and nothing to answer
+differently in `CheckDeviceFormat`.
+
+**Scope for whoever takes it.** Widening the WAT gate alone is not enough: the
+colour-storage contract is 32-bit throughout. `$d3d9_texture_colors_init`
+copies the texture's format into the record at +28 and the mip pitch into +48,
+and `ensureColor` in `lib/d3d9-host.js` rejects anything where
+`pitch !== resource.width * 4`, while the sampler path additionally requires
+`resource.format === format`. So the choice is either 16-bit colour storage end
+to end, or promoting a 16-bit render-target texture to 32-bit storage while the
+guest keeps seeing `D3DFMT_R5G6B5` — which is safe for a surface that is only
+rendered into and sampled, and wrong for one that is locked and written as
+raw 16-bit texels.
