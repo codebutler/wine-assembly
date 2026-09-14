@@ -5291,3 +5291,41 @@ mappings against 828 MB of backing on this host (316 MB primary pool plus the
 created at 16384 pages because that is the import's declared maximum, not
 because anything measured says 1 GB; a shared memory of 32768, 49152 and 65536
 pages all construct fine under Node 24 on this box.
+
+### With the arena raised, the wall moves to backing (2026-09-13)
+
+Re-driven on `ee44e655`. The land pick now places fine and dies one step later:
+
+```
+pick+5s   records=387 live=0x1c20a000 backing_avail=0x1dfd2000/0x33c00000 bump_fits=true  largest_hole=0x3d150000@0x8400000
+pick+30s  records=390 live=0x2c2fa000 backing_avail=0x1dfd2000/0x33c00000 bump_fits=true  largest_hole=0x2d060000@0x8400000
+pick+70s  records=371 live=0x317ca000 backing_avail=0x0000c000/0x33c00000 bump_fits=false largest_hole=0x16d70000@0x35460000
+pick+110s PROBE GONE
+```
+
+`backing_overlaps` stayed 0 throughout, and the largest free run through the
+whole load is 977 MB rather than the 91 MB the old ceiling left -- so the
+address-space wall is gone. The refusal reason changed with it:
+
+```
+[heap] OOM: 430571520 bytes (0x19aa0000) - sparse arena: reserved range could not be committed
+[heap] OOM: 430511656 bytes (0x19a91628) - bump arena full, low reserve and sparse arena both refused
+```
+
+That is reason **3**, not reason 2: the 430 MB range is *reserved* and then has
+no bytes to be backed by. `backing_avail` is 48 KB of 828 MB at that moment,
+with 792 MB live.
+
+828 MB is what a 1 GB memory provides -- the 316 MB primary pool plus the
+512 MB above `0x20000000` -- so B&W2's land load needs about 1.3 GB and the
+1 GB ceiling was never measured to be enough for it. `src/01-header.wat` now
+declares `(memory 8192 32768 shared)`; the host-side page count that decides
+what is actually created lives in `host.js`, `test/run.js` and
+`tools/black-white-software-probe.js`.
+
+`test/test-virtual-backing-two-gigabyte.js` is this measurement as a test: the
+same WAT booted on both memories, the 792 MB working set committed, and the
+430 MB request refused on the 1 GB one and served on the 2 GB one -- with the
+top of the 2 GB memory written and read back, because `memory.size << 16` is
+`0x80000000` there and one signed comparison anywhere in that arithmetic would
+lose the whole window.

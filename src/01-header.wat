@@ -912,14 +912,28 @@
   ;; net_frame_commit() — discard the frame most recently peeked.
   (import "host" "net_frame_commit" (func $host_net_frame_commit))
 
-  ;; Minimum 8192 pages (512MB) and maximum 16384: a host that creates the
-  ;; 512MB memory every platform has always used still satisfies this import,
-  ;; and a host that has the headroom may create up to 1GB instead. The extra
-  ;; half is $VIRTUAL_BACKING_EXT, the second sparse backing window, and
-  ;; nothing but that window is ever placed above 0x20000000 — so a module
-  ;; running on the smaller memory simply never addresses it. The code asks
-  ;; memory.size, never this declaration, before touching a byte up there.
-  (import "host" "memory" (memory 8192 16384 shared))
+  ;; Minimum 8192 pages (512MB) and maximum 32768 (2GB): a host that creates
+  ;; the 512MB memory every platform has always used still satisfies this
+  ;; import, and a host that has the headroom may create more. Everything
+  ;; above 0x20000000 is $VIRTUAL_BACKING_EXT, the second sparse backing
+  ;; window, and nothing else is ever placed there — so a module running on
+  ;; the smaller memory simply never addresses it. The code asks memory.size,
+  ;; never this declaration, before touching a byte up there.
+  ;;
+  ;; 32768 rather than 16384 because 1GB is not enough for Black & White 2 and
+  ;; was never measured to be: at its land load 792MB of backing is live and
+  ;; the loader then asks for one 430MB range, against the 828MB a 1GB memory
+  ;; provides (316MB primary pool + a 512MB extension window). That refusal is
+  ;; reason 3, "reserved range could not be committed" — the reservation
+  ;; itself places fine since ee44e655.
+  ;;
+  ;; 32768 is also the largest value that is safe by construction, which is why
+  ;; the ceiling stops here rather than at the 4GB an i32 address space
+  ;; suggests: $virtual_backing_ext_end is (i32.shl (memory.size) 16), and that
+  ;; shift wraps to 0 at exactly 65536 pages. Every comparison it feeds is
+  ;; unsigned, so 2GB (0x80000000) and 3GB are read correctly despite the sign
+  ;; bit; 4GB would silently report "no extension window".
+  (import "host" "memory" (memory 8192 32768 shared))
   (export "memory" (memory 0))
 
   ;; String constants at WASM offset 0x100
