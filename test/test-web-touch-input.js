@@ -27,6 +27,14 @@ assert(html.includes('const LONG_PRESS_MS = 550'), 'touch should expose a delibe
 assert(html.includes('renderer.handleMouseDown(p.x, p.y, 2)'), 'long-press should map to right-button mouse down');
 assert(html.includes("pinchMode = 'wheel'"), 'parallel two-finger motion should classify as wheel scrolling');
 assert(html.includes('renderer.handleMouseMove(x, y)'), 'touchmove should map to mouse move');
+// A tap is an appearance, not travel. Publishing its position unmarked fed the
+// whole jump from the previous tap to DirectInput as physical motion, which
+// walked Marbles' own pointer onto the mode menu's QUIT item and made every
+// later tap exit the app. See test/test-touch-teleport-di-delta.js.
+assert(html.includes('renderer.handleMouseMove(cx, cy, { teleport: true })'),
+  'touchstart should publish the tap position without faking DirectInput motion');
+assert(html.includes('renderer.handleMouseMove(p.x, p.y, { teleport: true })'),
+  'the pre-click tap publish should not fake DirectInput motion either');
 assert(html.includes('renderer.handleMouseUp(p.x, p.y, 0)'), 'touchend/cancel should release left-button mouse up');
 assert(html.includes("mobileTouch: app.mobileTouch || 'auto'"),
   'the launcher should carry each app mobile-touch override into its running record');
@@ -214,6 +222,23 @@ try {
     'once the pinch is over a released single touch clicks normally');
   assert.deepStrictEqual(directEvents, [['move',100,100],['move',100,100],['down',100,100]],
     'a direct tap updates the software cursor before clicking, without requiring a hover');
+
+  // A push button is the exception to that wait. It has no right click to be
+  // disambiguated from, and its whole job is to look pressed while the finger
+  // is on it -- Calculator reads as broken otherwise, because nothing moves
+  // until the finger comes off.
+  renderer.touchWantsImmediatePress = x => x === 200;
+  const beforeButton = downs.length;
+  pendingInputTimer = null;
+  touchStart(tev([finger(5, 200, 120)], [finger(5, 200, 120)]));
+  assert.deepStrictEqual(downs.at(-1), [200, 120, 0],
+    'a tap on a WAT button presses as the finger lands');
+  assert.strictEqual(pendingInputTimer, null,
+    'and arms no long press, so holding the button cannot also right-click');
+  (listeners.get('touchend') || []).at(-1)(tev([], [finger(5, 200, 120)]));
+  assert.strictEqual(downs.length, beforeButton + 1,
+    'still exactly one press for the tap');
+  renderer.touchWantsImmediatePress = null;
 
   // A stationary hold is a clean right click: no preceding or trailing left
   // click, in both direct and trackpad modes.

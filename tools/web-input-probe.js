@@ -18,6 +18,8 @@
 // Steps (semicolon separated, left to right):
 //   move:X,Y      move the pointer to guest pixel X,Y
 //   click:X,Y     move, then press and release the left button
+//   tap:X,Y       a touchscreen tap (needs --touch); drives the touch bridge,
+//                 which `click` never reaches
 //   down:X,Y      / up:X,Y   — the halves of a drag
 //   key:Name      keyboard press (puppeteer key name, e.g. Enter, KeyA)
 //   type:TEXT     type literal text through browser key events
@@ -457,6 +459,14 @@ async function main() {
         await page.keyboard.press(rest);
       } else if (kind === 'type') {
         await page.keyboard.type(rest);
+      } else if (kind === 'tap') {
+        // A real finger, not a mouse: `click` drives page.mouse and therefore
+        // exercises none of the touchstart/touchend bridge, which is where the
+        // phone-only input bugs live. Needs --touch (an emulated device
+        // without a touchscreen has nothing to dispatch to).
+        const [gx, gy] = rest.split(',').map(Number);
+        const p = await toPage(page, gx, gy);
+        await page.touchscreen.tap(p.x, p.y);
       } else if (kind === 'move' || kind === 'click' || kind === 'dbl'
                  || kind === 'down' || kind === 'up') {
         const [gx, gy] = rest.split(',').map(Number);
