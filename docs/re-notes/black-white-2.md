@@ -7348,3 +7348,37 @@ gameplay. That is still the input stall above: measured again on drive49, the
 poll entry `0x9b0880` and all four of its call sites count **zero** over 45s
 while `0xa4da46` counts 144 DrawPrimitive returns, the game's cursor sits at
 `399,569` and `bw-aim.sh` cannot move it by a pixel in six tries.
+
+### …and then the land renders (drive49, 36 minutes after the click)
+
+The stall ends by itself. Measured end to end on drive49: the land click at
+`13:02`, then 36 minutes in which the poll entry `0x9b0880` and all four of its
+call sites count **zero** while the picker's static preview keeps presenting —
+and at `13:32` the game's cursor resets to `-1,-1` and the screen becomes the
+island: full 3D terrain, water, sky and letterbox bars, i.e. the in-game
+cinematic flyover (`scratchpad/d49-c.png`, `d49-land3.png`). Input is still not
+polled during the flyover, which is what a cutscene is entitled to do.
+
+So the 36 minutes are *load*, and the shape of it is measured rather than
+guessed. The hot-block histogram over one minute of the stall:
+
+```
+blocks=2532432 distinct=2218 | exe 73.5%, d3dx9_25 20.7%, msvcrt 5.8%
+top: exe+0x9b3458 2.9%, +0x9b3456 2.7%, +0x9b348a 2.7%, +0x9b3493 2.7%,
+     +0x9b348f 2.6%, exe+0xadeda9 1.9%, msvcrt+0x4107e7 1.5%,
+     d3dx9_25+0x50e3f7/0x50e41f/0x50e465 1.5% each
+```
+
+`0x9b3402` is a **linear name → id lookup**: it walks 16-byte records at
+`[ebp + idx*16]`, compares the name with an inlined `strcmp`
+(`0x9b3456..0x9b3476`), returns the 16-bit index, and on a miss calls
+`0x9b2c10` to add one. Five of its blocks are 13.7% of every block entry in the
+process, so the table is large and the scan is O(n) per name — the game's own
+design, and nothing an emulator can shorten. At ~8M ops/s against a period
+Pentium's ~100M, a one-to-three-minute load becomes half an hour.
+
+Two practical consequences: **a B&W2 land run needs an hour-scale wall budget**
+(the probe's `--seconds` is a hard deadline — drive49 died at 40 minutes with
+the flyover barely started), and *no screen change for tens of minutes is not
+evidence of a hang here* — the VA record count climbing (387 → 510 over 14
+minutes) is the progress signal to read instead.
