@@ -262,6 +262,62 @@
         (i64.mul (i64.mul (local.get $dy) (local.get $dy)) (i64.mul (local.get $w) (local.get $w))))
       (i64.mul (i64.mul (local.get $w) (local.get $w)) (i64.mul (local.get $h) (local.get $h)))))
 
+  ;; Where row $y of the ellipse inscribed in [$left,$right) starts and ends,
+  ;; as the half-open interval [$gdi_rgn_ellipse_row_x0, _x1); returns 0 when
+  ;; the row has no coverage. The row's covered set is contiguous because the
+  ;; implicit equation is monotone in |dx| for a fixed dy, which is what lets
+  ;; the two ends be bisected instead of scanned -- and testing the centre
+  ;; first is what decides "this row is empty" in one call.
+  ;;
+  ;; Both the region builder below and the raster's $gdi_ellipse_desc ask this
+  ;; question, and they must never answer it differently: an ellipse that
+  ;; fills one pixel wider than the region clipped to is a fringe the
+  ;; scan-converter can produce and no test would obviously name.
+  (global $gdi_rgn_ellipse_row_x0 (mut i32) (i32.const 0))
+  (global $gdi_rgn_ellipse_row_x1 (mut i32) (i32.const 0))
+
+  (func $gdi_rgn_ellipse_row_span (param $y i32) (param $left i32) (param $right i32)
+        (param $cx2 i32) (param $cy2 i32) (param $width i32) (param $height i32)
+        (result i32)
+    (local $lo i32) (local $hi i32) (local $mid i32) (local $center i32)
+    (global.set $gdi_rgn_ellipse_row_x0 (i32.const 0))
+    (global.set $gdi_rgn_ellipse_row_x1 (i32.const 0))
+    (local.set $center (i32.add (local.get $left)
+      (i32.shr_u (i32.sub (local.get $width) (i32.const 1)) (i32.const 1))))
+    (if (i32.eqz (call $gdi_rgn_ellipse_inside
+          (local.get $center) (local.get $y) (local.get $cx2) (local.get $cy2)
+          (local.get $width) (local.get $height)))
+      (then (return (i32.const 0))))
+    ;; First covered x on the monotonic false-to-true left half.
+    (local.set $lo (local.get $left))
+    (local.set $hi (local.get $center))
+    (block $left_done (loop $left_search
+      (br_if $left_done (i32.ge_s (local.get $lo) (local.get $hi)))
+      (local.set $mid (i32.add (local.get $lo)
+        (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
+      (if (call $gdi_rgn_ellipse_inside
+            (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
+            (local.get $width) (local.get $height))
+        (then (local.set $hi (local.get $mid)))
+        (else (local.set $lo (i32.add (local.get $mid) (i32.const 1)))))
+      (br $left_search)))
+    (global.set $gdi_rgn_ellipse_row_x0 (local.get $lo))
+    ;; First uncovered x after the right half of the covered span.
+    (local.set $lo (local.get $center))
+    (local.set $hi (local.get $right))
+    (block $right_done (loop $right_search
+      (br_if $right_done (i32.ge_s (local.get $lo) (local.get $hi)))
+      (local.set $mid (i32.add (local.get $lo)
+        (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
+      (if (call $gdi_rgn_ellipse_inside
+            (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
+            (local.get $width) (local.get $height))
+        (then (local.set $lo (i32.add (local.get $mid) (i32.const 1))))
+        (else (local.set $hi (local.get $mid))))
+      (br $right_search)))
+    (global.set $gdi_rgn_ellipse_row_x1 (local.get $lo))
+    (i32.const 1))
+
   (func $gdi_rgn_alloc_ellipse (param $left_in i32) (param $top_in i32) (param $right_in i32) (param $bottom_in i32) (result i32)
     (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
     (local $width i32) (local $height i32) (local $cx2 i32) (local $cy2 i32)
@@ -293,38 +349,13 @@
     (local.set $y (local.get $top))
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_s (local.get $y) (local.get $bottom)))
-      (if (call $gdi_rgn_ellipse_inside
-            (local.get $center) (local.get $y) (local.get $cx2) (local.get $cy2)
+      (if (call $gdi_rgn_ellipse_row_span
+            (local.get $y) (local.get $left) (local.get $right)
+            (local.get $cx2) (local.get $cy2)
             (local.get $width) (local.get $height))
         (then
-          ;; First covered x on the monotonic false-to-true left half.
-          (local.set $lo (local.get $left))
-          (local.set $hi (local.get $center))
-          (block $left_done (loop $left_search
-            (br_if $left_done (i32.ge_s (local.get $lo) (local.get $hi)))
-            (local.set $mid (i32.add (local.get $lo)
-              (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
-            (if (call $gdi_rgn_ellipse_inside
-                  (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
-                  (local.get $width) (local.get $height))
-              (then (local.set $hi (local.get $mid)))
-              (else (local.set $lo (i32.add (local.get $mid) (i32.const 1)))))
-            (br $left_search)))
-          (local.set $first (local.get $lo))
-          ;; First uncovered x after the right half of the covered span.
-          (local.set $lo (local.get $center))
-          (local.set $hi (local.get $right))
-          (block $right_done (loop $right_search
-            (br_if $right_done (i32.ge_s (local.get $lo) (local.get $hi)))
-            (local.set $mid (i32.add (local.get $lo)
-              (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
-            (if (call $gdi_rgn_ellipse_inside
-                  (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
-                  (local.get $width) (local.get $height))
-              (then (local.set $lo (i32.add (local.get $mid) (i32.const 1))))
-              (else (local.set $hi (local.get $mid))))
-            (br $right_search)))
-          (local.set $last (local.get $lo))
+          (local.set $first (global.get $gdi_rgn_ellipse_row_x0))
+          (local.set $last (global.get $gdi_rgn_ellipse_row_x1))
           (if (i32.gt_u (local.get $count) (i32.const 0))
             (then (local.set $prev (i32.add (global.get $GDI_REGION_WORK)
               (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 4))))))
