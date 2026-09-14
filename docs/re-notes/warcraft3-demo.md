@@ -1287,3 +1287,115 @@ accumulating it. **No evidence for `bigMemory: true` on this app.**
 **A run dying with Puppeteer's `Attempted to use detached Frame` is the box,
 not the app.** runGP9 hit it 170s in at a load average of 115 (another agent's
 90-minute B&W2 probe). Check `uptime` before reading anything into it.
+
+## The campaign load, measured headless (2026-09-14)
+
+**`node test/run.js` drives this app now.** The claim a few sections up — "it
+needs a GL context, and nothing on the OpenGL path can run headless" — is no
+longer true: `lib/headless-gl.js` (`@node-3d/webgl` + `@node-3d/glfw`, both
+Node-API so no per-ABI rebuild) gives `lib/gl-compat.js` a real native context
+with no browser at all. The full 3D main menu is up in ~45s at 640x480,
+renderer `Apple M1`:
+
+```sh
+node test/run.js --app=warcraft3_demo --headless-gl --quiet-api --quiet-blocks \
+  --control=8124 --max-seconds=5400 --max-batches=999999999 --no-close
+```
+
+`--quiet-blocks` is not optional. `test/run.js:9067` prints a full register
+dump for every batch whose EIP differs from the last one's; an unflagged run
+wrote 114,891 of those lines, and that is blocking I/O on the guest's thread.
+
+### Driving the menu (this cost an hour; do not re-derive it)
+
+Two rules, both discovered the hard way, neither guessable:
+
+1. **A button needs a real hover transition, then a fast press.** Send one
+   `ctl mousemove` somewhere else, then one to the target, as *separate* ctl
+   invocations — the guest must see the hover change. Then send the press as
+   one burst: `printf 'mousedown:X:Y\nmouseup:X:Y\n' | node tools/ctl.js -s :PORT pipe`.
+   Putting the move in the same pipe is too fast for the hover to register;
+   putting a `sleep 3` between down and up is **168 guest-seconds** at the
+   default 200ms/batch and the UI discards the press as a stale drag. Both
+   failure modes look identical from outside: nothing happens.
+2. **The keyboard is DirectInput only.** `ctl type` and `ctl key` send window
+   messages and do nothing on any WC3 screen. `ctl cmd di-keydown:VK` +
+   `di-keyup:VK` types. That is how the profile name goes in and how Enter
+   commits it — the `Create` button itself never answered a click.
+
+Menu centres at 640x480: Single Player 546,113 · Battle.net 546,161 · LAN
+546,208 · Options 546,255 · Credits 546,302 · Quit 546,412. Then: profile name
+field 92,173, `Create` 203,173 (use Enter instead), right panel Campaign
+546,150, and on the campaign screen **the clickable is the bullet glyph at
+435,152, not the "Exodus of the Horde" text** — clicks on the label do nothing.
+
+### What the load is actually doing
+
+Instrument a live run with no restart: `ctl eval 'exports.reset_handler_hist();
+exports.set_handler_hist_enabled(1)'`, let a window elapse, then read it with
+`tools/ctl-probes/read-handler-hist.js` (the `--control` twin of the page probe;
+the page version reaches `runningApps[0].wine`, which does not exist here, and
+`moduleBases` is not in a `new Function` body's scope, so name the addresses
+from the run's own `DLL:` header lines).
+
+**It computes the whole way. It never waits.** `yieldReason` is 0 across the
+entire load, EIP churns across every module, and the batch rate swings 90–700/s.
+There is no `WaitForSingleObject` park in this and no emulator stall.
+
+It is **phase-structured**, and each phase has a different owner:
+
+| window | ops/block | biggest owner |
+|---|---|---|
+| first ~4 min | 8.47 | **`ijl15.dll` — 40.3% of all block entries**, from the top-40 blocks alone |
+| later | 5.09 | `Game.dll+0x6f0deb60`, one 2-block loop, 18.1% |
+| later still | 4.69 | same loop 13.7%, `Storm.dll+0x15020d02` 6.9%, msvcrt 4.6% |
+
+`ijl15.dll` is the **Intel JPEG Library** — WC3's BLP textures carry JPEG
+payloads, and the map load decodes them. The handler mix under it is
+`mov_r_r` / `compute_ea_sib` / `shift_r` / `add_r_i32` / `imul_r_r_i`, i.e. IDCT
+and Huffman. It has exactly **six exports** (`ijlGetLibVersion`, `ijlInit`,
+`ijlFree`, `ijlRead`, `ijlWrite`, `ijlErrorStr`), so the single largest cost in
+the load sits behind one interceptable call, `ijlRead` at `0x600333d0`. That is
+the obvious lever and nothing has been built for it yet.
+
+`Game.dll+0x6f0deb60` is a linear first-free-slot scan, entry `0x6f0deb40`:
+
+```
+mov ecx,[edi+0x30]        ; count
+mov edx,[edi+0x34] / add edx,0x14   ; array base + flag field
+0x6f0deb60: test [edx],1 / jz found ; slot in use?
+            inc eax / add edx,0x18  ; 24-byte records
+            cmp eax,ecx / jb 0x6f0deb60
+            ; fell through: grow-and-append via call 0x6f0df290
+```
+
+**It is NOT the O(n²) it looks like** — that was the first hypothesis here and
+it is wrong. Measured over two windows as a share of block entries (load-immune,
+unlike iterations/second on a box whose load average moved 6.8 → 11.9): 13.7%
+then 9.6%. The scan is steady ~10–14% of the work, not runaway.
+
+### The loading bar does not decelerate; it has plateaus
+
+The bar trough spans x≈150–492 at y≈427. Right edge against wall seconds from
+the click:
+
+```
+t+20 189 · t+40 224 · t+61 233 · t+81 233 · t+101 259 · t+121 260
+t+162 270 · t+203 292 · t+243 327 · t+283 367 · t+324 369 · t+659 381
+```
+
+1.55 px/s, then 0.44, then back up to 0.94, then a long flat stretch — so an
+early reading of "it is decelerating, something is quadratic" is an artifact of
+where the samples land. Take the whole curve before concluding anything from a
+pair of points.
+
+The first 63 seconds after the click are a **100% black screen** (one distinct
+colour) before the parchment map appears; that is part of the load, not a hang.
+
+### So why is it slow
+
+Guest work at interpreter speed, with nothing pathological in between. The
+ops/block figures — 4.7 to 8.5 — say this is block-transfer-bound, not
+op-bound: tiny blocks, so the per-block cost dominates, which is exactly the
+regime the fold/region work targets. The two app-specific levers, in order of
+size, are a host-side `ijlRead` and cheaper block transfer. Neither is a bug.
