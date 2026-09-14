@@ -5114,3 +5114,112 @@ One consequence for driving: the land picker draws no cursor at all (an aim
 there changes 0 of 8000 pixels, where the same aim on the menu and the tutorial
 draws both cursor and hover highlight), so a click on that screen cannot be
 verified optically the way every earlier click was.
+
+## CORRECTION 2026-09-13: the land pick is a failed allocation, and the spin is its aftermath
+
+"The walk and the 430 MB allocation are the same event seen twice" above has the
+causality backwards, and the section title one level up -- "does not OOM" -- is
+simply wrong. Picking a land **throws `std::bad_alloc` and ends the process**.
+The triangulation spin is what the code does on the way there and afterwards,
+not what kills the run.
+
+The reason this took a whole session to see is worth writing down: **the crash
+log is not in the probe's stdout.** `tools/black-white-software-probe.js` spawns
+`test/run.js` with `stdio:['pipe','pipe','pipe']` and sends the child's stderr
+to a `run.log` inside the artifacts directory it prints on its first line
+(`Artifacts: /var/folders/.../bw-software-probe-XXXXXX`). Every `[heap]`,
+`[C++ throw]` and `=== UNHANDLED EXCEPTION ===` line lands there. Read that file
+before concluding anything about a probe run that "just stopped".
+
+What it said:
+
+```
+[heap] OOM: 430571520 bytes (0x19aa0000) - sparse arena: no guest address space left to reserve
+[heap] OOM: 430511656 bytes (0x19a91628) - bump arena full, low reserve and sparse arena both refused
+  requested from eip=0x00ad561b frames=[0x00ad5652 <- 0x009d5440 <- 0x00000087]
+[C++ throw] .?AVbad_alloc@std@@ <- .?AVexception@@  obj 0x074fc980 at EIP 0x00ada813
+=== UNHANDLED EXCEPTION: CXX_EXCEPTION 0xe06d7363 ===
+[Exit] code=-529697949
+```
+
+The reason codes are in `lib/host-imports.js` (1 = bump arena full, 2 = sparse
+arena has no guest address space left, 3 = reserved range would not commit,
+4 = map record table full, 5 = request refused as too large). This is reason 2:
+a **guest address space** refusal, not a backing-memory one.
+
+### Why the address space ran out: a floor that was not a fact
+
+Measured at the picker, off the live instance:
+
+```
+maps=0x182  backing_hw=0x26404000  reserve_cursor=0x289f0000
+ext_cursor=0x2202e000  reserve_count=0xc  sticky_floor=0x0
+```
+
+The sparse arena is allocated downward from `$VIRTUAL_ALLOC_TOP_INIT`
+(`0x50000000`) and was floored at a flat `$VIRTUAL_ALLOC_MIN` of `0x10000000`.
+`0x289F0000 - 0x19AA0000 = 0x0EF50000`, which is `0x10B0000` -- **17.4 MB** --
+below that floor, so the reservation was refused.
+
+That constant was not a fact about anything. The only address a sparse mapping
+must stay clear of is the **direct window**, because `$g2w` answers anything
+inside it from the image's affine delta and never consults the page table. That
+window ends at guest `(region.end $DIRECT_WINDOW) + image_base - GUEST_BASE` --
+`0x083EE000` for the usual `0x400000` image -- so the constant was holding back
+124 MB that nothing could ever use. Fixed in `9cca3c58`: `$virtual_alloc_min`
+derives the floor and is capped at the old constant, so it can only ever move
+down. Verified on the app: the land loader now places that reservation at
+`0x0AE70000` and the later reclaim lifts the cursor back to `0x1C0A0000`.
+
+DLL placement was checked before trusting this, not assumed: `next_dll=0x44a7000
+dll_count=7 image_base=0x400000 sizeofimage=0x2028000`, i.e. the seven DLLs load
+contiguously inside the direct window (`$next_dll_addr`), so the range the lower
+floor opens up is genuinely free.
+
+### The second bug: two guest ranges on one extension extent
+
+`$SCRATCH/bw-vaspace.js` walks `VIRTUAL_MAP_TABLE` and coalesces **both** sides
+of each record, so "live guest bytes" and "distinct backing bytes" can be
+compared. Sampled every five seconds after the land click:
+
+```
+pick+80s  records=390  live=0x2c2fa000  backing_covered=0x2c2fa000  overlaps=0
+pick+95s  records=391  live=0x3797a000  backing_covered=0x2c2fa000  overlaps=10
+                                                       first_overlap=0x2202e000
+```
+
+`0x2202E000` is exactly the extension bump cursor measured above.
+`$virtual_backing_ext_take` published that cursor as wilderness with no conflict
+check, while `$virtual_hole_take` can hand out a released extension extent at or
+above it without advancing it -- so a hole reused up there leaves the bump
+pointing at live bytes. Fixed in `4d025525`: the bump candidate is asked of the
+record table, and a gap placement republishes the cursor.
+
+This is the same failure the comment in `$virtual_map_commit_locked` already
+records (guest `0x2e040000` and `0x2de00000` sharing backing `0x18299000`, after
+which the grid query at `0x9e5272` read a free-list link as a vector length and
+scanned forever) -- which is very likely what the non-terminating walk in the
+section above actually is.
+
+### What the land load actually demands
+
+Sampling live committed mappings every five seconds after the click: **528 MB ->
+707 MB -> 889 MB** in roughly 180 MB steps over 45 seconds, each step held while
+the next is built, across 371-391 records, followed by ~98 MB released. Neither
+placement nor fragmentation is the binding constraint -- at pick+15s both
+`bump_fits` and `gap_fits` were true. The binding quantity is live bytes.
+
+With the derived floor the arena is `0x50000000 - 0x08400000` = 1148 MB of guest
+address space, and total backing is 828 MB (316 MB primary pool + 512 MB
+extension window on the 1 GB memory `bigMemory` asks for). **889 MB live plus a
+430 MB request does not fit in either.** So the two fixes above are necessary
+and are not obviously sufficient; raising `$VIRTUAL_ALLOC_TOP_INIT` past the DIB
+guest window would buy address space but no backing, and backing is capped by
+the wasm memory itself.
+
+### One throughput note, unrelated to the crash
+
+With `--quiet-api`, a land-picker run still made `log=7265302` and
+`log_api_exit=7265302` host calls -- 14.5 M of 15.5 M total. `--quiet-api`
+suppresses the printing, not the crossing into JS. A gate for that belongs in
+WAT beside the dispatch, not in the JS import.
