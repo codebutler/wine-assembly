@@ -41,20 +41,7 @@ const BLOCKS = Number(opt('blocks', 25));
 const EXE_BASE = Number(opt('exe-base', '0x400000'));
 const DUMP = opt('dump', '');
 
-function handlerNames() {
-  const names = [];
-  const source = fs.readFileSync(path.join(ROOT, 'src', '02-thread-table.wat'), 'utf8');
-  for (const line of source.split(/\r?\n/)) {
-    const m = line.match(/^\s*(\$[^\s()]+).*;;\s*(\d+)(?::\s*(.*))?$/);
-    if (!m) continue;
-    const id = parseInt(m[2], 10);
-    if (!Number.isFinite(id)) continue;
-    names[id] = m[3] ? `${m[1]}: ${m[3].trim()}` : m[1];
-  }
-  return names;
-}
-
-const { makeAttributor, readHist } = require('./hist-blocks');
+const { makeAttributor, readHist, handlerNames } = require('./hist-blocks');
 
 const hist = readHist(file);
 const names = handlerNames();

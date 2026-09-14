@@ -63,4 +63,24 @@ function readHist(file) {
   }
 }
 
-module.exports = { moduleList, makeAttributor, attributeBlocks, readHist };
+// Handler names come from the `(elem ...)` list in src/02-thread-table.wat, so
+// they cannot drift from a renumber. Lived in browser-handler-hist.js until
+// tools/ctl-hist-series.js needed the same mapping; this file is the one that
+// exists so block/handler attribution is not written twice.
+function handlerNames() {
+  const fs = require('fs');
+  const path = require('path');
+  const names = [];
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'src', '02-thread-table.wat'), 'utf8');
+  for (const line of source.split(/\r?\n/)) {
+    const m = line.match(/^\s*(\$[^\s()]+).*;;\s*(\d+)(?::\s*(.*))?$/);
+    if (!m) continue;
+    const id = parseInt(m[2], 10);
+    if (!Number.isFinite(id)) continue;
+    names[id] = m[3] ? `${m[1]}: ${m[3].trim()}` : m[1];
+  }
+  return names;
+}
+
+module.exports = { moduleList, makeAttributor, attributeBlocks, readHist, handlerNames };
