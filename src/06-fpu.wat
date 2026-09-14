@@ -249,25 +249,44 @@
 
   ;; FUCOMI / FUCOMIP: unordered compare. NaN (treated as QNaN) does NOT
   ;; raise IE — only the eflags are set to ZF=PF=CF=1.
+  ;;
+  ;; PF is not optional here, and getting it from the lazy arithmetic modes is
+  ;; not merely imprecise, it inverts the most common float test MSVC emits:
+  ;;
+  ;;     fucomip st,st(1) ; lahf ; test ah,0x44 ; jp not_equal
+  ;;
+  ;; On real hardware an EQUAL compare leaves ZF=1, PF=0, so `ah & 0x44` is
+  ;; 0x40 — one bit, odd parity, PF clear, and the JP is NOT taken. Deriving PF
+  ;; from flag_res the way modes 2 and 3 do makes PF the parity of the low byte
+  ;; of a synthetic result: equal stores flag_res = 0, whose parity is even, so
+  ;; PF comes out SET, `ah & 0x44` reads 0x44, and the JP is taken. Every
+  ;; `if (a == b)` on doubles then takes the not-equal branch. Black & White 2's
+  ;; land loader is where that showed up: the insert at 0x9cef29 is gated by
+  ;; exactly this sequence, it never ran, the list at [esp+0x50] stayed empty,
+  ;; and 0x9cef45 dereferenced NULL 53 million times.
+  ;;
+  ;; So publish the three flags x87 actually defines through the exact raw mode
+  ;; (flag_op 9), which carries CF in flag_a bit 0 and PF in flag_a bit 1
+  ;; independently of flag_res. OF/SF/AF are cleared by FCOMI on real hardware,
+  ;; which flag_b = 0 and a flag_res with bit 31 clear give us.
   (func $fpu_compare_eflags_unord (param $a f64) (param $b f64)
+    (global.set $flag_op (i32.const 9))
+    (global.set $flag_sign_shift (i32.const 31))
+    (global.set $flag_b (i32.const 0))  ;; OF = 0
     (if (f64.lt (local.get $a) (local.get $b))
-      (then
-        (global.set $flag_op (i32.const 2))
-        (global.set $flag_a (i32.const 0)) (global.set $flag_b (i32.const 1))
-        (global.set $flag_res (i32.const 0xFFFFFFFF)))
+      (then  ;; ZF=0 PF=0 CF=1
+        (global.set $flag_a (i32.const 1))
+        (global.set $flag_res (i32.const 1)))
       (else (if (f64.eq (local.get $a) (local.get $b))
-        (then
-          (global.set $flag_op (i32.const 3))
+        (then  ;; ZF=1 PF=0 CF=0
+          (global.set $flag_a (i32.const 0))
           (global.set $flag_res (i32.const 0)))
         (else (if (f64.gt (local.get $a) (local.get $b))
-          (then
-            (global.set $flag_op (i32.const 3))
+          (then  ;; ZF=0 PF=0 CF=0
+            (global.set $flag_a (i32.const 0))
             (global.set $flag_res (i32.const 1)))
-          (else
-            ;; Unordered: emulate x87 by setting ZF=CF=1 (PF support is partial
-            ;; in the lazy flag system; ZF+CF is what compilers actually test).
-            (global.set $flag_op (i32.const 2))
-            (global.set $flag_a (i32.const 0)) (global.set $flag_b (i32.const 1))
+          (else  ;; unordered: ZF=1 PF=1 CF=1
+            (global.set $flag_a (i32.const 3))
             (global.set $flag_res (i32.const 0)))))))))
 
   ;; Apply current FPU rounding-control (CW bits 10-11) to an f64.
