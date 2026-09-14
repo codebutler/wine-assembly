@@ -843,15 +843,36 @@
     (local.set $end (call $virtual_backing_ext_end))
     (if (i32.eqz (local.get $end)) (then (return (i32.const 0))))
     (local.set $cursor (call $virtual_backing_ext_cursor))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    ;; The bump is only wilderness while nothing live sits above it, and this
+    ;; cursor is not the only way an extension extent gets handed out: a released
+    ;; one goes on the hole list, and $virtual_hole_take gives it to the next
+    ;; commit that fits without ever advancing the cursor. So a hole reused at or
+    ;; above the cursor leaves the bump pointing at bytes that are now live, and
+    ;; the next request too large for the primary pool writes a second guest
+    ;; range onto them.
+    ;;
+    ;; Measured on Black & White 2's land load: at pick+95s the record table held
+    ;; 0x3797A000 of live mappings over only 0x2C2FA000 of distinct backing, with
+    ;; ten records overlapping and the first collision at 0x2202E000 -- the exact
+    ;; address the cursor had been left at. Two guest ranges on one extent is the
+    ;; failure this loader has produced before, and it is silent: a write through
+    ;; either address appears through the other.
+    ;;
+    ;; So ask the record table, which is the only authority, and on a collision
+    ;; fall through to the scan below rather than trusting the claim.
     (if (i32.le_u (local.get $size) (i32.sub (local.get $end) (local.get $cursor)))
       (then
-        (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
-          (i32.add (local.get $cursor) (local.get $size)))
-        (return (local.get $cursor))))
-    ;; Spent. Slide a candidate up from the base past every live record; each
-    ;; collision moves it to that record's end, so the walk is monotone.
+        (if (i32.eqz (call $virtual_backing_conflicts
+              (local.get $cursor) (local.get $size) (local.get $count)))
+          (then
+            (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
+              (i32.add (local.get $cursor) (local.get $size)))
+            (return (local.get $cursor))))))
+    ;; Spent, or the cursor was standing on something live. Slide a candidate up
+    ;; from the base past every live record; each collision moves it to that
+    ;; record's end, so the walk is monotone.
     (local.set $cand (call $virtual_backing_ext_base))
-    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (block $found (loop $gap
       (if (i32.gt_u (local.get $size) (i32.sub (local.get $end) (local.get $cand)))
         (then (return (i32.const 0))))
@@ -865,6 +886,14 @@
         (then (local.set $cand (local.get $k_end)) (local.set $i (i32.const 0)))
         (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
       (br $gap)))
+    ;; A placement at or above the stale cursor makes the bump honest again:
+    ;; everything below the new cursor is either live or a hole the hole list
+    ;; already names, which is exactly what the wilderness claim means. Without
+    ;; this the cursor stays parked on a live record for the rest of the run and
+    ;; every later extension request pays the full scan.
+    (if (i32.ge_u (local.get $cand) (local.get $cursor))
+      (then (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
+        (i32.add (local.get $cand) (local.get $size)))))
     (local.get $cand))
 
   ;; Does [backing, backing+size) intersect the backing of any live record?
