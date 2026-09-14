@@ -28,7 +28,9 @@ const IMAGE_BASE = 0x400000;
 // module is asked for it rather than a number being written down here, because
 // every scenario below is "a tenant this far above the floor" or "a cursor one
 // page above the floor" and a stale copy would silently stop testing that.
-const ALLOC_TOP = 0x50000000;
+// Read from the module for the same reason the floor is: the ceiling has moved
+// twice (0x40000000, then 0x50000000, now the top of user space) and every case
+// below is expressed relative to it.
 
 const extraWat = `
   (func (export "test_gap_reset")
@@ -42,6 +44,7 @@ const extraWat = `
     (i32.store offset=4 (global.get $VIRTUAL_MAP_STATE) (global.get $VIRTUAL_BACKING_BASE))
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT)))
   (func (export "test_gap_floor") (result i32) (call $virtual_alloc_min))
+  (func (export "test_gap_top") (result i32) (global.get $VIRTUAL_ALLOC_TOP_INIT))
   (func (export "test_gap_cursor") (result i32)
     (i32.load offset=8 (global.get $VIRTUAL_MAP_STATE)))
   (func (export "test_gap_set_cursor") (param $v i32)
@@ -69,6 +72,7 @@ const extraWat = `
       filename === '13-exports.wat' ? `${source}\n${extraWat}\n` : source);
   const module = await WebAssembly.compile(wasmBytes);
 
+  let ALLOC_TOP = 0;
   async function boot() {
     const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
     const host = { memory };
@@ -76,6 +80,7 @@ const extraWat = `
     const e = (await WebAssembly.instantiate(module, { host })).exports;
     e.init_thread(0, IMAGE_BASE, 0, 0, 0, 0, 0);
     e.test_gap_reset();
+    ALLOC_TOP = e.test_gap_top() >>> 0;
     return e;
   }
   const live = (e) => {

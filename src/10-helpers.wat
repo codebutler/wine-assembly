@@ -645,6 +645,15 @@
     (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
     (local $base i32)
     (local.set $end (i32.add (local.get $cand) (local.get $size)))
+    ;; The excluded band is an owner like any other, and it is checked first
+    ;; because it is the only one that is never in a table: the DIB guest arena
+    ;; translates through its own affine range in $g2w and the static
+    ;; system-DLL handles are not memory at all. Reported as a blocker, the
+    ;; slide below steps over it exactly the way it steps over a live record.
+    (if (i32.and
+          (i32.lt_u (global.get $VIRTUAL_ALLOC_BAND_BASE) (local.get $end))
+          (i32.gt_u (global.get $VIRTUAL_ALLOC_BAND_END) (local.get $cand)))
+      (then (return (global.get $VIRTUAL_ALLOC_BAND_BASE))))
     (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
@@ -744,6 +753,22 @@
       (if (i32.or (i32.lt_u (local.get $top) (local.get $size))
                   (i32.lt_u (local.get $new_top) (call $virtual_alloc_min)))
         (then (return (call $virtual_reserve_gap (local.get $size)))))
+      ;; Step the whole reservation below the excluded band rather than letting
+      ;; it straddle one. The cursor becomes the new base, so everything after
+      ;; this continues underneath the band and the test never fires again --
+      ;; the band costs one comparison per reservation and is crossed once.
+      (if (i32.and
+            (i32.lt_u (global.get $VIRTUAL_ALLOC_BAND_BASE)
+              (i32.add (local.get $new_top) (local.get $size)))
+            (i32.gt_u (global.get $VIRTUAL_ALLOC_BAND_END) (local.get $new_top)))
+        (then
+          (if (i32.lt_u (global.get $VIRTUAL_ALLOC_BAND_BASE) (local.get $size))
+            (then (return (call $virtual_reserve_gap (local.get $size)))))
+          (local.set $new_top
+            (i32.and (i32.sub (global.get $VIRTUAL_ALLOC_BAND_BASE) (local.get $size))
+              (i32.const 0xFFFF0000)))
+          (if (i32.lt_u (local.get $new_top) (call $virtual_alloc_min))
+            (then (return (call $virtual_reserve_gap (local.get $size)))))))
       (br_if $done
         (i32.eq (local.get $seen)
           (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $seen) (local.get $new_top))))

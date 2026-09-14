@@ -2455,12 +2455,40 @@
   (global $MAX_VIRTUAL_HOLES i32 (i32.const 4096))
   (global $VIRTUAL_BACKING_BASE i32 (region.addr $VIRTUAL_BACKING_BASE 0))
   (global $VIRTUAL_BACKING_BASE_SIZE i32 (region.size $VIRTUAL_BACKING_BASE))
-  ;; The sparse VA arena ends exactly where the separate DIB guest arena
-  ;; begins. Keeping the former 0x40000000 ceiling left 256MB of valid,
-  ;; non-overlapping guest address space unused and exhausted StarCraft's
-  ;; reserve/free churn before its first command-panel allocation.
-  (global $VIRTUAL_ALLOC_TOP_INIT i32 (i32.const 0x50000000))
+  ;; The sparse VA arena used to end exactly where the separate DIB guest arena
+  ;; begins, at 0x50000000. (Keeping the 0x40000000 ceiling before that left
+  ;; 256MB of valid, non-overlapping guest address space unused and exhausted
+  ;; StarCraft's reserve/free churn before its first command-panel allocation.)
+  ;;
+  ;; But the DIB arena is 63MB and the pseudo module handles are sixteen words,
+  ;; so stopping at 0x50000000 gave away everything from there to the top of
+  ;; Win32 user space -- 752MB -- to avoid two objects that together occupy
+  ;; less than a tenth of it. Black & White 2's land load is what made that
+  ;; matter: 70 seconds after the land pick it holds 785MB of live mappings in
+  ;; 348 records, the largest free run in the old 1148MB arena is 91MB, and the
+  ;; 430MB reservation it asks for next is refused with "no guest address space
+  ;; left to reserve" -- after which it throws std::bad_alloc and the process
+  ;; ends. 363MB free and no run big enough is a capacity problem, not a
+  ;; placement one: no allocator can serve that request out of this arena.
+  ;;
+  ;; So the ceiling is now the top of user space (0x7F000000, one page short of
+  ;; the 0x80000000 that $handle_VirtualQuery already refuses as kernel space),
+  ;; and the two objects in the middle are declared as one excluded band rather
+  ;; than being worked around individually. A reservation never lands inside the
+  ;; band; see $virtual_range_blocker_locked and $virtual_reserve_down.
+  (global $VIRTUAL_ALLOC_TOP_INIT i32 (i32.const 0x7F000000))
   (global $VIRTUAL_ALLOC_MIN i32 (i32.const 0x10000000))
+  ;; The band the sparse arena steps over. It is deliberately coarser than what
+  ;; is in it -- the DIB guest arena at 0x50000000..0x53F00000 and the static
+  ;; system-DLL pseudo handles at 0x5D110000 -- because one span costs one test
+  ;; on the reserve path and a set of exact holes would cost a walk, and because
+  ;; a handle is compared against a base address rather than translated: a real
+  ;; mapping landing on $STATIC_SYS_DLL_HANDLE_BASE would make a guest that
+  ;; reads through a GetModuleHandle result find plausible bytes instead of
+  ;; nothing. 256MB of slack in a 2GB address space is the cheap side of that
+  ;; trade.
+  (global $VIRTUAL_ALLOC_BAND_BASE i32 (i32.const 0x50000000))
+  (global $VIRTUAL_ALLOC_BAND_END i32 (i32.const 0x60000000))
   ;; Process-wide heap state, in memory rather than in globals so every instance
   ;; over the shared memory sees one copy. Padded to its own 64-byte cache line:
   ;; sharing a line with another hot shared cell costs more in inter-core line

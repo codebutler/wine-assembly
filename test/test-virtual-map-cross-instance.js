@@ -19,6 +19,8 @@ const PAGE_TABLE = RegionMap.BASE.GUEST_PAGE_TABLE;
 const VIRTUAL_BACKING = RegionMap.BASE.VIRTUAL_BACKING_BASE;
 
 const extraWat = String.raw`
+  (func (export "test_alloc_top_init") (result i32)
+    (global.get $VIRTUAL_ALLOC_TOP_INIT))
   (func (export "test_backing_size") (result i32)
     (global.get $VIRTUAL_BACKING_BASE_SIZE))
   (func (export "test_virtual_reset")
@@ -135,8 +137,13 @@ async function main() {
 
   const graphicsSize = 0x00a90000;
   const graphicsBase = main.test_virtual_alloc_null(graphicsSize) >>> 0;
-  assert.strictEqual(graphicsBase, 0x4f570000,
-    'the first reservation should retain the legacy high-arena address');
+  // Off the top of the arena, 64KB-granular. Derived rather than pinned to the
+  // 0x4f570000 this used to read: the ceiling has moved twice now, and what the
+  // assertion is actually about is that the first reservation starts at the top
+  // and that both instances agree on where the top is.
+  assert.strictEqual(graphicsBase,
+    ((main.test_alloc_top_init() >>> 0) - graphicsSize) & 0xFFFF0000,
+    'the first reservation comes off the top of the arena');
 
   // Model Blobby's exact order: the main thread reserves its graphics arena
   // without MEM_COMMIT, then a worker spills HeapAlloc into sparse memory.

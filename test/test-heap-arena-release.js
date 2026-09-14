@@ -29,9 +29,21 @@ const regions = require('../lib/region-map.generated');
 const MB = 1024 * 1024;
 const IMAGE_BASE = 0x400000;
 
+// The arena's ceiling is asked of the module rather than written down: it
+// moved once already (0x40000000 -> 0x50000000 -> the top of user space), and
+// a stale copy here would turn the reservation-cursor delta below into a
+// meaningless number without failing.
+const extraWat = `
+  (func (export "test_alloc_top_init") (result i32)
+    (global.get $VIRTUAL_ALLOC_TOP_INIT))
+`;
+
 (async () => {
   const module = await WebAssembly.compile(
-    process.argv[2] ? fs.readFileSync(process.argv[2]) : compileSrcWasm());
+    process.argv[2] ? fs.readFileSync(process.argv[2]) : compileSrcWasm(
+      (filename, source) =>
+        filename === '13-exports.wat' ? `${source}\n${extraWat}\n` : source));
+  let ALLOC_TOP = 0;
   const lowEnd = regions.END.GUEST_HEAP_BASE - regions.GUEST_BASE + IMAGE_BASE;
   const poolBytes = regions.REGIONS.VIRTUAL_BACKING_BASE.size;
 
@@ -42,6 +54,7 @@ const IMAGE_BASE = 0x400000;
     const e = (await WebAssembly.instantiate(module, { host })).exports;
     e.init_thread(0, IMAGE_BASE, 0, 0, 0, 0, 0);
     e.heap_init(lowEnd);   // low window already spent: everything goes sparse
+    ALLOC_TOP = e.test_alloc_top_init() >>> 0;
     return { e, memory };
   }
   // +4 is the backing bump cursor, +8 the downward reservation cursor.
@@ -51,7 +64,7 @@ const IMAGE_BASE = 0x400000;
       records: dv.getUint32(regions.BASE.VIRTUAL_MAP_STATE, true),
       backing: dv.getUint32(regions.BASE.VIRTUAL_MAP_STATE + 4, true)
         - regions.BASE.VIRTUAL_BACKING_BASE,
-      reserved: 0x50000000 - dv.getUint32(regions.BASE.VIRTUAL_MAP_STATE + 8, true),
+      reserved: ALLOC_TOP - dv.getUint32(regions.BASE.VIRTUAL_MAP_STATE + 8, true),
     };
   };
   // Four words spread over the block: the first, the last, and two inside. Far
