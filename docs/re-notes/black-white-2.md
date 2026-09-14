@@ -7129,3 +7129,59 @@ shader (`mov r0.xyz, v1` / `mov r0.w, c0.w`) rendered twice: with a vertex
 shader writing `oD1` from a green COLOR0 attribute every pixel is
 `(0,255,0,255)`, and with the `oD1` write removed every pixel is black. The
 control is the point -- it proves the colour travelled through the varying.
+
+### drive45: the fix holds live, and the picker is not where it fails
+
+Same script as drive44 on the build carrying the varying, with the second click
+baked in. It reached the land picker in **four minutes** (drive44 took twelve)
+and sat there clean:
+
+| | drive44 | drive45 |
+|---|---|---|
+| shaders at the picker | 217 made / 129 refused | 217 made / 129 refused |
+| queue errors | `0/0` | `0/0` |
+| probe `failed` | 0 | **0** |
+| shaded draws | 144 | 144 |
+| draw categories | small | **58** |
+
+So nothing regressed and nothing new was refused. The whole selection screen
+renders: the burning Greek village in the vignette, the Greek-key border, and
+the strip of **nine island thumbnails** with the second one — the playable
+land — drawn in colour while the other eight are pale outlines. 77,354 distinct
+colours in the frame.
+
+Three inputs were tried against the live picker and none started a land:
+
+| input | result |
+|---|---|
+| second click 30 s after the first | only the animated border strip changes (392 of 307,200 px, a 493x16 box at y=417) |
+| a *fast* down/up/down/up pair in place | no change at all; shaded draws stay at 144 |
+| relative move to the bottom-right band, then diff | only that same border strip |
+
+That last one is the interesting negative: a mouse move produces **no cursor
+sprite motion in the frame**, where drive43's aim diffs always showed the
+21x22 gold arrow. And the pale band under the Greek key — where the real game
+puts the land name and its buttons — is blank. **No text renders anywhere on
+this screen.** So the working hypothesis is no longer "the confirm input has
+not been found"; it is that the screen's text and cursor layer is missing, and
+the confirm is probably in it.
+
+### What the new 1.x-bucket counters say
+
+`vs11=2,err6@1459  vs20=45  ps1x=13,err0@0  ps20=69  other=0`
+
+- **`ps1x` err 0 is the version gate, and the bucket is ps_1_4.** The comment
+  added with these counters claimed error 0 could not appear here. It can:
+  `$d3d9_shader_create` is called with `0xffff0101` from `CreatePixelShader`
+  (`09ad-handlers-d3d9.wat:1894`) and the widening just above the gate covers
+  only `0xffff0102` and `0xffff0103` — not `0xffff0104`. So a ps_1_4 blob is
+  refused at the mismatch site with error 0 and the blob's own word, which
+  lands it in the 1.x bucket. That is 13 of B&W2's 129 refusals.
+  `test/test-d3d9-ps14-stage-linkage.js` passes today and its own name says
+  what the state is: *"private PS1.4 validator -> SIMD -> six-stage raster
+  linkage; public gate remains closed"*. Opening it is widening that gate, not
+  writing a compiler.
+- **`vs11` err 6 at token offset 1459 is a real gap** inside the vs_1_1 front
+  end we do claim — error 6 is the unsupported-operand class, raised from ten
+  sites in `09af-d3d-shader-ir.wat`. Two shaders, and naming which site needs
+  the blob dumped at that offset.
