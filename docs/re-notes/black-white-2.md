@@ -5892,3 +5892,34 @@ default still points at the `/private/tmp` extraction, which is now gone and
 will be gone again for any new one: files under `/private/tmp` are reaped once
 they go three days without a read, and a long investigation reads the same few
 assets over and over while the rest of the install ages out underneath it.
+
+## The HeapCompact wall is cleared; what is past it (2026-09-14)
+
+With `$handle_HeapCompact` implemented (01a0bfc4) the land load runs straight
+through `pick+795s`, the exact second drive20 died on that stub, and keeps
+going. The allocation burst that used to end there now completes: the sparse
+map went from 557 records / `0x17523000` live to 593 records / `0x1c6ce000`
+over the following two minutes — about 90MB more committed — and then stopped.
+
+What the run looks like after that, sampled every five seconds for another
+three minutes:
+
+- The sparse map is **flat**: 593 records, `live=0x1c6ce000`, `cursor=0x434f0000`,
+  `backing_avail=0x5dfd2000/0x73c00000` unchanged sample to sample.
+- The GPU probe counters are **frozen and balanced**: `submitted == completed`
+  in every category, `pending: 0`, `failed: 0`, `lastError: null`. Nothing is
+  queued and nothing is waiting on the backend.
+- The `--capture-every=60` frames are **byte-stable** — successive PNGs are the
+  same size to the byte — and they still show the land-selection screen, with
+  the burning-village preview rendered in the vignette and the nine land
+  thumbnails along the bottom. No present has happened since the click.
+
+So this is a CPU-bound load phase with no drawing in it, not a hang on a stub
+and not a stalled backend: there is no crash, no unimplemented API, no fault,
+and no pending GPU work. The 1800-second drive simply ran out of wall clock at
+`pick+1055s` while it was still in there.
+
+The open question is whether that phase terminates. `--trace-sched=N` is the
+cheap way to ask — it prints the main thread's EIP on a heartbeat, so a flat
+five minutes reads either as progress through a long load or as a spin on one
+address, without spending another twenty-minute drive to find out.
