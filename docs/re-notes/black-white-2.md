@@ -5223,3 +5223,21 @@ With `--quiet-api`, a land-picker run still made `log=7265302` and
 `log_api_exit=7265302` host calls -- 14.5 M of 15.5 M total. `--quiet-api`
 suppresses the printing, not the crossing into JS. A gate for that belongs in
 WAT beside the dispatch, not in the JS import.
+
+### The profile dialog's ENTER needs a 3000-batch hold (2026-09-13)
+
+"Sometimes needs several tries" above is not flakiness. Measured on one run:
+**six** ENTERs at `bw-step.sh key 13 250` left the New Profile Name dialog
+standing, and a single `key 13 3000` dismissed it immediately.
+
+The hold is a **batch** budget, and a batch is not a fixed amount of guest time:
+in the rendering phase a batch ends on the D3D render park after ~126 blocks, so
+250 batches is a fraction of a second of guest time -- less than one poll of the
+dialog's keyboard state. This is the same trap the button-hold note above
+records for clicks, and it applies to keys too.
+
+One consequence worth knowing before driving: those extra ENTERs are not
+harmless once the dialog does go. The one that landed also carried the game
+through **New Game and the mouse tutorial**, so the run arrived at the land
+picker while the driver was still waiting for a main menu that had already gone
+by. Check the picture, not only the PNG size window, after a retry loop.
