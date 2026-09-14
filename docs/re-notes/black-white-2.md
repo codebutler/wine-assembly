@@ -6148,3 +6148,77 @@ released ranges and best-fit into it before touching the bump at all.
 
 Do not read this as "B&W2 needs a bigger arena". It needs the arena it already
 has to be usable twice.
+
+## The land renders, and one draw poisons the whole queue (2026-09-14)
+
+drive26 got past the widened render target, finished allocating at pick+1900s
+(4055 records, 754 MB) and entered the land's render loop. It dies there, and
+not on memory: the sparse map simply stops changing because nothing is being
+loaded any more.
+
+The probe's own queue record says what happened:
+
+```
+failed: 558381
+lastError: "QueueError: D3D9 software: missing pixel sampler2"
+queues: [{ submitted: 9032, consumed: 9032, completed: 9031, error: "...missing pixel sampler2" }]
+```
+
+9032 submitted, **9031 completed, one failed** — and 558,381 failures after it.
+The queue carries a sticky `error`, so the single unservable draw poisons it
+and every later submission fails. That is why the screen stays byte-identical
+on the land picker: the whole render path is dead after one draw, not degraded.
+
+### What the draw is
+
+The check is in `lib/d3d9-software-backend.js:489`:
+
+```js
+if(stage>5||!snapshot.textures?.[stage])invalid(`missing pixel sampler${stage}`);
+```
+
+Hooking `_submit` in the live process (the payload is built in `d3d9-host.js`
+in the main process and only then handed to the software worker, so this sees
+exactly what the backend will see) and decoding each `pixelShader.nativeBytes`
+gives, over 40s of draws:
+
+| shader samples | draw binds | count |
+|---|---|---|
+| `[0]` | `[0]` | 108 |
+| `[0,1]` | `[0,1]` | 54 |
+| `[]` | `[]` | 54 |
+| **`[2]`** | **`[]`** | **54** |
+
+Three of the four match exactly, so the binding path is *not* generally broken
+— `SetTexture` reaches the payload fine for stages 0 and 1. One PS1.1 shader,
+five instructions, is the odd one out:
+
+```
+ver=0xffff0101  n=5  ops=[81>1  66@s2  8>0  4>0  1>0]
+```
+
+`def c1` / **`tex t2`** / `dp3 r0` / `mad r0` / `mov r0` — it samples texture
+stage 2 and the draw has nothing bound at any stage.
+
+### The two candidate causes, and how to tell them apart
+
+Either the guest never binds stage 2 at all, or it does and we refuse the
+bind. `$d3d9_texture_binding` (`src/09ae-d3d9-resources.wat:1848`) returns
+`D3DERR_INVALIDCALL` *without binding* when the texture has no level-0 mip,
+when `[wa+8] != device`, or when the pool at `[wa+44]` is above MANAGED — and
+the guest checks none of those, exactly as it did not check the `CreateTexture`
+that started this whole chain. A third path: while a state block is recording
+(`[state+1740]` non-zero) the binding goes to the block instead of the device,
+and d3dx9 effects record blocks constantly.
+
+drive27 is running with `--trace-api` filtered to `SetTexture`, `CreateTexture`,
+`SetPixelShader`, the state-block APIs and the render-target APIs to settle it.
+
+### Regardless of which it is, the queue behaviour is wrong
+
+Real D3D9 does not fail a draw for sampling a stage with no texture bound; the
+result is undefined, not an error, and the device stays usable. Ours turns it
+into a sticky queue error that ends rendering for the rest of the run. Even
+after the binding question is answered, an unservable draw should cost that
+draw and not the device — otherwise the next gap found this way costs another
+35-minute drive to reach.
