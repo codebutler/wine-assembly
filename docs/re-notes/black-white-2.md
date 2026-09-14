@@ -6030,3 +6030,57 @@ to end, or promoting a 16-bit render-target texture to 32-bit storage while the
 guest keeps seeing `D3DFMT_R5G6B5` — which is safe for a surface that is only
 rendered into and sampled, and wrong for one that is locked and written as
 raw 16-bit texels.
+
+## Verified: widening the R5G6B5 render target clears the plateau (2026-09-14)
+
+The fix named in the previous section works. `$d3d9_texture_create_kind` in
+`src/09ae-d3d9-resources.wat` now widens a `D3DUSAGE_RENDERTARGET` request in
+`D3DFMT_R5G6B5` (23) to `X8R8G8B8` (22), and one in `D3DFMT_A4R4G4B4` (26) to
+`A8R8G8B8` (21), instead of refusing it. Everything else about the gate is
+unchanged: a render target is still rejected unless the pool is `DEFAULT` and
+the usage is exactly `D3DUSAGE_RENDERTARGET`.
+
+Widening rather than storing 16-bit is the right call for a *render target*
+specifically, and only there. Colour storage in this emulator is 32-bit end to
+end — `$d3d9_texture_colors_init` (`src/09am-d3d-color.wat`) copies the
+texture's own format into the record at +28 and the mip pitch at +48,
+`ensureColor` in `lib/d3d9-host.js` throws on any pitch that is not
+`width * 4`, and the sampler path additionally insists the record's format and
+the requested format agree. A surface that is only ever rendered into and
+sampled cannot tell the difference: a 32-bit target cannot lose information a
+16-bit one would have kept. The case widening *would* be wrong for is a texture
+locked and written as raw 16-bit texels, and a render target is not that.
+
+### What the measurement says
+
+Same probe command, same in-repo install, same land pick; the only difference
+between drive24 and drive25 is the widening.
+
+| | drives 22/23/24 | drive 25 (widened) |
+|---|---|---|
+| sparse records at pick+900s | 593 (frozen since ~pick+600s) | 838, still climbing |
+| live backing at pick+900s | `0x1c6ce000` (frozen) | `0x1db99000`, still climbing |
+| at pick+1200s | 593 / `0x1c6ce000` | **1764 / `0x21783000`** |
+| `[fault] unmapped` before the plateau | 4 | **0** |
+| `[eip-zero]` | 1 (batch 6,015,963) | **0** |
+| main thread after the plateau | `M:run@0x0` forever | `M:run@0x75005c8`, alive |
+
+`backing_avail` starts at `0x5dec2000` against `0x5dfd2000` on every previous
+drive — 1.1 MB more committed on the first sample, which is exactly the
+promoted 512×512 surface at four bytes per texel plus its record. That number
+is the cheapest confirmation that the widened path is the one being taken.
+
+The four `[fault] unmapped guest access` lines that preceded the crash in
+drives 23 and 24 are gone, not merely deferred: they were the accessor at
+`0x938fc0` reading `[esi+0x1d0]` and `[esi]` off the NULL, so they disappear
+for the same reason the null call does.
+
+### What this does not yet say
+
+Reaching a record count no previous drive reached is proof the *refusal* was
+the blocker. It is not by itself proof the land finishes loading — the land
+selection frame stays byte-identical throughout (the picker does not repaint
+while the land streams in behind it), so the record count and the scheduler
+line are the only live signals until the screen changes. Whoever picks this up
+should read `records=` in the probe's sample line first and the frame captures
+second.
