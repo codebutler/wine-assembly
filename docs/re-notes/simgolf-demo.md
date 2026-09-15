@@ -1054,3 +1054,87 @@ The "before" arm also died three times out of four during that 4-minute warmup
 ("Attempted to use detached Frame"), leaving an orphaned Chrome each time,
 while the "after" arm completed every attempt. Not investigated, so not
 claimed as a finding — but if you are baselining the old behaviour, expect it.
+
+## 2026-09-15: headless gameplay "stalls" after 26 frames — a game bug the clock seeds
+
+`node test/run.js --app=simgolf_demo --headless-gl` reaches the textured course
+and draws 26 GL frames, then goes silent: API calls stop at exactly 590,688 in
+every run while T1 (sound.dll, `0xc1d01e`) keeps running, so the process looks
+alive. The main thread has called through NULL
+(`[eip-zero] ... dbg_prev_eip=0x00460d13`).
+
+The chain, from `--watch=0x570294 --watch-log --stuck-after=100000000`:
+
+| batch | `[0x570294]` | writer |
+|---|---|---|
+| 95762 | 0 -> `0x7e243e30` | jgl.dll `0xad2490` creates a sprite cell's sub-surface |
+| 169045 | -> `0x03243e30` | golf.exe `0x45eb3e` `mov byte [0x56f860 + 51*esi + ebp], 3` with esi=51, ebp=14 |
+| 169046 | -> `0x03030330` | the same store, next step (the reported `0x43fe50` is only the RNG called after it) |
+| 187101 | — | `0x460d25 call [edi+0x54]` on `this=[0x570294]`, whose vtable word is 0 |
+
+`0x570290` is element 0 of a static array of 36 sprite cells (0x2c bytes each,
+ctor `0x4608f0`, filled by the 16x16-from-a-sheet loop at `0x43ac96`). It sits
+directly after the 51x51 byte grid at `0x56f860`, so grid row 51 IS the cell's
+pointer.
+
+Row 51 comes from terrain generation at `0x45e97f..0x45ebb3`: 24 random walks,
+each starting at `esi = rng(4) + (walk%4)*50/4 + 4` (at most 44), then stepping
+`esi`/`ebp` by +-1 (`neg ax / sbb eax,eax / and 2 / dec`) five steps at a time
+for as long as `rng(16) != 0`. **Nothing clamps the walk.** Its sibling grids
+(`0x516620`, `0x549890`, `0x5156d8`) are 50 wide, so any walk that wanders off
+the map scribbles on neighbouring data; only some seeds happen to land on the
+sprite pointer.
+
+The seed is `timeGetTime() * 37` (`0x4542a0` -> `[0x7ea4bc]`). The browser gets a
+wall-clock seed; the CLI's `timeGetTime` is `batch * --tick-ms-per-batch`, so
+every default headless run gets the identical seed and the identical crash.
+Evidence it is the seed and not our flag emulation: the same command with
+`--tick-ms-per-batch=37` keeps the pointer intact and is still making API
+calls at 1.63M after 120s.
+
+So for headless SimGolf gameplay, pass a non-default `--tick-ms-per-batch`
+(37 is known good). Do not "fix" the emulator for this: real Win98 runs the
+same unclamped walk, and a time-seeded crash is what it would do too.
+
+Confirmed over a full 270s run:
+
+```
+node -r ./tools/gl-stats-preload.js test/run.js --app=simgolf_demo --headless-gl \
+  --no-build --quiet-api --quiet-blocks --no-close --stuck-after=100000000 \
+  --tick-ms-per-batch=37 --control=8177 --max-batches=100000000 --max-seconds=270
+-> 3,228,280 API calls, 696,044 batches in 269.974s, no [eip-zero]
+```
+
+Two flags are needed for any long headless SimGolf run and are easy to lose:
+`--stuck-after=100000000`, because the busy-wait at `exe+0x43fc60` trips the
+stuck detector and ends the run at ~batch 728; and `--control=PORT`, because
+the batch loop is synchronous and nothing on a timer (a stats interval, a
+`ctl.js` step) fires without the periodic yield it turns on.
+
+## 2026-09-15: what the OpenGL transport actually carries per frame
+
+Same run, counters from `lib/gl-command-stream.js` / `lib/gl-compat.js`
+(`stats` on both, added in 30779957; read them headlessly with
+`-r ./tools/gl-stats-preload.js`, or in a page with
+`tools/page-probes/{arm,read}-gl-stats.js`). "Frame" = one `glFlush` or
+`SwapBuffers` reaching the executor — SimGolf ends frames with `glFlush` and
+never swaps.
+
+| per frame | gameplay (38 frames, tick=37) | earlier menu/course window (26 frames) |
+|---|---|---|
+| guest `gl*` calls crossing wasm->JS | 2569 | 3847 |
+| `glBegin`/`glEnd` spans | 287 | 418 |
+| spans enqueued | 287 | 418 |
+| WebGL draws issued | 123 | 218 |
+| vertices | 863 | — |
+| spans per draw (merge rate) | 2.34 | 1.92 |
+
+Top calls per frame: `glArrayElement` 859, `glTexCoord2fv` 859, `glBegin` 287,
+`glEnd` 287, `glBindTexture` 171, `glTexParameteri` 50, `glTexImage2D` 13,
+`glGenTextures` 13.
+
+So the shape is ~2.5-3.8k boundary crossings per frame to produce ~120-220
+draws: two calls per vertex on a quad-heavy immediate-mode path, and every one
+of them is an individual wasm->JS import call today. `glTexImage2D` and
+`glGenTextures` at 13/frame say textures are being re-created every frame, not
+cached — worth its own look.
