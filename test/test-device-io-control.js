@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const ROOT = path.join(__dirname, '..');
 const STACK = 0x00300000;
@@ -40,6 +41,8 @@ const extraWat = String.raw`
 
   (func (export "test_device_io_last_error") (result i32)
     (global.get $last_error))
+  (func (export "test_device_io_api_id") (result i32)
+    (call $lookup_api_id "DeviceIoControl"))
 `;
 
 function kernelDeviceIoImports(exe) {
@@ -69,6 +72,12 @@ function kernelDeviceIoImports(exe) {
   const { exports: e, hostCtx } = await bootRenderHarness({
     fonts: 'none', extraWat,
   });
+  const api = apiTable.find(entry => entry.name === 'DeviceIoControl');
+  assert(api, 'DeviceIoControl is registered in the generated API table');
+  assert.strictEqual(api.nargs, 8, 'API metadata records all eight arguments');
+  assert.strictEqual(api.convention, 'stdcall');
+  assert.strictEqual(e.test_device_io_api_id(), api.id,
+    'runtime import hashing resolves DeviceIoControl to its registered id');
   hostCtx.vfs.files.set('c:\\device-io.bin', {
     data: Uint8Array.of(1, 2, 3, 4), attrs: 0x80,
   });

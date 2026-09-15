@@ -30467,5 +30467,12 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 2442503706
+  },
+  {
+    "id": 3634,
+    "name": "DeviceIoControl",
+    "nargs": 8,
+    "convention": "stdcall",
+    "hash": 2957823636
   }
 ]
