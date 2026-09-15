@@ -1742,7 +1742,13 @@ loading screen — "Chapter One: Chasing Visions", progress bar advancing, HUD
 reporting 2.2M blocks/s — so the record exhaustion is no longer what ends the
 load. Re-measure before quoting the 181s figure or the 2048 ceiling again.
 
-### Driving the menu headlessly needs DirectInput, not clicks
+### WRONG, superseded: "Driving the menu headlessly needs DirectInput, not clicks"
+
+> **This section's conclusion is false and is kept only as a record of the
+> error.** The menu drives fine with ordinary absolute clicks; see "CORRECTION:
+> the menu DOES drive headlessly" immediately below for the working walk and
+> the trace that settles it (198 `GetCursorPos`, zero DirectInput calls). Only
+> the first paragraph here — the 640x480 rescaling — is still true.
 
 The click table above was taken in a browser at a larger resolution; headless
 the menu renders at 640x480, so every coordinate in it needs rescaling (Single
@@ -1899,6 +1905,9 @@ now answers it directly; the "2 simultaneous GL contexts" warning remains a
 good second confirmation that the guest's own context was created.
 
 ## The map load has NO hot loop — 11 windows say so
+
+The reusable method, and this measurement written up in full, is
+[docs/long-load-census-method.md](../long-load-census-method.md).
 
 The first real multi-window census of the campaign map load, and it settles the
 question the `ijlRead` interception idea rests on. Collected with the headless
