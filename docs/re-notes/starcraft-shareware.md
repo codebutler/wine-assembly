@@ -110,6 +110,47 @@ Useful landmarks from that run:
 Use this gate before counting a candidate game frame. Startup counts mostly
 measure Smacker and the outer message pump.
 
+### The input route is not optional, and `--batch-size` is not a substitute
+
+Ruled out 2026-09-15. `CLAUDE.md` documents raising `--batch-size` as the fix
+for time-paced content that looks stalled (Diablo's Blizzard North logo is
+byte-identical for 23,000 batches and plays straight through at
+`--batch-size=200000`), so it is the natural first thing to reach for here. It
+does not work on StarCraft, because this is not the same problem: Diablo is
+*pacing* itself off the clock, while StarCraft is *waiting for input* it never
+receives. Two no-input runs against the same prebuilt artifact:
+
+| run | batches | `0x004411db` | `0x004411e7` | `0x004cbaf0` |
+|---|---:|---:|---:|---:|
+| default batch size, `--max-seconds=40` | 24550 | 0 | 0 | 1 |
+| `--batch-size=200000`, `--max-seconds=60` | 534 | 0 | 0 | 1 |
+
+Zero simulation frames either way, and exactly one display flush. Only the
+escape/click route above gets past it.
+
+**Cheap gate:** `--count=0x004411db` reading **0** means you are not in
+gameplay, whatever else the run looks like. That check is worth making before
+believing any StarCraft profile, because every *generic* health metric reports
+a thoroughly busy machine at the same time — the 40s run above retired
+536,403,711 handler ops at 614 batches/s with a dense handler histogram and a
+plausible-looking hot loop. Nothing in those numbers hints that the game has
+not started.
+
+### What a startup profile actually measures
+
+The same 40s no-input run, `--handler-hist --handler-hist-thread=0`:
+
+| | share | |
+|---|---:|---|
+| `H422 $th_mmx_rr` | 6.95% | 45,916,262 MMX instructions retired |
+| `H395 $th_smack_huff_walk` | 1.45% | bounded Smacker Huffman node walk |
+
+and every one of the top 20 hot blocks lands in `0x008e4xxx`/`0x008e8xxx`,
+which is inside `smackw32.dll` (loaded at `0x8d6000`, `origBase=0x10000000`).
+So "mostly Smacker" is literal: a startup census is a census of the intro video
+decoder, and optimising anything it names would speed up the movie and nothing
+else.
+
 ## Gameplay-window counts
 
 Matched `--no-build` runs to batch 4300 and 4700, using the input route above,
