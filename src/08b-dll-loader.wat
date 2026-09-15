@@ -22,7 +22,7 @@
     (local $reloc_rva i32) (local $reloc_size i32)
     (local $entry_rva i32) (local $tls_rva i32) (local $characteristics i32)
     (local $dll_idx i32) (local $tbl_ptr i32)
-    (local $src i32) (local $dst i32)
+    (local $src i32) (local $dst i32) (local $header_size i32)
     (local $rsrc_rva_d i32) (local $rsrc_size_d i32) (local $rsrc_ptr i32)
 
     ;; Every DLL has entries in three fixed parallel tables. Refuse the load
@@ -45,6 +45,17 @@
     (local.set $preferred_base (i32.load (i32.add (local.get $pe_off) (i32.const 52))))
     (local.set $entry_rva (i32.load (i32.add (local.get $pe_off) (i32.const 40))))
     (local.set $delta (i32.sub (local.get $load_addr) (local.get $preferred_base)))
+
+    ;; Keep the mapped DLL's DOS/PE headers just as $load_pe keeps the
+    ;; executable's. VirtualQuery can then derive MEM_IMAGE page protection
+    ;; from the authentic section table after PE_STAGING is reused by another
+    ;; module, rather than growing a second per-DLL metadata format.
+    (local.set $header_size (i32.load (i32.add (local.get $pe_off) (i32.const 84))))
+    (if (i32.gt_u (local.get $header_size) (local.get $size))
+      (then (local.set $header_size (local.get $size))))
+    (if (local.get $header_size)
+      (then (call $memcpy (call $g2w (local.get $load_addr))
+        (global.get $PE_STAGING) (local.get $header_size))))
 
     ;; Read data directories
     (local.set $export_rva (i32.load (i32.add (local.get $pe_off) (i32.const 120))))

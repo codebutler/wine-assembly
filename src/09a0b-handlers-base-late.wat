@@ -1743,13 +1743,346 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
+  ;; Find the mapped PE image which owns an address. The executable headers are
+  ;; copied by $load_pe, and $load_dll now does the same for DLLs, so the cold
+  ;; query path can read the real section table instead of maintaining a second
+  ;; protection mirror which could drift from the loader.
+  (func $virtual_query_image_base (param $address i32) (result i32)
+    (local $i i32) (local $rec i32) (local $base i32) (local $size i32)
+    (local.set $base (global.get $image_base))
+    (local.set $size (global.get $exe_size_of_image))
+    (if (i32.and (i32.ne (local.get $base) (i32.const 0))
+          (i32.lt_u (i32.sub (local.get $address) (local.get $base))
+            (local.get $size)))
+      (then (return (local.get $base))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $dll_count)))
+      (local.set $rec (i32.add (global.get $DLL_TABLE)
+        (i32.shl (local.get $i) (i32.const 5))))
+      (local.set $base (i32.load (local.get $rec)))
+      (local.set $size (i32.load offset=4 (local.get $rec)))
+      (if (i32.and (i32.ne (local.get $base) (i32.const 0))
+            (i32.lt_u (i32.sub (local.get $address) (local.get $base))
+              (local.get $size)))
+        (then (return (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $virtual_query_image_size (param $base i32) (result i32)
+    (local $i i32) (local $rec i32)
+    (if (i32.eq (local.get $base) (global.get $image_base))
+      (then (return (global.get $exe_size_of_image))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $dll_count)))
+      (local.set $rec (i32.add (global.get $DLL_TABLE)
+        (i32.shl (local.get $i) (i32.const 5))))
+      (if (i32.eq (i32.load (local.get $rec)) (local.get $base))
+        (then (return (i32.load offset=4 (local.get $rec)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Translate IMAGE_SCN_MEM_* access bits into the page protections exposed by
+  ;; Win32. Win98 has executable page constants but no DEP enforcement; keeping
+  ;; EXECUTE here is nevertheless observable metadata used by MSVC's protected
+  ;; exception-handler validation.
+  (func $virtual_query_section_protect (param $characteristics i32) (result i32)
+    (local $protect i32)
+    (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x20000000))
+          (i32.const 0))
+      (then
+        (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x80000000))
+              (i32.const 0))
+          (then
+            (local.set $protect (i32.const 0x40))) ;; PAGE_EXECUTE_READWRITE
+          (else
+            (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x40000000))
+                  (i32.const 0))
+              (then
+                (local.set $protect (i32.const 0x20))) ;; PAGE_EXECUTE_READ
+              (else
+                (local.set $protect (i32.const 0x10))))))) ;; PAGE_EXECUTE
+      (else
+        (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x80000000))
+              (i32.const 0))
+          (then
+            (local.set $protect (i32.const 0x04))) ;; PAGE_READWRITE
+          (else
+            (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x40000000))
+                  (i32.const 0))
+              (then
+                (local.set $protect (i32.const 0x02))) ;; PAGE_READONLY
+              (else
+                (local.set $protect (i32.const 0x01)))))))) ;; PAGE_NOACCESS
+    (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x04000000))
+          (i32.const 0))
+      (then (local.set $protect (i32.or (local.get $protect) (i32.const 0x200)))))
+    (local.get $protect))
+
+  (func $virtual_query_pte (param $address i32) (result i32)
+    (i32.atomic.load
+      (i32.add (global.get $GUEST_PAGE_TABLE)
+        (i32.and (i32.shr_u (local.get $address) (i32.const 10))
+          (i32.const 0x003FFFFC)))))
+
+  ;; Return the current protection for one page of an image. A direct-image
+  ;; VirtualProtect override is recorded in the packed PTE metadata but does not
+  ;; participate in translation, so the established affine fast path is
+  ;; unchanged. Otherwise derive the protection from the mapped PE section.
+  (func $virtual_query_image_protect
+      (param $address i32) (param $base i32) (param $image_size i32) (result i32)
+    (local $pte i32) (local $base_wa i32) (local $pe_delta i32) (local $pe i32)
+    (local $count i32) (local $opt_size i32) (local $section i32) (local $i i32)
+    (local $offset i32) (local $headers i32) (local $vaddr i32)
+    (local $vsize i32) (local $raw_size i32) (local $mapped i32)
+    (local $section_start i32) (local $section_end i32)
+    (local.set $pte (call $virtual_query_pte (local.get $address)))
+    (if (i32.ne (i32.and (local.get $pte) (global.get $GUEST_PTE_PRESENT))
+          (i32.const 0))
+      (then (return
+        (i32.and (local.get $pte) (global.get $GUEST_PTE_PROTECT_MASK)))))
+    (if (i32.lt_u (local.get $image_size) (i32.const 64))
+      (then (return (i32.const 0x01))))
+    (local.set $base_wa (call $g2w (local.get $base)))
+    (if (i32.or
+          (i32.eq (local.get $base_wa) (global.get $NULL_SENTINEL))
+          (i32.ne (i32.load16_u (local.get $base_wa)) (i32.const 0x5A4D)))
+      (then (return (i32.const 0x01))))
+    (local.set $pe_delta (i32.load offset=0x3C (local.get $base_wa)))
+    (if (i32.gt_u (local.get $pe_delta)
+          (i32.sub (local.get $image_size) (i32.const 24)))
+      (then (return (i32.const 0x01))))
+    (local.set $pe (i32.add (local.get $base_wa) (local.get $pe_delta)))
+    (if (i32.ne (i32.load (local.get $pe)) (i32.const 0x00004550))
+      (then (return (i32.const 0x01))))
+    (local.set $count (i32.load16_u offset=6 (local.get $pe)))
+    (if (i32.gt_u (local.get $count) (i32.const 96))
+      (then (return (i32.const 0x01))))
+    (local.set $opt_size (i32.load16_u offset=20 (local.get $pe)))
+    (local.set $section
+      (i32.add (local.get $pe) (i32.add (i32.const 24) (local.get $opt_size))))
+    (local.set $offset (i32.sub (local.get $address) (local.get $base)))
+    (local.set $headers (i32.load offset=84 (local.get $pe)))
+    (local.set $headers
+      (i32.and (i32.add (local.get $headers) (i32.const 0xFFF))
+        (i32.const 0xFFFFF000)))
+    (if (i32.lt_u (local.get $offset) (local.get $headers))
+      (then (return (i32.const 0x02)))) ;; mapped image headers are read-only
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (if (i32.gt_u (i32.sub (local.get $section) (local.get $base_wa))
+            (i32.sub (local.get $image_size) (i32.const 40)))
+        (then (return (i32.const 0x01))))
+      (local.set $vaddr (i32.load offset=12 (local.get $section)))
+      (local.set $vsize (i32.load offset=8 (local.get $section)))
+      (local.set $raw_size (i32.load offset=16 (local.get $section)))
+      (local.set $mapped
+        (select (local.get $vsize) (local.get $raw_size)
+          (i32.gt_u (local.get $vsize) (local.get $raw_size))))
+      (if (local.get $mapped)
+        (then
+          (local.set $section_start
+            (i32.and (local.get $vaddr) (i32.const 0xFFFFF000)))
+          (local.set $section_end
+            (i32.and
+              (i32.add (i32.add (local.get $vaddr) (local.get $mapped))
+                (i32.const 0xFFF))
+              (i32.const 0xFFFFF000)))
+          (if (i32.and
+                (i32.ge_u (local.get $offset) (local.get $section_start))
+                (i32.lt_u (local.get $offset) (local.get $section_end)))
+            (then (return (call $virtual_query_section_protect
+              (i32.load offset=36 (local.get $section))))))))
+      (local.set $section (i32.add (local.get $section) (i32.const 40)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    ;; Alignment gaps are part of the image mapping but are inaccessible.
+    (i32.const 0x01))
+
+  ;; Locate the initial sparse VirtualAlloc reservation. Reserved-only ranges
+  ;; live in VIRTUAL_RESERVE_TABLE; committed ranges live in VIRTUAL_MAP_TABLE.
+  ;; Split commits mark every record after the first as a continuation, so walk
+  ;; exact predecessors back to the allocation base without touching the PTE
+  ;; translation path.
+  (func $virtual_query_sparse_base (param $address i32) (result i32)
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local $flags i32) (local $steps i32) (local $found i32)
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (block $reserve_done (loop $reserve
+      (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.lt_u (i32.sub (local.get $address) (local.get $base))
+            (i32.load offset=4 (local.get $rec)))
+        (then (return (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $reserve)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $map_done (loop $map
+      (br_if $map_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $flags (i32.load offset=12 (local.get $rec)))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.eqz (i32.and (local.get $flags) (i32.const 0x40000000)))
+            (i32.lt_u (i32.sub (local.get $address) (local.get $base))
+              (i32.load offset=4 (local.get $rec))))
+        (then (local.set $found (i32.const 1)) (br $map_done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $map)))
+    (if (i32.eqz (local.get $found)) (then (return (i32.const 0))))
+    (block $root (loop $previous
+      (br_if $root (i32.eqz (i32.and (local.get $flags) (i32.const 0x80000000))))
+      (br_if $root (i32.ge_u (local.get $steps) (local.get $count)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (local.set $i (i32.const 0))
+      (local.set $found (i32.const 0))
+      (block $pred_done (loop $pred
+        (br_if $pred_done (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+          (i32.shl (local.get $i) (i32.const 4))))
+        (if (i32.eq (i32.add (i32.load (local.get $rec))
+              (i32.load offset=4 (local.get $rec))) (local.get $base))
+          (then
+            (local.set $base (i32.load (local.get $rec)))
+            (local.set $flags (i32.load offset=12 (local.get $rec)))
+            (local.set $found (i32.const 1))
+            (br $pred_done)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $pred)))
+      (br_if $root (i32.eqz (local.get $found)))
+      (br $previous)))
+    (local.get $base))
+
+  (func $virtual_query_sparse_end
+      (param $address i32) (param $allocation_base i32) (result i32)
+    (local $count i32) (local $i i32) (local $rec i32) (local $end i32)
+    (local $found i32) (local $steps i32)
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (block $reserve_done (loop $reserve
+      (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (if (i32.eq (i32.load (local.get $rec)) (local.get $allocation_base))
+        (then (return (i32.add (local.get $allocation_base)
+          (i32.load offset=4 (local.get $rec))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $reserve)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $end (local.get $allocation_base))
+    (block $done (loop $next
+      (br_if $done (i32.ge_u (local.get $steps) (local.get $count)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (local.set $i (i32.const 0))
+      (local.set $found (i32.const 0))
+      (block $record_done (loop $record
+        (br_if $record_done (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+          (i32.shl (local.get $i) (i32.const 4))))
+        (if (i32.and
+              (i32.eq (i32.load (local.get $rec)) (local.get $end))
+              (i32.eqz (i32.and (i32.load offset=12 (local.get $rec))
+                (i32.const 0x40000000))))
+          (then
+            (if (i32.and (i32.ne (local.get $end) (local.get $allocation_base))
+                  (i32.eqz (i32.and (i32.load offset=12 (local.get $rec))
+                    (i32.const 0x80000000))))
+              (then (br $record_done)))
+            (local.set $end
+              (i32.add (local.get $end) (i32.load offset=4 (local.get $rec))))
+            (local.set $found (i32.const 1))
+            (br $record_done)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $record)))
+      (br_if $done (i32.eqz (local.get $found)))
+      (br $next)))
+    (select (local.get $end) (i32.add (local.get $address) (i32.const 0x1000))
+      (i32.gt_u (local.get $end) (local.get $address))))
+
+  (func $virtual_query_sparse_allocation_protect
+      (param $address i32) (result i32)
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.eqz (i32.and (i32.load offset=12 (local.get $rec))
+              (i32.const 0x40000000)))
+            (i32.lt_u (i32.sub (local.get $address) (local.get $base))
+              (i32.load offset=4 (local.get $rec))))
+        (then (return (i32.and (i32.load offset=12 (local.get $rec))
+          (global.get $GUEST_PTE_PROTECT_MASK)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; First known occupied address after a free page. VirtualQuery defines a
+  ;; free region from the queried page forward, so no predecessor scan is
+  ;; needed. Unknown low direct-window pages retain the former permissive
+  ;; committed classification for compatibility; high sparse gaps are free.
+  (func $virtual_query_next_allocation (param $address i32) (result i32)
+    (local $next i32) (local $candidate i32) (local $count i32)
+    (local $i i32) (local $rec i32)
+    (local.set $next (i32.const 0x80000000))
+    (local.set $candidate (global.get $image_base))
+    (if (i32.and (i32.gt_u (local.get $candidate) (local.get $address))
+          (i32.lt_u (local.get $candidate) (local.get $next)))
+      (then (local.set $next (local.get $candidate))))
+    (local.set $count (global.get $dll_count))
+    (block $dll_done (loop $dll
+      (br_if $dll_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $candidate (i32.load (i32.add (global.get $DLL_TABLE)
+        (i32.shl (local.get $i) (i32.const 5)))))
+      (if (i32.and (i32.gt_u (local.get $candidate) (local.get $address))
+            (i32.lt_u (local.get $candidate) (local.get $next)))
+        (then (local.set $next (local.get $candidate))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $dll)))
+    (local.set $i (i32.const 0))
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (block $reserve_done (loop $reserve
+      (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $candidate (i32.load (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3)))))
+      (if (i32.and (i32.gt_u (local.get $candidate) (local.get $address))
+            (i32.lt_u (local.get $candidate) (local.get $next)))
+        (then (local.set $next (local.get $candidate))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $reserve)))
+    (local.set $i (i32.const 0))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (block $map_done (loop $map
+      (br_if $map_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $candidate (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.eqz (i32.and (i32.load offset=12 (local.get $rec))
+              (i32.const 0x40000000)))
+            (i32.and (i32.gt_u (local.get $candidate) (local.get $address))
+              (i32.lt_u (local.get $candidate) (local.get $next))))
+        (then (local.set $next (local.get $candidate))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $map)))
+    (local.get $next))
+
   ;; VirtualProtect(lpAddress, dwSize, flNewProtect, lpflOldProtect).
   ;; Sparse VirtualAlloc pages retain their exact PAGE_* value in packed PTEs.
   ;; Validate the complete page-rounded range before changing any page and
-  ;; publish the first page's actual previous value. Direct image/heap pages
-  ;; remain permissive until their section/page metadata joins this model.
+  ;; publish the first page's actual previous value. Direct image pages retain
+  ;; their affine translation but publish an override PTE so VirtualQuery sees
+  ;; the protection transition without adding a check to the memory hot path.
   (func $handle_VirtualProtect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $old i32) (local $old_wa i32)
+    (local $old i32) (local $old_wa i32) (local $image i32)
+    (local $page_base i32) (local $raw_end i32) (local $page_end i32)
+    (local $backing i32)
     (if (i32.or
           (i32.eqz (local.get $arg0))
           (i32.or
@@ -1772,7 +2105,38 @@
                 (local.set $old (call $virtual_map_protect
                   (local.get $arg0) (local.get $arg1) (local.get $arg2))))
               (else
-                (local.set $old (i32.const 0x40))))
+                (local.set $page_base
+                  (i32.and (local.get $arg0) (i32.const 0xFFFFF000)))
+                (local.set $raw_end (i32.add (local.get $arg0) (local.get $arg1)))
+                (if (i32.le_u (local.get $raw_end) (local.get $arg0))
+                  (then (local.set $old (i32.const -1)))
+                  (else
+                    (local.set $page_end
+                      (i32.and (i32.add (local.get $raw_end) (i32.const 0xFFF))
+                        (i32.const 0xFFFFF000)))
+                    (local.set $backing (call $g2w_affine_span
+                      (local.get $page_base)
+                      (i32.sub (local.get $page_end) (local.get $page_base))))
+                    (if (i32.eq (local.get $backing) (global.get $NULL_SENTINEL))
+                      (then (local.set $old (i32.const -1)))
+                      (else
+                        (local.set $image
+                          (call $virtual_query_image_base (local.get $page_base)))
+                        (if (local.get $image)
+                          (then (local.set $old (call $virtual_query_image_protect
+                            (local.get $page_base) (local.get $image)
+                            (call $virtual_query_image_size (local.get $image)))))
+                          (else
+                            (local.set $old (i32.and
+                              (call $virtual_query_pte (local.get $page_base))
+                              (global.get $GUEST_PTE_PROTECT_MASK)))
+                            (if (i32.eqz (local.get $old))
+                              (then (local.set $old (i32.const 0x04))))))
+                        (if (i32.eqz (call $guest_page_publish_range
+                              (local.get $page_base)
+                              (i32.sub (local.get $page_end) (local.get $page_base))
+                              (local.get $backing) (local.get $arg2)))
+                          (then (local.set $old (i32.const -1))))))))))
             (if (i32.eq (local.get $old) (i32.const -1))
               (then
                 (global.set $last_error (i32.const 487)) ;; ERROR_INVALID_ADDRESS
@@ -1784,9 +2148,13 @@
   )
 
   ;; VirtualQuery(lpAddress, lpBuffer, dwLength) → SIZE_T
-  ;; Describe low user-space probes as committed RW regions rooted at
-  ;; image_base. Apps that probe a ptr (e.g. CRT exception filter, MFC heap walker)
-  ;; just want a non-zero return + plausible State/Protect, not real bookkeeping.
+  ;; Describe a region beginning at the page containing lpAddress, exactly as
+  ;; VirtualQuery does: consecutive pages must retain one allocation, state,
+  ;; protection and type. PE images derive protections from their actual mapped
+  ;; section table; sparse VirtualAlloc derives state/protection from its
+  ;; reservation/map records and packed PTEs. Unknown low direct-window pages
+  ;; keep the historical permissive private-RW answer so this metadata fix does
+  ;; not change which legacy heap probes succeed.
   ;; GetSystemInfo publishes 0x7FFEFFFF as the maximum application address, so
   ;; queries at 0x80000000 or above must fail. Without that boundary, address-
   ;; space walkers wrap back to zero and scan our synthetic regions forever.
@@ -1799,7 +2167,12 @@
   ;;   +20 Protect         DWORD   (PAGE_READWRITE = 0x04)
   ;;   +24 Type            DWORD   (MEM_PRIVATE = 0x20000)
   (func $handle_VirtualQuery (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $buf i32)
+    (local $buf i32) (local $page i32) (local $end i32) (local $next i32)
+    (local $image i32) (local $image_size i32) (local $protect i32)
+    (local $allocation_base i32) (local $allocation_protect i32)
+    (local $pte i32) (local $state i32) (local $signature i32)
+    (local $next_pte i32) (local $next_signature i32)
+    (local $direct_start i32) (local $direct_end i32)
     (if (i32.eqz (local.get $arg1))
       (then (global.set $eax (i32.const 0))
             (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
@@ -1814,13 +2187,107 @@
             (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
             (return)))
     (local.set $buf (call $g2w (local.get $arg1)))
-    (i32.store (local.get $buf)                            (i32.and (local.get $arg0) (i32.const 0xFFFFF000)))
-    (i32.store (i32.add (local.get $buf) (i32.const 4))    (global.get $image_base))
-    (i32.store (i32.add (local.get $buf) (i32.const 8))    (i32.const 0x04))      ;; AllocationProtect = PAGE_READWRITE
-    (i32.store (i32.add (local.get $buf) (i32.const 12))   (i32.const 0x10000000));; RegionSize = 256MB (huge)
-    (i32.store (i32.add (local.get $buf) (i32.const 16))   (i32.const 0x1000))    ;; State = MEM_COMMIT
-    (i32.store (i32.add (local.get $buf) (i32.const 20))   (i32.const 0x04))      ;; Protect = PAGE_READWRITE
-    (i32.store (i32.add (local.get $buf) (i32.const 24))   (i32.const 0x20000))   ;; Type = MEM_PRIVATE
+    (if (i32.eq (local.get $buf) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $page (i32.and (local.get $arg0) (i32.const 0xFFFFF000)))
+    (local.set $image (call $virtual_query_image_base (local.get $page)))
+    (if (local.get $image)
+      (then
+        (local.set $image_size (call $virtual_query_image_size (local.get $image)))
+        (local.set $protect (call $virtual_query_image_protect
+          (local.get $page) (local.get $image) (local.get $image_size)))
+        (local.set $end (i32.add (local.get $image) (local.get $image_size)))
+        (local.set $next (i32.add (local.get $page) (i32.const 0x1000)))
+        (block $image_done (loop $image_pages
+          (br_if $image_done (i32.ge_u (local.get $next) (local.get $end)))
+          (br_if $image_done (i32.ne (call $virtual_query_image_protect
+              (local.get $next) (local.get $image) (local.get $image_size))
+            (local.get $protect)))
+          (local.set $next (i32.add (local.get $next) (i32.const 0x1000)))
+          (br $image_pages)))
+        (local.set $end (select (local.get $next) (local.get $end)
+          (i32.lt_u (local.get $next) (local.get $end))))
+        (local.set $allocation_base (local.get $image))
+        (local.set $allocation_protect (i32.const 0x80)) ;; PAGE_EXECUTE_WRITECOPY
+        (local.set $state (i32.const 0x1000)) ;; MEM_COMMIT
+        (i32.store offset=24 (local.get $buf) (i32.const 0x01000000))) ;; MEM_IMAGE
+      (else
+        (local.set $allocation_base
+          (call $virtual_query_sparse_base (local.get $page)))
+        (if (local.get $allocation_base)
+          (then
+            (local.set $end (call $virtual_query_sparse_end
+              (local.get $page) (local.get $allocation_base)))
+            (local.set $allocation_protect
+              (call $virtual_query_sparse_allocation_protect (local.get $page)))
+            (local.set $pte (call $virtual_query_pte (local.get $page)))
+            (if (i32.ne (i32.and (local.get $pte) (global.get $GUEST_PTE_PRESENT))
+                  (i32.const 0))
+              (then
+                (local.set $state (i32.const 0x1000))
+                (local.set $protect
+                  (i32.and (local.get $pte) (global.get $GUEST_PTE_PROTECT_MASK))))
+              (else
+                (local.set $state (i32.const 0x2000))
+                (local.set $protect (i32.const 0))))
+            (local.set $signature
+              (i32.or (local.get $state) (i32.shl (local.get $protect) (i32.const 16))))
+            (local.set $next (i32.add (local.get $page) (i32.const 0x1000)))
+            (block $sparse_done (loop $sparse_pages
+              (br_if $sparse_done (i32.ge_u (local.get $next) (local.get $end)))
+              (local.set $next_pte (call $virtual_query_pte (local.get $next)))
+              (if (i32.ne (i32.and (local.get $next_pte)
+                    (global.get $GUEST_PTE_PRESENT)) (i32.const 0))
+                (then (local.set $next_signature
+                  (i32.or (i32.const 0x1000)
+                    (i32.shl (i32.and (local.get $next_pte)
+                      (global.get $GUEST_PTE_PROTECT_MASK)) (i32.const 16)))))
+                (else (local.set $next_signature (i32.const 0x2000))))
+              (br_if $sparse_done
+                (i32.ne (local.get $next_signature) (local.get $signature)))
+              (local.set $next (i32.add (local.get $next) (i32.const 0x1000)))
+              (br $sparse_pages)))
+            (local.set $end (select (local.get $next) (local.get $end)
+              (i32.lt_u (local.get $next) (local.get $end))))
+            (i32.store offset=24 (local.get $buf) (i32.const 0x00020000))) ;; MEM_PRIVATE
+          (else
+            (local.set $direct_start
+              (i32.sub (global.get $image_base) (global.get $GUEST_BASE)))
+            (local.set $direct_end
+              (i32.add (local.get $direct_start) (region.end $DIRECT_WINDOW)))
+            (if (i32.lt_u (i32.sub (local.get $page) (local.get $direct_start))
+                  (region.end $DIRECT_WINDOW))
+              (then
+                (local.set $pte (call $virtual_query_pte (local.get $page)))
+                (local.set $protect
+                  (i32.and (local.get $pte) (global.get $GUEST_PTE_PROTECT_MASK)))
+                (if (i32.eqz (local.get $protect))
+                  (then (local.set $protect (i32.const 0x04))))
+                (local.set $allocation_base (local.get $direct_start))
+                (local.set $allocation_protect (i32.const 0x04))
+                (local.set $state (i32.const 0x1000))
+                (local.set $end (local.get $direct_end))
+                (i32.store offset=24 (local.get $buf) (i32.const 0x00020000)))
+              (else
+                (local.set $end
+                  (call $virtual_query_next_allocation (local.get $page)))
+                (if (i32.le_u (local.get $end) (local.get $page))
+                  (then (local.set $end (i32.add (local.get $page) (i32.const 0x1000)))))
+                (local.set $allocation_base (i32.const 0))
+                (local.set $allocation_protect (i32.const 0))
+                (local.set $state (i32.const 0x10000)) ;; MEM_FREE
+                (local.set $protect (i32.const 0))
+                (i32.store offset=24 (local.get $buf) (i32.const 0))))))))
+    (i32.store (local.get $buf) (local.get $page))
+    (i32.store offset=4 (local.get $buf) (local.get $allocation_base))
+    (i32.store offset=8 (local.get $buf) (local.get $allocation_protect))
+    (i32.store offset=12 (local.get $buf) (i32.sub (local.get $end) (local.get $page)))
+    (i32.store offset=16 (local.get $buf) (local.get $state))
+    (i32.store offset=20 (local.get $buf) (local.get $protect))
     (global.set $eax (i32.const 28))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
