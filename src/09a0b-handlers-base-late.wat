@@ -359,12 +359,16 @@
   )
 
   ;; GetKeyboardType(nTypeFlag) → int. Enhanced 101/102-key (type 4, 12 func keys).
-  ;; nTypeFlag: 0=type, 1=subtype, 2=num func keys. We report type=4, subtype=0, keys=12.
+  ;; nTypeFlag: 0=type, 1=subtype, 2=num func keys. Unsupported selectors fail
+  ;; with zero; they must not accidentally look like another type query.
   (func $handle_GetKeyboardType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
-      (select (i32.const 12)
-        (select (i32.const 0) (i32.const 4) (i32.eq (local.get $arg0) (i32.const 1)))
-        (i32.eq (local.get $arg0) (i32.const 2))))
+      (if (result i32) (i32.eq (local.get $arg0) (i32.const 0))
+        (then (i32.const 4))
+        (else
+          (if (result i32) (i32.eq (local.get $arg0) (i32.const 2))
+            (then (i32.const 12))
+            (else (i32.const 0))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 

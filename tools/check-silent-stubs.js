@@ -255,8 +255,11 @@ const digest = crypto.createHash('sha256')
 // 2026-09-11: 332 -> 331. keybd_event now synchronously enters the ordinary
 // hardware-input FIFO with Win98 keyboard-message state instead of succeeding
 // without generating input.
-const EXPECTED_COUNT = 283;
-const EXPECTED_SHA256 = '66d43dc302f92d6bf71e4fbb2374ee6b9e43251cce8638e2941bc8fbe8ab5db5';
+// 2026-09-15: 283 -> 282. GetKeyboardType now rejects selector values outside
+// the documented 0..2 range instead of misreporting every one as an enhanced
+// keyboard-type query. The modeled US 101/102-key answers remain 4/0/12.
+const EXPECTED_COUNT = 282;
+const EXPECTED_SHA256 = '01c4bbb3eea865fc8c756ea918d49fc752def845a59fa5380610bf9aa125197a';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
