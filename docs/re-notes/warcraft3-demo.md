@@ -1764,3 +1764,84 @@ hand in a browser. Anyone wanting a histogram series over the *map load* needs
 to build that walk first, or drive the browser by hand — `tools/ctl-hist-series.js`
 (which samples a live `--control` session into the several windows
 `tools/hot-loop-census.js` wants) is ready and waiting on it.
+
+### CORRECTION: the menu DOES drive headlessly — the working walk
+
+The section immediately above ("Driving the menu headlessly needs DirectInput,
+not clicks", committed in b6ba59dd) is **wrong**, and this supersedes it. The
+menu drives fine from `test/run.js` with ordinary `--input` mouse events. What
+misled me is recorded below, because the same trap is easy to re-enter.
+
+**What the menu actually reads.** Traced over a 75s `--headless-gl` load with
+`--trace-api` filtered to every cursor/DirectInput entry point:
+
+```
+201  ClipCursor
+198  GetCursorPos
+  0  IDirectInputDevice_GetDeviceState / GetDeviceData / Acquire / SetProperty
+  0  GetAsyncKeyState / GetKeyState
+```
+
+So it is **absolute cursor position plus window messages** — `GetCursorPos`
+reads `renderer._mouseX/_mouseY` (lib/renderer-input.js:546) — and there is no
+DirectInput in the menu at all. Driving it through
+`renderer._queueDirectInputMouseButton` or `handleRelativeMouseMove`, as the
+superseded section describes, moves nothing because nothing is listening.
+
+**Pace by batch, not by wall clock.** The other half of the earlier failure was
+sending a press and scheduling its release with a 1.5s `setTimeout`. The guest
+samples the button per *batch*, and batch rate swings enormously with phase —
+measured this session between 362/s in the working load and >4,000/s while
+spinning behind the DirectX modal. A wall-clock release straddles the sample.
+`--input=BATCH:...` is paced in the guest's own unit and is the primitive to
+use.
+
+**The walk, at the headless 640x480 layout** (the click table earlier in this
+file is from a browser at a larger size; scale it by ~0.68 or use these):
+
+| step | coords | what it reaches |
+|---|---|---|
+| Single Player | 546,113 | Single Player Profiles |
+| type a name | `keypress:65,66,67` | edit is already focused, no click first |
+| Create | 203,173 | profile appears in the list |
+| profile row 1 | 130,225 | selects it |
+| Select | 203,314 | Single Player menu |
+| Campaign | 546,149 | Campaign screen |
+| Prologue: Exodus of the Horde | 505,157 | map load begins (screen goes black) |
+
+Verified end to end. As one command, with `B:png:PATH` snapshots between steps
+so a mis-aimed click is visible rather than silent:
+
+```bash
+node test/run.js --app=warcraft3_demo --no-threads --headless-gl --quiet-api \
+  --input="40000:mousemove:546:113,44000:mousedown:546:113,48000:mouseup:546:113,\
+54000:keypress:65,54800:keypress:66,55600:keypress:67,\
+59000:mousemove:203:173,61000:mousedown:203:173,64000:mouseup:203:173,\
+70000:mousemove:130:225,72000:mousedown:130:225,75000:mouseup:130:225,\
+78000:mousemove:203:314,80000:mousedown:203:314,83000:mouseup:203:314,\
+90000:mousemove:546:149,92000:mousedown:546:149,95000:mouseup:546:149,\
+104000:mousemove:505:157,106000:mousedown:505:157,109000:mouseup:505:157" \
+  --max-seconds=420 --max-batches=99999999 --no-close
+```
+
+Two cautions. Hold each press for a few thousand batches and move the pointer
+onto the control first — the hover highlight in a `B:png` capture is the cheap
+confirmation that `GetCursorPos` is reading your position before you trust the
+click. And the batch numbers above are calibrated for ~400 batches/s; on a
+quieter box the walk fires earlier than the menu exists, so re-check the
+snapshots rather than assuming the schedule still lands.
+
+**`--headless-gl` is not reliable when the box is busy.** A working run logs
+*two* GL contexts:
+
+```
+[gl] headless WebGL enabled (@node-3d/webgl)
+[gl] warning: 2 simultaneous GL contexts, but @node-3d/webgl shares one state
+     machine between them; interleaved draws will fight
+```
+
+A run that logs only the first line has lost the guest's `wglCreateContext`,
+and comes up with the "unable to initialize DirectX" modal and a batch rate
+several times too high — the spin signature. One identical command failed this
+way with three other `run.js` processes on the machine and succeeded on retry.
+**Check for the second `[gl]` line before believing any WC3 measurement.**
