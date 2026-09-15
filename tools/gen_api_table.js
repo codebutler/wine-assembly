@@ -1258,7 +1258,7 @@ const extra = [
   { name: 'IDirectDraw7_EvaluateMode', nargs: 3 },
   { name: 'LZClose', nargs: 1 },
   // WINMM — RIFF file seek used by RCT after the 16-bit POP decoder fix.
-  { name: 'mmioSeek', nargs: 3 },
+  { name: 'mmioSeek', nargs: 3, handler: '_llseek' },
   // KERNEL32/USER32 — the halves of the atom API that had no entry at all.
   // Delphi's VCL calls GlobalFindAtomA on every window activation, so a
   // missing entry resolved to api_id 0xFFFF and trapped (Tetravex).

@@ -780,15 +780,9 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; mmioSeek(hmmio, lOffset, iOrigin) — 3 args stdcall
-  ;; Returns the new file position, or -1 on failure.
-  (func $handle_mmioSeek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_set_file_pointer
-      (local.get $arg0)
-      (local.get $arg1)
-      (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-  )
+  ;; The currently modeled unbuffered mmioSeek operation has the same
+  ;; offset/origin/result contract as _llseek and dispatches to that canonical
+  ;; handler through api_table.json.  HMMIO remains a distinct public type.
 
   ;; --- MMIO buffered I/O ------------------------------------------------
   ;; MMIOINFO: +0 dwFlags, +4 fccIOProc, +8 pIOProc, +12 wErrorRet, +16 htask,

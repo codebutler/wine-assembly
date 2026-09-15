@@ -2685,11 +2685,22 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args + ret
   )
 
-  ;; 22: _llseek — STUB: unimplemented
+  ;; Legacy HFILE, LZ, and MMIO seeks use the same three origin values and
+  ;; return the new absolute position.  Their invalid-origin results differ:
+  ;; _llseek/mmioSeek return -1, while LZSeek returns LZERROR_BADVALUE (-7).
+  (func $legacy_file_seek
+      (param $handle i32) (param $offset i32) (param $origin i32)
+      (param $bad_origin i32) (result i32)
+    (if (i32.gt_u (local.get $origin) (i32.const 2))
+      (then (return (local.get $bad_origin))))
+    (call $host_fs_set_file_pointer
+      (local.get $handle) (local.get $offset) (local.get $origin)))
+
+  ;; 22: _llseek(hFile, lOffset, iOrigin) — 3 args stdcall.
   (func $handle__llseek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; _llseek(hFile, lOffset, iOrigin) — 3 args stdcall
-    (global.set $eax (call $host_fs_set_file_pointer
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (global.set $eax (call $legacy_file_seek
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const -1)))       ;; HFILE_ERROR
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args + ret
   )
 
@@ -2849,8 +2860,9 @@
   )
 
   (func $handle_LZSeek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_fs_set_file_pointer
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (global.set $eax (call $legacy_file_seek
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const -7)))       ;; LZERROR_BADVALUE
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
