@@ -1538,6 +1538,31 @@
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return))
 
+  ;; BOOL ShowWindowAsync(HWND, int). USER does not run the target window's
+  ;; show path on the caller's stack: it posts work to the owning thread and
+  ;; reports whether that work was successfully started.  Keep the command in
+  ;; the ordinary cross-thread-aware post queue.  DispatchMessage consumes the
+  ;; private event below and only then enters the same complete ShowWindow path
+  ;; used by the synchronous API; no visibility, placement, activation, paint,
+  ;; or host-window state changes before that dispatch.
+  ;;
+  ;; 0x7FEF is private to USER's queue (the adjacent 0x7FF0 is this runtime's
+  ;; multimedia-timer pseudo-message).  The lParam cookie prevents a guest
+  ;; message using the same numeric id from being interpreted as a show event.
+  (func $handle_ShowWindowAsync (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (global.set $eax (call $post_queue_push
+      (local.get $arg0) (i32.const 0x7FEF)
+      (local.get $arg1) (i32.const 0x53485741))) ;; "SHWA"
+    (if (i32.eqz (global.get $eax))
+      (then (global.set $last_error (i32.const 1816)))) ;; ERROR_NOT_ENOUGH_QUOTA
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return))
+
   ;; 72: UpdateWindow
   (func $handle_UpdateWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wp i32)
@@ -2353,6 +2378,28 @@
   ;; 75: DispatchMessageA
   (func $handle_DispatchMessageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $wndproc i32) (local $ctrl_class i32)
+    ;; ShowWindowAsync's queue record is a USER operation, not an application
+    ;; message.  Run it on the owner thread at dispatch time and do not expose
+    ;; the private id to the target WndProc.  Rebase DispatchMessage's two-word
+    ;; frame into the three-word frame ShowWindow owns.  This also preserves
+    ;; ShowWindow's first-activation continuation: if it enters a guest WndProc,
+    ;; that chain returns directly to DispatchMessage's original caller.
+    (if (i32.and
+          (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 4)))
+                  (i32.const 0x7FEF))
+          (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 12)))
+                  (i32.const 0x53485741)))
+      (then
+        (local.set $tmp (call $gl32 (global.get $esp)))
+        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+        (call $gs32 (global.get $esp) (local.get $tmp))
+        (call $handle_ShowWindow
+          (call $gl32 (local.get $arg0))
+          (call $gl32 (i32.add (local.get $arg0) (i32.const 8)))
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+        ;; DispatchMessage returns an LRESULT, not ShowWindow's BOOL.
+        (global.set $eax (i32.const 0))
+        (return)))
     ;; Skip WM_NULL — idle message, don't dispatch to WndProc
     (if (i32.eqz (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
     (then (global.set $eax (i32.const 0))
