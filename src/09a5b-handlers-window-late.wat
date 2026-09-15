@@ -1168,14 +1168,196 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
   )
 
-  ;; 643: ReuseDDElParam — STUB: unimplemented
+  ;; USER32 owns the storage behind packed 32-bit DDE lParams. Keep that
+  ;; storage opaque to the application just as Win32 does, but give it normal
+  ;; Global-memory provenance so it can move safely between worker instances
+  ;; and be invalidated exactly once. The message tag matters: a packed DATA
+  ;; lParam cannot be unpacked as POKE merely because both carry two values.
+  ;;
+  ;; Payload: magic, message, 32-bit low value, 32-bit high value. The public
+  ;; value is the guest pointer itself; callers are explicitly forbidden from
+  ;; using it for anything except a posted DDE message.
+  (global $DDE_LPARAM_MAGIC i32 (i32.const 0x50454444)) ;; "DDEP"
+
+  (func $dde_lparam_message_supported (param $msg i32) (result i32)
+    (i32.or
+      (i32.or
+        (i32.or
+          (i32.eq (local.get $msg) (i32.const 0x03E2)) ;; WM_DDE_ADVISE
+          (i32.eq (local.get $msg) (i32.const 0x03E3))) ;; WM_DDE_UNADVISE
+        (i32.or
+          (i32.eq (local.get $msg) (i32.const 0x03E4)) ;; WM_DDE_ACK
+          (i32.eq (local.get $msg) (i32.const 0x03E5)))) ;; WM_DDE_DATA
+      (i32.or
+        (i32.or
+          (i32.eq (local.get $msg) (i32.const 0x03E6)) ;; WM_DDE_REQUEST
+          (i32.eq (local.get $msg) (i32.const 0x03E7))) ;; WM_DDE_POKE
+        (i32.eq (local.get $msg) (i32.const 0x03E8))))) ;; WM_DDE_EXECUTE
+
+  ;; ADVISE/DATA/POKE pair a 32-bit HGLOBAL with an atom and therefore need
+  ;; an allocated 32-bit packing object. REQUEST/UNADVISE are two 16-bit
+  ;; values and stay inline. EXECUTE carries its HGLOBAL directly. ACK is
+  ;; conditional: an atom fits inline, while the HGLOBAL returned for an
+  ;; EXECUTE acknowledgement needs the packing object.
+  (func $dde_lparam_message_needs_object
+      (param $msg i32) (param $hi i32) (result i32)
+    (i32.or
+      (i32.or
+        (i32.eq (local.get $msg) (i32.const 0x03E2))
+        (i32.eq (local.get $msg) (i32.const 0x03E5)))
+      (i32.or
+        (i32.eq (local.get $msg) (i32.const 0x03E7))
+        (i32.and
+          (i32.eq (local.get $msg) (i32.const 0x03E4))
+          (i32.ne (i32.and (local.get $hi) (i32.const 0xFFFF0000))
+                  (i32.const 0))))))
+
+  (func $dde_lparam_object_valid
+      (param $lparam i32) (param $msg i32) (result i32)
+    ;; heap_global_block_size proves an exact, live allocation boundary before
+    ;; either metadata dword is read. heap_alloc(16) has a 24-byte extent.
+    (if (i32.ne
+          (call $heap_global_block_size (local.get $lparam) (i32.const 0))
+          (i32.const 24))
+      (then (return (i32.const 0))))
+    (i32.and
+      (i32.eq (call $gl32 (local.get $lparam)) (global.get $DDE_LPARAM_MAGIC))
+      (i32.eq (call $gl32 (i32.add (local.get $lparam) (i32.const 4)))
+              (local.get $msg))))
+
+  (func $dde_lparam_object_write
+      (param $lparam i32) (param $msg i32) (param $lo i32) (param $hi i32)
+    (call $gs32 (local.get $lparam) (global.get $DDE_LPARAM_MAGIC))
+    (call $gs32 (i32.add (local.get $lparam) (i32.const 4)) (local.get $msg))
+    (call $gs32 (i32.add (local.get $lparam) (i32.const 8)) (local.get $lo))
+    (call $gs32 (i32.add (local.get $lparam) (i32.const 12)) (local.get $hi)))
+
+  ;; 643: ReuseDDElParam(lParam, msgIn, msgOut, uiLo, uiHi)
   (func $handle_ReuseDDElParam (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $old_object i32) (local $new_object i32)
+    ;; These are the seven DDE messages for which the low/high abstraction is
+    ;; defined. INITIATE is sent synchronously and TERMINATE has no payload;
+    ;; Microsoft documents the packing family for posted messages only.
+    (if (i32.eqz (i32.and
+          (call $dde_lparam_message_supported (local.get $arg1))
+          (call $dde_lparam_message_supported (local.get $arg2))))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+
+    ;; The three always-packed inputs must be one of our live packing objects.
+    ;; ACK may be either inline (atom) or packed (EXECUTE HGLOBAL), so only
+    ;; recognize it as allocated when the opaque object validates completely.
+    (if (call $dde_lparam_message_needs_object
+          (local.get $arg1) (i32.const 0))
+      (then
+        (if (i32.eqz (call $dde_lparam_object_valid
+              (local.get $arg0) (local.get $arg1)))
+          (then
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (return)))
+        (local.set $old_object (local.get $arg0)))
+      (else
+        (if (i32.and
+              (i32.eq (local.get $arg1) (i32.const 0x03E4))
+              (call $dde_lparam_object_valid
+                (local.get $arg0) (local.get $arg1)))
+          (then (local.set $old_object (local.get $arg0))))))
+
+    (if (call $dde_lparam_message_needs_object
+          (local.get $arg2) (local.get $arg4))
+      (then
+        ;; Reuse the incoming allocation whenever both message layouts need
+        ;; one; otherwise allocate the opaque storage the outgoing post owns.
+        (local.set $new_object (local.get $old_object))
+        (if (i32.eqz (local.get $new_object))
+          (then
+            (local.set $new_object (call $heap_alloc (i32.const 16)))
+            (if (i32.eqz (local.get $new_object))
+              (then
+                (global.set $eax (i32.const 0))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+                (return)))
+            (call $heap_global_mark (local.get $new_object))))
+        (call $dde_lparam_object_write
+          (local.get $new_object) (local.get $arg2)
+          (local.get $arg3) (local.get $arg4))
+        (global.set $eax (local.get $new_object)))
+      (else
+        ;; Converting an allocated incoming pair to an inline/direct outgoing
+        ;; value consumes the old packing storage, but never its lo/hi contents.
+        (if (local.get $old_object)
+          (then
+            (if (i32.eqz (call $heap_global_free (local.get $old_object)))
+              (then
+                (global.set $eax (i32.const 0))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+                (return)))))
+        (if (i32.eq (local.get $arg2) (i32.const 0x03E8)) ;; WM_DDE_EXECUTE
+          (then (global.set $eax (local.get $arg4)))
+          (else
+            (global.set $eax
+              (i32.or
+                (i32.and (local.get $arg3) (i32.const 0xFFFF))
+                (i32.shl (i32.and (local.get $arg4) (i32.const 0xFFFF))
+                         (i32.const 16))))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
   )
 
-  ;; 644: UnpackDDElParam — STUB: unimplemented
+  ;; 644: UnpackDDElParam(msg, lParam, puiLo, puiHi)
   (func $handle_UnpackDDElParam (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $lo i32) (local $hi i32)
+    ;; Validate both required outputs before writing either one. This avoids a
+    ;; plausible half-result when the second pointer crosses an unmapped page.
+    (if (i32.or
+          (i32.eqz (call $dde_lparam_message_supported (local.get $arg0)))
+          (i32.or
+            (call $ptr_range_access_bad
+              (local.get $arg2) (i32.const 4) (i32.const 1))
+            (call $ptr_range_access_bad
+              (local.get $arg3) (i32.const 4) (i32.const 1))))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+
+    (if (call $dde_lparam_message_needs_object
+          (local.get $arg0) (i32.const 0))
+      (then
+        (if (i32.eqz (call $dde_lparam_object_valid
+              (local.get $arg1) (local.get $arg0)))
+          (then
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
+        (local.set $lo (call $gl32
+          (i32.add (local.get $arg1) (i32.const 8))))
+        (local.set $hi (call $gl32
+          (i32.add (local.get $arg1) (i32.const 12)))))
+      (else
+        (if (i32.and
+              (i32.eq (local.get $arg0) (i32.const 0x03E4))
+              (call $dde_lparam_object_valid
+                (local.get $arg1) (local.get $arg0)))
+          (then
+            (local.set $lo (call $gl32
+              (i32.add (local.get $arg1) (i32.const 8))))
+            (local.set $hi (call $gl32
+              (i32.add (local.get $arg1) (i32.const 12)))))
+          (else
+            (if (i32.eq (local.get $arg0) (i32.const 0x03E8))
+              (then
+                (local.set $lo (i32.const 0))
+                (local.set $hi (local.get $arg1)))
+              (else
+                (local.set $lo (i32.and (local.get $arg1) (i32.const 0xFFFF)))
+                (local.set $hi (i32.shr_u (local.get $arg1) (i32.const 16)))))))))
+    (call $gs32 (local.get $arg2) (local.get $lo))
+    (call $gs32 (local.get $arg3) (local.get $hi))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
   ;; 645: WaitMessage() — block until USER has queue work. The message remains
