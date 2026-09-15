@@ -30572,5 +30572,19 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 954991421
+  },
+  {
+    "id": 3651,
+    "name": "AVIFileInit",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3011274109
+  },
+  {
+    "id": 3652,
+    "name": "AVIFileExit",
+    "nargs": 0,
+    "convention": "stdcall",
+    "hash": 3522106387
   }
 ]

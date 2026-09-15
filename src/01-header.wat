@@ -2875,6 +2875,11 @@
   ;; It fills the 16-byte hole between WND_DLG_RECORDS and SCROLL_TABLE.
   (global $WAVE_OUT_SHARED i32 (region.addr $WAVE_OUT_SHARED 0))
   (global $WAVE_OUT_SHARED_SIZE i32 (region.size $WAVE_OUT_SHARED))
+  ;; AVIFileInit/AVIFileExit's process-wide balanced library reference count.
+  ;; This is shared memory, not a mutable global, so Worker guest threads see
+  ;; the same initialized state.
+  (global $AVIFILE_STATE i32 (region.addr $AVIFILE_STATE 0))
+  (global $AVIFILE_STATE_SIZE i32 (region.size $AVIFILE_STATE))
   ;; waveOut audio state
   (global $wave_out_handle (mut i32) (i32.const 0))
   (global $wave_out_callback (mut i32) (i32.const 0))

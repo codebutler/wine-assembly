@@ -2,6 +2,31 @@
   ;; AUDIO/WAVE API HANDLERS
   ;; ============================================================
 
+  ;; AVIFileInit() / AVIFileExit() initialize and release the process-wide
+  ;; AVIFile library. Microsoft documents a balanced library reference count:
+  ;; every initialization must have a matching exit. Keep the count in shared
+  ;; memory so calls from distinct guest-thread WASM instances participate in
+  ;; one process state. An unmatched exit leaves a fresh process uninitialized
+  ;; instead of wrapping the counter and fabricating billions of references.
+  (func $handle_AVIFileInit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (drop (i32.atomic.rmw.add
+      (global.get $AVIFILE_STATE) (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  (func $handle_AVIFileExit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $old i32) (local $seen i32)
+    (block $done
+      (loop $retry
+        (local.set $old (i32.atomic.load (global.get $AVIFILE_STATE)))
+        (br_if $done (i32.eqz (local.get $old)))
+        (local.set $seen (i32.atomic.rmw.cmpxchg
+          (global.get $AVIFILE_STATE)
+          (local.get $old)
+          (i32.sub (local.get $old) (i32.const 1))))
+        (br_if $done (i32.eq (local.get $seen) (local.get $old)))
+        (br $retry)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
   ;; acmMetrics(hao, uMetric, pMetric) reports Audio Compression Manager
   ;; inventory and sizing information.  The emulator exposes one built-in
   ;; PCM converter and no installable codecs or filters.  In particular,
