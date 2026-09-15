@@ -3795,6 +3795,14 @@
   ;; resolved from the canonical bitmap record named by surfaceId at +68.
   (global $gdi_fast_span_hits (mut i32) (i32.const 0))
   (global $gdi_fast_bitblt_hits (mut i32) (i32.const 0))
+  ;; Pixels in the blits the fast path handed back. The decline HISTOGRAM is
+  ;; per blit, and blits differ in area by orders of magnitude -- one declined
+  ;; 640x480 present is 307200 pixels against 64000 for a thousand declined 8x8
+  ;; cursor blits -- so a count alone cannot say whether a gate costs anything.
+  ;; The span counters below cannot answer it either: they measure the span
+  ;; rasterizer, which a declined BitBlt never enters. This is the one number
+  ;; that prices a decline.
+  (global $gdi_bitblt_decline_px (mut i32) (i32.const 0))
   (global $gdi_fast_stretch_hits (mut i32) (i32.const 0))
   ;; What the last $gdi_shape_fill_span call actually wrote, as a half-open
   ;; interval of surface x. Geometry that used to accumulate its dirty
@@ -4712,13 +4720,15 @@
   ;; Count one decline and return the -1 the caller expects, so the reason a
   ;; blit went generic is recorded at the site that decided it rather than
   ;; guessed at afterwards. Reasons, in $GDI_BITBLT_DECLINE word order:
-  ;;   0 destination is not 32bpp        5 palette absent or shorter than 256
-  ;;   1 clip region has >1 rect         6 degenerate 16bpp channel mask
-  ;;   2 geometry outside the safe range 7 source and destination are one
-  ;;   3 source coordinates out of range   surface (overlap)
-  ;;   4 source bpp is not 32/16/8       8 ROP3 has no source and is not one
-  ;;                                       of the four pattern ops
-  ;;   9 PATCOPY brush is not one colour
+  ;;   0 destination is not 32bpp        5 palette absent or shorter than the
+  ;;   1 clip region has >1 rect           source depth needs
+  ;;   2 geometry outside the safe range 6 degenerate 16bpp channel mask
+  ;;   3 source coordinates out of range 7 source and destination are one
+  ;;   4 source bpp is not 32/16/8/4/1     surface (overlap)
+  ;;                                     8 ROP3 has no source and is not one
+  ;;   9 PATCOPY brush is not one colour   of the four pattern ops
+  ;;  10 SRCINVERT from an indexed source (the generic kernel evaluates that
+  ;;     one in device-index space, not in RGB; see $gdi_raster_bitblt)
   ;; A decline costs the whole blit: the generic loop re-resolves the clip and
   ;; the DC state per pixel, which on Diablo's Choose Class was ~75% of all
   ;; CPU. The histogram is therefore the work list for widening this function,
@@ -4732,19 +4742,22 @@
       (i32.add (i32.load (local.get $slot)) (i32.const 1)))
     (i32.const -1))
 
-  ;; Reason 4 alone is not actionable: "source bpp is not 32/16/8" names three
-  ;; different unpackers to write and does not say which one an app wants. So
-  ;; that gate also buckets the depth it saw, into the region's spare slots --
-  ;; 10:1bpp, 11:4bpp, 12:24bpp, 13:anything else. A census over mspaint, sol,
-  ;; winmine and freecell put 79-100% of every decline on reason 4, which is
-  ;; what made this second dimension worth having; see
-  ;; tools/gdi-decline-census.js.
+  ;; Reason 4 alone is not actionable: "source bpp this path cannot unpack"
+  ;; names several different unpackers to write and does not say which one an
+  ;; app wants. So that gate also buckets the depth it saw, into the region's
+  ;; spare slots -- 11:1bpp, 12:4bpp, 13:24bpp, 14:anything else. A census over
+  ;; mspaint, sol, winmine and freecell put 79-100% of every decline on reason
+  ;; 4, and the breakdown said 4bpp and 1bpp were all of it; that is what the
+  ;; two indexed arms below were written from. See tools/gdi-decline-census.js.
+  ;;
+  ;; The buckets sit ABOVE the reasons rather than beside them, so adding a
+  ;; reason moves them; they are counted IN ADDITION to reason 4 and sum to it.
   (func $gdi_bitblt_decline_src_bpp (param $bpp i32) (result i32)
     (local $slot i32)
-    (local.set $slot (i32.const 13))
-    (if (i32.eq (local.get $bpp) (i32.const 1)) (then (local.set $slot (i32.const 10))))
-    (if (i32.eq (local.get $bpp) (i32.const 4)) (then (local.set $slot (i32.const 11))))
-    (if (i32.eq (local.get $bpp) (i32.const 24)) (then (local.set $slot (i32.const 12))))
+    (local.set $slot (i32.const 14))
+    (if (i32.eq (local.get $bpp) (i32.const 1)) (then (local.set $slot (i32.const 11))))
+    (if (i32.eq (local.get $bpp) (i32.const 4)) (then (local.set $slot (i32.const 12))))
+    (if (i32.eq (local.get $bpp) (i32.const 24)) (then (local.set $slot (i32.const 13))))
     (drop (call $gdi_bitblt_decline (local.get $slot)))
     (call $gdi_bitblt_decline (i32.const 4)))
 
@@ -4760,7 +4773,8 @@
     (local $color i32) (local $source_mode i32)
     (local $app_clip i32) (local $system_clip i32) (local $bound i32)
     (local $src_bpp i32) (local $src_step i32)
-    (local $pal i32) (local $pal_dx i32)
+    (local $pal i32) (local $pal_dx i32) (local $index i32)
+    (local $record i32) (local $mono_dc i32) (local $mono0 i32) (local $mono1 i32)
     (local $r_mask i32) (local $g_mask i32) (local $b_mask i32)
     (local $r_shift i32) (local $g_shift i32) (local $b_shift i32)
     (local $r_max i32) (local $g_max i32) (local $b_max i32)
@@ -4805,12 +4819,34 @@
         ;; the ~85k pixels in a frame: 57% of dx_tunnel's wasm time. Unpack it
         ;; here instead, with the masks hoisted, and keep the arithmetic
         ;; bit-identical to $gdi_raster_unpack_channel.
+        ;; 4bpp and 1bpp join 8bpp as indexed sources rather than as their own
+        ;; blitters: they differ from it only in how the index is extracted
+        ;; from the row, and a census over mspaint/sol/winmine put every single
+        ;; reachable reason-4 decline on those two depths (24bpp was 4 blits in
+        ;; one app). The sub-byte depths need no cursor of their own -- their
+        ;; $src_step is 0, so $sp stays on the row base all row and the index
+        ;; is taken from the absolute source x instead of from a walking
+        ;; pointer.
         (local.set $src_bpp (i32.load offset=16 (local.get $src)))
         (if (i32.or (i32.eqz (local.get $src))
               (i32.and (i32.ne (local.get $src_bpp) (i32.const 32))
                 (i32.and (i32.ne (local.get $src_bpp) (i32.const 16))
-                         (i32.ne (local.get $src_bpp) (i32.const 8)))))
+                  (i32.and (i32.ne (local.get $src_bpp) (i32.const 8))
+                    (i32.and (i32.ne (local.get $src_bpp) (i32.const 4))
+                             (i32.ne (local.get $src_bpp) (i32.const 1)))))))
           (then (return (call $gdi_bitblt_decline_src_bpp (local.get $src_bpp)))))
+        ;; SRCINVERT out of an indexed source is not an RGB xor at all in the
+        ;; generic kernel: when the destination colour is an exact member of
+        ;; the source palette it xors the palette INDEXES and resolves the
+        ;; result, which is what a Win16 DDB sprite strip means by SRCINVERT.
+        ;; Reproducing that here would need $gdi_raster_nearest_index -- a
+        ;; whole-palette scan -- per pixel, which is the opposite of a fast
+        ;; path, so it stays generic. This also closes the same divergence in
+        ;; the 8bpp arm, which has silently taken the RGB route since it
+        ;; landed; test-wat-gdi-bitblt-widen.js is what found it.
+        (if (i32.and (i32.eq (local.get $rop3) (i32.const 0x66))
+              (i32.le_u (local.get $src_bpp) (i32.const 8)))
+          (then (return (call $gdi_bitblt_decline (i32.const 10)))))
         ;; An 8bpp source over a 32bpp surface is how every palettised
         ;; DirectDraw app presents: $dx_blit_entry_rect_to_hdc hands the
         ;; primary to SetDIBitsToDevice, which SRCCOPYs it here. Declining it
@@ -4820,15 +4856,45 @@
         ;; Diablo's Choose Class that loop plus its clip lookups was ~75% of
         ;; all CPU, and $dx_reseed_overlays repeats the whole blit once per
         ;; overlay window per present. Resolve the table once and index it.
-        (if (i32.eq (local.get $src_bpp) (i32.const 8))
+        ;; A 1bpp DDB copied into a colour DC is a MASK, not a picture: the
+        ;; generic kernel takes no colour from the source at all, giving zero
+        ;; bits the destination DC's text colour and one bits its background
+        ;; colour ($gdi_raster_read_blt_source). Getting this wrong does not
+        ;; look like a bug, it looks like an inverted icon -- so the two
+        ;; colours are resolved here, once, exactly as that function resolves
+        ;; them, and the inner loop only picks between them. A 1bpp *DIB*
+        ;; (record absent, or flags bit 0 set) keeps its own colour table and
+        ;; goes down the palette path below, which is also what the generic
+        ;; kernel does with it.
+        (if (i32.eq (local.get $src_bpp) (i32.const 1))
+          (then
+            (local.set $record
+              (call $gdi_object_record (i32.load offset=68 (local.get $src))))
+            (if (i32.and (i32.ne (local.get $hdc) (i32.const 0))
+                  (i32.and (i32.ne (local.get $record) (i32.const 0))
+                    (i32.eqz (i32.and
+                      (load.field.memarg GdiBitmap flags (local.get $record))
+                      (i32.const 1)))))
+              (then
+                (local.set $mono_dc (i32.const 1))
+                (local.set $mono0 (call $gdi_raster_swap_rb (call $gdi_dc_get_field
+                  (local.get $hdc) (i32.const 20) (i32.const 0))))
+                (local.set $mono1 (call $gdi_raster_swap_rb (call $gdi_dc_get_field
+                  (local.get $hdc) (i32.const 24) (i32.const 0xFFFFFF))))))))
+        (if (i32.and (i32.le_u (local.get $src_bpp) (i32.const 8))
+              (i32.eqz (local.get $mono_dc)))
           (then
             (local.set $pal (call $gdi_raster_palette_base (local.get $src)))
             (local.set $pal_dx (global.get $gdi_pal_dx))
             ;; A short table leaves indexes at or past the count to
             ;; $gdi_raster_palette_color's default-palette fallback, which this
-            ;; path does not reproduce. Let those blits stay generic.
+            ;; path does not reproduce. Let those blits stay generic. The bar
+            ;; is the depth's full index space -- 256, 16 or 2 -- because any
+            ;; index the source can encode has to resolve out of this one
+            ;; table for the loop below to be allowed to skip the fallback.
             (if (i32.or (i32.eqz (local.get $pal))
-                  (i32.ne (global.get $gdi_pal_count) (i32.const 256)))
+                  (i32.lt_u (global.get $gdi_pal_count)
+                    (i32.shl (i32.const 1) (local.get $src_bpp))))
               (then (return (call $gdi_bitblt_decline (i32.const 5)))))))
         (if (i32.eq (local.get $src_bpp) (i32.const 16))
           (then
@@ -4954,20 +5020,74 @@
         (i32.add (local.get $dx) (local.get $x0)) (i32.add (local.get $dy) (local.get $y))))
       (if (local.get $source_mode)
         (then
-          (if (i32.eq (local.get $src_bpp) (i32.const 16))
-            (then (local.set $sp (call $gdi_raster_row_ptr_16 (local.get $src)
-              (i32.add (local.get $sx) (local.get $x0)) (i32.add (local.get $sy) (local.get $y)))))
-            (else (if (i32.eq (local.get $src_bpp) (i32.const 8))
-              (then (local.set $sp (call $gdi_raster_row_ptr_8 (local.get $src)
+          ;; 4bpp and 1bpp cannot point AT a pixel -- several share a byte --
+          ;; so their cursor is the row base and the column body indexes into
+          ;; the row from the absolute source x. That falls out of the existing
+          ;; walk for free: $src_step is bpp>>3, which is 0 for both, so the
+          ;; per-pixel advance below leaves $sp exactly where this put it.
+          (if (i32.lt_u (local.get $src_bpp) (i32.const 8))
+            (then (local.set $sp (call $gdi_raster_row_ptr_8 (local.get $src)
+              (i32.const 0) (i32.add (local.get $sy) (local.get $y)))))
+            (else (if (i32.eq (local.get $src_bpp) (i32.const 16))
+              (then (local.set $sp (call $gdi_raster_row_ptr_16 (local.get $src)
                 (i32.add (local.get $sx) (local.get $x0)) (i32.add (local.get $sy) (local.get $y)))))
-              (else (local.set $sp (call $gdi_raster_row_ptr_32 (local.get $src)
-                (i32.add (local.get $sx) (local.get $x0)) (i32.add (local.get $sy) (local.get $y))))))))))
+              (else (if (i32.eq (local.get $src_bpp) (i32.const 8))
+                (then (local.set $sp (call $gdi_raster_row_ptr_8 (local.get $src)
+                  (i32.add (local.get $sx) (local.get $x0)) (i32.add (local.get $sy) (local.get $y)))))
+                (else (local.set $sp (call $gdi_raster_row_ptr_32 (local.get $src)
+                  (i32.add (local.get $sx) (local.get $x0)) (i32.add (local.get $sy) (local.get $y))))))))))))
       (local.set $x (local.get $x0))
       (block $cols_done (loop $cols
         (br_if $cols_done (i32.ge_s (local.get $x) (local.get $x1)))
         (if (local.get $source_mode)
           (then
-            (if (i32.eq (local.get $src_bpp) (i32.const 16))
+            (if (i32.le_u (local.get $src_bpp) (i32.const 8))
+              (then
+                ;; One index extraction per depth, then one shared resolve.
+                ;; The sub-byte forms are $gdi_raster_read's, verbatim, down to
+                ;; which nibble an odd x selects and which end of the byte bit
+                ;; 0 lives at -- getting either backwards mirrors every glyph
+                ;; and every icon, and does it without failing anything.
+                (if (i32.eq (local.get $src_bpp) (i32.const 8))
+                  (then (local.set $index (i32.load8_u (local.get $sp))))
+                  (else (if (i32.eq (local.get $src_bpp) (i32.const 4))
+                    (then
+                      (local.set $value (i32.load8_u (i32.add (local.get $sp)
+                        (i32.shr_u (i32.add (local.get $sx) (local.get $x))
+                          (i32.const 1)))))
+                      (local.set $index (select
+                        (i32.and (local.get $value) (i32.const 15))
+                        (i32.shr_u (local.get $value) (i32.const 4))
+                        (i32.and (i32.add (local.get $sx) (local.get $x))
+                          (i32.const 1)))))
+                    (else
+                      (local.set $index (i32.and
+                        (i32.shr_u
+                          (i32.load8_u (i32.add (local.get $sp)
+                            (i32.shr_u (i32.add (local.get $sx) (local.get $x))
+                              (i32.const 3))))
+                          (i32.sub (i32.const 7)
+                            (i32.and (i32.add (local.get $sx) (local.get $x))
+                              (i32.const 7))))
+                        (i32.const 1)))))))
+                (if (local.get $mono_dc)
+                  (then (local.set $s (select (local.get $mono1) (local.get $mono0)
+                    (local.get $index))))
+                  (else
+                    (local.set $value (i32.load (i32.add (local.get $pal)
+                      (i32.shl (local.get $index) (i32.const 2)))))
+                    ;; A DirectDraw table is PALETTEENTRY (R,G,B,flags) and a
+                    ;; bitmap/BITMAPINFO table is RGBQUAD (B,G,R,0). The rest
+                    ;; of the rasterizer works in the RGBQUAD order, so only
+                    ;; the first needs swizzling -- same arithmetic as
+                    ;; $gdi_raster_palette_color's two branches.
+                    (local.set $s (select
+                      (i32.or (i32.and (i32.shr_u (local.get $value) (i32.const 16)) (i32.const 0xFF))
+                        (i32.or (i32.and (local.get $value) (i32.const 0xFF00))
+                          (i32.shl (i32.and (local.get $value) (i32.const 0xFF)) (i32.const 16))))
+                      (i32.and (local.get $value) (i32.const 0xFFFFFF))
+                      (local.get $pal_dx))))))
+              (else (if (i32.eq (local.get $src_bpp) (i32.const 16))
               (then
                 (local.set $value (i32.load16_u (local.get $sp)))
                 (local.set $s (i32.or
@@ -4994,22 +5114,7 @@
                           (local.get $b_shift)) (i32.const 255))
                         (i32.shr_u (local.get $b_max) (i32.const 1)))
                       (local.get $b_max))))))
-              (else (if (i32.eq (local.get $src_bpp) (i32.const 8))
-                (then
-                  (local.set $value (i32.load (i32.add (local.get $pal)
-                    (i32.shl (i32.load8_u (local.get $sp)) (i32.const 2)))))
-                  ;; A DirectDraw table is PALETTEENTRY (R,G,B,flags) and a
-                  ;; bitmap/BITMAPINFO table is RGBQUAD (B,G,R,0). The rest of
-                  ;; the rasterizer works in the RGBQUAD order, so only the
-                  ;; first needs swizzling -- same arithmetic as
-                  ;; $gdi_raster_palette_color's two branches.
-                  (local.set $s (select
-                    (i32.or (i32.and (i32.shr_u (local.get $value) (i32.const 16)) (i32.const 0xFF))
-                      (i32.or (i32.and (local.get $value) (i32.const 0xFF00))
-                        (i32.shl (i32.and (local.get $value) (i32.const 0xFF)) (i32.const 16))))
-                    (i32.and (local.get $value) (i32.const 0xFFFFFF))
-                    (local.get $pal_dx))))
-                (else (local.set $s (i32.and (i32.load (local.get $sp)) (i32.const 0xFFFFFF)))))))))
+              (else (local.set $s (i32.and (i32.load (local.get $sp)) (i32.const 0xFFFFFF)))))))))
         (if (i32.or (i32.eq (local.get $rop3) (i32.const 0x55))
               (i32.or (i32.eq (local.get $rop3) (i32.const 0x66))
                 (i32.or (i32.eq (local.get $rop3) (i32.const 0x88))
@@ -5487,6 +5592,12 @@
       (local.get $w) (local.get $h) (local.get $src) (local.get $sx) (local.get $sy)
       (local.get $pattern) (local.get $brush) (local.get $rop3)))
     (if (i32.ge_s (local.get $fast) (i32.const 0)) (then (return (local.get $fast))))
+    ;; Priced here rather than at each decline site, because this is the one
+    ;; place that knows the blit went generic AND still has its extent. The
+    ;; product wraps for an absurd extent; this is a diagnostic counter, and a
+    ;; blit that large has already been refused on its own merits upstream.
+    (global.set $gdi_bitblt_decline_px (i32.add (global.get $gdi_bitblt_decline_px)
+      (i32.mul (local.get $w) (local.get $h))))
     (local.set $y (select (i32.sub (local.get $h) (i32.const 1)) (i32.const 0) (local.get $start)))
     ;; Per-row clip span; see the note in $gdi_raster_stretch_blt for why the
     ;; reset belongs here and why one blit is a safe scope for the cache.
@@ -6081,6 +6192,7 @@
     (global.set $gdi_band_span_hits (i32.const 0))
     (global.set $gdi_slow_span_clip (i32.const 0))
     (global.set $gdi_slow_span_rop (i32.const 0))
+    (global.set $gdi_bitblt_decline_px (i32.const 0))
     (memory.fill (global.get $GDI_BITBLT_DECLINE) (i32.const 0) (i32.const 0x40)))
   ;; Reason -> count for the blits $gdi_raster_bitblt_fast32 sent to the
   ;; generic path; see $gdi_bitblt_decline for what each index means.
@@ -6105,6 +6217,10 @@
       (then (return (global.get $gdi_slow_span_clip))))
     (if (i32.eq (local.get 0) (i32.const 8))
       (then (return (global.get $gdi_band_span_hits))))
+    ;; 9 is the only one of these that prices the BITBLT fast path: everything
+    ;; above it counts spans, which a declined blit never becomes.
+    (if (i32.eq (local.get 0) (i32.const 9))
+      (then (return (global.get $gdi_bitblt_decline_px))))
     (global.get $gdi_slow_span_rop))
   (func (export "test_gdi_raster_bitblt")
         (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)

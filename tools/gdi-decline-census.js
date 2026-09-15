@@ -20,10 +20,16 @@
 // another print to run.js, so it works against a working tree somebody else is
 // in the middle of editing.
 //
-// READ THE SHARE, NOT THE COUNT. A count is per BLIT, and blits differ in area
-// by orders of magnitude -- one declined full-screen present is 307200 slow
-// pixels while a thousand declined 8x8 cursor blits are 64000. The px columns
-// from the span counters are printed beside the histogram for that reason.
+// READ THE PIXELS, NOT THE COUNT. A count is per BLIT, and blits differ in
+// area by orders of magnitude -- one declined full-screen present is 307200
+// pixels while a thousand declined 8x8 cursor blits are 64000. "declined
+// pixels" below is the number that says whether a gate costs anything.
+//
+// The span-raster block is a DIFFERENT subsystem and is printed only as
+// context: a declined BitBlt goes to the generic blit loop, which is not the
+// span rasterizer, so a "slow span" share of 0.0% says nothing at all about
+// these declines. Reading it as though it did is the mistake this note exists
+// to prevent -- it was in an earlier version of this tool's own output.
 
 const path = require('path');
 const { startControlSession } = require('../test/control-session');
@@ -38,29 +44,33 @@ const REASONS = [
   'clip region has more than one rect',
   'blit geometry outside the safe range',
   'source coordinates outside the safe range',
-  'source bpp is not 32/16/8',
-  'palette absent or shorter than 256',
+  'source bpp is not 32/16/8/4/1',
+  'palette absent or shorter than the source depth needs',
   'degenerate 16bpp channel mask',
   'source and destination are one surface (overlap)',
   'ROP3 reads no source and is not one of the four pattern ops',
   'PATCOPY brush is not a single colour',
+  'SRCINVERT from an indexed source (generic evaluates it in index space)',
 ];
 
-// Slots 10-15 are a second dimension, not more reasons: when reason 4 fires,
+// Slots 11-14 are a second dimension, not more reasons: when reason 4 fires,
 // $gdi_bitblt_decline_src_bpp also buckets the depth it actually saw, because
-// "not 32/16/8" names three different unpackers and does not say which one the
-// app wants. These are counted IN ADDITION to reason 4, so they sum to it.
+// a bare "bpp not supported" names several different unpackers and does not
+// say which one the app wants. These are counted IN ADDITION to reason 4, so
+// they sum to it. They sit ABOVE the reasons, so adding a reason moves them --
+// test/test-wat-gdi-bitblt-declines.js pins the numbering both tools read.
 const SRC_BPP_BUCKETS = [
-  [10, '1bpp source (monochrome mask)'],
-  [11, '4bpp source'],
-  [12, '24bpp source'],
-  [13, 'source of some other depth'],
+  [11, '1bpp source (monochrome mask)'],
+  [12, '4bpp source'],
+  [13, '24bpp source'],
+  [14, 'source of some other depth'],
 ];
 
 // test_gdi_fast_count's indices, from src/10g-gdi-raster.wat.
 const SPAN = {
   fastSpans: 0, fastBitblts: 1, fastStretches: 2, slowSpans: 3,
   fastPx: 4, slowPx: 5, slowByClip: 6, slowByRop: 7, bandSpans: 8,
+  declinedPx: 9,
 };
 
 function parseArgs(argv) {
@@ -100,7 +110,7 @@ const READ_COUNTERS = `
         ? e.test_gdi_bitblt_decline_count(i) >>> 0 : -1);
     }
     var spans = [];
-    for (var j = 0; j < 9; j++) {
+    for (var j = 0; j < 10; j++) {
       spans.push(e.test_gdi_fast_count ? e.test_gdi_fast_count(j) >>> 0 : -1);
     }
     return { declines: declines, spans: spans, batch: tickState.batch | 0 };
@@ -173,13 +183,19 @@ async function main() {
     console.log(JSON.stringify({
       app: opts.app || opts.exe, batches: result.batch,
       declines: REASONS.map((name, i) => ({ reason: i, name, count: declines[i] })),
-      total, spans,
+      byDepth: SRC_BPP_BUCKETS.map(([slot, name]) => ({ slot, name, count: declines[slot] || 0 })),
+      total, declinedPx: spans[SPAN.declinedPx],
+      fastBitblts: spans[SPAN.fastBitblts], spans,
     }, null, 2));
     return;
   }
 
+  const declinedPx = spans[SPAN.declinedPx];
+  const fastBlits = spans[SPAN.fastBitblts];
+
   console.log(`\n${opts.app || opts.exe}: ${result.batch} batches`);
-  console.log(`\nfast-path bitblt declines: ${total}`);
+  console.log(`\nfast-path bitblt declines: ${total} blit(s), ` +
+    `${declinedPx} px, against ${fastBlits} blit(s) taken fast`);
   if (!total) {
     console.log('  none — every blit this run took the fast 32bpp path.');
   } else {
@@ -205,9 +221,10 @@ async function main() {
     }
   }
 
-  // The declines are per blit; these are per pixel, and they are the ones that
-  // say whether any of it mattered.
-  console.log(`\nspan raster, same instant:`);
+  // A DIFFERENT subsystem, printed as context only. A declined BitBlt runs the
+  // generic blit loop, not the span rasterizer, so nothing here prices the
+  // histogram above -- "declined px" on the first line does that.
+  console.log(`\nspan raster (a separate path; does NOT price the declines above):`);
   console.log(`  ${spans[SPAN.fastBitblts]} fast bitblts, ` +
     `${spans[SPAN.fastStretches]} fast stretches`);
   console.log(`  ${spans[SPAN.fastSpans]} fast spans (${fastPx} px), ` +

@@ -31,8 +31,9 @@ const EXTRA_WAT = `
 
 const REASON = {
   DST_BPP: 0, NO_CLIP: 1, GEOMETRY: 2, SRC_COORDS: 3, SRC_BPP: 4,
-  PALETTE: 5, MASK: 6, OVERLAP: 7, ROP3: 8, BRUSH: 9,
+  PALETTE: 5, MASK: 6, OVERLAP: 7, ROP3: 8, BRUSH: 9, SRCINVERT: 10,
 };
+const REASON_COUNT = 11;
 
 (async () => {
   const { exports: wat, memory } = await bootRenderHarness({ extraWat: EXTRA_WAT });
@@ -73,11 +74,13 @@ const REASON = {
     return { hdc, desc, bits, width, height, bpp, stride };
   }
 
-  const counts = () => Array.from({ length: 10 }, (_, i) =>
+  const counts = () => Array.from({ length: REASON_COUNT }, (_, i) =>
     wat.test_gdi_bitblt_decline_count(i) >>> 0);
-  // Slots 10..15 are a second dimension over reason 4, not more reasons.
-  const depths = () => Array.from({ length: 6 }, (_, i) =>
-    wat.test_gdi_bitblt_decline_count(10 + i) >>> 0);
+  // Slots 11..14 are a second dimension over reason 4, not more reasons.
+  // They sit above the reasons, so adding a reason moves them; that is what
+  // this file exists to pin.
+  const depths = () => Array.from({ length: 4 }, (_, i) =>
+    wat.test_gdi_bitblt_decline_count(REASON_COUNT + i) >>> 0);
 
   // Runs `fn` and asserts exactly one counter moved, by exactly one.
   function onlyReason(reason, fn) {
@@ -143,7 +146,8 @@ const REASON = {
 
   check('a source bit depth the unpacker does not know is counted', () => {
     const dst = surface(8, 8, 32);
-    const src = surface(8, 8, 4);
+    // 4bpp and 1bpp joined the fast path; 24 is the depth still declined.
+    const src = surface(8, 8, 24);
     onlyReason(REASON.SRC_BPP, () => {
       wat.test_bitblt_on_dc(dst.hdc, dst.desc, 0, 0, 8, 8, src.desc, 0, 0,
         0, SRCCOPY);
@@ -157,12 +161,13 @@ const REASON = {
   check('reason 4 also records which source depth it declined', () => {
     const dst = surface(8, 8, 32);
     const before = depths();
-    // 1, 4 and 24 are the only depths this gate can actually see: a DIB is
-    // 1/4/8/16/24/32 and the other three are already handled. Bucket 13
-    // ("some other depth") is therefore a catch-all that a well-formed
-    // surface cannot reach, and is deliberately not exercised here rather
-    // than reached through a malformed descriptor that proves nothing.
-    for (const [bpp, bucket] of [[1, 0], [4, 1], [24, 2]]) {
+    // A DIB is 1/4/8/16/24/32 and the fast path now unpacks every one of
+    // those but 24, so 24 is the ONLY depth this gate can still see on a
+    // well-formed surface. Bucket 14 ("some other depth") is a catch-all that
+    // a valid descriptor cannot reach, and buckets 0-1 (1bpp, 4bpp) are now
+    // dead by construction rather than untested -- widening them is exactly
+    // what emptied those buckets, and this check is how that stays visible.
+    for (const [bpp, bucket] of [[24, 2]]) {
       const src = surface(8, 8, bpp);
       const reasonBefore = counts()[REASON.SRC_BPP];
       const depthBefore = depths();
@@ -177,8 +182,22 @@ const REASON = {
         `${bpp}bpp source should also count as reason 4`);
     }
     const spread = depths().map((n, i) => n - before[i]);
-    assert.strictEqual(spread.reduce((a, b) => a + b, 0), 3,
+    assert.strictEqual(spread.reduce((a, b) => a + b, 0), 1,
       'the buckets must sum to the reason-4 declines, not over- or under-count');
+  });
+
+  // 1bpp and 4bpp used to be reason 4. They are unpacked now, and what stops
+  // these particular surfaces is that they carry no colour table at all --
+  // a different gate, and a decline the fast path is still right to make.
+  check('a sub-byte source with no colour table declines on the palette', () => {
+    const dst = surface(8, 8, 32);
+    for (const bpp of [1, 4]) {
+      const src = surface(8, 8, bpp);
+      onlyReason(REASON.PALETTE, () => {
+        wat.test_bitblt_on_dc(dst.hdc, dst.desc, 0, 0, 8, 8, src.desc, 0, 0,
+          0, SRCCOPY);
+      });
+    }
   });
 
   check('blitting a surface onto itself is counted as overlap', () => {
@@ -213,8 +232,8 @@ const REASON = {
   check('the reset clears every reason', () => {
     assert(counts().some(n => n > 0), 'nothing had been counted yet');
     wat.test_gdi_fast_reset();
-    assert.deepStrictEqual(counts(), new Array(10).fill(0));
-    assert.deepStrictEqual(depths(), new Array(6).fill(0),
+    assert.deepStrictEqual(counts(), new Array(REASON_COUNT).fill(0));
+    assert.deepStrictEqual(depths(), new Array(4).fill(0),
       'the reset must clear the depth buckets too, not just the reasons');
   });
 
