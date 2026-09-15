@@ -52,6 +52,7 @@
 (include "09a2-handlers-console.wat")
 (include "09a3-handlers-audio.wat")
 (include "09a4-handlers-gdi.wat")
+(include "09a4b-handlers-cursor-icon.wat")
 (include "09a5-handlers-window.wat")
 (include "09a5b-handlers-window-late.wat")
 (include "09a5c-handlers-wide.wat")
