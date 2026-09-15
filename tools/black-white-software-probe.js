@@ -31,12 +31,26 @@ if(!Number.isSafeInteger(maxBatches)||maxBatches<1)throw Error('max-batches must
 const captureEvery=Number(arg('capture-every','0'));
 if(!Number.isFinite(captureEvery)||(captureEvery!==0&&(captureEvery<10||captureEvery>1800)))
   throw Error('capture-every must be0 (off) or10..1800 seconds');
-const game=path.resolve(arg('game','/private/tmp/black-white-full.ntZDCF/extracted/MainApp'));
+// The default used to be an extraction under /private/tmp. macOS reaps files
+// there once they go three days without a read, and it reaps FILES while
+// leaving the directory tree standing -- so the install went 366 files to 45
+// with `find -type d` still looking healthy, and BW2Demo.exe exited cleanly on
+// a missing Data\Text\BW2Text.bin in a way that read convincingly as an
+// emulator regression. Cost a session. Point at the durable in-repo install.
+const game=path.resolve(arg('game',path.join(__dirname,'..','test','binaries',
+  'win98-games-a-d','Black and White 2-DX9-D3D','installed')));
 const output=fs.mkdtempSync(path.join(os.tmpdir(),'bw-software-probe-'));
 const root=path.resolve(__dirname,'..');
 const flags=[`--exe=${path.join(game,'BW2Demo.exe')}`,'--vfs-include=**/*',
   `--dll-seed=${['d3dx9_25.dll','binkw32.dll','dbghelp.dll'].map(f=>path.join(game,f)).join(',')}`,
   '--d3d9-renderer=software','--d3d9-programmable','--control-stdin','--real-ticks',
+  // The land commits the whole 316MB sparse backing pool and then asks for
+  // more, so this app is the reason run.js has --memory-mb at all: everything
+  // above 0x20000000 is the extension backing window. Matches the `bigMemory`
+  // flag lib/apps.js gives it in the browser. 2048 rather than 1024 because
+  // 1024 was measured short -- 792MB live when the land loader asks for one
+  // more 430MB range, against the 828MB a 1GB memory provides.
+  '--memory-mb=2048',
   '--quiet-api','--quiet-blocks','--batch-size=200000',`--max-batches=${maxBatches}`,`--max-seconds=${seconds+30}`,
   '--trace-eip-range=0x00526d93-0x00526d97','--trace-eip-detail','--trace-eip-stream'];
 if(arg('wasm',null))flags.push(`--wasm=${path.resolve(arg('wasm'))}`,'--no-build');

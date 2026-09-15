@@ -7517,3 +7517,65 @@ webgl backend. So the two ways to measure the GPU path today are:
 Worth doing: the measurement above says the software path loses ~90% of its
 wall clock to the per-draw hand-off, and a GPU backend changes both halves of
 that — the rasterization disappears and the command stream can pipeline.
+
+## Pipelining the command stream: +41% draws/s, and the byte budget that bit back (drive52, 2026-09-14)
+
+The measurement above said the software path loses ~90% of its wall clock to
+the per-draw hand-off, so the fix is not a faster rasterizer. `lib/d3d9-host.js`
+now defers DRAW and CLEAR on an async device: submit, return `D3D_OK`, do not
+park. The commands whose value the guest actually reads — readback, present,
+query, release, reset — still fence. This is the shape D3D9 itself has, which is
+why it is safe: the runtime validates parameters synchronously and returns
+`D3DERR_INVALIDCALL` from the call, then lets the driver consume the command
+asynchronously; a fault only the hardware can see surfaces at the next
+synchronization point as device-lost, never as a per-draw result. Parking bought
+nothing else, because `_result`'s default finalize returns 1 regardless.
+
+Measured on the same drive, same script, same arithmetic
+(`scratchpad/draw-rate.js` reads the probe's own 5-second counter samples):
+
+| | fence per draw (drive51) | pipelined (drive52) |
+|---|---|---|
+| draws | 42400, 0 failed | 29850, 0 failed (still running) |
+| draws/s p50 | 1.99 | **2.80** |
+| draws/s p90 | 12.20 | **15.92** |
+| draws/s max | 38.57 | 42.77 |
+| in flight | 1 | max 33, p50 2 |
+
+Read the *in flight* row before the rates. drive51's 1 is a sampling artifact —
+`submitted` is bumped just before `completed`, so a 1 appears even under the old
+per-command fence — while drive52 genuinely runs up to 33 commands ahead of the
+worker. That is the thing the old path made structurally impossible, and the
+rate follows from it.
+
+### The cap has to be in BYTES, and that cost a run
+
+The first attempt capped only the command count (32 in flight) and died 15
+minutes in: 457 failed draws, `render payload exceeds available byte budget`,
+then `render worker stopped`, at pick+930s.
+
+`lib/d3d-command-stream.js:340` charges every payload against what is still
+*free* — `capacityBytes - bytes`, where `bytes` only drops when a command
+retires. Under the old fence each draw therefore met an **empty** queue and
+could use the whole 64 MB. Deferred commands hold their copied payloads all at
+once instead, and this game's land draws carry 2048x1024 texture payloads of
+about 8 MB each (the probe's own category census names them:
+`5/2/false/false/2048x1024:1`), so eight in flight exhaust the capacity. The
+refusal is *fatal* rather than slow, because the queue's error is sticky: one
+refused draw ends rendering for the rest of the run. Same sticky-error shape as
+the unbound-sampler refusal in blocker #9 — worth remembering as a class.
+
+Bounded two ways now, because the payload size is not known until it is copied:
+stop deferring past a quarter of the capacity, so a payload that fit before
+still finds three quarters free; and treat a `FULL` from a deferred submit as
+backpressure rather than failure — park the guest until the in-flight set has
+drained, which restores exactly the empty queue the fencing path always
+submitted into, then submit. A payload too large for an *empty* queue still
+fails, as it always did. Pinned by test-d3d9-async-protocol.
+
+### What this does not fix
+
+The land renders and the flyover is faster, but this is still the cinematic.
+The input poll has not gone nonzero on any drive yet and ESC does not skip the
+cinematic, so interactive gameplay remains the open blocker — and it is not on
+the render path at all.
