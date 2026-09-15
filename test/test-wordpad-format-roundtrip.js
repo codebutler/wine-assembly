@@ -49,7 +49,7 @@ seq.push('230:0x111:57604');
 seq.push(`280:open-dlg-pick:${SAVE_NAME}`);
 seq.push('345:dump-focus-charformat:after-save');
 seq.push('365:0x111:57600');
-seq.push('395:dlg-cmd:1');
+seq.push('395:dlg-post-cmd:1');
 seq.push('445:dump-focus-text:after-new');
 seq.push('475:0x111:57601');
 seq.push(`525:open-dlg-pick:${SAVE_NAME}`);
@@ -153,7 +153,7 @@ check('Format > Font applied Arial Bold Italic 24pt',
 check('underline plus direct text color were set before Save As', hasFontRun(beforeSave));
 check('Save As dialog filename accepted', picks >= 1);
 check('GetSaveFileNameA was called', /GetSaveFileNameA/.test(out));
-check('CreateFileA created formatted RTF file', new RegExp(`CreateFileA\\(path="${escapeRe(SAVE_NAME)}"`).test(out));
+check('CreateFileA created formatted RTF file', new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('wvsprintfA streamed formatted RTF', /wvsprintfA\(/.test(out));
 check('WriteFile wrote non-empty formatted RTF bytes', /WriteFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0*[1-9a-f][0-9a-f]*,/i.test(out));
 check('formatting state remained after Save As', hasFontRun(afterSave));
@@ -161,7 +161,7 @@ check('File New cleared native RichEdit text', /len=0 text=""/.test(afterNew));
 check('Open saved filename accepted', picks >= 2);
 check('GetOpenFileNameA was called', /GetOpenFileNameA/.test(out));
 check('CreateFileA reopened formatted RTF file',
-  new RegExp(`CreateFileA\\(path="C:\\\\windows\\\\${escapeRe(SAVE_NAME)}"`).test(out));
+  new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('ReadFile streamed formatted RTF bytes', /ReadFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0*[1-9a-f][0-9a-f]*,/i.test(out));
 check('reopened formatted RTF restored plain text', /len=5 text="style"/.test(afterOpen));
 check('Ctrl+A selected reopened text', /sel=0\.\.[1-9][0-9]*/.test(selected));

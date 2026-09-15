@@ -47,6 +47,10 @@ const extraWat = String.raw`
   (func (export "test_open_result") (result i32) (global.get $modal_result))
   (func (export "test_open_error") (result i32) (global.get $common_dialog_error))
   (func (export "test_open_buf") (result i32) (global.get $test_open_buf))
+  (func (export "test_open_file_offset") (result i32)
+    (i32.load16_u (call $g2w (i32.add (global.get $test_open_ofn) (i32.const 56)))))
+  (func (export "test_open_extension_offset") (result i32)
+    (i32.load16_u (call $g2w (i32.add (global.get $test_open_ofn) (i32.const 58)))))
 `;
 
 function writeAscii(exports, memory, text) {
@@ -83,7 +87,7 @@ async function makePair() {
 
     const bufWa = RegionMap.g2w(guest.test_open_buf() >>> 0, guest.get_image_base());
     const view = new DataView(memory.buffer);
-    assert.strictEqual(view.getUint16(bufWa, true), 7,
+    assert.strictEqual(view.getUint16(bufWa, true), 10,
       'the first two lpstrFile bytes contain the required character count');
     assert.strictEqual(view.getUint8(bufWa + 2), 0xA5,
       'failure does not copy a truncated filename after the required-size word');
@@ -100,9 +104,29 @@ async function makePair() {
     assert.strictEqual(guest.test_open_result(), 1);
     assert.strictEqual(guest.test_open_error(), 0);
     const bufWa = RegionMap.g2w(guest.test_open_buf() >>> 0, guest.get_image_base());
-    assert.deepStrictEqual(Array.from(new Uint8Array(memory.buffer, bufWa, 8)),
-      [0x41, 0, 0x42, 0, 0x43, 0, 0, 0],
-      'renderer-shadow acceptance preserves GetOpenFileNameW UTF-16 output');
+    assert.deepStrictEqual(Array.from(new Uint8Array(memory.buffer, bufWa, 14)),
+      [0x43, 0, 0x3A, 0, 0x5C, 0, 0x41, 0, 0x42, 0, 0x43, 0, 0, 0],
+      'renderer-shadow acceptance preserves the full GetOpenFileNameW UTF-16 path');
+    assert.strictEqual(guest.test_open_file_offset(), 3,
+      'nFileOffset points past the root directory');
+    assert.strictEqual(guest.test_open_extension_offset(), 0,
+      'nFileExtension is zero when the selected leaf has no extension');
+  }
+
+  // ANSI success returns the full path and publishes both documented offsets.
+  {
+    const { memory, guest, ui } = await makePair();
+    const dlg = guest.test_open_begin(0, 32) >>> 0;
+    const text = writeAscii(guest, memory, 'report.txt');
+    ui.test_open_accept(dlg, text);
+    assert.strictEqual(guest.test_open_pump(), 0);
+    assert.strictEqual(guest.test_open_result(), 1);
+    const bufWa = RegionMap.g2w(guest.test_open_buf() >>> 0, guest.get_image_base());
+    const bytes = new Uint8Array(memory.buffer, bufWa, 14);
+    assert.strictEqual(Buffer.from(bytes).toString('latin1').replace(/\0.*$/, ''),
+      'C:\\report.txt', 'GetOpenFileNameA returns drive, path, leaf, and extension');
+    assert.strictEqual(guest.test_open_file_offset(), 3);
+    assert.strictEqual(guest.test_open_extension_offset(), 10);
   }
 
   console.log('PASS  Open/Save filename overflow is atomic and crosses the Worker modal bridge');

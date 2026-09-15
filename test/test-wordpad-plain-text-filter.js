@@ -41,7 +41,7 @@ seq.push('210:dlg-cmd:6');
 seq.push('250:click:40:150');
 seq.push('260:dump-focus-text:after-save');
 seq.push('300:0x111:57600');
-seq.push('330:dlg-cmd:1');
+seq.push('330:dlg-post-cmd:1');
 seq.push('380:dump-focus-text:after-new');
 seq.push('410:0x111:57601');
 seq.push(`460:open-dlg-pick:${SAVE_NAME}`);
@@ -90,6 +90,7 @@ const interesting = out.split('\n').filter(l =>
   l.includes('dump-focus-text') ||
   l.includes('dlg-dump') ||
   l.includes('dlg-cmd') ||
+  l.includes('dlg-post-cmd') ||
   l.includes('open-dlg-filter') ||
   l.includes('open-dlg-pick') ||
   l.includes('MessageBox') ||
@@ -132,10 +133,10 @@ check('Text Document filter was selected',
 check('Save As filename accepted', new RegExp(`open-dlg-pick: ${escapeRe(SAVE_NAME)}`).test(out));
 check('WordPad showed text-only data loss warning',
   /MessageBox\] "WordPad": "You are about to save the document in a Text-Only format/.test(out));
-check('text-only warning accepted with Yes', /dlg-cmd: cmd=6 hwnd=0x[0-9a-f]+ at batch 210/.test(out));
+check('text-only warning accepted with Yes', /dlg-cmd: cmd=6 (?:modal )?hwnd=0x[0-9a-f]+ at batch 210/.test(out));
 check('GetSaveFileNameA was called', /GetSaveFileNameA/.test(out));
 check('CreateFileA created picked plain text file',
-  new RegExp(`CreateFileA\\(path="${escapeRe(SAVE_NAME)}"`).test(out));
+  new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('WriteFile wrote exact plain text byte count',
   /WriteFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0000000a,/i.test(out));
 check('plain text save did not write an RTF-sized payload',
@@ -148,7 +149,7 @@ check('GetOpenFileNameA was called', /GetOpenFileNameA/.test(out));
 check('Open saved filename accepted',
   (out.match(new RegExp(`open-dlg-pick: ${escapeRe(SAVE_NAME)}`, 'g')) || []).length >= 2);
 check('CreateFileA reopened saved plain text file',
-  new RegExp(`CreateFileA\\(path="C:\\\\windows\\\\${escapeRe(SAVE_NAME)}"`).test(out));
+  new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('ReadFile streamed saved plain text bytes',
   /ReadFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x00000ffe,/i.test(out));
 check('reopened plain text restored native RichEdit text', /len=10 text="plain text"/.test(afterOpen));

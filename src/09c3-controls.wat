@@ -4710,7 +4710,11 @@
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
     (local $cmd i32) (local $notif i32) (local $ofn i32) (local $ofn_w i32)
     (local $edit_h i32) (local $edit_state i32) (local $edit_sw ptr<EditState>)
+    (local $dir_h i32) (local $dir_state i32) (local $dir_sw ptr<EditState>)
     (local $text_len i32) (local $text_src_w i32)
+    (local $dir_len i32) (local $dir_src_w i32) (local $sep_len i32)
+    (local $path_g i32) (local $path_w i32) (local $path_len i32)
+    (local $file_offset i32) (local $extension_offset i32) (local $i i32)
     (local $dst_g i32) (local $dst_w i32) (local $max_len i32)
     (local $required_w i32) (local $is_wide i32)
     (local $filter_cb i32) (local $filter_sel i32)
@@ -4766,6 +4770,31 @@
               (then
                 (local.set $edit_sw (cast ptr<EditState> (call $g2w (local.get $edit_state))))
                 (local.set $text_len (load.field.memarg EditState text_len (local.get $edit_sw)))
+                ;; The filename edit contains only the leaf. OPENFILENAME's
+                ;; successful lpstrFile result is the full path. Read the
+                ;; displayed current directory from shared EditState rather
+                ;; than $opendlg_current_dir: a renderer shadow accepting a
+                ;; Worker-owned modal has private globals but shared controls.
+                (local.set $dir_h (call $ctrl_find_by_id (local.get $hwnd) (i32.const 0x440)))
+                (if (local.get $dir_h)
+                  (then
+                    (local.set $dir_state (call $wnd_get_state_ptr (local.get $dir_h)))
+                    (if (local.get $dir_state)
+                      (then
+                        (local.set $dir_sw (cast ptr<EditState> (call $g2w (local.get $dir_state))))
+                        (local.set $dir_len (load.field.memarg EditState text_len (local.get $dir_sw)))
+                        (if (load.field EditState text_buf_ptr (local.get $dir_sw))
+                          (then
+                            (local.set $dir_src_w
+                              (call $g2w (load.field EditState text_buf_ptr (local.get $dir_sw))))))))))
+                (if (i32.and
+                      (i32.gt_u (local.get $dir_len) (i32.const 0))
+                      (i32.ne (i32.load8_u
+                        (i32.add (local.get $dir_src_w) (i32.sub (local.get $dir_len) (i32.const 1))))
+                        (i32.const 0x5C)))
+                  (then (local.set $sep_len (i32.const 1))))
+                (local.set $file_offset (i32.add (local.get $dir_len) (local.get $sep_len)))
+                (local.set $path_len (i32.add (local.get $file_offset) (local.get $text_len)))
                 ;; OPENFILENAME.nMaxFile counts characters including the NUL.
                 ;; Never truncate a successful selection: USER's documented
                 ;; failure writes the required character count into the first
@@ -4773,34 +4802,57 @@
                 ;; FNERR_BUFFERTOOSMALL. The tagged modal result carries that
                 ;; error from a renderer shadow back to the parked guest
                 ;; instance without confusing it with an ordinary Cancel.
-                (if (i32.ge_u (local.get $text_len) (local.get $max_len))
+                (if (i32.ge_u (local.get $path_len) (local.get $max_len))
                   (then
                     (local.set $required_w
                       (call $g2w_affine_span (local.get $dst_g) (i32.const 2)))
                     (if (i32.ne (local.get $required_w) (global.get $NULL_SENTINEL))
                       (then
                         (i32.store16 (local.get $required_w)
-                          (i32.add (local.get $text_len) (i32.const 1)))))
+                          (i32.add (local.get $path_len) (i32.const 1)))))
                     (call $modal_done (i32.const 0xFFFF3003))
                     (return (i32.const 0))))
+                (local.set $path_g (call $heap_alloc (i32.add (local.get $path_len) (i32.const 1))))
+                (local.set $path_w (call $g2w (local.get $path_g)))
+                (if (local.get $dir_len)
+                  (then (call $memcpy (local.get $path_w) (local.get $dir_src_w) (local.get $dir_len))))
+                (if (local.get $sep_len)
+                  (then (i32.store8 (i32.add (local.get $path_w) (local.get $dir_len)) (i32.const 0x5C))))
                 (local.set $dst_w (call $g2w (local.get $dst_g)))
                 (if (load.field EditState text_buf_ptr (local.get $edit_sw))
                   (then
                     (local.set $text_src_w (call $g2w (load.field EditState text_buf_ptr (local.get $edit_sw))))
                     (if (local.get $text_len)
                       (then
-                        (if (local.get $is_wide)
-                          (then
-                            (drop (call $ansi_to_wide
-                              (load.field EditState text_buf_ptr (local.get $edit_sw)) (local.get $dst_g)
-                              (local.get $max_len))))
-                          (else
-                            (call $memcpy (local.get $dst_w)
-                              (local.get $text_src_w) (local.get $text_len))))))))
+                        (call $memcpy (i32.add (local.get $path_w) (local.get $file_offset))
+                          (local.get $text_src_w) (local.get $text_len))))))
+                (i32.store8 (i32.add (local.get $path_w) (local.get $path_len)) (i32.const 0))
+                (if (local.get $is_wide)
+                  (then
+                    (drop (call $ansi_to_wide (local.get $path_g) (local.get $dst_g)
+                      (local.get $max_len))))
+                  (else
+                    (call $memcpy (local.get $dst_w) (local.get $path_w) (local.get $path_len))))
                 (if (local.get $is_wide)
                   (then (i32.store16 (i32.add (local.get $dst_w)
-                          (i32.shl (local.get $text_len) (i32.const 1))) (i32.const 0)))
-                  (else (i32.store8 (i32.add (local.get $dst_w) (local.get $text_len)) (i32.const 0))))))))
+                          (i32.shl (local.get $path_len) (i32.const 1))) (i32.const 0)))
+                  (else (i32.store8 (i32.add (local.get $dst_w) (local.get $path_len)) (i32.const 0))))
+                ;; nFileOffset names the leaf within the returned full path;
+                ;; nFileExtension names the first character after the last
+                ;; dot, or zero when the leaf has no extension.
+                (local.set $i (i32.const 0))
+                (block $ext_done (loop $ext_scan
+                  (br_if $ext_done (i32.ge_u (local.get $i) (local.get $text_len)))
+                  (if (i32.eq (i32.load8_u (i32.add (local.get $text_src_w) (local.get $i)))
+                              (i32.const 0x2E))
+                    (then
+                      (local.set $extension_offset
+                        (i32.add (local.get $file_offset) (i32.add (local.get $i) (i32.const 1))))))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $ext_scan)))
+                (i32.store16 offset=56 (local.get $ofn_w) (local.get $file_offset))
+                (i32.store16 offset=58 (local.get $ofn_w) (local.get $extension_offset))
+                (call $heap_free (local.get $path_g))))))
         (local.set $filter_cb (call $ctrl_find_by_id (local.get $hwnd) (i32.const 0x445)))
         (if (local.get $filter_cb)
           (then
