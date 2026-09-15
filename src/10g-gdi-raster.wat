@@ -130,6 +130,17 @@
           (i32.or (i32.lt_s (local.get $y) (i32.const 0))
             (i32.ge_s (local.get $y) (i32.load offset=8 (local.get $desc)))))
       (then (return (i32.const 0))))
+    (if (call $window_update_damage_hdc_rect
+          (local.get $hdc)
+          (i32.sub (local.get $x) (i32.load offset=72 (local.get $desc)))
+          (i32.sub (local.get $y) (i32.load offset=76 (local.get $desc)))
+          (i32.add
+            (i32.sub (local.get $x) (i32.load offset=72 (local.get $desc)))
+            (i32.const 1))
+          (i32.add
+            (i32.sub (local.get $y) (i32.load offset=76 (local.get $desc)))
+            (i32.const 1)))
+      (then (return (i32.const 0))))
     (if (i32.eqz (call $gdi_dc_clip_device_point_visible
           (local.get $hdc)
           (i32.sub (local.get $x) (i32.load offset=72 (local.get $desc)))
@@ -153,7 +164,10 @@
   ;; desc uses the line descriptor's surface/mapping layout. Geometry callers
   ;; own coverage; this helper owns native bytes, clip, and ROP2.
   (func $gdi_shape_clip_visible (param $hdc i32) (param $x i32) (param $y i32) (result i32)
-    (call $window_update_damage_hdc (local.get $hdc))
+    (drop (call $window_update_damage_hdc_rect
+      (local.get $hdc) (local.get $x) (local.get $y)
+      (i32.add (local.get $x) (i32.const 1))
+      (i32.add (local.get $y) (i32.const 1))))
     (call $gdi_dc_clip_device_point_visible
       (local.get $hdc) (local.get $x) (local.get $y)))
 
@@ -544,6 +558,17 @@
     (local $app_clip i32) (local $system_clip i32) (local $bound i32)
     (global.set $gdi_span_wrote_l (i32.const 0x7FFFFFFF))
     (global.set $gdi_span_wrote_r (i32.const 0x80000000))
+    ;; A retained NULLREGION would make both the fast and reference paths
+    ;; empty. Record this attempted run once, before either path branches.
+    (if (call $window_update_damage_hdc_rect
+          (local.get $hdc)
+          (i32.sub (local.get $left) (i32.load offset=72 (local.get $desc)))
+          (i32.sub (local.get $y) (i32.load offset=76 (local.get $desc)))
+          (i32.sub (local.get $right) (i32.load offset=72 (local.get $desc)))
+          (i32.add
+            (i32.sub (local.get $y) (i32.load offset=76 (local.get $desc)))
+            (i32.const 1)))
+      (then (return (i32.const 0))))
     ;; The classic UI and Paint spend most geometry time in solid COPYPEN
     ;; spans. Once surface bounds and retained clipping are known to be simple,
     ;; write the canonical XRGB words directly instead of re-running the full
@@ -1065,10 +1090,6 @@
     (if (i32.or (i32.le_s (local.get $x1) (local.get $x0))
           (i32.le_s (local.get $y1) (local.get $y0)))
       (then (return (i32.const 1))))
-    ;; This is a valid nonempty GDI operation even when the USER system clip
-    ;; is the NULLREGION installed by LockWindowUpdate. Record the attempt
-    ;; before the span fast path rejects every row.
-    (call $window_update_damage_hdc (local.get $hdc))
     (local.set $y (local.get $y0))
     (block $done (loop $rows
       (br_if $done (i32.ge_s (local.get $y) (local.get $y1)))
@@ -3848,10 +3869,6 @@
         (else (i32.const 0)))))
 
   (func $gdi_raster_system_clip_record (param $hdc i32) (result i32)
-    ;; Fast span/blit paths inspect the retained clip once and can reject a
-    ;; NULLREGION without reaching the per-pixel visibility predicate. Record
-    ;; that attempted locked-window draw before returning the empty record.
-    (call $window_update_damage_hdc (local.get $hdc))
     (call $gdi_raster_simple_clip_record
       (call $gdi_dc_system_clip_handle (local.get $hdc))))
 
@@ -5409,6 +5426,17 @@
           (local.get $hdc) (i32.const 8) (i32.const 0x30010)))
         (if (i32.eqz (call $gdi_brush_valid (local.get $brush)))
           (then (return (i32.const 0))))))
+    ;; This extent-bearing entry covers both the direct 32-bit path and the
+    ;; generic row cache. A locked destination succeeds without touching it.
+    (if (call $window_update_damage_hdc_rect
+          (local.get $hdc)
+          (i32.sub (local.get $dx) (i32.load offset=72 (local.get $dst)))
+          (i32.sub (local.get $dy) (i32.load offset=76 (local.get $dst)))
+          (i32.sub (i32.add (local.get $dx) (local.get $dw))
+            (i32.load offset=72 (local.get $dst)))
+          (i32.sub (i32.add (local.get $dy) (local.get $dh))
+            (i32.load offset=76 (local.get $dst))))
+      (then (return (i32.const 1))))
     (local.set $fast (call $gdi_raster_stretch_blt_fast32
       (local.get $hdc) (local.get $dst) (local.get $dx) (local.get $dy)
       (local.get $dw) (local.get $dh) (local.get $src) (local.get $sx) (local.get $sy)
@@ -5596,6 +5624,17 @@
           (local.get $hdc) (i32.const 8) (i32.const 0x30010)))
         (if (i32.eqz (call $gdi_brush_valid (local.get $brush)))
           (then (return (i32.const 0))))))
+    ;; This extent-bearing entry covers both the direct 32-bit path and the
+    ;; generic row cache. A locked destination succeeds without touching it.
+    (if (call $window_update_damage_hdc_rect
+          (local.get $hdc)
+          (i32.sub (local.get $dx) (i32.load offset=72 (local.get $dst)))
+          (i32.sub (local.get $dy) (i32.load offset=76 (local.get $dst)))
+          (i32.sub (i32.add (local.get $dx) (local.get $w))
+            (i32.load offset=72 (local.get $dst)))
+          (i32.sub (i32.add (local.get $dy) (local.get $h))
+            (i32.load offset=76 (local.get $dst))))
+      (then (return (i32.const 1))))
     (local.set $fast (call $gdi_raster_bitblt_fast32
       (local.get $hdc) (local.get $dst) (local.get $dx) (local.get $dy)
       (local.get $w) (local.get $h) (local.get $src) (local.get $sx) (local.get $sy)
@@ -5818,6 +5857,9 @@
       (then (return (i32.const -1))))
     (local.set $x (call $gdi_line_map_x (local.get $desc) (local.get $logical_x)))
     (local.set $y (call $gdi_line_map_y (local.get $desc) (local.get $logical_y)))
+    (if (i32.eqz (call $gdi_raster_clip_visible
+          (local.get $hdc) (local.get $desc) (local.get $x) (local.get $y)))
+      (then (return (i32.const -1))))
     (local.set $result (call $gdi_raster_set_pixel
       (local.get $desc) (local.get $x) (local.get $y) (local.get $color)))
     (if (i32.ne (local.get $result) (i32.const -1))
@@ -5969,6 +6011,19 @@
     (local.set $top (i32.load offset=12 (local.get $record)))
     (local.set $right (i32.load offset=16 (local.get $record)))
     (local.set $bottom (i32.load offset=20 (local.get $record)))
+    ;; FrameRgn owns its raster loop and historically bypassed the DC clip.
+    ;; Record its mapped output bound once and suppress the direct writes.
+    (if (call $window_update_damage_hdc_rect
+          (local.get $hdc)
+          (i32.sub (call $gdi_line_map_x (local.get $desc) (local.get $left))
+            (i32.load offset=72 (local.get $desc)))
+          (i32.sub (call $gdi_line_map_y (local.get $desc) (local.get $top))
+            (i32.load offset=76 (local.get $desc)))
+          (i32.sub (call $gdi_line_map_x (local.get $desc) (local.get $right))
+            (i32.load offset=72 (local.get $desc)))
+          (i32.sub (call $gdi_line_map_y (local.get $desc) (local.get $bottom))
+            (i32.load offset=76 (local.get $desc))))
+      (then (return (i32.const 1))))
     (local.set $y (local.get $top))
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_s (local.get $y) (local.get $bottom)))

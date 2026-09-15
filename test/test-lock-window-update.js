@@ -61,7 +61,12 @@ const extraWat = String.raw`
   (func (export "test_window_update_target") (result i32)
     (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
   (func (export "test_window_update_damaged") (result i32)
-    (i32.atomic.load offset=4 (global.get $WINDOW_UPDATE_LOCK)))
+    (i32.atomic.load offset=8 (global.get $WINDOW_UPDATE_LOCK)))
+  (func (export "test_window_update_damage_field") (param $offset i32) (result i32)
+    (i32.atomic.load
+      (i32.add (global.get $WINDOW_UPDATE_LOCK) (local.get $offset))))
+  (func (export "test_get_update_rect") (param $hwnd i32) (param $rect i32) (result i32)
+    (call $update_get_rect (local.get $hwnd) (call $g2w (local.get $rect))))
   (func (export "test_clear_window_update") (param $hwnd i32)
     (call $paint_flag_clear_hwnd (local.get $hwnd))
     (call $update_clear_hwnd (local.get $hwnd)))
@@ -77,16 +82,24 @@ function installTop(h, hwnd, x) {
   h.exports.test_gdi_client_rect_set(hwnd, 0, 0, 80, 60);
 }
 
+function writeRect(e, rect, left, top, right, bottom) {
+  e.guest_write32(rect + 0, left);
+  e.guest_write32(rect + 4, top);
+  e.guest_write32(rect + 8, right);
+  e.guest_write32(rect + 12, bottom);
+}
+
+function readRect(e, rect) {
+  return [0, 4, 8, 12].map(offset => e.guest_read32(rect + offset) | 0);
+}
+
 (async () => {
   const h = await bootRenderHarness({ extraWat, fonts: 'none', width: 200, height: 100 });
   const e = h.exports;
   const rect = e.guest_alloc(16) >>> 0;
   const fill = e.guest_alloc(16) >>> 0;
   const ps = e.guest_alloc(64) >>> 0;
-  e.guest_write32(fill + 0, 0);
-  e.guest_write32(fill + 4, 0);
-  e.guest_write32(fill + 8, 12);
-  e.guest_write32(fill + 12, 10);
+  writeRect(e, fill, 0, 0, 12, 10);
 
   installTop(h, ROOT, 8);
   installTop(h, OTHER, 108);
@@ -143,30 +156,51 @@ function installTop(h, hwnd, x) {
   assert.strictEqual(e.test_get_clip_box(rootDc, rect), SIMPLEREGION,
     'unlock restores retained DC clipping');
 
-  // Seed a known pixel, then prove an ordinary locked fill is suppressed and
-  // converted into deferred repaint damage on unlock.
-  assert.strictEqual(e.test_get_dc_ex(ROOT, 0, DCX_LOCKWINDOWUPDATE) >>> 0 > 0, true);
+  // Seed known pixels, then prove several disjoint locked operations are
+  // suppressed and unioned in locked-window client coordinates. The child
+  // fill exercises descendant-to-root translation; SetPixel exercises a path
+  // that does not otherwise use the shape-span clipper.
+  const seedDc = e.test_get_dc_ex(ROOT, 0, DCX_LOCKWINDOWUPDATE) >>> 0;
+  assert(seedDc);
   assert.strictEqual(e.test_call_FillRect(rootDc, fill, 0x30010), 1);
   const before = e.test_call_GetPixel(rootDc, 1, 1) >>> 0;
+  assert.notStrictEqual(e.test_call_SetPixel(seedDc, 20, 15, 0x000000ff) | 0, -1);
+  const beforePoint = e.test_call_GetPixel(rootDc, 20, 15) >>> 0;
   e.test_clear_window_update(ROOT);
   e.test_clear_window_update(CHILD);
   assert.strictEqual(e.test_lock_window_update(ROOT), 1);
   assert.strictEqual(e.test_get_clip_box(rootDc, rect), NULLREGION);
+  writeRect(e, fill, 2, 3, 8, 9);
   assert.strictEqual(e.test_call_FillRect(rootDc, fill, 0x30012), 1);
+  writeRect(e, fill, 1, 2, 5, 6);
+  assert.strictEqual(e.test_call_FillRect(childDc, fill, 0x30012), 1);
+  assert.strictEqual(e.test_call_SetPixel(rootDc, 20, 15, 0x0000ff00) | 0, -1);
   assert.strictEqual(e.test_call_GetPixel(rootDc, 1, 1) >>> 0, before,
     'drawing through the locked DC is fully clipped');
+  assert.strictEqual(e.test_call_GetPixel(rootDc, 20, 15) >>> 0, beforePoint,
+    'SetPixel through the locked DC is fully clipped');
   assert.strictEqual(e.test_window_update_damaged(), 1,
     'the clipped draw records deferred damage');
+  assert.deepStrictEqual([12, 16, 20, 24].map(offset =>
+    e.test_window_update_damage_field(offset) | 0), [2, 3, 21, 16],
+  'attempted root, child, and point output is unioned in root client space');
   assert.strictEqual(e.test_lock_window_update(0), 1);
   assert.strictEqual(e.paint_flag_test(ROOT), 1,
     'unlock queues repaint for the locked window');
   assert.strictEqual(e.paint_flag_test(CHILD), 1,
     'unlock propagates repaint to locked descendants');
+  assert.strictEqual(e.test_get_update_rect(ROOT, rect), 1);
+  assert.deepStrictEqual(readRect(e, rect), [2, 3, 21, 16],
+    'unlock installs the accumulated bounding rectangle, not a full repaint');
+  assert.strictEqual(e.test_get_update_rect(CHILD, rect), 1);
+  assert.deepStrictEqual(readRect(e, rect), [0, 0, 17, 11],
+    'child update region is the translated intersection with the root damage');
 
   e.test_clear_window_update(ROOT);
   e.test_clear_window_update(CHILD);
   assert.strictEqual(e.test_lock_window_update(ROOT), 1);
   const drawThroughDc = e.test_get_dc_ex(ROOT, 0, DCX_LOCKWINDOWUPDATE) >>> 0;
+  writeRect(e, fill, 0, 0, 12, 10);
   assert.strictEqual(e.test_call_FillRect(drawThroughDc, fill, 0x30012), 1);
   assert.strictEqual(e.test_window_update_damaged(), 0,
     'drawing through DCX_LOCKWINDOWUPDATE is immediate, not deferred damage');
@@ -192,7 +226,7 @@ function installTop(h, hwnd, x) {
   assert.strictEqual(e.paint_flag_test(ROOT), 0,
     'RDW_VALIDATE retires the empty non-main update and its paint flag');
 
-  console.log('PASS LockWindowUpdate shares one lock, clips target/children, honors DCX bypass, and repaints only after attempted drawing');
+  console.log('PASS LockWindowUpdate shares one lock, clips target/children, unions exact attempted bounds, honors DCX bypass, and invalidates only that bound');
 })().catch(error => {
   console.error(error.stack || error);
   process.exit(1);

@@ -3197,9 +3197,19 @@
         (drop (call $gdi_dc_set_field (local.get $hdc) (i32.const 16)
           (local.get $update_y) (i32.const 0)))))
     (if (i32.eqz (local.get $path_open))
-      (then (call $gdi_geometry_present (local.get $hdc) (local.get $desc)
-        (local.get $dirty_left) (local.get $dirty_top)
-        (local.get $dirty_right) (local.get $dirty_bottom))))
+      (then
+        ;; Glyph-row clipping is memoized for the text hot path. Record the
+        ;; completed operation bound once here, instead of adding a lock check
+        ;; to every cached glyph pixel.
+        (drop (call $window_update_damage_hdc_rect
+          (local.get $hdc)
+          (i32.sub (local.get $dirty_left) (i32.load offset=72 (local.get $desc)))
+          (i32.sub (local.get $dirty_top) (i32.load offset=76 (local.get $desc)))
+          (i32.sub (local.get $dirty_right) (i32.load offset=72 (local.get $desc)))
+          (i32.sub (local.get $dirty_bottom) (i32.load offset=76 (local.get $desc)))))
+        (call $gdi_geometry_present (local.get $hdc) (local.get $desc)
+          (local.get $dirty_left) (local.get $dirty_top)
+          (local.get $dirty_right) (local.get $dirty_bottom))))
     (i32.const 1))
 
   (func $gdi_bitmap_draw_text (param $hdc i32) (param $text i32) (param $count i32)

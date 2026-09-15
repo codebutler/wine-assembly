@@ -6237,26 +6237,133 @@
       (br $walk)))
     (i32.const 0))
 
-  ;; A raster path calls this only when it is about to test/write a display
-  ;; DC. A locked DC has a retained NULLREGION; DCX_LOCKWINDOWUPDATE keeps its
-  ;; ordinary nonempty region and must not contribute deferred damage.
-  (func $window_update_damage_hdc (param $hdc i32)
-    (local $dc i32) (local $binding i32) (local $hwnd i32) (local $clip i32)
-    (if (i32.eqz (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
-      (then (return)))
+  ;; Serialize the tiny shared damage record. Drawing can come from several
+  ;; guest Workers, while unlock has to consume one coherent rectangle.
+  (func $window_update_damage_guard_acquire
+    (block $acquired (loop $retry
+      (br_if $acquired
+        (i32.eqz (i32.atomic.rmw.cmpxchg offset=4
+          (global.get $WINDOW_UPDATE_LOCK) (i32.const 0) (i32.const 1))))
+      (br $retry))))
+
+  (func $window_update_damage_guard_release
+    (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0)))
+
+  ;; Record one attempted device-space output rectangle. Coordinates arrive in
+  ;; the target DC's own device space; translate them to the locked window's
+  ;; client coordinates before unioning. +8 is the nonempty flag and +12..+24
+  ;; are left/top/right/bottom. Returning 1 means the retained NULLREGION came
+  ;; from LockWindowUpdate, so a caller that bypasses normal clipping must not
+  ;; write pixels. DCX_LOCKWINDOWUPDATE retains an ordinary system clip and
+  ;; therefore returns 0 without contributing deferred damage.
+  (func $window_update_damage_hdc_rect
+        (param $hdc i32) (param $left_in i32) (param $top_in i32)
+        (param $right_in i32) (param $bottom_in i32) (result i32)
+    (local $locked i32) (local $dc i32) (local $binding i32)
+    (local $hwnd i32) (local $cur i32) (local $clip i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+    (local $swap i32) (local $ox i32) (local $oy i32) (local $depth i32)
+    ;; This is the only cost on the overwhelmingly common unlocked path.
+    (local.set $locked (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
+    (if (i32.or (i32.eqz (local.get $locked))
+          (i32.eq (local.get $locked) (i32.const -1)))
+      (then (return (i32.const 0))))
     (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
-    (if (i32.eqz (local.get $dc)) (then (return)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
     (local.set $binding (load.field.memarg GdiDcState window_binding (local.get $dc)))
     (local.set $hwnd (i32.and (local.get $binding) (i32.const 0x7FFFFFFF)))
     (if (i32.eqz (call $window_update_lock_covers (local.get $hwnd)))
-      (then (return)))
+      (then (return (i32.const 0))))
     (local.set $clip (call $gdi_dc_system_clip_handle (local.get $hdc)))
-    (if (i32.and
-          (i32.ne (local.get $clip) (i32.const 0))
-          (i32.eq (call $gdi_rgn_get_box (local.get $clip) (i32.const 0))
+    (if (i32.or
+          (i32.eqz (local.get $clip))
+          (i32.ne (call $gdi_rgn_get_box (local.get $clip) (i32.const 0))
             (i32.const 1))) ;; NULLREGION
+      (then (return (i32.const 0))))
+
+    (local.set $left (local.get $left_in))
+    (local.set $top (local.get $top_in))
+    (local.set $right (local.get $right_in))
+    (local.set $bottom (local.get $bottom_in))
+    (if (i32.gt_s (local.get $left) (local.get $right))
       (then
-        (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 1)))))
+        (local.set $swap (local.get $left))
+        (local.set $left (local.get $right))
+        (local.set $right (local.get $swap))))
+    (if (i32.gt_s (local.get $top) (local.get $bottom))
+      (then
+        (local.set $swap (local.get $top))
+        (local.set $top (local.get $bottom))
+        (local.set $bottom (local.get $swap))))
+    (if (i32.or
+          (i32.le_s (local.get $right) (local.get $left))
+          (i32.le_s (local.get $bottom) (local.get $top)))
+      (then (return (i32.const 0))))
+
+    ;; A client DC starts at its HWND's client origin; a window DC starts at
+    ;; the window origin. Walk only WS_CHILD ancestry already proven by
+    ;; $window_update_lock_covers, so top-level host geometry cancels out and
+    ;; no Worker RPC is needed while accumulating damage.
+    (if (i32.ge_s (local.get $binding) (i32.const 0))
+      (then
+        (local.set $ox (call $client_rect_get_l (local.get $hwnd)))
+        (local.set $oy (call $client_rect_get_t (local.get $hwnd)))))
+    (local.set $cur (local.get $hwnd))
+    (block $at_locked (loop $walk
+      (br_if $at_locked (i32.eq (local.get $cur) (local.get $locked)))
+      (if (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS))
+        (then (return (i32.const 0))))
+      (local.set $ox (i32.add (local.get $ox) (call $ctrl_get_x_s (local.get $cur))))
+      (local.set $oy (i32.add (local.get $oy) (call $ctrl_get_y_s (local.get $cur))))
+      (local.set $cur (call $wnd_get_parent (local.get $cur)))
+      (if (i32.eqz (local.get $cur)) (then (return (i32.const 0))))
+      (local.set $ox (i32.add (local.get $ox) (call $client_rect_get_l (local.get $cur))))
+      (local.set $oy (i32.add (local.get $oy) (call $client_rect_get_t (local.get $cur))))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (local.set $ox (i32.sub (local.get $ox) (call $client_rect_get_l (local.get $locked))))
+    (local.set $oy (i32.sub (local.get $oy) (call $client_rect_get_t (local.get $locked))))
+    (local.set $left (i32.add (local.get $left) (local.get $ox)))
+    (local.set $right (i32.add (local.get $right) (local.get $ox)))
+    (local.set $top (i32.add (local.get $top) (local.get $oy)))
+    (local.set $bottom (i32.add (local.get $bottom) (local.get $oy)))
+
+    (call $window_update_damage_guard_acquire)
+    ;; Unlock first publishes -1, then waits for this guard. Recheck after
+    ;; acquiring it so a draw that raced that transition cannot appear in the
+    ;; next lock transaction.
+    (if (i32.ne
+          (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK))
+          (local.get $locked))
+      (then
+        (call $window_update_damage_guard_release)
+        (return (i32.const 0))))
+    (if (i32.eqz (i32.atomic.load offset=8 (global.get $WINDOW_UPDATE_LOCK)))
+      (then
+        (i32.atomic.store offset=12 (global.get $WINDOW_UPDATE_LOCK) (local.get $left))
+        (i32.atomic.store offset=16 (global.get $WINDOW_UPDATE_LOCK) (local.get $top))
+        (i32.atomic.store offset=20 (global.get $WINDOW_UPDATE_LOCK) (local.get $right))
+        (i32.atomic.store offset=24 (global.get $WINDOW_UPDATE_LOCK) (local.get $bottom))
+        (i32.atomic.store offset=8 (global.get $WINDOW_UPDATE_LOCK) (i32.const 1)))
+      (else
+        (if (i32.lt_s (local.get $left)
+              (i32.atomic.load offset=12 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=12
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $left))))
+        (if (i32.lt_s (local.get $top)
+              (i32.atomic.load offset=16 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=16
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $top))))
+        (if (i32.gt_s (local.get $right)
+              (i32.atomic.load offset=20 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=20
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $right))))
+        (if (i32.gt_s (local.get $bottom)
+              (i32.atomic.load offset=24 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=24
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $bottom))))))
+    (call $window_update_damage_guard_release)
+    (i32.const 1))
 
   ;; The ordinary USER visible-region calculation, without a window-update
   ;; lock. GetDCEx uses this entry for DCX_LOCKWINDOWUPDATE.

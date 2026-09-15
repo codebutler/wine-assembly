@@ -1936,10 +1936,12 @@ GetTopWindow(hWnd) — 1 arg stdcall
   ;; 658: LockWindowUpdate(hwnd). USER permits one locked window, shared by
   ;; every guest thread. Ordinary display DCs for that window and its children
   ;; receive an empty visible region until LockWindowUpdate(NULL). Drawing
-  ;; attempted through those DCs is accumulated conservatively as a full-tree
-  ;; repaint; the retained raster layer records whether any attempt occurred.
+  ;; attempted through those DCs is unioned in locked-window client space; on
+  ;; unlock that exact bound becomes the update region of the window and the
+  ;; intersecting portion is translated into each visible child.
   (func $handle_LockWindowUpdate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $old i32) (local $damaged i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
     (if (i32.eqz (local.get $arg0))
       (then
         ;; -1 keeps another Worker from acquiring a new lock while retained
@@ -1963,15 +1965,37 @@ GetTopWindow(hWnd) — 1 arg stdcall
             (global.set $eax (i32.const 0))
             (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
             (return)))
+        ;; A recorder that started before -1 was published finishes under this
+        ;; guard; one that starts later fails its HWND recheck and is not lost.
+        (call $window_update_damage_guard_acquire)
         (local.set $damaged
-          (i32.atomic.load offset=4 (global.get $WINDOW_UPDATE_LOCK)))
-        (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+          (i32.atomic.load offset=8 (global.get $WINDOW_UPDATE_LOCK)))
+        (local.set $left
+          (i32.atomic.load offset=12 (global.get $WINDOW_UPDATE_LOCK)))
+        (local.set $top
+          (i32.atomic.load offset=16 (global.get $WINDOW_UPDATE_LOCK)))
+        (local.set $right
+          (i32.atomic.load offset=20 (global.get $WINDOW_UPDATE_LOCK)))
+        (local.set $bottom
+          (i32.atomic.load offset=24 (global.get $WINDOW_UPDATE_LOCK)))
+        (i32.atomic.store offset=8 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        (i32.atomic.store offset=12 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        (i32.atomic.store offset=16 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        (i32.atomic.store offset=20 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        (i32.atomic.store offset=24 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        (call $window_update_damage_guard_release)
         ;; With -1 published, the common clip helpers rebuild ordinary USER
         ;; regions instead of reinstalling the lock's NULLREGION.
         (call $gdi_refresh_window_dc_system_clips)
         (if (local.get $damaged)
           (then
-            (call $paint_mark_visible_tree (local.get $old))
+            (call $update_invalidate_rect (local.get $old)
+              (local.get $left) (local.get $top)
+              (local.get $right) (local.get $bottom))
+            (if (i32.eq (local.get $old) (global.get $main_hwnd))
+              (then (global.set $paint_pending (i32.const 1)))
+              (else (call $paint_flag_set (local.get $old))))
+            (drop (call $paint_seed_child_paints (local.get $old)))
             (call $host_invalidate (local.get $old))))
         (i32.atomic.store (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
         (global.set $eax (i32.const 1))
@@ -1982,6 +2006,9 @@ GetTopWindow(hWnd) — 1 arg stdcall
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
         (return)))
+    ;; Clear the previous transaction while holding the same guard recorders
+    ;; use, before they can observe the newly-published HWND.
+    (call $window_update_damage_guard_acquire)
     (local.set $old (i32.atomic.rmw.cmpxchg (global.get $WINDOW_UPDATE_LOCK)
       (i32.const 0) (local.get $arg0)))
     ;; Re-locking the same HWND is idempotent; a different active lock fails.
@@ -1990,10 +2017,18 @@ GetTopWindow(hWnd) — 1 arg stdcall
       (then
         (if (i32.eqz (local.get $old))
           (then
-            (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
-            (call $gdi_refresh_window_dc_system_clips)))
+            (i32.atomic.store offset=8 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+            (i32.atomic.store offset=12 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+            (i32.atomic.store offset=16 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+            (i32.atomic.store offset=20 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+            (i32.atomic.store offset=24 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))))
+        (call $window_update_damage_guard_release)
+        (if (i32.eqz (local.get $old))
+          (then (call $gdi_refresh_window_dc_system_clips)))
         (global.set $eax (i32.const 1)))
-      (else (global.set $eax (i32.const 0))))
+      (else
+        (call $window_update_damage_guard_release)
+        (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 

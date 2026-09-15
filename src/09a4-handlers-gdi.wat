@@ -1091,7 +1091,7 @@
     (local $dst i32) (local $src i32) (local $mask i32) (local $src_hdc i32)
     (local $sx i32) (local $sy i32) (local $mask_bitmap i32)
     (local $mx i32) (local $my i32) (local $rop4 i32)
-    (local $dx i32) (local $dy i32) (local $ok i32)
+    (local $dx i32) (local $dy i32) (local $ok i32) (local $locked i32)
     (local.set $dst (global.get $GDI_BLIT_DST_DESC))
     (local.set $src (global.get $GDI_BLIT_SRC_DESC))
     (local.set $mask (global.get $GDI_BRUSH_DESC))
@@ -1112,12 +1112,26 @@
         (local.set $dy (call $gdi_line_map_y (local.get $dst) (local.get $arg2)))
         (local.set $sx (call $gdi_line_map_x (local.get $src) (local.get $sx)))
         (local.set $sy (call $gdi_line_map_y (local.get $src) (local.get $sy)))
-        (local.set $ok (call $gdi_raster_mask_blt
-          (local.get $dst) (local.get $dx) (local.get $dy) (local.get $arg3) (local.get $arg4)
-          (local.get $src) (local.get $sx) (local.get $sy)
-          (i32.load (local.get $mask)) (i32.load offset=12 (local.get $mask))
-          (local.get $mx) (local.get $my) (i32.const 0) (local.get $rop4)))
-        (if (local.get $ok)
+        (if (i32.and (i32.gt_s (local.get $arg3) (i32.const 0))
+              (i32.gt_s (local.get $arg4) (i32.const 0)))
+          (then (local.set $locked (call $window_update_damage_hdc_rect
+            (local.get $arg0)
+            (i32.sub (local.get $dx) (i32.load offset=72 (local.get $dst)))
+            (i32.sub (local.get $dy) (i32.load offset=76 (local.get $dst)))
+            (i32.sub (i32.add (local.get $dx) (local.get $arg3))
+              (i32.load offset=72 (local.get $dst)))
+            (i32.sub (i32.add (local.get $dy) (local.get $arg4))
+              (i32.load offset=76 (local.get $dst)))))))
+        (if (local.get $locked)
+          (then (local.set $ok (i32.const 1)))
+          (else
+            (local.set $ok (call $gdi_raster_mask_blt
+              (local.get $dst) (local.get $dx) (local.get $dy)
+              (local.get $arg3) (local.get $arg4)
+              (local.get $src) (local.get $sx) (local.get $sy)
+              (i32.load (local.get $mask)) (i32.load offset=12 (local.get $mask))
+              (local.get $mx) (local.get $my) (i32.const 0) (local.get $rop4)))))
+        (if (i32.and (local.get $ok) (i32.eqz (local.get $locked)))
           (then (call $gdi_geometry_present (local.get $arg0) (local.get $dst)
             (local.get $dx) (local.get $dy)
             (i32.add (local.get $dx) (local.get $arg3))
@@ -1938,21 +1952,8 @@
 
   ;; 318: SetPixel(hdc, x, y, color) → prev color
   (func $handle_SetPixel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $desc i32) (local $x i32) (local $y i32) (local $result i32)
-    (local.set $desc (global.get $GDI_BLIT_DST_DESC))
-    (if (call $gdi_surface_descriptor (local.get $arg0) (local.get $desc))
-      (then
-        (local.set $x (call $gdi_line_map_x (local.get $desc) (local.get $arg1)))
-        (local.set $y (call $gdi_line_map_y (local.get $desc) (local.get $arg2)))
-        (local.set $result (call $gdi_raster_set_pixel
-          (local.get $desc) (local.get $x) (local.get $y) (local.get $arg3)))
-        (if (i32.ne (local.get $result) (i32.const -1))
-          (then (call $gdi_geometry_present (local.get $arg0) (local.get $desc)
-            (local.get $x) (local.get $y)
-            (i32.add (local.get $x) (i32.const 1))
-            (i32.add (local.get $y) (i32.const 1))))))
-      (else (local.set $result (i32.const -1))))
-    (global.set $eax (local.get $result))
+    (global.set $eax (call $gdi_hdc_set_pixel
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; stdcall, 4 args
   )
 
