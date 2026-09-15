@@ -16,8 +16,10 @@
 //   Rule 4  no shared memory => no routing (a private copy would be worse than
 //           the splice it replaces, because a guest rewrite would be silent)
 //
-// and, above all of them, that the feature is OFF by default, so none of this
-// is on the path any app takes today.
+// These rules carry more weight than they did when this path was opt-in: the
+// worklet is now the DEFAULT, so Rule 1 is the only thing standing between
+// Minesweeper and a process() callback it will never stop paying for. It is
+// asserted below against a ctx with no flag set at all -- the shipping config.
 
 'use strict';
 
@@ -114,24 +116,39 @@ async function settleModule(ctx) {
 (async () => {
   console.log('AudioWorklet routing rules');
 
-  // ===== OFF BY DEFAULT =====================================================
+  // ===== ON BY DEFAULT, and the way back ===================================
+  // The splice path is not merely a slower alternative -- an AudioBufferSource
+  // cannot be rewound or mutated, so it can only FAKE a ring rewrite, and the
+  // ring position at the splice boundary is a quantity that can be computed
+  // wrong. So the worklet is the default and the splice is the fallback, not
+  // the other way round.
   {
     counters.workletNodes = 0; counters.addModule = 0;
     const { ctx, host } = makeCtx();                    // no ctx.audioWorklet
     const id = host.voice_open(RATE, 1, 8);
     host.voice_play_ring(id, PTR, RING, 0, 1);          // a LOOPING ring
-    ok(counters.workletNodes === 0,
-      'with the flag unset, even a looping ring creates NO AudioWorkletNode');
-    ok(counters.addModule === 0,
-      'and the worklet module is never even fetched');
+    ok(counters.addModule === 1,
+      'with no flag set at all, a looping ring routes to the worklet by DEFAULT');
     ok(!!ctx._voices._map[id].currentSrc,
-      'the existing AudioBufferSource path still runs and is still what ships');
+      'and still sounds on the old path until the module resolves');
+    await settleModule(ctx);
+    host.voice_play_ring(id, PTR, RING, 0, 1);
+    ok(counters.workletNodes === 1, 'then takes its worklet node with no flag involved');
+  }
+  {
+    counters.workletNodes = 0; counters.addModule = 0;
+    const { ctx, host } = makeCtx({ audioWorklet: false });   // the opt-OUT
+    const id = host.voice_open(RATE, 1, 8);
+    host.voice_play_ring(id, PTR, RING, 0, 1);
+    ok(counters.addModule === 0 && counters.workletNodes === 0,
+      'ctx.audioWorklet === false is the way back to the splice path');
+    ok(!!ctx._voices._map[id].currentSrc, 'which still works');
   }
 
   // ===== RULE 1: a one-shot never reaches the worklet =======================
   {
     counters.workletNodes = 0; counters.addModule = 0;
-    const { ctx, host } = makeCtx({ audioWorklet: true });
+    const { ctx, host } = makeCtx();        // NO flag: exactly what ships
     const id = host.voice_open(RATE, 1, 8);
 
     host.voice_play_ring(id, PTR, RING, 0, 0);          // loop = 0: one-shot
@@ -225,9 +242,9 @@ async function settleModule(ctx) {
     const mem = new SharedArrayBuffer(1024);
     const v = { rate: RATE, channels: 1, bits: 8, gain: null };
 
-    ok(router.enabled({}) === false, 'the router is off for a ctx that says nothing');
-    ok(router.enabled({ audioWorklet: false }) === false, 'and stays off when told so explicitly');
-    ok(router.enabled({ audioWorklet: true }) === true, 'and on only when opted in');
+    ok(router.enabled({}) === true, 'the router is ON for a ctx that says nothing');
+    ok(router.enabled({ audioWorklet: false }) === false, 'and off only when opted out');
+    ok(router.enabled({ audioWorklet: true }) === true, 'and on when opted in explicitly');
 
     const on = { audioWorklet: true };
     ok(router.canRoute(on, ac, v, 0, mem) === false, 'canRoute refuses loop=0');
