@@ -626,6 +626,16 @@
       (then
         (call $propsheet_release_pages)
         (call $propsheet_page_hwnds_release)))
+    ;; The Open/Save wndproc tags a filename-buffer overflow so the value can
+    ;; cross the renderer-shadow modal bridge. Keep the API's BOOL result zero
+    ;; like Cancel, while retaining the documented extended error in the
+    ;; guest instance that owns the parked call.
+    (if (i32.and
+          (i32.eq (local.get $class) (i32.const 12))
+          (i32.eq (local.get $result) (i32.const 0xFFFF3003)))
+      (then
+        (global.set $common_dialog_error (i32.const 0x3003))
+        (local.set $result (i32.const 0))))
     (global.set $modal_result (local.get $result))
     (call $cd_modal_writeback (local.get $result))
     (local.set $owner (call $wnd_get_owner (local.get $hwnd)))

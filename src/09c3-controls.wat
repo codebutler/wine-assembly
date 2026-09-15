@@ -4712,6 +4712,7 @@
     (local $edit_h i32) (local $edit_state i32) (local $edit_sw ptr<EditState>)
     (local $text_len i32) (local $text_src_w i32)
     (local $dst_g i32) (local $dst_w i32) (local $max_len i32)
+    (local $required_w i32) (local $is_wide i32)
     (local $filter_cb i32) (local $filter_sel i32)
 
     (if (i32.eq (local.get $msg) (i32.const 0x0085))   ;; WM_NCPAINT
@@ -4740,7 +4741,13 @@
     ;; ---- OK / Open / Save: copy filename edit text into OFN.lpstrFile ----
     (if (i32.eq (local.get $cmd) (i32.const 1))
       (then
+        ;; The dialog can be clicked in the renderer shadow while the parked
+        ;; API call belongs to a guest Worker. Keep the A/W bit beside the OFN
+        ;; pointer in shared window memory instead of consulting the shadow's
+        ;; private $opendlg_wide global.
         (local.set $ofn (call $wnd_get_userdata (local.get $hwnd)))
+        (local.set $is_wide (i32.lt_s (local.get $ofn) (i32.const 0)))
+        (local.set $ofn (i32.and (local.get $ofn) (i32.const 0x7FFFFFFF)))
         (if (i32.eqz (local.get $ofn))
           (then (call $modal_done (i32.const 0)) (return (i32.const 0))))
         (local.set $ofn_w (call $g2w (local.get $ofn)))
@@ -4759,15 +4766,30 @@
               (then
                 (local.set $edit_sw (cast ptr<EditState> (call $g2w (local.get $edit_state))))
                 (local.set $text_len (load.field.memarg EditState text_len (local.get $edit_sw)))
-                (local.set $dst_w (call $g2w (local.get $dst_g)))
+                ;; OPENFILENAME.nMaxFile counts characters including the NUL.
+                ;; Never truncate a successful selection: USER's documented
+                ;; failure writes the required character count into the first
+                ;; two lpstrFile bytes and CommDlgExtendedError reports
+                ;; FNERR_BUFFERTOOSMALL. The tagged modal result carries that
+                ;; error from a renderer shadow back to the parked guest
+                ;; instance without confusing it with an ordinary Cancel.
                 (if (i32.ge_u (local.get $text_len) (local.get $max_len))
-                  (then (local.set $text_len (i32.sub (local.get $max_len) (i32.const 1)))))
+                  (then
+                    (local.set $required_w
+                      (call $g2w_affine_span (local.get $dst_g) (i32.const 2)))
+                    (if (i32.ne (local.get $required_w) (global.get $NULL_SENTINEL))
+                      (then
+                        (i32.store16 (local.get $required_w)
+                          (i32.add (local.get $text_len) (i32.const 1)))))
+                    (call $modal_done (i32.const 0xFFFF3003))
+                    (return (i32.const 0))))
+                (local.set $dst_w (call $g2w (local.get $dst_g)))
                 (if (load.field EditState text_buf_ptr (local.get $edit_sw))
                   (then
                     (local.set $text_src_w (call $g2w (load.field EditState text_buf_ptr (local.get $edit_sw))))
                     (if (local.get $text_len)
                       (then
-                        (if (global.get $opendlg_wide)
+                        (if (local.get $is_wide)
                           (then
                             (drop (call $ansi_to_wide
                               (load.field EditState text_buf_ptr (local.get $edit_sw)) (local.get $dst_g)
@@ -4775,7 +4797,7 @@
                           (else
                             (call $memcpy (local.get $dst_w)
                               (local.get $text_src_w) (local.get $text_len))))))))
-                (if (global.get $opendlg_wide)
+                (if (local.get $is_wide)
                   (then (i32.store16 (i32.add (local.get $dst_w)
                           (i32.shl (local.get $text_len) (i32.const 1))) (i32.const 0)))
                   (else (i32.store8 (i32.add (local.get $dst_w) (local.get $text_len)) (i32.const 0))))))))
@@ -5029,8 +5051,12 @@
     (call $defwndproc_do_ncpaint (local.get $dlg))
     (call $nc_flags_set (local.get $dlg) (i32.const 3))
     (call $dlg_fill_bkgnd (local.get $dlg))
-    ;; Stash OFN ptr for the OK handler.
-    (drop (call $wnd_set_userdata (local.get $dlg) (local.get $ofn)))
+    ;; Stash the OFN pointer and its A/W spelling in shared window memory. Guest
+    ;; pointers live below 0x80000000, so the high bit is a collision-free tag
+    ;; that a renderer shadow sees without another fixed memory-map region.
+    (drop (call $wnd_set_userdata (local.get $dlg)
+      (i32.or (local.get $ofn)
+        (i32.shl (global.get $opendlg_wide) (i32.const 31)))))
 
     ;; "Look in:" static
     (drop (call $ctrl_create_child (local.get $dlg) (i32.const 3) (i32.const 0xFFFF)
