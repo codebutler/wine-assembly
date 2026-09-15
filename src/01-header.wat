@@ -2039,6 +2039,7 @@
   (global $GDI_BRUSH_ROW i32 (region.addr $GDI_BRUSH_ROW 0))
   (global $GDI_BRUSH_ROW_SIZE i32 (region.size $GDI_BRUSH_ROW))
   (global $GDI_BITBLT_DECLINE i32 (region.addr $GDI_BITBLT_DECLINE 0))
+  (global $GDI_BITBLT_DECLINE_SIZE i32 (region.size $GDI_BITBLT_DECLINE))
   ;; Synchronous DIB_PAL_COLORS decoding resolves WORD logical-palette
   ;; indexes into this RGBQUAD table before a raster operation starts.
   (global $GDI_PALETTE_RESOLVE i32 (region.addr $GDI_PALETTE_RESOLVE 0))

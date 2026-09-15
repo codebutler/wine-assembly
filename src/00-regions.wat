@@ -660,3 +660,8 @@
     (owner "10-helpers.wat:$post_queue_base"))
   (region.declare $HEAP_ARENAS (size 0x00004010) (align 0x00000010)
     (owner "10-helpers.wat:$heap_arena_register"))
+  ;; One process token plus 32 independently closeable handles.  The records
+  ;; are emulator-private shared state; the tail holds the immutable classic
+  ;; privilege names used by LookupPrivilegeValueA.
+  (region.declare $TOKEN_OBJECTS (size 0x00000500) (align 0x00000010)
+    (owner "09a0-handlers-base.wat:$token_record_addr"))

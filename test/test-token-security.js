@@ -93,6 +93,8 @@ const extraWat = String.raw`
 
   (func (export "test_get_last_error") (result i32)
     (global.get $last_error))
+  (func (export "test_set_last_error") (param $value i32)
+    (global.set $last_error (local.get $value)))
 `;
 
 (async () => {
@@ -129,6 +131,7 @@ const extraWat = String.raw`
   assert.strictEqual(view.getUint32(toWasm(out + 4), true), 28,
     'administrator TOKEN_GROUPS reports its exact packed size');
 
+  e.test_set_last_error(0x1234);
   assert.strictEqual(e.test_call_GetTokenInformation(token, 2, out + 8, 28, out + 4), 1,
     'the sized TokenGroups query succeeds');
   assert.strictEqual(view.getUint32(toWasm(out + 8), true), 1,
@@ -147,8 +150,8 @@ const extraWat = String.raw`
   'process group is S-1-5-32-544 (BUILTIN\\Administrators)');
   assert.strictEqual(e.test_call_GetLengthSid(out + 20), 16,
     'GetLengthSid accounts for the SID header and two subauthorities');
-  assert.strictEqual(e.test_get_last_error(), 0,
-    'successful token query clears last error');
+  assert.strictEqual(e.test_get_last_error(), 0x1234,
+    'successful token and SID queries preserve last error');
 
   const name = out + 64;
   const domain = out + 128;

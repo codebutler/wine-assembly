@@ -2882,9 +2882,41 @@
         (global.set $sleep_timeout (local.get $arg0))))
   )
 
-  ;; 26: CloseHandle(hObject) — 1 arg stdcall, return TRUE
+  ;; A token handle close has to run before the generic host-file fallback:
+  ;; token handles are WAT-owned and a stale generation is an invalid handle,
+  ;; not a request to close a coincidentally numbered host file.
+  ;;
+  ;; Return -1 when the value is outside the token namespace, 0 for a stale or
+  ;; forged token handle, and 1 after atomically claiming and releasing it.
+  (func $token_close_handle (param $handle i32) (result i32)
+    (local $rec i32)
+    (if (i32.ne
+          (i32.and (local.get $handle) (i32.const 0xff000000))
+          (i32.const 0xfa000000))
+      (then (return (i32.const -1))))
+    (local.set $rec (call $token_record_from_handle (local.get $handle)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (if (i32.ne
+          (i32.atomic.rmw.cmpxchg (local.get $rec)
+            (local.get $handle) (i32.const -1))
+          (local.get $handle))
+      (then (return (i32.const 0))))
+    (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=12 (local.get $rec) (i32.const 0))
+    (i32.atomic.store (local.get $rec) (i32.const 0))
+    (i32.const 1))
+
+  ;; 26: CloseHandle(hObject) — 1 arg stdcall
   (func $handle_CloseHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $console_result i32)
+    (local.set $console_result (call $token_close_handle (local.get $arg0)))
+    (if (i32.ge_s (local.get $console_result) (i32.const 0))
+      (then
+        (global.set $eax (local.get $console_result))
+        (if (i32.eqz (local.get $console_result))
+          (then (global.set $last_error (i32.const 6)))) ;; ERROR_INVALID_HANDLE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
     (local.set $console_result (call $console_handle_close (local.get $arg0)))
     (if (i32.ge_s (local.get $console_result) (i32.const 0))
       (then
@@ -2925,18 +2957,268 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; OpenProcessToken(ProcessHandle, DesiredAccess, TokenHandle). Hand back a
-  ;; process-local pseudo handle representing the emulator's elevated user.
-  (func $handle_OpenProcessToken (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (i32.eqz (local.get $arg2))
+  ;; Shared access-token state.  TOKEN_OBJECTS begins with an initialization
+  ;; word and the process-wide enabled mask.  Thirty-two 16-byte handle records
+  ;; follow at +0x10: exact generation-tagged handle, generation counter,
+  ;; granted access and a retained enabled-mask mirror.  Names start at +0x220.
+  ;; The declaration gate requires the traditional base/size pair even though
+  ;; consumers below use region.addr directly so their offsets are checked.
+  (global $TOKEN_OBJECTS i32 (region.addr $TOKEN_OBJECTS 0))
+  (global $TOKEN_OBJECTS_SIZE i32 (region.size $TOKEN_OBJECTS))
+  (global $TOKEN_OBJECT_COUNT i32 (i32.const 32))
+  (global $TOKEN_OBJECT_STRIDE i32 (i32.const 16))
+
+  (data (region.addr $TOKEN_OBJECTS 0x220)
+    "SeCreateTokenPrivilege\00SeAssignPrimaryTokenPrivilege\00"
+    "SeLockMemoryPrivilege\00SeIncreaseQuotaPrivilege\00"
+    "SeMachineAccountPrivilege\00SeTcbPrivilege\00SeSecurityPrivilege\00"
+    "SeTakeOwnershipPrivilege\00SeLoadDriverPrivilege\00"
+    "SeSystemProfilePrivilege\00SeSystemtimePrivilege\00"
+    "SeProfileSingleProcessPrivilege\00SeIncreaseBasePriorityPrivilege\00"
+    "SeCreatePagefilePrivilege\00SeCreatePermanentPrivilege\00"
+    "SeBackupPrivilege\00SeRestorePrivilege\00SeShutdownPrivilege\00"
+    "SeDebugPrivilege\00SeAuditPrivilege\00SeSystemEnvironmentPrivilege\00"
+    "SeChangeNotifyPrivilege\00SeRemoteShutdownPrivilege\00"
+    "SeUndockPrivilege\00SeSyncAgentPrivilege\00"
+    "SeEnableDelegationPrivilege\00SeManageVolumePrivilege\00")
+
+  (func $token_record_addr (param $slot i32) (result i32)
+    (i32.add (region.addr $TOKEN_OBJECTS 0x10)
+      (i32.shl (local.get $slot) (i32.const 4))))
+
+  (func $token_record_from_handle (param $handle i32) (result i32)
+    (local $slot i32) (local $rec i32)
+    (if (i32.ne
+          (i32.and (local.get $handle) (i32.const 0xff000000))
+          (i32.const 0xfa000000))
+      (then (return (i32.const 0))))
+    (local.set $slot (i32.and (local.get $handle) (i32.const 31)))
+    (local.set $rec (call $token_record_addr (local.get $slot)))
+    (if (i32.ne (i32.atomic.load (local.get $rec)) (local.get $handle))
+      (then (return (i32.const 0))))
+    (local.get $rec))
+
+  (func $token_handle_value (param $slot i32) (param $generation i32) (result i32)
+    ;; 0xFA is disjoint from VFS's 0x70..0x7F handles, its 0xF0000001
+    ;; sentinel, and file mappings' 0xFB namespace.
+    (i32.or (i32.const 0xfa000000)
+      (i32.or
+        ;; Bits 5..23 are the generation; the fixed top byte is never touched.
+        (i32.shl
+          (i32.and (local.get $generation) (i32.const 0x0007ffff))
+          (i32.const 5))
+        (i32.and (local.get $slot) (i32.const 31)))))
+
+  ;; Initialize the process token exactly once even when a Worker instance is
+  ;; being brought up concurrently.  SeChangeNotifyPrivilege is the one
+  ;; classic privilege documented as enabled by default for every user.
+  (func $token_process_enabled (result i32)
+    (local $state i32)
+    (local.set $state (i32.atomic.load (region.addr $TOKEN_OBJECTS 0)))
+    (if (i32.eqz (local.get $state))
+      (then
+        (if (i32.eqz
+              (i32.atomic.rmw.cmpxchg (region.addr $TOKEN_OBJECTS 0)
+                (i32.const 0) (i32.const 1)))
+          (then
+            (i32.atomic.store (region.addr $TOKEN_OBJECTS 4)
+              (i32.const 0x00800000))
+            (i32.atomic.store (region.addr $TOKEN_OBJECTS 0) (i32.const 2))))))
+    ;; A competing initializer owns state 1 only for the two stores above.
+    (block $ready
+      (loop $wait
+        (br_if $ready
+          (i32.eq (i32.atomic.load (region.addr $TOKEN_OBJECTS 0))
+            (i32.const 2)))
+        (br $wait)))
+    (i32.atomic.load (region.addr $TOKEN_OBJECTS 4)))
+
+  (func $token_allocate_handle (param $access i32) (result i32)
+    (local $slot i32) (local $rec i32) (local $generation i32)
+    (local $handle i32) (local $enabled i32)
+    (local.set $enabled (call $token_process_enabled))
+    (block $full
+      (loop $scan
+        (br_if $full (i32.ge_u (local.get $slot) (global.get $TOKEN_OBJECT_COUNT)))
+        (local.set $rec (call $token_record_addr (local.get $slot)))
+        (if (i32.eqz
+              (i32.atomic.rmw.cmpxchg (local.get $rec)
+                (i32.const 0) (i32.const -1)))
+          (then
+            (local.set $generation
+              (i32.and
+                (i32.add
+                  (i32.atomic.rmw.add offset=4 (local.get $rec) (i32.const 1))
+                  (i32.const 1))
+                (i32.const 0x0007ffff)))
+            (if (i32.eqz (local.get $generation))
+              (then (local.set $generation (i32.const 1))))
+            ;; Normalize after wrap so stale generations are not retained in
+            ;; the counter even though only the masked value enters a handle.
+            (i32.atomic.store offset=4 (local.get $rec) (local.get $generation))
+            (local.set $handle
+              (call $token_handle_value (local.get $slot) (local.get $generation)))
+            (i32.atomic.store offset=8 (local.get $rec) (local.get $access))
+            (i32.atomic.store offset=12 (local.get $rec) (local.get $enabled))
+            (i32.atomic.store (local.get $rec) (local.get $handle))
+            (return (local.get $handle))))
+        (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
+
+  (func $token_publish_enabled (param $enabled i32)
+    (local $slot i32) (local $rec i32) (local $handle i32)
+    (i32.atomic.store (region.addr $TOKEN_OBJECTS 4) (local.get $enabled))
+    (block $done
+      (loop $scan
+        (br_if $done (i32.ge_u (local.get $slot) (global.get $TOKEN_OBJECT_COUNT)))
+        (local.set $rec (call $token_record_addr (local.get $slot)))
+        (local.set $handle (i32.atomic.load (local.get $rec)))
+        (if (i32.and
+              (i32.ne (local.get $handle) (i32.const 0))
+              (i32.ne (local.get $handle) (i32.const -1)))
+          (then (i32.atomic.store offset=12 (local.get $rec) (local.get $enabled))))
+        (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+        (br $scan))))
+
+  ;; Win32 leaves the low 64KB unmapped so NULL-adjacent pointers fault rather
+  ;; than aliasing image storage.  The generic affine translator deliberately
+  ;; models mappings rather than that user-pointer policy, so token APIs add
+  ;; the low-page guard before reusing the bounded security span proof.
+  (func $token_guest_span_valid (param $ptr i32) (param $size i32) (result i32)
+    (i32.and
+      (i32.ge_u (local.get $ptr) (i32.const 0x00010000))
+      (call $security_span_valid (local.get $ptr) (local.get $size))))
+
+  (func $token_guest_string_valid (param $ptr i32) (result i32)
+    (local $i i32)
+    (if (i32.eqz (local.get $ptr)) (then (return (i32.const 0))))
+    (block $too_long
+      (loop $scan
+        (br_if $too_long (i32.ge_u (local.get $i) (i32.const 64)))
+        (if (i32.eqz
+              (call $token_guest_span_valid
+                (i32.add (local.get $ptr) (local.get $i)) (i32.const 1)))
+          (then (return (i32.const 0))))
+        (if (i32.eqz (call $gl8 (i32.add (local.get $ptr) (local.get $i))))
+          (then (return (i32.const 1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
+
+  (func $token_name_equal (param $name i32) (param $known_wa i32) (result i32)
+    (local $i i32) (local $a i32) (local $b i32)
+    (block $different
+      (loop $compare
+        (br_if $different (i32.ge_u (local.get $i) (i32.const 64)))
+        (local.set $a (call $gl8 (i32.add (local.get $name) (local.get $i))))
+        (local.set $b (i32.load8_u (i32.add (local.get $known_wa) (local.get $i))))
+        (br_if $different
+          (i32.ne (call $tolower (local.get $a)) (call $tolower (local.get $b))))
+        (if (i32.eqz (local.get $a)) (then (return (i32.const 1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $compare)))
+    (i32.const 0))
+
+  ;; Return the stable classic privilege LUID low part, or -1 for an unknown
+  ;; name.  These are the well-known NT privilege identifiers exposed to old
+  ;; Win32 applications; every high part is zero.
+  (func $token_luid_from_name (param $name i32) (result i32)
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x220)) (then (return (i32.const 2))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x237)) (then (return (i32.const 3))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x255)) (then (return (i32.const 4))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x26b)) (then (return (i32.const 5))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x284)) (then (return (i32.const 6))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x29e)) (then (return (i32.const 7))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x2ad)) (then (return (i32.const 8))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x2c1)) (then (return (i32.const 9))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x2da)) (then (return (i32.const 10))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x2f0)) (then (return (i32.const 11))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x309)) (then (return (i32.const 12))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x31f)) (then (return (i32.const 13))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x33f)) (then (return (i32.const 14))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x35f)) (then (return (i32.const 15))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x379)) (then (return (i32.const 16))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x394)) (then (return (i32.const 17))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x3a6)) (then (return (i32.const 18))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x3b9)) (then (return (i32.const 19))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x3cd)) (then (return (i32.const 20))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x3de)) (then (return (i32.const 21))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x3ef)) (then (return (i32.const 22))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x40c)) (then (return (i32.const 23))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x424)) (then (return (i32.const 24))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x43e)) (then (return (i32.const 25))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x450)) (then (return (i32.const 26))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x465)) (then (return (i32.const 27))))
+    (if (call $token_name_equal (local.get $name) (region.addr $TOKEN_OBJECTS 0x481)) (then (return (i32.const 28))))
+    (i32.const -1))
+
+  ;; LookupPrivilegeValueA(lpSystemName, lpName, lpLuid).
+  (func $handle_LookupPrivilegeValueA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $luid i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (if (i32.or
+          (i32.eqz (call $token_guest_string_valid (local.get $arg1)))
+          (i32.eqz (call $token_guest_span_valid (local.get $arg2) (i32.const 8))))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0)))
-      (else
-        (call $gs32 (local.get $arg2) (i32.const 0x70000030))
-        (global.set $last_error (i32.const 0))
-        (global.set $eax (i32.const 1))))
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (local.get $arg0)
+      (then
+        (if (i32.eqz (call $token_guest_string_valid (local.get $arg0)))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $eax (i32.const 0))
+            (return)))
+        (if (call $gl8 (local.get $arg0))
+          (then
+            (global.set $last_error (i32.const 53)) ;; ERROR_BAD_NETPATH
+            (global.set $eax (i32.const 0))
+            (return)))))
+    (local.set $luid (call $token_luid_from_name (local.get $arg1)))
+    (if (i32.lt_s (local.get $luid) (i32.const 0))
+      (then
+        (global.set $last_error (i32.const 1313)) ;; ERROR_NO_SUCH_PRIVILEGE
+        (global.set $eax (i32.const 0))
+        (return)))
+    (call $gs32 (local.get $arg2) (local.get $luid))
+    (call $gs32 (i32.add (local.get $arg2) (i32.const 4)) (i32.const 0))
+    (global.set $eax (i32.const 1)))
+
+  ;; OpenProcessToken(ProcessHandle, DesiredAccess, TokenHandle).  The browser
+  ;; hosts one elevated process token.  Each open gets a distinct closeable
+  ;; handle whose access bits are enforced by token APIs.
+  (func $handle_OpenProcessToken (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $access i32) (local $handle i32)
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (if (i32.eqz (call $token_guest_span_valid (local.get $arg2) (i32.const 4)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eqz (call $current_process_handle_valid (local.get $arg0)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return)))
+    (local.set $access (i32.and (local.get $arg1) (i32.const 0x28)))
+    ;; MAXIMUM_ALLOWED and generic access are mapped only to rights this token
+    ;; model implements; unrelated requested token rights remain harmless.
+    (if (i32.ne (i32.and (local.get $arg1) (i32.const 0x02000000)) (i32.const 0))
+      (then (local.set $access (i32.const 0x28))))
+    (if (i32.ne (i32.and (local.get $arg1) (i32.const 0x80000000)) (i32.const 0))
+      (then (local.set $access (i32.or (local.get $access) (i32.const 8)))))
+    (if (i32.ne (i32.and (local.get $arg1) (i32.const 0x50000000)) (i32.const 0))
+      (then (local.set $access (i32.or (local.get $access) (i32.const 0x28)))))
+    (local.set $handle (call $token_allocate_handle (local.get $access)))
+    (if (i32.eqz (local.get $handle))
+      (then
+        (global.set $last_error (i32.const 8)) ;; ERROR_NOT_ENOUGH_MEMORY
+        (global.set $eax (i32.const 0))
+        (return)))
+    (call $gs32 (local.get $arg2) (local.get $handle))
+    (global.set $eax (i32.const 1))
   )
 
   ;; GetTokenInformation(TokenHandle, TokenInformationClass, TokenInformation,
@@ -2944,13 +3226,48 @@
   ;; for setup/admin probes. Report one enabled S-1-5-32-544 (BUILTIN\Admins)
   ;; group, which matches the process model used to run installers directly.
   (func $handle_GetTokenInformation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 28))))
+    (local $rec i32) (local $needed i32) (local $i i32)
+    (local $out i32) (local $enabled i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $rec (call $token_record_from_handle (local.get $arg0)))
+    (if (i32.eqz (local.get $rec))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eqz (i32.and (i32.atomic.load offset=8 (local.get $rec)) (i32.const 8)))
+      (then
+        (global.set $last_error (i32.const 5)) ;; ERROR_ACCESS_DENIED
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $arg1) (i32.const 2))
+      (then (local.set $needed (i32.const 28)))
+      (else
+        (if (i32.eq (local.get $arg1) (i32.const 3))
+          (then (local.set $needed (i32.const 328)))
+          (else
+            (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+            (global.set $eax (i32.const 0))
+            (return)))))
+    (if (i32.eqz (call $token_guest_span_valid (local.get $arg4) (i32.const 4)))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $eax (i32.const 0))
+        (return)))
+    (call $gs32 (local.get $arg4) (local.get $needed))
     (if (i32.or (i32.eqz (local.get $arg2))
-                (i32.lt_u (local.get $arg3) (i32.const 28)))
+                (i32.lt_u (local.get $arg3) (local.get $needed)))
       (then
         (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
-        (global.set $eax (i32.const 0)))
-      (else
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eqz (call $token_guest_span_valid (local.get $arg2) (local.get $needed)))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eq (local.get $arg1) (i32.const 2))
+      (then
         (call $gs32 (local.get $arg2) (i32.const 1)) ;; TOKEN_GROUPS.GroupCount
         (call $gs32 (i32.add (local.get $arg2) (i32.const 4))
           (i32.add (local.get $arg2) (i32.const 12))) ;; SID_AND_ATTRIBUTES.Sid
@@ -2962,10 +3279,174 @@
         (call $gs16 (i32.add (local.get $arg2) (i32.const 18)) (i32.const 0x0500))
         (call $gs32 (i32.add (local.get $arg2) (i32.const 20)) (i32.const 32))
         (call $gs32 (i32.add (local.get $arg2) (i32.const 24)) (i32.const 544))
-        (global.set $last_error (i32.const 0))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (global.set $eax (i32.const 1))
+        (return)))
+    ;; TokenPrivileges: the classic LUIDs 2..28, with the retained enabled bit.
+    (call $gs32 (local.get $arg2) (i32.const 27))
+    (local.set $enabled (i32.atomic.load offset=12 (local.get $rec)))
+    (local.set $out (i32.add (local.get $arg2) (i32.const 4)))
+    (local.set $i (i32.const 2))
+    (block $done
+      (loop $write
+        (br_if $done (i32.gt_u (local.get $i) (i32.const 28)))
+        (call $gs32 (local.get $out) (local.get $i))
+        (call $gs32 (i32.add (local.get $out) (i32.const 4)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $out) (i32.const 8))
+          (select (i32.const 2) (i32.const 0)
+            (i32.ne
+              (i32.and (local.get $enabled)
+                (i32.shl (i32.const 1) (local.get $i)))
+              (i32.const 0))))
+        (local.set $out (i32.add (local.get $out) (i32.const 12)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $write)))
+    (global.set $eax (i32.const 1))
   )
+
+  ;; AdjustTokenPrivileges(TokenHandle, DisableAllPrivileges, NewState,
+  ;; BufferLength, PreviousState, ReturnLength).
+  (func $handle_AdjustTokenPrivileges (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $return_length i32) (local $rec i32) (local $count i32)
+    (local $total i32) (local $i i32) (local $entry i32) (local $low i32)
+    (local $high i32) (local $attrs i32) (local $old i32) (local $next i32)
+    (local $changed i32) (local $changed_count i32) (local $needed i32)
+    (local $not_all i32) (local $out i32)
+    (local.set $return_length (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (local.set $rec (call $token_record_from_handle (local.get $arg0)))
+    (if (i32.eqz (local.get $rec))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eqz
+          (i32.and (i32.atomic.load offset=8 (local.get $rec)) (i32.const 0x20)))
+      (then
+        (global.set $last_error (i32.const 5)) ;; ERROR_ACCESS_DENIED
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (local.get $arg4)
+      (then
+        (if (i32.eqz
+              (i32.and (i32.atomic.load offset=8 (local.get $rec)) (i32.const 8)))
+          (then
+            (global.set $last_error (i32.const 5))
+            (global.set $eax (i32.const 0))
+            (return)))
+        (if (i32.eqz
+              (call $token_guest_span_valid (local.get $return_length) (i32.const 4)))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $eax (i32.const 0))
+            (return)))))
+    (local.set $old (i32.atomic.load offset=12 (local.get $rec)))
+    (local.set $next (local.get $old))
+    (if (local.get $arg1)
+      (then (local.set $next (i32.const 0)))
+      (else
+        (if (i32.eqz (call $token_guest_span_valid (local.get $arg2) (i32.const 4)))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $eax (i32.const 0))
+            (return)))
+        (local.set $count (call $gl32 (local.get $arg2)))
+        (if (i32.gt_u (local.get $count) (i32.const 357913940))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $eax (i32.const 0))
+            (return)))
+        (local.set $total
+          (i32.add (i32.const 4) (i32.mul (local.get $count) (i32.const 12))))
+        (if (i32.eqz (call $token_guest_span_valid (local.get $arg2) (local.get $total)))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $eax (i32.const 0))
+            (return)))
+        (block $parsed
+          (loop $parse
+            (br_if $parsed (i32.ge_u (local.get $i) (local.get $count)))
+            (local.set $entry
+              (i32.add (local.get $arg2)
+                (i32.add (i32.const 4) (i32.mul (local.get $i) (i32.const 12)))))
+            (local.set $low (call $gl32 (local.get $entry)))
+            (local.set $high (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
+            (local.set $attrs (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
+            (if (i32.or
+                  (i32.ne (local.get $high) (i32.const 0))
+                  (i32.or
+                    (i32.lt_u (local.get $low) (i32.const 2))
+                    (i32.gt_u (local.get $low) (i32.const 28))))
+              (then (local.set $not_all (i32.const 1)))
+              (else
+                (if (i32.ne (i32.and (local.get $attrs) (i32.const 2)) (i32.const 0))
+                  (then
+                    (local.set $next
+                      (i32.or (local.get $next)
+                        (i32.shl (i32.const 1) (local.get $low)))))
+                  (else
+                    (local.set $next
+                      (i32.and (local.get $next)
+                        (i32.xor
+                          (i32.shl (i32.const 1) (local.get $low))
+                          (i32.const -1))))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $parse)))))
+    (local.set $changed (i32.xor (local.get $old) (local.get $next)))
+    (local.set $i (i32.const 2))
+    (block $counted
+      (loop $count_changes
+        (br_if $counted (i32.gt_u (local.get $i) (i32.const 28)))
+        (if (i32.ne
+              (i32.and (local.get $changed)
+                (i32.shl (i32.const 1) (local.get $i)))
+              (i32.const 0))
+          (then
+            (local.set $changed_count
+              (i32.add (local.get $changed_count) (i32.const 1)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $count_changes)))
+    (local.set $needed
+      (i32.add (i32.const 4) (i32.mul (local.get $changed_count) (i32.const 12))))
+    (if (local.get $arg4)
+      (then
+        (call $gs32 (local.get $return_length) (local.get $needed))
+        (if (i32.lt_u (local.get $arg3) (local.get $needed))
+          (then
+            (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
+            (global.set $eax (i32.const 0))
+            (return)))
+        (if (i32.eqz
+              (call $token_guest_span_valid (local.get $arg4) (local.get $needed)))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $eax (i32.const 0))
+            (return)))
+        (call $gs32 (local.get $arg4) (local.get $changed_count))
+        (local.set $out (i32.add (local.get $arg4) (i32.const 4)))
+        (local.set $i (i32.const 2))
+        (block $written
+          (loop $write_previous
+            (br_if $written (i32.gt_u (local.get $i) (i32.const 28)))
+            (if (i32.ne
+                  (i32.and (local.get $changed)
+                    (i32.shl (i32.const 1) (local.get $i)))
+                  (i32.const 0))
+              (then
+                (call $gs32 (local.get $out) (local.get $i))
+                (call $gs32 (i32.add (local.get $out) (i32.const 4)) (i32.const 0))
+                (call $gs32 (i32.add (local.get $out) (i32.const 8))
+                  (select (i32.const 2) (i32.const 0)
+                    (i32.ne
+                      (i32.and (local.get $old)
+                        (i32.shl (i32.const 1) (local.get $i)))
+                      (i32.const 0))))
+                (local.set $out (i32.add (local.get $out) (i32.const 12)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $write_previous)))))
+    (call $token_publish_enabled (local.get $next))
+    (global.set $last_error
+      (select (i32.const 1300) (i32.const 0) (local.get $not_all)))
+    (global.set $eax (i32.const 1)))
 
   ;; LookupAccountSidW(System, Sid, Name, cchName, Domain, cchDomain, Use).
   ;; The process token exposes S-1-5-32-544, so resolve it to the matching
