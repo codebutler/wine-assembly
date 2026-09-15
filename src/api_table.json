@@ -30544,5 +30544,12 @@
     "nargs": 7,
     "convention": "stdcall",
     "hash": 3142208404
+  },
+  {
+    "id": 3645,
+    "name": "DoDragDrop",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2454613115
   }
 ]

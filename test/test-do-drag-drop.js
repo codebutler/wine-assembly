@@ -37,6 +37,9 @@ const extraWat = String.raw`
       (local.get $data) (local.get $source) (local.get $allowed)
       (local.get $effect) (i32.const 0) (i32.const 0))
     (global.get $esp))
+
+  (func (export "test_do_drag_drop_api_id") (result i32)
+    (call $lookup_api_id "DoDragDrop"))
 `;
 
 function put32(bytes, offset, value) {
@@ -198,6 +201,13 @@ function put32(bytes, offset, value) {
     return log;
   };
   const logValues = log => Array.from({ length: read(log) }, (_, i) => read(log + 4 + i * 4));
+
+  const dragApi = apiTable.find(entry => entry.name === 'DoDragDrop');
+  assert(dragApi, 'DoDragDrop is registered in the generated API table');
+  assert.strictEqual(dragApi.nargs, 4, 'API metadata records all four arguments');
+  assert.strictEqual(dragApi.convention, 'stdcall');
+  assert.strictEqual(e.test_do_drag_drop_api_id(), dragApi.id,
+    'runtime import hashing resolves DoDragDrop to its registered id');
 
   const callApi = (name, ...args) => {
     const api = apiTable.find(entry => entry.name === name);
