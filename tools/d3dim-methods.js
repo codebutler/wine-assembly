@@ -280,7 +280,7 @@ const interfaces = [
     { name: 'QueryInterface',  nargs: 3 },
     { name: 'AddRef',          nargs: 1, ret: 'ADDREF', handler: 'dx_com_addref' },
     { name: 'Release',         nargs: 1, ret: 'RELEASE' },
-    { name: 'GetHandle',       nargs: 3, body: 'TEX_HANDLE' },
+    { name: 'GetHandle',       nargs: 3, handler: 'IDirect3DTexture_GetHandle' },
     { name: 'PaletteChanged',  nargs: 3 },
     { name: 'Load',            nargs: 2, body: 'TEX_LOAD' },
   ]},

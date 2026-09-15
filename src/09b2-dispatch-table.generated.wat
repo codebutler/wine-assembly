@@ -7721,7 +7721,7 @@
       (call $handle_IDirect3DTexture2_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1483: IDirect3DTexture2_GetHandle
-      (call $handle_IDirect3DTexture2_GetHandle (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DTexture_GetHandle (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1484: IDirect3DTexture2_PaletteChanged
       (call $handle_IDirect3DTexture2_PaletteChanged (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))

@@ -8,7 +8,10 @@
 // produces recognizable terrain geometry with every texture removed.
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const extraWat = String.raw`
   (func (export "test_diptex_seed")
@@ -62,12 +65,16 @@ const extraWat = String.raw`
   (func (export "test_diptex_format") (param $surface i32) (result i32)
     (call $dx_surf_fmt_get (call $dx_from_this (local.get $surface))))
 
-  (func (export "test_diptex_get_handle") (param $texture i32) (param $out i32) (result i32)
+  (func (export "test_diptex_get_handle")
+      (param $api i32) (param $texture i32) (param $device i32) (param $out i32)
+      (result i32)
     (global.set $esp (i32.const 0x30000))
-    (call $handle_IDirect3DTexture2_GetHandle
-      (local.get $texture) (i32.const 0) (local.get $out)
-      (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $dispatch_api_table
+      (local.get $api) (local.get $texture) (local.get $device)
+      (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $eax))
+
+  (func (export "test_diptex_esp") (result i32) (global.get $esp))
 
   (func (export "test_diptex_bind_handle") (param $device i32) (param $handle i32) (result i32)
     (global.set $esp (i32.const 0x30000))
@@ -232,6 +239,30 @@ function writeFloat(wat, addr, value) {
 }
 
 (async () => {
+  const textureApi = apiTable.find(entry =>
+    entry.name === 'IDirect3DTexture_GetHandle');
+  const texture2Api = apiTable.find(entry =>
+    entry.name === 'IDirect3DTexture2_GetHandle');
+  assert(textureApi && texture2Api,
+    'both public legacy texture-handle APIs remain registered');
+  assert.strictEqual(textureApi.id, 1476, 'Texture GetHandle API id remains stable');
+  assert.strictEqual(texture2Api.id, 1483, 'Texture2 GetHandle API id remains stable');
+  assert.strictEqual(textureApi.nargs, 5);
+  assert.strictEqual(texture2Api.nargs, 5);
+  assert.strictEqual(texture2Api.handler, 'IDirect3DTexture_GetHandle',
+    'Texture2 dispatch aliases the canonical texture-handle implementation');
+
+  const root = path.join(__dirname, '..');
+  const dispatch = fs.readFileSync(
+    path.join(root, 'src/09b2-dispatch-table.generated.wat'), 'utf8');
+  assert.match(dispatch,
+    /;; 1483: IDirect3DTexture2_GetHandle[\s\S]*?call \$handle_IDirect3DTexture_GetHandle/,
+    'generated dispatch routes Texture2 GetHandle through the canonical handler');
+  const d3dimSource = fs.readFileSync(
+    path.join(root, 'src/09aa-handlers-d3dim.wat'), 'utf8');
+  assert(!d3dimSource.includes('(func $handle_IDirect3DTexture2_GetHandle'),
+    'the duplicate Texture2 GetHandle wrapper is absent');
+
   const h = await bootRenderHarness({ extraWat, fonts: 'none' });
   const { exports: wat, memory } = h;
   const mem = new DataView(memory.buffer);
@@ -423,9 +454,23 @@ function writeFloat(wat, addr, value) {
   wat.guest_write32(indices + 4, 0x00000002); // u16 index 2
 
   const handleOut = out + 8;
-  assert.strictEqual(wat.test_diptex_get_handle(texture, handleOut) >>> 0, 0);
-  const textureHandle = wat.guest_read32(handleOut) >>> 0;
-  assert(textureHandle, 'Texture2::GetHandle returned a null handle');
+  let textureHandle = 0;
+  for (const api of [textureApi, texture2Api]) {
+    wat.guest_write32(handleOut, 0xdeadbeef);
+    assert.strictEqual(
+      wat.test_diptex_get_handle(api.id, texture, device, handleOut) >>> 0, 0,
+      `${api.name} returns D3D_OK`);
+    const handle = wat.guest_read32(handleOut) >>> 0;
+    assert(handle, `${api.name} returned a null handle`);
+    if (textureHandle) {
+      assert.strictEqual(handle, textureHandle,
+        `${api.name} did not return the texture's stable slot handle`);
+    } else {
+      textureHandle = handle;
+    }
+    assert.strictEqual(wat.test_diptex_esp() >>> 0, 0x30010,
+      `${api.name} pops this, device, output, and return address`);
+  }
   assert.strictEqual(wat.test_diptex_bind_handle(device, textureHandle) >>> 0, 0);
   wat.test_diptex_draw(device, vertices, indices);
 
@@ -671,7 +716,9 @@ function writeFloat(wat, addr, value) {
   for (let y = 0; y < 2; y++) {
     for (let x = 0; x < 2; x++) mem.setUint16(alphaDib + y * 4 + x * 2, 0xf678, true);
   }
-  assert.strictEqual(wat.test_diptex_get_handle(alphaTexture, handleOut) >>> 0, 0);
+  assert.strictEqual(
+    wat.test_diptex_get_handle(texture2Api.id, alphaTexture, device, handleOut) >>> 0,
+    0);
   assert.strictEqual(wat.test_diptex_bind_handle(device, wat.guest_read32(handleOut) >>> 0) >>> 0, 0);
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) mem.setUint16(rtDib + y * 16 + x * 2, 0x001f, true);

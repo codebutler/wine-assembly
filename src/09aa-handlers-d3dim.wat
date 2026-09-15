@@ -1838,14 +1838,6 @@
       (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (global.set $eax (local.get $rc))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; IDirect3DTexture2_GetHandle — 3 args (incl. this)
-  (func $handle_IDirect3DTexture2_GetHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $entry i32)
-    (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (call $gs32 (local.get $arg2) (call $dx_slot_of (local.get $entry)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-
   ;; IDirect3DTexture2_PaletteChanged — 3 args (incl. this)
   (func $handle_IDirect3DTexture2_PaletteChanged (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0))
