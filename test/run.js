@@ -827,25 +827,6 @@ const WASM_PATH = getArg('wasm', ENV_WASM || path.join(ROOT, 'build', 'wine-asse
 const WASM_PINNED = argHas('wasm') || !!ENV_WASM;
 const PNG_OUT = getArg('png', null);     // --png=out.png: render to PNG via node-canvas
 const PNG_CANVAS = hasFlag('png-canvas'); // --png-canvas: always capture the composited screen, never a raw DX surface
-// --headless-gl: run the OpenGL path for real, with no browser. Without it
-// wglCreateContext returns 0 here and the guest takes its no-3D-hardware path,
-// which is why Warcraft III and Quake II could only ever be driven through
-// tools/profile-web-frames.js and a real Chrome -- and why none of this file's
-// tracing (--trace-api, --count, --break, --handler-hist) reached them.
-// Opt-in: a large amount of existing headless behaviour is pinned to the
-// software path, so enabling it by default would silently change what many
-// runs mean. Needs the optional native deps; it says so rather than rendering
-// black if they are missing.
-const HEADLESS_GL = hasFlag('headless-gl');
-if (HEADLESS_GL) {
-  const _hgl = require('../lib/headless-gl');
-  // Say it at startup, not at the first wglCreateContext. A GL context that
-  // silently fails to exist looks exactly like an emulator bug for the rest of
-  // the run, and that misreading has cost whole sessions before.
-  console.log(_hgl.available()
-    ? '[gl] headless WebGL enabled (@node-3d/webgl)'
-    : `[gl] --headless-gl requested but UNAVAILABLE: ${_hgl.unavailableReason()}`);
-}
 // --dump-image=0xGUESTADDR:W:H:PITCH:BPP:FILE.png (repeatable, comma-separated)
 // Render an arbitrary guest memory region as an image at exit, through the
 // current DirectDraw palette for 8bpp. A blit bug is a disagreement between
@@ -2066,12 +2047,6 @@ async function main() {
           reclaimHeap:head=>instance.exports.d3d_render_adopt_free_list(head)});
     },
     renderer,
-    // --headless-gl: give the OpenGL bridge a drawable factory so wglCreateContext
-    // can succeed without a browser. Opt-in, because without it these guests take
-    // their documented no-3D-hardware path and a large amount of existing headless
-    // behaviour is pinned to that; turning it on silently would change what many
-    // runs mean. See lib/headless-gl.js.
-    createCanvas: HEADLESS_GL ? createCanvas : null,
     processId: 1000,
     apiTable,
     log: VERBOSE ? console.log.bind(console) : null,

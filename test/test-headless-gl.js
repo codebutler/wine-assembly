@@ -12,20 +12,8 @@
 // suite.
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 const hgl = require('../lib/headless-gl');
 const { createCanvas } = require('../lib/canvas-compat');
-
-// The canvas and bridge can both work while the CLI still forgets to connect
-// them. Keep the opt-in wiring pinned here: that omission made --headless-gl
-// print an enablement message and then fail every device with "requires a GPU
-// window".
-const runSource = fs.readFileSync(path.join(__dirname, 'run.js'), 'utf8');
-assert.match(runSource, /const HEADLESS_GL = hasFlag\('headless-gl'\)/,
-  'run.js does not recognize --headless-gl');
-assert.match(runSource, /createCanvas:\s*HEADLESS_GL\s*\?\s*createCanvas\s*:\s*null/,
-  'run.js does not pass the opt-in Node canvas factory to its GPU bridges');
 
 if (!hgl.available()) {
   console.log(`SKIP test-headless-gl: ${hgl.unavailableReason()}`);
