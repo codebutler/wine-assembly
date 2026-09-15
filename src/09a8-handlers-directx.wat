@@ -12,7 +12,8 @@
   ;; +16 bpp (u16) | pitch (u16); DIDev: parent DirectInput version
   ;; +20 misc1 (DDSurface: dib_ptr, DSound: DSSCL level, 0 before SetCooperativeLevel)
   ;; +24 misc2 (DDSurface: color key low / surface byte size)
-  ;; +28 flags (surface type: 1=primary,2=backbuf,4=offscreen; 0x100=has_colorkey)
+  ;; +28 flags (surface type: 1=primary,2=backbuf,4=offscreen; 0x100=has_colorkey;
+  ;;            DSound root: initialized speaker configuration plus one)
   ;; D3D9 surface arm: 0x40000000 = guest CPU ownership (not compositor binding).
   ;; 0x20000000 = acquire pending; 0x10000000 = release upload pending.
   ;; Bit 27 = D3D9 lockable backbuffer, captured from presentation flags.
@@ -1482,6 +1483,7 @@
         (if (i32.eqz (local.get $native_obj))
           (then (global.set $eax (i32.const 0x80004005)))
           (else
+            (call $dsound_mark_initialized (local.get $native_obj))
             (local.set $entry (call $dx_from_this (local.get $native_obj)))
             (local.set $slot (call $dx_slot_of (local.get $entry)))
             (local.set $wrapper (call $dx_get_wrapper_for_vtbl
@@ -1700,6 +1702,7 @@
         (global.set $eax (i32.const 0x80004005))
         (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
         (return)))
+    (call $dsound_mark_initialized (local.get $obj_guest))
     (call $gs32 (local.get $arg1) (local.get $obj_guest))
     (global.set $eax (i32.const 0)) ;; DS_OK
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
@@ -5945,6 +5948,42 @@
   ;; IDirectSound methods
   ;; ════════════════════════════════════════════════════════════
 
+  ;; A type-4 DirectSound root otherwise uses only misc0 (cooperative HWND)
+  ;; and misc1 (DSSCL level). Keep initialization and speaker configuration in
+  ;; its unused flags arm. The stored value is config+1 so DSSPEAKER_DIRECTOUT
+  ;; (zero) remains distinct from a CoCreateInstance object awaiting Initialize.
+  ;; A plain stereo request is normalized to the documented default WIDE
+  ;; geometry; GetSpeakerConfig may return this packed form.
+  (func $dsound_mark_initialized (param $this i32)
+    (store.field DxObject flags (call $dx_from_this (local.get $this))
+      (i32.const 0x00140005))) ;; DSSPEAKER_COMBINED(STEREO, WIDE) + 1
+
+  (func $dsound_speaker_config_valid (param $config i32) (result i32)
+    (local $kind i32) (local $geometry i32)
+    ;; Only the low configuration byte and bits 16..23 geometry byte belong to
+    ;; DSSPEAKER_COMBINED. Windows 98 supports the original values 0 through 7;
+    ;; the later 5.1/7.1 SURROUND identifiers are deliberately not admitted.
+    (if (i32.ne (i32.and (local.get $config) (i32.const 0xFF00FF00))
+                (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $kind (i32.and (local.get $config) (i32.const 0xFF)))
+    (local.set $geometry
+      (i32.and (i32.shr_u (local.get $config) (i32.const 16))
+               (i32.const 0xFF)))
+    (if (i32.gt_u (local.get $kind) (i32.const 7))
+      (then (return (i32.const 0))))
+    (if (i32.ne (local.get $kind) (i32.const 4)) ;; DSSPEAKER_STEREO
+      (then (return (i32.eqz (local.get $geometry)))))
+    (i32.or
+      (i32.or
+        (i32.eqz (local.get $geometry))
+        (i32.eq (local.get $geometry) (i32.const 5)))
+      (i32.or
+        (i32.eq (local.get $geometry) (i32.const 10))
+        (i32.or
+          (i32.eq (local.get $geometry) (i32.const 20))
+          (i32.eq (local.get $geometry) (i32.const 180))))))
+
   (func $handle_IDirectSound_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; IID_IDirectSound {279AFA83-4981-11CE-A521-0020AF0BE560}.
     (global.set $eax (call $dx_query_interface_single
@@ -6256,17 +6295,73 @@
                      (i32.le_u (local.get $level) (i32.const 4)))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; GetSpeakerConfig
+  ;; GetSpeakerConfig(this, pdwSpeakerConfig). Microsoft documents a packed
+  ;; configuration/geometry DWORD and INVALIDPARAM/UNINITIALIZED failures.
   (func $handle_IDirectSound_GetSpeakerConfig (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $gs32 (local.get $arg1) (i32.const 0x200)) ;; DSSPEAKER_STEREO
+    (local $root i32) (local $state i32) (local $out_wa i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $state (load.field DxObject flags (local.get $root)))
+    (if (i32.eqz (local.get $state))
+      (then
+        (global.set $eax (i32.const 0x887800AA)) ;; DSERR_UNINITIALIZED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $out_wa
+      (call $g2w_affine_span (local.get $arg1) (i32.const 4)))
+    (if (i32.eq (local.get $out_wa) (global.get $NULL_SENTINEL))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (i32.store (local.get $out_wa) (i32.sub (local.get $state) (i32.const 1)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   (func $handle_IDirectSound_SetSpeakerConfig (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $root i32) (local $config i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (load.field DxObject flags (local.get $root)))
+      (then
+        (global.set $eax (i32.const 0x887800AA)) ;; DSERR_UNINITIALIZED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eqz (call $dsound_speaker_config_valid (local.get $arg1)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $config (local.get $arg1))
+    (if (i32.eq (local.get $config) (i32.const 4)) ;; stereo, no geometry
+      (then (local.set $config (i32.const 0x00140004)))) ;; default WIDE
+    (store.field DxObject flags (local.get $root)
+      (i32.add (local.get $config) (i32.const 1)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   (func $handle_IDirectSound_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $root i32)
+    (local.set $root (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.ne (load.field DxObject flags (local.get $root)) (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0x88780082)) ;; DSERR_ALREADYINITIALIZED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (call $dsound_mark_initialized (local.get $arg0))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
