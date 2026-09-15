@@ -1865,9 +1865,6 @@ async function main() {
     const [screenW, screenH] = screenArg ? screenArg.split('=')[1].split('x').map(Number) : [640, 480];
     const canvas = createCanvas(screenW, screenH);
     renderer = new Win98Renderer(canvas);
-    if (renderer.setInputHooks) {
-      renderer.setInputHooks(1000, (ASSET_ENTRY && ASSET_ENTRY.inputHooks) || null);
-    }
     if (TRACE_COMPOSITE) renderer.traceComposite = true;
     if (TRACE_INPUT) renderer.onInputTrace = (what) => console.log(`[input-route] ${what}`);
   }
@@ -3701,6 +3698,9 @@ async function main() {
   if (renderer) {
     renderer.wasm = instance;
     renderer.wasmMemory = memory;
+    if (renderer.setInputHooks) {
+      renderer.setInputHooks(instance, (ASSET_ENTRY && ASSET_ENTRY.inputHooks) || null);
+    }
   }
 
   // Create ThreadManager now that we have the main instance
