@@ -30481,5 +30481,26 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 3083168876
+  },
+  {
+    "id": 3636,
+    "name": "ShowWindowAsync",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3464069348
+  },
+  {
+    "id": 3637,
+    "name": "CopySid",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1380369264
+  },
+  {
+    "id": 3638,
+    "name": "LookupAccountSidA",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1359480257
   }
 ]

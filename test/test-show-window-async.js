@@ -7,6 +7,7 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const ESP0 = 0x07390000;
 const MSG = 0x00510000;
@@ -66,6 +67,8 @@ const extraWat = String.raw`
     (global.set $last_error (local.get $value)))
   (func (export "test_get_last_error") (result i32)
     (global.get $last_error))
+  (func (export "test_show_window_async_api_id") (result i32)
+    (call $lookup_api_id "ShowWindowAsync"))
 `;
 
 (async () => {
@@ -80,6 +83,12 @@ const extraWat = String.raw`
       },
     },
   });
+  const api = apiTable.find(entry => entry.name === 'ShowWindowAsync');
+  assert(api, 'ShowWindowAsync is registered');
+  assert.strictEqual(api.nargs, 2);
+  assert.strictEqual(api.convention, 'stdcall');
+  assert.strictEqual(e.test_show_window_async_api_id(), api.id,
+    'runtime import hashing resolves ShowWindowAsync');
 
   const hwnd = e.test_create_hidden_iconic_window() >>> 0;
   e.set_post_queue_count(0);

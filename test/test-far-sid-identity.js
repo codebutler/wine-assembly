@@ -3,6 +3,7 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const LAST_ERROR_SENTINEL = 0x6a5b4c3d;
 
@@ -73,6 +74,10 @@ const extraWat = String.raw`
     (global.get $last_error))
   (func (export "test_sid_set_last_error") (param $value i32)
     (global.set $last_error (local.get $value)))
+  (func (export "test_copy_sid_api_id") (result i32)
+    (call $lookup_api_id "CopySid"))
+  (func (export "test_lookup_account_sid_a_api_id") (result i32)
+    (call $lookup_api_id "LookupAccountSidA"))
 `;
 
 function fillGuest(e, ptr, length, value) {
@@ -81,6 +86,13 @@ function fillGuest(e, ptr, length, value) {
 
 (async () => {
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const copySidApi = apiTable.find(entry => entry.name === 'CopySid');
+  const lookupApi = apiTable.find(entry => entry.name === 'LookupAccountSidA');
+  assert(copySidApi && lookupApi, 'both FAR SID APIs are registered');
+  assert.strictEqual(copySidApi.nargs, 3);
+  assert.strictEqual(lookupApi.nargs, 7);
+  assert.strictEqual(e.test_copy_sid_api_id(), copySidApi.id);
+  assert.strictEqual(e.test_lookup_account_sid_a_api_id(), lookupApi.id);
   const imageBase = e.get_image_base() >>> 0;
   const guestBase = e.get_guest_base() >>> 0;
   const toWasm = guest => (guest - imageBase + guestBase) >>> 0;
