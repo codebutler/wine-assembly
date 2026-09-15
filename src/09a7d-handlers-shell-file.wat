@@ -1151,9 +1151,10 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-  ;; 463: WriteFmtUserTypeStg(pStg, cf, lpszUserType) — no-op success.
+  ;; 463: WriteFmtUserTypeStg(pStg, cf, lpszUserType) — persist \1CompObj.
   (func $handle_WriteFmtUserTypeStg (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) ;; S_OK
+    (global.set $eax (call $ole_write_fmt_user_type_stg
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 

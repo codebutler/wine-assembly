@@ -3789,6 +3789,232 @@
       (br $scan)))
     (i32.const 0))
 
+  ;; Persist the user-visible object type and clipboard format in the
+  ;; MS-OLEDS \1CompObj stream.  The ANSI fields keep legacy readers working;
+  ;; the Unicode tail preserves the caller's exact LPOLESTR.  Build the whole
+  ;; replacement first, then publish it with one backing-buffer swap so a bad
+  ;; pointer, unknown registered format, lock conflict, or OOM cannot truncate
+  ;; a previously valid stream.
+  (func $ole_write_fmt_user_type_stg
+      (param $storage i32) (param $cf_arg i32) (param $user_type i32) (result i32)
+    (local $cf i32) (local $user_chars i32) (local $user_ansi_bytes i32)
+    (local $user_unicode_bytes i32) (local $format_name i32)
+    (local $format_chars i32) (local $ansi_format_bytes i32)
+    (local $unicode_format_bytes i32) (local $total i32)
+    (local $payload i32) (local $cursor i32) (local $i i32) (local $ch i32)
+    (local $stream_name i32) (local $stream i32) (local $old_data i32)
+    (local $old_owned i32) (local $lock_length i32)
+
+    (if (i32.or (i32.eqz (local.get $storage)) (i32.eqz (local.get $user_type)))
+      (then (return (i32.const 0x80004003)))) ;; E_POINTER
+    (if (call $ptr_range_access_bad (local.get $storage) (i32.const 20) (i32.const 1))
+      (then (return (i32.const 0x80004003))))
+    (if (i32.or
+          (i32.ne (call $gl32 (local.get $storage)) (global.get $DX_VTBL_OLE_STORAGE))
+          (i32.ne (call $gl32 (i32.add (local.get $storage) (i32.const 8))) (i32.const 2)))
+      (then (return (i32.const 0x80030009)))) ;; STG_E_INVALIDPOINTER
+
+    ;; A bounded field-by-field scan is required here: a caller may place the
+    ;; string across two non-affine sparse pages, so no flat host memory copy is
+    ;; valid even when every guest byte is readable.
+    (block $user_found (loop $scan_user
+      (if (i32.ge_u (local.get $user_chars) (i32.const 0x7fff))
+        (then (return (i32.const 0x80070057)))) ;; E_INVALIDARG
+      (if (call $ptr_range_access_bad
+            (i32.add (local.get $user_type) (i32.shl (local.get $user_chars) (i32.const 1)))
+            (i32.const 2) (i32.const 0))
+        (then (return (i32.const 0x80004003))))
+      (br_if $user_found (i32.eqz (call $gl16
+        (i32.add (local.get $user_type) (i32.shl (local.get $user_chars) (i32.const 1))))))
+      (local.set $user_chars (i32.add (local.get $user_chars) (i32.const 1)))
+      (br $scan_user)))
+    (if (local.get $user_chars)
+      (then
+        (local.set $user_ansi_bytes (i32.add (local.get $user_chars) (i32.const 1)))
+        (local.set $user_unicode_bytes
+          (i32.shl (i32.add (local.get $user_chars) (i32.const 1)) (i32.const 1)))))
+
+    (local.set $cf (i32.and (local.get $cf_arg) (i32.const 0xffff)))
+    (if (i32.ge_u (local.get $cf) (i32.const 0xc000))
+      (then
+        (local.set $format_name (call $clipfmt_name_of (local.get $cf)))
+        (if (i32.eqz (local.get $format_name))
+          (then (return (i32.const 0x8004006a)))) ;; DV_E_CLIPFORMAT
+        (block $format_found (loop $scan_format
+          ;; MS-OLEDS caps a registered ClipboardFormat string, including its
+          ;; terminator, at 0x190 characters.
+          (if (i32.ge_u (local.get $format_chars) (i32.const 0x190))
+            (then (return (i32.const 0x8004006a))))
+          (local.set $ch (call $gl8 (i32.add (local.get $format_name) (local.get $format_chars))))
+          (local.set $format_chars (i32.add (local.get $format_chars) (i32.const 1)))
+          (br_if $format_found (i32.eqz (local.get $ch)))
+          (br $scan_format)))
+        (local.set $ansi_format_bytes (local.get $format_chars))
+        (local.set $unicode_format_bytes (i32.shl (local.get $format_chars) (i32.const 1)))))
+
+    ;; Header + ANSI user/format + one-byte Reserved1 + Unicode marker,
+    ;; user/format, and the empty Reserved2 length.  Standard formats carry a
+    ;; DWORD after marker -1; format zero carries no payload.
+    (local.set $total (i32.add (i32.const 57)
+      (i32.add (local.get $user_ansi_bytes) (local.get $user_unicode_bytes))))
+    (if (i32.eqz (local.get $cf))
+      (then (nop))
+      (else
+        (if (i32.ge_u (local.get $cf) (i32.const 0xc000))
+          (then (local.set $total (i32.add (local.get $total)
+            (i32.add (local.get $ansi_format_bytes) (local.get $unicode_format_bytes)))))
+          (else (local.set $total (i32.add (local.get $total) (i32.const 8)))))))
+    (local.set $payload (call $heap_alloc (local.get $total)))
+    (if (i32.eqz (local.get $payload)) (then (return (i32.const 0x8007000e))))
+    (call $zero_memory (call $g2w (local.get $payload)) (local.get $total))
+
+    ;; CompObjHeader fields are ignored by readers according to MS-OLEDS.  Use
+    ;; the long-standing OLE byte order/version values while keeping Reserved2
+    ;; zeroed.
+    (call $gs32 (local.get $payload) (i32.const 0xfffe0001))
+    (call $gs32 (i32.add (local.get $payload) (i32.const 4)) (i32.const 0x00000a03))
+    (call $gs32 (i32.add (local.get $payload) (i32.const 8)) (i32.const -1))
+    (local.set $cursor (i32.add (local.get $payload) (i32.const 28)))
+
+    ;; LengthPrefixedAnsiString user type.  Windows uses the system ANSI code
+    ;; page; this runtime's single-byte OLE mirror substitutes '?' when a UTF-16
+    ;; code unit has no one-byte representation, while the Unicode tail below
+    ;; remains lossless.
+    (call $gs32 (local.get $cursor) (local.get $user_ansi_bytes))
+    (local.set $cursor (i32.add (local.get $cursor) (i32.const 4)))
+    (local.set $i (i32.const 0))
+    (block $ansi_user_done (loop $write_ansi_user
+      (br_if $ansi_user_done (i32.ge_u (local.get $i) (local.get $user_chars)))
+      (local.set $ch (call $gl16
+        (i32.add (local.get $user_type) (i32.shl (local.get $i) (i32.const 1)))))
+      (call $gs8 (i32.add (local.get $cursor) (local.get $i))
+        (select (local.get $ch) (i32.const 63) (i32.le_u (local.get $ch) (i32.const 255))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $write_ansi_user)))
+    (local.set $cursor (i32.add (local.get $cursor) (local.get $user_ansi_bytes)))
+
+    ;; ClipboardFormatOrAnsiString.
+    (if (i32.eqz (local.get $cf))
+      (then
+        (call $gs32 (local.get $cursor) (i32.const 0))
+        (local.set $cursor (i32.add (local.get $cursor) (i32.const 4))))
+      (else
+        (if (i32.ge_u (local.get $cf) (i32.const 0xc000))
+          (then
+            (call $gs32 (local.get $cursor) (local.get $format_chars))
+            (local.set $cursor (i32.add (local.get $cursor) (i32.const 4)))
+            (local.set $i (i32.const 0))
+            (block $ansi_format_done (loop $write_ansi_format
+              (br_if $ansi_format_done (i32.ge_u (local.get $i) (local.get $format_chars)))
+              (call $gs8 (i32.add (local.get $cursor) (local.get $i))
+                (call $gl8 (i32.add (local.get $format_name) (local.get $i))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $write_ansi_format)))
+            (local.set $cursor (i32.add (local.get $cursor) (local.get $ansi_format_bytes))))
+          (else
+            (call $gs32 (local.get $cursor) (i32.const -1))
+            (call $gs32 (i32.add (local.get $cursor) (i32.const 4)) (local.get $cf))
+            (local.set $cursor (i32.add (local.get $cursor) (i32.const 8)))))))
+
+    ;; A present one-byte Reserved1 lets conforming readers continue into the
+    ;; Unicode extension.
+    (call $gs32 (local.get $cursor) (i32.const 1))
+    (local.set $cursor (i32.add (local.get $cursor) (i32.const 5)))
+    (call $gs32 (local.get $cursor) (i32.const 0x71b239f4))
+    (local.set $cursor (i32.add (local.get $cursor) (i32.const 4)))
+
+    (call $gs32 (local.get $cursor) (local.get $user_unicode_bytes))
+    (local.set $cursor (i32.add (local.get $cursor) (i32.const 4)))
+    (local.set $i (i32.const 0))
+    (block $unicode_user_done (loop $write_unicode_user
+      (br_if $unicode_user_done (i32.ge_u (local.get $i) (local.get $user_chars)))
+      (call $gs16 (i32.add (local.get $cursor) (i32.shl (local.get $i) (i32.const 1)))
+        (call $gl16 (i32.add (local.get $user_type) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $write_unicode_user)))
+    (local.set $cursor (i32.add (local.get $cursor) (local.get $user_unicode_bytes)))
+
+    ;; ClipboardFormatOrUnicodeString.
+    (if (i32.eqz (local.get $cf))
+      (then
+        (call $gs32 (local.get $cursor) (i32.const 0))
+        (local.set $cursor (i32.add (local.get $cursor) (i32.const 4))))
+      (else
+        (if (i32.ge_u (local.get $cf) (i32.const 0xc000))
+          (then
+            (call $gs32 (local.get $cursor) (local.get $format_chars))
+            (local.set $cursor (i32.add (local.get $cursor) (i32.const 4)))
+            (local.set $i (i32.const 0))
+            (block $unicode_format_done (loop $write_unicode_format
+              (br_if $unicode_format_done (i32.ge_u (local.get $i) (local.get $format_chars)))
+              (call $gs16 (i32.add (local.get $cursor) (i32.shl (local.get $i) (i32.const 1)))
+                (call $gl8 (i32.add (local.get $format_name) (local.get $i))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $write_unicode_format)))
+            (local.set $cursor (i32.add (local.get $cursor) (local.get $unicode_format_bytes))))
+          (else
+            (call $gs32 (local.get $cursor) (i32.const -1))
+            (call $gs32 (i32.add (local.get $cursor) (i32.const 4)) (local.get $cf))
+            (local.set $cursor (i32.add (local.get $cursor) (i32.const 8)))))))
+    (call $gs32 (local.get $cursor) (i32.const 0)) ;; empty Reserved2
+
+    (local.set $stream_name (call $heap_alloc (i32.const 18)))
+    (if (i32.eqz (local.get $stream_name))
+      (then (call $heap_free (local.get $payload)) (return (i32.const 0x8007000e))))
+    (call $gs16 (local.get $stream_name) (i32.const 1))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 2)) (i32.const 67))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 4)) (i32.const 111))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 6)) (i32.const 109))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 8)) (i32.const 112))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 10)) (i32.const 79))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 12)) (i32.const 98))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 14)) (i32.const 106))
+    (call $gs16 (i32.add (local.get $stream_name) (i32.const 16)) (i32.const 0))
+
+    (local.set $stream (call $ole_storage_find_stream (local.get $storage) (local.get $stream_name)))
+    (if (i32.eqz (local.get $stream))
+      (then
+        (if (call $ole_storage_find_storage (local.get $storage) (local.get $stream_name))
+          (then
+            (call $heap_free (local.get $stream_name))
+            (call $heap_free (local.get $payload))
+            (return (i32.const 0x80030050)))) ;; STG_E_FILEALREADYEXISTS
+        (local.set $stream (call $ole_create_stream (local.get $storage) (local.get $stream_name)))
+        (if (i32.or (i32.eqz (local.get $stream))
+              (i32.eqz (call $gl32 (i32.add (local.get $stream) (i32.const 28)))))
+          (then
+            (if (local.get $stream) (then (drop (call $ole_obj_release (local.get $stream)))))
+            (call $heap_free (local.get $stream_name))
+            (call $heap_free (local.get $payload))
+            (return (i32.const 0x8007000e))))
+        ;; Its construction reference becomes the storage-owned reference.
+        (call $gs32 (i32.add (local.get $stream) (i32.const 40))
+          (call $gl32 (i32.add (local.get $storage) (i32.const 16))))
+        (call $gs32 (i32.add (local.get $storage) (i32.const 16)) (local.get $stream)))
+      (else
+        (local.set $lock_length (call $gl32 (i32.add (local.get $stream) (i32.const 16))))
+        (if (i32.gt_u (local.get $total) (local.get $lock_length))
+          (then (local.set $lock_length (local.get $total))))
+        (if (call $ole_stream_lock_conflict
+              (local.get $stream) (i32.const 0) (local.get $lock_length) (i32.const 1))
+          (then
+            (call $heap_free (local.get $stream_name))
+            (call $heap_free (local.get $payload))
+            (return (i32.const 0x80030021)))))) ;; STG_E_LOCKVIOLATION
+
+    (call $heap_free (local.get $stream_name))
+    (local.set $old_data (call $gl32 (i32.add (local.get $stream) (i32.const 12))))
+    (local.set $old_owned (call $gl32 (i32.add (local.get $stream) (i32.const 32))))
+    (call $gs32 (i32.add (local.get $stream) (i32.const 12)) (local.get $payload))
+    (call $gs32 (i32.add (local.get $stream) (i32.const 16)) (local.get $total))
+    (call $gs32 (i32.add (local.get $stream) (i32.const 20))
+      (call $heap_payload_size_unchecked (local.get $payload)))
+    (call $gs32 (i32.add (local.get $stream) (i32.const 24)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $stream) (i32.const 32)) (i32.const 1))
+    (if (i32.and (local.get $old_data) (local.get $old_owned))
+      (then (call $heap_free (local.get $old_data))))
+    (i32.const 0))
+
   (func $ole_storage_destroy_element (param $storage i32) (param $name i32) (result i32)
     (local $current i32) (local $previous i32) (local $next i32)
     (if (i32.or (i32.eqz (local.get $storage)) (i32.eqz (local.get $name)))

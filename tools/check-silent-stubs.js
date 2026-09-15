@@ -265,8 +265,11 @@ const digest = crypto.createHash('sha256')
 // 2026-09-15: 280 -> 279. DrawAnimatedRects now validates its HWND, legacy
 // Win98 animation selector and both readable RECTs, then schedules a clipped
 // client-coordinate wire-frame transition instead of reporting false success.
-const EXPECTED_COUNT = 279;
-const EXPECTED_SHA256 = '6173b38c0de84346a98b09fc1d961773b08fd96ccc2136ee7834ae8601df47bf';
+// 2026-09-15: 279 -> 278. WriteFmtUserTypeStg now transactionally persists the
+// standard or registered clipboard format and Unicode user type in a valid
+// MS-OLEDS \1CompObj stream instead of returning S_OK without touching storage.
+const EXPECTED_COUNT = 278;
+const EXPECTED_SHA256 = '5c3a5ec188b28fb4732d070a07bf7793cc05586077d7c382e046ac19e2b6bf12';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
