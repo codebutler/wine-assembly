@@ -1778,6 +1778,22 @@
       (i32.shl (call $gl8 (i32.add (local.get $sid) (i32.const 1)))
         (i32.const 2))))
 
+  ;; The process token currently publishes one principal SID: the enabled
+  ;; BUILTIN\Administrators group, S-1-5-32-544. Account lookup must resolve
+  ;; that exact identity rather than assigning its name to every valid SID.
+  (func $security_sid_is_builtin_admin (param $sid i32) (result i32)
+    (i32.and
+      (i32.and
+        (i32.eq (call $gl8 (local.get $sid)) (i32.const 1))
+        (i32.eq (call $gl8 (i32.add (local.get $sid) (i32.const 1))) (i32.const 2)))
+      (i32.and
+        (i32.and
+          (i32.eq (call $gl32 (i32.add (local.get $sid) (i32.const 2))) (i32.const 0))
+          (i32.eq (call $gl16 (i32.add (local.get $sid) (i32.const 6))) (i32.const 0x0500)))
+        (i32.and
+          (i32.eq (call $gl32 (i32.add (local.get $sid) (i32.const 8))) (i32.const 32))
+          (i32.eq (call $gl32 (i32.add (local.get $sid) (i32.const 12))) (i32.const 544))))))
+
   (func $security_max_u (param $a i32) (param $b i32) (result i32)
     (select (local.get $a) (local.get $b)
       (i32.gt_u (local.get $a) (local.get $b))))
@@ -2325,6 +2341,28 @@
         (i32.ne (local.get $arg0) (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
+
+  ;; CopySid(nDestinationSidLength, pDestinationSid, pSourceSid). Validate the
+  ;; complete variable-sized source and destination before copying so failure
+  ;; never leaves a partial SID in the caller's buffer.
+  (func $handle_CopySid (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $length i32)
+    (global.set $eax (i32.const 0))
+    (if (i32.eqz (call $security_sid_valid (local.get $arg2)))
+      (then (global.set $last_error (i32.const 1337))) ;; ERROR_INVALID_SID
+      (else
+        (local.set $length (call $security_sid_length (local.get $arg2)))
+        (if (i32.lt_u (local.get $arg0) (local.get $length))
+          (then (global.set $last_error (i32.const 122))) ;; ERROR_INSUFFICIENT_BUFFER
+          (else
+            (if (i32.eqz
+                  (call $security_span_valid (local.get $arg1) (local.get $length)))
+              (then (global.set $last_error (i32.const 87))) ;; ERROR_INVALID_PARAMETER
+              (else
+                (memory.copy (call $g2w (local.get $arg1))
+                  (call $g2w (local.get $arg2)) (local.get $length))
+                (global.set $eax (i32.const 1))))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; The emulator deliberately presents Windows 98. InstallShield uses a
   ;; successful OpenSCManager call to select its Windows NT service/security
@@ -3467,53 +3505,119 @@
       (select (i32.const 1300) (i32.const 0) (local.get $not_all)))
     (global.set $eax (i32.const 1)))
 
-  ;; LookupAccountSidW(System, Sid, Name, cchName, Domain, cchDomain, Use).
-  ;; The process token exposes S-1-5-32-544, so resolve it to the matching
-  ;; well-known alias. Buffer capacities include room for NUL on input; the
-  ;; successful output lengths exclude NUL, as on Windows.
-  (func $handle_LookupAccountSidW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $domain_len_ptr i32) (local $use_ptr i32)
-    (local $name_cap i32) (local $domain_cap i32)
-    (local.set $domain_len_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $use_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
-    (if (i32.or (i32.eqz (local.get $arg3)) (i32.eqz (local.get $domain_len_ptr)))
+  ;; Shared LookupAccountSidA/W identity model. The only principal the process
+  ;; token publishes is S-1-5-32-544, the predefined BUILTIN\Administrators
+  ;; alias. Buffer capacities include NUL on input; success lengths exclude it.
+  (func $lookup_account_sid
+      (param $system i32) (param $sid i32)
+      (param $name i32) (param $name_len_ptr i32)
+      (param $domain i32) (param $domain_len_ptr i32)
+      (param $use_ptr i32) (param $wide i32)
+    (local $name_cap i32) (local $domain_cap i32) (local $char_size i32)
+    (global.set $eax (i32.const 0))
+    (if (i32.or
+          (i32.or
+            (i32.eqz (call $token_guest_span_valid
+              (local.get $name_len_ptr) (i32.const 4)))
+            (i32.eqz (call $token_guest_span_valid
+              (local.get $domain_len_ptr) (i32.const 4))))
+          (i32.eqz (call $token_guest_span_valid
+            (local.get $use_ptr) (i32.const 4))))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
         (return)))
-    (local.set $name_cap (call $gl32 (local.get $arg3)))
+    (if (local.get $system)
+      (then
+        (if (i32.eqz (call $token_guest_span_valid
+              (local.get $system) (i32.const 1)))
+          (then
+            (global.set $last_error (i32.const 87))
+            (return)))
+        ;; The browser exposes no remote account database. Empty retains the
+        ;; local-system meaning; any named system is an unavailable net path.
+        (if (call $gl8 (local.get $system))
+          (then
+            (global.set $last_error (i32.const 53)) ;; ERROR_BAD_NETPATH
+            (return)))))
+    (if (i32.eqz (call $security_sid_valid (local.get $sid)))
+      (then
+        (global.set $last_error (i32.const 1337)) ;; ERROR_INVALID_SID
+        (return)))
+    (if (i32.eqz (call $security_sid_is_builtin_admin (local.get $sid)))
+      (then
+        (global.set $last_error (i32.const 1332)) ;; ERROR_NONE_MAPPED
+        (return)))
+    (local.set $name_cap (call $gl32 (local.get $name_len_ptr)))
     (local.set $domain_cap (call $gl32 (local.get $domain_len_ptr)))
     (if (i32.or
-          (i32.or (i32.eqz (local.get $arg2)) (i32.lt_u (local.get $name_cap) (i32.const 15)))
-          (i32.or (i32.eqz (local.get $arg4)) (i32.lt_u (local.get $domain_cap) (i32.const 8))))
+          (i32.or (i32.eqz (local.get $name))
+            (i32.lt_u (local.get $name_cap) (i32.const 15)))
+          (i32.or (i32.eqz (local.get $domain))
+            (i32.lt_u (local.get $domain_cap) (i32.const 8))))
       (then
-        (call $gs32 (local.get $arg3) (i32.const 15))
+        ;; Both required sizes are defined on an insufficient-buffer failure;
+        ;; name/domain/use payloads remain untouched.
+        (call $gs32 (local.get $name_len_ptr) (i32.const 15))
         (call $gs32 (local.get $domain_len_ptr) (i32.const 8))
         (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
-        (global.set $eax (i32.const 0)))
-      (else
+        (return)))
+    (local.set $char_size (select (i32.const 2) (i32.const 1) (local.get $wide)))
+    (if (i32.or
+          (i32.eqz (call $token_guest_span_valid (local.get $name)
+            (i32.mul (i32.const 15) (local.get $char_size))))
+          (i32.eqz (call $token_guest_span_valid (local.get $domain)
+            (i32.mul (i32.const 8) (local.get $char_size)))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (return)))
+    (if (local.get $wide)
+      (then
         ;; L"Administrators\0".
-        (call $gs32 (local.get $arg2) (i32.const 0x00640041))
-        (call $gs32 (i32.add (local.get $arg2) (i32.const 4)) (i32.const 0x0069006d))
-        (call $gs32 (i32.add (local.get $arg2) (i32.const 8)) (i32.const 0x0069006e))
-        (call $gs32 (i32.add (local.get $arg2) (i32.const 12)) (i32.const 0x00740073))
-        (call $gs32 (i32.add (local.get $arg2) (i32.const 16)) (i32.const 0x00610072))
-        (call $gs32 (i32.add (local.get $arg2) (i32.const 20)) (i32.const 0x006f0074))
-        (call $gs32 (i32.add (local.get $arg2) (i32.const 24)) (i32.const 0x00730072))
-        (call $gs16 (i32.add (local.get $arg2) (i32.const 28)) (i32.const 0))
+        (call $gs32 (local.get $name) (i32.const 0x00640041))
+        (call $gs32 (i32.add (local.get $name) (i32.const 4)) (i32.const 0x0069006d))
+        (call $gs32 (i32.add (local.get $name) (i32.const 8)) (i32.const 0x0069006e))
+        (call $gs32 (i32.add (local.get $name) (i32.const 12)) (i32.const 0x00740073))
+        (call $gs32 (i32.add (local.get $name) (i32.const 16)) (i32.const 0x00610072))
+        (call $gs32 (i32.add (local.get $name) (i32.const 20)) (i32.const 0x006f0074))
+        (call $gs32 (i32.add (local.get $name) (i32.const 24)) (i32.const 0x00730072))
+        (call $gs16 (i32.add (local.get $name) (i32.const 28)) (i32.const 0))
         ;; L"BUILTIN\0".
-        (call $gs32 (local.get $arg4) (i32.const 0x00550042))
-        (call $gs32 (i32.add (local.get $arg4) (i32.const 4)) (i32.const 0x004c0049))
-        (call $gs32 (i32.add (local.get $arg4) (i32.const 8)) (i32.const 0x00490054))
-        (call $gs32 (i32.add (local.get $arg4) (i32.const 12)) (i32.const 0x0000004e))
-        (call $gs32 (local.get $arg3) (i32.const 14))
-        (call $gs32 (local.get $domain_len_ptr) (i32.const 7))
-        (if (local.get $use_ptr) (then (call $gs32 (local.get $use_ptr) (i32.const 4)))) ;; SidTypeAlias
-        (global.set $last_error (i32.const 0))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
-  )
+        (call $gs32 (local.get $domain) (i32.const 0x00550042))
+        (call $gs32 (i32.add (local.get $domain) (i32.const 4)) (i32.const 0x004c0049))
+        (call $gs32 (i32.add (local.get $domain) (i32.const 8)) (i32.const 0x00490054))
+        (call $gs32 (i32.add (local.get $domain) (i32.const 12)) (i32.const 0x0000004e)))
+      (else
+        ;; "Administrators\0" and "BUILTIN\0".
+        (call $gs32 (local.get $name) (i32.const 0x696d6441))
+        (call $gs32 (i32.add (local.get $name) (i32.const 4)) (i32.const 0x7473696e))
+        (call $gs32 (i32.add (local.get $name) (i32.const 8)) (i32.const 0x6f746172))
+        (call $gs16 (i32.add (local.get $name) (i32.const 12)) (i32.const 0x7372))
+        (call $gs8 (i32.add (local.get $name) (i32.const 14)) (i32.const 0))
+        (call $gs32 (local.get $domain) (i32.const 0x4c495542))
+        (call $gs32 (i32.add (local.get $domain) (i32.const 4)) (i32.const 0x004e4954))))
+    (call $gs32 (local.get $name_len_ptr) (i32.const 14))
+    (call $gs32 (local.get $domain_len_ptr) (i32.const 7))
+    (call $gs32 (local.get $use_ptr) (i32.const 4)) ;; SidTypeAlias
+    ;; Like other Win32 BOOL APIs, success does not define LastError.
+    (global.set $eax (i32.const 1)))
+
+  (func $handle_LookupAccountSidA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $domain_len_ptr i32) (local $use_ptr i32)
+    (local.set $domain_len_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $use_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (call $lookup_account_sid
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $domain_len_ptr) (local.get $use_ptr) (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+
+  (func $handle_LookupAccountSidW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $domain_len_ptr i32) (local $use_ptr i32)
+    (local.set $domain_len_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $use_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (call $lookup_account_sid
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $domain_len_ptr) (local.get $use_ptr) (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
   ;; MsiQueryProductStateW(szProduct) — the emulated MSI database starts
   ;; empty, so a valid product code is neither advertised nor installed.
