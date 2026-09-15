@@ -13,6 +13,13 @@
   ;; reentrant guest callback must not observe a half-owned list entry.
   (global $ole_drop_targets (mut i32) (i32.const 0))
   (global $ole_drop_target_mutating (mut i32) (i32.const 0))
+  ;; DoDragDrop is an OLE service, not merely a COM service. Keep the
+  ;; successful OleInitialize nesting count in the module that owns this
+  ;; thread's parked callback continuation; bare CoInitialize does not enable
+  ;; drag/drop. Only one synchronous drag loop may own that continuation at a
+  ;; time.
+  (global $ole_initialize_count (mut i32) (i32.const 0))
+  (global $ole_drag_active (mut i32) (i32.const 0))
   ;; One 12-byte node per balanced CoLockObjectExternal(TRUE) call:
   ;; IUnknown, ownership kind (1 local / 2 DLL-private guest), next. Keeping
   ;; duplicate calls as duplicate nodes makes the required lock count exact.
@@ -79,7 +86,8 @@
         (global.set $eax (i32.const 0x80040101)) ;; DRAGDROP_E_ALREADYREGISTERED
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
-    (if (global.get $ole_drop_target_mutating)
+    (if (i32.or (global.get $ole_drop_target_mutating)
+                (global.get $ole_drag_active))
       (then
         (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED (reentrant mutation)
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
@@ -138,7 +146,8 @@
         (global.set $eax (i32.const 0x80040100)) ;; DRAGDROP_E_NOTREGISTERED
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
         (return)))
-    (if (global.get $ole_drop_target_mutating)
+    (if (i32.or (global.get $ole_drop_target_mutating)
+                (global.get $ole_drag_active))
       (then
         (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED (reentrant mutation)
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
@@ -161,6 +170,401 @@
       (i32.const 0) (local.get $entry) (i32.const 0) (i32.const 0) (i32.const 0)))
     (drop (call $ole_guest_callback_invoke1
       (local.get $ctx) (local.get $target) (i32.const 2))))
+
+  ;; Pick a retained, process-local IDropTarget at a screen point. OLE targets
+  ;; are registered on an HWND that commonly owns a forest of child controls,
+  ;; so test the registered window rectangle itself. Deeper registered windows
+  ;; win over their ancestors; z-order breaks ties between overlapping peers.
+  (func $ole_drop_target_at_point (param $x i32) (param $y i32) (result i32)
+    (local $entry i32) (local $best i32) (local $hwnd i32)
+    (local $wx i32) (local $wy i32) (local $ww i32) (local $wh i32)
+    (local $depth i32) (local $best_depth i32) (local $z i32) (local $best_z i32)
+    (local $walk i32) (local $guard i32)
+    (local.set $entry (global.get $ole_drop_targets))
+    (block $done (loop $scan
+      (br_if $done (i32.eqz (local.get $entry)))
+      (local.set $hwnd (call $gl32 (local.get $entry)))
+      (if (i32.and
+            (i32.ge_s (call $wnd_table_find (local.get $hwnd)) (i32.const 0))
+            (call $wnd_is_effectively_visible (local.get $hwnd)))
+        (then
+          (local.set $wx (call $wnd_window_screen_x (local.get $hwnd)))
+          (local.set $wy (call $wnd_window_screen_y (local.get $hwnd)))
+          (local.set $ww (call $wnd_screen_w (local.get $hwnd)))
+          (local.set $wh (call $wnd_screen_h (local.get $hwnd)))
+          (if (i32.and
+                (i32.and (i32.ge_s (local.get $x) (local.get $wx))
+                         (i32.lt_s (local.get $x) (i32.add (local.get $wx) (local.get $ww))))
+                (i32.and (i32.ge_s (local.get $y) (local.get $wy))
+                         (i32.lt_s (local.get $y) (i32.add (local.get $wy) (local.get $wh)))))
+            (then
+              (local.set $depth (i32.const 0))
+              (local.set $guard (i32.const 0))
+              (local.set $walk (local.get $hwnd))
+              (block $depth_done (loop $parents
+                (local.set $walk (call $wnd_get_parent (local.get $walk)))
+                (br_if $depth_done (i32.eqz (local.get $walk)))
+                (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+                (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
+                (br_if $depth_done (i32.ge_u (local.get $guard) (global.get $MAX_WINDOWS)))
+                (br $parents)))
+              (local.set $z (call $wnd_z_get (local.get $hwnd)))
+              (if (i32.or
+                    (i32.eqz (local.get $best))
+                    (i32.or (i32.gt_u (local.get $depth) (local.get $best_depth))
+                            (i32.and (i32.eq (local.get $depth) (local.get $best_depth))
+                                     (i32.gt_s (local.get $z) (local.get $best_z)))))
+                (then
+                  (local.set $best (local.get $entry))
+                  (local.set $best_depth (local.get $depth))
+                  (local.set $best_z (local.get $z))))))))
+      (local.set $entry (call $gl32 (i32.add (local.get $entry) (i32.const 12))))
+      (br $scan)))
+    (local.get $best))
+
+  (func $ole_drag_key_state (result i32)
+    (local $keys i32)
+    (local.set $keys (i32.and (call $host_get_mouse_buttons) (i32.const 3)))
+    (if (call $host_get_key_down_state (i32.const 0x10)) ;; VK_SHIFT
+      (then (local.set $keys (i32.or (local.get $keys) (i32.const 4)))))
+    (if (call $host_get_key_down_state (i32.const 0x11)) ;; VK_CONTROL
+      (then (local.set $keys (i32.or (local.get $keys) (i32.const 8)))))
+    (local.get $keys))
+
+  (func $ole_drag_effect_sanitize (param $effect i32) (param $allowed i32) (result i32)
+    (i32.and (local.get $effect)
+      (i32.and (local.get $allowed) (i32.const 0x80000007))))
+
+  (func $ole_drag_effect_has_operation (param $effect i32) (result i32)
+    (i32.ne (i32.and (local.get $effect) (i32.const 7)) (i32.const 0)))
+
+  ;; A drag state is 56 guest bytes:
+  ;; data, source, allowed effects, caller effect*, current/pending target
+  ;; entries, last key state/point/escape, continuation stage, scratch effect,
+  ;; feedback-seen flag, final HRESULT, reserved.
+  (func $ole_drag_park (param $ctx i32) (param $state i32)
+    (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 1)) ;; WAIT
+    (global.set $esp (local.get $ctx))
+    (global.set $eip (global.get $font_enum_ret_thunk)) ;; CACA0011
+    ;; Re-entering the same continuation thunk is intentional. Prevent the
+    ;; thunk-zone fallback from mistaking unchanged EIP for a missing redirect
+    ;; and popping the OLEC context magic as a return address.
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $yield_reason (i32.const 15))
+    (global.set $steps (i32.const 0)))
+
+  (func $ole_drag_finish (param $ctx i32) (param $state i32) (param $result i32)
+    (global.set $ole_drag_active (i32.const 0))
+    (call $heap_free (local.get $state))
+    (call $ole_guest_callback_finish (local.get $ctx) (local.get $result)))
+
+  (func $ole_drag_feedback
+        (param $ctx i32) (param $state i32) (param $effect i32) (param $next_stage i32)
+    (call $gs32 (i32.add (local.get $state) (i32.const 36)) (local.get $next_stage))
+    (drop (call $ole_guest_callback_invoke2
+      (local.get $ctx) (call $gl32 (i32.add (local.get $state) (i32.const 4)))
+      (i32.const 4) (local.get $effect)))) ;; IDropSource::GiveFeedback
+
+  (func $ole_drag_finish_request
+        (param $ctx i32) (param $state i32) (param $result i32)
+    (local $entry i32)
+    (call $gs32 (i32.add (local.get $state) (i32.const 48)) (local.get $result))
+    (local.set $entry (call $gl32 (i32.add (local.get $state) (i32.const 16))))
+    (if (local.get $entry)
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 9)) ;; LEAVE_FINISH
+        (drop (call $ole_guest_callback_invoke1
+          (local.get $ctx) (call $gl32 (i32.add (local.get $entry) (i32.const 4)))
+          (i32.const 5))) ;; IDropTarget::DragLeave
+        (return)))
+    (call $ole_drag_finish (local.get $ctx) (local.get $state) (local.get $result)))
+
+  (func $ole_drag_enter_pending (param $ctx i32) (param $state i32)
+    (local $entry i32) (local $target i32) (local $pos i32)
+    (local.set $entry (call $gl32 (i32.add (local.get $state) (i32.const 20))))
+    (if (i32.eqz (local.get $entry))
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 40)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $state) (i32.const 44)) (i32.const 1))
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (i32.const 0) (i32.const 6))
+        (return)))
+    (local.set $target (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
+    ;; Registration validated lifetime methods; a usable drag target must also
+    ;; expose the complete IDropTarget quartet before any method is entered.
+    (if (i32.or
+          (i32.or (i32.eqz (call $ole_guest_method_addr (local.get $target) (i32.const 3)))
+                  (i32.eqz (call $ole_guest_method_addr (local.get $target) (i32.const 4))))
+          (i32.or (i32.eqz (call $ole_guest_method_addr (local.get $target) (i32.const 5)))
+                  (i32.eqz (call $ole_guest_method_addr (local.get $target) (i32.const 6)))))
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 20)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $state) (i32.const 40)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $state) (i32.const 44)) (i32.const 1))
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (i32.const 0) (i32.const 6))
+        (return)))
+    (call $gs32 (i32.add (local.get $state) (i32.const 16)) (local.get $entry))
+    (call $gs32 (i32.add (local.get $state) (i32.const 20)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $state) (i32.const 40))
+      (call $gl32 (i32.add (local.get $state) (i32.const 8))))
+    (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 5)) ;; ENTER
+    (local.set $pos (call $gl32 (i32.add (local.get $state) (i32.const 28))))
+    (drop (call $ole_guest_callback_invoke6
+      (local.get $ctx) (local.get $target) (i32.const 3)
+      (call $gl32 (local.get $state))
+      (call $gl32 (i32.add (local.get $state) (i32.const 24)))
+      (i32.shr_s (i32.shl (local.get $pos) (i32.const 16)) (i32.const 16))
+      (i32.shr_s (local.get $pos) (i32.const 16))
+      (i32.add (local.get $state) (i32.const 40)))))
+
+  (func $ole_drag_update_target (param $ctx i32) (param $state i32)
+    (local $pos i32) (local $x i32) (local $y i32)
+    (local $current i32) (local $next i32) (local $target i32)
+    (local.set $pos (call $gl32 (i32.add (local.get $state) (i32.const 28))))
+    (local.set $x (i32.shr_s (i32.shl (local.get $pos) (i32.const 16)) (i32.const 16)))
+    (local.set $y (i32.shr_s (local.get $pos) (i32.const 16)))
+    (local.set $current (call $gl32 (i32.add (local.get $state) (i32.const 16))))
+    (local.set $next (call $ole_drop_target_at_point (local.get $x) (local.get $y)))
+    (if (i32.ne (local.get $current) (local.get $next))
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 20)) (local.get $next))
+        (if (local.get $current)
+          (then
+            (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 3)) ;; LEAVE_SWITCH
+            (drop (call $ole_guest_callback_invoke1
+              (local.get $ctx)
+              (call $gl32 (i32.add (local.get $current) (i32.const 4)))
+              (i32.const 5)))
+            (return)))
+        (call $ole_drag_enter_pending (local.get $ctx) (local.get $state))
+        (return)))
+    (if (local.get $current)
+      (then
+        (local.set $target (call $gl32 (i32.add (local.get $current) (i32.const 4))))
+        (call $gs32 (i32.add (local.get $state) (i32.const 40))
+          (call $gl32 (i32.add (local.get $state) (i32.const 8))))
+        (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 7)) ;; OVER
+        (drop (call $ole_guest_callback_invoke5
+          (local.get $ctx) (local.get $target) (i32.const 4)
+          (call $gl32 (i32.add (local.get $state) (i32.const 24)))
+          (local.get $x) (local.get $y)
+          (i32.add (local.get $state) (i32.const 40))))
+        (return)))
+    (if (i32.eqz (call $gl32 (i32.add (local.get $state) (i32.const 44))))
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 44)) (i32.const 1))
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (i32.const 0) (i32.const 6))
+        (return)))
+    (call $ole_drag_park (local.get $ctx) (local.get $state)))
+
+  (func $ole_drag_poll (param $ctx i32) (param $state i32)
+    (local $keys i32) (local $pos i32) (local $escape i32)
+    (local $key_changed i32) (local $pos_changed i32)
+    (local.set $keys (call $ole_drag_key_state))
+    (local.set $pos (call $host_get_mouse_position))
+    (local.set $escape
+      (i32.ne (call $host_get_key_down_state (i32.const 0x1B)) (i32.const 0))) ;; VK_ESCAPE
+    (local.set $key_changed
+      (i32.or
+        (i32.ne (local.get $keys) (call $gl32 (i32.add (local.get $state) (i32.const 24))))
+        (i32.ne (local.get $escape) (call $gl32 (i32.add (local.get $state) (i32.const 32))))))
+    (local.set $pos_changed
+      (i32.ne (local.get $pos) (call $gl32 (i32.add (local.get $state) (i32.const 28)))))
+    (if (i32.or (local.get $key_changed) (local.get $pos_changed))
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 24)) (local.get $keys))
+        (call $gs32 (i32.add (local.get $state) (i32.const 28)) (local.get $pos))
+        (call $gs32 (i32.add (local.get $state) (i32.const 32)) (local.get $escape))))
+    (if (local.get $key_changed)
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 2)) ;; QUERY
+        (drop (call $ole_guest_callback_invoke3
+          (local.get $ctx)
+          (call $gl32 (i32.add (local.get $state) (i32.const 4)))
+          (i32.const 3) (local.get $escape) (local.get $keys)))
+        (return)))
+    (if (local.get $pos_changed)
+      (then
+        (call $ole_drag_update_target (local.get $ctx) (local.get $state))
+        (return)))
+    (call $ole_drag_park (local.get $ctx) (local.get $state)))
+
+  ;; Resume one method in the synchronous DoDragDrop protocol. Stages are
+  ;; stored in the heap record rather than globals so the CACA0011 callback
+  ;; frame remains the single source of truth across Worker yields.
+  (func $ole_drag_continue (param $ctx i32) (param $state i32)
+    (local $stage i32) (local $hr i32) (local $entry i32)
+    (local $target i32) (local $effect i32) (local $pos i32)
+    (local.set $stage (call $gl32 (i32.add (local.get $state) (i32.const 36))))
+    (local.set $hr (global.get $eax))
+    (if (i32.eq (local.get $stage) (i32.const 1))
+      (then (call $ole_drag_poll (local.get $ctx) (local.get $state)) (return)))
+    (if (i32.eq (local.get $stage) (i32.const 2)) ;; QueryContinueDrag
+      (then
+        (if (i32.eqz (local.get $hr))
+          (then
+            (call $ole_drag_update_target (local.get $ctx) (local.get $state))
+            (return)))
+        (if (i32.eq (local.get $hr) (i32.const 0x00040100)) ;; DRAGDROP_S_DROP
+          (then
+            (local.set $entry (call $gl32 (i32.add (local.get $state) (i32.const 16))))
+            (local.set $effect (call $gl32 (i32.add (local.get $state) (i32.const 40))))
+            (if (i32.and (i32.ne (local.get $entry) (i32.const 0))
+                         (call $ole_drag_effect_has_operation (local.get $effect)))
+              (then
+                (local.set $target (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
+                (call $gs32 (i32.add (local.get $state) (i32.const 40))
+                  (call $gl32 (i32.add (local.get $state) (i32.const 8))))
+                (call $gs32 (i32.add (local.get $state) (i32.const 36)) (i32.const 8)) ;; DROP
+                (local.set $pos (call $gl32 (i32.add (local.get $state) (i32.const 28))))
+                (drop (call $ole_guest_callback_invoke6
+                  (local.get $ctx) (local.get $target) (i32.const 6)
+                  (call $gl32 (local.get $state))
+                  (call $gl32 (i32.add (local.get $state) (i32.const 24)))
+                  (i32.shr_s (i32.shl (local.get $pos) (i32.const 16)) (i32.const 16))
+                  (i32.shr_s (local.get $pos) (i32.const 16))
+                  (i32.add (local.get $state) (i32.const 40))))
+                (return)))
+            (call $ole_drag_finish_request (local.get $ctx) (local.get $state)
+              (i32.const 0x00040101))
+            (return)))
+        (call $ole_drag_finish_request (local.get $ctx) (local.get $state) (local.get $hr))
+        (return)))
+    (if (i32.eq (local.get $stage) (i32.const 3)) ;; DragLeave for target switch
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 16)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $state) (i32.const 40)) (i32.const 0))
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (i32.const 0) (i32.const 4))
+        (return)))
+    (if (i32.eq (local.get $stage) (i32.const 4))
+      (then (call $ole_drag_enter_pending (local.get $ctx) (local.get $state)) (return)))
+    (if (i32.eq (local.get $stage) (i32.const 5)) ;; DragEnter
+      (then
+        (if (i32.lt_s (local.get $hr) (i32.const 0))
+          (then
+            (call $gs32 (i32.add (local.get $state) (i32.const 16)) (i32.const 0))
+            (local.set $effect (i32.const 0)))
+          (else
+            (local.set $effect (call $ole_drag_effect_sanitize
+              (call $gl32 (i32.add (local.get $state) (i32.const 40)))
+              (call $gl32 (i32.add (local.get $state) (i32.const 8)))))))
+        (call $gs32 (i32.add (local.get $state) (i32.const 40)) (local.get $effect))
+        (call $gs32 (i32.add (local.get $state) (i32.const 44)) (i32.const 1))
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (local.get $effect) (i32.const 6))
+        (return)))
+    (if (i32.eq (local.get $stage) (i32.const 6))
+      (then (call $ole_drag_park (local.get $ctx) (local.get $state)) (return)))
+    (if (i32.eq (local.get $stage) (i32.const 7)) ;; DragOver
+      (then
+        (local.set $effect (i32.const 0))
+        (if (i32.ge_s (local.get $hr) (i32.const 0))
+          (then
+            (local.set $effect (call $ole_drag_effect_sanitize
+              (call $gl32 (i32.add (local.get $state) (i32.const 40)))
+              (call $gl32 (i32.add (local.get $state) (i32.const 8)))))))
+        (call $gs32 (i32.add (local.get $state) (i32.const 40)) (local.get $effect))
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (local.get $effect) (i32.const 6))
+        (return)))
+    (if (i32.eq (local.get $stage) (i32.const 8)) ;; Drop
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 16)) (i32.const 0))
+        (local.set $effect (i32.const 0))
+        (if (i32.ge_s (local.get $hr) (i32.const 0))
+          (then
+            (local.set $effect (call $ole_drag_effect_sanitize
+              (call $gl32 (i32.add (local.get $state) (i32.const 40)))
+              (call $gl32 (i32.add (local.get $state) (i32.const 8)))))))
+        (if (call $ole_drag_effect_has_operation (local.get $effect))
+          (then
+            (call $gs32 (call $gl32 (i32.add (local.get $state) (i32.const 12)))
+              (local.get $effect))
+            (call $ole_drag_finish (local.get $ctx) (local.get $state)
+              (i32.const 0x00040100))
+            (return)))
+        (call $ole_drag_finish (local.get $ctx) (local.get $state)
+          (i32.const 0x00040101))
+        (return)))
+    (if (i32.eq (local.get $stage) (i32.const 9)) ;; final DragLeave
+      (then
+        (call $gs32 (i32.add (local.get $state) (i32.const 16)) (i32.const 0))
+        (call $gs32 (i32.add (local.get $state) (i32.const 40)) (i32.const 0))
+        ;; Microsoft specifies GiveFeedback(DROPEFFECT_NONE) after DragLeave.
+        (call $ole_drag_feedback (local.get $ctx) (local.get $state)
+          (i32.const 0) (i32.const 10))
+        (return)))
+    (if (i32.eq (local.get $stage) (i32.const 10))
+      (then
+        (call $ole_drag_finish (local.get $ctx) (local.get $state)
+          (call $gl32 (i32.add (local.get $state) (i32.const 48))))
+        (return)))
+    (call $ole_drag_finish (local.get $ctx) (local.get $state) (i32.const 0x8000FFFF)))
+
+  ;; DoDragDrop(pDataObject, pDropSource, dwOKEffects, pdwEffect). This is a
+  ;; bounded browser-appropriate modal loop: it polls the existing physical
+  ;; input seam between slices and delivers COM callbacks only to retained
+  ;; targets in this process. Cross-process COM marshaling is deliberately not
+  ;; fabricated; release over empty/foreign space is a truthful cancellation.
+  (func $handle_DoDragDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $state i32) (local $ctx i32) (local $ret i32)
+    (if (i32.eqz (global.get $ole_initialize_count))
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.or
+          (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
+          (i32.eqz (local.get $arg3)))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (i32.or
+          (i32.or
+            (i32.eqz (call $ole_guest_method_addr (local.get $arg0) (i32.const 0)))
+            (i32.eqz (call $ole_guest_method_addr (local.get $arg1) (i32.const 3))))
+          (i32.eqz (call $ole_guest_method_addr (local.get $arg1) (i32.const 4))))
+      (then
+        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (if (global.get $ole_drag_active)
+      (then
+        (global.set $eax (i32.const 0x8000FFFF)) ;; E_UNEXPECTED
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (local.set $state (call $heap_alloc (i32.const 56)))
+    (if (i32.eqz (local.get $state))
+      (then
+        (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 56))
+    (call $gs32 (local.get $state) (local.get $arg0))
+    (call $gs32 (i32.add (local.get $state) (i32.const 4)) (local.get $arg1))
+    (call $gs32 (i32.add (local.get $state) (i32.const 8))
+      (i32.and (local.get $arg2) (i32.const 0x80000007)))
+    (call $gs32 (i32.add (local.get $state) (i32.const 12)) (local.get $arg3))
+    (call $gs32 (i32.add (local.get $state) (i32.const 24)) (call $ole_drag_key_state))
+    (call $gs32 (i32.add (local.get $state) (i32.const 28)) (call $host_get_mouse_position))
+    (call $gs32 (i32.add (local.get $state) (i32.const 32))
+      (i32.ne (call $host_get_key_down_state (i32.const 0x1B)) (i32.const 0)))
+    (global.set $ole_drag_active (i32.const 1))
+    (local.set $ret (call $gl32 (global.get $esp)))
+    (local.set $ctx (call $ole_guest_callback_context
+      (i32.const 36) (i32.const 0) (local.get $ret)
+      (i32.add (global.get $esp) (i32.const 20))
+      (local.get $state) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+    ;; Force the first point through target selection; subsequent passes are
+    ;; event-driven by a key/button or position change.
+    (call $gs32 (i32.add (local.get $state) (i32.const 28))
+      (i32.xor (call $host_get_mouse_position) (i32.const 1)))
+    (call $ole_drag_poll (local.get $ctx) (local.get $state)))
 
   (func $ole_external_lock_find (param $object i32) (result i32)
     (local $entry i32) (local $guard i32)
@@ -320,9 +724,12 @@
   ;; entry point rather than maintaining a second copy of its ABI and result
   ;; handling.
   (func $handle_OleInitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_CoInitialize
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (global.set $eax
+      (call $com_initialize_current (local.get $arg0) (i32.const 2)))
+    (if (i32.ge_s (global.get $eax) (i32.const 0))
+      (then (global.set $ole_initialize_count
+        (i32.add (global.get $ole_initialize_count) (i32.const 1)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
   ;; CoGetMalloc(dwMemContext, ppMalloc) — return a process-local IMalloc
@@ -480,9 +887,11 @@
   ;; runtime has no additional OLE-service teardown, so keep the public entry
   ;; point but share the canonical current-thread balance and ABI path.
   (func $handle_OleUninitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_CoUninitialize
-      (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (if (global.get $ole_initialize_count)
+      (then (global.set $ole_initialize_count
+        (i32.sub (global.get $ole_initialize_count) (i32.const 1)))))
+    (call $com_uninitialize_current)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; OleRun/OleIsRunning/OleLockRunning maintain real lifecycle state for the
@@ -7779,6 +8188,7 @@
   ;; 32/33: CoLockObjectExternal AddRef commit / Release teardown.
   ;; 34: CoSetState AddRef/Release replacement transaction;
   ;; 35: CoGetState returned-reference AddRef.
+  ;; 36: DoDragDrop source/target modal callback sequence.
   (func $ole_guest_callback_continue
     (local $ctx i32) (local $operation i32) (local $stage i32)
     (local $root i32) (local $p1 i32) (local $p2 i32) (local $p3 i32) (local $p4 i32)
@@ -7791,6 +8201,10 @@
     (local.set $p2 (call $gl32 (i32.add (local.get $ctx) (i32.const 28))))
     (local.set $p3 (call $gl32 (i32.add (local.get $ctx) (i32.const 32))))
     (local.set $p4 (call $gl32 (i32.add (local.get $ctx) (i32.const 36))))
+    (if (i32.eq (local.get $operation) (i32.const 36))
+      (then
+        (call $ole_drag_continue (local.get $ctx) (local.get $root))
+        (return)))
     (if (i32.eq (local.get $operation) (i32.const 1))
       (then
         (if (i32.eqz (local.get $stage))
