@@ -3,6 +3,7 @@
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
 const Texture=require('../lib/d3d9-texture');
+const {REGIONS}=require('../lib/region-map.generated.js');
 (async () => {
   const dxt1=new Uint8Array([0,248,224,7,0xe4,0xe4,0xe4,0xe4]);
   const decoded=Texture.decode(dxt1,4,4,Texture.DXT1);
@@ -70,6 +71,28 @@ const Texture=require('../lib/d3d9-texture');
         (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
     (func (export "surface_unlock") (param $s i32) (result i32)
       (call $d3d9_texture_surface_unlock (local.get $s)) (global.get $eax))
+    (func (export "volume_create") (param $d i32) (param $w i32) (param $h i32) (param $depth i32) (param $out i32) (result i32)
+      (global.set $esp (i32.const 0x00300000))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 21))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (i32.const 1))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 36)) (local.get $out))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 40)) (i32.const 0))
+      (call $handle_IDirect3DDevice9_CreateVolumeTexture (local.get $d) (local.get $w)
+        (local.get $h) (local.get $depth) (i32.const 1) (i32.const 0))
+      (global.get $eax))
+    (func (export "check_format") (param $usage i32) (param $rtype i32) (param $format i32) (result i32)
+      (global.set $esp (i32.const 0x00300000))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $rtype))
+      (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $format))
+      (call $handle_IDirect3D9_CheckDeviceFormat (i32.const 0) (i32.const 0)
+        (i32.const 1) (i32.const 22) (local.get $usage) (i32.const 0))
+      (global.get $eax))
+    (func (export "avail_texture_mem") (param $d i32) (result i32)
+      (global.set $esp (i32.const 0x00300000))
+      (call $handle_IDirect3DDevice9_GetAvailableTextureMem (local.get $d) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+      (global.get $eax))
   `});
   e.init_dx_com_thunks();
   const d=e.new_device(),out=0x00409000,locked=out+128,desc=out+256,rect=out+512;
@@ -124,6 +147,44 @@ const Texture=require('../lib/d3d9-texture');
   assert.strictEqual(e.guest_read32(locked+4)>>>0,a8l8base+16+6);
   assert.strictEqual(e.unlock(a8l8,0),0);
   assert.strictEqual(e.release_texture(a8l8),0);
+  // L8 (one byte) and L16 (two) are the rest of the luminance family. B&W2's
+  // land asks for L16 first and L8 next, and a texture it cannot create is a
+  // slot it leaves NULL and then calls through.
+  for(const [format,texel] of [[50,1],[81,2],[23,2],[20,3]]) {
+    assert.strictEqual(e.texture(d,8,4,1,out,format),0);
+    const lum=e.guest_read32(out)>>>0;
+    assert.strictEqual(e.desc(lum,0,desc),0);assert.strictEqual(e.guest_read32(desc),format);
+    assert.strictEqual(e.lock(lum,0,locked,0),0);
+    assert.strictEqual(e.guest_read32(locked),8*texel,'pitch is width times the texel width');
+    const base=e.guest_read32(locked+4)>>>0;
+    assert.strictEqual(e.guest_read32(lum+64+12),8*texel*4,'level 0 is pitch times height');
+    assert.strictEqual(e.unlock(lum,0),0);
+    [3,1,8,4].forEach((v,i)=>e.guest_write32(rect+i*4,v));
+    assert.strictEqual(e.lock(lum,0,locked,rect),0);
+    assert.strictEqual(e.guest_read32(locked+4)>>>0,base+8*texel+3*texel,'subrect offset scales with the texel');
+    assert.strictEqual(e.unlock(lum,0),0);
+    assert.strictEqual(e.release_texture(lum),0);
+  }
+  // A format we cannot store must be refused, and CheckDeviceFormat has to say
+  // so first: a yes there followed by a refusal here is what left the slot NULL.
+  assert.strictEqual(e.texture(d,8,4,1,out,41)>>>0,0x8876086c,'P8 is not stored');
+  for(const format of [20,21,22,23,50,51,62,81,Texture.DXT1,Texture.DXT3,Texture.DXT5])
+    assert.strictEqual(e.check_format(0,3,format),0,`CheckDeviceFormat accepts ${format}`);
+  for(const format of [41,52,77]) // P8, A4L4, D3DFMT_D24X8
+    assert.strictEqual(e.check_format(0,3,format)>>>0,0x8876086a,`CheckDeviceFormat refuses ${format}`);
+  assert.strictEqual(e.get_esp(),0x00300020,'CheckDeviceFormat pops seven args');
+  // A volume texture with a zero extent is refused the way real D3D9 refuses
+  // it, not trapped: B&W2's land loader asks d3dx9 for a 0x0x0 one and reads
+  // the HRESULT. Anything we could actually honour still crashes loudly.
+  for(const [w,h,depth] of [[0,4,4],[4,0,4],[4,4,0]]) {
+    e.guest_write32(out,0xdeadbeef);
+    assert.strictEqual(e.volume_create(d,w,h,depth,out)>>>0,0x8876086c);
+    assert.strictEqual(e.guest_read32(out)>>>0,0,'a refused create clears the out pointer');
+    assert.strictEqual(e.get_esp(),0x0030002c,'CreateVolumeTexture pops ten args');
+  }
+  assert.strictEqual(e.volume_create(d,4,4,4,0)>>>0,0x8876086c,'no out pointer is refused too');
+  assert.strictEqual(e.check_format(0,1,77),0,'other resource types keep the permissive answer');
+  assert.strictEqual(e.check_format(1,3,77),0,'a usage query is not a plain texture query');
   for(const [format,blockBytes] of [[Texture.DXT1,8],[Texture.DXT3,16],[Texture.DXT5,16]]){
     assert.strictEqual(e.texture(d,8,8,0,out,format),0);const compressed=e.guest_read32(out)>>>0;
     let base;
@@ -145,5 +206,13 @@ const Texture=require('../lib/d3d9-texture');
     assert.strictEqual(e.texture(d,6,8,1,out,format)>>>0,0x8876086c);
     assert.strictEqual(e.release_texture(compressed),0);
   }
+  // Textures live in guest memory, so the honest answer is what the sparse
+  // backing pool can still commit, at the megabyte granularity a real driver
+  // reports. Returning 0 tells an engine that budgets its streaming from this
+  // call that there is no texture memory at all.
+  const availMem=e.avail_texture_mem(d)>>>0;
+  assert.strictEqual(e.get_esp(),0x00300008);
+  assert.strictEqual(availMem&0xfffff,0,'reported in whole megabytes');
+  assert.ok(availMem>0&&availMem<=REGIONS.VIRTUAL_BACKING_BASE.size,`implausible texture memory ${availMem}`);
   console.log('PASS D3D9 mip allocation, lock bounds, surface identity/aliasing and parent lifetime');
 })().catch(error=>{console.error(error);process.exitCode=1;});

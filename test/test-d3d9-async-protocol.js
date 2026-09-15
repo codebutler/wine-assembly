@@ -20,8 +20,12 @@ function fixture(options={}) {
     commands.push(command);const gate=deferred();gates.push(gate);
     return {completion:gate.promise,value:gate.promise};
   },async cancel(){for(const gate of gates)gate.reject(new Error('cancelled'));}};
+  // The continuation protocol below is exercised with DRAW because a draw is
+  // the cheapest command to build. A draw no longer fences by default, so the
+  // fixture asks for the command-by-command form explicitly; the deferred
+  // default has its own section at the end of this file.
   const bridge=new Bridge({backend:'software',createSoftwareWorker:()=>consumer,
-    getMemory:()=>memory,guestToWasm:p=>p,...options});
+    getMemory:()=>memory,guestToWasm:p=>p,maxDeferredCommands:0,...options});
   const advance=async value=>{const gate=gates.shift();assert(gate,'command is executing');gate.resolve(value);await tick();};
   return {bridge,memory,v,commands,gates,initialized,advance,desc,program,vertices,target,consumer};
 }
@@ -38,9 +42,12 @@ function fixture(options={}) {
   new Float32Array(lit.memory,lightNode+20,25).set(Array.from({length:25},(_,i)=>i/8));
   write(256+174*4,1);[0,1,2,2,1].forEach((v,i)=>write(lit.program+22000+i*4,v));
   const floatWords=Uint32Array.from({length:1024},(_,i)=>i===1023?0x7fc01234:(0x3e800000+i)>>>0);
+  const planeWords=Uint32Array.from({length:24},(_,i)=>i===23?0x7fc01234:(0x3f000000+i)>>>0);
+  new Uint32Array(lit.memory,lit.program+25244,24).set(planeWords);write(256+152*4,33);
   new Uint32Array(lit.memory,lit.program+16,384).set(floatWords.subarray(0,384));
   new Uint32Array(lit.memory,lit.program+22684,640).set(floatWords.subarray(384));
   const litToken=lit.bridge.call(0x30001,lit.desc,0);assert(litToken<=-2);
+  new Uint8Array(lit.memory,lit.program+25244,96).fill(0);write(256+152*4,0);
   new Uint8Array(lit.memory,lit.program+16,1536).fill(0);
   new Uint8Array(lit.memory,lit.program+22684,2560).fill(0);
   new Uint8Array(lit.memory,lightNode,120).fill(0x77);
@@ -51,6 +58,9 @@ function fixture(options={}) {
   lit.initialized.resolve();await tick();await lit.advance(1);await lit.advance(1);
   const lighting=lit.commands.at(-1).payload.fixedFunction;
   const snapConstants=lit.commands.at(-1).payload.vertexConstants;
+  const clip=lit.commands.at(-1).payload.userClipPlanes;
+  assert.strictEqual(clip.space,'world');assert.strictEqual(clip.mask,33);
+  assert.deepStrictEqual(new Uint32Array(clip.planes.buffer),planeWords,'enabled world planes detach raw bits before guest reuse');
   assert.strictEqual(snapConstants.length,1024);
   assert.deepStrictEqual(new Uint32Array(snapConstants.buffer,snapConstants.byteOffset,1024),floatWords,
     'all 256 VS float constants, including NaN bits, are detached before guest reuse');
@@ -106,6 +116,7 @@ function fixture(options={}) {
   }
   six.initialized.resolve();await tick();await six.advance(1);await six.advance(1);
   const payload=six.commands.at(-1).payload;assert.strictEqual(six.commands.at(-1).opcode,OP.DRAW);
+  assert.strictEqual(payload.userClipPlanes,undefined,'disabled equations are not read or submitted');
   assert.strictEqual(payload.fixedFunction.normalizeNormals,1,'normal normalization is snapshotted before guest mutation');
   assert.strictEqual(payload.fixedFunction.localViewer,1,'local viewer is snapshotted before guest mutation');
   for(const [name,value]of Object.entries({fogColor:0xff123456,fogTableMode:0,fogVertexMode:3,
@@ -140,11 +151,15 @@ function fixture(options={}) {
     new Uint32Array(both.memory,at+64,4).set([1,0,228,0]);}
   put(256+28*4,1);put(256+34*4,0xffabcdef);put(256+35*4,0);
   for(const [id,value]of[[36,.25],[37,.75],[38,.5]])both.v.setFloat32(256+id*4,value,true);
+  put(256+152*4,4);new Float32Array(both.memory,both.program+25244,24).fill(.25);
   const bothToken=both.bridge.call(0x30001,both.desc,0);assert(bothToken<=-2);
+  put(256+152*4,0);new Float32Array(both.memory,both.program+25244,24).fill(99);
   put(256+28*4,0);put(256+34*4,0);put(256+35*4,3);
   for(const id of[36,37,38])put(256+id*4,0);
   both.initialized.resolve();await tick();await both.advance(1);await both.advance(1);
   const bothDraw=both.commands.at(-1).payload;
+  assert.strictEqual(bothDraw.userClipPlanes.space,'clip');assert.strictEqual(bothDraw.userClipPlanes.mask,4);
+  assert(bothDraw.userClipPlanes.planes.every(x=>x===.25),'programmable plane snapshot immutable');
   assert.strictEqual(bothDraw.fixedFunction,undefined,'both bound programs have no fixed-stage descriptor');
   assert(bothDraw.vertexShader&&bothDraw.pixelShader);
   assert.deepStrictEqual(bothDraw.fogState,{enabled:1,color:0xffabcdef,tableMode:0,start:.25,end:.75,density:.5,depthMode:0},'raster fog survives both-programmed binding and guest mutation');
@@ -214,5 +229,46 @@ function fixture(options={}) {
   generation.initialized.resolve();await tick();await generation.advance(1);await generation.advance(1);await generation.advance(1);
   await generation.bridge.wait(old);generation.bridge.devices.get(7).queue.reset();
   assert.strictEqual(generation.bridge.call(0x30007,0,old),-1,'stale generation cannot finalize');
+  // ---- The deferred default: a draw is recorded, not awaited ----------------
+  //
+  // D3D9 records a draw into a command buffer and returns D3D_OK. The guest
+  // never reads a per-draw result -- the finalize for DRAW returns 1 whatever
+  // the worker answers -- so parking on one bought nothing but the error, and
+  // the error is kept: it is reported from the NEXT call on that device, the
+  // way a driver reports at the next synchronization point.
+  const pipe=fixture({maxDeferredCommands:32});
+  pipe.initialized.resolve();await tick();
+  const first=pipe.bridge.call(0x30001,pipe.desc,0);
+  assert.strictEqual(first,1,'a deferred draw returns success immediately');
+  assert.strictEqual(pipe.bridge.requests.size,0,'a deferred draw allocates no continuation token');
+  for(let i=0;i<8;i++)assert.strictEqual(pipe.bridge.call(0x30001,pipe.desc,0),1);
+  await tick();
+  assert.strictEqual(pipe.bridge.devices.get(7).queue.submitted,11,
+    'nine draws, plus the device create and its clear, reached the queue with no fence between them');
+
+  // Backpressure: past the in-flight cap the guest parks again, so an outrun
+  // worker can never be queued at without bound.
+  const capped=fixture({maxDeferredCommands:2});
+  capped.initialized.resolve();await tick();
+  assert.strictEqual(capped.bridge.call(0x30001,capped.desc,0),1);
+  assert.strictEqual(capped.bridge.call(0x30001,capped.desc,0),1);
+  assert(capped.bridge.call(0x30001,capped.desc,0)<=-2,'the third in-flight draw parks for backpressure');
+
+  // A deferred failure is reported once, verbatim, at the next call -- not
+  // swallowed, and not replaced by the queue's own poisoned-stream text, which
+  // names nothing.
+  const late=fixture({maxDeferredCommands:32});
+  late.initialized.resolve();await tick();
+  assert.strictEqual(late.bridge.call(0x30001,late.desc,0),1);
+  await tick();
+  await late.advance(1);                       // the device create
+  await late.advance(1);                       // its initial clear
+  const gate=late.gates.shift();assert(gate,'the deferred draw is executing');
+  gate.reject(new Error('D3D9 software: invalid NORMAL/specular input'));
+  await tick();await tick();
+  assert.strictEqual(late.bridge.call(0x30001,late.desc,0),-1,'the next call reports the deferred failure');
+  assert.match(String(late.bridge.lastError),/invalid NORMAL\/specular input/,
+    'the original message survives, not "earlier render command failed"');
+
   console.log('PASS D3D9 async continuation protocol: snapshots, fences, single poll, Present lifetime, errors and bounds');
 })().catch(error=>{console.error(error);process.exitCode=1;});

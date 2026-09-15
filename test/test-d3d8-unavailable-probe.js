@@ -223,12 +223,13 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.get_esp() >>> 0, 0x074ff018);
   assert.strictEqual(e.d3d8_set_vertex_shader(device, declaration) >>> 0, 0,
     'D3D8 SetVertexShader binds an opaque translated declaration handle');
-    [536870912, 0x40020000, 536870913, 0x40040006, 536870915,
-    0x40010007, 0xffffffff]
+    [536870912, 0x40020000, 0x40020003, 536870913, 0x40040006,
+    536870914, 0x40040005, 536870915, 0x40010007, 536870916,
+    0x40010008, 0xffffffff]
     .forEach((token, i) => e.guest_write32(tokens + i * 4, token));
   e.guest_write32(out, 0);
   assert.strictEqual(e.d3d8_create_vertex_decl(device, tokens, out) >>> 0, 0,
-    'D3D8 accepts UE2 software declarations split over streams 0..3');
+    'D3D8 accepts UT2003 terrain declarations split over streams 0..4');
   assert(e.guest_read32(out), 'multi-stream compatibility declaration returns a handle');
   console.log('PASS  Direct3D8 factory/device ABI, caps bounds and D3D9-backed device creation');
 })().catch(error => { console.error(error && error.stack || error); process.exit(1); });

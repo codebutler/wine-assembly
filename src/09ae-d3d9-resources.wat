@@ -149,8 +149,10 @@
   ;; Mip: width,height,pitch,bytes,bitsGuest,lockFlags,surface,reserved/dirtySeq.
   ;; Buffer: common resource header, +24 length,+28 usage,+32 FVF/index format,
   ;; +36 pool,+40 lock flags,+52 priority; canonical byte storage starts at +64.
-  ;; Device slots: +1716 buffer vtable,+1720 stream0,+1724 offset,+1728 stride,
-  ;; +1732 indices. Bindings hold internal refs, not a parent-device cycle.
+  ;; Device slots: +1716 buffer vtable, +1732 indices, and the 16 stream
+  ;; binding records at +25340 that $d3d9_stream_slot addresses (+1720/+1724/
+  ;; +1728 were stream 0's slots before there was more than one stream, and
+  ;; are now unused). Bindings hold internal refs, not a parent-device cycle.
   (func $d3d9_buffer_create (param $device i32) (param $length i32) (param $usage i32)
     (param $format i32) (param $pool i32) (param $out i32) (param $kind i32)
     (local $state i32) (local $vtbl i32) (local $obj i32) (local $wa i32)
@@ -215,12 +217,29 @@
     (call $gs32 (local.get $out) (i32.add (local.get $buffer) (i32.add (i32.const 64) (local.get $offset))))
     (global.set $eax (i32.const 0)))
 
+  ;; Where stream $index's binding record lives, as a guest address. The record
+  ;; is four dwords: +0 buffer, +4 offset, +8 stride, +12 the byte pointer the
+  ;; last draw computed for it (zero when the stream is unusable for that draw).
+  ;;
+  ;; There used to be exactly one stream, at +1720/+1724/+1728, and that is why
+  ;; $handle_IDirect3DDevice9_SetStreamSource ignored every index but 0 and
+  ;; $d3d9_declaration_create refused every element naming a stream but 0 --
+  ;; both silently. Black & White 2 declares TEXCOORD2 on stream 1 throughout
+  ;; its menus, so those refusals took the declaration, and every draw using it,
+  ;; with them. The table is 16 records because D3D9 devices expose 16 streams;
+  ;; it lives at the end of the device state, past the user clip planes. The
+  ;; old three slots are retired, not mirrored -- a
+  ;; mirror is a second place for stream 0 to be right or wrong.
+  (func $d3d9_stream_slot (param $state i32) (param $index i32) (result i32)
+    (i32.add (local.get $state) (i32.add (i32.const 25340) (i32.mul (local.get $index) (i32.const 16)))))
+
   (func $d3d9_buffer_bind (param $device i32) (param $buffer i32) (param $kind i32)
-    (param $offset i32) (param $stride i32)
+    (param $offset i32) (param $stride i32) (param $stream i32)
     (local $state i32) (local $slot i32) (local $old i32) (local $wa i32) (local $block i32)
     (global.set $eax (i32.const 0x8876086c))
     (local.set $state (call $d3d9_program_state (local.get $device)))
     (if (i32.eqz (local.get $state)) (then (return)))
+    (if (i32.ge_u (local.get $stream) (i32.const 16)) (then (return)))
     (if (local.get $buffer) (then
       (local.set $wa (call $g2w (local.get $buffer)))
       (if (i32.ne (i32.load offset=12 (local.get $wa)) (local.get $kind)) (then (return)))
@@ -235,13 +254,15 @@
       (global.set $eax (i32.const 0)) (return)))
     (if (local.get $buffer) (then
       (i32.store offset=20 (local.get $wa) (i32.add (i32.load offset=20 (local.get $wa)) (i32.const 1)))))
-    (local.set $slot (i32.add (local.get $state)
-      (select (i32.const 1720) (i32.const 1732) (i32.eq (local.get $kind) (i32.const 6)))))
+    (local.set $slot (select
+      (call $d3d9_stream_slot (local.get $state) (local.get $stream))
+      (i32.add (local.get $state) (i32.const 1732))
+      (i32.eq (local.get $kind) (i32.const 6))))
     (local.set $old (call $gl32 (local.get $slot)))
     (call $gs32 (local.get $slot) (local.get $buffer))
     (if (i32.eq (local.get $kind) (i32.const 6)) (then
-      (call $gs32 (i32.add (local.get $state) (i32.const 1724)) (local.get $offset))
-      (call $gs32 (i32.add (local.get $state) (i32.const 1728)) (local.get $stride))))
+      (call $gs32 (i32.add (local.get $slot) (i32.const 4)) (local.get $offset))
+      (call $gs32 (i32.add (local.get $slot) (i32.const 8)) (local.get $stride))))
     (call $d3d9_shader_unbind (local.get $old))
     (global.set $eax (i32.const 0)))
 
@@ -338,8 +359,35 @@
       (global.set $eax (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
+  ;; The first byte stream $index contributes to this draw, or 0 when it cannot
+  ;; contribute one: nothing bound, the buffer locked, a zero stride, a range
+  ;; that runs past the buffer, or an address that does not fit in 32 bits.
+  ;; $end is the exclusive highest vertex index the draw will read.
+  (func $d3d9_stream_pointer (param $state i32) (param $index i32) (param $base i32)
+    (param $end i64) (param $indexed i32) (result i32)
+    (local $slot i32) (local $vb i32) (local $stride i32) (local $offset i32) (local $ptr i64)
+    (local.set $slot (call $d3d9_stream_slot (local.get $state) (local.get $index)))
+    (local.set $vb (call $gl32 (local.get $slot)))
+    (if (i32.eqz (local.get $vb)) (then (return (i32.const 0))))
+    (if (call $gl32 (i32.add (local.get $vb) (i32.const 40))) (then (return (i32.const 0))))
+    (local.set $offset (call $gl32 (i32.add (local.get $slot) (i32.const 4))))
+    (local.set $stride (call $gl32 (i32.add (local.get $slot) (i32.const 8))))
+    (if (i32.eqz (local.get $stride)) (then (return (i32.const 0))))
+    (if (i64.gt_u
+      (i64.add (i64.extend_i32_u (local.get $offset))
+        (i64.mul (local.get $end) (i64.extend_i32_u (local.get $stride))))
+      (i64.extend_i32_u (call $gl32 (i32.add (local.get $vb) (i32.const 24)))))
+      (then (return (i32.const 0))))
+    (local.set $ptr (i64.add (i64.extend_i32_u (i32.add (local.get $vb) (i32.const 64)))
+      (i64.add (i64.extend_i32_u (local.get $offset))
+        (i64.mul (select (i64.extend_i32_s (local.get $base)) (i64.extend_i32_u (local.get $base)) (local.get $indexed))
+          (i64.extend_i32_u (local.get $stride))))))
+    (if (i64.gt_u (local.get $ptr) (i64.const 0xffffffff)) (then (return (i32.const 0))))
+    (i32.wrap_i64 (local.get $ptr)))
+
   (func $d3d9_draw_buffer (param $device i32) (param $primitive i32) (param $base i32)
     (param $min i32) (param $num i32) (param $start i32) (param $primitives i32) (param $indexed i32)
+    (local $i i32) (local $slot i32)
     (local $state i32) (local $vb i32) (local $ib i32) (local $stride i32)
     (local $offset i32) (local $count i32) (local $desc i32) (local $format i32)
     (local $index_bytes i32) (local $first i64) (local $end i64) (local $ptr i64)
@@ -360,11 +408,12 @@
       (if (i32.eq (local.get $primitive) (i32.const 3)) (then (local.set $count (i32.add (local.get $count) (i32.const 1)))))
       (if (i32.eq (local.get $primitive) (i32.const 4)) (then (local.set $count (i32.mul (local.get $count) (i32.const 3)))))
       (if (i32.ge_u (local.get $primitive) (i32.const 5)) (then (local.set $count (i32.add (local.get $count) (i32.const 2)))))))
-    (local.set $vb (call $gl32 (i32.add (local.get $state) (i32.const 1720))))
+    (local.set $slot (call $d3d9_stream_slot (local.get $state) (i32.const 0)))
+    (local.set $vb (call $gl32 (local.get $slot)))
     (if (i32.eqz (local.get $vb)) (then (return)))
     (if (call $gl32 (i32.add (local.get $vb) (i32.const 40))) (then (return)))
-    (local.set $stride (call $gl32 (i32.add (local.get $state) (i32.const 1728))))
-    (local.set $offset (call $gl32 (i32.add (local.get $state) (i32.const 1724))))
+    (local.set $stride (call $gl32 (i32.add (local.get $slot) (i32.const 8))))
+    (local.set $offset (call $gl32 (i32.add (local.get $slot) (i32.const 4))))
     (if (local.get $indexed) (then
       (local.set $first (i64.add (i64.extend_i32_s (local.get $base)) (i64.extend_i32_u (local.get $min))))
       (local.set $end (i64.add (local.get $first) (i64.extend_i32_u (local.get $num))))
@@ -395,6 +444,20 @@
     (i32.store offset=28 (local.get $desc) (local.get $primitives))
     (i32.store offset=32 (local.get $desc) (i32.wrap_i64 (local.get $ptr)))
     (i32.store offset=36 (local.get $desc) (local.get $stride))
+    ;; Publish a byte pointer for every stream the declaration might name. Only
+    ;; stream 0 can fail the draw -- an unusable stream 0 means there is nothing
+    ;; to draw from at all -- so the rest record a zero and lib/d3d9-host.js
+    ;; raises only if an attribute actually reads one. A stream left bound from
+    ;; an earlier draw and unused by this declaration must not cost this draw
+    ;; anything, which is why this is not a validation loop.
+    (local.set $i (i32.const 0))
+    (loop $streams
+      (call $gs32 (i32.add (call $d3d9_stream_slot (local.get $state) (local.get $i)) (i32.const 12))
+        (call $d3d9_stream_pointer (local.get $state) (local.get $i) (local.get $base)
+          (local.get $end) (local.get $indexed)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $streams (i32.lt_u (local.get $i) (i32.const 16))))
+    (i32.store offset=60 (local.get $desc) (call $d3d9_stream_slot (local.get $state) (i32.const 0)))
     (if (local.get $indexed) (then
       (i32.store offset=44 (local.get $desc) (i32.add (local.get $ib)
         (i32.add (i32.const 64) (i32.mul (local.get $start) (local.get $index_bytes)))))
@@ -405,47 +468,117 @@
     (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
     (global.set $eax (select (i32.const 0) (i32.const 0x8876086c) (i32.eq (local.get $result) (i32.const 1)))))
 
+  ;; Why $d3d9_declaration_create refused, counted. The refusal itself is
+  ;; invisible: it sets eax to D3DERR_INVALIDCALL, leaves *out at 0 and
+  ;; returns, so a guest that does not check HRESULTs carries a NULL
+  ;; declaration around and the consequence surfaces thousands of draws later,
+  ;; somewhere else, as a draw with neither a declaration nor an FVF that
+  ;; lib/d3d9-host.js drops with a bare "D3D9 FVF 0 is not implemented".
+  ;; Black & White 2's world pass loses about 61% of its draws that way and no
+  ;; error count in the system moves. These three globals are what make the
+  ;; question answerable at all: how many, on which rule, and which element.
+  (global $d3d9_decl_reject_count (mut i32) (i32.const 0))
+  (global $d3d9_decl_reject_mask (mut i32) (i32.const 0))
+  ;; The element is kept as its two raw dwords rather than decoded fields: the
+  ;; type and usage live in the high one, and tools/d3d9-decl-decode.js already
+  ;; knows how to read the pair.
+  (global $d3d9_decl_reject_element (mut i32) (i32.const 0))
+  (global $d3d9_decl_reject_element_hi (mut i32) (i32.const 0))
+  (global $d3d9_decl_reject_reason (mut i32) (i32.const 0))
+  (global $d3d9_decl_reject_element2 (mut i32) (i32.const 0))
+  (global $d3d9_decl_reject_element2_hi (mut i32) (i32.const 0))
+  (global $d3d9_decl_reject_reason2 (mut i32) (i32.const 0))
+  ;; $reason is one bit, so a run that trips several rules reports all of them
+  ;; rather than only the last. Two element slots, not one: keeping only the
+  ;; very first refusal's element was measured to be too few, because Black &
+  ;; White 2 trips `stream != 0` in its menus and `type > 4` later, as the land
+  ;; loads -- a single slot reports the first rule with an element and the
+  ;; second with a bare bit, which is exactly enough to scope a fix at half its
+  ;; real size. So slot 1 keeps the first refusal and slot 2 the first refusal
+  ;; whose reason DIFFERS from it. Each slot also records its own reason, so a
+  ;; reader never has to guess which bit an element belongs to.
+  (func $d3d9_decl_reject (param $reason i32) (param $element i32)
+    (global.set $d3d9_decl_reject_mask
+      (i32.or (global.get $d3d9_decl_reject_mask) (local.get $reason)))
+    (global.set $d3d9_decl_reject_count
+      (i32.add (global.get $d3d9_decl_reject_count) (i32.const 1)))
+    (if (i32.eqz (global.get $d3d9_decl_reject_reason)) (then
+      (global.set $d3d9_decl_reject_reason (local.get $reason))
+      (if (local.get $element) (then
+        (global.set $d3d9_decl_reject_element (i32.load (local.get $element)))
+        (global.set $d3d9_decl_reject_element_hi (i32.load offset=4 (local.get $element)))))
+      (return)))
+    (if (i32.or (i32.eq (local.get $reason) (global.get $d3d9_decl_reject_reason))
+                (i32.ne (global.get $d3d9_decl_reject_reason2) (i32.const 0)))
+      (then (return)))
+    (global.set $d3d9_decl_reject_reason2 (local.get $reason))
+    (if (local.get $element) (then
+      (global.set $d3d9_decl_reject_element2 (i32.load (local.get $element)))
+      (global.set $d3d9_decl_reject_element2_hi (i32.load offset=4 (local.get $element))))))
+
   ;; Immutable vertex declaration: resource header, then 8-byte elements incl.
   ;; D3DDECL_END. Device +1736 caches its vtable; +8 owns the current binding.
   (func $d3d9_declaration_create (param $device i32) (param $elements i32) (param $out i32)
     (local $state i32) (local $src i32) (local $i i32) (local $element i32)
     (local $vtbl i32) (local $obj i32) (local $wa i32) (local $bytes i32) (local $j i32)
     (global.set $eax (i32.const 0x8876086c))
-    (if (i32.eqz (local.get $out)) (then (return)))
+    (if (i32.eqz (local.get $out)) (then
+      (call $d3d9_decl_reject (i32.const 0x001) (i32.const 0)) (return)))
     (call $gs32 (local.get $out) (i32.const 0))
-    (if (i32.eqz (local.get $elements)) (then (return)))
+    (if (i32.eqz (local.get $elements)) (then
+      (call $d3d9_decl_reject (i32.const 0x002) (i32.const 0)) (return)))
     (local.set $state (call $d3d9_program_state (local.get $device)))
-    (if (i32.eqz (local.get $state)) (then (return)))
+    (if (i32.eqz (local.get $state)) (then
+      (call $d3d9_decl_reject (i32.const 0x004) (i32.const 0)) (return)))
     (local.set $src (call $g2w (local.get $elements)))
     (block $end (loop $scan
-      (if (i32.gt_u (local.get $i) (i32.const 16)) (then (return)))
+      (if (i32.gt_u (local.get $i) (i32.const 16)) (then
+        (call $d3d9_decl_reject (i32.const 0x008) (local.get $element)) (return)))
       (local.set $element (i32.add (local.get $src) (i32.mul (local.get $i) (i32.const 8))))
       (if (i32.eq (i32.load (local.get $element)) (i32.const 255)) (then
-        (if (i32.ne (i32.load offset=4 (local.get $element)) (i32.const 17)) (then (return)))
+        (if (i32.ne (i32.load offset=4 (local.get $element)) (i32.const 17)) (then
+          (call $d3d9_decl_reject (i32.const 0x010) (local.get $element)) (return)))
         (br $end)))
-      ;; Current renderer supports stream0 FLOAT1..4 and D3DCOLOR, DEFAULT method.
-      (if (i32.load16_u (local.get $element)) (then (return)))
-      (if (i32.and (i32.load16_u offset=2 (local.get $element)) (i32.const 3)) (then (return)))
-      (if (i32.gt_u (i32.load8_u offset=4 (local.get $element)) (i32.const 4)) (then (return)))
-      (if (i32.load8_u offset=5 (local.get $element)) (then (return)))
-      (if (i32.gt_u (i32.load8_u offset=6 (local.get $element)) (i32.const 13)) (then (return)))
-      (if (i32.gt_u (i32.load8_u offset=7 (local.get $element)) (i32.const 15)) (then (return)))
+      ;; The renderer supports all 16 D3D9 streams with the DEFAULT method, and
+      ;; every D3DDECLTYPE from FLOAT1 (0) through FLOAT16_4 (16) -- the
+      ;; backend's DECL_TYPES table in lib/d3d9-software-backend.js decodes all
+      ;; of them. 17 is D3DDECLTYPE_UNUSED, which is only legal in D3DDECL_END
+      ;; and is handled above. Both limits used to be narrower (stream 0 only,
+      ;; type <= D3DCOLOR) and both refusals were silent, which is how Black &
+      ;; White 2 lost its menus' stream-1 TEXCOORD2 and its land's SHORT4
+      ;; positions without a single error being raised.
+      (if (i32.ge_u (i32.load16_u (local.get $element)) (i32.const 16)) (then
+        (call $d3d9_decl_reject (i32.const 0x020) (local.get $element)) (return)))
+      (if (i32.and (i32.load16_u offset=2 (local.get $element)) (i32.const 3)) (then
+        (call $d3d9_decl_reject (i32.const 0x040) (local.get $element)) (return)))
+      (if (i32.gt_u (i32.load8_u offset=4 (local.get $element)) (i32.const 16)) (then
+        (call $d3d9_decl_reject (i32.const 0x080) (local.get $element)) (return)))
+      (if (i32.load8_u offset=5 (local.get $element)) (then
+        (call $d3d9_decl_reject (i32.const 0x100) (local.get $element)) (return)))
+      (if (i32.gt_u (i32.load8_u offset=6 (local.get $element)) (i32.const 13)) (then
+        (call $d3d9_decl_reject (i32.const 0x200) (local.get $element)) (return)))
+      (if (i32.gt_u (i32.load8_u offset=7 (local.get $element)) (i32.const 15)) (then
+        (call $d3d9_decl_reject (i32.const 0x400) (local.get $element)) (return)))
       (local.set $j (i32.const 0))
       (block $unique (loop $previous
         (br_if $unique (i32.ge_u (local.get $j) (local.get $i)))
         (if (i32.eq (i32.load16_u offset=6 (local.get $element))
-          (i32.load16_u offset=6 (i32.add (local.get $src) (i32.mul (local.get $j) (i32.const 8))))) (then (return)))
+          (i32.load16_u offset=6 (i32.add (local.get $src) (i32.mul (local.get $j) (i32.const 8))))) (then
+          (call $d3d9_decl_reject (i32.const 0x800) (local.get $element)) (return)))
         (local.set $j (i32.add (local.get $j) (i32.const 1))) (br $previous)))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $scan)))
-    (if (i32.eqz (local.get $i)) (then (return)))
+    (if (i32.eqz (local.get $i)) (then
+      (call $d3d9_decl_reject (i32.const 0x1000) (i32.const 0)) (return)))
     (local.set $bytes (i32.mul (i32.add (local.get $i) (i32.const 1)) (i32.const 8)))
     (local.set $vtbl (call $gl32 (i32.add (local.get $state) (i32.const 1736))))
     (if (i32.eqz (local.get $vtbl)) (then
       (local.set $vtbl (call $init_com_vtable (global.get $API_ID_IDirect3DVertexDeclaration9_BASE) (i32.const 5)))
       (call $gs32 (i32.add (local.get $state) (i32.const 1736)) (local.get $vtbl))))
-    (if (i32.eqz (local.get $vtbl)) (then (global.set $eax (i32.const 0x8007000e)) (return)))
+    (if (i32.eqz (local.get $vtbl)) (then (global.set $eax (i32.const 0x8007000e))
+      (call $d3d9_decl_reject (i32.const 0x2000) (i32.const 0)) (return)))
     (local.set $obj (call $heap_alloc (i32.add (local.get $bytes) (i32.const 24))))
-    (if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x8007000e)) (return)))
+    (if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x8007000e))
+      (call $d3d9_decl_reject (i32.const 0x4000) (i32.const 0)) (return)))
     (local.set $wa (call $g2w (local.get $obj)))
     (i32.store (local.get $wa) (local.get $vtbl))
     (i32.store offset=4 (local.get $wa) (i32.const 1))
@@ -703,14 +836,15 @@
     ;; Bank order VS I/B, PS I/B; each I is vec4, each BOOL one raw DWORD.
     ;; +23068 VS c96..c255 byte masks[160], +23228 float values[2560].
     ;; Low VS and PS float masks/values retain their historical offsets.
-    (local.set $obj (call $heap_alloc (i32.const 25788)))
+    ;; +25788 user-plane byte masks[6], padding2, +25796 equations[96].
+    (local.set $obj (call $heap_alloc (i32.const 25892)))
     (if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x8007000e)) (return (i32.const 0))))
     (local.set $wa (call $g2w (local.get $obj)))
-    (call $zero_memory (local.get $wa) (i32.const 25788))
+    (call $zero_memory (local.get $wa) (i32.const 25892))
     (i32.store (local.get $wa) (local.get $vtbl))
     (i32.store offset=8 (local.get $wa) (local.get $device))
     (i32.store offset=12 (local.get $wa) (i32.const 0xd3d90003))
-    (i32.store offset=16 (local.get $wa) (i32.const 25788))
+    (i32.store offset=16 (local.get $wa) (i32.const 25892))
     (i32.store offset=20 (local.get $wa) (i32.const 1))
     (local.get $obj))
 
@@ -915,18 +1049,43 @@
       (i32.store offset=22316 (local.get $wa) (i32.const 1))
       (i32.store offset=22344 (local.get $wa) (i32.const 1))
       (memory.fill (i32.add (local.get $wa) (i32.const 1644)) (i32.const 1) (i32.const 266))
+      (memory.fill (i32.add (local.get $wa) (i32.const 25788)) (i32.const 1) (i32.const 6))
       (local.set $i (i32.const 0))
       (loop $textures
         (i32.store8 (i32.add (local.get $wa) (call $d3d9_block_texture_mask (local.get $i))) (i32.const 1))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br_if $textures (i32.lt_u (local.get $i) (i32.const 6))))))
-    ;; Optional absent clip planes/palette/vertex texture/stream-frequency state
+    ;; Optional absent palette/vertex texture/stream-frequency state
     ;; is not fabricated. NPatch0 is immutable; this is represented-state support.
     (call $d3d9_stateblock_transfer (local.get $obj) (i32.const 0))
     (if (global.get $eax) (then (call $d3d9_shader_unbind (local.get $obj)) (return)))
     (drop (call $d3d9_shader_addref (local.get $obj)))
     (call $d3d9_shader_unbind (local.get $obj))
     (i32.store (local.get $ow) (local.get $obj))
+    (global.set $eax (i32.const 0)))
+
+  ;; SetClipPlane stores equations only; RS152 independently enables them.
+  ;; Microsoft SetClipPlane: fixed-function world space, programmable clip space.
+  ;; Preserve raw bits for Get; execution validates finite coefficients separately.
+  (func $d3d9_clip_plane (param $device i32) (param $index i32) (param $data i32) (param $get i32)
+    (local $state i32) (local $p i32) (local $slot i32) (local $block i32)
+    (global.set $eax (i32.const 0x8876086c))
+    (if (i32.ge_u (local.get $index) (i32.const 6)) (then (return)))
+    (local.set $p (call $d3d9_state_bytes (local.get $data) (i32.const 16)))
+    (if (i32.eqz (local.get $p)) (then (return)))
+    (local.set $state (call $d3d9_program_state (local.get $device)))
+    (if (i32.eqz (local.get $state)) (then (return)))
+    (local.set $slot (i32.add (call $g2w (local.get $state))
+      (i32.add (i32.const 25244) (i32.shl (local.get $index) (i32.const 4)))))
+    (if (local.get $get) (then (memory.copy (local.get $p) (local.get $slot) (i32.const 16)))
+    (else
+      (local.set $block (call $gl32 (i32.add (local.get $state) (i32.const 1740))))
+      (if (local.get $block) (then
+        (local.set $block (call $g2w (local.get $block)))
+        (i32.store8 offset=25788 (i32.add (local.get $block) (local.get $index)) (i32.const 1))
+        (local.set $slot (i32.add (local.get $block)
+          (i32.add (i32.const 25796) (i32.shl (local.get $index) (i32.const 4)))))))
+      (memory.copy (local.get $slot) (local.get $p) (i32.const 16))))
     (global.set $eax (i32.const 0)))
 
   ;; Material/light state is native-owned, not a host shadow. Light indices
@@ -1357,16 +1516,20 @@
     (loop $buffers
       (if (i32.and (i32.load offset=22048 (local.get $wa)) (i32.shl (i32.const 1) (local.get $rs))) (then
         (if (local.get $apply) (then
+          ;; State blocks capture stream 0 only, which is all the mask at
+          ;; +22048 models. SetStreamSource refuses a non-zero index while a
+          ;; block records rather than dropping it on the floor.
           (call $d3d9_buffer_bind (local.get $device)
             (i32.load (i32.add (local.get $wa) (select (i32.const 22064) (i32.const 22052) (local.get $rs))))
             (i32.add (i32.const 6) (local.get $rs))
-            (i32.load offset=22056 (local.get $wa)) (i32.load offset=22060 (local.get $wa))))
+            (i32.load offset=22056 (local.get $wa)) (i32.load offset=22060 (local.get $wa)) (i32.const 0)))
         (else
           (call $d3d9_stateblock_buffer (local.get $wa)
-            (call $gl32 (i32.add (local.get $state) (select (i32.const 1732) (i32.const 1720) (local.get $rs))))
+            (select (call $gl32 (i32.add (local.get $state) (i32.const 1732)))
+              (call $gl32 (call $d3d9_stream_slot (local.get $state) (i32.const 0))) (local.get $rs))
             (i32.add (i32.const 6) (local.get $rs))
-            (call $gl32 (i32.add (local.get $state) (i32.const 1724)))
-            (call $gl32 (i32.add (local.get $state) (i32.const 1728))))))))
+            (call $gl32 (i32.add (call $d3d9_stream_slot (local.get $state) (i32.const 0)) (i32.const 4)))
+            (call $gl32 (i32.add (call $d3d9_stream_slot (local.get $state) (i32.const 0)) (i32.const 8))))))))
       (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
       (br_if $buffers (i32.lt_u (local.get $rs) (i32.const 2))))
     (local.set $rs (i32.const 0))
@@ -1460,6 +1623,17 @@
           (select (local.get $values) (local.get $live) (local.get $apply)) (local.get $typed_bytes))))
       (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
       (br_if $typed_constants (i32.lt_u (local.get $rs) (i32.const 64))))
+    (local.set $rs (i32.const 0))
+    (loop $clip_planes
+      (if (i32.load8_u offset=25788 (i32.add (local.get $wa) (local.get $rs))) (then
+        (local.set $live (i32.add (call $g2w (local.get $state))
+          (i32.add (i32.const 25244) (i32.shl (local.get $rs) (i32.const 4)))))
+        (local.set $values (i32.add (local.get $wa)
+          (i32.add (i32.const 25796) (i32.shl (local.get $rs) (i32.const 4)))))
+        (memory.copy (select (local.get $live) (local.get $values) (local.get $apply))
+          (select (local.get $values) (local.get $live) (local.get $apply)) (i32.const 16))))
+      (local.set $rs (i32.add (local.get $rs) (i32.const 1)))
+      (br_if $clip_planes (i32.lt_u (local.get $rs) (i32.const 6))))
     (local.set $rs (i32.const 0))
     (loop $texture_stages
       (if (i32.load8_u offset=20728 (i32.add (local.get $wa) (local.get $rs))) (then
@@ -1562,15 +1736,54 @@
   ;; retain this flattened index, sharing the same bytes and lock state.
   (func $d3d9_texture_block_bytes (param $format i32) (result i32)
     (if (i32.eq (local.get $format) (i32.const 0x31545844)) (then (return (i32.const 8))))
+    (if (i32.eq (local.get $format) (i32.const 0x33545844)) (then (return (i32.const 16))))
     (if (i32.eq (local.get $format) (i32.const 0x35545844)) (then (return (i32.const 16))))
     (i32.const 0))
+
+  ;; Uncompressed texel width. The luminance family is narrower than four bytes:
+  ;; L8 is one, A8L8 and L16 are two; everything else we store is four. The
+  ;; 16-bit colour family (A4R4G4B4) is two as well.
+  (func $d3d9_texture_texel_bytes (param $format i32) (result i32)
+    (if (i32.eq (local.get $format) (i32.const 50)) (then (return (i32.const 1))))
+    (if (i32.or (i32.or (i32.eq (local.get $format) (i32.const 23))
+                        (i32.eq (local.get $format) (i32.const 51)))
+                (i32.or (i32.eq (local.get $format) (i32.const 81))
+                        (i32.eq (local.get $format) (i32.const 26)))) (then (return (i32.const 2))))
+    (if (i32.eq (local.get $format) (i32.const 20)) (then (return (i32.const 3))))
+    (i32.const 4))
+
+  ;; The formats the texture path can store and the draw path can sample. This
+  ;; is the one list: the create gate reads it, and so does CheckDeviceFormat,
+  ;; so a game's format fallback chain gets a truthful no rather than a yes that
+  ;; CreateTexture then contradicts. B&W2's land asks for L8, R8G8B8 and R5G6B5
+  ;; as well as the four-byte pair; with those refused and the check still
+  ;; saying yes, it left its own texture slot NULL and called through it.
+  ;; A4R4G4B4 (26) is the last one it asks for and the one that used to kill it:
+  ;; a single 32x32 managed texture, created by the game's own direct call at
+  ;; 0x00938af6 with no CheckDeviceFormat ahead of it, so a truthful "no" here
+  ;; is not a fallback the game will take -- it dereferences the NULL slot
+  ;; thirty instructions later at 0x0093907b.
+  (func $d3d9_texture_format_supported (param $format i32) (result i32)
+    (if (call $d3d9_texture_block_bytes (local.get $format)) (then (return (i32.const 1))))
+    (i32.or
+      (i32.or
+        (i32.or (i32.eq (local.get $format) (i32.const 20))
+                (i32.eq (local.get $format) (i32.const 21)))
+        (i32.or (i32.eq (local.get $format) (i32.const 22))
+                (i32.eq (local.get $format) (i32.const 23))))
+      (i32.or
+        (i32.or (i32.or (i32.eq (local.get $format) (i32.const 50))
+                        (i32.eq (local.get $format) (i32.const 51)))
+                (i32.eq (local.get $format) (i32.const 26)))
+        (i32.or (i32.eq (local.get $format) (i32.const 62))
+                (i32.eq (local.get $format) (i32.const 81))))))
 
   (func $d3d9_texture_pitch (param $width i32) (param $format i32) (result i32)
     (local $block i32)
     (local.set $block (call $d3d9_texture_block_bytes (local.get $format)))
     (if (local.get $block) (then (return (i32.mul (local.get $block)
       (i32.shr_u (i32.add (local.get $width) (i32.const 3)) (i32.const 2))))))
-    (i32.mul (local.get $width) (i32.const 4)))
+    (i32.mul (local.get $width) (call $d3d9_texture_texel_bytes (local.get $format))))
 
   (func $d3d9_texture_rows (param $height i32) (param $format i32) (result i32)
     (if (call $d3d9_texture_block_bytes (local.get $format)) (then
@@ -1589,17 +1802,32 @@
     (if (i32.or (i32.eqz (local.get $width)) (i32.eqz (local.get $height))) (then (return)))
     (if (i32.or (i32.gt_u (local.get $width) (i32.const 2048))
                 (i32.gt_u (local.get $height) (i32.const 2048))) (then (return)))
-    ;; X8L8V8U8 is also four bytes per texel; pitch/lock storage stays raw.
-    (if (i32.and (i32.and (i32.ne (local.get $format) (i32.const 62))
-      (i32.and (i32.ne (local.get $format) (i32.const 21))
-                 (i32.ne (local.get $format) (i32.const 22))))
-      (i32.eqz (call $d3d9_texture_block_bytes (local.get $format)))) (then (return)))
+    ;; Pitch/lock storage stays raw for every uncompressed format; the texel
+    ;; width is what varies, and $d3d9_texture_texel_bytes owns it.
+    (if (i32.eqz (call $d3d9_texture_format_supported (local.get $format))) (then (return)))
     (if (call $d3d9_texture_block_bytes (local.get $format)) (then
       (if (i32.and (i32.or (local.get $width) (local.get $height)) (i32.const 3)) (then (return)))))
     (if (i32.gt_u (local.get $pool) (i32.const 3)) (then (return)))
     ;; Render-target textures share native storage identities with their surface
     ;; views. Autogen/depth textures and dynamic render targets remain gated.
     (if (i32.and (local.get $usage) (i32.const -514)) (then (return)))
+    ;; Colour storage is 32-bit and nothing else: $d3d9_texture_colors_init
+    ;; copies the texture's own format and mip pitch into the record at +28/+48,
+    ;; ensureColor refuses a pitch that is not width*4, and the sampler path
+    ;; insists the two agree. A 16-bit render target therefore cannot be stored
+    ;; as asked -- but refusing it is worse than widening it. B&W2 asks for
+    ;; exactly one 512x512 R5G6B5 render target in a whole land load (its other
+    ;; six are A8R8G8B8) and does not negotiate: 0xa9d4b0 pushes the format as
+    ;; an immediate, checks nothing, and calls GetSurfaceLevel on the NULL a
+    ;; refusal leaves behind. Widening is safe for a surface that is rendered
+    ;; into and sampled -- a 32-bit target cannot lose what a 16-bit one would
+    ;; have kept -- and is wrong only for one locked and written as raw 16-bit
+    ;; texels, which a render target is not.
+    (if (i32.and (local.get $usage) (i32.const 1)) (then
+      (if (i32.eq (local.get $format) (i32.const 23))
+        (then (local.set $format (i32.const 22))))
+      (if (i32.eq (local.get $format) (i32.const 26))
+        (then (local.set $format (i32.const 21))))))
     (if (i32.and (local.get $usage) (i32.const 1)) (then
       (if (local.get $pool) (then (return)))
       (if (i32.ne (local.get $usage) (i32.const 1)) (then (return)))
@@ -1721,7 +1949,8 @@
     (if (i32.or (i32.gt_u (local.get $right) (i32.load (local.get $mip)))
       (i32.gt_u (local.get $bottom) (i32.load offset=4 (local.get $mip)))) (then (return)))
     (local.set $block (call $d3d9_texture_block_bytes (call $gl32 (i32.add (local.get $texture) (i32.const 36)))))
-    (local.set $xbytes (i32.mul (local.get $left) (i32.const 4)))
+    (local.set $xbytes (i32.mul (local.get $left)
+      (call $d3d9_texture_texel_bytes (call $gl32 (i32.add (local.get $texture) (i32.const 36))))))
     (if (local.get $block) (then
       (if (i32.and (i32.or (local.get $left) (local.get $top)) (i32.const 3)) (then (return)))
       (if (i32.and (i32.ne (i32.and (local.get $right) (i32.const 3)) (i32.const 0))

@@ -16,7 +16,7 @@ const {bootRenderHarness}=require('./render-helper');
     (func (export "bind") (param $d i32) (param $b i32) (param $kind i32)
       (param $offset i32) (param $stride i32) (result i32)
       (call $d3d9_buffer_bind (local.get $d) (local.get $b) (local.get $kind)
-        (local.get $offset) (local.get $stride)) (global.get $eax))
+        (local.get $offset) (local.get $stride) (i32.const 0)) (global.get $eax))
     ${names.map(name=>`(func (export "${name}") (param $a i32) (param $b i32) (param $c i32)
       (param $d i32) (param $f i32) (result i32)
       (global.set $esp (i32.const 0x074ff000))

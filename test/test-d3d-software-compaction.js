@@ -12,9 +12,9 @@ const fixtures=require('./fixtures/d3d9-triangle-edge-cases');
  const pending=new Map();
  function record(desc,p){
   const n=word(desc+36),count=word(desc+48);
-  if(p){const emitted=word(p+48),point=!!(word(p+100)&8),capacity=Math.ceil(emitted/7),bytes=288+capacity*(point?1050:1022);
+  if(p){const emitted=word(p+48),point=!!(word(p+100)&8),capacity=Math.ceil(emitted/7),bytes=288+capacity*(point?1162:1134);
    assert.strictEqual(word(p+196),bytes,'minimal compatible capacity');
-   assert.strictEqual(word(p+156),p+288+capacity*1008,'relocated indices');
+   assert.strictEqual(word(p+156),p+288+capacity*1120,'relocated indices');
    assert.strictEqual(word(p-4),(bytes+11)&~7,'actual heap block shrunk');
    assert(e.d3d_software_retained_bound(p)<=e.d3d_software_allocation_bound(n,count));
    records.push({p,bytes,count,emitted,point});
@@ -54,7 +54,7 @@ const fixtures=require('./fixtures/d3d9-triangle-edge-cases');
   pixelShader:new Uint32Array([0xffff0101,1,0x800f0000,0x90e40000,0xffff]),textures:[],depthAttachment:null,
   state:{fillMode:1,cull:1,zenable:false,pointSize:0,pointSizeMin:0,pointSizeMax:1}};
  d.clear([0,0,0,1],1,1,null,null);const pd=d.prepare(point),pr=records.at(-1);
- assert(pr.point);const sidecar=pr.p+288+Math.ceil(pr.emitted/7)*1022;
+ assert(pr.point);const sidecar=pr.p+288+Math.ceil(pr.emitted/7)*1134;
  assert.deepStrictEqual(Array.from({length:3},(_,i)=>new DataView(memory.buffer).getFloat32(sidecar+i*4,true)).sort((a,b)=>a-b),[Math.fround(.2),1,2]);
  let ps=1;while(ps===1)ps=d.step(pd);assert.strictEqual(ps,0);d.completeDraw(pd);d.release(pd);
  assert.deepStrictEqual(Array.from(new Uint32Array(d.readPixels().buffer),(n,i)=>n===0xffff0000?i:-1).filter(i=>i>=0),[13,41]);tests++;

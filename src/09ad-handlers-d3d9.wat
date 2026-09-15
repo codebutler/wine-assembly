@@ -49,9 +49,16 @@
     ;; +22044 VS int[16][4], +22300 VS BOOL[16], +22364 PS int,
     ;; +22620 PS BOOL. Raw API words; execution normalizes Boolean truth.
     ;; Append VS c96..c255 at +22684; all historical banks retain their offsets.
-    (local.set $state (call $heap_alloc (i32.const 25244)))
+    ;; Six user clip-plane float4 equations follow at +25244, and the 16 stream
+    ;; binding records $d3d9_stream_slot addresses at +25340 (16 bytes each,
+    ;; through 25595). The streams went on the end rather than into the span
+    ;; that looked free between the GPU descriptor and the matrices, because
+    ;; that span is not free: $d3d9_sampler_offset computes 1808 + stage*64 for
+    ;; stages 0..3 and owns every byte of it. A computed offset is invisible to
+    ;; a grep for the literal, so check that helper before claiming a gap.
+    (local.set $state (call $heap_alloc (i32.const 25596)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (call $zero_memory (call $g2w (local.get $state)) (i32.const 25244))
+    (call $zero_memory (call $g2w (local.get $state)) (i32.const 25596))
     (call $gs32 (i32.add (local.get $state) (i32.const 21780)) (global.get $current_thread_id))
     (loop $texture_stages
       (local.set $sampler (i32.add (call $g2w (local.get $state))
@@ -202,6 +209,160 @@
     (if (i32.eqz (i32.or (local.get $refs) (i32.load offset=4 (local.get $wa))))
       (then (call $d3d9_resource_free (local.get $shader)))))
 
+  ;; What shader creation did, counted. A refused CreateVertexShader is silent
+  ;; in exactly the way a refused declaration was: the game gets NULL, binds
+  ;; nothing, and the draw quietly falls back to fixed-function vertex
+  ;; processing -- which then paints a declaration that was written for a
+  ;; shader. Black & White 2's world came out flat and grey for that reason and
+  ;; there was nothing anywhere to say so, so count it rather than infer it.
+  ;; $d3d9_shader_made counts publications, $d3d9_shader_refused refusals, and
+  ;; the two version words are the FIRST refused first-dword of each stage
+  ;; (0xfffeXXXX vertex, 0xffffXXXX pixel) -- the first, because the profile a
+  ;; game is compiled for does not vary draw to draw, and the first refusal
+  ;; names it before any later fallback muddies the reading.
+  ;; $error is the validator's code when the refusal came out of
+  ;; $d3d_shader_ir_compile, and 0 when the version gate above it refused the
+  ;; shader outright -- the two say completely different things ("we do not
+  ;; implement this profile" against "we implement it and something inside this
+  ;; shader is unsupported"), and a count that conflated them would send the
+  ;; next session looking in the wrong file.
+  (global $d3d9_shader_made (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused_vs (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused_ps (mut i32) (i32.const 0))
+  (global $d3d9_shader_error_vs (mut i32) (i32.const 0))
+  (global $d3d9_shader_error_ps (mut i32) (i32.const 0))
+  (global $d3d9_shader_error_at (mut i32) (i32.const 0))
+  ;; The token the validator stopped on. The offset alone says "something 519
+  ;; dwords in", which is not an instruction; this is, and it decodes straight
+  ;; to an opcode with tools/d3d9-decl-decode.js's sibling table in
+  ;; src/09af-d3d-shader-ir.wat.
+  (global $d3d9_shader_error_token (mut i32) (i32.const 0))
+  ;; And a copy of the whole refused shader, because one token was not enough:
+  ;; the word at dword 519 came back as 0x00000009, which is neither a legal
+  ;; instruction token (opcode 9 is DP4, whose arity is 3, and this token's
+  ;; length field is 0) nor a source parameter (bit31 clear). So the offset
+  ;; does not point at what a reader would assume it points at, and the only
+  ;; way to say what the validator was looking at is to have the stream. The
+  ;; caller's bytes belong to the guest and the private copy is freed on the
+  ;; failure path, so neither survives to be read later -- take a private copy
+  ;; at refusal time and keep it. First refused vertex shader only; a second
+  ;; one would overwrite the evidence for no gain, since the profile and the
+  ;; failure are the same every run.
+  (global $d3d9_shader_error_copy (mut i32) (i32.const 0))
+  (global $d3d9_shader_error_copy_words (mut i32) (i32.const 0))
+  ;; Refusals split by the profile that was asked for. The "first refused word"
+  ;; globals above name ONE profile per stage and cannot say how the refusals
+  ;; divide, which is the question that decides what to build next: vs_2_0 has
+  ;; a compiler and a VM already (reachable only from tests), while ps_2_0 has
+  ;; no front end anywhere, so "70 of the 74 are pixel" and "70 are vertex"
+  ;; point at completely different work.
+  (global $d3d9_shader_refused_vs11 (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused_vs20 (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused_ps1x (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused_ps20 (mut i32) (i32.const 0))
+  (global $d3d9_shader_refused_other (mut i32) (i32.const 0))
+
+  ;; And the first refusal in each 1.x bucket, with its validator error and
+  ;; offset. The first-refused-word globals above keep ONE word per stage, and
+  ;; both of B&W2's are 2.0 -- so the 1.x refusals, which are the ones we claim
+  ;; to implement and refuse anyway, are invisible there no matter how many
+  ;; there are. Measured at B&W2's land picker: vs11=2 ps1x=13 among 129
+  ;; refusals.
+  ;;
+  ;; Error 0 means the version-mismatch site, and it DOES reach the ps_1_x
+  ;; bucket -- $d3d9_shader_create is called with 0xffff0101 from
+  ;; CreatePixelShader and the widening above the gate covers only 0xffff0102
+  ;; and 0xffff0103, so a ps_1_4 blob is refused there with its own word. All
+  ;; 13 of B&W2's ps_1_x refusals are that, and the private PS1.4 path behind
+  ;; the closed public gate already passes (test-d3d9-ps14-stage-linkage.js).
+  ;; A nonzero error is the other kind: a gap inside a compiler we have.
+  (global $d3d9_shader_err_vs11 (mut i32) (i32.const 0))
+  (global $d3d9_shader_err_vs11_at (mut i32) (i32.const 0))
+  (global $d3d9_shader_err_ps1x (mut i32) (i32.const 0))
+  (global $d3d9_shader_err_ps1x_at (mut i32) (i32.const 0))
+
+  (func $d3d9_shader_tally (param $word i32) (param $error i32)
+    (if (i32.eq (local.get $word) (i32.const 0xfffe0101))
+      (then
+        (if (i32.eqz (global.get $d3d9_shader_refused_vs11)) (then
+          (global.set $d3d9_shader_err_vs11 (local.get $error))
+          (global.set $d3d9_shader_err_vs11_at (global.get $d3d_ir_error_offset))))
+        (global.set $d3d9_shader_refused_vs11
+        (i32.add (global.get $d3d9_shader_refused_vs11) (i32.const 1))) (return)))
+    (if (i32.eq (local.get $word) (i32.const 0xfffe0200))
+      (then (global.set $d3d9_shader_refused_vs20
+        (i32.add (global.get $d3d9_shader_refused_vs20) (i32.const 1))) (return)))
+    (if (i32.eq (local.get $word) (i32.const 0xffff0200))
+      (then (global.set $d3d9_shader_refused_ps20
+        (i32.add (global.get $d3d9_shader_refused_ps20) (i32.const 1))) (return)))
+    ;; Every ps_1_x minor in one bucket: they are one front end, and the
+    ;; interesting split is 1.x against 2.0.
+    (if (i32.eq (i32.and (local.get $word) (i32.const 0xffffff00)) (i32.const 0xffff0100))
+      (then
+        (if (i32.eqz (global.get $d3d9_shader_refused_ps1x)) (then
+          (global.set $d3d9_shader_err_ps1x (local.get $error))
+          (global.set $d3d9_shader_err_ps1x_at (global.get $d3d_ir_error_offset))))
+        (global.set $d3d9_shader_refused_ps1x
+        (i32.add (global.get $d3d9_shader_refused_ps1x) (i32.const 1))) (return)))
+    (global.set $d3d9_shader_refused_other
+      (i32.add (global.get $d3d9_shader_refused_other) (i32.const 1))))
+
+  (func $d3d9_shader_refuse (param $word i32) (param $error i32) (param $base i32)
+    (local $n i32) (local $token i32) (local $copy i32)
+    (global.set $d3d9_shader_refused (i32.add (global.get $d3d9_shader_refused) (i32.const 1)))
+    ;; $word is the blob's own first dword at the version gate, and the profile
+    ;; that gate accepted at the two IR-failure sites -- which are equal there,
+    ;; because a shader only reaches them by matching it.
+    (call $d3d9_shader_tally (local.get $word) (local.get $error))
+    (if (i32.eq (i32.and (local.get $word) (i32.const 0xffff0000)) (i32.const 0xfffe0000))
+      (then
+        (if (i32.eqz (global.get $d3d9_shader_refused_vs))
+          (then
+            (global.set $d3d9_shader_refused_vs (local.get $word))
+            (global.set $d3d9_shader_error_vs (local.get $error))
+            (if (local.get $error)
+              (then
+                (global.set $d3d9_shader_error_at (global.get $d3d_ir_error_offset))
+                (if (i32.and (i32.ne (local.get $base) (i32.const 0))
+                      (i32.lt_u (global.get $d3d_ir_error_offset) (i32.const 65536)))
+                  (then
+                    (global.set $d3d9_shader_error_token
+                      (i32.load (i32.add (local.get $base)
+                        (i32.shl (global.get $d3d_ir_error_offset) (i32.const 2)))))))
+                ;; A fixed window, NOT a scan for the END token. The obvious
+                ;; linear search for 0x0000ffff is wrong and was measured to be
+                ;; wrong: B&W2's shaders open with a 135-dword COMMENT carrying
+                ;; the HLSL constant table (CTAB), and that blob contains a
+                ;; word equal to 0x0000ffff, so the search stopped at dword 383
+                ;; of a stream whose reported error is at 519. Walking tokens
+                ;; properly would mean reimplementing the comment skip here,
+                ;; which is the validator's job; copying a generous window and
+                ;; letting the reader find END is both simpler and immune to
+                ;; whatever else a comment happens to contain. 4096 dwords is
+                ;; far past vs_1_1's 128-instruction ceiling.
+                (if (i32.and (i32.ne (local.get $base) (i32.const 0))
+                      (i32.eqz (global.get $d3d9_shader_error_copy)))
+                  (then
+                    (local.set $n (i32.const 4096))
+                    ;; Never read past the end of linear memory.
+                    (local.set $token (i32.shr_u (i32.sub (i32.shl (memory.size) (i32.const 16))
+                      (local.get $base)) (i32.const 2)))
+                    (if (i32.lt_u (local.get $token) (local.get $n))
+                      (then (local.set $n (local.get $token))))
+                    (local.set $copy (call $heap_alloc (i32.shl (local.get $n) (i32.const 2))))
+                    (if (local.get $copy)
+                      (then
+                        (memory.copy (call $g2w (local.get $copy)) (local.get $base)
+                          (i32.shl (local.get $n) (i32.const 2)))
+                        (global.set $d3d9_shader_error_copy (call $g2w (local.get $copy)))
+                        (global.set $d3d9_shader_error_copy_words (local.get $n)))))))))))
+      (else
+        (if (i32.eqz (global.get $d3d9_shader_refused_ps))
+          (then
+            (global.set $d3d9_shader_refused_ps (local.get $word))
+            (global.set $d3d9_shader_error_ps (local.get $error)))))))
+
   (func $d3d9_shader_create (param $this i32) (param $code i32) (param $out i32) (param $version i32)
     (local $state i32) (local $length i32) (local $shader i32) (local $wa i32)
     (local $ir i32) (local $words i32) (local $retained i32) (local $ir_bytes i32)
@@ -224,13 +385,15 @@
     (if (i32.and (i32.eq (local.get $version) (i32.const 0xffff0101))
       (i32.or (i32.eq (i32.load (local.get $wa)) (i32.const 0xffff0102)) (i32.eq (i32.load (local.get $wa)) (i32.const 0xffff0103))))
       (then (local.set $version (i32.load (local.get $wa)))))
-    (if (i32.ne (i32.load (local.get $wa)) (local.get $version)) (then (return)))
+    (if (i32.ne (i32.load (local.get $wa)) (local.get $version)) (then
+      (call $d3d9_shader_refuse (i32.load (local.get $wa)) (i32.const 0) (i32.const 0)) (return)))
     (local.set $words (i32.shr_u (i32.sub
       (i32.shl (memory.size) (i32.const 16)) (local.get $wa)) (i32.const 2)))
     (if (i32.gt_u (local.get $words) (i32.const 65536))
       (then (local.set $words (i32.const 65536))))
     (local.set $ir (call $d3d_shader_ir_compile (local.get $wa) (local.get $words)))
     (if (i32.eqz (local.get $ir)) (then
+      (call $d3d9_shader_refuse (local.get $version) (global.get $d3d_ir_error) (local.get $wa))
       (if (i32.eq (global.get $d3d_ir_error) (i32.const 12))
         (then (global.set $eax (i32.const 0x8007000E))))
       (return)))
@@ -249,6 +412,9 @@
       (i32.add (local.get $wa) (i32.const 24)) (i32.shr_u (local.get $length) (i32.const 2))))
     (if (i32.eqz (local.get $ir)) (then
       (call $heap_free (local.get $shader))
+      ;; The private copy's tokens start 24 bytes into the allocation.
+      (call $d3d9_shader_refuse (local.get $version) (global.get $d3d_ir_error)
+        (i32.add (local.get $wa) (i32.const 24)))
       (if (i32.eq (global.get $d3d_ir_error) (i32.const 12))
         (then (global.set $eax (i32.const 0x8007000E))))
       (return)))
@@ -277,6 +443,7 @@
     (i32.store offset=20 (local.get $wa) (i32.const 0))
     (drop (call $d3d9_device_addref (local.get $this)))
     (call $gs32 (local.get $out) (local.get $shader))
+    (global.set $d3d9_shader_made (i32.add (global.get $d3d9_shader_made) (i32.const 1)))
     (global.set $eax (i32.const 0)))
 
   (func $d3d9_shader_binding (param $this i32) (param $shader i32) (param $pixel i32) (param $get i32)
@@ -536,9 +703,21 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
-  ;; IDirect3D9_CheckDeviceFormat — 7 args (incl. this)
+  ;; IDirect3D9_CheckDeviceFormat(this, Adapter, DeviceType, AdapterFormat,
+  ;; Usage, RType, CheckFormat) — 7 args. A blanket S_OK is a lie for plain
+  ;; textures: the app then creates one, CreateTexture refuses the format and
+  ;; the app is left holding the NULL it never expected. Answer D3DRTYPE_TEXTURE
+  ;; (3) with no usage bits from the one list $d3d9_texture_create_kind uses, so
+  ;; a format fallback chain walks down to something we really do store.
+  ;; Every other resource type — render targets, depth/stencil surfaces, volumes
+  ;; — keeps the permissive answer it has always had.
   (func $handle_IDirect3D9_CheckDeviceFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0))
+    (if (i32.and (i32.eqz (local.get $arg4))
+          (i32.eq (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (i32.const 3)))
+      (then (if (i32.eqz (call $d3d9_texture_format_supported
+              (call $gl32 (i32.add (global.get $esp) (i32.const 28)))))
+        (then (global.set $eax (i32.const 0x8876086A)))))) ;; D3DERR_NOTAVAILABLE
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
   ;; IDirect3D9_CheckDeviceMultiSampleType — 7 args (incl. this)
@@ -765,7 +944,7 @@
   ;; IDirect3DDevice9_Release — 1 args (incl. this)
   (func $handle_IDirect3DDevice9_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32) (local $i i32) (local $rt i32)
-    (local $parent i32) (local $result i32)
+    (local $parent i32) (local $result i32) (local $stream i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $rt (call $d3ddev_rt_entry (local.get $arg0)))
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
@@ -798,7 +977,13 @@
               (call $d3d9_texture_offset (local.get $i)))))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
             (br_if $textures (i32.lt_u (local.get $i) (i32.const 6))))
-          (call $d3d9_shader_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 1720))))
+          ;; All 16 stream bindings, not just the one there used to be.
+          (local.set $stream (i32.const 0))
+          (loop $streams
+            (call $d3d9_shader_unbind (call $gl32
+              (call $d3d9_stream_slot (load.field DxObject misc1 (local.get $entry)) (local.get $stream))))
+            (local.set $stream (i32.add (local.get $stream) (i32.const 1)))
+            (br_if $streams (i32.lt_u (local.get $stream) (i32.const 16))))
           (call $d3d9_shader_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 1732))))
           (call $heap_free (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 1716))))
           (call $d3d9_shader_unbind (call $gl32 (i32.add (load.field DxObject misc1 (local.get $entry)) (i32.const 8))))
@@ -829,8 +1014,13 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; IDirect3DDevice9_GetAvailableTextureMem — 1 args (incl. this)
+  ;; Textures live in guest memory here, so the honest figure is what the
+  ;; sparse backing pool can still commit, reported at the megabyte granularity
+  ;; every real driver uses. Returning 0 told an engine that budgets its
+  ;; streaming from this call that there was no texture memory at all --
+  ;; Black & White 2 asks once, at 0x00934a20, before it loads a land.
   (func $handle_IDirect3DDevice9_GetAvailableTextureMem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (i32.and (call $virtual_backing_available) (i32.const 0xFFF00000)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; IDirect3DDevice9_EvictManagedResources — 1 args (incl. this)
@@ -1011,8 +1201,25 @@
       (call $gl32 (i32.add (global.get $esp) (i32.const 32))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 40))))
 
-  ;; IDirect3DDevice9_CreateVolumeTexture — 10 args (incl. this)
+  ;; IDirect3DDevice9_CreateVolumeTexture — 10 args (incl. this):
+  ;; (this, Width, Height, Depth, Levels, Usage, Format, Pool, ppVolume, pShared)
+  ;; There is no volume storage and no 3D sampler here, so a request we could
+  ;; honour still crashes loudly and says what to implement. A zero extent is
+  ;; not such a request: real D3D9 refuses it with D3DERR_INVALIDCALL, and
+  ;; B&W2's land loader asks d3dx9 for a 0x0x0 DXT1 volume, tests the HRESULT
+  ;; (d3dx9_25+0x4d22e7 is the `test edi,edi / jl`) and carries on. Trapping on
+  ;; that would be inventing a failure the hardware does not have.
   (func $handle_IDirect3DDevice9_CreateVolumeTexture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $out i32)
+    (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 36))))
+    (if (i32.or (i32.eqz (local.get $out))
+          (i32.or (i32.eqz (local.get $arg1))
+            (i32.or (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))))
+      (then
+        (if (local.get $out) (then (call $gs32 (local.get $out) (i32.const 0))))
+        (global.set $eax (i32.const 0x8876086C)) ;; D3DERR_INVALIDCALL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 44)))
+        (return)))
     (call $crash_unimplemented (local.get $name_ptr))
     (global.set $esp (i32.add (global.get $esp) (i32.const 44))))
 
@@ -1100,7 +1307,9 @@
 
   ;; IDirect3DDevice9_StretchRect — 6 args (incl. this)
   (func $handle_IDirect3DDevice9_StretchRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_color_stretch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (call $gl32 (i32.add (global.get $esp) (i32.const 24))) (local.get $name_ptr))
+    (if (global.get $d3d_render_token) (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
   ;; IDirect3DDevice9_ColorFill — 4 args (incl. this)
@@ -1302,13 +1511,12 @@
 
   ;; IDirect3DDevice9_SetClipPlane — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_SetClipPlane (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_recording_guard (local.get $arg0) (local.get $name_ptr))
-    (global.set $eax (i32.const 0))
+    (call $d3d9_clip_plane (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_GetClipPlane — 3 args (incl. this)
   (func $handle_IDirect3DDevice9_GetClipPlane (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (call $d3d9_clip_plane (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; IDirect3DDevice9_SetRenderState — 3 args (incl. this)
@@ -1479,7 +1687,7 @@
     (if (call $d3d_render_park (local.get $result) (i32.const 24)) (then (return)))
     (global.set $eax (select (i32.const 0) (i32.const 0x8876086c) (i32.eq (local.get $result) (i32.const 1))))
     (local.set $result (global.get $eax))
-    (call $d3d9_buffer_bind (local.get $arg0) (i32.const 0) (i32.const 6) (i32.const 0) (i32.const 0))
+    (call $d3d9_buffer_bind (local.get $arg0) (i32.const 0) (i32.const 6) (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $eax (local.get $result)))
 
   ;; IDirect3DDevice9_DrawIndexedPrimitiveUP — 9 args (incl. this)
@@ -1517,8 +1725,8 @@
     (if (call $d3d_render_park (local.get $result) (i32.const 40)) (then (return)))
     (global.set $eax (select (i32.const 0) (i32.const 0x8876086c) (i32.eq (local.get $result) (i32.const 1))))
     (local.set $result (global.get $eax))
-    (call $d3d9_buffer_bind (local.get $arg0) (i32.const 0) (i32.const 6) (i32.const 0) (i32.const 0))
-    (call $d3d9_buffer_bind (local.get $arg0) (i32.const 0) (i32.const 7) (i32.const 0) (i32.const 0))
+    (call $d3d9_buffer_bind (local.get $arg0) (i32.const 0) (i32.const 6) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $d3d9_buffer_bind (local.get $arg0) (i32.const 0) (i32.const 7) (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $eax (local.get $result)))
 
   ;; IDirect3DDevice9_ProcessVertices — 7 args (incl. this)
@@ -1621,29 +1829,39 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; IDirect3DDevice9_SetStreamSource — 5 args (incl. this)
+  ;; Every index binds now. This used to accept stream 0 and silently drop the
+  ;; rest -- it set D3DERR_INVALIDCALL and stored nothing -- which cost Black &
+  ;; White 2 its stream-1 TEXCOORD2 and, through $d3d9_declaration_create, every
+  ;; draw that named it. A state block records stream 0 only, so a non-zero
+  ;; index arriving mid-record is refused loudly rather than captured wrong.
   (func $handle_IDirect3DDevice9_SetStreamSource (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $state i32)
     (global.set $eax (i32.const 0x8876086c))
-    (if (i32.eqz (local.get $arg1)) (then
-      (call $d3d9_buffer_bind (local.get $arg0) (local.get $arg2) (i32.const 6)
-        (local.get $arg3) (local.get $arg4))))
+    (local.set $state (call $d3d9_program_state (local.get $arg0)))
+    (if (i32.and (i32.ne (local.get $arg1) (i32.const 0)) (i32.ne (local.get $state) (i32.const 0))) (then
+      (if (call $gl32 (i32.add (local.get $state) (i32.const 1740)))
+        (then (call $crash_unimplemented (local.get $name_ptr))))))
+    (call $d3d9_buffer_bind (local.get $arg0) (local.get $arg2) (i32.const 6)
+      (local.get $arg3) (local.get $arg4) (local.get $arg1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
   ;; IDirect3DDevice9_GetStreamSource — 5 args (incl. this)
   (func $handle_IDirect3DDevice9_GetStreamSource (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $state i32) (local $buffer i32)
+    (local $state i32) (local $buffer i32) (local $slot i32)
     (global.set $eax (i32.const 0x8876086c))
     (block $done
-      (br_if $done (local.get $arg1))
+      (br_if $done (i32.ge_u (local.get $arg1) (i32.const 16)))
       (br_if $done (i32.eqz (local.get $arg2)))
       (br_if $done (i32.eqz (local.get $arg3)))
       (br_if $done (i32.eqz (local.get $arg4)))
       (local.set $state (call $d3d9_program_state (local.get $arg0)))
       (br_if $done (i32.eqz (local.get $state)))
-      (local.set $buffer (call $gl32 (i32.add (local.get $state) (i32.const 1720))))
+      (local.set $slot (call $d3d9_stream_slot (local.get $state) (local.get $arg1)))
+      (local.set $buffer (call $gl32 (local.get $slot)))
       (if (local.get $buffer) (then (drop (call $d3d9_shader_addref (local.get $buffer)))))
       (call $gs32 (local.get $arg2) (local.get $buffer))
-      (call $gs32 (local.get $arg3) (call $gl32 (i32.add (local.get $state) (i32.const 1724))))
-      (call $gs32 (local.get $arg4) (call $gl32 (i32.add (local.get $state) (i32.const 1728))))
+      (call $gs32 (local.get $arg3) (call $gl32 (i32.add (local.get $slot) (i32.const 4))))
+      (call $gs32 (local.get $arg4) (call $gl32 (i32.add (local.get $slot) (i32.const 8))))
       (global.set $eax (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
@@ -1660,7 +1878,7 @@
 
   ;; IDirect3DDevice9_SetIndices — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_SetIndices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3d9_buffer_bind (local.get $arg0) (local.get $arg1) (i32.const 7) (i32.const 0) (i32.const 0))
+    (call $d3d9_buffer_bind (local.get $arg0) (local.get $arg1) (i32.const 7) (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DDevice9_GetIndices — 2 args (incl. this)

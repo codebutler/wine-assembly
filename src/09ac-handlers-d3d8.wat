@@ -271,7 +271,7 @@
   (func $handle_IDirect3DDevice8_SetIndices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $state i32)
     (call $d3d9_buffer_bind (local.get $arg0) (local.get $arg1)
-      (i32.const 7) (i32.const 0) (i32.const 0))
+      (i32.const 7) (i32.const 0) (i32.const 0) (i32.const 0))
     (if (i32.eqz (global.get $eax)) (then
       (local.set $state (call $d3d9_program_state (local.get $arg0)))
       (if (local.get $state) (then
@@ -367,14 +367,10 @@
       (if (i32.eq (i32.and (local.get $token) (i32.const 0xf0000000)) (global.get $D3D8_DECL_TOKEN_STREAM))
         (then
           (local.set $stream (i32.and (local.get $token) (i32.const 0xf)))
-          ;; UE2 builds several software-T&L declarations with position,
-          ;; normal/color and texture coordinates split across streams 0..3.
-          ;; The common backend still owns only stream0, but declaration
-          ;; creation must not become a fatal capability probe. Collapse the
-          ;; selector for now; SetStreamSource retains its explicit failure for
-          ;; nonzero streams, so drawing one of these declarations cannot be
-          ;; mistaken for complete multi-stream support.
-          (if (i32.gt_u (local.get $stream) (i32.const 3))
+          ;; D3D8 exposes the same sixteen stream selectors now implemented by
+          ;; the common D3D9 binding table. Preserve the selector: UT2003's
+          ;; terrain declaration splits position/normal/colors/UVs over 0..4.
+          (if (i32.ge_u (local.get $stream) (i32.const 16))
             (then (call $heap_free (local.get $tmp)) (return)))
           (local.set $offset (i32.const 0))
           (br $tokens)))
@@ -401,7 +397,7 @@
                         (else (local.set $usage_index (i32.const 1)) (i32.const 3))))))))))))))))))
       (local.set $elem (i32.add (call $g2w (local.get $tmp))
         (i32.mul (local.get $elements) (i32.const 8))))
-      (i32.store16 (local.get $elem) (i32.const 0))
+      (i32.store16 (local.get $elem) (local.get $stream))
       (i32.store16 offset=2 (local.get $elem) (local.get $offset))
       (i32.store8 offset=4 (local.get $elem) (local.get $dtype))
       (i32.store8 offset=5 (local.get $elem) (i32.const 0))

@@ -225,8 +225,16 @@ const {bootRenderHarness}=require('./render-helper');
       {fill:1,flags:8,vs:sizedVS});bindPoints(clipped);clipped.run(1);
     assert.strictEqual(e.d3d_software_samples(clipped.ctx),13n,'near clipping preserves retained original oPts sizes without intersection points');
     clipped.guards();e.d3d_software_free(clipped.ctx);cases++;
+    // A non-finite oPts used to fail CREATION, which killed the whole draw --
+    // and, because the render queue's error is sticky, every draw after it.
+    // Real hardware rasterizes nothing for a primitive it cannot order and
+    // carries on, so the setup now marks the vertex and the clipper drops only
+    // the triangles that reference it. The target must still be untouched.
     const invalid=draw([vertex(2,2,.5,1,red,[NaN,0,0,1]),vertex(6,2),vertex(2,6)],{flags:12,vs:sizedVS});
-    assert.strictEqual(invalid.ctx,0,'non-finite undefined point output fails creation before target writes');assert.strictEqual(invalid.pixel(2,2),0xff000000);invalid.guards();cases++;
+    assert.notStrictEqual(invalid.ctx,0,'a non-finite point size does not fail creation');
+    invalid.run();
+    assert.strictEqual(invalid.pixel(2,2),0xff000000,'and paints nothing');
+    invalid.guards();e.d3d_software_free(invalid.ctx);cases++;
     e.d3d_shader_vm_free(sizedVS);
   }
   {
@@ -622,9 +630,16 @@ const {bootRenderHarness}=require('./render-helper');
     u8.fill(0,d.input,d.input+144);u16.fill(65535,d.indexPtr/2,d.indexPtr/2+3);f32.fill(0,d.constants/4,d.constants/4+4);u32.fill(0,d.desc/4,d.desc/4+32);
     d.run();assert.strictEqual(d.pixel(1,1),0xffff0000,'creation snapshots guest inputs/constants/indices/descriptor');d.guards();e.d3d_software_free(d.ctx);cases++;
   }
+  // A non-finite clip position is dropped, not rejected: the draw runs, the
+  // triangles referencing the bad vertex rasterize nothing, and the rest of
+  // the draw is unaffected. Refusing the whole draw was fatal in practice --
+  // the render queue's error is sticky, so Black & White 2 lost every frame
+  // after the first NaN its own geometry contained.
   for(const vertices of [[vertex(NaN,1),triangle[1],triangle[2]],[vertex(-1,1,.5,Infinity),triangle[1],triangle[2]]]){
-    const d=draw(vertices);assert.strictEqual(d.ctx,0,'nonfinite clip position rejected');
-    for(let y=0;y<8;y++)for(let x=0;x<8;x++)assert.strictEqual(d.pixel(x,y),0xff000000,'failure before target mutation');d.guards();cases++;
+    const d=draw(vertices);assert.notStrictEqual(d.ctx,0,'nonfinite clip position does not fail creation');
+    d.run();
+    for(let y=0;y<8;y++)for(let x=0;x<8;x++)assert.strictEqual(d.pixel(x,y),0xff000000,'and leaves the target alone');
+    d.guards();e.d3d_software_free(d.ctx);cases++;
   }
   {
     const d=draw(triangle,{cull:2});assert.ok(d.ctx);d.run();assert.strictEqual(d.pixel(1,1),0xff000000,'clockwise culled');e.d3d_software_free(d.ctx);cases++;
@@ -739,8 +754,14 @@ const {bootRenderHarness}=require('./render-helper');
     assert.strictEqual(d.pixel(1,1),0xff000000);d.guards();cases++;
   }
   {
-    const d=draw([...triangle,vertex(-1,1),vertex(1,1),vertex(NaN,-1)]);assert.strictEqual(d.ctx,0,'late vertex validation failure');
-    for(let y=0;y<8;y++)for(let x=0;x<8;x++)assert.strictEqual(d.pixel(x,y),0xff000000,'earlier triangles never partially published during create');d.guards();cases++;
+    // Two triangles, the second carrying a NaN. The bad one is dropped and the
+    // GOOD one still draws -- which is the point of per-vertex marking over a
+    // whole-draw refusal, and the opposite of what this case used to assert.
+    const d=draw([...triangle,vertex(-1,1),vertex(1,1),vertex(NaN,-1)]);
+    assert.notStrictEqual(d.ctx,0,'one bad vertex does not fail the draw');
+    d.run();
+    assert.strictEqual(d.pixel(1,1),0xffff0000,'the finite triangle still rasterizes');
+    d.guards();e.d3d_software_free(d.ctx);cases++;
   }
   {
     const tokens=[0xfffe0101,1,0xc00f0000,0x90e40000,1,0xd00f0000,0x90e40001];

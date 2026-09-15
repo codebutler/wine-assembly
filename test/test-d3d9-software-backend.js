@@ -225,12 +225,28 @@ const {CommandQueue,OPCODES:OP}=require('../lib/d3d-command-stream');
       assert.deepStrictEqual([...device.readPixels().slice(0,4)],[255,0,0,255],'TEXREG2GB samples its destination stage without bump state');
       assert.strictEqual(device.bytes,base);
     }
+    // `s.textures[1]=null` used to belong here. It does not any more: sampling
+    // an unbound stage is legal D3D9 with an undefined result, and refusing the
+    // draw for it was fatal (the command queue's error is sticky), so the
+    // backend now samples a 1x1 transparent texel instead. That behaviour is
+    // pinned by test/test-d3d9-unbound-sampler.js.
     for(const mutate of [s=>delete s.bumpStates,s=>s.bumpStates[1]=new Float32Array(5),
-      s=>s.bumpStates[1][2]=Infinity,s=>s.textures[1]=null,s=>s.textures[0].format=99,
-      s=>s.attributes.find(a=>a.usageIndex===1&&a.usage===5).usageIndex=6]){
+      s=>s.bumpStates[1][2]=Infinity,s=>s.textures[0].format=99]){
       const source=bumpSnapshot();mutate(source);const before=device.readPixels();
       assert.throws(()=>device.draw(source),/D3D9 software/);assert.deepStrictEqual(device.readPixels(),before);
       assert.strictEqual(device.bytes,base,'bump validation failures release snapshots');
+    }
+    {
+      // TEXCOORD6 has no fixed UV lane, and used to be refused for it. A
+      // programmable vertex program reads its inputs by REGISTER, so the
+      // semantic only decides which attribute feeds v8 -- the attribute now
+      // gets its own appended lane and the picture is unchanged.
+      device.clear([0,0,0,1],3);device.draw(bumpSnapshot());
+      const expected=device.readPixels().slice();
+      const moved=bumpSnapshot();moved.attributes.find(a=>a.usage===5&&a.usageIndex===1).usageIndex=6;
+      device.clear([0,0,0,1],3);device.draw(moved);
+      assert.deepStrictEqual(device.readPixels(),expected,'TEXCOORD6 reaches v8 through an appended lane');
+      assert.strictEqual(device.bytes,base);
     }
     {
       const source=snapshot();source.stride=40;source.vertices=new Uint8Array(120);

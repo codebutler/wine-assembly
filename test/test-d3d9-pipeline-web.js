@@ -362,15 +362,33 @@ const { compileSrcWasm } = require('./compile-src');
       const singleLevelFilter=gpuDevice.gpu.gl.getTexParameter(gpuDevice.gpu.gl.TEXTURE_2D,
         gpuDevice.gpu.gl.TEXTURE_MIN_FILTER);
       const compressedPixels=[];
-      for(const format of [0x31545844,0x35545844]){
+      for(const format of [0x31545844,0x33545844,0x35545844]){
         calls.push(e.compressed_create(device,out,format));const t=e.guest_read32(out)>>>0;
         calls.push(e.lock_texture(t,out));const bits=e.guest_read32(out+4)>>>0;
         if(format===0x31545844)write(bits,[0x0000f800,0]);
+        // DXT3's alpha is sixteen explicit nibbles, so 0x8 replicates to 0x88.
+        else if(format===0x33545844)write(bits,[0x88888888,0x88888888,0x000007e0,0]);
         else write(bits,[128,0,0x000007e0,0]);
         calls.push(e.unlock_texture(t),e.SetTexture(device,0,t),e.SetTextureStageState(device,0,5,2));
         for(let i=0;i<3;i++)e.guest_write32(vptr+i*28+16,0xffffffff);
         calls.push(e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
         compressedPixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4)));
+      }
+      // The three uncompressed widths B&W2's land asks for -- one byte (L8),
+      // two (R5G6B5) and three (R8G8B8) -- through the same real GPU path, so
+      // each decode is covered end to end and not only as a unit conversion.
+      // Every texture is uniform, so the sampled texel is the whole picture.
+      const narrowPixels=[];
+      for(const [format,words] of [[50,Array(4).fill(0x40404040)],
+        [23,Array(8).fill(0x07e007e0)],
+        [20,[0x00ff0000,0x0000ff00,0xff0000ff,0x00ff0000,0x0000ff00,0xff0000ff,
+             0x00ff0000,0x0000ff00,0xff0000ff,0x00ff0000,0x0000ff00,0xff0000ff]]]){
+        calls.push(e.compressed_create(device,out,format));const t=e.guest_read32(out)>>>0;
+        calls.push(e.lock_texture(t,out));write(e.guest_read32(out+4)>>>0,words);
+        calls.push(e.unlock_texture(t),e.SetTexture(device,0,t),e.SetTextureStageState(device,0,5,2));
+        for(let i=0;i<3;i++)e.guest_write32(vptr+i*28+16,0xffffffff);
+        calls.push(e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
+        narrowPixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4)));
       }
       calls.push(e.SetRenderState(device,28,1));
       const fixedFog=e.DrawPrimitiveUP(device,4,1,vptr,28)>>>0;
@@ -411,7 +429,7 @@ const { compileSrcWasm } = require('./compile-src');
       const clearDepthValue=clearGL.getParameter(clearGL.DEPTH_CLEAR_VALUE);
       const layer=renderer.windows[1]._gpuFrameLayer;
       const result={calls,caps,pixel,texturedPixel,indexedPixel,indexed32Pixel,bufferPixel,invalid,backingRequests,repaintRequests,
-        fixedPixel,alphaRejected,transformedPixel,transformedOutside,culledPixel,fixedFog,untexturedPixel,singleLevelFilter,compressedPixels,
+        fixedPixel,alphaRejected,transformedPixel,transformedOutside,culledPixel,fixedFog,untexturedPixel,singleLevelFilter,compressedPixels,narrowPixels,
         cubePixels,cubeMipPixel,restored2DPixel,mixedPixels,initialViewport,viewport,invalidViewport,viewportPixels,
         declarationPixel,declarationIdentity,declarationFVF,badBufferRange,badIndexRange,lockedDraw,
         queryFinishes,eventComplete,beforePresent,presents,hasLayer:!!layer,lastError:invalidMessage,
@@ -440,10 +458,13 @@ const { compileSrcWasm } = require('./compile-src');
     assert.strictEqual(result.gpuFinishes,result.queueOpcodes.length,'correctness executor genuinely finishes every command');
     assert.ok(result.nativeIRDraws>0,'queued draws retain the WAT-owned IR projection');
     assert.strictEqual(result.eventComplete,1);
-    assert.strictEqual(result.presents,26); assert.ok(result.hasLayer);
+    assert.strictEqual(result.presents,30); assert.ok(result.hasLayer);
     // RGBA render targets preserve DXT5 alpha; the opaque default canvas used
     // to replace this with255 during readback.
-    assert.deepStrictEqual(result.compressedPixels,[[0,0,255,255],[0,255,0,128]]);
+    assert.deepStrictEqual(result.compressedPixels,[[0,0,255,255],[0,255,0,136],[0,255,0,128]]);
+    // L8 reads its one byte on all three channels; R5G6B5's all-ones green
+    // field reaches 255, not 252; R8G8B8 is blue-first like every other xRGB.
+    assert.deepStrictEqual(result.narrowPixels,[[64,64,64,255],[0,255,0,255],[0,0,255,255]]);
     assert.deepStrictEqual(result.culledPixel,result.transformedPixel);
     assert.deepStrictEqual(result.untexturedPixel,[0,255,0,128]);
     assert.strictEqual(result.singleLevelFilter,0x2600);

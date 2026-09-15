@@ -32,6 +32,16 @@ for(const primitive of [4,5,6])for(const indexed of [false,true]){
   assert.deepStrictEqual(batches.flatMap(triangles),expected,'packed input remains immutable after guest reuse');
 }
 const bad=fixture(4,300,true);bad.indices[bad.indices.length-1]=999;
+for(const primitive of [4,5,6])for(const limit of [1,17,210,256]){
+ const source=fixture(primitive,513,true),expected=triangles(source);
+ const {batches,bytes}=split(source,64*1024*1024,limit);
+ assert(batches.every(batch=>batch.primitiveCount<=limit),'caller-selected internal triangle limit');
+ assert.deepStrictEqual(batches.flatMap(triangles),expected,'splitting never limits guest draw size or changes winding');
+ assert.strictEqual(split(source,bytes,limit).bytes,bytes);
+ assert.throws(()=>split(source,bytes-1,limit),/budget/);
+}
+for(const limit of [0,-1,1.5,257,NaN,Infinity])
+ assert.throws(()=>split(fixture(4,1),1024,limit),/triangle batch limit/);
 assert.throws(()=>split(bad),/outside/,'late invalid index fails before any batch is returned');
 {
   const vertices=new Uint8Array(65539*4),view=new DataView(vertices.buffer);

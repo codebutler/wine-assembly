@@ -43,16 +43,18 @@ const bytes32 = n => [n & 255, n >>> 8 & 255, n >>> 16 & 255, n >>> 24 & 255];
       (call $d3d9_buffer_create (local.get $d) (i32.const 64) (i32.const 0)
         (i32.const 0) (i32.const 1) (local.get $out) (i32.const 6)) (global.get $eax))
     (func (export "bind_buffer") (param $d i32) (param $b i32)
-      (call $d3d9_buffer_bind (local.get $d) (local.get $b) (i32.const 6) (i32.const 0) (i32.const 16)))
+      (call $d3d9_buffer_bind (local.get $d) (local.get $b) (i32.const 6) (i32.const 0) (i32.const 16) (i32.const 0)))
     (func (export "make_indices") (param $d i32) (param $out i32) (result i32)
       (call $d3d9_buffer_create (local.get $d) (i32.const 6) (i32.const 0)
         (i32.const 101) (i32.const 1) (local.get $out) (i32.const 7)) (global.get $eax))
     (func (export "bind_indices") (param $d i32) (param $b i32)
-      (call $d3d9_buffer_bind (local.get $d) (local.get $b) (i32.const 7) (i32.const 0) (i32.const 0)))
+      (call $d3d9_buffer_bind (local.get $d) (local.get $b) (i32.const 7) (i32.const 0) (i32.const 0) (i32.const 0)))
     (func (export "bound_indices") (param $d i32) (result i32)
       (call $gl32 (i32.add (call $d3d9_program_state (local.get $d)) (i32.const 1732))))
+    ;; Stream 0's buffer. It used to live at a fixed +1720; the device now
+    ;; carries 16 stream records and $d3d9_stream_slot is where they are.
     (func (export "bound_buffer") (param $d i32) (result i32)
-      (call $gl32 (i32.add (call $d3d9_program_state (local.get $d)) (i32.const 1720))))
+      (call $gl32 (call $d3d9_stream_slot (call $d3d9_program_state (local.get $d)) (i32.const 0))))
   `});
   const pe = fs.readFileSync(path.join(__dirname, 'binaries/calc.exe'));
   new Uint8Array(memory.buffer).set(pe, e.get_staging());

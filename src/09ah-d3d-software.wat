@@ -41,11 +41,18 @@
 ;; Only completed draws
 ;; publish this count; coverage/depth/kill/alpha rejects and helper lanes do not
 ;; contribute. Color/depth write masks and blending do not suppress counting.
-;; Vertex snapshot144: screenX,Y,Z,invW,colorOverW float4,texOverW float4[6],fogOverW,pad3.
-;; Context288+indexCount*1022 (POINT uses1050 with scalar oPts sidecar).
+;; Vertex snapshot160: screenX,Y,Z,invW,colorOverW float4,texOverW float4[6],
+;; fogOverW,pad3,specularOverW float4. The second colour varying is oD1/v1 and
+;; is carried unconditionally: a vertex shader that never writes oD1 leaves the
+;; VM's zeroed output register, which is the same value the pixel VM served for
+;; an unwritten v1 before. Black & White 2's terrain pass is what needs it --
+;; its vertex shader ends `mov oD1.xyzw` and its pixel shader is `mov r0.xyz,
+;; v1` / `mov r0.w, c0.w`, so the land is painted BY the interpolated specular
+;; colour and serving zero would paint it black.
+;; Context288+indexCount*1134 (POINT uses1162 with scalar oPts sidecar).
 ;; Fog enabled256/color260, interpolated four-lane factor264..279.
 ;; Owned table-fog descriptor280, owned scissor RECT284 (null disables).
-;; Creation workspace3552+vertexCount*144+indexCount*2 (POINT adds vertexCount*4).
+;; Creation workspace3552+vertexCount*160+indexCount*2 (POINT adds vertexCount*4).
 ;; Deferred setup: status140=2; private flags100 bit131072 means160 owns
 ;; a64-byte setup record plus compact input copies. Record: phase4, vertex8,
 ;; original counts12/16, UVcount20, PSIZE24/register28, input map32:i64,
@@ -55,6 +62,13 @@
 ;; Workspace includes two12-u32 provenance arrays. Emitted (not guest) U16
 ;; indices reserve high3bits of each triangle's first index for enabled edges;
 ;; all generated indices fit low13bits. Clipping-created edges stay disabled.
+;; Private deferred_clipped adds six immutable clip-space equations. For a
+;; nonzero mask, batches are limited to630 indices and reserve double output
+;; capacity (14x; the mathematical fan bound is13x),16-vertex scratch arrays,
+;; and96 plane bytes after the setup input snapshot. Setup52 mask,56 plane
+;; pointer,60 output capacity; all die with setup, including cancellation.
+;; Mask0 retains every old allocation size/limit. Compaction restores the
+;; unchanged retained context layout. POSITIONT+user planes rejects explicitly.
 ;; https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/d3dhal/ns-d3dhal-_d3dhal_clippedtrianglefan
 
 ;; Conservative peak payload reservation, including creation workspace even
@@ -66,16 +80,29 @@
     (i32.or (i32.gt_u (local.get $count) (i32.const 768))
       (i32.ne (i32.rem_u (local.get $count) (i32.const 3)) (i32.const 0))))))
     (then (return (i32.const 0))))
-  (i32.add (i32.add (i32.const 4080) (i32.mul (local.get $count) (i32.const 1052)))
-    (i32.add (i32.mul (local.get $n) (i32.const 148))
+  (i32.add (i32.add (i32.const 4464) (i32.mul (local.get $count) (i32.const 1164)))
+    (i32.add (i32.mul (local.get $n) (i32.const 164))
       (i32.mul (call $d3d_shader_vm_context_bytes) (i32.const 2)))))
 
 ;; Deferred preparation also owns copied active input vectors (at most11).
-(func (export "d3d_software_deferred_allocation_bound") (param $n i32) (param $count i32) (result i32)
+(func $d3d_software_deferred_allocation_bound (export "d3d_software_deferred_allocation_bound") (param $n i32) (param $count i32) (result i32)
   (local $base i32)
   (local.set $base (call $d3d_software_allocation_bound (local.get $n) (local.get $count)))
   (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
   (i32.add (local.get $base) (i32.mul (local.get $n) (i32.const 176))))
+
+;; Private clipping batch limit210 triangles preserves packed13-bit indices.
+;; Zero-mask callers keep the old768-index limit and identical reservation.
+(func (export "d3d_software_clipped_allocation_bound") (param $n i32) (param $count i32) (param $mask i32) (result i32)
+  (local $base i32)
+  (if (i32.gt_u (local.get $mask) (i32.const 63)) (then (return (i32.const 0))))
+  (if (local.get $mask) (then
+    (if (i32.gt_u (local.get $count) (i32.const 630)) (then (return (i32.const 0))))))
+  (local.set $base (call $d3d_software_deferred_allocation_bound (local.get $n) (local.get $count)))
+  (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
+  (i32.add (local.get $base) (select
+    (i32.add (i32.const 1408) (i32.mul (local.get $count) (i32.const 1162)))
+    (i32.const 0) (local.get $mask))))
 
 ;; Valid live contexts only. Deliberately retain the peak bound's VM/slack
 ;; allowance for later binders; this is a conservative reservation, not telemetry.
@@ -151,20 +178,33 @@
 ;; PS ivec4[16], BOOL[16]. Copy before constructor vertex execution; retain no
 ;; pointer to the caller's storage. The existing128-byte draw ABI is unchanged.
 (func $d3d_software_create_typed (export "d3d_software_create_typed") (param $desc i32) (param $typed i32) (result i32)
-  (call $d3d_software_create_mode (local.get $desc) (local.get $typed) (i32.const 0)))
+  (call $d3d_software_create_mode (local.get $desc) (local.get $typed) (i32.const 0) (i32.const 0) (i32.const 0)))
 (func (export "d3d_software_create_deferred") (param $desc i32) (param $typed i32) (result i32)
-  (call $d3d_software_create_mode (local.get $desc) (local.get $typed) (i32.const 1)))
-(func $d3d_software_create_mode (param $desc i32) (param $typed i32) (param $deferred i32) (result i32)
+  (call $d3d_software_create_mode (local.get $desc) (local.get $typed) (i32.const 1) (i32.const 0) (i32.const 0)))
+(func (export "d3d_software_create_deferred_clipped") (param $desc i32) (param $typed i32) (param $planes i32) (param $mask i32) (result i32)
+  (call $d3d_software_create_mode (local.get $desc) (local.get $typed) (i32.const 1) (local.get $planes) (local.get $mask)))
+(func $d3d_software_create_mode (param $desc i32) (param $typed i32) (param $deferred i32) (param $planes i32) (param $mask i32) (result i32)
   (local $ctx i32) (local $n i32) (local $count i32) (local $i i32) (local $j i32)
   (local $lane i32) (local $bank i32) (local $vm i32) (local $src i32) (local $dst i32)
   (local $out i32) (local $v i32) (local $bits i32) (local $map i32) (local $x f32) (local $y f32)
   (local $z f32) (local $w f32) (local $iw f32) (local $bytes i32) (local $point_base i32) (local $point_size f32)
   (local $uvs i32) (local $used i32) (local $register i32) (local $psize i32) (local $psreg i32)
-  (local $setup i32) (local $stride i32) (local $status i32)
+  (local $setup i32) (local $stride i32) (local $status i32) (local $capacity i32) (local $scratch_bytes i32)
   (local $wide i64)
   (if (local.get $typed) (then
     (if (i32.eqz (call $d3d_shader_vm_range (local.get $typed) (i32.const 640))) (then (return (i32.const 0))))))
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $desc) (i32.const 128))) (then (return (i32.const 0))))
+  (if (i32.gt_u (local.get $mask) (i32.const 63)) (then (return (i32.const 0))))
+  (local.set $scratch_bytes (select (i32.const 5248) (i32.const 3936) (local.get $mask)))
+  (if (local.get $mask) (then
+    (if (i32.or (i32.ne (i32.and (i32.load offset=100 (local.get $desc)) (i32.const 4)) (i32.const 0))
+      (i32.gt_u (i32.load offset=48 (local.get $desc)) (i32.const 630))) (then (return (i32.const 0))))
+    (if (i32.eqz (call $d3d_shader_vm_range (local.get $planes) (i32.const 96))) (then (return (i32.const 0))))
+    (local.set $i (i32.const 0))
+    (loop $validate_planes
+      (if (i32.eqz (f32.le (f32.abs (f32.load (i32.add (local.get $planes) (local.get $i)))) (f32.const 3.4028234663852886e38)))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 4))) (br_if $validate_planes (i32.lt_u (local.get $i) (i32.const 96))))))
   (if (i32.or (i32.ne (i32.load (local.get $desc)) (i32.const 0x44535031))
     (i32.or (i32.lt_u (i32.load offset=4 (local.get $desc)) (i32.const 1))
       (i32.gt_u (i32.load offset=4 (local.get $desc)) (i32.const 5)))) (then (return (i32.const 0))))
@@ -240,8 +280,9 @@
     (if (i32.eqz (call $d3d_shader_vm_range (i32.load offset=60 (local.get $desc)) (i32.shl (i32.load offset=64 (local.get $desc)) (i32.const 4)))) (then (return (i32.const 0))))))
   (if (i32.load offset=72 (local.get $desc)) (then
     (if (i32.eqz (call $d3d_shader_vm_range (i32.load offset=68 (local.get $desc)) (i32.shl (i32.load offset=72 (local.get $desc)) (i32.const 4)))) (then (return (i32.const 0))))))
-  (local.set $bytes (i32.add (i32.const 288) (i32.mul (local.get $count)
-    (select (i32.const 1050) (i32.const 1022) (i32.ne (i32.and (i32.load offset=100 (local.get $desc)) (i32.const 8)) (i32.const 0))))))
+  (local.set $capacity (i32.mul (local.get $count) (select (i32.const 2) (i32.const 1) (local.get $mask))))
+  (local.set $bytes (i32.add (i32.const 288) (i32.mul (local.get $capacity)
+    (select (i32.const 1162) (i32.const 1134) (i32.ne (i32.and (i32.load offset=100 (local.get $desc)) (i32.const 8)) (i32.const 0))))))
   (local.set $ctx (call $heap_alloc (local.get $bytes)))
   (if (i32.eqz (local.get $ctx)) (then (return (i32.const 0))))
   (local.set $ctx (call $g2w (local.get $ctx)))
@@ -254,22 +295,22 @@
   (i32.store offset=196 (local.get $ctx) (local.get $bytes))
   (i32.store offset=140 (local.get $ctx) (i32.const 1))
   (i32.store offset=152 (local.get $ctx) (i32.add (local.get $ctx) (i32.const 288)))
-  (i32.store offset=156 (local.get $ctx) (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $count) (i32.const 1008))))
+  (i32.store offset=156 (local.get $ctx) (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $capacity) (i32.const 1120))))
   (block $failure
-    (local.set $out (call $heap_alloc (i32.add (i32.const 3552)
-      (i32.add (i32.mul (local.get $n) (select (i32.const 148) (i32.const 144)
+    (local.set $out (call $heap_alloc (i32.add (local.get $scratch_bytes)
+      (i32.add (i32.mul (local.get $n) (select (i32.const 164) (i32.const 160)
         (i32.ne (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const 8)) (i32.const 0)))) (i32.shl (local.get $count) (i32.const 1))))))
     (br_if $failure (i32.eqz (local.get $out)))
     (local.set $out (call $g2w (local.get $out)))
     (i32.store offset=200 (local.get $ctx) (local.get $out))
-    (local.set $point_base (i32.add (local.get $out) (i32.add (i32.const 3552)
-      (i32.add (i32.mul (local.get $n) (i32.const 144)) (i32.shl (local.get $count) (i32.const 1))))))
+    (local.set $point_base (i32.add (local.get $out) (i32.add (local.get $scratch_bytes)
+      (i32.add (i32.mul (local.get $n) (i32.const 160)) (i32.shl (local.get $count) (i32.const 1))))))
     (local.set $i (i32.const 0))
     (loop $indices
       (local.set $v (local.get $i))
       (if (i32.load offset=44 (local.get $ctx)) (then (local.set $v (i32.load16_u (i32.add (i32.load offset=44 (local.get $ctx)) (i32.shl (local.get $i) (i32.const 1)))))))
       (br_if $failure (i32.ge_u (local.get $v) (local.get $n)))
-      (i32.store16 (i32.add (i32.add (local.get $out) (i32.mul (local.get $n) (i32.const 144))) (i32.shl (local.get $i) (i32.const 1))) (local.get $v))
+      (i32.store16 (i32.add (i32.add (local.get $out) (i32.mul (local.get $n) (i32.const 160))) (i32.shl (local.get $i) (i32.const 1))) (local.get $v))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br_if $indices (i32.lt_u (local.get $i) (local.get $count))))
     (i32.store offset=144 (local.get $ctx) (call $d3d_shader_vm_context (i32.load offset=52 (local.get $ctx)) (i32.const 15)))
     (br_if $failure (i32.eqz (i32.load offset=144 (local.get $ctx))))
@@ -293,7 +334,7 @@
     ;; Pending-only tagged setup owner in160; raster triangle pointers are
     ;; unavailable until setup finishes. Status2 rejects all geometry binders.
     (local.set $stride (i32.shl (i32.add (i32.add (local.get $uvs) (i32.const 2)) (local.get $psize)) (i32.const 4)))
-    (local.set $setup (call $heap_alloc (i32.add (i32.const 64)
+    (local.set $setup (call $heap_alloc (i32.add (select (i32.const 160) (i32.const 64) (local.get $mask))
       (select (i32.mul (local.get $n) (local.get $stride)) (i32.const 0) (local.get $deferred)))))
     (br_if $failure (i32.eqz (local.get $setup)))
     (local.set $setup (call $g2w (local.get $setup)))
@@ -306,6 +347,13 @@
     (i32.store offset=28 (local.get $setup) (local.get $psreg))
     (i64.store offset=32 (local.get $setup) (local.get $wide))
     (i32.store offset=40 (local.get $setup) (local.get $point_base))
+    ;;52 mask,56 owned plane snapshot pointer,60 reserved output capacity.
+    (i32.store offset=52 (local.get $setup) (local.get $mask))
+    (i32.store offset=60 (local.get $setup) (local.get $capacity))
+    (if (local.get $mask) (then
+      (local.set $dst (i32.add (i32.add (local.get $setup) (i32.const 64)) (i32.mul (local.get $n) (local.get $stride))))
+      (memory.copy (local.get $dst) (local.get $planes) (i32.const 96))
+      (i32.store offset=56 (local.get $setup) (local.get $dst))))
     (i32.store offset=160 (local.get $ctx) (local.get $setup))
     (i32.store offset=100 (local.get $ctx) (i32.or (i32.load offset=100 (local.get $ctx)) (i32.const 131072)))
     (i32.store offset=140 (local.get $ctx) (i32.const 2))
@@ -335,6 +383,7 @@
   (local $vm i32) (local $out i32) (local $point_base i32) (local $uvs i32) (local $psize i32) (local $psreg i32)
   (local $lane i32) (local $bank i32) (local $src i32) (local $dst i32) (local $bits i32)
   (local $x f32) (local $y f32) (local $z f32) (local $w f32) (local $point_size f32) (local $wide i64)
+  (local $bad i32)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $ctx) (i32.const 288))) (then (return (i32.const -1))))
   (if (i32.ne (i32.load (local.get $ctx)) (i32.const 0x44535031)) (then (return (i32.const -1))))
   (local.set $status (i32.load offset=140 (local.get $ctx)))
@@ -390,15 +439,25 @@
         (local.set $src (i32.add (i32.add (local.get $vm) (i32.const 32800)) (i32.shl (local.get $lane) (i32.const 2))))
         (local.set $x (f32.load (local.get $src))) (local.set $y (f32.load offset=16 (local.get $src)))
         (local.set $z (f32.load offset=32 (local.get $src))) (local.set $w (f32.load offset=48 (local.get $src)))
-        (br_if $failure (i32.eqz (i32.and
+        ;; A non-finite post-VS position is a property of ONE vertex, not of the
+        ;; draw. Real hardware rasterizes nothing for a triangle it cannot
+        ;; order and carries on; refusing here instead ended rendering for the
+        ;; whole run, because the producer's queue error is sticky. Black &
+        ;; White 2's land pass writes NaN into the Y of four vertices of one
+        ;; 56-vertex batch (measured: command9233, vertices48-51) and every
+        ;; other vertex in it is ordinary. Mark the vertex and let
+        ;; $d3d_software_clip_range drop the triangles that reference it.
+        (local.set $bad (i32.eqz (i32.and
           (i32.and (f32.le (f32.abs (local.get $x)) (f32.const 3.4028234663852886e38)) (f32.le (f32.abs (local.get $y)) (f32.const 3.4028234663852886e38)))
           (i32.and (f32.le (f32.abs (local.get $z)) (f32.const 3.4028234663852886e38)) (f32.le (f32.abs (local.get $w)) (f32.const 3.4028234663852886e38))))))
-        (local.set $dst (i32.add (local.get $out) (i32.mul (i32.add (local.get $i) (local.get $lane)) (i32.const 144))))
+        (local.set $dst (i32.add (local.get $out) (i32.mul (i32.add (local.get $i) (local.get $lane)) (i32.const 160))))
         (f32.store (local.get $dst) (local.get $x)) (f32.store offset=4 (local.get $dst) (local.get $y))
         (f32.store offset=8 (local.get $dst) (local.get $z)) (f32.store offset=12 (local.get $dst) (local.get $w))
         (if (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const 65536)) (then
           (local.set $point_size (f32.load (i32.add (i32.add (local.get $vm) (i32.const 32928)) (i32.shl (local.get $lane) (i32.const 2)))))
-          (br_if $failure (f32.ne (local.get $point_size) (local.get $point_size)))
+          ;; A NaN point size is the same class of per-vertex defect.
+          (local.set $bad (i32.or (local.get $bad)
+            (f32.ne (local.get $point_size) (local.get $point_size))))
           (f32.store (i32.add (local.get $point_base) (i32.shl (i32.add (local.get $i) (local.get $lane)) (i32.const 2))) (local.get $point_size))))
         (local.set $j (i32.const 0))
         (loop $varyings
@@ -413,6 +472,19 @@
         (f32.store offset=128 (local.get $dst)
           (f32.load (i32.add (i32.add (local.get $vm) (i32.const 32864)) (i32.shl (local.get $lane) (i32.const 2)))))
         (memory.fill (i32.add (local.get $dst) (i32.const 132)) (i32.const 0) (i32.const 12))
+        ;; The first of the three reserved words carries the per-vertex verdict.
+        (i32.store offset=132 (local.get $dst) (local.get $bad))
+        ;; oD1, the second colour output, is bank5 register1 -- one register
+        ;; past oD0, so32+ (5*128+1)*64 = 41056 in the VS context. The bank is
+        ;; zero-filled before every packet, so a shader that never writes oD1
+        ;; lands four zeroes here, which is exactly what the pixel VM served for
+        ;; an unwritten v1 before this varying existed.
+        (local.set $j (i32.const 0))
+        (loop $specular
+          (f32.store (i32.add (i32.add (local.get $dst) (i32.const 144)) (i32.shl (local.get $j) (i32.const 2)))
+            (f32.load (i32.add (i32.add (local.get $vm) (i32.const 41056))
+              (i32.add (i32.shl (local.get $j) (i32.const 4)) (i32.shl (local.get $lane) (i32.const 2))))))
+          (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $specular (i32.lt_u (local.get $j) (i32.const 4))))
         (local.set $lane (i32.add (local.get $lane) (i32.const 1))) (br_if $store (i32.lt_u (local.get $lane) (i32.const 4)))))
       (local.set $i (i32.add (local.get $i) (i32.const 4)))
       (i32.store offset=8 (local.get $setup) (local.get $i)) (i32.store offset=44 (local.get $setup) (i32.const 0))
@@ -432,6 +504,7 @@
     (i32.store offset=48 (local.get $setup) (local.get $j))
     (if (i32.lt_u (local.get $j) (local.get $count)) (then (return (i32.const 1))))
     (call $d3d_shader_vm_free (i32.load offset=200 (local.get $ctx))) (i32.store offset=200 (local.get $ctx) (i32.const 0))
+    (local.set $count (i32.load offset=60 (local.get $setup)))
     (call $d3d_shader_vm_free (local.get $setup)) (i32.store offset=160 (local.get $ctx) (i32.const 0))
     (i32.store offset=100 (local.get $ctx) (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const -131073)))
     (br_if $failure (i32.eqz (call $d3d_software_compact (local.get $ctx) (local.get $count))))
@@ -450,6 +523,21 @@
     (return (f64.promote_f32 (f32.load offset=8 (local.get $v)))))
   (f64.sub (local.get $w) (f64.promote_f32 (f32.load offset=8 (local.get $v)))))
 
+(func $d3d_software_clip_distance_user (param $v i32) (param $plane i32) (param $setup i32) (result f64)
+  (local $p i32) (local $i i32) (local $sum f64)
+  (if (i32.lt_u (local.get $plane) (i32.const 6))
+    (then (return (call $d3d_software_clip_distance (local.get $v) (local.get $plane)))))
+  (local.set $plane (i32.sub (local.get $plane) (i32.const 6)))
+  (if (i32.eqz (i32.and (i32.load offset=52 (local.get $setup)) (i32.shl (i32.const 1) (local.get $plane))))
+    (then (return (f64.const 1))))
+  (local.set $p (i32.add (i32.load offset=56 (local.get $setup)) (i32.shl (local.get $plane) (i32.const 4))))
+  (loop $dot
+    (local.set $sum (f64.add (local.get $sum) (f64.mul
+      (f64.promote_f32 (f32.load (i32.add (local.get $v) (local.get $i))))
+      (f64.promote_f32 (f32.load (i32.add (local.get $p) (local.get $i)))))))
+    (local.set $i (i32.add (local.get $i) (i32.const 4))) (br_if $dot (i32.lt_u (local.get $i) (i32.const 16))))
+  (local.get $sum))
+
 (func $d3d_software_intersection (param $a i32) (param $b i32) (param $da f64) (param $db f64) (param $out i32) (param $plane i32)
   (local $i i32) (local $den f64)
   (local.set $den (f64.sub (local.get $db) (local.get $da)))
@@ -461,15 +549,15 @@
       (f32.demote_f64 (f64.div (f64.sub
         (f64.mul (f64.promote_f32 (f32.load (i32.add (local.get $a) (local.get $i)))) (local.get $db))
         (f64.mul (f64.promote_f32 (f32.load (i32.add (local.get $b) (local.get $i)))) (local.get $da))) (local.get $den))))
-    (local.set $i (i32.add (local.get $i) (i32.const 4))) (br_if $attributes (i32.lt_u (local.get $i) (i32.const 144))))
+    (local.set $i (i32.add (local.get $i) (i32.const 4))) (br_if $attributes (i32.lt_u (local.get $i) (i32.const 160))))
   ;; This is the constructed intersection's defining plane, not a clamp of an
   ;; original vertex. Preserve it exactly after rounding the interpolated W.
   (if (i32.lt_u (local.get $plane) (i32.const 4))
     (then (f32.store (i32.add (local.get $out) (i32.shl (i32.shr_u (local.get $plane) (i32.const 1)) (i32.const 2)))
       (f32.mul (f32.load offset=12 (local.get $out))
         (select (f32.const 1) (f32.const -1) (i32.and (local.get $plane) (i32.const 1))))))
-    (else (f32.store offset=8 (local.get $out)
-      (select (f32.const 0) (f32.load offset=12 (local.get $out)) (i32.eq (local.get $plane) (i32.const 4)))))))
+    (else (if (i32.lt_u (local.get $plane) (i32.const 6)) (then (f32.store offset=8 (local.get $out)
+      (select (f32.const 0) (f32.load offset=12 (local.get $out)) (i32.eq (local.get $plane) (i32.const 4)))))))))
 
 (func $d3d_software_project (param $ctx i32) (param $src i32) (param $dst i32) (result i32)
   (local $w f32) (local $iw f32) (local $i i32)
@@ -491,7 +579,7 @@
   (local.set $i (i32.const 16))
   (loop $varyings
     (f32.store (i32.add (local.get $dst) (local.get $i)) (f32.mul (f32.load (i32.add (local.get $src) (local.get $i))) (local.get $iw)))
-    (local.set $i (i32.add (local.get $i) (i32.const 4))) (br_if $varyings (i32.lt_u (local.get $i) (i32.const 144))))
+    (local.set $i (i32.add (local.get $i) (i32.const 4))) (br_if $varyings (i32.lt_u (local.get $i) (i32.const 160))))
   (i32.const 1))
 
 (func $d3d_software_clip (param $ctx i32) (param $vertex_count i32) (param $index_count i32) (result i32)
@@ -503,23 +591,38 @@
   (local $count i32) (local $outcount i32) (local $i i32) (local $j i32) (local $plane i32)
   (local $prev i32) (local $current i32) (local $da f64) (local $db f64) (local $dst i32)
   (local $ma i32) (local $mb i32) (local $previous_mask i32) (local $current_mask i32) (local $edge_mask i32) (local $point_mask i32)
+  (local $setup i32) (local $user_mask i32) (local $slots i32) (local $limit i32) (local $capacity i32)
+  (local $bad i32)
+  (local.set $setup (i32.load offset=160 (local.get $ctx)))
+  (local.set $user_mask (i32.load offset=52 (local.get $setup)))
+  (local.set $slots (select (i32.const 16) (i32.const 12) (local.get $user_mask)))
+  (local.set $limit (select (i32.const 12) (i32.const 6) (local.get $user_mask)))
+  (local.set $capacity (i32.load offset=60 (local.get $setup)))
   (local.set $raw (i32.load offset=200 (local.get $ctx)))
-  (local.set $indices (i32.add (local.get $raw) (i32.mul (local.get $vertex_count) (i32.const 144))))
+  (local.set $indices (i32.add (local.get $raw) (i32.mul (local.get $vertex_count) (i32.const 160))))
   (local.set $scratch (i32.add (local.get $indices) (i32.shl (local.get $index_count) (i32.const 1))))
   (loop $triangles
-    (local.set $a (local.get $scratch)) (local.set $b (i32.add (local.get $scratch) (i32.const 1728)))
-    (local.set $ma (i32.add (local.get $scratch) (i32.const 3456)))
-    (local.set $mb (i32.add (local.get $scratch) (i32.const 3504)))
+    (local.set $a (local.get $scratch)) (local.set $b (i32.add (local.get $scratch) (i32.mul (local.get $slots) (i32.const 160))))
+    (local.set $ma (i32.add (local.get $scratch) (i32.mul (local.get $slots) (i32.const 320))))
+    (local.set $mb (i32.add (local.get $ma) (i32.shl (local.get $slots) (i32.const 2))))
     ;; Membership in ORIGINAL triangle edges AB=1, BC=2, CA=4. An
     ;; intersection inherits only shared memberships, never a new clip edge.
     (i32.store (local.get $ma) (i32.const 5)) (i32.store offset=4 (local.get $ma) (i32.const 3))
     (i32.store offset=8 (local.get $ma) (i32.const 6))
-    (local.set $i (i32.const 0))
+    (local.set $i (i32.const 0)) (local.set $bad (i32.const 0))
     (loop $input
-      (memory.copy (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 144)))
+      (memory.copy (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 160)))
         (i32.add (local.get $raw) (i32.mul (i32.load16_u (i32.add (local.get $indices)
-          (i32.shl (i32.add (local.get $triangle) (local.get $i)) (i32.const 1)))) (i32.const 144))) (i32.const 144))
+          (i32.shl (i32.add (local.get $triangle) (local.get $i)) (i32.const 1)))) (i32.const 160))) (i32.const 160))
+      ;; +132 is the per-vertex verdict $d3d_software_prepare_step wrote: the
+      ;; post-VS position (or point size) was not finite. Such a triangle has no
+      ;; orderable projection, so it contributes nothing -- which is what the
+      ;; hardware produces too. Drop it and keep clipping the rest of the batch.
+      (local.set $bad (i32.or (local.get $bad)
+        (i32.load offset=132 (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 160))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br_if $input (i32.lt_u (local.get $i) (i32.const 3))))
+    (block $dropped
+    (br_if $dropped (local.get $bad))
     (local.set $count (i32.const 3)) (local.set $plane (i32.const 0))
     (if (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const 8)) (then (local.set $plane (i32.const 4))))
     (block $clipped (loop $planes
@@ -529,26 +632,26 @@
       (br_if $clipped (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const 4)))
       (br_if $clipped (i32.eqz (local.get $count)))
       (local.set $outcount (i32.const 0)) (local.set $i (i32.const 0))
-      (local.set $prev (i32.add (local.get $a) (i32.mul (i32.sub (local.get $count) (i32.const 1)) (i32.const 144))))
-      (local.set $da (call $d3d_software_clip_distance (local.get $prev) (local.get $plane)))
+      (local.set $prev (i32.add (local.get $a) (i32.mul (i32.sub (local.get $count) (i32.const 1)) (i32.const 160))))
+      (local.set $da (call $d3d_software_clip_distance_user (local.get $prev) (local.get $plane) (local.get $setup)))
       (local.set $previous_mask (i32.load (i32.add (local.get $ma) (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 2)))))
       (loop $edges
-        (local.set $current (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 144))))
-        (local.set $db (call $d3d_software_clip_distance (local.get $current) (local.get $plane)))
+        (local.set $current (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 160))))
+        (local.set $db (call $d3d_software_clip_distance_user (local.get $current) (local.get $plane) (local.get $setup)))
         (local.set $current_mask (i32.load (i32.add (local.get $ma) (i32.shl (local.get $i) (i32.const 2)))))
         ;; A vertex exactly on-plane is copied once, not emitted twice as an
         ;; intersection and endpoint. This keeps the convex n+1/plane bound.
         (if (i32.or (i32.and (f64.lt (local.get $da) (f64.const 0)) (f64.gt (local.get $db) (f64.const 0)))
           (i32.and (f64.gt (local.get $da) (f64.const 0)) (f64.lt (local.get $db) (f64.const 0)))) (then
-          (if (i32.ge_u (local.get $outcount) (i32.const 12)) (then (return (i32.const -1))))
+          (if (i32.ge_u (local.get $outcount) (local.get $slots)) (then (return (i32.const -1))))
           (call $d3d_software_intersection (local.get $prev) (local.get $current) (local.get $da) (local.get $db)
-            (i32.add (local.get $b) (i32.mul (local.get $outcount) (i32.const 144))) (local.get $plane))
+            (i32.add (local.get $b) (i32.mul (local.get $outcount) (i32.const 160))) (local.get $plane))
           (i32.store (i32.add (local.get $mb) (i32.shl (local.get $outcount) (i32.const 2)))
             (i32.and (local.get $previous_mask) (local.get $current_mask)))
           (local.set $outcount (i32.add (local.get $outcount) (i32.const 1)))))
         (if (f64.ge (local.get $db) (f64.const 0)) (then
-          (if (i32.ge_u (local.get $outcount) (i32.const 12)) (then (return (i32.const -1))))
-          (memory.copy (i32.add (local.get $b) (i32.mul (local.get $outcount) (i32.const 144))) (local.get $current) (i32.const 144))
+          (if (i32.ge_u (local.get $outcount) (local.get $slots)) (then (return (i32.const -1))))
+          (memory.copy (i32.add (local.get $b) (i32.mul (local.get $outcount) (i32.const 160))) (local.get $current) (i32.const 160))
           (i32.store (i32.add (local.get $mb) (i32.shl (local.get $outcount) (i32.const 2))) (local.get $current_mask))
           (local.set $outcount (i32.add (local.get $outcount) (i32.const 1)))))
         (local.set $prev (local.get $current)) (local.set $da (local.get $db)) (local.set $previous_mask (local.get $current_mask))
@@ -556,22 +659,22 @@
       (local.set $tmp (local.get $a)) (local.set $a (local.get $b)) (local.set $b (local.get $tmp))
       (local.set $tmp (local.get $ma)) (local.set $ma (local.get $mb)) (local.set $mb (local.get $tmp))
       (local.set $count (local.get $outcount))
-      (local.set $plane (i32.add (local.get $plane) (i32.const 1))) (br_if $planes (i32.lt_u (local.get $plane) (i32.const 6)))))
+      (local.set $plane (i32.add (local.get $plane) (i32.const 1))) (br_if $planes (i32.lt_u (local.get $plane) (local.get $limit)))))
     ;; After all six half-spaces, W=0 implies X=Y=Z=0: the homogeneous zero
     ;; vector has no projected area. Removing it leaves the convex hull of the
     ;; positive-W vertices, without inventing an epsilon clip plane or clamp.
     (local.set $i (i32.const 0)) (local.set $outcount (i32.const 0))
     (block $positive (loop $compact
       (br_if $positive (i32.ge_u (local.get $i) (local.get $count)))
-      (local.set $current (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 144))))
+      (local.set $current (i32.add (local.get $a) (i32.mul (local.get $i) (i32.const 160))))
       (if (f32.gt (f32.load offset=12 (local.get $current)) (f32.const 0)) (then
-        (memory.copy (i32.add (local.get $a) (i32.mul (local.get $outcount) (i32.const 144))) (local.get $current) (i32.const 144))
+        (memory.copy (i32.add (local.get $a) (i32.mul (local.get $outcount) (i32.const 160))) (local.get $current) (i32.const 160))
         (i32.store (i32.add (local.get $ma) (i32.shl (local.get $outcount) (i32.const 2)))
           (i32.load (i32.add (local.get $ma) (i32.shl (local.get $i) (i32.const 2)))))
         (local.set $outcount (i32.add (local.get $outcount) (i32.const 1)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $compact)))
     (local.set $count (local.get $outcount))
-    (if (i32.gt_u (local.get $count) (i32.const 9)) (then (return (i32.const -1))))
+    (if (i32.gt_u (local.get $count) (select (i32.const 15) (i32.const 9) (local.get $user_mask))) (then (return (i32.const -1))))
     (local.set $i (i32.const 1))
     (block $fan_done (loop $fan
       (br_if $fan_done (i32.ge_u (i32.add (local.get $i) (i32.const 1)) (local.get $count)))
@@ -589,28 +692,30 @@
           (i32.shl (i32.gt_u (i32.popcnt (local.get $tmp)) (i32.const 1)) (i32.const 2)))))
       (local.set $j (i32.const 0))
       (loop $vertex
-        (if (i32.ge_u (local.get $emitted) (i32.mul (local.get $index_count) (i32.const 7))) (then (return (i32.const -1))))
+        (if (i32.or (i32.ge_u (local.get $emitted) (i32.const 8192))
+          (i32.ge_u (local.get $emitted) (i32.mul (local.get $index_count) (select (i32.const 13) (i32.const 7) (local.get $user_mask)))))
+          (then (return (i32.const -1))))
         (local.set $current (local.get $a))
         (if (local.get $j) (then (local.set $current (i32.add (local.get $a)
-          (i32.mul (i32.sub (i32.add (local.get $i) (local.get $j)) (i32.const 1)) (i32.const 144))))))
-        (local.set $dst (i32.add (i32.load offset=152 (local.get $ctx)) (i32.mul (local.get $emitted) (i32.const 144))))
+          (i32.mul (i32.sub (i32.add (local.get $i) (local.get $j)) (i32.const 1)) (i32.const 160))))))
+        (local.set $dst (i32.add (i32.load offset=152 (local.get $ctx)) (i32.mul (local.get $emitted) (i32.const 160))))
         (if (i32.eqz (call $d3d_software_project (local.get $ctx) (local.get $current) (local.get $dst))) (then (return (i32.const -1))))
         (if (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const 65536)) (then
           (local.set $current_mask (i32.load (i32.add (local.get $ma)
-            (i32.shl (i32.div_u (i32.sub (local.get $current) (local.get $a)) (i32.const 144)) (i32.const 2)))))
+            (i32.shl (i32.div_u (i32.sub (local.get $current) (local.get $a)) (i32.const 160)) (i32.const 2)))))
           (if (i32.gt_u (i32.popcnt (local.get $current_mask)) (i32.const 1)) (then
             (local.set $tmp (i32.load16_u (i32.add (local.get $indices) (i32.shl (i32.add (local.get $triangle)
               (select (i32.const 0) (select (i32.const 1) (i32.const 2) (i32.eq (local.get $current_mask) (i32.const 3)))
                 (i32.eq (local.get $current_mask) (i32.const 5)))) (i32.const 1)))))
-            (f32.store (i32.add (i32.add (local.get $ctx) (i32.add (i32.const 288) (i32.mul (local.get $index_count) (i32.const 1022))))
+            (f32.store (i32.add (i32.add (local.get $ctx) (i32.add (i32.const 288) (i32.mul (local.get $capacity) (i32.const 1134))))
               (i32.shl (local.get $emitted) (i32.const 2)))
-              (f32.load (i32.add (i32.add (local.get $scratch) (i32.const 3552)) (i32.shl (local.get $tmp) (i32.const 2)))))))))
+              (f32.load (i32.add (i32.load offset=40 (local.get $setup)) (i32.shl (local.get $tmp) (i32.const 2)))))))))
         (i32.store16 (i32.add (i32.load offset=156 (local.get $ctx)) (i32.shl (local.get $emitted) (i32.const 1)))
           (i32.or (local.get $emitted) (select (i32.shl (local.get $edge_mask) (i32.const 13))
             (select (i32.shl (local.get $point_mask) (i32.const 13)) (i32.const 0) (i32.eq (local.get $j) (i32.const 1))) (i32.eqz (local.get $j)))))
         (local.set $emitted (i32.add (local.get $emitted) (i32.const 1)))
         (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $vertex (i32.lt_u (local.get $j) (i32.const 3))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $fan)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $fan))))
     (local.set $triangle (i32.add (local.get $triangle) (i32.const 3))) (br_if $triangles (i32.lt_u (local.get $triangle) (local.get $end))))
   (i32.store offset=36 (local.get $ctx) (local.get $emitted))
   (i32.store offset=48 (local.get $ctx) (local.get $emitted))
@@ -625,14 +730,14 @@
   (local.set $emitted (i32.load offset=48 (local.get $ctx)))
   (local.set $capacity (i32.div_u (i32.add (local.get $emitted) (i32.const 6)) (i32.const 7)))
   (local.set $point (i32.ne (i32.and (i32.load offset=100 (local.get $ctx)) (i32.const 8)) (i32.const 0)))
-  (local.set $indices (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $capacity) (i32.const 1008))))
+  (local.set $indices (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $capacity) (i32.const 1120))))
   (memory.copy (local.get $indices) (i32.load offset=156 (local.get $ctx)) (i32.shl (local.get $emitted) (i32.const 1)))
   (if (local.get $point) (then
-    (memory.copy (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $capacity) (i32.const 1022)))
-      (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $old_capacity) (i32.const 1022)))
+    (memory.copy (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $capacity) (i32.const 1134)))
+      (i32.add (i32.add (local.get $ctx) (i32.const 288)) (i32.mul (local.get $old_capacity) (i32.const 1134)))
       (i32.shl (local.get $emitted) (i32.const 2)))))
   (local.set $bytes (i32.add (i32.const 288) (i32.mul (local.get $capacity)
-    (select (i32.const 1050) (i32.const 1022) (local.get $point)))))
+    (select (i32.const 1162) (i32.const 1134) (local.get $point)))))
   (if (i32.eqz (call $heap_shrink (call $w2g (local.get $ctx)) (local.get $bytes))) (then (return (i32.const 0))))
   (i32.store offset=156 (local.get $ctx) (local.get $indices))
   (i32.store offset=196 (local.get $ctx) (local.get $bytes))
@@ -678,9 +783,9 @@
   (if (i32.ne (i32.load offset=200 (local.get $ctx)) (i32.const 0)) (then
     (local.set $size (f32.load offset=8 (i32.load offset=200 (local.get $ctx))))))
   (if (local.get $point) (then (local.set $edges (i32.shr_u (i32.load16_u offset=2 (local.get $idx)) (i32.const 13)))))
-  (local.set $a (i32.add (local.get $base) (i32.mul (i32.and (i32.load16_u (local.get $idx)) (i32.const 8191)) (i32.const 144))))
-  (local.set $b (i32.add (local.get $base) (i32.mul (i32.and (i32.load16_u offset=2 (local.get $idx)) (i32.const 8191)) (i32.const 144))))
-  (local.set $c (i32.add (local.get $base) (i32.mul (i32.and (i32.load16_u offset=4 (local.get $idx)) (i32.const 8191)) (i32.const 144))))
+  (local.set $a (i32.add (local.get $base) (i32.mul (i32.and (i32.load16_u (local.get $idx)) (i32.const 8191)) (i32.const 160))))
+  (local.set $b (i32.add (local.get $base) (i32.mul (i32.and (i32.load16_u offset=2 (local.get $idx)) (i32.const 8191)) (i32.const 160))))
+  (local.set $c (i32.add (local.get $base) (i32.mul (i32.and (i32.load16_u offset=4 (local.get $idx)) (i32.const 8191)) (i32.const 160))))
   (local.set $area (call $d3d_software_edge (local.get $a) (local.get $b) (f32.load (local.get $c)) (f32.load offset=4 (local.get $c))))
   (if (f32.eq (local.get $area) (f32.const 0)) (then (return (i32.const 0))))
   (if (i32.or (i32.and (i32.eq (i32.load offset=112 (local.get $ctx)) (i32.const 2)) (f32.gt (local.get $area) (f32.const 0)))
@@ -720,8 +825,8 @@
         ;; newly generated vertices (which do not own polygon points).
         (local.set $size (f32.load (i32.add
           (i32.add (local.get $ctx) (i32.add (i32.const 288)
-            (i32.mul (i32.div_u (i32.sub (i32.load offset=196 (local.get $ctx)) (i32.const 288)) (i32.const 1050)) (i32.const 1022))))
-          (i32.shl (i32.div_u (i32.sub (local.get $a) (i32.load offset=152 (local.get $ctx))) (i32.const 144)) (i32.const 2)))))
+            (i32.mul (i32.div_u (i32.sub (i32.load offset=196 (local.get $ctx)) (i32.const 288)) (i32.const 1162)) (i32.const 1134))))
+          (i32.shl (i32.div_u (i32.sub (local.get $a) (i32.load offset=152 (local.get $ctx))) (i32.const 160)) (i32.const 2)))))
         (local.set $tmp (i32.load offset=200 (local.get $ctx)))
         (if (local.get $tmp)
           (then (local.set $size (f32.min (f32.min (f32.load offset=16 (local.get $tmp)) (f32.load offset=20 (local.get $tmp)))
@@ -968,7 +1073,7 @@
   (if (i32.ne (local.get $mode) (i32.const 3)) (then
     (block $validated (loop $vertices
       (br_if $validated (i32.ge_u (local.get $i) (i32.load offset=36 (local.get $ctx))))
-      (local.set $v (i32.add (i32.load offset=152 (local.get $ctx)) (i32.mul (local.get $i) (i32.const 144))))
+      (local.set $v (i32.add (i32.load offset=152 (local.get $ctx)) (i32.mul (local.get $i) (i32.const 160))))
       (if (i32.eqz (i32.and (f32.le (f32.abs (f32.load (local.get $v))) (f32.const 1048576))
         (f32.le (f32.abs (f32.load offset=4 (local.get $v))) (f32.const 1048576)))) (then (return (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $vertices)))))
@@ -1054,6 +1159,19 @@
             (i32.add (i32.shl (i32.and (local.get $j) (i32.const 3)) (i32.const 4)) (i32.shl (local.get $lane) (i32.const 2))))
             (local.get $value))
           (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $varyings (i32.lt_u (local.get $j) (i32.const 28))))
+        ;; The second colour varying, snapshot bytes144..159, lands in v1 --
+        ;; pixel bank1 register1, one register past v0, so8224+64 = 8288.
+        ;; Perspective-corrected like every other varying: the snapshot stores
+        ;; it over W and the interpolated value is divided by the interpolated
+        ;; 1/W. A vertex shader that never wrote oD1 stored zeroes, so v1 still
+        ;; reads zero here, exactly as it did before the varying existed.
+        (local.set $j (i32.const 0))
+        (loop $specular
+          (f32.store (i32.add (i32.add (local.get $vm) (i32.const 8288))
+            (i32.add (i32.shl (local.get $j) (i32.const 4)) (i32.shl (local.get $lane) (i32.const 2))))
+            (f32.div (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
+              (i32.add (i32.const 144) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $iw)))
+          (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $specular (i32.lt_u (local.get $j) (i32.const 4))))
       (block $outside
         (br_if $outside (i32.or (i32.lt_u (local.get $x) (i32.load offset=76 (local.get $ctx)))
           (i32.or (i32.lt_u (local.get $y) (i32.load offset=80 (local.get $ctx)))

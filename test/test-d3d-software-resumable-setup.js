@@ -42,8 +42,12 @@ const assert=require('assert'),{bootRenderHarness}=require('./render-helper');
  function retired(owned){const ranges=[];let p=e.free_head()>>>0;for(let i=0;p&&i<10000;i++){const at=e.guest_to_wasm(p);ranges.push([p,p+u(at,1)[0]]);p=u(at+4,1)[0];}assert.strictEqual(p,0);for(const [start,size]of owned)assert(ranges.some(([a,z])=>a<=start&&z>=start+size),'all setup/context children returned to allocator');}
  for(let i=0;i<16;i++){const p=e.d3d_software_create_deferred(desc,typed)>>>0;assert(p);const owned=owners(p);assert.strictEqual(e.d3d_software_prepare_step(p,3,1),1);e.d3d_software_cancel(p);assert.strictEqual(e.d3d_software_prepare_step(p,3,1),-2);e.d3d_software_free(p);retired(owned);}
  f(vertices,1)[0]=NaN;u(typed,1)[0]=0;b(target,272).fill(0x55);
+ // A NaN in the vertex data used to make prepare_step refuse the whole draw
+ // (-1). It now completes (1) with the offending vertex marked, and the
+ // clipper drops the triangles that use it -- so the target stays untouched
+ // either way, which is the property that actually matters here.
  const failed=e.d3d_software_create_deferred(desc,typed)>>>0;assert(failed);const owned=owners(failed);
- assert.strictEqual(e.d3d_software_prepare_step(failed,100,1),-1);assert(b(target,272).every(x=>x===0x55));e.d3d_software_free(failed);retired(owned);
+ assert.strictEqual(e.d3d_software_prepare_step(failed,100,1),1);assert(b(target,272).every(x=>x===0x55));e.d3d_software_free(failed);retired(owned);
  for(const p of programs)e.d3d_shader_vm_free(p);for(const p of allocations)e.guest_free(p);
  console.log('PASS resumable native VS setup: REP>8192, packet PC, immutable inputs, clipping budget, cancellation and pixels');
  function ok(v){assert.strictEqual(v,1);}
