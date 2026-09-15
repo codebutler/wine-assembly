@@ -1440,6 +1440,30 @@
     (return (f32x4.max (local.get $a) (local.get $b))))
   (unreachable))
 
+;; MOV0,ADD1,SUB2,MAD3,MUL4,MIN7,MAX8 is the whole plain-ALU set -- the ops that
+;; reach $d3d_shader_vm_alu -- and it is also most of a real pixel shader. Two
+;; things made each one far more expensive than its arithmetic.
+;;
+;; Wasm evaluates call arguments strictly, so handing $d3d_shader_vm_alu three
+;; operands gathered three sources whatever the op read: a MOV paid for two
+;; register gathers it discarded, and every binary op for one. Fetching lazily
+;; here cannot change a result, because $d3d_shader_vm_source_row only reads.
+;;
+;; The other half is in $d3d_shader_vm_component's caller: this set falls
+;; through the ENTIRE operand chain below, ~20 compound tests, and it does so
+;; once per component, so four times per instruction. Answering the set before
+;; the chain removes that walk; the chain's own tail now calls back into here so
+;; there is still exactly one definition of the arithmetic.
+(func $d3d_shader_vm_alu_fast (param $regs i32) (param $pkt i32) (param $comp i32) (param $op i32) (result v128)
+  (local $a v128) (local $b v128)
+  (local.set $a (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 16)) (local.get $comp)))
+  (if (i32.eqz (local.get $op)) (then (return (local.get $a))))
+  (local.set $b (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 32)) (local.get $comp)))
+  (if (i32.ne (local.get $op) (i32.const 3)) (then (return (call $d3d_shader_vm_alu
+    (local.get $op) (local.get $a) (local.get $b) (v128.const i32x4 0 0 0 0)))))
+  (call $d3d_shader_vm_alu (local.get $op) (local.get $a) (local.get $b)
+    (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 48)) (local.get $comp))))
+
 ;; Appended static handler IDs20..32: RCP,RSQ,SLT,SGE,EXP,LOG,LIT,DST,
 ;; LRP,FRC,EXPP,LOGP,CND. Native math references:
 ;; https://learn.microsoft.com/en-us/windows/win32/direct3dhlsl/exp---vs
@@ -1600,6 +1624,11 @@
   (local $projected i32) (local $q v128) (local $valid v128)
   (local $ex v128) (local $ey v128) (local $ez v128) (local $reflection v128)
   (local.set $op (i32.load (local.get $pkt)))
+  ;; The plain-ALU set answers first: it is the common case and it is the one
+  ;; the chain below charges the most for, having no early test anywhere in it.
+  (if (i32.or (i32.le_u (local.get $op) (i32.const 4))
+      (i32.or (i32.eq (local.get $op) (i32.const 7)) (i32.eq (local.get $op) (i32.const 8))))
+    (then (return (call $d3d_shader_vm_alu_fast (local.get $regs) (local.get $pkt) (local.get $comp) (local.get $op)))))
   (if (i32.or (i32.eq (local.get $op) (i32.const 48)) (i32.eq (local.get $op) (i32.const 52))) (then (return (f32x4.splat (f32.const 0)))))
   (if (i32.eq (local.get $op) (i32.const 49)) (then (return (v128.bitselect
     (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 32)) (local.get $comp))
@@ -1812,10 +1841,10 @@
         (local.set $j (i32.add (local.get $j) (i32.const 1)))
         (br_if $dot (i32.lt_u (local.get $j) (select (i32.const 3) (i32.const 4) (i32.eq (local.get $op) (i32.const 5))))))
       (return (local.get $v))))
-  (call $d3d_shader_vm_alu (local.get $op)
-    (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 16)) (local.get $comp))
-    (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 32)) (local.get $comp))
-    (call $d3d_shader_vm_source (local.get $regs) (i32.add (local.get $pkt) (i32.const 48)) (local.get $comp))))
+  ;; Unreachable for a valid program now that the set is answered above; kept
+  ;; as this function's total default, since an unmatched op must still produce
+  ;; a value rather than fall off the end.
+  (call $d3d_shader_vm_alu_fast (local.get $regs) (local.get $pkt) (local.get $comp) (local.get $op)))
 
 (func $d3d_shader_vm_write (param $dst i32) (param $v v128) (param $mask v128) (param $sat i32)
   (local $shift i32)
