@@ -4732,6 +4732,22 @@
       (i32.add (i32.load (local.get $slot)) (i32.const 1)))
     (i32.const -1))
 
+  ;; Reason 4 alone is not actionable: "source bpp is not 32/16/8" names three
+  ;; different unpackers to write and does not say which one an app wants. So
+  ;; that gate also buckets the depth it saw, into the region's spare slots --
+  ;; 10:1bpp, 11:4bpp, 12:24bpp, 13:anything else. A census over mspaint, sol,
+  ;; winmine and freecell put 79-100% of every decline on reason 4, which is
+  ;; what made this second dimension worth having; see
+  ;; tools/gdi-decline-census.js.
+  (func $gdi_bitblt_decline_src_bpp (param $bpp i32) (result i32)
+    (local $slot i32)
+    (local.set $slot (i32.const 13))
+    (if (i32.eq (local.get $bpp) (i32.const 1)) (then (local.set $slot (i32.const 10))))
+    (if (i32.eq (local.get $bpp) (i32.const 4)) (then (local.set $slot (i32.const 11))))
+    (if (i32.eq (local.get $bpp) (i32.const 24)) (then (local.set $slot (i32.const 12))))
+    (drop (call $gdi_bitblt_decline (local.get $slot)))
+    (call $gdi_bitblt_decline (i32.const 4)))
+
   ;; Return -1 when the generic format/region path is required, otherwise 1.
   ;; Direct XRGB loops preserve the generic kernel's zeroed reserved byte.
   (func $gdi_raster_bitblt_fast32 (param $hdc i32)
@@ -4794,7 +4810,7 @@
               (i32.and (i32.ne (local.get $src_bpp) (i32.const 32))
                 (i32.and (i32.ne (local.get $src_bpp) (i32.const 16))
                          (i32.ne (local.get $src_bpp) (i32.const 8)))))
-          (then (return (call $gdi_bitblt_decline (i32.const 4)))))
+          (then (return (call $gdi_bitblt_decline_src_bpp (local.get $src_bpp)))))
         ;; An 8bpp source over a 32bpp surface is how every palettised
         ;; DirectDraw app presents: $dx_blit_entry_rect_to_hdc hands the
         ;; primary to SetDIBitsToDevice, which SRCCOPYs it here. Declining it

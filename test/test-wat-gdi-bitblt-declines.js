@@ -75,6 +75,9 @@ const REASON = {
 
   const counts = () => Array.from({ length: 10 }, (_, i) =>
     wat.test_gdi_bitblt_decline_count(i) >>> 0);
+  // Slots 10..15 are a second dimension over reason 4, not more reasons.
+  const depths = () => Array.from({ length: 6 }, (_, i) =>
+    wat.test_gdi_bitblt_decline_count(10 + i) >>> 0);
 
   // Runs `fn` and asserts exactly one counter moved, by exactly one.
   function onlyReason(reason, fn) {
@@ -147,6 +150,37 @@ const REASON = {
     });
   });
 
+  // "not 32/16/8" names three different unpackers and does not say which one
+  // an app wants, so reason 4 also buckets the depth it saw. The buckets are
+  // counted in ADDITION to reason 4 and must sum to it, or a census reading
+  // both numbers would double-count.
+  check('reason 4 also records which source depth it declined', () => {
+    const dst = surface(8, 8, 32);
+    const before = depths();
+    // 1, 4 and 24 are the only depths this gate can actually see: a DIB is
+    // 1/4/8/16/24/32 and the other three are already handled. Bucket 13
+    // ("some other depth") is therefore a catch-all that a well-formed
+    // surface cannot reach, and is deliberately not exercised here rather
+    // than reached through a malformed descriptor that proves nothing.
+    for (const [bpp, bucket] of [[1, 0], [4, 1], [24, 2]]) {
+      const src = surface(8, 8, bpp);
+      const reasonBefore = counts()[REASON.SRC_BPP];
+      const depthBefore = depths();
+      wat.test_bitblt_on_dc(dst.hdc, dst.desc, 0, 0, 8, 8, src.desc, 0, 0,
+        0, SRCCOPY);
+      const moved = depths()
+        .map((n, i) => ({ i, delta: n - depthBefore[i] }))
+        .filter(x => x.delta !== 0);
+      assert.deepStrictEqual(moved, [{ i: bucket, delta: 1 }],
+        `${bpp}bpp source should land in bucket ${bucket}`);
+      assert.strictEqual(counts()[REASON.SRC_BPP], reasonBefore + 1,
+        `${bpp}bpp source should also count as reason 4`);
+    }
+    const spread = depths().map((n, i) => n - before[i]);
+    assert.strictEqual(spread.reduce((a, b) => a + b, 0), 3,
+      'the buckets must sum to the reason-4 declines, not over- or under-count');
+  });
+
   check('blitting a surface onto itself is counted as overlap', () => {
     const t = surface(16, 16, 32);
     onlyReason(REASON.OVERLAP, () => {
@@ -180,6 +214,8 @@ const REASON = {
     assert(counts().some(n => n > 0), 'nothing had been counted yet');
     wat.test_gdi_fast_reset();
     assert.deepStrictEqual(counts(), new Array(10).fill(0));
+    assert.deepStrictEqual(depths(), new Array(6).fill(0),
+      'the reset must clear the depth buckets too, not just the reasons');
   });
 
   if (failures) {
