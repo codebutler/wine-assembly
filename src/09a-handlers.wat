@@ -8586,11 +8586,15 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; 382: RedrawWindow(hwnd, lprcUpdate, hrgnUpdate, flags). Minimal:
-  ;; treat as InvalidateRect/Rgn. RDW_VALIDATE (flags & 8) clears instead.
-  ;; Other flag nuances (RDW_FRAME, RDW_UPDATENOW, RDW_NOCHILDREN) ignored.
+  ;; 382: RedrawWindow(hwnd, lprcUpdate, hrgnUpdate, flags). Minimal region
+  ;; mutation: RDW_INVALIDATE adds the supplied area and RDW_VALIDATE removes
+  ;; it. Flags that only control when/how existing update work is processed
+  ;; must not manufacture a new full-client invalidation. Half-Life uses
+  ;; RDW_ALLCHILDREN|RDW_UPDATENOW (0x180) under LockWindowUpdate precisely to
+  ;; process work already created by its child layout changes.
+  ;; RDW_FRAME/RDW_UPDATENOW/RDW_NOCHILDREN delivery nuances remain deferred.
   (func $handle_RedrawWindow (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $l i32) (local $t i32) (local $r i32) (local $b i32) (local $wa i32) (local $cs i32)
+    (local $l i32) (local $t i32) (local $r i32) (local $b i32) (local $wa i32) (local $cs i32) (local $empty i32)
     (if (i32.eqz (local.get $arg0))
       (then
         (global.set $eax (i32.const 1))
@@ -8610,13 +8614,23 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
         (local.set $b (i32.shr_u (local.get $cs) (i32.const 16)))))
     (if (i32.and (local.get $arg3) (i32.const 0x8))  ;; RDW_VALIDATE
       (then
-        (drop (call $update_validate_rect (local.get $arg0) (local.get $l) (local.get $t) (local.get $r) (local.get $b))))
+        (local.set $empty
+          (call $update_validate_rect (local.get $arg0)
+            (local.get $l) (local.get $t) (local.get $r) (local.get $b)))
+        (if (local.get $empty)
+          (then
+            (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
+              (then (global.set $paint_pending (i32.const 0)))
+              (else (call $paint_flag_clear_hwnd (local.get $arg0)))))))
       (else
-        (call $update_invalidate_rect (local.get $arg0) (local.get $l) (local.get $t) (local.get $r) (local.get $b))
-        (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
-          (then (global.set $paint_pending (i32.const 1)))
-          (else (call $paint_flag_set (local.get $arg0))))
-        (call $host_invalidate (local.get $arg0))))
+        (if (i32.and (local.get $arg3) (i32.const 0x1)) ;; RDW_INVALIDATE
+          (then
+            (call $update_invalidate_rect (local.get $arg0)
+              (local.get $l) (local.get $t) (local.get $r) (local.get $b))
+            (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
+              (then (global.set $paint_pending (i32.const 1)))
+              (else (call $paint_flag_set (local.get $arg0))))
+            (call $host_invalidate (local.get $arg0))))))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
   )

@@ -1535,30 +1535,88 @@ GetTopWindow(hWnd) — 1 arg stdcall
     ;; hwnd=NULL and the fixed desktop hwnd both use the host screen DC path.
     (if (i32.or
           (i32.eqz (local.get $arg0))
-          (i32.or
-            (i32.eq (local.get $arg0) (i32.const 0x00010000))
-            (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))))
+          (i32.eq (local.get $arg0) (i32.const 0x00010000)))
       (then
         (local.set $hdc (call $host_alloc_screen_dc)))
       (else
-        (if (i32.and (local.get $arg2) (i32.const 0x00000001)) ;; DCX_WINDOW
+        (if (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))
+          (then (local.set $hdc (i32.const 0)))
+          (else (if (i32.and (local.get $arg2) (i32.const 0x00000001)) ;; DCX_WINDOW
           (then
             (local.set $hdc (call $host_alloc_window_dc (local.get $arg0) (i32.const 1)))
-            (call $dc_apply_window_clip (local.get $hdc) (local.get $arg0)))
+            (if (i32.and (local.get $arg2) (i32.const 0x00000400)) ;; DCX_LOCKWINDOWUPDATE
+              (then (call $dc_apply_window_clip_unlocked (local.get $hdc) (local.get $arg0)))
+              (else (call $dc_apply_window_clip (local.get $hdc) (local.get $arg0)))))
           (else
             (local.set $hdc (call $host_alloc_window_dc (local.get $arg0) (i32.const 0)))
-            (call $dc_apply_client_clip (local.get $hdc) (local.get $arg0))))))
+            (if (i32.and (local.get $arg2) (i32.const 0x00000400)) ;; DCX_LOCKWINDOWUPDATE
+              (then (call $dc_apply_client_clip_unlocked (local.get $hdc) (local.get $arg0)))
+              (else (call $dc_apply_client_clip (local.get $hdc) (local.get $arg0))))))))))
     (global.set $eax (local.get $hdc))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; 658: LockWindowUpdate — STUB: unimplemented
+  ;; 658: LockWindowUpdate(hwnd). USER permits one locked window, shared by
+  ;; every guest thread. Ordinary display DCs for that window and its children
+  ;; receive an empty visible region until LockWindowUpdate(NULL). Drawing
+  ;; attempted through those DCs is accumulated conservatively as a full-tree
+  ;; repaint; the retained raster layer records whether any attempt occurred.
   (func $handle_LockWindowUpdate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; LockWindowUpdate(hWndLock) blocks drawing to all other windows until
-    ;; unlocked with NULL. WordPad/MFC uses it around toolbar command UI
-    ;; updates. We do not maintain host-side window locks, so accept both lock
-    ;; and unlock requests as successful no-ops.
-    (global.set $eax (i32.const 1))
+    (local $old i32) (local $damaged i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        ;; -1 keeps another Worker from acquiring a new lock while retained
+        ;; DC clips are being restored. It does not cover any HWND.
+        (local.set $old (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
+        (if (i32.eq (local.get $old) (i32.const -1))
+          (then
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (return)))
+        (if (i32.eqz (local.get $old))
+          (then
+            (global.set $eax (i32.const 1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (return)))
+        (if (i32.ne
+              (i32.atomic.rmw.cmpxchg (global.get $WINDOW_UPDATE_LOCK)
+                (local.get $old) (i32.const -1))
+              (local.get $old))
+          (then
+            (global.set $eax (i32.const 0))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (return)))
+        (local.set $damaged
+          (i32.atomic.load offset=4 (global.get $WINDOW_UPDATE_LOCK)))
+        (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        ;; With -1 published, the common clip helpers rebuild ordinary USER
+        ;; regions instead of reinstalling the lock's NULLREGION.
+        (call $gdi_refresh_window_dc_system_clips)
+        (if (local.get $damaged)
+          (then
+            (call $paint_mark_visible_tree (local.get $old))
+            (call $host_invalidate (local.get $old))))
+        (i32.atomic.store (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+        (global.set $eax (i32.const 1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $old (i32.atomic.rmw.cmpxchg (global.get $WINDOW_UPDATE_LOCK)
+      (i32.const 0) (local.get $arg0)))
+    ;; Re-locking the same HWND is idempotent; a different active lock fails.
+    (if (i32.or (i32.eqz (local.get $old))
+          (i32.eq (local.get $old) (local.get $arg0)))
+      (then
+        (if (i32.eqz (local.get $old))
+          (then
+            (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0))
+            (call $gdi_refresh_window_dc_system_clips)))
+        (global.set $eax (i32.const 1)))
+      (else (global.set $eax (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 

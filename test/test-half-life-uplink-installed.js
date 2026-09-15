@@ -83,7 +83,7 @@ const run = spawnSync(process.execPath, [
   '--quiet-api',
   '--quiet-blocks',
   '--input=1:wait-dlg-control:1:10000,2:dlg-click:1',
-  '--trace-api=mciSendStringA,mciGetDeviceIDA,DirectDrawCreate,SetWindowTextA',
+  '--trace-api=mciSendStringA,mciGetDeviceIDA,DirectDrawCreate,SetWindowTextA,LockWindowUpdate,MoveWindow,RedrawWindow',
 ], {
   cwd: root,
   encoding: 'utf8',
@@ -102,6 +102,15 @@ for (const marker of [
 ]) {
   assert(output.includes(marker), `missing installed-game marker ${marker}\n${output.slice(-5000)}`);
 }
+const lockAt = output.indexOf('LockWindowUpdate(0x00010001)');
+const moveAt = output.indexOf('MoveWindow(0x00010001', lockAt);
+const redrawAt = output.indexOf('RedrawWindow(', moveAt);
+const redrawEnd = output.indexOf('\n', redrawAt);
+const unlockAt = output.indexOf('LockWindowUpdate(0x00000000)', redrawAt);
+assert(lockAt >= 0 && moveAt > lockAt && redrawAt > moveAt &&
+  output.slice(redrawAt, redrawEnd < 0 ? undefined : redrawEnd).includes('0x00000180') &&
+  unlockAt > redrawAt,
+'Half-Life preserves its lock, child redraw, and unlock window-layout transaction');
 assert(!/UNIMPLEMENTED API|\*\*\* CRASH|RuntimeError:/i.test(output),
   `installed game entered a failed compatibility path\n${output.slice(-5000)}`);
 

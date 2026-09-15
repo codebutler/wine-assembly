@@ -153,6 +153,7 @@
   ;; desc uses the line descriptor's surface/mapping layout. Geometry callers
   ;; own coverage; this helper owns native bytes, clip, and ROP2.
   (func $gdi_shape_clip_visible (param $hdc i32) (param $x i32) (param $y i32) (result i32)
+    (call $window_update_damage_hdc (local.get $hdc))
     (call $gdi_dc_clip_device_point_visible
       (local.get $hdc) (local.get $x) (local.get $y)))
 
@@ -1064,6 +1065,10 @@
     (if (i32.or (i32.le_s (local.get $x1) (local.get $x0))
           (i32.le_s (local.get $y1) (local.get $y0)))
       (then (return (i32.const 1))))
+    ;; This is a valid nonempty GDI operation even when the USER system clip
+    ;; is the NULLREGION installed by LockWindowUpdate. Record the attempt
+    ;; before the span fast path rejects every row.
+    (call $window_update_damage_hdc (local.get $hdc))
     (local.set $y (local.get $y0))
     (block $done (loop $rows
       (br_if $done (i32.ge_s (local.get $y) (local.get $y1)))
@@ -3843,6 +3848,10 @@
         (else (i32.const 0)))))
 
   (func $gdi_raster_system_clip_record (param $hdc i32) (result i32)
+    ;; Fast span/blit paths inspect the retained clip once and can reject a
+    ;; NULLREGION without reaching the per-pixel visibility predicate. Record
+    ;; that attempted locked-window draw before returning the empty record.
+    (call $window_update_damage_hdc (local.get $hdc))
     (call $gdi_raster_simple_clip_record
       (call $gdi_dc_system_clip_handle (local.get $hdc))))
 

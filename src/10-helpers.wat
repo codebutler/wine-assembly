@@ -6201,7 +6201,58 @@
     (if (i32.eq (local.get $idx) (i32.const 24)) (then (return (i32.const 0x00E1FFFF)))) ;; INFOBK
     (i32.const 0x00C0C0C0))
 
-  (func $dc_apply_client_clip (param $hdc i32) (param $hwnd i32)
+  ;; LockWindowUpdate is USER state, shared by every guest thread/instance.
+  ;; It covers the selected HWND and WS_CHILD descendants, but not owned
+  ;; top-level popups whose GetParent-style owner happens to use the same
+  ;; table field. The -1 value serializes the small unlock/clip-refresh window.
+  (func $window_update_lock_covers (param $hwnd i32) (result i32)
+    (local $locked i32) (local $cur i32) (local $depth i32)
+    (local.set $locked (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
+    (if (i32.or (i32.eqz (local.get $locked))
+          (i32.eq (local.get $locked) (i32.const -1)))
+      (then (return (i32.const 0))))
+    (local.set $cur (local.get $hwnd))
+    (block $done (loop $walk
+      (if (i32.eq (local.get $cur) (local.get $locked))
+        (then (return (i32.const 1))))
+      (if (i32.or
+            (i32.eqz (local.get $cur))
+            (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+        (then (return (i32.const 0))))
+      ;; Owners are not child windows. Stop before following that relation.
+      (if (i32.eqz
+            (i32.and (call $wnd_get_style (local.get $cur))
+              (i32.const 0x40000000))) ;; WS_CHILD
+        (then (return (i32.const 0))))
+      (local.set $cur (call $wnd_get_parent (local.get $cur)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (i32.const 0))
+
+  ;; A raster path calls this only when it is about to test/write a display
+  ;; DC. A locked DC has a retained NULLREGION; DCX_LOCKWINDOWUPDATE keeps its
+  ;; ordinary nonempty region and must not contribute deferred damage.
+  (func $window_update_damage_hdc (param $hdc i32)
+    (local $dc i32) (local $binding i32) (local $hwnd i32) (local $clip i32)
+    (if (i32.eqz (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
+      (then (return)))
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return)))
+    (local.set $binding (load.field.memarg GdiDcState window_binding (local.get $dc)))
+    (local.set $hwnd (i32.and (local.get $binding) (i32.const 0x7FFFFFFF)))
+    (if (i32.eqz (call $window_update_lock_covers (local.get $hwnd)))
+      (then (return)))
+    (local.set $clip (call $gdi_dc_system_clip_handle (local.get $hdc)))
+    (if (i32.and
+          (i32.ne (local.get $clip) (i32.const 0))
+          (i32.eq (call $gdi_rgn_get_box (local.get $clip) (i32.const 0))
+            (i32.const 1))) ;; NULLREGION
+      (then
+        (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 1)))))
+
+  ;; The ordinary USER visible-region calculation, without a window-update
+  ;; lock. GetDCEx uses this entry for DCX_LOCKWINDOWUPDATE.
+  (func $dc_apply_client_clip_unlocked (param $hdc i32) (param $hwnd i32)
     (local $w i32) (local $h i32)
     (if (i32.eqz (call $gdi_dc_system_clip_reset (local.get $hdc))) (then (return)))
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd)))
@@ -6234,6 +6285,14 @@
           (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
 
+  (func $dc_apply_client_clip (param $hdc i32) (param $hwnd i32)
+    (call $dc_apply_client_clip_unlocked (local.get $hdc) (local.get $hwnd))
+    (if (call $window_update_lock_covers (local.get $hwnd))
+      (then
+        (drop (call $gdi_dc_system_clip_rect (local.get $hdc)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 1))))))
+
   (func $dc_apply_client_erase_clip (param $hdc i32) (param $hwnd i32)
     (local $w i32) (local $h i32)
     (if (i32.eqz (call $gdi_dc_system_clip_reset (local.get $hdc))) (then (return)))
@@ -6256,7 +6315,7 @@
         (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
 
-  (func $dc_apply_window_clip (param $hdc i32) (param $hwnd i32)
+  (func $dc_apply_window_clip_unlocked (param $hdc i32) (param $hwnd i32)
     (local $style i32) (local $wh i32)
     (if (i32.eqz (call $gdi_dc_system_clip_reset (local.get $hdc))) (then (return)))
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd)))
@@ -6282,6 +6341,14 @@
       (call $client_rect_get_l (local.get $hwnd))
       (call $client_rect_get_t (local.get $hwnd)))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
+
+  (func $dc_apply_window_clip (param $hdc i32) (param $hwnd i32)
+    (call $dc_apply_window_clip_unlocked (local.get $hdc) (local.get $hwnd))
+    (if (call $window_update_lock_covers (local.get $hwnd))
+      (then
+        (drop (call $gdi_dc_system_clip_rect (local.get $hdc)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 1))))))
 
   ;; A window DC may outlive the visibility state under which GetDC created
   ;; its USER clip. Rebuild all retained window clips when WS_VISIBLE changes;

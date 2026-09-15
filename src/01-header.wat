@@ -3074,6 +3074,8 @@
   ;; scans this table for the first set bit. 256 slots = 256 bytes total.
   (global $PAINT_FLAGS i32 (region.addr $PAINT_FLAGS 0))
   (global $PAINT_FLAGS_SIZE i32 (region.size $PAINT_FLAGS))
+  (global $WINDOW_UPDATE_LOCK i32 (region.addr $WINDOW_UPDATE_LOCK 0))
+  (global $WINDOW_UPDATE_LOCK_SIZE i32 (region.size $WINDOW_UPDATE_LOCK))
   (global $pending_child_create (mut i32) (i32.const 0)) ;; Child hwnd needing WM_CREATE (0=none)
   (global $pending_child_size   (mut i32) (i32.const 0)) ;; Child WM_SIZE lParam (cx|cy<<16, 0=none)
   (global $pending_child_size_hwnd (mut i32) (i32.const 0)) ;; Child hwnd for pending WM_SIZE

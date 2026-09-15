@@ -404,6 +404,13 @@
     (owner "09a7-handlers-dispatch.wat:$prop_find"))
   (region.declare $PAINT_FLAGS (size 0x00000100) (align 0x00001000)
     (owner "01-header.wat:$PAINT_FLAGS"))
+  ;; Process-wide USER window-update lock. Separate WASM instances execute
+  ;; guest threads, so a mutable module global would let two threads lock two
+  ;; different windows at once. +0 is the locked HWND (0=free, -1=unlock in
+  ;; progress); +4 records that drawing was attempted through an empty locked
+  ;; DC and therefore owes the window tree a repaint on unlock.
+  (region.declare $WINDOW_UPDATE_LOCK (size 0x00000010) (align 0x00000010)
+    (owner "10-helpers.wat:$window_update_lock_covers"))
   (region.declare $TAB_NATIVE_STATE_TABLE (size 0x00000100) (align 0x00000100)
     (owner "09c3-controls.wat:$tab_native_state_get"))
   (region.declare $ICON_TABLE (size 0x00000100) (align 0x00000100)
