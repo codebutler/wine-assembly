@@ -1412,12 +1412,14 @@
   )
 
   ;; 769: GetVersionExW(lpVersionInfo) — the same OSVERSIONINFO the A spelling
-  ;; fills, read from $winver rather than hardcoded to Windows 98.
+  ;; fills, read from $winver rather than hardcoded to Windows 98. The shared
+  ;; numeric prefix is encoding-neutral and this runtime reports an empty
+  ;; szCSDVersion, whose two zero bytes terminate both CHAR and WCHAR arrays;
+  ;; delegate so the reported platform cannot drift again.
   (func $handle_GetVersionExW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $version_info (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
-  )
+    (call $handle_GetVersionExA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; Park a COM activation at its import thunk while JS loads an in-proc
   ;; server. Keeping the stdcall frame untouched lets the normal handler retry

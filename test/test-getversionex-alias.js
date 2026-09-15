@@ -35,6 +35,13 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $esp))
 
+  (func (export "test_call_version_ex_w") (param $stack i32) (param $info i32) (result i32)
+    (global.set $esp (local.get $stack))
+    (call $handle_GetVersionExW
+      (local.get $info) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $esp))
+
   (func (export "test_get_proc_system_windows_directory") (param $stack i32) (result i32)
     (local $name i32)
     (local.set $name (call $heap_alloc (i32.const 27)))
@@ -117,24 +124,34 @@ const extraWat = String.raw`
   const apiA = apiTable.find(entry => entry.name === 'GetVersionExA');
   assert(apiA, 'GetVersionExA exists');
   assert.strictEqual(apiA.nargs, 1, 'GetVersionExA has one stdcall argument');
+  const apiW = apiTable.find(entry => entry.name === 'GetVersionExW');
+  assert(apiW, 'GetVersionExW exists');
+  assert.strictEqual(apiW.nargs, 1, 'GetVersionExW has one stdcall argument');
 
   const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const stack = 0x074ff000;
   const info = wat.guest_alloc(148) >>> 0;
   const infoA = wat.guest_alloc(148) >>> 0;
+  const infoW = wat.guest_alloc(276) >>> 0;
   const infoWasm = RegionMap.g2w(info, wat.get_image_base());
   const infoAWasm = RegionMap.g2w(infoA, wat.get_image_base());
+  const infoWWasm = RegionMap.g2w(infoW, wat.get_image_base());
   const view = new DataView(memory.buffer);
   new Uint8Array(memory.buffer, infoWasm, 148).fill(0xcc);
   new Uint8Array(memory.buffer, infoAWasm, 148).fill(0xcc);
+  new Uint8Array(memory.buffer, infoWWasm, 276).fill(0xcc);
   view.setUint32(infoWasm, 148, true);
   view.setUint32(infoAWasm, 148, true);
+  view.setUint32(infoWWasm, 276, true);
 
   assert.notStrictEqual(wat.test_get_proc_version_ex(stack) >>> 0, 0,
     'GetProcAddress(GetVersionEx) returns a callable thunk');
   assert.strictEqual(wat.test_call_version_ex_a(stack, infoA) >>> 0, stack + 8,
     'GetVersionExA pops its argument and return address');
   assert.strictEqual(wat.get_eax(), 1, 'GetVersionExA succeeds');
+  assert.strictEqual(wat.test_call_version_ex_w(stack, infoW) >>> 0, stack + 8,
+    'GetVersionExW pops its argument and return address');
+  assert.strictEqual(wat.get_eax(), 1, 'GetVersionExW succeeds');
   assert.strictEqual(wat.test_call_version_ex(stack, info) >>> 0, stack + 8,
     'GetVersionEx pops its argument and return address');
   assert.strictEqual(wat.get_eax(), 1, 'GetVersionEx succeeds');
@@ -146,6 +163,31 @@ const extraWat = String.raw`
   assert.strictEqual(view.getUint32(infoWasm + 8, true), 10, 'reports Windows 98 minor version');
   assert.strictEqual(view.getUint32(infoWasm + 16, true), 1,
     'reports VER_PLATFORM_WIN32_WINDOWS');
+  assert.deepStrictEqual(
+    Buffer.from(new Uint8Array(memory.buffer, infoWWasm + 4, 18)),
+    Buffer.from(new Uint8Array(memory.buffer, infoAWasm + 4, 18)),
+    'GetVersionExW shares the numeric version prefix and empty CSD string');
+  assert.strictEqual(view.getUint16(infoWWasm + 20, true), 0,
+    'GetVersionExW terminates the WCHAR CSD string');
+  assert.strictEqual(view.getUint8(infoWWasm + 22), 0xcc,
+    'the empty WCHAR CSD string does not overwrite the caller-owned tail');
+
+  wat.set_winver(0x05650004);
+  for (const [ptr, at, call] of [
+    [infoA, infoAWasm, wat.test_call_version_ex_a],
+    [infoW, infoWWasm, wat.test_call_version_ex_w],
+  ]) {
+    new Uint8Array(memory.buffer, at, ptr === infoW ? 276 : 148).fill(0xcc);
+    view.setUint32(at, ptr === infoW ? 276 : 148, true);
+    assert.strictEqual(call(stack, ptr) >>> 0, stack + 8,
+      'version aliases retain stdcall cleanup under the NT compatibility profile');
+  }
+  assert.deepStrictEqual(
+    Buffer.from(new Uint8Array(memory.buffer, infoWWasm + 4, 18)),
+    Buffer.from(new Uint8Array(memory.buffer, infoAWasm + 4, 18)),
+    'GetVersionExW tracks GetVersionExA when the reported platform changes');
+  assert.strictEqual(view.getUint32(infoWWasm + 16, true), 2,
+    'GetVersionExW reports VER_PLATFORM_WIN32_NT under the NT profile');
 
   const systemWindowsApi = apiTable.find(entry => entry.name === 'GetSystemWindowsDirectoryA');
   assert(systemWindowsApi, 'GetSystemWindowsDirectoryA is exposed to dynamic callers');
