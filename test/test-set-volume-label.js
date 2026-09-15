@@ -4,6 +4,7 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const LAST_ERROR_SENTINEL = 0x6a5b4c3d;
 
@@ -28,6 +29,8 @@ const extraWat = String.raw`
     (global.get $last_error))
   (func (export "test_set_volume_label_set_last_error") (param $value i32)
     (global.set $last_error (local.get $value)))
+  (func (export "test_set_volume_label_api_id") (result i32)
+    (call $lookup_api_id "SetVolumeLabelA"))
 `;
 
 function installGuestHelpers(e) {
@@ -56,6 +59,12 @@ function installGuestHelpers(e) {
 
 (async () => {
   const { exports: e, hostCtx } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const api = apiTable.find(entry => entry.name === 'SetVolumeLabelA');
+  assert(api, 'SetVolumeLabelA is registered in the generated API table');
+  assert.strictEqual(api.nargs, 2);
+  assert.strictEqual(api.convention, 'stdcall');
+  assert.strictEqual(e.test_set_volume_label_api_id(), api.id,
+    'runtime import hashing resolves SetVolumeLabelA to its registered id');
   e.init_thread(1, 0x00400000, 0, 0, 0, 0, 0);
   e.heap_init(0x00420000);
   const { alloc, writeA, readA } = installGuestHelpers(e);
