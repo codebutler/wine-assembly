@@ -268,8 +268,12 @@ const digest = crypto.createHash('sha256')
 // 2026-09-15: 279 -> 278. WriteFmtUserTypeStg now transactionally persists the
 // standard or registered clipboard format and Unicode user type in a valid
 // MS-OLEDS \1CompObj stream instead of returning S_OK without touching storage.
-const EXPECTED_COUNT = 278;
-const EXPECTED_SHA256 = '5c3a5ec188b28fb4732d070a07bf7793cc05586077d7c382e046ac19e2b6bf12';
+// 2026-09-15: 278 -> 276. RegisterDeviceNotificationW now owns copied,
+// generation-tagged window/interface registrations and routes matching audio
+// topology changes as WM_DEVICECHANGE. UnregisterDeviceNotification consumes
+// only the exact live HDEVNOTIFY instead of accepting arbitrary handles.
+const EXPECTED_COUNT = 276;
+const EXPECTED_SHA256 = '752d3bc71fec596d2e2a633958a53647434720799e0e2e3774cfbfa7072f3cc3';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

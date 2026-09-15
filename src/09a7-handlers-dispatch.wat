@@ -4690,13 +4690,252 @@
     (global.set $eax (i32.const 0xffffffff))  ;; INVALID_HANDLE_VALUE
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
+  ;; Window device-interface registrations are process objects even when the
+  ;; registering window belongs to a Worker-owned thread.  The public handle
+  ;; is generation tagged, while its filter is copied into emulator-private
+  ;; shared state so changing or freeing the caller's stack filter cannot alter
+  ;; a live subscription.
+  ;;
+  ;; DeviceNotifyRecord (48 bytes, 32 process-shared records):
+  ;;   +0 published handle/claim  +4 generation  +8 recipient HWND  +12 flags
+  ;;   +16 interface class GUID[16]                         +32..47 reserved
+  ;; DEVICE_NOTIFY_PAYLOADS holds one 32-byte guest-readable
+  ;; DEV_BROADCAST_DEVICEINTERFACE_W per matching record.
+  (global $DEVICE_NOTIFY_RECORDS i32 (region.addr $DEVICE_NOTIFY_RECORDS 0))
+  (global $DEVICE_NOTIFY_RECORDS_SIZE i32 (region.size $DEVICE_NOTIFY_RECORDS))
+  (global $DEVICE_NOTIFY_PAYLOADS i32 (region.addr $DEVICE_NOTIFY_PAYLOADS 0))
+  (global $DEVICE_NOTIFY_PAYLOADS_SIZE i32 (region.size $DEVICE_NOTIFY_PAYLOADS))
+  (global $DEVICE_NOTIFY_RECORD_COUNT i32 (i32.const 32))
+
+  (func $device_notify_record_addr (param $slot i32) (result i32)
+    (i32.add (global.get $DEVICE_NOTIFY_RECORDS)
+      (i32.mul (local.get $slot) (i32.const 48))))
+
+  (func $device_notify_payload_addr (param $slot i32) (result i32)
+    (i32.add (global.get $DEVICE_NOTIFY_PAYLOADS)
+      (i32.shl (local.get $slot) (i32.const 5))))
+
+  (func $device_notify_handle_value
+      (param $slot i32) (param $generation i32) (result i32)
+    ;; 0xFD is disjoint from SetupAPI's 0xFC namespace and the VFS/token/file
+    ;; handle ranges. Bits 5..23 carry the nonzero generation.
+    (i32.or (i32.const 0xFD000000)
+      (i32.or
+        (i32.shl
+          (i32.and (local.get $generation) (i32.const 0x0007FFFF))
+          (i32.const 5))
+        (i32.and (local.get $slot) (i32.const 31)))))
+
+  (func $device_notify_record_from_handle (param $handle i32) (result i32)
+    (local $rec i32)
+    (if (i32.ne
+          (i32.and (local.get $handle) (i32.const 0xFF000000))
+          (i32.const 0xFD000000))
+      (then (return (i32.const 0))))
+    (local.set $rec
+      (call $device_notify_record_addr
+        (i32.and (local.get $handle) (i32.const 31))))
+    (if (i32.ne (i32.atomic.load (local.get $rec)) (local.get $handle))
+      (then (return (i32.const 0))))
+    (local.get $rec))
+
+  ;; The fixed DEVICEINTERFACE header is 32 bytes on 32-bit Windows.  Endpoint
+  ;; validation plus page-safe $gl32 gathers accepts sparse adjacent guest
+  ;; pages even when their WASM backing pages are not affine.
+  (func $device_notify_filter_span_valid (param $filter i32) (result i32)
+    (local $last i32)
+    (if (i32.eqz (local.get $filter)) (then (return (i32.const 0))))
+    (local.set $last (i32.add (local.get $filter) (i32.const 31)))
+    (if (i32.lt_u (local.get $last) (local.get $filter))
+      (then (return (i32.const 0))))
+    (i32.and
+      (i32.ne
+        (call $g2w_affine_span (local.get $filter) (i32.const 1))
+        (global.get $NULL_SENTINEL))
+      (i32.ne
+        (call $g2w_affine_span (local.get $last) (i32.const 1))
+        (global.get $NULL_SENTINEL))))
+
+  (func $device_notify_write_audio_payload (param $slot i32) (result i32)
+    (local $payload i32)
+    (local.set $payload (call $device_notify_payload_addr (local.get $slot)))
+    (i32.atomic.store          (local.get $payload) (i32.const 32)) ;; dbcc_size
+    (i32.atomic.store offset=4 (local.get $payload) (i32.const 5))  ;; DBT_DEVTYP_DEVICEINTERFACE
+    (i32.atomic.store offset=8 (local.get $payload) (i32.const 0))
+    ;; KSCATEGORY_AUDIO {6994AD04-93EF-11D0-A3CC-00A0C9223196}.
+    (i32.atomic.store offset=12 (local.get $payload) (i32.const 0x6994AD04))
+    (i32.atomic.store offset=16 (local.get $payload) (i32.const 0x11D093EF))
+    (i32.atomic.store offset=20 (local.get $payload) (i32.const 0xA000CCA3))
+    (i32.atomic.store offset=24 (local.get $payload) (i32.const 0x963122C9))
+    (i32.atomic.store offset=28 (local.get $payload) (i32.const 0)) ;; empty dbcc_name
+    (call $w2g (local.get $payload)))
+
+  (func $device_notify_allocate_record
+      (param $hwnd i32) (param $flags i32)
+      (param $g0 i32) (param $g1 i32) (param $g2 i32) (param $g3 i32)
+      (result i32)
+    (local $slot i32) (local $rec i32) (local $generation i32)
+    (local $handle i32)
+    (block $full (loop $scan
+      (br_if $full
+        (i32.ge_u (local.get $slot) (global.get $DEVICE_NOTIFY_RECORD_COUNT)))
+      (local.set $rec (call $device_notify_record_addr (local.get $slot)))
+      (if (i32.eqz
+            (i32.atomic.rmw.cmpxchg (local.get $rec)
+              (i32.const 0) (i32.const -1)))
+        (then
+          (local.set $generation
+            (i32.and
+              (i32.add
+                (i32.atomic.rmw.add offset=4 (local.get $rec) (i32.const 1))
+                (i32.const 1))
+              (i32.const 0x0007FFFF)))
+          (if (i32.eqz (local.get $generation))
+            (then (local.set $generation (i32.const 1))))
+          (i32.atomic.store offset=4 (local.get $rec) (local.get $generation))
+          (local.set $handle
+            (call $device_notify_handle_value
+              (local.get $slot) (local.get $generation)))
+          (i32.atomic.store offset=8 (local.get $rec) (local.get $hwnd))
+          (i32.atomic.store offset=12 (local.get $rec) (local.get $flags))
+          (i32.atomic.store offset=16 (local.get $rec) (local.get $g0))
+          (i32.atomic.store offset=20 (local.get $rec) (local.get $g1))
+          (i32.atomic.store offset=24 (local.get $rec) (local.get $g2))
+          (i32.atomic.store offset=28 (local.get $rec) (local.get $g3))
+          (drop (call $device_notify_write_audio_payload (local.get $slot)))
+          ;; Publish only after filter and event payload are complete.
+          (i32.atomic.store (local.get $rec) (local.get $handle))
+          (return (local.get $handle))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   (func $handle_RegisterDeviceNotificationW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $handle i32)
+    (local $g0 i32) (local $g1 i32) (local $g2 i32) (local $g3 i32)
+    ;; DEVICE_NOTIFY_SERVICE_HANDLE and future flag bits are not modeled.  The
+    ;; documented ALL_INTERFACE_CLASSES bit is valid only with this supported
+    ;; DEVICEINTERFACE filter type.
+    (if (i32.or
+          (i32.eqz (call $window_handle_valid (local.get $arg0)))
+          (i32.ne (i32.and (local.get $arg2) (i32.const 0xFFFFFFFB))
+                  (i32.const 0)))
+      (then
+        (global.set $last_error
+          (select (i32.const 1400) (i32.const 87)
+            (i32.eqz (call $window_handle_valid (local.get $arg0)))))
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.eqz (call $device_notify_filter_span_valid (local.get $arg1)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.or
+          (i32.lt_u (call $gl32 (local.get $arg1)) (i32.const 32))
+          (i32.ne (call $gl32 (i32.add (local.get $arg1) (i32.const 4)))
+                  (i32.const 5)))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $g0 (call $gl32 (i32.add (local.get $arg1) (i32.const 12))))
+    (local.set $g1 (call $gl32 (i32.add (local.get $arg1) (i32.const 16))))
+    (local.set $g2 (call $gl32 (i32.add (local.get $arg1) (i32.const 20))))
+    (local.set $g3 (call $gl32 (i32.add (local.get $arg1) (i32.const 24))))
+    (local.set $handle
+      (call $device_notify_allocate_record
+        (local.get $arg0) (local.get $arg2)
+        (local.get $g0) (local.get $g1) (local.get $g2) (local.get $g3)))
+    (if (i32.eqz (local.get $handle))
+      (then (global.set $last_error (i32.const 8)))) ;; ERROR_NOT_ENOUGH_MEMORY
+    (global.set $eax (local.get $handle))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_UnregisterDeviceNotification (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $rec i32)
+    (local.set $rec (call $device_notify_record_from_handle (local.get $arg0)))
+    (if (i32.eqz (local.get $rec))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (i32.ne
+          (i32.atomic.rmw.cmpxchg (local.get $rec)
+            (local.get $arg0) (i32.const -1))
+          (local.get $arg0))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=12 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=16 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=20 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=24 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=28 (local.get $rec) (i32.const 0))
+    ;; Do not clear the guest-visible payload: a WM_DEVICECHANGE already in a
+    ;; thread queue keeps its lParam valid even if another thread unregisters
+    ;; before the recipient pumps that message. Slot reuse rewrites the same
+    ;; fixed KSCATEGORY_AUDIO payload before publishing the next generation.
+    (i32.atomic.store (local.get $rec) (i32.const 0))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  ;; Browser host bridge for audio input/output topology changes.  event is a
+  ;; documented WM_DEVICECHANGE wParam (DBT_DEVICEARRIVAL or
+  ;; DBT_DEVICEREMOVECOMPLETE).  Return the number of recipient queues that
+  ;; accepted the message; callers do not synthesize an initial arrival.
+  (func $device_notify_broadcast_audio (param $event i32) (result i32)
+    (local $slot i32) (local $rec i32) (local $handle i32)
+    (local $flags i32) (local $matches i32) (local $posted i32)
+    (if (i32.and
+          (i32.ne (local.get $event) (i32.const 0x8000))
+          (i32.ne (local.get $event) (i32.const 0x8004)))
+      (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done
+        (i32.ge_u (local.get $slot) (global.get $DEVICE_NOTIFY_RECORD_COUNT)))
+      (local.set $rec (call $device_notify_record_addr (local.get $slot)))
+      (local.set $handle (i32.atomic.load (local.get $rec)))
+      (if (i32.and
+            (i32.ne (local.get $handle) (i32.const 0))
+            (i32.ne (local.get $handle) (i32.const -1)))
+        (then
+          (local.set $flags (i32.atomic.load offset=12 (local.get $rec)))
+          (local.set $matches
+            (i32.or
+              (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0))
+              (i32.and
+                (i32.eq (i32.atomic.load offset=16 (local.get $rec))
+                        (i32.const 0x6994AD04))
+                (i32.and
+                  (i32.eq (i32.atomic.load offset=20 (local.get $rec))
+                          (i32.const 0x11D093EF))
+                  (i32.and
+                    (i32.eq (i32.atomic.load offset=24 (local.get $rec))
+                            (i32.const 0xA000CCA3))
+                    (i32.eq (i32.atomic.load offset=28 (local.get $rec))
+                            (i32.const 0x963122C9)))))))
+          (if (i32.and
+                (i32.ne (local.get $matches) (i32.const 0))
+                (i32.eq (i32.atomic.load (local.get $rec)) (local.get $handle)))
+            (then
+              (local.set $posted
+                (i32.add (local.get $posted)
+                  (call $post_queue_push
+                    (i32.atomic.load offset=8 (local.get $rec))
+                    (i32.const 0x0219) ;; WM_DEVICECHANGE
+                    (local.get $event)
+                    (call $device_notify_write_audio_payload (local.get $slot)))))))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (local.get $posted))
 
   ;; 826: mixerGetNumDevs() -> UINT
   (func $handle_mixerGetNumDevs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

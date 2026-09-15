@@ -1640,6 +1640,11 @@
   (func (export "post_message_q")
         (param $hwnd i32) (param $msg i32) (param $wP i32) (param $lP i32) (result i32)
     (call $post_queue_push (local.get $hwnd) (local.get $msg) (local.get $wP) (local.get $lP)))
+  ;; Browser audio topology bridge.  lib/host-audio.js diffs
+  ;; MediaDevices.enumerateDevices() snapshots and supplies only documented
+  ;; arrival/removal event codes; WAT retains filter and HWND ownership.
+  (func (export "device_notify_audio_change") (param $event i32) (result i32)
+    (call $device_notify_broadcast_audio (local.get $event)))
   ;; Renderer-wide top-level lifecycle bridge. code uses the Win9x HSHELL_*
   ;; values (1=created, 2=destroyed, 4=activated); hwnd is lParam.
   (func (export "notify_shell_window")

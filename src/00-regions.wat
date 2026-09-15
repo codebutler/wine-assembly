@@ -717,3 +717,14 @@
   (region.declare $SETUPDI_INFO_SETS (size 0x00000400) (align 0x00000010)
     (stride 0x20 (count $SETUPDI_INFO_SET_COUNT))
     (owner "09a7-handlers-dispatch.wat:$setupdi_record_addr"))
+  ;; RegisterDeviceNotification returns an opaque HDEVNOTIFY whose lifetime is
+  ;; shared by every thread in the process.  Keep caller-independent metadata
+  ;; separate from the guest-readable WM_DEVICECHANGE payloads: applications
+  ;; may inspect or temporarily alter lParam bytes while a message is handled,
+  ;; but cannot thereby forge registration ownership.
+  (region.declare $DEVICE_NOTIFY_RECORDS (size 0x00000600) (align 0x00000010)
+    (stride 0x30 (count $DEVICE_NOTIFY_RECORD_COUNT))
+    (owner "09a7-handlers-dispatch.wat:$device_notify_record_addr"))
+  (region.declare $DEVICE_NOTIFY_PAYLOADS (size 0x00000400) (align 0x00000010)
+    (stride 0x20 (count $DEVICE_NOTIFY_RECORD_COUNT))
+    (owner "09a7-handlers-dispatch.wat:$device_notify_payload_addr"))
