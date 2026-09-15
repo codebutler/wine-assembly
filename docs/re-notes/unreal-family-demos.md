@@ -82,8 +82,9 @@ creation before taking a PNG, rejects the loading screen and spectator join
 prompt, and rejects the flat-pale weapon signature that exposed the rendering
 bug.
 
-That bug had two layers. D3D8 sampler controls are texture-stage states
-13--21 and 25, but D3D9 moved them into sampler-state slots 1--10. Forwarding
+Getting the textured materials working had two layers. D3D8 sampler controls
+are texture-stage states 13--21 and 25, but D3D9 moved them into sampler-state
+slots 1--10. Forwarding
 the D3D8 numbers directly to the D3D9 texture-stage bank returned
 `D3DERR_INVALIDCALL`, leaving filter and address state at defaults. Translating
 those states activates the mip-atlas shaders; the native headless desktop GLSL
@@ -91,7 +92,26 @@ those states activates the mip-atlas shaders; the native headless desktop GLSL
 `GL_OES_standard_derivatives : require` directive even though `dFdx`/`dFdy`
 are core there. The desktop port now removes only that directive. The corrected
 capture has a textured dark-metal/green assault rifle and textured terrain
-rather than the former nearly uniform white weapon.
+rather than the former nearly uniform white weapon inside the native GL frame.
+
+The remaining pale-rifle CLI capture was a headless presentation bug, not a
+D3D8 material bug. WebGL requests an opaque default framebuffer with
+`alpha:false`, but the native desktop GL context still stores fragment alpha;
+the readback path passed those low alpha bytes to the software compositor and
+blended otherwise-correct rifle RGB toward white. Headless readback now honors
+the requested WebGL contract by forcing alpha to 255. The focused regression
+draws RGB with alpha zero and verifies opaque readback, while the frozen VLAN
+replay verifies the textured rifle survives composition and that held movement
+changes the first-person scene.
+
+The final acceptance was repeated from a clean worktree at commit `fecc3e2f`.
+The authentic dedicated server entered DM-Antalus, the client and server
+exchanged native UDP through `vln/1`, the client created its D3D viewport, Fire
+transitioned it from the join prompt to an owned pawn, and the captured frame
+showed the HUD plus textured weapon and terrain. Both emulator processes exited
+cleanly. The committed wall-clock test proves join and rendered gameplay;
+deterministic held-key movement was additionally proved with a frozen
+`tools/ctl.js` replay.
 
 A fixed-wall-time profile of the map-load window (batches 6000--12000) retired
 938 million handler operations. Raw x87 instructions were 26.85% of them, with

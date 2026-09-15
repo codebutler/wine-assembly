@@ -259,7 +259,10 @@ Recommendation: Phase 0 first (cheap, obvious win). Then commit to loading the r
 
 ## Non-goals
 
-- **DirectX 8 / D3D8+ interfaces.** No binary in our set needs them. `IDirect3D8`, `IDirect3DDevice8`, shaders, vertex declarations, pixel pipelines — all out of scope.
+- **DirectX 8 / D3D8+ work in this D3DIM plan.** D3D8 is now a separate,
+  bounded compatibility frontend over the D3D9 backend, exercised by UT2003
+  gameplay. Extending that frontend beyond its measured fixed-function surface
+  (for example, broader shaders and resource types) remains out of scope here.
 - **Hardware T&L.** We're software. Render state flags that request hardware features are ignored silently.
 - **Multi-sample anti-aliasing.** Not in our rasterizer.
 - **Stencil buffer.** Deferred.

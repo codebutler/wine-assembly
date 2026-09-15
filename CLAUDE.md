@@ -166,7 +166,7 @@ toolbars as they move, so a `dvh`-sized spacer grows mid-gesture and the scroll 
 from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. Size overflow in
 `svh`; test "are the bars down?" as `innerHeight >= 100lvh - 8`.
 
-## Source Parts (`src/main.watx` include order — 61 files)
+## Source Parts (`src/main.watx` include order — 91 files)
 
 | File | Purpose |
 |------|---------|
@@ -184,30 +184,58 @@ from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. 
 | `06c-mmx.wat` | MMX: eight i64-global registers, whole-register moves/boolean/shift ops direct, packed ops widened to real wasm SIMD |
 | `07-decoder.wat` | x86 instruction decoder → threaded code emitter |
 | `07b-loop-match.wat` | Loop-idiom matcher (Design A): classifies the ops a self-loop block just emitted and, when a pattern holds, replaces the whole body with one super-op |
+| `07c-block-exec.wat` | Experimental per-basic-block executor and region machinery, gated off by default |
 | `08-pe-loader.wat` | PE executable loader, import table processing |
 | `08b-dll-loader.wat` | DLL loader with relocations, export resolution |
 | `08c-ne-loader.wat` | NE (New Executable) loader for 16-bit images: per-segment loading into the 64KB-strided WIN16 arena, selector layout, relocation fixups, ordinal-import thunk segment |
 | `09a-handlers.wat` | Win32 API handler functions (core: process, memory, encoding, window props) |
+| `09a0-handlers-base.wat` | Early base handlers: process, loader, locale, DDE, security, files, synchronization and memory |
+| `09a0b-handlers-base-late.wat` | Later environment, process, synchronization, memory, filesystem and atom handlers |
+| `09a0c-handlers-device-io.wat` | DeviceIoControl and bounded Win9x device-I/O behavior |
+| `09a1-comctl-handlers.wat` | COMCTL32 helper API handlers |
 | `09a2-handlers-console.wat` | Console API handlers (screen buffer, cursor, read/write) |
 | `09a3-handlers-audio.wat` | Audio/wave API handlers (waveOut*, mmio*, mci) |
 | `09a4-handlers-gdi.wat` | GDI API handlers (SelectObject, pens, brushes, BitBlt, text) |
+| `09a4b-handlers-cursor-icon.wat` | Cursor/icon resource loading, interning and rasterization handlers |
 | `09a5-handlers-window.wat` | Window creation & message dispatch (CreateWindowExA, GetMessage, etc.) |
+| `09a5b-handlers-window-late.wat` | Later USER/GDI window, message, dialog, clipboard and enumeration handlers |
+| `09a5c-handlers-wide.wat` | Wide-character KERNEL/USER adapters over the mature ANSI paths |
+| `09a5d-handlers-windowpos.wat` | Rectangle and window-position utility handlers |
 | `09a6-handlers-crt.wat` | C runtime/string handlers (strlen, strcmp, _mbschr, etc.) |
 | `09a7-handlers-dispatch.wat` | Late-added misc handlers (shell, version, file, key/prop, atoms, setupapi) |
 | `09a7b-ole.wat` | OLE/COM: ROT, monikers, bind contexts, IFont, structured storage, IDataObject/clipboard, IOleObject/IOleCache/IViewObject |
 | `09a7c-mixer.wat` | WINMM mixer handlers (mixerOpen/GetLineInfo/GetControlDetails and A/W pairs) |
+| `09a7d-handlers-shell-file.wat` | Later file, registry, shell and desktop handlers |
 | `09a8-handlers-directx.wat` | DirectX handlers — DirectDraw, DirectSound, DirectInput; COM vtable dispatch through the thunk zone, and the `DxObject` record declaration |
 | `09a8b-handlers-opengl.wat` | OpenGL 1.x / WGL frontend: one ABI bridge lowering the measured Quake II GL/WGL set to the generic GPU backend |
 | `09a9-comctl32.wat` | COMCTL32: ImageList, toolbar and status-bar creation, up-down and property-sheet stubs, MenuHelp, DSA/DPA dynamic arrays |
 | `09aa-handlers-d3dim.wat` | **Generated** — Direct3D Immediate Mode: ~211 IM methods across D3D v2/v7 (Device, Viewport, Material, ExecuteBuffer, VertexBuffer, Texture), plus pick state and viewport light lists |
 | `09ab-handlers-d3dim-core.wat` | D3DIM core helpers: hand-written forwarding from the v1/v2/v3/v7 stubs into the IDirect3DDevice3/IDirect3DViewport3 cores, and the extended state-block layout |
+| `09ac-handlers-d3d8.wat` | Direct3D 8 compatibility frontend: exact D3D8 COM ABIs translated onto the shared D3D9 backend state |
 | `09ad-handlers-d3d9.wat` | **Generated** — Direct3D 9: IDirect3D9, IDirect3DDevice9, IDirect3DTexture9, IDirect3DSurface9, plus windowed-vs-fullscreen device-window tracking |
+| `09ae-d3d9-resources.wat` | Additional D3D9 resource interfaces and ownership paths |
+| `09af-d3d-shader-ir.wat` | Backend-neutral shader IR validation and lowering ABI |
+| `09ag-d3d-shader-vm.wat` | Dedicated bounded shader-program virtual machine |
+| `09ah-d3d-software.wat` | Programmable software triangle raster pipeline |
+| `09ai-d3d-render-lifetime.wat` | Render-instance heap retirement and handoff exports |
+| `09aj-d3d-fixed.wat` | Native fixed-function pipeline lowering |
+| `09ak-d3d-depth.wat` | D3D9 depth-surface identities, state and lifetime |
+| `09al-d3d-reset.wat` | Transactional D3D9 device reset implementation |
+| `09am-d3d-color.wat` | Independent D3D9 color-surface state and ownership |
 | `09b-dispatch.wat` | Manual dispatch helpers |
 | `09b2-dispatch-table.generated.wat` | **Generated** — br_table dispatch calling handler functions |
 | `09c-help.wat` | WAT-native help system |
 | `09c0-window-table.wat` | WND_RECORDS + accessors, per-slot parallel tables, GWL/cbWndExtra, dialog state, class table, `$wat_wndproc_dispatch`, focus |
 | `09c2-treeview.wat` | WAT-native TreeView control: per-item TV_TABLE records, image and owner tables, per-window view state |
 | `09c3-controls.wat` | CONTROL_TABLE and the built-in control wndprocs (Button, Edit, Static, ListBox, ComboBox, ColorGrid, ScrollBar, ProgressBar, ListView, TrackBar…) with per-window state structs |
+| `09c3-controls0-basic-wndprocs.wat` | Simple built-in control wndprocs split from the control-state fragment |
+| `09c3-controls1-browse-dialog.wat` | SHBrowseForFolder tree and dialog implementation |
+| `09c3-controls2-open-save-dialog.wat` | Open/Save common-dialog controls and behavior |
+| `09c3-controls3-color-dialog.wat` | ColorGrid and ChooseColor dialog implementation |
+| `09c3-controls4-shell-dialogs.wat` | Run and Shut Down shell-owned dialogs |
+| `09c3-wndprocs.wat` | Larger common-control wndprocs such as ListView |
+| `09c3a-dialog-runtime.wat` | Native dialog runtime and find/replace helpers |
+| `09c3b-scrollbar.wat` | Shared Win98 scrollbar rendering and interaction helpers |
 | `09c4-defwndproc.wat` | DefWindowProc non-client paint: 3D outset frame, caption gradient and text, sysmenu buttons, as a callable entry point |
 | `09c5-menu.wat` | Menu painting and hit-testing over the heap-resident menu blob, indexed per window by MENU_DATA_TABLE |
 | `09c6-winhelp-core.wat` | WAT-native WinHelp document core: WAT-owned file bytes and directory index, plus the bounded-size limits every help parser works within |
@@ -215,7 +243,9 @@ from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. 
 | `09c8-winhelp-cnt.wat` | Bounded WAT-native CNT contents-file parser (directive tokenizing, topic/heading tree) |
 | `09c9-winhelp-ui.wat` | WAT-native WinHelp typed topic layout: positioned text/space/bitmap runs, fonts, colors, extents |
 | `09d-winsock.wat` | Virtual LAN Winsock core — socket table, in-process switch, and the `vln/1` frame wire that joins two emulator processes into one room |
+| `09d1-mpr.wat` | Multiple Provider Router behavior for a machine with no network provider or mapped drives |
 | `09d2-tapi.wat` | TAPI 2.0 line device API (TAPI32.DLL) for a machine with zero line devices — real init/shutdown and documented errors, not stubs |
+| `09d3-spooler.wat` | Win98 spooler surface for a machine with no installed printer |
 | `09e-win16-api.wat` | Win16 API dispatch by module and ordinal (KERNEL/USER/GDI) — the Pascal-convention twin of `$win32_dispatch` |
 | `09e2-win16-dialog.wat` | Win16 dialogs: 16-bit RT_DIALOG template rewritten into the 32-bit form, plus the Pascal modal pump |
 | `09f-win16-ddeml.wat` | Win16 DDEML: string/data handle interning, service registration and truthful "no peer" conversation results |
