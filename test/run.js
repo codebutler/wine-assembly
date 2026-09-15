@@ -855,9 +855,17 @@ if (HEADLESS_GL) {
   // Say it at startup, not at the first wglCreateContext. A GL context that
   // silently fails to exist looks exactly like an emulator bug for the rest of
   // the run, and that misreading has cost whole sessions before.
-  console.log(_hgl.available()
-    ? '[gl] headless WebGL enabled (@node-3d/webgl)'
-    : `[gl] --headless-gl requested but UNAVAILABLE: ${_hgl.unavailableReason()}`);
+  if (!_hgl.available()) {
+    console.log(`[gl] --headless-gl requested but UNAVAILABLE: ${_hgl.unavailableReason()}`);
+  } else {
+    // Installed and loadable is NOT the same as usable: GLFW needs a display,
+    // and on macOS the display list empties when the screen sleeps. Asking now
+    // turns "the app puts up a DirectX error and spins" into one line here.
+    const noDisplay = _hgl.noDisplayReason();
+    console.log(noDisplay
+      ? `[gl] --headless-gl requested but UNUSABLE: ${noDisplay}`
+      : `[gl] headless WebGL enabled (@node-3d/webgl), ${_hgl.displayCount()} display(s)`);
+  }
 }
 // --dump-image=0xGUESTADDR:W:H:PITCH:BPP:FILE.png (repeatable, comma-separated)
 // Render an arbitrary guest memory region as an image at exit, through the
