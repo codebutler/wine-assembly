@@ -1897,3 +1897,78 @@ Two diagnostics now make this self-reporting instead of a puzzle:
 So the check before believing a WC3 measurement is the **startup line**, which
 now answers it directly; the "2 simultaneous GL contexts" warning remains a
 good second confirmation that the guest's own context was created.
+
+## The map load has NO hot loop — 11 windows say so
+
+The first real multi-window census of the campaign map load, and it settles the
+question the `ijlRead` interception idea rests on. Collected with the headless
+walk above plus `--control=8124`, sampled by `tools/ctl-hist-series.js`
+(11 windows, 45s each, 15s gaps — 11 minutes of the load) and read by
+`tools/hot-loop-census.js`:
+
+```
+  window  ops/blk distinct    ijl15     Game    Storm   msvcrt
+   t+45s    10.29    26970      6.5     25.7     25.0        -
+  t+105s     7.31     9152     72.3        -        -        -
+  t+165s     6.90     8741        -     32.3      5.0        -
+  t+226s     6.27    15521      2.0     12.0     12.7      6.7
+  t+286s     6.51    15390     47.8      7.5        -        -
+  t+346s     6.10    11064     27.0      4.9      7.0      5.9
+  t+406s     5.13    10433      0.3     26.8     12.4      9.7
+  t+466s     4.87     6516        -     24.4     14.6      9.7
+  t+526s     6.39    10654     41.5      5.0      3.9      1.8
+  t+586s     4.91     9148        -     20.6     16.5      9.9
+  t+647s     7.32    17483     35.0        -      8.6      3.6
+
+11 windows   2.9G ops   405M block entries   7.10 ops/block overall
+weighted over the whole series: ijl15 29.41%, Game 14.31%, Storm 7.97%
+```
+
+**The census verdict, verbatim:**
+
+```
+NO region holds >=5% of block entries in every window.
+Nothing here is a safe fold target on this evidence.
+```
+
+Three things follow.
+
+**1. ijl15 is a PHASE, not a hot loop.** Its share per window runs
+`6.5, 72.3, ~0, 2.0, 47.8, 27.0, 0.3, ~0, 41.5, ~0, 35.0` — it alternates hard
+with Game.dll, which is the shape of a pipeline: decode a JPEG, consume it,
+decode the next. The earlier "≈40% ijl15" in this file came from one early
+window and is not the number. The *weighted* share over 11 minutes is
+**29.41%**, which is what an `ijlRead` interception is worth as an upper bound
+— still the single biggest lever here, but by Amdahl it caps the whole load at
+about **1.4x**, not the 1.7x a 40% share implies, and only if the interception
+is free.
+
+**2. No single loop is worth folding.** The largest mean share of any region is
+5.9% (`Game.dll+0x6f0deb60`, two blocks) and it is 0.0% in six of eleven
+windows. Every region with a big number has a correspondingly big spread — the
+top rows are 19.2pp, 14.3pp, 13.6pp, 16.0pp. These are scenes.
+
+**3. This is exactly the error the census tool was built to prevent, and it
+would have been made again.** Reading window 1 alone nominates
+`Game.dll+0x6f4a4220..6f4a42f0` (13 blocks) as a fold target at **19.9%**. It
+is **0.0% in all ten other windows.** One window is not evidence.
+
+The reusable command, end to end:
+
+```bash
+caffeinate -d node test/run.js --app=warcraft3_demo --no-threads --headless-gl \
+  --quiet-api --control=8124 --input="<the walk above>" \
+  --max-seconds=1500 --max-batches=99999999 --no-close > /tmp/wc3.log 2>&1 &
+# once the Prologue click lands and the screen goes black:
+node tools/ctl-hist-series.js --port=8124 --log=/tmp/wc3.log \
+  --window=45 --gap=15 --count=11 --out=/tmp/wc3-series.ndjson
+node tools/hot-loop-census.js /tmp/wc3-series.ndjson --top=14
+```
+
+`hot-loop-census.js` reads the series file directly since 4c819b18.
+
+**What this does NOT say.** Shares of block entries are load-immune and
+comparable window to window, which is why they are the unit here — but they
+are not time. `ops/block` falls steadily across the series (10.29 → 4.87), so
+later windows retire cheaper blocks, and a share of entries is not a share of
+wall clock. Nothing above should be quoted as a speedup.
