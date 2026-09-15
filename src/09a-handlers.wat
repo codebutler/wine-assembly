@@ -6116,9 +6116,136 @@
     (call $crash_unimplemented (local.get $name_ptr))
   )
 
-  ;; 282: _getdcwd — STUB: unimplemented: return empty string
+  ;; Store a CRT error lazily.  The public _errno entry point owns the same
+  ;; pointer; failures that occur before an application asks for it must still
+  ;; be observable by the next _errno() call.
+  (func $msvcrt_set_errno (param $value i32)
+    (if (i32.eqz (global.get $msvcrt_errno_ptr))
+      (then
+        (global.set $msvcrt_errno_ptr (call $heap_alloc (i32.const 4)))))
+    (if (global.get $msvcrt_errno_ptr)
+      (then (call $gs32 (global.get $msvcrt_errno_ptr) (local.get $value)))))
+
+  ;; 282: _getdcwd(drive, buffer, maxlen) — cdecl.  The VFS has one mutable
+  ;; current directory.  Its documented drive-relative rule treats every
+  ;; other mounted drive as being at that drive's root, so expose exactly that
+  ;; model rather than fabricating per-drive mutable state.
   (func $handle__getdcwd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $scratch_g i32) (local $scratch_w i32) (local $dst_w i32)
+    (local $len i32) (local $needed i32) (local $buf i32)
+    (local $letter i32) (local $current_drive i32) (local $drive i32)
+    (global.set $eax (i32.const 0))
+
+    ;; Microsoft specifies a positive maxlen and drive 0..26 (0 means the
+    ;; default drive).  This CRT has no invalid-parameter callback, so retain
+    ;; the documented NULL result and make the validation failure observable.
+    (if (i32.or
+          (i32.le_s (local.get $arg2) (i32.const 0))
+          (i32.gt_u (local.get $arg0) (i32.const 26)))
+      (then
+        (call $msvcrt_set_errno (i32.const 22)) ;; EINVAL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return)))
+
+    ;; Read through a private MAX_PATH buffer first.  fs_get_current_directory
+    ;; is a Win32-style producer, while _getdcwd must not touch a too-small CRT
+    ;; caller buffer before returning ERANGE.
+    (local.set $scratch_g (call $heap_alloc (i32.const 260)))
+    (if (i32.eqz (local.get $scratch_g))
+      (then
+        (call $msvcrt_set_errno (i32.const 12)) ;; ENOMEM
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return)))
+    (local.set $scratch_w (call $g2w (local.get $scratch_g)))
+    (local.set $len (call $host_fs_get_current_directory
+      (i32.const 260) (local.get $scratch_g) (i32.const 0)))
+    (if (i32.or
+          (i32.or (i32.lt_u (local.get $len) (i32.const 3))
+                  (i32.ge_u (local.get $len) (i32.const 260)))
+          (i32.ne (i32.load8_u offset=1 (local.get $scratch_w)) (i32.const 0x3a)))
+      (then
+        (call $heap_free (local.get $scratch_g))
+        (call $msvcrt_set_errno (i32.const 34)) ;; ERANGE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return)))
+
+    (local.set $letter
+      (i32.and (i32.load8_u (local.get $scratch_w)) (i32.const 0xdf)))
+    (if (i32.or (i32.lt_u (local.get $letter) (i32.const 0x41))
+                (i32.gt_u (local.get $letter) (i32.const 0x5a)))
+      (then
+        (call $heap_free (local.get $scratch_g))
+        (call $msvcrt_set_errno (i32.const 22)) ;; EINVAL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return)))
+    (local.set $current_drive
+      (i32.sub (local.get $letter) (i32.const 0x40)))
+    (local.set $drive
+      (select (local.get $arg0) (local.get $current_drive)
+        (i32.ne (local.get $arg0) (i32.const 0))))
+
+    ;; A non-current drive has no private remembered directory in this VFS;
+    ;; its drive-relative base is the root.  It must nevertheless be mounted.
+    (if (i32.ne (local.get $drive) (local.get $current_drive))
+      (then
+        (if (i32.eqz (i32.and
+              (call $host_fs_logical_drive_mask)
+              (i32.shl (i32.const 1) (i32.sub (local.get $drive) (i32.const 1)))))
+          (then
+            (call $heap_free (local.get $scratch_g))
+            (call $msvcrt_set_errno (i32.const 22)) ;; EINVAL/unavailable drive
+            (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+            (return)))
+        (local.set $len (i32.const 3))))
+
+    (local.set $needed (i32.add (local.get $len) (i32.const 1)))
+    (if (i32.gt_u (local.get $needed) (local.get $arg2))
+      (then
+        (call $heap_free (local.get $scratch_g))
+        (call $msvcrt_set_errno (i32.const 34)) ;; ERANGE
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return)))
+
+    (local.set $buf (local.get $arg1))
+    (if (i32.eqz (local.get $buf))
+      (then
+        ;; A NULL buffer requests a malloc-compatible block of at least
+        ;; maxlen bytes, not merely the bytes occupied by today's path.
+        (local.set $buf (call $heap_alloc (local.get $arg2)))
+        (if (i32.eqz (local.get $buf))
+          (then
+            (call $heap_free (local.get $scratch_g))
+            (call $msvcrt_set_errno (i32.const 12)) ;; ENOMEM
+            (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+            (return)))))
+
+    ;; Validate the complete span before the first write.  In particular, an
+    ;; unmapped guest pointer must not turn into a successful write to the
+    ;; shared NULL sentinel.
+    (local.set $dst_w (call $g2w_affine_span (local.get $buf) (local.get $needed)))
+    (if (i32.eq (local.get $dst_w) (global.get $NULL_SENTINEL))
+      (then
+        (if (i32.eqz (local.get $arg1))
+          (then (call $heap_free (local.get $buf))))
+        (call $heap_free (local.get $scratch_g))
+        (call $msvcrt_set_errno (i32.const 22)) ;; EINVAL
+        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (return)))
+
+    (if (i32.eq (local.get $drive) (local.get $current_drive))
+      (then
+        (call $memcpy (local.get $dst_w) (local.get $scratch_w) (local.get $needed)))
+      (else
+        (i32.store8 (local.get $dst_w)
+          (i32.add (local.get $drive) (i32.const 0x40)))
+        (i32.store8 offset=1 (local.get $dst_w) (i32.const 0x3a))
+        (i32.store8 offset=2 (local.get $dst_w) (i32.const 0x5c))
+        (i32.store8 offset=3 (local.get $dst_w) (i32.const 0))))
+    (call $heap_free (local.get $scratch_g))
+    (global.set $eax (local.get $buf))
+    ;; cdecl: pop only the API thunk's synthetic return address.  The caller
+    ;; owns all three arguments.
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
   ;; 283: GetModuleHandleW(lpModuleName) — the A lookup, over a narrowed name.
