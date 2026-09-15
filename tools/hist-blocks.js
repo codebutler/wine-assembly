@@ -83,4 +83,72 @@ function handlerNames() {
   return names;
 }
 
-module.exports = { moduleList, makeAttributor, attributeBlocks, readHist, handlerNames };
+// A tools/ctl-hist-series.js .ndjson holds ONE WINDOW PER LINE, and its blocks
+// arrive already attributed as `Storm.dll+0x150338a0` -- the original VA, not a
+// runtime address, because the series tool resolved them against the run log at
+// collection time. hot-loop-census.js was written for one probe JSON per file,
+// so without this the two tools that exist for the same question do not
+// connect: the series is what produces several windows, and the census is what
+// reads several windows. Returning an ARRAY from one file is the whole fix.
+function parseAttributedBlocks(blocks) {
+  return (blocks || []).map(([label, hits]) => {
+    const m = /^(.*)\+(0x[0-9a-fA-F]+)$/.exec(label);
+    if (!m) {
+      const addr = parseInt(label, 16) >>> 0;
+      return { addr, hits, mod: 'exe', va: addr };
+    }
+    const va = parseInt(m[2], 16) >>> 0;
+    return { addr: va, hits, mod: m[1], va };
+  });
+}
+
+// Which of the two block forms this window carries. The probe emits raw
+// runtime addresses as hex (`"f2a0f0"`); ctl-hist-series has already resolved
+// its own to `Storm.dll+0x150338a0`. Deciding this on the BLOCKS and not on
+// how many lines the file has matters: a one-window series is a real case, and
+// running pre-attributed labels through parseInt(.,16) yields NaN for every
+// block, which collapses the whole window into a single `?+0x0` region sitting
+// at a plausible-looking share. That is a wrong answer that looks like a right
+// one, so it is decided by shape here and never guessed.
+function isAttributed(blocks) {
+  return Array.isArray(blocks) && blocks.length > 0
+    && typeof blocks[0][0] === 'string' && /\+0x[0-9a-fA-F]+$/.test(blocks[0][0]);
+}
+
+function windowFrom(hist, label, exeBase) {
+  return {
+    label,
+    blocks: isAttributed(hist.blocks)
+      ? parseAttributedBlocks(hist.blocks)
+      : attributeBlocks(hist, exeBase),
+    ops: hist.ops || 0,
+    blockHits: hist.blockHits || 0,
+    distinct: hist.distinct || 0,
+    hist,
+  };
+}
+
+// Every window in a file, whatever the file is: a single probe JSON, a
+// profile-web-frames log carrying one, or an .ndjson series carrying many.
+function readWindows(file, exeBase) {
+  const text = require('fs').readFileSync(file, 'utf8');
+  const lines = text.split(/\r?\n/).filter(l => l.trim().startsWith('{'));
+  if (lines.length > 1) {
+    const out = [];
+    for (const line of lines) {
+      let w;
+      try { w = JSON.parse(line); } catch (_) { continue; }
+      if (!w || !Array.isArray(w.blocks)) continue;
+      out.push(windowFrom(w, w.label || `t+${w.elapsed}s`, exeBase));
+    }
+    if (out.length > 1) return out;
+  }
+  const hist = readHist(file);
+  return [windowFrom(hist, hist.label || (hist.elapsed != null
+    ? `t+${hist.elapsed}s` : file), exeBase)];
+}
+
+module.exports = {
+  moduleList, makeAttributor, attributeBlocks, readHist, handlerNames,
+  parseAttributedBlocks, readWindows, isAttributed,
+};

@@ -31,7 +31,7 @@
 'use strict';
 
 const fs = require('fs');
-const { attributeBlocks, readHist } = require('./hist-blocks');
+const { readWindows } = require('./hist-blocks');
 
 const argv = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -53,8 +53,15 @@ const AS_JSON = argv.includes('--json');
 // ---- one window ------------------------------------------------------------
 
 function loadWindow(file) {
-  const hist = readHist(file);
-  const blocks = attributeBlocks(hist, EXE_BASE);
+  // One file can be many windows: a tools/ctl-hist-series.js .ndjson holds a
+  // whole series, which is exactly the input this tool wants and previously
+  // could not take.
+  return readWindows(file, EXE_BASE).map(w => finishWindow(file, w));
+}
+
+function finishWindow(file, w) {
+  const hist = w.hist || {};
+  const blocks = w.blocks;
   // The present ring is the whole run; only the presents between the arm and
   // the read belong to these counts.
   let presents = null, spanS = null;
@@ -64,10 +71,10 @@ function loadWindow(file) {
     spanS = (hist.nowMs - hist.armPerfMs) / 1000;
   }
   return {
-    file, blocks,
-    ops: hist.ops || 0,
-    blockHits: hist.blockHits || 0,
-    distinct: hist.distinct || blocks.length,
+    file: w.label || file, blocks,
+    ops: w.ops || 0,
+    blockHits: w.blockHits || 0,
+    distinct: w.distinct || blocks.length,
     folds: hist.folds || null,
     presents, spanS,
     // The probe returns only the top N blocks, so shares here are shares of
@@ -76,7 +83,7 @@ function loadWindow(file) {
   };
 }
 
-const windows = files.map(loadWindow);
+const windows = files.flatMap(loadWindow);
 
 // ---- group blocks into loop regions ----------------------------------------
 // Regions are built from the union of every window's blocks, so a loop that
