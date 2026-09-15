@@ -30297,5 +30297,19 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 1165891804
+  },
+  {
+    "id": 3612,
+    "name": "GetCompressedFileSizeA",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1075035268
+  },
+  {
+    "id": 3613,
+    "name": "GetCompressedFileSizeW",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 1309921934
   }
 ]

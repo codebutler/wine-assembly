@@ -2,9 +2,15 @@
 'use strict';
 
 const assert = require('assert');
+const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
+  (func (export "test_get_compressed_file_size_a_id") (result i32)
+    (call $lookup_api_id "GetCompressedFileSizeA"))
+  (func (export "test_get_compressed_file_size_w_id") (result i32)
+    (call $lookup_api_id "GetCompressedFileSizeW"))
+
   (func (export "test_call_GetCompressedFileSizeA")
       (param $path i32) (param $high i32) (param $esp0 i32) (result i32)
     (global.set $esp (local.get $esp0))
@@ -66,6 +72,21 @@ function assertEsp(e, label) {
   const { exports: e, hostCtx } = harness;
   const { alloc, writeA, writeW } = installGuestHelpers(e);
   const high = alloc(4);
+
+  for (const [name, expectedId] of [
+    ['GetCompressedFileSizeA', 3612],
+    ['GetCompressedFileSizeW', 3613],
+  ]) {
+    const api = apiTable.find(entry => entry.name === name);
+    assert(api, `${name} is registered`);
+    assert.strictEqual(api.id, expectedId, `${name} keeps its append-only API id`);
+    assert.strictEqual(api.nargs, 2, `${name} exposes its two-argument ABI`);
+    assert.strictEqual(api.convention, 'stdcall', `${name} is stdcall`);
+  }
+  assert.strictEqual(e.test_get_compressed_file_size_a_id(), 3612,
+    'generated API hash table resolves GetCompressedFileSizeA');
+  assert.strictEqual(e.test_get_compressed_file_size_w_id(), 3613,
+    'generated API hash table resolves GetCompressedFileSizeW');
 
   hostCtx.vfs.files.set('c:\\far\\panel.bin', {
     data: new Uint8Array(0x12345), attrs: 0x20,
