@@ -888,9 +888,12 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; 732: sprintf(buf, fmt, ...) — cdecl, same as wsprintfA
+  ;; 732: sprintf(buf, fmt, ...) — cdecl. It shares the currently-supported
+  ;; conversion engine with wsprintfA, but keeps a distinct policy wrapper:
+  ;; User32 documents a 1024-byte buffer contract while sprintf has no size
+  ;; argument. Do not turn the public front doors into aliases.
   (func $handle_sprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $wsprintf_impl
+    (global.set $eax (call $sprintf_impl
       (local.get $arg0) (local.get $arg1) (i32.add (global.get $esp) (i32.const 12))))
     ;; cdecl: only pop return address
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
@@ -917,7 +920,7 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
         (return)))
     (local.set $written
-      (call $wsprintf_impl (local.get $scratch) (local.get $arg2) (local.get $arg3)))
+      (call $sprintf_impl (local.get $scratch) (local.get $arg2) (local.get $arg3)))
     (local.set $copy_len
       (select (local.get $arg1) (local.get $written)
         (i32.gt_u (local.get $written) (local.get $arg1))))
@@ -1296,7 +1299,7 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
         (return)))
     (local.set $written
-      (call $wsprintf_impl (local.get $scratch) (local.get $arg1)
+      (call $sprintf_impl (local.get $scratch) (local.get $arg1)
         (i32.add (global.get $esp) (i32.const 12))))
     (if (i32.ge_s (local.get $written) (i32.const 0))
       (then (local.set $written (call $crt_stream_write
@@ -1320,7 +1323,7 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
         (return)))
     (local.set $written
-      (call $wsprintf_impl (local.get $scratch) (local.get $arg0)
+      (call $sprintf_impl (local.get $scratch) (local.get $arg0)
         (i32.add (global.get $esp) (i32.const 8))))
     (call $heap_free (local.get $scratch))
     (global.set $eax (local.get $written))
@@ -1341,7 +1344,7 @@
         (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
         (return)))
     (local.set $written
-      (call $wsprintf_impl (local.get $scratch) (local.get $arg1) (local.get $arg2)))
+      (call $sprintf_impl (local.get $scratch) (local.get $arg1) (local.get $arg2)))
     (local.set $written
       (if (result i32) (i32.lt_s (call $crt_stream_write
             (local.get $arg0) (local.get $scratch) (local.get $written)) (i32.const 0))
@@ -1354,7 +1357,7 @@
 
   (func $handle_vsprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax
-      (call $wsprintf_impl (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+      (call $sprintf_impl (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 

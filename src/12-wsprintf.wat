@@ -133,10 +133,12 @@
       (br $l2)))
     (i32.mul (local.get $width) (local.get $unit)))
 
-  ;; wsprintf{A,W}: lpOut (guest), lpFmt (guest), arg_ptr (guest stack pointer to
-  ;; the first vararg). Returns the character count written, excluding the NUL.
-  (func $wsprintf_core (param $out i32) (param $fmt i32) (param $arg_ptr i32)
-        (param $wide i32) (result i32)
+  ;; Shared formatting engine for User32 wsprintf and the currently-supported
+  ;; CRT printf subset. $dialect keeps that policy boundary explicit: their
+  ;; cdecl vararg plumbing is identical, but their full format contracts are
+  ;; not. Returns the character count written, excluding the NUL.
+  (func $format_core (param $out i32) (param $fmt i32) (param $arg_ptr i32)
+        (param $wide i32) (param $dialect i32) (result i32)
     (local $fi i32) (local $oi i32) (local $ch i32) (local $arg i32)
     (local $sptr i32) (local $sch i32) (local $written i32)
     (local $pad_zero i32) (local $width i32) (local $length i32)
@@ -292,7 +294,14 @@
     (call $apply_pad_x (local.get $dst) (local.get $written) (local.get $width)
       (local.get $pad) (i32.const 0)))
   (func $wsprintf_impl (param $out i32) (param $fmt i32) (param $arg_ptr i32) (result i32)
-    (call $wsprintf_core (local.get $out) (local.get $fmt) (local.get $arg_ptr) (i32.const 0)))
+    (call $format_core (local.get $out) (local.get $fmt) (local.get $arg_ptr)
+      (i32.const 0) (i32.const 1)))
+
+  ;; Keep a distinct CRT policy wrapper even while its supported conversion
+  ;; subset is implemented by the shared engine.
+  (func $sprintf_impl (param $out i32) (param $fmt i32) (param $arg_ptr i32) (result i32)
+    (call $format_core (local.get $out) (local.get $fmt) (local.get $arg_ptr)
+      (i32.const 0) (i32.const 0)))
 
   (func $write_uint_w (param $dst i32) (param $val i32) (result i32)
     (call $write_uint_x (local.get $dst) (local.get $val) (i32.const 1)))
@@ -304,4 +313,5 @@
     (call $apply_pad_x (local.get $dst) (local.get $written) (local.get $width)
       (local.get $pad) (i32.const 1)))
   (func $wsprintf_impl_w (param $out i32) (param $fmt i32) (param $arg_ptr i32) (result i32)
-    (call $wsprintf_core (local.get $out) (local.get $fmt) (local.get $arg_ptr) (i32.const 1)))
+    (call $format_core (local.get $out) (local.get $fmt) (local.get $arg_ptr)
+      (i32.const 1) (i32.const 1)))
