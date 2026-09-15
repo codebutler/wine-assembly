@@ -83,6 +83,7 @@
 (include "09c3-controls.wat")
 (include "09c3-controls0-basic-wndprocs.wat")
 (include "09c3-controls1-browse-dialog.wat")
+(include "09c3-controls2-open-save-dialog.wat")
 (include "09c3-wndprocs.wat")
 (include "09c3a-dialog-runtime.wat")
 (include "09c3b-scrollbar.wat")

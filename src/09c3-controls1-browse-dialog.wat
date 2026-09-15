@@ -1,3 +1,7 @@
+  ;; ============================================================
+  ;; SHBrowseForFolderA — classic Win98 shell folder picker
+  ;; ============================================================
+
   ;; Insert one TreeView item. path_data is either a guest path pointer or one
   ;; of the private virtual-folder sentinels 1=Desktop, 2=My Computer,
   ;; 3=Network Neighborhood. TreeView copies label_guest immediately.
