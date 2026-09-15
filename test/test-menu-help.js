@@ -19,6 +19,10 @@ const extraWat = String.raw`
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_BUILTIN))
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (call $statusbar_native_mark_slot (local.get $slot) (i32.const 1))
+    (drop (call $wnd_set_style (local.get $hwnd) (i32.const 0x10000000)))
+    (call $ctrl_geom_set
+      (local.get $slot) (i32.const 0) (i32.const 0)
+      (i32.const 200) (i32.const 20))
     (call $title_table_set
       (local.get $hwnd) (call $g2w (local.get $text_g))
       (call $guest_strlen (local.get $text_g)))
@@ -42,6 +46,14 @@ const extraWat = String.raw`
     (call $title_table_get_len (local.get $hwnd)))
   (func (export "test_statusbar_state_ptr") (param $hwnd i32) (result i32)
     (call $wnd_get_state_ptr (local.get $hwnd)))
+  (func (export "test_statusbar_class") (param $hwnd i32) (result i32)
+    (call $ctrl_table_get_class (local.get $hwnd)))
+  (func (export "test_statusbar_queue_and_drain") (param $hwnd i32) (result i32)
+    (call $update_invalidate_full (local.get $hwnd))
+    (call $paint_flag_set (local.get $hwnd))
+    (call $paint_drain_native_control_paints))
+  (func (export "test_statusbar_drain") (result i32)
+    (call $paint_drain_native_control_paints))
   (func (export "test_string_load_w")
       (param $hinst i32) (param $id i32) (param $buf_g i32) (result i32)
     (local $len i32)
@@ -126,6 +138,12 @@ const extraWat = String.raw`
 
   const status = e.test_create_statusbar(strA('Ready')) >>> 0;
   assert.strictEqual(title(status), 'Ready');
+  assert.strictEqual(e.test_statusbar_class(status), 0,
+    'registered status bar keeps class zero so COMCTL32 owns its wndproc');
+  assert.strictEqual(e.test_statusbar_queue_and_drain(status), 1,
+    'a visible class-zero native status bar drains its retained WM_PAINT');
+  assert.strictEqual(e.test_statusbar_drain(), 0,
+    'draining validates the native status bar exactly once');
 
   // Simple-part text is retained independently and appears only in simple mode.
   assert.strictEqual(e.test_statusbar_send(status, 0x040b, 0x01ff, strW('Transient')), 1);

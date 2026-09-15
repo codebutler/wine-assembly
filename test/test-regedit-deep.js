@@ -31,26 +31,26 @@ for (const file of [deepPng, menuPng, statusVisiblePng, statusHiddenPng, statusS
 
 const input = [
   '0:wait-title:Registry_Editor:1200',
-  `0:png:${statusVisiblePng}`,
-  '2:post-cmd:668',                  // View > Status Bar off
-  '4:dump-windows:status-hidden',
-  `4:png:${statusHiddenPng}`,
-  '6:dblclick:92:113',               // update path while status bar is hidden
-  '9:dump-tree:double-click',
-  `9:png:${doubleClickPng}`,
-  '11:post-cmd:668',                 // View > Status Bar on after path update
-  '13:dump-windows:status-shown-late',
-  `13:png:${statusShownLatePng}`,
-  '14:click:47:103',                 // expand HKEY_CURRENT_USER
-  '17:click:63:119',                 // expand Control Panel
-  '20:click:100:135',                // select Desktop
-  '23:dump-tree:deep',
-  '23:dump-listview:desktop',
-  `23:png:${deepPng}`,
-  '26:wait-title-menu-open:Registry_Editor:100:82:registry',
-  '26:menu-dump:registry',
-  `27:png:${menuPng}`,
-  '28:stop',
+  `2:png:${statusVisiblePng}`,
+  '4:post-cmd:668',                  // View > Status Bar off
+  '6:dump-windows:status-hidden',
+  `7:png:${statusHiddenPng}`,
+  '9:dblclick:92:113',               // update path while status bar is hidden
+  '12:dump-tree:double-click',
+  `13:png:${doubleClickPng}`,
+  '15:post-cmd:668',                 // View > Status Bar on after path update
+  '17:dump-windows:status-shown-late',
+  `19:png:${statusShownLatePng}`,
+  '21:click:47:103',                 // expand HKEY_CURRENT_USER
+  '24:click:63:119',                 // expand Control Panel
+  '27:click:100:135',                // select Desktop
+  '30:dump-tree:deep',
+  '30:dump-listview:desktop',
+  `31:png:${deepPng}`,
+  '34:wait-title-menu-open:Registry_Editor:100:82:registry',
+  '34:menu-dump:registry',
+  `35:png:${menuPng}`,
+  '36:stop',
 ].join(',');
 
 let output = '';
@@ -135,7 +135,7 @@ async function countStatusInk(file) {
       // HKLM\System for Welcome98, and back to 9 once registry key names
       // became case-insensitive: HKLM used to carry both a SOFTWARE and a
       // Software child because our own seed data spelled it both ways.
-      /dump-tree:double-click:[^\n]*visible=9[^\n]*state=0x40000022[^\n]*text="HKEY_LOCAL_MACHINE"[^\n]*text="SOFTWARE"/.test(output)],
+      /dump-tree:double-click:[^\n]*paintVisible=9[^\n]*state=0x40000062[^\n]*text="HKEY_LOCAL_MACHINE"[^\n]*text="SOFTWARE"/.test(output)],
     ['nested TreeView contains HKCU, Control Panel, Desktop, and Mouse',
       /dump-tree:deep:[^\n]*HKEY_CURRENT_USER[^\n]*Control Panel[^\n]*Desktop[^\n]*Mouse/.test(output)],
     ['Desktop TreeView row is selected and remains a collapsed leaf',
@@ -145,9 +145,14 @@ async function countStatusInk(file) {
       ['(Default)', 'Wallpaper', 'TileWallpaper', 'ScreenSaveActive'].every(value => listDump.includes(value))],
     ['Desktop ListView exposes unset, empty, and zero values',
       listDump.includes('(value not set)') && listDump.includes('\\"\\"') && listDump.includes('\\"0\\"')],
-    ['MENUEX Registry menu has nine direct items', /menu-dump:registry:[^\n]*count=9/.test(output)],
-    ['Registry menu exposes Import, Export, Connect, Disconnect, Print, and Exit',
-      ['Import', 'Export', 'Connect', 'Disconnect', 'Print', 'xit'].every(value => output.includes(value))],
+    // This Win98 configuration has no remote-registry provider. RegEdit itself
+    // calls DeleteMenu three times during startup, removing Connect,
+    // Disconnect and their separator from the nine-row MENUEX resource.
+    ['Registry menu has six live rows after remote-registry removal',
+      /menu-dump:registry:[^\n]*count=6/.test(output)],
+    ['Registry menu exposes Import, Export, Print, and Exit',
+      ['Import', 'Export', 'Print', 'xit'].every(value => output.includes(value)) &&
+      !/menu-dump:registry:[^\n]*(?:Connect|Disconnect)/.test(output)],
     ['both screenshots were written', screenshots],
     [`value pane contains rendered text (${paneInk} dark px)`, paneInk >= 100],
     [`tree displays classic folder glyphs (${visual ? visual.folderPixels : -1} yellow px)`,

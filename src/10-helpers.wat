@@ -3816,6 +3816,7 @@
   ;; even though they paint through host GDI primitives without BeginPaint.
   (func $paint_drain_native_control_paints (result i32)
     (local $i i32) (local $hwnd i32) (local $n i32) (local $guard i32) (local $progress i32)
+    (local $native_status i32)
     (block $done (loop $again
       (br_if $done (i32.ge_u (local.get $guard) (global.get $MAX_WINDOWS)))
       (local.set $progress (i32.const 0))
@@ -3825,19 +3826,26 @@
         (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
           (then
             (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
-            (if (i32.eqz (call $ctrl_table_get_class (local.get $hwnd)))
+            (local.set $native_status (call $statusbar_native_is (local.get $hwnd)))
+            (if (i32.and
+                  (i32.eqz (call $ctrl_table_get_class (local.get $hwnd)))
+                  (i32.eqz (local.get $native_status)))
               (then
                 ;; Dirty, but this drain only paints WAT-native controls, so a
                 ;; window whose CONTROL_TABLE class never got set is passed over
                 ;; in silence however often it is invalidated.
                 (call $ctrl_paint_trace_emit
                   (local.get $hwnd) (i32.const 0) (i32.const 4))))
-            ;; A subclassed control paints from its own WNDPROC. Leave its
-            ;; PAINT_FLAGS bit set so $paint_select_next_dirty hands the
-            ;; WM_PAINT to the pump, which dispatches it to that proc.
-            (if (i32.and
-                  (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0))
-                  (i32.eqz (call $ctrl_is_subclassed (local.get $hwnd))))
+            ;; A native status bar deliberately keeps class=0 so its guest
+            ;; COMCTL32 wndproc remains authoritative for layout. Its shared-
+            ;; surface WM_PAINT is nevertheless WAT-owned, exactly like the
+            ;; native-status interception in $wnd_send_message. Other
+            ;; subclassed controls stay queued for their own WNDPROC.
+            (if (i32.or
+                  (local.get $native_status)
+                  (i32.and
+                    (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0))
+                    (i32.eqz (call $ctrl_is_subclassed (local.get $hwnd)))))
               (then
                 (if (i32.or
                       (call $wnd_has_pending_ancestor_erase (local.get $hwnd))
@@ -3862,9 +3870,15 @@
                     (drop (call $paint_seed_child_paints (local.get $hwnd)))
                     (call $paint_flag_clear_hwnd (local.get $hwnd))
                     (call $update_clear_hwnd (local.get $hwnd))
-                    (drop (call $control_wndproc_dispatch
-                      (local.get $hwnd) (i32.const 0x000F)
-                      (i32.const 0) (i32.const 0)))
+                    (if (local.get $native_status)
+                      (then
+                        (drop (call $statusbar_wndproc
+                          (local.get $hwnd) (i32.const 0x000F)
+                          (i32.const 0) (i32.const 0))))
+                      (else
+                        (drop (call $control_wndproc_dispatch
+                          (local.get $hwnd) (i32.const 0x000F)
+                          (i32.const 0) (i32.const 0)))))
                     (local.set $n (i32.add (local.get $n) (i32.const 1)))
                     (local.set $progress (i32.const 1))
                     (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
