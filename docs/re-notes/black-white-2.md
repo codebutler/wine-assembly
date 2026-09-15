@@ -7712,3 +7712,39 @@ vertex array starts. Adding one means moving that boundary, which touches
 `d3d_software_create`, the JS backend's context sizing and the vertex-array base
 arithmetic. That is the next piece of work, and it is an ABI change, not a
 tweak.
+
+### Correction: the section above ranks the costs against a one-instruction shader
+
+The paragraph naming the 8KB per-quad `memory.fill` as "the leading remaining
+suspect" is true only for a trivial shader, because `flat` was `mov r0,v0` --
+one instruction. A `flat8` arm (the same quad with eight arithmetic
+instructions, ps_1_1's legal maximum) separates the VM's per-instruction cost
+from its per-packet entry cost. Three runs at 640x480:
+
+| | ns/px |
+|---|---|
+| setup only (`sliver`) | 288.7 / 300.3 / 317.4 |
+| + VM entry + 1 instruction (`flat`) | 356.3 / 376.8 / 392.1 |
+| + 8 instructions (`flat8`) | 588.9 / 670.3 / 717.2 |
+
+That is **~42 ns/px per shader instruction** (33.2 / 41.9 / 46.4) and ~30 ns/px
+of VM entry. Per 2x2 packet, one instruction costs about 170ns to execute at
+most four `f32x4` ops -- roughly 40x the arithmetic it performs. Extrapolating
+at those rates the VM is 19% of a one-instruction pixel, 55% at eight and ~74%
+at twenty, so for any shader B&W2 actually ships the interpreter dominates and
+the per-pixel fixed costs matter less the longer the shader gets.
+
+**This changes the work ordering.** The `$d3d_shader_vm_run` loop pays, per
+instruction: an `i32.atomic.load` cancellation check, a budget check, a 64-byte
+packet load, flag validation, a co-issue partner probe and a linear `if`-chain
+over ~70 opcodes rather than a `br_table` -- all of it per 2x2 packet. Batching
+the shader so the outer loop is over INSTRUCTIONS and the inner loop over a tile
+of many pixels pays that once per batch instead of once per four pixels. The
+packet stays 2x2-composed so `$d3d_shader_vm_quad_lod`'s finite differences
+still work; it is the batch that widens, not the quad.
+
+The blocker is the same one the fill has: batch width is bounded by the live
+register set (128 registers x 4 components x N lanes x 4 bytes must stay in
+cache, which is 512KB at N=256), so both changes need a per-program max-temp
+count, and there is no field for one. That single missing number gates the two
+largest wins here.
