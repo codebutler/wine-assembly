@@ -3,8 +3,12 @@
 'use strict';
 
 const assert = require('assert');
+const path = require('path');
+const { execFileSync } = require('child_process');
 const { bootRenderHarness } = require('./render-helper');
 const RegionMap = require('../lib/region-map.generated.js');
+
+const ROOT = path.join(__dirname, '..');
 
 // One PE32 section containing an MSVCRT import descriptor, lookup table, IAT,
 // and two imports. Its entry point mirrors 7zFM 9.20 at 0x441fcf/0x441fd4:
@@ -78,6 +82,15 @@ const extraWat = String.raw`
 `;
 
 (async () => {
+  const sevenZip = path.join(ROOT, 'test', 'binaries', 'candidates',
+    '7zip-file-manager', '7zFM.exe');
+  if (require('fs').existsSync(sevenZip)) {
+    const audit = execFileSync('node', [
+      path.join(ROOT, 'tools', 'unimplemented-imports.js'), sevenZip,
+    ], { cwd: ROOT, encoding: 'utf8' });
+    assert(!audit.includes('_acmdln'),
+      'static trap audit recognizes the loader-owned MSVCRT data import');
+  }
   const { exports: wat, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
   let mem = new Uint8Array(memory.buffer);
   const staging = wat.get_staging() >>> 0;

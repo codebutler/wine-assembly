@@ -11,8 +11,11 @@
 // This answers the same question statically, for every import at once, before
 // any of them is reached.
 //
-// An import is reported when its name has no row in src/api_table.json at all,
-// or when the row's handler function calls $crash_unimplemented. Rows that
+// An ordinary function import is reported when its name has no row in
+// src/api_table.json at all, or when the row's handler function calls
+// $crash_unimplemented. MSVCRT data exports are resolved by the PE loader to
+// storage cells rather than callable API thunks and are audited separately.
+// Rows that
 // share a handler (the D3D8-on-D3D9 aliases, the A/W pairs) are resolved
 // through the row's own "handler" field, so an alias of a live handler is not
 // reported as missing.
@@ -41,6 +44,9 @@ if (!files.length) {
 // name -> handler function name, from the API registry.
 const table = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'api_table.json'), 'utf8'));
 const handlerOf = new Map(table.map(e => [e.name, e.handler || e.name]));
+const msvcrtDataImports = new Set(['_acmdln', '__argc', '__argv']);
+const isResolvedDataImport = imp =>
+  /^msvcrt(?:\.dll)?$/i.test(imp.dll) && msvcrtDataImports.has(imp.name);
 
 // handler name -> does its body trap? One pass over the WAT sources, splitting
 // on the (func $handle_ boundary rather than parsing: a stub is one line and
@@ -110,11 +116,12 @@ for (const file of files) {
     if (!imp.name) continue;                       // ordinal imports carry no name to match
     if (provided(imp.dll)) continue;
     const handler = handlerOf.get(imp.name);
-    const status = !handler ? 'no api_table row'
+    const status = isResolvedDataImport(imp) ? 'ok (data import)'
+      : !handler ? 'no api_table row'
       : !defined.has(handler) ? `no $handle_${handler}`
       : stubs.has(handler) ? 'crash_unimplemented'
       : 'ok';
-    if (status !== 'ok' || showAll) rows.push({ ...imp, handler: handler || null, status });
+    if (!status.startsWith('ok') || showAll) rows.push({ ...imp, handler: handler || null, status });
   }
   report.push({ file, total: list.length, rows });
 }
@@ -132,7 +139,7 @@ for (const entry of report) {
   for (const [dll, rows] of byDll) {
     console.log(`  ${dll}`);
     for (const row of rows) {
-      if (row.status !== 'ok') missing++;
+      if (!row.status.startsWith('ok')) missing++;
       console.log(`    ${row.name.padEnd(40)} ${row.status}`);
     }
   }
