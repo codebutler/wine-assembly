@@ -30502,5 +30502,47 @@
     "nargs": 7,
     "convention": "stdcall",
     "hash": 1359480257
+  },
+  {
+    "id": 3639,
+    "name": "ClosePrinter",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3322486421
+  },
+  {
+    "id": 3640,
+    "name": "EndDocPrinter",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4061260256
+  },
+  {
+    "id": 3641,
+    "name": "WritePrinter",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1150144152
+  },
+  {
+    "id": 3642,
+    "name": "StartDocPrinterA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 846420708
+  },
+  {
+    "id": 3643,
+    "name": "OpenPrinterA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 2610642326
+  },
+  {
+    "id": 3644,
+    "name": "EnumPrintersA",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 3142208404
   }
 ]

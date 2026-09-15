@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const ROOT = path.join(__dirname, '..');
 const FAR = path.join(ROOT, 'test', 'binaries', 'candidates',
@@ -87,6 +88,10 @@ const extraWat = String.raw`
     (global.set $last_error (local.get $value)))
   (func (export "test_spool_get_error") (result i32)
     (global.get $last_error))
+  (func (export "test_spool_first_api_id") (result i32)
+    (call $lookup_api_id "ClosePrinter"))
+  (func (export "test_spool_last_api_id") (result i32)
+    (call $lookup_api_id "EnumPrintersA"))
 `;
 
 function assertStack(e, bytes, name) {
@@ -110,6 +115,16 @@ function assertStack(e, bytes, name) {
   const { exports: e } = await bootRenderHarness({
     extraWat, fonts: 'none',
   });
+  const names = [
+    'ClosePrinter', 'EndDocPrinter', 'WritePrinter', 'StartDocPrinterA',
+    'OpenPrinterA', 'EnumPrintersA',
+  ];
+  const rows = names.map(name => apiTable.find(entry => entry.name === name));
+  assert(rows.every(Boolean), 'all six FAR spooler APIs are registered');
+  assert.deepStrictEqual(rows.map(row => row.nargs), [1, 1, 4, 3, 3, 7]);
+  assert(rows.every(row => row.convention === 'stdcall'));
+  assert.strictEqual(e.test_spool_first_api_id(), rows[0].id);
+  assert.strictEqual(e.test_spool_last_api_id(), rows[5].id);
   const buffer = e.guest_alloc(128) >>> 0;
   const needed = e.guest_alloc(4) >>> 0;
   const returned = e.guest_alloc(4) >>> 0;
