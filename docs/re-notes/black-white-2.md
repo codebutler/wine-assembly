@@ -7929,3 +7929,114 @@ is now the top item by evidence, not just by structure. On textured pixels the
 four-components-at-once sampler is second and worth about as much as the VM
 work was on ALU pixels. The interpreter tax in `$d3d_shader_vm_run` proper is
 12.5% of an 8-instruction pixel: real, but third.
+
+## Remote-controlled stage-by-stage run: WebGL vs software (2026-09-15)
+
+Everything below was measured on a real, visible Chrome driven over the
+dev-server hub, so one run yields the intro, the menus and the loads in order
+instead of one guessed window per run. The recipe:
+
+```
+# serve a CLEAN tree: main's wasm and lib/region-map.generated.js disagreed
+# ("region layout MISMATCH") while another agent was mid-change
+node tools/dev-server.js --port=8130 --isolate      # --isolate is REQUIRED for the software renderer
+open -na "Google Chrome" --args --remote-debugging-port=9333 --user-data-dir=$S/chrome-rc \
+  --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
+  --disable-background-timer-throttling 'http://127.0.0.1:8130/?debug&perf[&d3d9-renderer=software]'
+node tools/ctl.js --hub=http://127.0.0.1:8130 -s <URL> launch black_white_2_demo
+node tools/ctl.js ... cmd relmousemove:-2000:-2000; cmd relmousemove:313:343; cmd relmousemove:-15:-15
+node tools/ctl.js ... cmd di-mousedown; sleep 2; cmd di-mouseup          # profile dialog OK
+#   New Game (197,555) -> Continue (400,575) -> double-click the green land (165,478)
+node tools/cdp-cpu-profile.js --seconds=15 --out=stage.cpuprofile [--worker=d3d-render-worker]
+```
+
+Three things the recipe depends on, each found the hard way:
+
+- **macOS Chrome reports an occluded window as `hidden`**, and host.js pauses the
+  guest on that. Without the three `--disable-*` flags every profile of a tab
+  behind the terminal came back at 1 guest fps and 80% idle. `curl
+  http://127.0.0.1:9333/json/activate/<id>` brings a tab forward.
+- **The software renderer's worker needs `crossOriginIsolated`.** Served without
+  `--isolate` it logs `SharedArrayBuffer transfer requires self.crossOriginIsolated`
+  on every frame and presents nothing; the guest runs at 0 fps with a blank canvas.
+- **The intro can be finished from the page.** `set_bp(0x00526d93)` (the
+  `add dword [esi+0x20],1` the CLI probe traces) plus a plain copy of the
+  exports whose `get_last_run_halt` captures ESI on halt 5, then write
+  `finishFrame = frame-1` at `+36`, clear the bp, restore the instance. A
+  `Proxy` over the exports is not an option: `get_yield_reason` is a
+  non-configurable property and the proxy invariant check kills the run loop.
+  It only finishes the Lionhead particle object; the Intel/ATI screens are
+  other classes and play out on their own.
+
+### Per-stage numbers (headful, tree at 20e5dd44, load average 10-20, so ±30%)
+
+| stage | WebGL guest fps | software guest fps | pixels differing (tol 8) |
+|---|---:|---:|---|
+| Lionhead intro | 4-12 | 1-2 (first present at +55 s) | not compared (animated) |
+| pre/post-intro loads | 0 (x87-bound, ~60 s) | 0 (same profile: `$next` 19%, `$fpu_exec_mem`, `$th_fpu_mem_ro`) | — |
+| profile dialog | 13-16 | 0.5-0.7 | 2.7% (OK-button glow frame + cursor only) |
+| main menu | 13-16 | ~1.2 | 1.0% |
+| controls screen | ~14 | 0.6 | 0.5% |
+| land picker | ~14 | 0.7-1.7 | 0.2% |
+| in-game scene | 0-0.8, wrong picture | not reached | — |
+
+**Rendering matches on every 2D screen.** The remaining differences are the
+animated OK-button glow, the cursor sprite and a few thumbnail highlight
+pixels. The picture that does NOT match is the in-game scene on WebGL: trees on
+a flat blue plane and no terrain, with ~1400 rejected draws per 6 s
+(`unsupported vertex declaration element` 1026, `programmed fog specular alpha
+linkage requires conformance` 271, `D3D9 FVF # is not implemented` 65,
+`invalid texture resource` 25, `incomplete mip chain` 5 — from `console.error`,
+not the log panel). So "runs on GL" is true up to the land picker; gameplay on GL
+is blocked on vertex-declaration element types (only FLOAT1-4/D3DCOLOR with
+4-aligned offsets are accepted, `lib/d3d9-backend.js:392-400`) before its
+speed means anything.
+
+### Where the time goes
+
+WebGL, menu (13-16 fps): 22% idle; host side is `d3d-command-stream.js`
+`copy()` 16% (it deep-copies and freezes every payload with a
+`defineProperty` per key), `readPixels` 9% (every PRESENT does a full
+`readColor(null)` readback plus BGRA swizzle, `d3d9-host.js:261`), `texImage2D`
+4-5%. WebGL, scene: host 61% — `copy` 21%, d3d9-host `call` 10%, texture
+`decode` 4%, and `onError`/`invalid`/`getError`/`compileIR` ~2% each because
+`invalid()` throws an `Error` per rejected draw. One 54 s main-thread stall in
+`AudioContext.resume()` (host.js primeAudio ← browser-input.js
+unlockRunningAudio ← handleKeyDown) during the post-intro load.
+
+Software, profile dialog (0.5 fps), render worker profiled over raw CDP
+(`--worker=d3d-render-worker`; dedicated workers are not puppeteer targets, the
+tool attaches with `Target.attachToTarget flatten:true` on the browser socket):
+
+```
+worker: idle 48.6%  $d3d_software_step 14.3%  $d3d_shader_vm_component 10.7%
+        $d3d_shader_vm_sample_face_lod 7.5%  $d3d_shader_vm_run 6.2%  $d3d_shader_vm_texel 5.8%
+        software-backend copy 2.1%  command-stream copy 1.1%
+main:   idle 74.2%  (program) 4.1%  $next 2.4%  $branch_end 1.4%  _profileNow 1.4%
+```
+
+**Neither thread is busy.** The main thread is three-quarters idle and the
+raster worker half idle, yet the guest advances at half a frame per second:
+the two are ping-ponging — the guest submits a frame, parks (`phaseMs.workers`
+~370-400 ms/s is the awaited rendezvous), the worker rasterizes ~1 s of shader
+VM per 800x600 frame, and the guest only submits the next one after that. The
+raster cost itself is the known list (quad early-out, four-component sampler,
+packet-class precompile), but the idle halves say a pipelined submit (let the
+guest run while the previous frame rasterizes) is worth up to 2× before any of
+that.
+
+### Open: the land picker's double-click at ~1 fps
+
+On WebGL a fast `di-mousedown/up` pair twice at (165,478) starts the scene
+load. On software none of these did: 1 s-spaced pairs, 3 s-spaced pairs, an
+80 ms page-side double-click (this one triggered a 90 s load burst and then the
+picker came back), a frame-paced 1.3 s pair, Enter. `WinePerf.input.ageMs.p99`
+was 41 s — buffered DI events wait many frames to be drained, and
+`GetDeviceData` stamps `dwTimeStamp` with `host_get_ticks` at DRAIN time
+(`src/09a8-handlers-directx.wat` ~8312/8407), so every event drained in one
+frame carries one timestamp. Whichever way the game measures a double-click
+(timestamp delta or frame count), at 1.2 s/frame it does not see one. Stamp
+the events when they are queued, then retry.
+
+Artifacts: `$S/rc/gl4/` and `$S/rc/sw2/` (stage PNGs, `*-vs-gl.png` diffs,
+`*.cpuprofile`, `perf.ndjson`) in this session's scratchpad.

@@ -160,6 +160,26 @@ let browser = null;
   const clicked = ctl('-s', sessionId, 'click', '100,100');
   check('click executes page-side', clicked.includes('click:100:100'), clicked.trim());
 
+  // DirectInput games read relative motion and button records, which a
+  // synthetic MouseEvent cannot carry (no movementX, no pointer lock). The
+  // browser twins of run.js's relmousemove / di-mousedown / di-mouseup go
+  // through the renderer's own entry points; the button mask must be back to
+  // zero after the release or the guest keeps seeing a held button.
+  // No app is running on this page, so there is no renderer to feed; what
+  // this pins is that the entries are recognized and refused for THAT reason,
+  // not as unsupported entries. The live behaviour (a B&W2 menu button
+  // pressed through them on WebGL) is in docs/re-notes/black-white-2.md.
+  const diRefusal = entry => {
+    try { ctl('-s', sessionId, 'cmd', entry); return 'accepted without a renderer'; }
+    catch (e) { return String(e.stderr || e.stdout || e.message); }
+  };
+  check('relmousemove is a known entry that needs a renderer',
+    /no renderer/.test(diRefusal('relmousemove:3:4')), diRefusal('relmousemove:3:4').trim());
+  check('di-mousedown is a known entry that needs a renderer',
+    /no renderer/.test(diRefusal('di-mousedown')), diRefusal('di-mousedown').trim());
+  check('di-mouseup rejects a button other than 1 or 2 before touching anything',
+    /button must be 1 or 2|no renderer/.test(diRefusal('di-mouseup:3')), diRefusal('di-mouseup:3').trim());
+
   // Synthetic keys used to be dispatched on `window`, whose non-Node target
   // reached shouldIgnorePageKey()'s toolbar.contains(e.target) and threw on
   // every keystroke — so browser-side type never reached the guest. Keys now

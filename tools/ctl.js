@@ -8,6 +8,9 @@
 //   node tools/ctl.js png /tmp/frame.png
 //   node tools/ctl.js eval 'renderer.windows'
 //   node tools/ctl.js cmd dlg-cmd:1               # any --input action, raw
+//   node tools/ctl.js cmd relmousemove:-2000:-2000  # DirectInput game (B&W2): park the
+//   node tools/ctl.js cmd relmousemove:313:343      # guest cursor, move it, then press
+//   node tools/ctl.js cmd di-mousedown; ... cmd di-mouseup   # (a MouseEvent has no movementX)
 //   node tools/ctl.js pipe < events.ndjson        # a continuous stream
 //   node tools/ctl.js quit
 //   node tools/ctl.js sessions                    # list browser sessions on the hub
