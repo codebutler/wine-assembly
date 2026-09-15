@@ -400,7 +400,7 @@ node tools/layout-migrate.js "${LOOPOP_LAYOUT_ARGS[@]}" --gate > /dev/null || {
 # them — the access width disagrees with the i32 field — rather than naming a
 # rect edge for a character. $coord_w and $glyph are deliberately absent from
 # --base-local-from-call for the same reason.
-PAINT_RECT_LAYOUT_ARGS=(--file=src/10-helpers.wat,src/09a-handlers.wat,src/09c4-defwndproc.wat,src/09b-dispatch.wat,src/09c3-controls.wat,src/09c5-menu.wat,src/09a8-handlers-directx.wat,src/13-exports.wat
+PAINT_RECT_LAYOUT_ARGS=(--file=src/10-helpers.wat,src/09a-handlers.wat,src/09c4-defwndproc.wat,src/09b-dispatch.wat,src/09c3-controls.wat,src/09c3-controls3-color-dialog.wat,src/09c5-menu.wat,src/09a8-handlers-directx.wat,src/13-exports.wat
   --layout=PaintRect --layout-from=src/10-helpers.wat
   --base-call='$paint_scratch_take' --base-local-from-call=rect,p,box,brect --memarg)
 node tools/layout-migrate.js "${PAINT_RECT_LAYOUT_ARGS[@]}" --gate > /dev/null || {
