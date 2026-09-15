@@ -62,6 +62,16 @@ const STREAM_BODY = Uint8Array.from([
   0x48, 0x75,0xb9,
 ]);
 const STREAM_LOOP = Uint8Array.from([...STREAM_BODY, 0xc3]);
+const PIPELINED_BODY = Uint8Array.from([
+  0x0f,0x18,0x86,0x38,0x02,0x00,0x00, 0x0f,0x6f,0x06, 0x83,0xc7,0x40,
+  0x0f,0x6f,0x4e,0x08, 0x83,0xc6,0x40, 0x0f,0x6f,0x56,0xd0,
+  0x0f,0xe7,0x47,0xc0, 0x0f,0x6f,0x46,0xd8, 0x0f,0xe7,0x4f,0xc8,
+  0x0f,0x6f,0x4e,0xe0, 0x0f,0xe7,0x57,0xd0, 0x0f,0x6f,0x56,0xe8,
+  0x0f,0xe7,0x47,0xd8, 0x0f,0x6f,0x46,0xf0, 0x0f,0xe7,0x4f,0xe0,
+  0x0f,0x6f,0x4e,0xf8, 0x0f,0xe7,0x57,0xe8, 0x0f,0xe7,0x47,0xf0,
+  0x49, 0x0f,0xe7,0x4f,0xf8, 0x75,0xb1,
+]);
+const PIPELINED_LOOP = Uint8Array.from([...PIPELINED_BODY, 0xc3]);
 
 function i64le(bytes, off) {
   let v = 0n;
@@ -212,7 +222,48 @@ function i64le(bytes, off) {
   assert.deepStrictEqual(streamFused, streamBaseline,
     'stream bulk lowering preserves GPR, flags, and final MMX0..7 values');
 
-  console.log('PASS MSVC MMX copy64 lowering: exact match, bulk, overlap, page split, state, near miss');
+  const pipeBaselineCode = install(PIPELINED_LOOP);
+  const pipeFusedCode = install(PIPELINED_LOOP);
+  const pipeDstA = (arena + 0x8200) >>> 0;
+  const pipeDstB = (arena + 0x8e00) >>> 0;
+  bytes.fill(0, wa(pipeDstA), wa(pipeDstA) + input.length);
+  bytes.fill(0, wa(pipeDstB), wa(pipeDstB) + input.length);
+  e.test_mmx_copy64_set_enabled(0);
+  const pipeBaseline = run(pipeBaselineCode, src, pipeDstA, count);
+  const beforePipe = e.test_mmx_copy64_matches();
+  e.test_mmx_copy64_set_enabled(1);
+  const pipeFused = run(pipeFusedCode, src, pipeDstB, count);
+  assert.strictEqual(e.test_mmx_copy64_matches(), beforePipe + 1,
+    'exact pipelined MOVNTQ body lowers once');
+  assert.deepStrictEqual(Array.from(bytes.subarray(wa(pipeDstB), wa(pipeDstB) + input.length)),
+    Array.from(bytes.subarray(wa(pipeDstA), wa(pipeDstA) + input.length)),
+    'pipelined bulk lowering agrees with ordinary MOVNTQ bytes');
+  assert.deepStrictEqual(pipeFused, pipeBaseline,
+    'pipelined bulk lowering preserves GPR, flags, and final MMX state');
+  assert.deepStrictEqual(pipeFused.mm.slice(0, 3), [48, 56, 40].map(off =>
+    i64le(input, (count - 1) * 64 + off)),
+  'pipelined mm0..mm2 retain qwords 6, 7, and 5');
+
+  // This shape alternates loads and stores after its first three reads. A
+  // load-all-then-store fallback would look right for disjoint copies but
+  // differ here, so compare the exact overlapping forward-copy result.
+  const pipeOverlapBaselineCode = install(PIPELINED_LOOP);
+  const pipeOverlapFusedCode = install(PIPELINED_LOOP);
+  const pipeOverlapA = (arena + 0x5200) >>> 0;
+  const pipeOverlapB = (arena + 0x5600) >>> 0;
+  bytes.set(overlapInput, wa(pipeOverlapA));
+  bytes.set(overlapInput, wa(pipeOverlapB));
+  e.test_mmx_copy64_set_enabled(0);
+  const pipeOverlapBaseline = run(pipeOverlapBaselineCode, pipeOverlapA, pipeOverlapA + 16, 2);
+  e.test_mmx_copy64_set_enabled(1);
+  const pipeOverlapFused = run(pipeOverlapFusedCode, pipeOverlapB, pipeOverlapB + 16, 2);
+  assert.deepStrictEqual(Array.from(bytes.subarray(wa(pipeOverlapB), wa(pipeOverlapB) + 192)),
+    Array.from(bytes.subarray(wa(pipeOverlapA), wa(pipeOverlapA) + 192)),
+    'pipelined overlap fallback preserves alternating load/store order');
+  assert.deepStrictEqual(pipeOverlapFused, pipeOverlapBaseline,
+    'pipelined overlap fallback preserves final architectural state');
+
+  console.log('PASS MSVC MMX copy64 lowering: exact match, bulk, overlap, page split, pipelined state, near miss');
 })().catch(error => {
   console.error(error.stack || error);
   process.exit(1);

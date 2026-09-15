@@ -4236,6 +4236,10 @@
                   (i32.eqz (local.get $prefix_67))
                   (i32.eqz (local.get $prefix_seg))))))
         (then
+          (if (call $try_emit_mmx_pipelined_copy64 (local.get $insn_start))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
           (if (call $try_emit_mmx_stream_copy64 (local.get $insn_start))
             (then
               (local.set $done (i32.const 1))
