@@ -35,7 +35,7 @@ if (!hgl.available()) {
 
 const W = 32, H = 16;
 const canvas = createCanvas(W, H);
-const gl = canvas.getContext('webgl');
+const gl = canvas.getContext('webgl', { alpha: false });
 assert.ok(gl, 'canvas.getContext("webgl") returned null with the deps installed');
 assert.strictEqual(canvas.getContext('webgl'), gl, 'getContext must be idempotent');
 
@@ -72,6 +72,21 @@ gpu.present();
 const center = ((H >> 1) * W + (W >> 1)) * 4;
 assert.deepStrictEqual(Array.from(canvas._data.slice(center, center + 4)), [255, 0, 255, 255],
   'backend present did not publish the completed native GL frame to the compositor canvas');
+
+// A native desktop framebuffer has alpha storage even when WebGL was requested
+// with alpha:false.  D3D backbuffers depend on the WebGL contract here: texture
+// alpha may carry an unrelated mask, and must not turn otherwise-correct RGB
+// translucent when the headless canvas is composited or encoded to PNG.
+gl.clearColor(0.25, 0.5, 0.75, 0);
+gl.clear(gl.COLOR_BUFFER_BIT);
+gpu.present();
+const opaquePixel = Array.from(canvas._data.slice(0, 4));
+assert.deepStrictEqual(opaquePixel, [64, 128, 191, 255],
+  `alpha:false headless readback was not opaque: ${opaquePixel}`);
+gl.clearColor(1, 0, 1, 1);
+gl.clear(gl.COLOR_BUFFER_BIT);
+gpu.present();
+assert.deepStrictEqual(Array.from(canvas._data.slice(0, 4)), [255, 0, 255, 255]);
 gpu.destroy();
 
 // --- the pixels must reach the byte array the compositor reads -------------
