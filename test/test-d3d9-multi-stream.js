@@ -33,9 +33,9 @@ const DEVICE_CALLS = ['CreateVertexDeclaration', 'SetVertexDeclaration', 'SetStr
 // POSITION as FLOAT3 and COLOR as D3DCOLOR, each element naming its stream.
 // D3DVERTEXELEMENT9 is {u16 stream, u16 offset, u8 type, u8 method, u8 usage,
 // u8 usageIndex}, and D3DDECL_END is {0xff,0,UNUSED(17),0,0,0}.
-const declarationBytes = (colorStream, colorOffset) => {
+const declarationBytes = (colorStream, colorOffset, positionStream = 0) => {
   const bytes = new Uint8Array(24), view = new DataView(bytes.buffer);
-  view.setUint16(0, 0, true); view.setUint16(2, 0, true);
+  view.setUint16(0, positionStream, true); view.setUint16(2, 0, true);
   bytes.set([2, 0, 0, 0], 4);                       // FLOAT3 DEFAULT POSITION0
   view.setUint16(8, colorStream, true); view.setUint16(10, colorOffset, true);
   bytes.set([4, 0, 10, 0], 12);                     // D3DCOLOR DEFAULT COLOR0
@@ -140,8 +140,8 @@ const declarationBytes = (colorStream, colorOffset) => {
 
   // Interleaved, the colour follows the position in the same vertex; split, it
   // starts its own buffer.
-  const declare = (colorStream, colorOffset) => {
-    const bytes = declarationBytes(colorStream, colorOffset), guest = alloc(bytes.length);
+  const declare = (colorStream, colorOffset, positionStream = 0) => {
+    const bytes = declarationBytes(colorStream, colorOffset, positionStream), guest = alloc(bytes.length);
     new Uint8Array(memory.buffer, wa(guest), bytes.length).set(bytes);
     const result = e.CreateVertexDeclaration(device, guest, out, 0, 0) >>> 0;
     return { result, declaration: e.guest_read32(out) >>> 0 };
@@ -179,6 +179,17 @@ const declarationBytes = (colorStream, colorOffset) => {
   ok(e.GetStreamSource(device, 1, got, offset, stride), 'GetStreamSource(1)');
   assert.deepStrictEqual([e.guest_read32(got) >>> 0, e.guest_read32(offset) >>> 0,
     e.guest_read32(stride) >>> 0], [colors, 0, 4], 'stream 1 reads back as it was bound');
+
+  // Stream 0 is not mandatory. A declaration can legally source every input
+  // from any one of the sixteen streams; requiring stream 0 here would be an
+  // implementation artifact inherited from the old single-stream descriptor.
+  const onlyOne = declare(1, 12, 1);
+  ok(onlyOne.result, 'CreateVertexDeclaration(all attributes on stream 1)');
+  ok(e.SetVertexDeclaration(device, onlyOne.declaration, 0, 0, 0),
+    'SetVertexDeclaration(all attributes on stream 1)');
+  ok(e.SetStreamSource(device, 0, 0, 0, 0), 'unbind unused stream 0');
+  ok(e.SetStreamSource(device, 1, interleaved, 0, 16), 'bind all attributes to stream 1');
+  assert.strictEqual(render(), expected, 'stream 1 draws without stream 0 bound');
 
   // A stream the declaration names and nothing fills must draw NOTHING -- not
   // whatever stream 1 held last, and not stream 0's bytes read at stream 1's

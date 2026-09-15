@@ -387,10 +387,9 @@
 
   (func $d3d9_draw_buffer (param $device i32) (param $primitive i32) (param $base i32)
     (param $min i32) (param $num i32) (param $start i32) (param $primitives i32) (param $indexed i32)
-    (local $i i32) (local $slot i32)
-    (local $state i32) (local $vb i32) (local $ib i32) (local $stride i32)
-    (local $offset i32) (local $count i32) (local $desc i32) (local $format i32)
-    (local $index_bytes i32) (local $first i64) (local $end i64) (local $ptr i64)
+    (local $i i32) (local $state i32) (local $ib i32)
+    (local $count i32) (local $desc i32) (local $format i32)
+    (local $index_bytes i32) (local $first i64) (local $end i64)
     (local $result i32)
     (block $issue
     (if (global.get $d3d_render_token) (then
@@ -408,12 +407,6 @@
       (if (i32.eq (local.get $primitive) (i32.const 3)) (then (local.set $count (i32.add (local.get $count) (i32.const 1)))))
       (if (i32.eq (local.get $primitive) (i32.const 4)) (then (local.set $count (i32.mul (local.get $count) (i32.const 3)))))
       (if (i32.ge_u (local.get $primitive) (i32.const 5)) (then (local.set $count (i32.add (local.get $count) (i32.const 2)))))))
-    (local.set $slot (call $d3d9_stream_slot (local.get $state) (i32.const 0)))
-    (local.set $vb (call $gl32 (local.get $slot)))
-    (if (i32.eqz (local.get $vb)) (then (return)))
-    (if (call $gl32 (i32.add (local.get $vb) (i32.const 40))) (then (return)))
-    (local.set $stride (call $gl32 (i32.add (local.get $slot) (i32.const 8))))
-    (local.set $offset (call $gl32 (i32.add (local.get $slot) (i32.const 4))))
     (if (local.get $indexed) (then
       (local.set $first (i64.add (i64.extend_i32_s (local.get $base)) (i64.extend_i32_u (local.get $min))))
       (local.set $end (i64.add (local.get $first) (i64.extend_i32_u (local.get $num))))
@@ -430,24 +423,17 @@
       (local.set $first (i64.extend_i32_u (local.get $base)))
       (local.set $end (i64.add (local.get $first) (i64.extend_i32_u (local.get $count))))))
     (if (i64.lt_s (local.get $first) (i64.const 0)) (then (return)))
-    (if (i64.gt_u (i64.add (i64.extend_i32_u (local.get $offset))
-      (i64.mul (local.get $end) (i64.extend_i32_u (local.get $stride))))
-      (i64.extend_i32_u (call $gl32 (i32.add (local.get $vb) (i32.const 24))))) (then (return)))
-    (local.set $ptr (i64.add (i64.extend_i32_u (i32.add (local.get $vb) (i32.const 64)))
-      (i64.add (i64.extend_i32_u (local.get $offset))
-        (i64.mul (select (i64.extend_i32_s (local.get $base)) (i64.extend_i32_u (local.get $base)) (local.get $indexed))
-          (i64.extend_i32_u (local.get $stride))))))
-    (if (i64.gt_u (local.get $ptr) (i64.const 0xffffffff)) (then (return)))
     (local.set $desc (call $d3d9_gpu_descriptor (local.get $device)))
     (if (i32.eqz (local.get $desc)) (then (return)))
     (i32.store offset=24 (local.get $desc) (local.get $primitive))
     (i32.store offset=28 (local.get $desc) (local.get $primitives))
-    (i32.store offset=32 (local.get $desc) (i32.wrap_i64 (local.get $ptr)))
-    (i32.store offset=36 (local.get $desc) (local.get $stride))
+    ;; Buffered draws consume the binding table below. These legacy fields are
+    ;; retained for Draw*UP descriptors, which have no table and use stream 0.
+    (i32.store offset=32 (local.get $desc) (i32.const 0))
+    (i32.store offset=36 (local.get $desc) (i32.const 0))
     ;; Publish a byte pointer for every stream the declaration might name. Only
-    ;; stream 0 can fail the draw -- an unusable stream 0 means there is nothing
-    ;; to draw from at all -- so the rest record a zero and lib/d3d9-host.js
-    ;; raises only if an attribute actually reads one. A stream left bound from
+    ;; an unusable stream records zero and lib/d3d9-host.js raises only if an
+    ;; attribute actually reads it. A stream left bound from
     ;; an earlier draw and unused by this declaration must not cost this draw
     ;; anything, which is why this is not a validation loop.
     (local.set $i (i32.const 0))
