@@ -201,7 +201,9 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_call_InitializeSecurityDescriptor(sd), 1);
   assert.strictEqual(e.test_call_SetSecurityDescriptorDacl(sd, acl), 1,
     'SetSecurityDescriptorDacl attaches the absolute ACL');
-  assert.strictEqual(view.getUint32(toWasm(sd + 12), true), acl);
+  assert.strictEqual(view.getUint32(toWasm(sd + 12), true), 0,
+    'SetSecurityDescriptorDacl does not overwrite the preceding SACL field');
+  assert.strictEqual(view.getUint32(toWasm(sd + 16), true), acl);
   assert.strictEqual(view.getUint16(toWasm(sd + 2), true) & 4, 4,
     'security descriptor marks its DACL present');
 

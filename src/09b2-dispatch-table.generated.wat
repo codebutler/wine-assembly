@@ -1754,7 +1754,7 @@
       (then
         (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
-    (if (i32.lt_u (local.get $api_id) (i32.const 3592))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3601))
       (then
         (call $dispatch_api_table_page_14 (i32.sub (local.get $api_id) (i32.const 3584)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
@@ -16210,8 +16210,17 @@
   )
 
   (func $dispatch_api_table_page_14 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; api ids 3584..3591
+    ;; api ids 3584..3600
     (block $fallback
+    (block $api_16
+    (block $api_15
+    (block $api_14
+    (block $api_13
+    (block $api_12
+    (block $api_11
+    (block $api_10
+    (block $api_9
+    (block $api_8
     (block $api_7
     (block $api_6
     (block $api_5
@@ -16220,7 +16229,7 @@
     (block $api_2
     (block $api_1
     (block $api_0
-      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $fallback (local.get $api_id))
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $fallback (local.get $api_id))
     ) ;; 3584: SetConsoleCP
       (call $handle_SetConsoleCP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
@@ -16244,6 +16253,33 @@
       (return)
     ) ;; 3591: IsCharUpperW
       (call $handle_IsCharUpperW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3592: GetSecurityDescriptorControl
+      (call $handle_GetSecurityDescriptorControl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3593: GetSecurityDescriptorDacl
+      (call $handle_GetSecurityDescriptorDacl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3594: GetSecurityDescriptorGroup
+      (call $handle_GetSecurityDescriptorGroup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3595: GetSecurityDescriptorLength
+      (call $handle_GetSecurityDescriptorLength (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3596: GetSecurityDescriptorOwner
+      (call $handle_GetSecurityDescriptorOwner (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3597: GetSecurityDescriptorSacl
+      (call $handle_GetSecurityDescriptorSacl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3598: IsValidAcl
+      (call $handle_IsValidAcl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3599: IsValidSecurityDescriptor
+      (call $handle_IsValidSecurityDescriptor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3600: IsValidSid
+      (call $handle_IsValidSid (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; fallback
     (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3584)))

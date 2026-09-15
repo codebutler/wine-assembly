@@ -30157,5 +30157,68 @@
       }
     ],
     "ret": "BOOL"
+  },
+  {
+    "id": 3592,
+    "name": "GetSecurityDescriptorControl",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3351441969
+  },
+  {
+    "id": 3593,
+    "name": "GetSecurityDescriptorDacl",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3359793612
+  },
+  {
+    "id": 3594,
+    "name": "GetSecurityDescriptorGroup",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 609209247
+  },
+  {
+    "id": 3595,
+    "name": "GetSecurityDescriptorLength",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4056159296
+  },
+  {
+    "id": 3596,
+    "name": "GetSecurityDescriptorOwner",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 150995963
+  },
+  {
+    "id": 3597,
+    "name": "GetSecurityDescriptorSacl",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 893995723
+  },
+  {
+    "id": 3598,
+    "name": "IsValidAcl",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 4034104367
+  },
+  {
+    "id": 3599,
+    "name": "IsValidSecurityDescriptor",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 770969598
+  },
+  {
+    "id": 3600,
+    "name": "IsValidSid",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2180451371
   }
 ]

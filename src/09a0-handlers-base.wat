@@ -1748,6 +1748,351 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
+  ;; SECURITY_DESCRIPTOR is the 32-bit Win32 layout:
+  ;;   +0 Revision/Sbz1, +2 Control, +4 Owner, +8 Group, +12 Sacl, +16 Dacl.
+  ;; In an absolute descriptor the four tail DWORDs are guest pointers.  With
+  ;; SE_SELF_RELATIVE they are offsets from the descriptor.  Keep validation
+  ;; in one place so WinRAR's accessors cannot turn malformed offsets, ACL
+  ;; sizes or SID counts into an unbounded guest-memory walk.
+  (func $security_span_valid (param $ptr i32) (param $size i32) (result i32)
+    (i32.and
+      (i32.ne (local.get $ptr) (i32.const 0))
+      (i32.ne (call $g2w_affine_span (local.get $ptr) (local.get $size))
+        (global.get $NULL_SENTINEL))))
+
+  (func $security_sid_valid (param $sid i32) (result i32)
+    (local $count i32) (local $size i32)
+    (if (i32.eqz (call $security_span_valid (local.get $sid) (i32.const 8)))
+      (then (return (i32.const 0))))
+    (local.set $count (call $gl8 (i32.add (local.get $sid) (i32.const 1))))
+    (if (i32.or
+          (i32.ne (call $gl8 (local.get $sid)) (i32.const 1))
+          (i32.gt_u (local.get $count) (i32.const 15)))
+      (then (return (i32.const 0))))
+    (local.set $size
+      (i32.add (i32.const 8) (i32.shl (local.get $count) (i32.const 2))))
+    (call $security_span_valid (local.get $sid) (local.get $size)))
+
+  (func $security_sid_length (param $sid i32) (result i32)
+    (i32.add (i32.const 8)
+      (i32.shl (call $gl8 (i32.add (local.get $sid) (i32.const 1)))
+        (i32.const 2))))
+
+  (func $security_max_u (param $a i32) (param $b i32) (result i32)
+    (select (local.get $a) (local.get $b)
+      (i32.gt_u (local.get $a) (local.get $b))))
+
+  (func $security_acl_valid (param $acl i32) (result i32)
+    (local $revision i32) (local $size i32) (local $count i32)
+    (local $used i32) (local $i i32) (local $ace_type i32)
+    (local $ace_size i32) (local $sid i32) (local $sid_size i32)
+    (if (i32.eqz (call $security_span_valid (local.get $acl) (i32.const 8)))
+      (then (return (i32.const 0))))
+    (local.set $revision (call $gl8 (local.get $acl)))
+    (local.set $size (call $gl16 (i32.add (local.get $acl) (i32.const 2))))
+    (local.set $count (call $gl16 (i32.add (local.get $acl) (i32.const 4))))
+    (if (i32.or
+          (i32.eqz
+            (i32.or (i32.eq (local.get $revision) (i32.const 2))
+                    (i32.eq (local.get $revision) (i32.const 4))))
+          (i32.or
+            (i32.lt_u (local.get $size) (i32.const 8))
+            (i32.ne (i32.and (local.get $size) (i32.const 3)) (i32.const 0))))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $security_span_valid (local.get $acl) (local.get $size)))
+      (then (return (i32.const 0))))
+    (local.set $used (i32.const 8))
+    (block $valid (loop $walk
+      (br_if $valid (i32.ge_u (local.get $i) (local.get $count)))
+      (if (i32.lt_u (i32.sub (local.get $size) (local.get $used)) (i32.const 4))
+        (then (return (i32.const 0))))
+      (local.set $ace_size
+        (call $gl16 (i32.add (local.get $acl)
+          (i32.add (local.get $used) (i32.const 2)))))
+      (if (i32.or
+            (i32.or
+              (i32.lt_u (local.get $ace_size) (i32.const 4))
+              (i32.ne (i32.and (local.get $ace_size) (i32.const 3)) (i32.const 0)))
+            (i32.gt_u (local.get $ace_size)
+              (i32.sub (local.get $size) (local.get $used))))
+        (then (return (i32.const 0))))
+      ;; Win98's supported ACE layouts all have {ACE_HEADER, ACCESS_MASK, SID}
+      ;; and use types 0 (allow), 1 (deny), or 2 (system audit).  Alarm ACEs
+      ;; and later object/callback layouts are not valid classic ACL entries.
+      (local.set $ace_type
+        (call $gl8 (i32.add (local.get $acl) (local.get $used))))
+      (if (i32.or
+            (i32.gt_u (local.get $ace_type) (i32.const 2))
+            (i32.lt_u (local.get $ace_size) (i32.const 16)))
+        (then (return (i32.const 0))))
+      (local.set $sid
+        (i32.add (local.get $acl) (i32.add (local.get $used) (i32.const 8))))
+      (if (i32.eqz (call $security_sid_valid (local.get $sid)))
+        (then (return (i32.const 0))))
+      (local.set $sid_size (call $security_sid_length (local.get $sid)))
+      (if (i32.gt_u (local.get $sid_size)
+            (i32.sub (local.get $ace_size) (i32.const 8)))
+        (then (return (i32.const 0))))
+      (local.set $used (i32.add (local.get $used) (local.get $ace_size)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $walk)))
+    (i32.const 1))
+
+  ;; Resolve one Owner/Group/Sacl/Dacl DWORD.  -1 is an invalid non-NULL
+  ;; pointer/offset; zero remains the meaningful absent/NULL component.
+  (func $security_sd_component
+      (param $sd i32) (param $raw i32) (param $self_relative i32) (result i32)
+    (local $ptr i32)
+    (if (i32.eqz (local.get $raw)) (then (return (i32.const 0))))
+    (if (local.get $self_relative)
+      (then
+        (if (i32.or
+              (i32.lt_u (local.get $raw) (i32.const 20))
+              (i32.ne (i32.and (local.get $raw) (i32.const 3)) (i32.const 0)))
+          (then (return (i32.const -1))))
+        (local.set $ptr (i32.add (local.get $sd) (local.get $raw)))
+        (if (i32.lt_u (local.get $ptr) (local.get $sd))
+          (then (return (i32.const -1)))))
+      (else
+        (local.set $ptr (local.get $raw))))
+    (local.get $ptr))
+
+  (func $security_descriptor_valid (param $sd i32) (result i32)
+    (local $control i32) (local $self_relative i32)
+    (local $owner i32) (local $group i32) (local $sacl i32) (local $dacl i32)
+    (if (i32.eqz (call $security_span_valid (local.get $sd) (i32.const 20)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl8 (local.get $sd)) (i32.const 1))
+      (then (return (i32.const 0))))
+    (local.set $control (call $gl16 (i32.add (local.get $sd) (i32.const 2))))
+    (local.set $self_relative
+      (i32.ne (i32.and (local.get $control) (i32.const 0x8000)) (i32.const 0)))
+    (local.set $owner
+      (call $security_sd_component (local.get $sd)
+        (call $gl32 (i32.add (local.get $sd) (i32.const 4)))
+        (local.get $self_relative)))
+    (local.set $group
+      (call $security_sd_component (local.get $sd)
+        (call $gl32 (i32.add (local.get $sd) (i32.const 8)))
+        (local.get $self_relative)))
+    (if (i32.or
+          (i32.or (i32.eq (local.get $owner) (i32.const -1))
+                  (i32.eq (local.get $group) (i32.const -1)))
+          (i32.or
+            (i32.and (i32.ne (local.get $owner) (i32.const 0))
+                     (i32.eqz (call $security_sid_valid (local.get $owner))))
+            (i32.and (i32.ne (local.get $group) (i32.const 0))
+                     (i32.eqz (call $security_sid_valid (local.get $group))))))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $control) (i32.const 0x10)) (i32.const 0))
+      (then
+        (local.set $sacl
+          (call $security_sd_component (local.get $sd)
+            (call $gl32 (i32.add (local.get $sd) (i32.const 12)))
+            (local.get $self_relative)))
+        (if (i32.or
+              (i32.eq (local.get $sacl) (i32.const -1))
+              (i32.and (i32.ne (local.get $sacl) (i32.const 0))
+                       (i32.eqz (call $security_acl_valid (local.get $sacl)))))
+          (then (return (i32.const 0))))))
+    (if (i32.ne (i32.and (local.get $control) (i32.const 4)) (i32.const 0))
+      (then
+        (local.set $dacl
+          (call $security_sd_component (local.get $sd)
+            (call $gl32 (i32.add (local.get $sd) (i32.const 16)))
+            (local.get $self_relative)))
+        (if (i32.or
+              (i32.eq (local.get $dacl) (i32.const -1))
+              (i32.and (i32.ne (local.get $dacl) (i32.const 0))
+                       (i32.eqz (call $security_acl_valid (local.get $dacl)))))
+          (then (return (i32.const 0))))))
+    (i32.const 1))
+
+  (func $security_descriptor_length (param $sd i32) (result i32)
+    (local $control i32) (local $self_relative i32) (local $length i32)
+    (local $raw i32) (local $ptr i32) (local $component_length i32)
+    (local.set $control (call $gl16 (i32.add (local.get $sd) (i32.const 2))))
+    (local.set $self_relative
+      (i32.ne (i32.and (local.get $control) (i32.const 0x8000)) (i32.const 0)))
+    (local.set $length (i32.const 20))
+
+    ;; Owner and primary group SIDs are meaningful whenever their fields are
+    ;; nonzero.  The present bits gate SACL/DACL fields.
+    (local.set $raw (call $gl32 (i32.add (local.get $sd) (i32.const 4))))
+    (if (local.get $raw)
+      (then
+        (local.set $ptr (call $security_sd_component
+          (local.get $sd) (local.get $raw) (local.get $self_relative)))
+        (local.set $component_length (call $security_sid_length (local.get $ptr)))
+        (local.set $length
+          (if (result i32) (local.get $self_relative)
+            (then (call $security_max_u (local.get $length)
+              (i32.add (local.get $raw) (local.get $component_length))))
+            (else (i32.add (local.get $length) (local.get $component_length)))))))
+    (local.set $raw (call $gl32 (i32.add (local.get $sd) (i32.const 8))))
+    (if (local.get $raw)
+      (then
+        (local.set $ptr (call $security_sd_component
+          (local.get $sd) (local.get $raw) (local.get $self_relative)))
+        (local.set $component_length (call $security_sid_length (local.get $ptr)))
+        (local.set $length
+          (if (result i32) (local.get $self_relative)
+            (then (call $security_max_u (local.get $length)
+              (i32.add (local.get $raw) (local.get $component_length))))
+            (else (i32.add (local.get $length) (local.get $component_length)))))))
+    (if (i32.ne (i32.and (local.get $control) (i32.const 0x10)) (i32.const 0))
+      (then
+        (local.set $raw (call $gl32 (i32.add (local.get $sd) (i32.const 12))))
+        (if (local.get $raw)
+          (then
+            (local.set $ptr (call $security_sd_component
+              (local.get $sd) (local.get $raw) (local.get $self_relative)))
+            (local.set $component_length
+              (call $gl16 (i32.add (local.get $ptr) (i32.const 2))))
+            (local.set $length
+              (if (result i32) (local.get $self_relative)
+                (then (call $security_max_u (local.get $length)
+                  (i32.add (local.get $raw) (local.get $component_length))))
+                (else (i32.add (local.get $length) (local.get $component_length)))))))))
+    (if (i32.ne (i32.and (local.get $control) (i32.const 4)) (i32.const 0))
+      (then
+        (local.set $raw (call $gl32 (i32.add (local.get $sd) (i32.const 16))))
+        (if (local.get $raw)
+          (then
+            (local.set $ptr (call $security_sd_component
+              (local.get $sd) (local.get $raw) (local.get $self_relative)))
+            (local.set $component_length
+              (call $gl16 (i32.add (local.get $ptr) (i32.const 2))))
+            (local.set $length
+              (if (result i32) (local.get $self_relative)
+                (then (call $security_max_u (local.get $length)
+                  (i32.add (local.get $raw) (local.get $component_length))))
+                (else (i32.add (local.get $length) (local.get $component_length)))))))))
+    (local.get $length))
+
+  (func $security_accessor_fail
+    (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+    (global.set $eax (i32.const 0)))
+
+  (func $handle_IsValidSid (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $security_sid_valid (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_IsValidAcl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $security_acl_valid (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_IsValidSecurityDescriptor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $security_descriptor_valid (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_GetSecurityDescriptorControl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $revision i32) (local $control i32)
+    (if (i32.or
+          (i32.eqz (call $security_span_valid (local.get $arg0) (i32.const 20)))
+          (i32.or
+            (i32.eqz (call $security_span_valid (local.get $arg1) (i32.const 2)))
+            (i32.eqz (call $security_span_valid (local.get $arg2) (i32.const 4)))))
+      (then (call $security_accessor_fail))
+      (else
+        (local.set $revision (call $gl8 (local.get $arg0)))
+        (local.set $control (call $gl16 (i32.add (local.get $arg0) (i32.const 2))))
+        ;; Microsoft documents that lpdwRevision is set even when descriptor
+        ;; validation fails.  Load both values before either output is touched.
+        (call $gs32 (local.get $arg2) (local.get $revision))
+        (if (call $security_descriptor_valid (local.get $arg0))
+          (then
+            (call $gs16 (local.get $arg1) (local.get $control))
+            (global.set $eax (i32.const 1)))
+          (else (call $security_accessor_fail)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_GetSecurityDescriptorLength (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (if (result i32) (call $security_descriptor_valid (local.get $arg0))
+        (then (call $security_descriptor_length (local.get $arg0)))
+        (else (i32.const 0))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $security_get_sid_component
+      (param $sd i32) (param $field_offset i32) (param $default_bit i32)
+      (param $out_sid i32) (param $out_defaulted i32)
+    (local $control i32) (local $raw i32) (local $sid i32)
+    (if (i32.or
+          (i32.eqz (call $security_descriptor_valid (local.get $sd)))
+          (i32.eqz (call $security_span_valid (local.get $out_sid) (i32.const 4))))
+      (then (call $security_accessor_fail) (return)))
+    (local.set $control (call $gl16 (i32.add (local.get $sd) (i32.const 2))))
+    (local.set $raw (call $gl32 (i32.add (local.get $sd) (local.get $field_offset))))
+    (local.set $sid
+      (call $security_sd_component (local.get $sd) (local.get $raw)
+        (i32.ne (i32.and (local.get $control) (i32.const 0x8000)) (i32.const 0))))
+    (if (i32.and
+          (i32.ne (local.get $sid) (i32.const 0))
+          (i32.eqz (call $security_span_valid (local.get $out_defaulted) (i32.const 4))))
+      (then (call $security_accessor_fail) (return)))
+    ;; An absent owner/group sets the pointer to NULL and leaves the ignored
+    ;; Defaulted output unchanged.
+    (if (local.get $sid)
+      (then
+        (call $gs32 (local.get $out_defaulted)
+          (i32.ne (i32.and (local.get $control) (local.get $default_bit)) (i32.const 0)))))
+    (call $gs32 (local.get $out_sid) (local.get $sid))
+    (global.set $eax (i32.const 1)))
+
+  (func $handle_GetSecurityDescriptorOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $security_get_sid_component (local.get $arg0) (i32.const 4) (i32.const 1)
+      (local.get $arg1) (local.get $arg2))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_GetSecurityDescriptorGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $security_get_sid_component (local.get $arg0) (i32.const 8) (i32.const 2)
+      (local.get $arg1) (local.get $arg2))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $security_get_acl_component
+      (param $sd i32) (param $field_offset i32) (param $present_bit i32)
+      (param $default_bit i32) (param $out_present i32) (param $out_acl i32)
+      (param $out_defaulted i32)
+    (local $control i32) (local $present i32) (local $raw i32) (local $acl i32)
+    (if (i32.or
+          (i32.eqz (call $security_descriptor_valid (local.get $sd)))
+          (i32.eqz (call $security_span_valid (local.get $out_present) (i32.const 4))))
+      (then (call $security_accessor_fail) (return)))
+    (local.set $control (call $gl16 (i32.add (local.get $sd) (i32.const 2))))
+    (local.set $present
+      (i32.ne (i32.and (local.get $control) (local.get $present_bit)) (i32.const 0)))
+    (if (local.get $present)
+      (then
+        (if (i32.or
+              (i32.eqz (call $security_span_valid (local.get $out_acl) (i32.const 4)))
+              (i32.eqz (call $security_span_valid (local.get $out_defaulted) (i32.const 4))))
+          (then (call $security_accessor_fail) (return)))
+        (local.set $raw
+          (call $gl32 (i32.add (local.get $sd) (local.get $field_offset))))
+        (local.set $acl
+          (call $security_sd_component (local.get $sd) (local.get $raw)
+            (i32.ne (i32.and (local.get $control) (i32.const 0x8000)) (i32.const 0))))
+        (call $gs32 (local.get $out_acl) (local.get $acl))
+        (call $gs32 (local.get $out_defaulted)
+          (i32.ne (i32.and (local.get $control) (local.get $default_bit)) (i32.const 0)))))
+    ;; If the ACL is absent, only Present is defined and the other outputs are
+    ;; deliberately left untouched.
+    (call $gs32 (local.get $out_present) (local.get $present))
+    (global.set $eax (i32.const 1)))
+
+  (func $handle_GetSecurityDescriptorSacl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $security_get_acl_component
+      (local.get $arg0) (i32.const 12) (i32.const 0x10) (i32.const 0x20)
+      (local.get $arg1) (local.get $arg2) (local.get $arg3))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  (func $handle_GetSecurityDescriptorDacl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $security_get_acl_component
+      (local.get $arg0) (i32.const 16) (i32.const 4) (i32.const 8)
+      (local.get $arg1) (local.get $arg2) (local.get $arg3))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
   ;; InitializeAcl(pAcl, nAclLength, dwAclRevision). ACL is an 8-byte header
   ;; followed by variable-sized ACE records.
   (func $handle_InitializeAcl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1829,7 +2174,7 @@
   (func $handle_SetSecurityDescriptorDacl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg0)
       (then
-        (call $gs32 (i32.add (local.get $arg0) (i32.const 12))
+        (call $gs32 (i32.add (local.get $arg0) (i32.const 16))
           (select (local.get $arg2) (i32.const 0) (local.get $arg1)))
         (call $gs16 (i32.add (local.get $arg0) (i32.const 2))
           (i32.or
