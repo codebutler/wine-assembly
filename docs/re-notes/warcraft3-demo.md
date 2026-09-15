@@ -1358,6 +1358,11 @@ and Huffman. It has exactly **six exports** (`ijlGetLibVersion`, `ijlInit`,
 the load sits behind one interceptable call, `ijlRead` at `0x600333d0`. That is
 the obvious lever and nothing has been built for it yet.
 
+> **Sized since, and it is smaller than this reads.** An 11-window census of
+> the whole load ("The map load has NO hot loop", below) puts ijl15 at
+> **29.41%** weighted, not the ~40% quoted from a single early window. It is
+> still the largest single lever, but it caps the load at about **1.4x**.
+
 `Game.dll+0x6f0deb60` is a linear first-free-slot scan, entry `0x6f0deb40`:
 
 ```
@@ -1494,6 +1499,7 @@ That makes two host-side interception candidates on this app, both pure
 functions over a byte range with a fixed ABI:
 
 - `ijl15.dll!ijlRead` at orig `0x600333d0` -- ~40% of the first load phase
+  (**29.41% weighted over the whole load**; see the 11-window census below)
 - `Game.dll+0x6f05ee50` CRC32 -- ~7% of the post-card phase
 
 Neither is a bug; both are guest work an emulator can do natively instead.
@@ -1723,7 +1729,8 @@ Two related corrections for anyone reading older notes or session logs:
   evidence.
 
 The real lever in this phase remains `ijl15.dll!ijlRead` at orig `0x600333d0`:
-six exports, one interceptable call, ~40% of the first load phase.
+six exports, one interceptable call, ~40% of the first load phase — but
+**29.41% weighted across the whole load**, per the 11-window census below.
 
 ### CORRECTION: the campaign no longer dies at 2048 virtual-map records
 
