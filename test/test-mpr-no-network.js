@@ -11,6 +11,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
 
 const ROOT = path.join(__dirname, '..');
 const STACK = 0x00300000;
@@ -26,6 +27,11 @@ const extraWat = String.raw`
 
   (func (export "test_mpr_last_error") (result i32)
     (global.get $last_error))
+
+  (func (export "test_mpr_first_api_id") (result i32)
+    (call $lookup_api_id "WNetAddConnection2W"))
+  (func (export "test_mpr_last_api_id") (result i32)
+    (call $lookup_api_id "WNetGetUniversalNameA"))
 
   (func (export "test_mpr_open_a") (param $out i32) (result i32)
     (call $mpr_test_begin)
@@ -162,6 +168,26 @@ function importedMprNames(exe) {
   ], 'focused family covers every Far MPR import');
 
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const expectedApis = [
+    ['WNetAddConnection2W', 4],
+    ['WNetOpenEnumA', 5], ['WNetOpenEnumW', 5], ['WNetCloseEnum', 1],
+    ['WNetEnumResourceA', 4], ['WNetEnumResourceW', 4],
+    ['WNetGetResourceParentA', 3], ['WNetGetResourceParentW', 3],
+    ['WNetGetResourceInformationA', 4], ['WNetGetResourceInformationW', 4],
+    ['WNetAddConnection2A', 4], ['WNetCancelConnection2A', 3],
+    ['WNetGetConnectionA', 3], ['WNetGetUniversalNameA', 4],
+  ];
+  expectedApis.forEach(([name, nargs], index) => {
+    const api = apiTable.find(entry => entry.name === name);
+    assert.deepStrictEqual(
+      api && { id: api.id, nargs: api.nargs, convention: api.convention },
+      { id: 3620 + index, nargs, convention: 'stdcall' },
+      `${name} keeps its append-only MPR identity and ABI`);
+  });
+  assert.strictEqual(e.test_mpr_first_api_id() >>> 0, 3620,
+    'generated lookup resolves the first MPR API');
+  assert.strictEqual(e.test_mpr_last_api_id() >>> 0, 3633,
+    'generated lookup resolves the last MPR API');
   const imageBase = e.get_image_base() >>> 0;
   const guestBase = e.get_guest_base() >>> 0;
   const wa = guest => (guest - imageBase + guestBase) >>> 0;

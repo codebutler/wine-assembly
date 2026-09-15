@@ -30353,5 +30353,103 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 538560389
+  },
+  {
+    "id": 3620,
+    "name": "WNetAddConnection2W",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1102887595
+  },
+  {
+    "id": 3621,
+    "name": "WNetOpenEnumA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2175139923
+  },
+  {
+    "id": 3622,
+    "name": "WNetOpenEnumW",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 2544247541
+  },
+  {
+    "id": 3623,
+    "name": "WNetCloseEnum",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3668691454
+  },
+  {
+    "id": 3624,
+    "name": "WNetEnumResourceA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 813142395
+  },
+  {
+    "id": 3625,
+    "name": "WNetEnumResourceW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 645366205
+  },
+  {
+    "id": 3626,
+    "name": "WNetGetResourceParentA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 4206680098
+  },
+  {
+    "id": 3627,
+    "name": "WNetGetResourceParentW",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3837572480
+  },
+  {
+    "id": 3628,
+    "name": "WNetGetResourceInformationA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3494603294
+  },
+  {
+    "id": 3629,
+    "name": "WNetGetResourceInformationW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3796600436
+  },
+  {
+    "id": 3630,
+    "name": "WNetAddConnection2A",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1471995213
+  },
+  {
+    "id": 3631,
+    "name": "WNetCancelConnection2A",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 484661650
+  },
+  {
+    "id": 3632,
+    "name": "WNetGetConnectionA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 3466359518
+  },
+  {
+    "id": 3633,
+    "name": "WNetGetUniversalNameA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 2442503706
   }
 ]
