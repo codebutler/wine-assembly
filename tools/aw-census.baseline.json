@@ -3,6 +3,8 @@
   "STUB": [],
   "DIVERGENT": [
     "GetCommandLine",
+    "IsCharAlpha",
+    "IsCharUpper",
     "wsprintf",
     "wvsprintf"
   ],
