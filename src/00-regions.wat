@@ -229,7 +229,7 @@
     (owner "01-header.wat:$RESERVED_PAGE_STRINGS"))
   ;; The texts on the shutting-down / safe-to-turn-off screens.
   (region.declare $POWER_SCREEN_STRINGS (size 0x000000C0) (align 0x00000010)
-    (owner "09c3-controls.wat:$POWER_SCREEN_STRINGS"))
+    (owner "09c3-controls4-shell-dialogs.wat:$POWER_SCREEN_STRINGS"))
   (region.declare-fixed $GUEST_BASE (base 0x00012000) (size 0x03C00000) (align 0x00001000)
     (owner "01-header.wat:$GUEST_BASE"))
   ;; Per-owner USER activation history fits in the remaining aligned table gap
