@@ -3988,7 +3988,8 @@
                 ;; ever handed out and let the reclaim stop there. Everything
                 ;; below it stays permanently spoken for, which costs address
                 ;; space; handing it out twice would cost correctness.
-                (call $virtual_reserve_record (local.get $new_top) (local.get $size))
+                (call $virtual_reserve_record
+                  (local.get $new_top) (local.get $size) (local.get $arg3))
                 (global.set $eax (local.get $new_top))))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
   )

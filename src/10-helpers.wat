@@ -548,7 +548,11 @@
         (br $scan)))
       (br $done))))
 
-  (func $virtual_reserve_record (param $guest i32) (param $size i32)
+  ;; The base is 64KB-aligned, leaving its low protection bits free. Preserve
+  ;; the initial VirtualAlloc flProtect there so VirtualQuery can report the
+  ;; allocation contract even before any page in the reservation is committed.
+  (func $virtual_reserve_record
+      (param $guest i32) (param $size i32) (param $protect i32)
     (local $count i32) (local $floor i32)
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
     (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
@@ -562,7 +566,8 @@
         (i32.store
           (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
             (i32.shl (local.get $count) (i32.const 3)))
-          (local.get $guest))
+          (i32.or (local.get $guest)
+            (i32.and (local.get $protect) (global.get $GUEST_PTE_PROTECT_MASK))))
         (i32.store offset=4
           (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
             (i32.shl (local.get $count) (i32.const 3)))
@@ -581,7 +586,9 @@
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
       (local.set $ent (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
         (i32.shl (local.get $i) (i32.const 3))))
-      (if (i32.eq (i32.load (local.get $ent)) (local.get $guest))
+      (if (i32.eq
+            (i32.and (i32.load (local.get $ent)) (i32.const 0xFFFFF000))
+            (local.get $guest))
         (then
           (local.set $last (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
             (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 3))))
@@ -607,9 +614,9 @@
     (local.set $i (i32.const 0))
     (block $res_done (loop $res
       (br_if $res_done (i32.ge_u (local.get $i) (local.get $count)))
-      (local.set $base (i32.load
+      (local.set $base (i32.and (i32.load
         (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
-          (i32.shl (local.get $i) (i32.const 3)))))
+          (i32.shl (local.get $i) (i32.const 3)))) (i32.const 0xFFFFF000)))
       (if (i32.and (i32.ge_u (local.get $base) (call $virtual_alloc_min))
             (i32.lt_u (local.get $base) (local.get $min)))
         (then (local.set $min (local.get $base))))
@@ -673,7 +680,8 @@
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
       (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
         (i32.shl (local.get $i) (i32.const 3))))
-      (local.set $base (i32.load (local.get $rec)))
+      (local.set $base
+        (i32.and (i32.load (local.get $rec)) (i32.const 0xFFFFF000)))
       (if (i32.and
             (i32.lt_u (local.get $base) (local.get $end))
             (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))

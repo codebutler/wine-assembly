@@ -61,7 +61,8 @@ const extraWat = `
   (func (export "test_gap_rec_size") (param $i i32) (result i32)
     (i32.load offset=4 (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4)))))
   (func (export "test_gap_bare_reserve") (param $guest i32) (param $size i32)
-    (call $virtual_reserve_record (local.get $guest) (local.get $size)))
+    (call $virtual_reserve_record
+      (local.get $guest) (local.get $size) (i32.const 0x04)))
   (func (export "test_gap_set_floor") (param $v i32)
     (i32.store offset=20 (global.get $VIRTUAL_MAP_STATE) (local.get $v)))
 `;

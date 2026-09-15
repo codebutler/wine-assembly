@@ -78,6 +78,8 @@ const extraWat = String.raw`
       (local.get $address) (local.get $size) (local.get $protect)
       (local.get $old) (i32.const 0) (i32.const 0))
     (global.get $eax))
+  (func (export "test_virtual_pte") (param $address i32) (result i32)
+    (call $virtual_query_pte (local.get $address)))
   (func (export "test_esp") (result i32) (global.get $esp))
 `;
 
@@ -127,11 +129,18 @@ async function main() {
     protect: 0x20,
     type: 0x01000000,
   }, 'adjacent executable/read pages coalesce within one image section');
+  assert.strictEqual(e.test_virtual_query(IMAGE_BASE + 0x2234, QUERY_BUFFER, 28), 28);
+  assert.strictEqual(mbi(e).base, IMAGE_BASE + 0x2000,
+    'BaseAddress is the rounded queried page, not the earlier matching page');
+  assert.strictEqual(mbi(e).size, 0x1000,
+    'RegionSize scans subsequent matching pages only');
 
   assert.strictEqual(e.test_virtual_query(IMAGE_BASE + 0x3456, QUERY_BUFFER, 28), 28);
   assert.strictEqual(mbi(e).protect, 0x02,
     'IMAGE_SCN_MEM_READ maps to PAGE_READONLY');
   assert.strictEqual(mbi(e).type, 0x01000000, 'read-only metadata remains MEM_IMAGE');
+  assert.strictEqual(e.test_virtual_pte(IMAGE_BASE + 0x3000) & 0x800, 0,
+    'normal image loading does not publish a packed-page override');
   assert.strictEqual(e.test_virtual_query(IMAGE_BASE + 0x4567, QUERY_BUFFER, 28), 28);
   assert.strictEqual(mbi(e).protect, 0x04,
     'IMAGE_SCN_MEM_READ|WRITE maps to PAGE_READWRITE');
@@ -145,6 +154,8 @@ async function main() {
   assert.strictEqual(e.test_virtual_query(IMAGE_BASE + 0x3456, QUERY_BUFFER, 28), 28);
   assert.strictEqual(mbi(e).protect, 0x04,
     'VirtualQuery reflects a direct-image VirtualProtect override');
+  assert.notStrictEqual(e.test_virtual_pte(IMAGE_BASE + 0x3000) & 0x800, 0,
+    'direct-image PTE metadata is created only by VirtualProtect');
   assert.strictEqual(mbi(e).allocationProtect, 0x80,
     'changing current protection preserves the image allocation protection');
 
@@ -162,7 +173,7 @@ async function main() {
   assert.deepStrictEqual(mbi(e), {
     base: reserve,
     allocationBase: reserve,
-    allocationProtect: 0,
+    allocationProtect: 0x04,
     size: 0x3000,
     state: 0x2000,
     protect: 0,
@@ -186,8 +197,8 @@ async function main() {
   assert.strictEqual(e.test_virtual_query(reserve + 0x1000, QUERY_BUFFER, 28), 28);
   assert.strictEqual(mbi(e).protect, 0x02,
     'VirtualQuery reads sparse current protection from the packed PTE');
-  assert.strictEqual(mbi(e).allocationProtect, 0x20,
-    'sparse AllocationProtect remains the original commit protection');
+  assert.strictEqual(mbi(e).allocationProtect, 0x04,
+    'a later commit does not replace the reservation allocation protection');
 
   assert.strictEqual(e.test_virtual_query(reserve - 0x2000, QUERY_BUFFER, 28), 28);
   assert.strictEqual(mbi(e).state, 0x10000, 'a sparse gap is MEM_FREE');

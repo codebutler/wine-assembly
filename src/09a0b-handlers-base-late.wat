@@ -1789,7 +1789,10 @@
   ;; exception-handler validation.
   (func $virtual_query_section_protect (param $characteristics i32) (result i32)
     (local $protect i32)
-    (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x20000000))
+    ;; Spell IMAGE_SCN_MEM_EXECUTE by bit position: its numeric value aliases a
+    ;; declared emulator region and must not become a raw address-map literal.
+    (if (i32.ne (i32.and (local.get $characteristics)
+          (i32.shl (i32.const 1) (i32.const 29)))
           (i32.const 0))
       (then
         (if (i32.ne (i32.and (local.get $characteristics) (i32.const 0x80000000))
@@ -1913,7 +1916,8 @@
       (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
       (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
         (i32.shl (local.get $i) (i32.const 3))))
-      (local.set $base (i32.load (local.get $rec)))
+      (local.set $base
+        (i32.and (i32.load (local.get $rec)) (i32.const 0xFFFFF000)))
       (if (i32.lt_u (i32.sub (local.get $address) (local.get $base))
             (i32.load offset=4 (local.get $rec)))
         (then (return (local.get $base))))
@@ -1967,7 +1971,9 @@
       (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
       (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
         (i32.shl (local.get $i) (i32.const 3))))
-      (if (i32.eq (i32.load (local.get $rec)) (local.get $allocation_base))
+      (if (i32.eq
+            (i32.and (i32.load (local.get $rec)) (i32.const 0xFFFFF000))
+            (local.get $allocation_base))
         (then (return (i32.add (local.get $allocation_base)
           (i32.load offset=4 (local.get $rec))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -2006,6 +2012,20 @@
   (func $virtual_query_sparse_allocation_protect
       (param $address i32) (result i32)
     (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (block $reserve_done (loop $reserve
+      (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (local.set $base
+        (i32.and (i32.load (local.get $rec)) (i32.const 0xFFFFF000)))
+      (if (i32.lt_u (i32.sub (local.get $address) (local.get $base))
+            (i32.load offset=4 (local.get $rec)))
+        (then (return (i32.and (i32.load (local.get $rec))
+          (global.get $GUEST_PTE_PROTECT_MASK)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $reserve)))
+    (local.set $i (i32.const 0))
     (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
@@ -2049,8 +2069,9 @@
     (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
     (block $reserve_done (loop $reserve
       (br_if $reserve_done (i32.ge_u (local.get $i) (local.get $count)))
-      (local.set $candidate (i32.load (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
-        (i32.shl (local.get $i) (i32.const 3)))))
+      (local.set $candidate (i32.and
+        (i32.load (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3)))) (i32.const 0xFFFFF000)))
       (if (i32.and (i32.gt_u (local.get $candidate) (local.get $address))
             (i32.lt_u (local.get $candidate) (local.get $next)))
         (then (local.set $next (local.get $candidate))))
@@ -2212,6 +2233,9 @@
         (local.set $end (select (local.get $next) (local.get $end)
           (i32.lt_u (local.get $next) (local.get $end))))
         (local.set $allocation_base (local.get $image))
+        ;; Microsoft's documented !vprot MEM_IMAGE example reports this image-
+        ;; mapping allocation default independently of the queried page's
+        ;; section-specific current protection.
         (local.set $allocation_protect (i32.const 0x80)) ;; PAGE_EXECUTE_WRITECOPY
         (local.set $state (i32.const 0x1000)) ;; MEM_COMMIT
         (i32.store offset=24 (local.get $buf) (i32.const 0x01000000))) ;; MEM_IMAGE
