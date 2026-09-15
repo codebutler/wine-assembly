@@ -4222,6 +4222,29 @@
               (local.set $done (i32.const 1))
               (br $decode)))))
 
+      ;; MSVC's 64-byte MMX memcpy body starts with unprefixed PREFETCHNTA.
+      ;; As with the Jazz exact loop above, recognize it at any instruction
+      ;; boundary in an enclosing decoded block.  The byte-proof matcher owns
+      ;; the loop's fall-through and back edge on success.
+      (if (i32.and
+            (i32.eq (local.get $op) (i32.const 0x0F))
+            (i32.and
+              (i32.eqz (local.get $prefix_rep))
+              (i32.and
+                (i32.eqz (local.get $prefix_66))
+                (i32.and
+                  (i32.eqz (local.get $prefix_67))
+                  (i32.eqz (local.get $prefix_seg))))))
+        (then
+          (if (call $try_emit_mmx_stream_copy64 (local.get $insn_start))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
+          (if (call $try_emit_mmx_copy64 (local.get $insn_start))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))))
+
       ;; ---- NOP (0x90) ----
       (if (i32.eq (local.get $op) (i32.const 0x90)) (then (call $te (i32.const 0) (i32.const 0)) (br $decode)))
 
@@ -5906,6 +5929,21 @@
           (if (i32.eq (local.get $op) (i32.const 0xA2))
             (then (call $te (i32.const 175) (i32.const 0)) (br $decode)))
 
+          ;; 0x0F 0xAE 0xF8: SFENCE. WebAssembly's ordinary stores are already
+          ;; observed in program order; x86 non-temporal stores are represented
+          ;; by those same stores here, so there is no additional state to
+          ;; publish. Accept only the exact register encoding: the other 0F AE
+          ;; forms are FXSAVE/FXRSTOR/LDMXCSR/STMXCSR/CLFLUSH and remain loud.
+          (if (i32.eq (local.get $op) (i32.const 0xAE))
+            (then
+              (call $decode_modrm)
+              (if (i32.and
+                    (i32.eq (global.get $mr_mod) (i32.const 3))
+                    (i32.and
+                      (i32.eq (global.get $mr_reg) (i32.const 7))
+                      (i32.eqz (global.get $mr_val))))
+                (then (call $te (i32.const 0) (i32.const 0)) (br $decode)))))
+
           ;; ---- 0x0F 0xA0/0xA8: PUSH FS/GS, 0x0F 0xA1/0xA9: POP FS/GS ----
           ;; The one-byte segment pushes (06/0E/16/1E) were handled but not
           ;; these. Allegro's bank-switched bitmap code saves FS alongside ES
@@ -5928,6 +5966,69 @@
               (br $decode)))
 
           ;; ---- SSE base ----
+          ;; MOVMSKPS r32,xmm extracts the four lane sign bits. It has only a
+          ;; register source form.
+          (if (i32.and
+                (i32.eq (local.get $op) (i32.const 0x50))
+                (i32.and (i32.eqz (local.get $prefix_66))
+                         (i32.eqz (local.get $prefix_rep))))
+            (then
+              (call $decode_modrm)
+              (if (i32.eq (global.get $mr_mod) (i32.const 3))
+                (then
+                  (call $te (i32.const 432)
+                    (i32.or (i32.const 0x2000)
+                      (i32.or (i32.shl (global.get $mr_reg) (i32.const 4))
+                              (global.get $mr_val))))
+                  (br $decode)))))
+          ;; CMPPS xmm,xmm/m128,imm8. All eight SSE1 predicates are handled by
+          ;; one subop; preserve the immediate in bits 16..23.
+          (if (i32.and
+                (i32.eq (local.get $op) (i32.const 0xC2))
+                (i32.and (i32.eqz (local.get $prefix_66))
+                         (i32.eqz (local.get $prefix_rep))))
+            (then
+              (call $decode_modrm)
+              (if (i32.eq (global.get $mr_mod) (i32.const 3))
+                (then
+                  (local.set $imm (call $d_fetch8))
+                  (call $te (i32.const 432)
+                    (i32.or (i32.shl (local.get $imm) (i32.const 16))
+                      (i32.or (i32.const 0x1F00)
+                        (i32.or (i32.shl (global.get $mr_reg) (i32.const 4))
+                                (global.get $mr_val)))))
+                  (br $decode))
+                (else
+                  (call $apply_seg_override)
+                  (local.set $a (call $emit_sib_or_abs))
+                  (local.set $imm (call $d_fetch8))
+                  (call $te (i32.const 433)
+                    (i32.or (i32.shl (local.get $imm) (i32.const 16))
+                      (i32.or (i32.const 0x1F00)
+                              (i32.shl (global.get $mr_reg) (i32.const 4)))))
+                  (call $te_raw (local.get $a))
+                  (br $decode)))))
+          ;; MOVLPS xmm,m64 / MOVLPS m64,xmm replace or store only the low
+          ;; half. Register encodings of 0F12 are MOVHLPS and are deliberately
+          ;; left unsupported until separately implemented.
+          (if (i32.and
+                (i32.and (i32.eqz (local.get $prefix_66))
+                         (i32.eqz (local.get $prefix_rep)))
+                (i32.or (i32.eq (local.get $op) (i32.const 0x12))
+                        (i32.eq (local.get $op) (i32.const 0x13))))
+            (then
+              (call $decode_modrm)
+              (if (i32.ne (global.get $mr_mod) (i32.const 3))
+                (then
+                  (call $apply_seg_override)
+                  (local.set $a (call $emit_sib_or_abs))
+                  (call $te
+                    (select (i32.const 434) (i32.const 433)
+                      (i32.eq (local.get $op) (i32.const 0x13)))
+                    (i32.or (i32.const 0x1E00)
+                            (i32.shl (global.get $mr_reg) (i32.const 4))))
+                  (call $te_raw (local.get $a))
+                  (br $decode)))))
           ;; CVTSS2SI r32,xmm/m32 (default MXCSR nearest-even rounding).
           (if (i32.and (i32.eq (local.get $op) (i32.const 0x2d))
             (i32.and (i32.eqz (local.get $prefix_66))
@@ -6148,6 +6249,20 @@
           ;; the right answer in the wrong 64 bits.
           (if (i32.and (i32.eqz (local.get $prefix_66)) (i32.eqz (local.get $prefix_rep)))
             (then
+              ;; 0xE7: MOVNTQ m64,mm. The non-temporal cache policy has no
+              ;; WebAssembly equivalent; the architectural memory result is
+              ;; exactly the same 64-bit store as MOVQ, followed by the SFENCE
+              ;; accepted above. There is no register-destination form.
+              (if (i32.eq (local.get $op) (i32.const 0xE7))
+                (then
+                  (call $decode_modrm)
+                  (if (i32.ne (global.get $mr_mod) (i32.const 3))
+                    (then
+                      (local.set $a (call $emit_sib_or_abs))
+                      (call $te (i32.const 424)
+                        (i32.shl (global.get $mr_reg) (i32.const 4)))
+                      (call $te_raw (local.get $a))
+                      (br $decode)))))
               ;; 0x71/0x72/0x73: shift-by-immediate group. The operation is in
               ;; the ModRM reg field and the count is an imm8 after it, so this
               ;; has to look at the ModRM before it can tell whether the opcode

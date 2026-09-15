@@ -137,6 +137,22 @@ async function main() {
   ]);
   test('prefetchnta consumes its full effective-address encoding', e.get_eax(), 0x51A7C0DE);
 
+  // SFENCE orders non-temporal stores. Those are ordinary ordered stores in
+  // this interpreter, so the instruction has no register-visible effect, but
+  // its complete three-byte encoding must be consumed.
+  runCode([0x0F, 0xAE, 0xF8, 0xB8, ...le32(0x5F3EACE)]);
+  test('sfence is accepted and consumes its ModRM byte', e.get_eax(), 0x05F3EACE);
+
+  setBytes(sseA, [0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]);
+  setBytes(sseOut, new Array(8).fill(0));
+  runCode([
+    0x0F, 0x6F, 0x05, ...le32(sseA),   // movq mm0,[sseA]
+    0x0F, 0xE7, 0x05, ...le32(sseOut), // movntq [sseOut],mm0
+    0x0F, 0xAE, 0xF8,                  // sfence
+  ]);
+  testBytes('movntq stores all 64 bits before sfence', bytesAt(sseOut, 8),
+    [0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]);
+
   // MOVZX/MOVSX preserve EFLAGS. MFC relies on this exact sequence in its
   // WM_COMMAND routing: TEST button-id; MOVZX notification-code; JZ.
   runCode([
@@ -829,6 +845,28 @@ async function main() {
     bytesAt(sseOut, 8), sseBytesB.slice(0, 8));
   testBytes('MOVHPS preserves the destination low 64 bits',
     bytesAt(sseOut + 16, 16), [...sseBytesA.slice(0, 8), ...sseBytesB.slice(0, 8)]);
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x12, 0x05, ...le32(sseB),       // movlps xmm0,qword [sseB]
+    0x0f, 0x13, 0x05, ...le32(sseOut),     // movlps qword [sseOut],xmm0
+    0x0f, 0x11, 0x05, ...le32(sseOut + 16), // movups [sseOut+16],xmm0
+  ]);
+  testBytes('MOVLPS memory load replaces and store selects the low 64 bits',
+    bytesAt(sseOut, 8), sseBytesB.slice(0, 8));
+  testBytes('MOVLPS preserves the destination high 64 bits',
+    bytesAt(sseOut + 16, 16), [...sseBytesB.slice(0, 8), ...sseBytesA.slice(8, 16)]);
+
+  [-2, 4, NaN, 8].forEach((v, i) => dv.setFloat32(g2w(sseA + i * 4), v, true));
+  [1, 4, 0, 9].forEach((v, i) => dv.setFloat32(g2w(sseB + i * 4), v, true));
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0xc2, 0x05, ...le32(sseB), 0x01, // cmpltps xmm0,[sseB]
+    0x0f, 0x50, 0xc8,                      // movmskps ecx,xmm0
+  ]);
+  test('CMPPS LT + MOVMSKPS produces the four-lane mask', e.get_ecx(), 0x9);
+  setBytes(sseA, sseBytesA);
+  setBytes(sseB, sseBytesB);
 
   runCode([
     0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]

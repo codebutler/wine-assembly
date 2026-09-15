@@ -128,6 +128,15 @@
   (global $mmx_mask_copy_runs (mut i32) (i32.const 0))
   (global $mmx_mask_copy_rows (mut i64) (i64.const 0))
   (global $mmx_mask_copy_bytes (mut i64) (i64.const 0))
+  ;; MSVC's Pentium/MMX memcpy copies 64-byte cache lines with eight MOVQ
+  ;; loads/stores.  On an interpreter that loop is sixteen dispatches per
+  ;; line; retain the exact CPU/MMX state while using Wasm bulk memory for the
+  ;; proved-disjoint common case.
+  (global $mmx_copy64_enabled (mut i32) (i32.const 1))
+  (global $mmx_copy64_matches (mut i32) (i32.const 0))
+  (global $mmx_copy64_runs (mut i32) (i32.const 0))
+  (global $mmx_copy64_lines (mut i64) (i64.const 0))
+  (global $mmx_copy64_bytes (mut i64) (i64.const 0))
 
   ;; Decode-time FNV-1a over guest bytes. Exact binary-specific folds use this
   ;; after cheap anchor checks so accepting a fold proves the complete body,
@@ -188,6 +197,60 @@
     (call $te_raw (i32.add (local.get $start_eip) (i32.const 42)))
     (call $te_raw (local.get $start_eip))
     (global.set $d_pc (i32.add (local.get $start_eip) (i32.const 42)))
+    (i32.const 1))
+
+  ;; Exact, address-independent proof of the MSVC 64-byte MMX memcpy body:
+  ;;
+  ;;   prefetchnta [esi+238h]
+  ;;   movq mm0..mm3,[esi+0..18h] / stores to [edi+0..18h]
+  ;;   movq mm0..mm3,[esi+20h..38h] / stores to [edi+20h..38h]
+  ;;   add esi,40h / add edi,40h / dec ecx / jnz body
+  ;;
+  ;; The whole 78-byte hash prevents a similar-looking near miss from being
+  ;; lowered.  No image address is part of the recognizer.
+  (func $try_emit_mmx_copy64 (param $start_eip i32) (result i32)
+    (if (i32.or (i32.eqz (global.get $mmx_copy64_enabled))
+                (global.get $code16))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (local.get $start_eip)) (i32.const 0x3886180F))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $start_eip) (i32.const 74)))
+                (i32.const 0xB2754940))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $loop_hash_bytes (local.get $start_eip) (i32.const 78))
+                (i32.const 0x4E398899))
+      (then (return (i32.const 0))))
+    (global.set $mmx_copy64_matches
+      (i32.add (global.get $mmx_copy64_matches) (i32.const 1)))
+    ;; H419's negative operand namespace is reserved for exact MMX copies.
+    ;; ...0000 is the Jazz masked row; ...0001 is this straight memcpy.
+    (call $te (global.get $LOOP_SUPEROP_COPY) (i32.const 0x80000001))
+    (call $te_raw (i32.add (local.get $start_eip) (i32.const 78)))
+    (call $te_raw (local.get $start_eip))
+    (global.set $d_pc (i32.add (local.get $start_eip) (i32.const 78)))
+    (i32.const 1))
+
+  ;; Streaming sibling selected when CPUID advertises SSE: eight MOVQ loads,
+  ;; eight MOVNTQ stores, and an EAX-counted 64-byte inner loop. UT2003.exe and
+  ;; D3DDrv.dll contain the same address-independent 71-byte body.
+  (func $try_emit_mmx_stream_copy64 (param $start_eip i32) (result i32)
+    (if (i32.or (i32.eqz (global.get $mmx_copy64_enabled))
+                (global.get $code16))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (local.get $start_eip)) (i32.const 0x0F066F0F))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $start_eip) (i32.const 67)))
+                (i32.const 0xB9754840))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $loop_hash_bytes (local.get $start_eip) (i32.const 71))
+                (i32.const 0xD68032EC))
+      (then (return (i32.const 0))))
+    (global.set $mmx_copy64_matches
+      (i32.add (global.get $mmx_copy64_matches) (i32.const 1)))
+    (call $te (global.get $LOOP_SUPEROP_COPY) (i32.const 0x80000002))
+    (call $te_raw (i32.add (local.get $start_eip) (i32.const 71)))
+    (call $te_raw (local.get $start_eip))
+    (global.set $d_pc (i32.add (local.get $start_eip) (i32.const 71)))
     (i32.const 1))
 
   ;; AoE I and II use the same span-list data structure and clipping algorithm,
@@ -3390,6 +3453,229 @@
     (global.set $eip
       (select (local.get $back) (local.get $fall) (i32.ne (local.get $count) (i32.const 0)))))
 
+  ;; Exact execution of the MSVC 64-byte MMX memcpy recognized above.  The
+  ;; ordinary loop is a forward copy, not memmove: only use memory.copy when
+  ;; the complete guest ranges are proved disjoint and this cache line has an
+  ;; affine page-local translation.  The overlap/split fallback performs the
+  ;; original interleaved load/store order through the mapping-aware helpers.
+  (func $th_mmx_copy64 (param $op i32)
+    (local $tp i32) (local $fall i32) (local $back i32)
+    (local $src i32) (local $dst i32) (local $count i32)
+    (local $old_dst i32) (local $old_count i32)
+    (local $src_end i32) (local $dst_end i32) (local $bytes i32)
+    (local $overlap i32) (local $src_wa i32) (local $dst_wa i32)
+    (local $q0 i64) (local $q1 i64) (local $q2 i64) (local $q3 i64)
+    (local $tail0 v128) (local $tail1 v128)
+    (local $iterations i32) (local $charge i32) (local $fast i32)
+
+    (local.set $tp (global.get $ip))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
+    (local.set $fall (i32.load (local.get $tp)))
+    (local.set $back (i32.load offset=4 (local.get $tp)))
+    (local.set $src (global.get $esi))
+    (local.set $dst (global.get $edi))
+    (local.set $count (global.get $ecx))
+    (global.set $mmx_copy64_runs
+      (i32.add (global.get $mmx_copy64_runs) (i32.const 1)))
+
+    ;; A zero ECX is the x86 do-while wrap case, and count<<6 can overflow.
+    ;; Both stay on the exact one-line-at-a-time arm.
+    (if (i32.and (i32.ne (local.get $count) (i32.const 0))
+                 (i32.le_u (local.get $count) (i32.const 0x03FFFFFF)))
+      (then
+        (local.set $bytes (i32.shl (local.get $count) (i32.const 6)))
+        (local.set $src_end (i32.add (local.get $src) (local.get $bytes)))
+        (local.set $dst_end (i32.add (local.get $dst) (local.get $bytes)))
+        (local.set $overlap
+          (i32.or
+            (i32.or (i32.lt_u (local.get $src_end) (local.get $src))
+                    (i32.lt_u (local.get $dst_end) (local.get $dst)))
+            (i32.and (i32.lt_u (local.get $src) (local.get $dst_end))
+                     (i32.lt_u (local.get $dst) (local.get $src_end))))))
+      (else (local.set $overlap (i32.const 1))))
+
+    (block $done
+      (loop $lines
+        (local.set $old_dst (local.get $dst))
+        (local.set $old_count (local.get $count))
+        (local.set $fast (i32.const 0))
+        (if (i32.and
+              (i32.eqz (local.get $overlap))
+              (i32.and
+                (i32.le_u (i32.and (local.get $src) (i32.const 0xFFF)) (i32.const 0xFC0))
+                (i32.le_u (i32.and (local.get $dst) (i32.const 0xFFF)) (i32.const 0xFC0))))
+          (then
+            (local.set $src_wa (call $g2w (local.get $src)))
+            (local.set $dst_wa (call $g2w (local.get $dst)))
+            (if (i32.and
+                  (i32.ne (local.get $src_wa) (global.get $NULL_SENTINEL))
+                  (i32.ne (local.get $dst_wa) (global.get $NULL_SENTINEL)))
+              (then
+                ;; The loop leaves mm0..mm3 holding bytes 32..63 of its final
+                ;; line.  Capture them before bulk copy for exact MMX state.
+                (local.set $tail0 (v128.load offset=32 (local.get $src_wa)))
+                (local.set $tail1 (v128.load offset=48 (local.get $src_wa)))
+                (local.set $q0 (i64x2.extract_lane 0 (local.get $tail0)))
+                (local.set $q1 (i64x2.extract_lane 1 (local.get $tail0)))
+                (local.set $q2 (i64x2.extract_lane 0 (local.get $tail1)))
+                (local.set $q3 (i64x2.extract_lane 1 (local.get $tail1)))
+                (call $invalidate_code_write (local.get $dst) (i32.const 64))
+                (memory.copy (local.get $dst_wa) (local.get $src_wa) (i32.const 64))
+                (local.set $fast (i32.const 1))))))
+
+        (if (i32.eqz (local.get $fast))
+          (then
+            ;; Preserve the source-observation order of the original eight
+            ;; load pairs and eight stores for overlapping or split mappings.
+            (local.set $q0 (call $mmx_load64 (local.get $src)))
+            (local.set $q1 (call $mmx_load64 (i32.add (local.get $src) (i32.const 8))))
+            (call $mmx_store64 (local.get $dst) (local.get $q0))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 8)) (local.get $q1))
+            (local.set $q2 (call $mmx_load64 (i32.add (local.get $src) (i32.const 16))))
+            (local.set $q3 (call $mmx_load64 (i32.add (local.get $src) (i32.const 24))))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 16)) (local.get $q2))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 24)) (local.get $q3))
+            (local.set $q0 (call $mmx_load64 (i32.add (local.get $src) (i32.const 32))))
+            (local.set $q1 (call $mmx_load64 (i32.add (local.get $src) (i32.const 40))))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 32)) (local.get $q0))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 40)) (local.get $q1))
+            (local.set $q2 (call $mmx_load64 (i32.add (local.get $src) (i32.const 48))))
+            (local.set $q3 (call $mmx_load64 (i32.add (local.get $src) (i32.const 56))))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 48)) (local.get $q2))
+            (call $mmx_store64 (i32.add (local.get $dst) (i32.const 56)) (local.get $q3))))
+
+        (local.set $src (i32.add (local.get $src) (i32.const 64)))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 64)))
+        (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+        (local.set $iterations (i32.add (local.get $iterations) (i32.const 1)))
+        (local.set $charge (i32.add (local.get $charge) (i32.const 21)))
+        (br_if $done (i32.eqz (local.get $count)))
+        (br_if $done
+          (i32.ge_u (i32.sub (local.get $charge) (i32.const 1))
+                    (global.get $steps)))
+        (br $lines)))
+
+    (global.set $esi (local.get $src))
+    (global.set $edi (local.get $dst))
+    (global.set $ecx (local.get $count))
+    ;; DEC preserves the carry flag produced by the immediately preceding ADD
+    ;; EDI,64; all other arithmetic flags come from DEC.
+    (call $set_flags_add (local.get $old_dst) (i32.const 64) (local.get $dst))
+    (call $set_flags_dec (local.get $old_count) (local.get $count))
+    (call $mmx_set (i32.const 0) (local.get $q0))
+    (call $mmx_set (i32.const 1) (local.get $q1))
+    (call $mmx_set (i32.const 2) (local.get $q2))
+    (call $mmx_set (i32.const 3) (local.get $q3))
+    (global.set $mmx_exec_count
+      (i32.add (global.get $mmx_exec_count)
+        (i32.mul (local.get $iterations) (i32.const 16))))
+    (global.set $mmx_copy64_lines
+      (i64.add (global.get $mmx_copy64_lines) (i64.extend_i32_u (local.get $iterations))))
+    (global.set $mmx_copy64_bytes
+      (i64.add (global.get $mmx_copy64_bytes)
+        (i64.extend_i32_u (i32.shl (local.get $iterations) (i32.const 6)))))
+    (global.set $steps
+      (i32.sub (global.get $steps) (i32.sub (local.get $charge) (i32.const 1))))
+    (global.set $eip
+      (select (local.get $back) (local.get $fall) (i32.ne (local.get $count) (i32.const 0)))))
+
+  (func $th_mmx_stream_copy64 (param $op i32)
+    (local $tp i32) (local $fall i32) (local $back i32)
+    (local $src i32) (local $dst i32) (local $count i32)
+    (local $old_dst i32) (local $old_count i32)
+    (local $src_wa i32) (local $dst_wa i32) (local $fast i32)
+    (local $q0 i64) (local $q1 i64) (local $q2 i64) (local $q3 i64)
+    (local $q4 i64) (local $q5 i64) (local $q6 i64) (local $q7 i64)
+    (local $iterations i32) (local $charge i32)
+    (local.set $tp (global.get $ip))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
+    (local.set $fall (i32.load (local.get $tp)))
+    (local.set $back (i32.load offset=4 (local.get $tp)))
+    (local.set $src (global.get $esi))
+    (local.set $dst (global.get $edi))
+    (local.set $count (global.get $eax))
+    (global.set $mmx_copy64_runs
+      (i32.add (global.get $mmx_copy64_runs) (i32.const 1)))
+    (block $done
+      (loop $lines
+        (local.set $old_dst (local.get $dst))
+        (local.set $old_count (local.get $count))
+        ;; Always capture all eight source qwords before any store. Besides
+        ;; preserving MMX0..7, this exactly retains the original overlap order.
+        (local.set $q0 (call $mmx_load64 (local.get $src)))
+        (local.set $q1 (call $mmx_load64 (i32.add (local.get $src) (i32.const 8))))
+        (local.set $q2 (call $mmx_load64 (i32.add (local.get $src) (i32.const 16))))
+        (local.set $q3 (call $mmx_load64 (i32.add (local.get $src) (i32.const 24))))
+        (local.set $q4 (call $mmx_load64 (i32.add (local.get $src) (i32.const 32))))
+        (local.set $q5 (call $mmx_load64 (i32.add (local.get $src) (i32.const 40))))
+        (local.set $q6 (call $mmx_load64 (i32.add (local.get $src) (i32.const 48))))
+        (local.set $q7 (call $mmx_load64 (i32.add (local.get $src) (i32.const 56))))
+        (local.set $fast (i32.const 0))
+        (if (i32.and
+              (i32.and
+                (i32.le_u (local.get $src) (i32.add (local.get $src) (i32.const 64)))
+                (i32.and
+                  (i32.le_u (local.get $dst) (i32.add (local.get $dst) (i32.const 64)))
+                  (i32.or (i32.le_u (i32.add (local.get $src) (i32.const 64)) (local.get $dst))
+                          (i32.le_u (i32.add (local.get $dst) (i32.const 64)) (local.get $src)))))
+              (i32.and
+                (i32.le_u (i32.and (local.get $src) (i32.const 0xFFF)) (i32.const 0xFC0))
+                (i32.le_u (i32.and (local.get $dst) (i32.const 0xFFF)) (i32.const 0xFC0))))
+          (then
+            (local.set $src_wa (call $g2w (local.get $src)))
+            (local.set $dst_wa (call $g2w (local.get $dst)))
+            (if (i32.and
+                  (i32.ne (local.get $src_wa) (global.get $NULL_SENTINEL))
+                  (i32.ne (local.get $dst_wa) (global.get $NULL_SENTINEL)))
+              (then
+                (call $invalidate_code_write (local.get $dst) (i32.const 64))
+                (memory.copy (local.get $dst_wa) (local.get $src_wa) (i32.const 64))
+                (local.set $fast (i32.const 1))))))
+        (if (i32.eqz (local.get $fast)) (then
+          (call $mmx_store64 (local.get $dst) (local.get $q0))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 8)) (local.get $q1))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 16)) (local.get $q2))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 24)) (local.get $q3))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 32)) (local.get $q4))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 40)) (local.get $q5))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 48)) (local.get $q6))
+          (call $mmx_store64 (i32.add (local.get $dst) (i32.const 56)) (local.get $q7))))
+        (local.set $src (i32.add (local.get $src) (i32.const 64)))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 64)))
+        (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+        (local.set $iterations (i32.add (local.get $iterations) (i32.const 1)))
+        (local.set $charge (i32.add (local.get $charge) (i32.const 20)))
+        (br_if $done (i32.eqz (local.get $count)))
+        (br_if $done
+          (i32.ge_u (i32.sub (local.get $charge) (i32.const 1))
+                    (global.get $steps)))
+        (br $lines)))
+    (global.set $esi (local.get $src))
+    (global.set $edi (local.get $dst))
+    (global.set $eax (local.get $count))
+    (call $set_flags_add (local.get $old_dst) (i32.const 64) (local.get $dst))
+    (call $set_flags_dec (local.get $old_count) (local.get $count))
+    (call $mmx_set (i32.const 0) (local.get $q0))
+    (call $mmx_set (i32.const 1) (local.get $q1))
+    (call $mmx_set (i32.const 2) (local.get $q2))
+    (call $mmx_set (i32.const 3) (local.get $q3))
+    (call $mmx_set (i32.const 4) (local.get $q4))
+    (call $mmx_set (i32.const 5) (local.get $q5))
+    (call $mmx_set (i32.const 6) (local.get $q6))
+    (call $mmx_set (i32.const 7) (local.get $q7))
+    (global.set $mmx_exec_count
+      (i32.add (global.get $mmx_exec_count)
+        (i32.mul (local.get $iterations) (i32.const 16))))
+    (global.set $mmx_copy64_lines
+      (i64.add (global.get $mmx_copy64_lines) (i64.extend_i32_u (local.get $iterations))))
+    (global.set $mmx_copy64_bytes
+      (i64.add (global.get $mmx_copy64_bytes)
+        (i64.extend_i32_u (i32.shl (local.get $iterations) (i32.const 6)))))
+    (global.set $steps
+      (i32.sub (global.get $steps) (i32.sub (local.get $charge) (i32.const 1))))
+    (global.set $eip
+      (select (local.get $back) (local.get $fall) (i32.ne (local.get $count) (i32.const 0)))))
+
   ;; ------------------------------------------------------------------
   ;; 419: the COPY_RUN super-op.
   ;; ------------------------------------------------------------------
@@ -3417,7 +3703,12 @@
     (local $src_end i32) (local $dst_end i32) (local $copy32_overlap i32)
 
     (if (i32.lt_s (local.get $op) (i32.const 0))
-      (then (return_call $th_mmx_mask_copy32 (local.get $op))))
+      (then
+        (if (i32.eq (local.get $op) (i32.const 0x80000001))
+          (then (return_call $th_mmx_copy64 (local.get $op))))
+        (if (i32.eq (local.get $op) (i32.const 0x80000002))
+          (then (return_call $th_mmx_stream_copy64 (local.get $op))))
+        (return_call $th_mmx_mask_copy32 (local.get $op))))
 
     ;; Fourteen $read_thread_word calls would be fourteen calls and fourteen
     ;; global round trips on every entry, and this loop's measured average trip

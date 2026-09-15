@@ -158,6 +158,50 @@
       (i32.or (i32.and (call $build_eflags) (i32.const 0xFFFFF72A))
               (local.get $flags))))
 
+  ;; CMPPS predicates 0..7: EQ, LT, LE, UNORD, NEQ, NLT, NLE, ORD. A true
+  ;; lane is all ones. The negated predicates are true for unordered inputs,
+  ;; matching x86 rather than WebAssembly's NaN-false ordered comparisons.
+  (func $sse_cmp_lane (param $a f32) (param $b f32) (param $pred i32) (result i32)
+    (local $u i32)
+    (local.set $pred (i32.and (local.get $pred) (i32.const 7)))
+    (local.set $u (i32.or (f32.ne (local.get $a) (local.get $a))
+                          (f32.ne (local.get $b) (local.get $b))))
+    (if (i32.eq (local.get $pred) (i32.const 0))
+      (then (return (select (i32.const -1) (i32.const 0)
+        (i32.and (i32.eqz (local.get $u)) (f32.eq (local.get $a) (local.get $b)))))))
+    (if (i32.eq (local.get $pred) (i32.const 1))
+      (then (return (select (i32.const -1) (i32.const 0)
+        (i32.and (i32.eqz (local.get $u)) (f32.lt (local.get $a) (local.get $b)))))))
+    (if (i32.eq (local.get $pred) (i32.const 2))
+      (then (return (select (i32.const -1) (i32.const 0)
+        (i32.and (i32.eqz (local.get $u)) (f32.le (local.get $a) (local.get $b)))))))
+    (if (i32.eq (local.get $pred) (i32.const 3))
+      (then (return (select (i32.const -1) (i32.const 0) (local.get $u)))))
+    (if (i32.eq (local.get $pred) (i32.const 4))
+      (then (return (select (i32.const -1) (i32.const 0)
+        (i32.or (local.get $u) (f32.ne (local.get $a) (local.get $b)))))))
+    (if (i32.eq (local.get $pred) (i32.const 5))
+      (then (return (select (i32.const -1) (i32.const 0)
+        (i32.or (local.get $u) (f32.ge (local.get $a) (local.get $b)))))))
+    (if (i32.eq (local.get $pred) (i32.const 6))
+      (then (return (select (i32.const -1) (i32.const 0)
+        (i32.or (local.get $u) (f32.gt (local.get $a) (local.get $b)))))))
+    (select (i32.const -1) (i32.const 0) (i32.eqz (local.get $u))))
+
+  (func $sse_cmpps (param $a v128) (param $b v128) (param $pred i32) (result v128)
+    (i32x4.replace_lane 3
+      (i32x4.replace_lane 2
+        (i32x4.replace_lane 1
+          (i32x4.replace_lane 0 (i32x4.splat (i32.const 0))
+            (call $sse_cmp_lane (f32x4.extract_lane 0 (local.get $a))
+              (f32x4.extract_lane 0 (local.get $b)) (local.get $pred)))
+          (call $sse_cmp_lane (f32x4.extract_lane 1 (local.get $a))
+            (f32x4.extract_lane 1 (local.get $b)) (local.get $pred)))
+        (call $sse_cmp_lane (f32x4.extract_lane 2 (local.get $a))
+          (f32x4.extract_lane 2 (local.get $b)) (local.get $pred)))
+      (call $sse_cmp_lane (f32x4.extract_lane 3 (local.get $a))
+        (f32x4.extract_lane 3 (local.get $b)) (local.get $pred))))
+
   (func $sse_scalar_arithmetic (param $sub i32) (param $d v128) (param $s f32) (result v128)
     (local $a f32) (local $r f32)
     (local.set $a (f32x4.extract_lane 0 (local.get $d)))
@@ -239,6 +283,14 @@
     (local.set $src (i32.and (local.get $op) (i32.const 0xF)))
     (local.set $d (call $xmm_get (local.get $dst)))
     (local.set $s (call $xmm_get (local.get $src)))
+    (if (i32.eq (local.get $sub) (i32.const 32)) (then
+      (call $set_reg (local.get $dst) (i32x4.bitmask (local.get $s)))
+      (return_call $next)))
+    (if (i32.eq (local.get $sub) (i32.const 31)) (then
+      (call $xmm_set (local.get $dst) (call $sse_cmpps
+        (local.get $d) (local.get $s)
+        (i32.and (i32.shr_u (local.get $op) (i32.const 16)) (i32.const 0xFF))))
+      (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 18)) (then
       (call $set_reg (local.get $dst)
         (call $sse_cvtt_f32_i32 (f32.nearest (f32x4.extract_lane 0 (local.get $s)))))
@@ -317,6 +369,17 @@
     (local.set $dst (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $addr (call $read_addr))
     (local.set $d (call $xmm_get (local.get $dst)))
+    (if (i32.eq (local.get $sub) (i32.const 31)) (then
+      (call $xmm_set (local.get $dst) (call $sse_cmpps
+        (local.get $d) (call $xmm_load128 (local.get $addr))
+        (i32.and (i32.shr_u (local.get $op) (i32.const 16)) (i32.const 0xFF))))
+      (return_call $next)))
+    (if (i32.eq (local.get $sub) (i32.const 30)) (then
+      (call $xmm_set (local.get $dst)
+        (i32x4.replace_lane 1
+          (i32x4.replace_lane 0 (local.get $d) (call $gl32 (local.get $addr)))
+          (call $gl32 (i32.add (local.get $addr) (i32.const 4)))))
+      (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 18)) (then
       (call $set_reg (local.get $dst) (call $sse_cvtt_f32_i32
         (f32.nearest (f32.reinterpret_i32 (call $gl32 (local.get $addr))))))
@@ -405,7 +468,12 @@
     (local.set $src (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $v (call $xmm_get (local.get $src)))
     (local.set $addr (call $read_addr))
-    (if (i32.eq (local.get $sub) (i32.const 2))
+    (if (i32.eq (local.get $sub) (i32.const 30))
+      (then
+        (call $gs32 (local.get $addr) (i32x4.extract_lane 0 (local.get $v)))
+        (call $gs32 (i32.add (local.get $addr) (i32.const 4))
+          (i32x4.extract_lane 1 (local.get $v))))
+      (else (if (i32.eq (local.get $sub) (i32.const 2))
       (then (call $gs32 (local.get $addr) (i32x4.extract_lane 0 (local.get $v))))
       (else
         (if (i32.eq (local.get $sub) (i32.const 4))
@@ -413,7 +481,7 @@
             (call $gs32 (local.get $addr) (i32x4.extract_lane 2 (local.get $v)))
             (call $gs32 (i32.add (local.get $addr) (i32.const 4))
               (i32x4.extract_lane 3 (local.get $v))))
-          (else (call $xmm_store128 (local.get $addr) (local.get $v))))))
+          (else (call $xmm_store128 (local.get $addr) (local.get $v))))))))
     (return_call $next))
 
   ;; ---- Guest 64-bit access ----
