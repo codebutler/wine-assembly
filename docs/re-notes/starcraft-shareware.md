@@ -110,6 +110,73 @@ Useful landmarks from that run:
 Use this gate before counting a candidate game frame. Startup counts mostly
 measure Smacker and the outer message pump.
 
+### Clicks skip the Smacker videos. Escapes do not.
+
+Measured 2026-09-15 by driving a frozen `--control` session by hand (step,
+screenshot, decide, step) rather than replaying a fixed `--input` schedule.
+**Six escapes in a row never left the intro cinematic**; the first *click*
+ended it immediately.
+
+| batch | screen | action | effect |
+|---:|---|---|---|
+| 23 | Blizzard logo | — | |
+| 120 | | escape | logo dismissed |
+| 150 | "Blizzard Entertainment Presents" | | |
+| 190-670 | intro cinematic (static, cockpit, debris) | escape x5 | **no effect** |
+| 670 | | **click 320,240** | cinematic ends |
+| 790 | title screen, "Loading" | | |
+| 990 | mission card "STRONGARM / Chau Sara" | **click 320,240** | |
+| 1140 | mission briefing, Objectives + Start | **click 545,393** | |
+| 1540 | gameplay behind "Starcraft Tips" modal | **click 198,261** | |
+| ~1690 | unobstructed gameplay, 250 min / 200 gas / 12 supply | | |
+
+That reaches gameplay at **batch ~1690 against the escape route's 4550** --
+2.7x less work to get there, and the difference is almost entirely Smacker
+frames that were being decoded rather than skipped. The escape route above
+still works; it is just paying for the intro it never manages to cancel.
+
+Pass `--repaint-every=50`: without it the boot is several times slower in wall
+clock for the same batches.
+
+### `0x004b2ed0` is not a live frame counter
+
+Corrected 2026-09-15. The earlier note called it the simulation counter. Read
+over a driven session it is **static at 1394928771** across 300+ batches of
+gameplay whose screen is demonstrably advancing (`tools/png-diff.js` reports
+833 pixels changed in a 330x172 box over 300 batches). A gate built on it reads
+a constant and passes anything.
+
+Count **block entries at the verifier `0x004411e7`** instead. In a live
+`--control` session that means scanning the hot-block histogram for the
+address, since the standard probe only returns the top 40 blocks and the
+verifier is far below that:
+
+```js
+// node tools/ctl.js -s :PORT eval '<this>'   (after reset_handler_hist +
+// set_handler_hist_enabled(1) and the window you want to measure)
+(function(){var e=exports,m=new Uint32Array(memory.buffer);
+ var bb=e.get_hot_block_hist_base()>>>2,bc=e.get_hot_block_hist_count()|0;
+ var tot=0,want={},targets=[0x4411e7,0x4cbaf0];
+ for(var j=0;j<bc;j++){var ad=m[bb+j*2]>>>0,hh=m[bb+j*2+1]>>>0;
+  if(ad&&hh){tot+=hh;for(var k=0;k<targets.length;k++)
+   if(ad===targets[k])want[targets[k].toString(16)]=hh;}}
+ return JSON.stringify({blockHits:tot,found:want});})()
+```
+
+Early-mission baseline from that probe: **82,818 block entries per game frame**,
+1.16 display flushes per game frame (38,096,358 blocks / 460 frames / 535
+flushes). For comparison a real iPhone measured 137k-168k blocks per frame
+early in a match and 493k late in one.
+
+**`--no-threads` is mandatory for any of these probes.** With real threads the
+guest runs in a worker with its own wasm instance and `controlEval` reads the
+*main* instance, whose counters then sit at zero -- the same trap that made a
+phone session report `cache_stores: 0` beside a frozen `thread_alloc`.
+
+The hot clusters reproduce exactly in this route (storm at `0x79c000`):
+`7c108b/97/ad/ce` = cluster A at **15.68%** of block entries, `7c056a/0511/0558`
+= cluster B at ~7.3%, `4b48aa` = 3.36%.
+
 ### The input route is not optional, and `--batch-size` is not a substitute
 
 Ruled out 2026-09-15. `CLAUDE.md` documents raising `--batch-size` as the fix
