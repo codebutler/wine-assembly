@@ -1083,7 +1083,7 @@
   (local $vm i32) (local $a i32) (local $b i32) (local $c i32) (local $lane i32)
   (local $x i32) (local $y i32) (local $bits i32) (local $j i32) (local $dst i32)
   (local $bank i32) (local $offset i32) (local $e0 f32) (local $e1 f32) (local $e2 f32)
-  (local $u f32) (local $v f32) (local $w f32) (local $iw f32) (local $z f32)
+  (local $u f32) (local $v f32) (local $w f32) (local $iw f32) (local $riw f32) (local $z f32)
   (local $output i32) (local $wire i32) (local $point i32) (local $sprite i32) (local $dx f32) (local $dy f32) (local $half f32) (local $value f32)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $ctx) (i32.const 256))) (then (return (i32.const -1))))
   (if (i32.ne (i32.load (local.get $ctx)) (i32.const 0x44535031)) (then (return (i32.const -1))))
@@ -1137,18 +1137,29 @@
           (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c) (i32.const 8) (local.get $u) (local.get $v) (local.get $w))))
         (f32.store (i32.add (i32.add (local.get $ctx) (i32.const 208)) (i32.shl (local.get $lane) (i32.const 2))) (local.get $z))
         (local.set $iw (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c) (i32.const 12) (local.get $u) (local.get $v) (local.get $w)))
+        ;; Every varying is perspective-corrected by the SAME interpolated 1/W,
+        ;; and there are 33 of them per lane (fog, 28 varyings, 4 specular). One
+        ;; reciprocal and 33 multiplies instead of 33 divides: an f32.div is an
+        ;; order of magnitude more expensive than an f32.mul here, and this loop
+        ;; is the measured bulk of the per-quad setup that runs before coverage
+        ;; is even known (tools/bench-raster.js, `sliver` arm). The result can
+        ;; differ from the divide in the last ulp; it is then quantized to 8
+        ;; bits by $d3d_software_channel, which is why the golden-image tests
+        ;; are the check that this is invisible rather than an argument that it
+        ;; must be.
+        (local.set $riw (f32.div (f32.const 1) (local.get $iw)))
         (f32.store (i32.add (i32.add (local.get $ctx) (i32.const 264)) (i32.shl (local.get $lane) (i32.const 2)))
           (if (result f32) (i32.load offset=280 (local.get $ctx))
             (then (call $d3d_software_table_fog_factor (i32.load offset=280 (local.get $ctx))
               (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c) (i32.const 8) (local.get $u) (local.get $v) (local.get $w)) (local.get $iw)))
-            (else (f32.div (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c) (i32.const 128) (local.get $u) (local.get $v) (local.get $w)) (local.get $iw)))))
+            (else (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c) (i32.const 128) (local.get $u) (local.get $v) (local.get $w)) (local.get $riw)))))
         (local.set $j (i32.const 0))
         (loop $varyings
           (local.set $bank (select (i32.const 8224)
             (i32.add (i32.const 24608) (i32.shl (i32.and (i32.sub (local.get $j) (i32.const 4)) (i32.const 28)) (i32.const 4)))
             (i32.lt_u (local.get $j) (i32.const 4))))
-          (local.set $value (f32.div (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
-              (i32.add (i32.const 16) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $iw)))
+          (local.set $value (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
+              (i32.add (i32.const 16) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $riw)))
           (if (i32.and (i32.ne (local.get $sprite) (i32.const 0)) (i32.ge_u (local.get $j) (i32.const 4))) (then
             (local.set $value (select (f32.const 1) (f32.const 0) (i32.eq (i32.and (local.get $j) (i32.const 3)) (i32.const 3))))
             (if (i32.eqz (i32.and (local.get $j) (i32.const 3))) (then
@@ -1169,8 +1180,8 @@
         (loop $specular
           (f32.store (i32.add (i32.add (local.get $vm) (i32.const 8288))
             (i32.add (i32.shl (local.get $j) (i32.const 4)) (i32.shl (local.get $lane) (i32.const 2))))
-            (f32.div (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
-              (i32.add (i32.const 144) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $iw)))
+            (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
+              (i32.add (i32.const 144) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $riw)))
           (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $specular (i32.lt_u (local.get $j) (i32.const 4))))
       (block $outside
         (br_if $outside (i32.or (i32.lt_u (local.get $x) (i32.load offset=76 (local.get $ctx)))
