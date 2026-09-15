@@ -1085,6 +1085,7 @@
   (local $bank i32) (local $offset i32) (local $e0 f32) (local $e1 f32) (local $e2 f32)
   (local $u f32) (local $v f32) (local $w f32) (local $iw f32) (local $riw f32) (local $z f32)
   (local $output i32) (local $wire i32) (local $point i32) (local $sprite i32) (local $dx f32) (local $dy f32) (local $half f32) (local $value f32)
+  (local $vmask i32)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $ctx) (i32.const 256))) (then (return (i32.const -1))))
   (if (i32.ne (i32.load (local.get $ctx)) (i32.const 0x44535031)) (then (return (i32.const -1))))
   (if (i32.le_s (i32.load offset=140 (local.get $ctx)) (i32.const 0)) (then (return (i32.load offset=140 (local.get $ctx)))))
@@ -1110,6 +1111,47 @@
       (if (i32.load offset=200 (local.get $ctx)) (then
         (local.set $sprite (i32.and (i32.load offset=4 (i32.load offset=200 (local.get $ctx))) (i32.const 1)))))))
     (memory.fill (i32.add (local.get $vm) (i32.const 32)) (i32.const 0) (i32.const 8192))
+    ;; The varying loop below is a FIXED 28 iterations and the specular loop a
+    ;; fixed 4, run for all four lanes of every quad whether the lane is inside
+    ;; the triangle or not -- and a pixel shader that reads one varying pays for
+    ;; all 32. There is no count of the varyings a program actually uses (the
+    ;; compiled program in src/09ag-d3d-shader-vm.wat records no input mask), so
+    ;; bound it by the data instead: a varying that is +0 at all three vertices
+    ;; interpolates to zero at every pixel of this triangle, whatever the
+    ;; weights. Scan the three vertices once per quad -- 32 integer loads,
+    ;; against the interpolate-and-scale it saves four times over -- and store a
+    ;; literal zero for those instead of calling $d3d_software_interp.
+    ;;
+    ;; The store stays unconditional. Skipping it would leave the previous
+    ;; triangle's value in the register bank, which is the trap here: this VM
+    ;; (ctx+148) keeps its varying banks across triangles and nothing else
+    ;; clears them -- the memory.fill above covers vm+32..vm+8224 and the
+    ;; varying banks start at vm+8224.
+    ;;
+    ;; The test is on the raw bits being +0, not f32.eq to zero, so a -0 vertex
+    ;; still takes the arithmetic path. What it does not preserve is the SIGN of
+    ;; a zero result: 0*u for a negative barycentric is -0, so an all-+0 varying
+    ;; could interpolate to -0 on an outside helper lane and now reads +0. That
+    ;; is visible only to a shader that divides by such a varying and cares
+    ;; which infinity it gets.
+    (local.set $vmask (i32.const 0)) (local.set $j (i32.const 0))
+    (loop $scan
+      (local.set $offset (i32.add (i32.const 16) (i32.shl (local.get $j) (i32.const 2))))
+      (if (i32.eqz (i32.and
+          (i32.and (i32.eqz (i32.load (i32.add (local.get $a) (local.get $offset))))
+            (i32.eqz (i32.load (i32.add (local.get $b) (local.get $offset)))))
+          (i32.eqz (i32.load (i32.add (local.get $c) (local.get $offset))))))
+        (then (local.set $vmask (i32.or (local.get $vmask) (i32.shl (i32.const 1) (local.get $j))))))
+      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $scan (i32.lt_u (local.get $j) (i32.const 28))))
+    (local.set $j (i32.const 0))
+    (loop $scan_specular
+      (local.set $offset (i32.add (i32.const 144) (i32.shl (local.get $j) (i32.const 2))))
+      (if (i32.eqz (i32.and
+          (i32.and (i32.eqz (i32.load (i32.add (local.get $a) (local.get $offset))))
+            (i32.eqz (i32.load (i32.add (local.get $b) (local.get $offset)))))
+          (i32.eqz (i32.load (i32.add (local.get $c) (local.get $offset))))))
+        (then (local.set $vmask (i32.or (local.get $vmask) (i32.shl (i32.const 1) (i32.add (local.get $j) (i32.const 28)))))))
+      (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $scan_specular (i32.lt_u (local.get $j) (i32.const 4))))
     (local.set $lane (i32.const 0)) (local.set $bits (i32.const 0))
     (loop $lanes
       (local.set $x (i32.add (i32.load offset=132 (local.get $ctx)) (i32.and (local.get $lane) (i32.const 1))))
@@ -1158,8 +1200,10 @@
           (local.set $bank (select (i32.const 8224)
             (i32.add (i32.const 24608) (i32.shl (i32.and (i32.sub (local.get $j) (i32.const 4)) (i32.const 28)) (i32.const 4)))
             (i32.lt_u (local.get $j) (i32.const 4))))
-          (local.set $value (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
+          (local.set $value (if (result f32) (i32.and (i32.shr_u (local.get $vmask) (local.get $j)) (i32.const 1))
+            (then (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
               (i32.add (i32.const 16) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $riw)))
+            (else (f32.const 0))))
           (if (i32.and (i32.ne (local.get $sprite) (i32.const 0)) (i32.ge_u (local.get $j) (i32.const 4))) (then
             (local.set $value (select (f32.const 1) (f32.const 0) (i32.eq (i32.and (local.get $j) (i32.const 3)) (i32.const 3))))
             (if (i32.eqz (i32.and (local.get $j) (i32.const 3))) (then
@@ -1180,8 +1224,10 @@
         (loop $specular
           (f32.store (i32.add (i32.add (local.get $vm) (i32.const 8288))
             (i32.add (i32.shl (local.get $j) (i32.const 4)) (i32.shl (local.get $lane) (i32.const 2))))
-            (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
-              (i32.add (i32.const 144) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $riw)))
+            (if (result f32) (i32.and (i32.shr_u (local.get $vmask) (i32.add (local.get $j) (i32.const 28))) (i32.const 1))
+              (then (f32.mul (call $d3d_software_interp (local.get $a) (local.get $b) (local.get $c)
+                (i32.add (i32.const 144) (i32.shl (local.get $j) (i32.const 2))) (local.get $u) (local.get $v) (local.get $w)) (local.get $riw)))
+              (else (f32.const 0))))
           (local.set $j (i32.add (local.get $j) (i32.const 1))) (br_if $specular (i32.lt_u (local.get $j) (i32.const 4))))
       (block $outside
         (br_if $outside (i32.or (i32.lt_u (local.get $x) (i32.load offset=76 (local.get $ctx)))
