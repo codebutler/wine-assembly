@@ -225,7 +225,7 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       '--no-build',
       '--quiet-api',
       '--quiet-blocks',
-      '--trace-api=EnableWindow,DestroyWindow',
+      '--trace-api=EnableWindow,DestroyWindow,SystemParametersInfoA',
       '--max-batches=120',
       '--batch-size=50000',
       `--input=1:wait-title:Please_register:2000,2:dlg-click:1,5:dump-windows:registration-closed,` +
@@ -254,6 +254,16 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       `installed WinRAR exited ${installed.status}${installed.signal ? ` (${installed.signal})` : ''}\n${installedOutput.slice(-8000)}`);
     assert(!/UNIMPLEMENTED API:|\*\*\* CRASH|RuntimeError|LinkError/i.test(installedOutput),
       `installed WinRAR hit a compatibility failure\n${installedOutput.slice(-8000)}`);
+    for (const [action, label] of [
+      ['0x00000068', 'SPI_GETWHEELSCROLLLINES'],
+      ['0x00000026', 'SPI_GETDRAGFULLWINDOWS'],
+      ['0x0000001f', 'SPI_GETICONTITLELOGFONT'],
+    ]) {
+      assert(installedOutput.includes(`SystemParametersInfoA(${action},`),
+        `WinRAR did not exercise ${label}\n${installedOutput.slice(-8000)}`);
+    }
+    assert(/SystemParametersInfoA\(0x0000001f, 0x0000005c,/i.test(installedOutput),
+      `WinRAR did not issue its newer-sized ANSI icon-title LOGFONT query\n${installedOutput.slice(-8000)}`);
     assert(installedOutput.includes('[SetWindowText] "c:\\ - WinRAR (evaluation copy)"'),
       `installed WinRAR never reached its live file panel\n${installedOutput.slice(-8000)}`);
     const modalDisable = installedOutput.match(

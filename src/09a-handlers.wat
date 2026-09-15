@@ -7229,13 +7229,49 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     ;; their windows underneath it.
     (if (i32.eq (local.get $arg0) (i32.const 0x30))
       (then
-        (if (local.get $arg2)
-          (then
-            (local.set $buf (call $g2w (local.get $arg2)))
-            (i32.store        (local.get $buf) (i32.const 0))
-            (i32.store offset=4  (local.get $buf) (i32.const 0))
-            (i32.store offset=8  (local.get $buf) (call $screen_metric_w))
-            (i32.store offset=12 (local.get $buf) (call $screen_work_bottom))))
+        (if (i32.eqz (local.get $arg2)) (then (return (i32.const 0))))
+        (local.set $buf
+          (call $g2w_affine_span (local.get $arg2) (i32.const 16)))
+        (if (i32.eq (local.get $buf) (global.get $NULL_SENTINEL))
+          (then (return (i32.const 0))))
+        (i32.store        (local.get $buf) (i32.const 0))
+        (i32.store offset=4  (local.get $buf) (i32.const 0))
+        (i32.store offset=8  (local.get $buf) (call $screen_metric_w))
+        (i32.store offset=12 (local.get $buf) (call $screen_work_bottom))
+        (return (i32.const 1))))
+    ;; SPI_GETICONTITLELOGFONT = 0x1f. WinRAR asks for this while creating its
+    ;; Settings property sheet. It passes a newer 92-byte declaration even to
+    ;; the ANSI entry point, so accept a caller size at least as large as the
+    ;; selected Win98 LOGFONT layout and initialize only that recognized prefix.
+    (if (i32.eq (local.get $arg0) (i32.const 0x1f))
+      (then
+        (if (i32.or
+              (i32.eqz (local.get $arg2))
+              (i32.lt_u (local.get $arg1) (local.get $lf)))
+          (then (return (i32.const 0))))
+        (local.set $buf
+          (call $g2w_affine_span (local.get $arg2) (local.get $lf)))
+        (if (i32.eq (local.get $buf) (global.get $NULL_SENTINEL))
+          (then (return (i32.const 0))))
+        (memory.fill (local.get $buf) (i32.const 0) (local.get $lf))
+        (call $spi_write_logfont (local.get $buf) (local.get $wide))
+        (return (i32.const 1))))
+    ;; The browser moves the complete top-level window while dragging, and the
+    ;; classic wheel default is three lines. These are output getters, not
+    ;; capability probes: success requires publishing the documented scalar.
+    (if (i32.or
+          (i32.eq (local.get $arg0) (i32.const 0x26)) ;; SPI_GETDRAGFULLWINDOWS
+          (i32.eq (local.get $arg0) (i32.const 0x68))) ;; SPI_GETWHEELSCROLLLINES
+      (then
+        (if (i32.eqz (local.get $arg2)) (then (return (i32.const 0))))
+        (local.set $buf
+          (call $g2w_affine_span (local.get $arg2) (i32.const 4)))
+        (if (i32.eq (local.get $buf) (global.get $NULL_SENTINEL))
+          (then (return (i32.const 0))))
+        (i32.store (local.get $buf)
+          (if (result i32) (i32.eq (local.get $arg0) (i32.const 0x68))
+            (then (i32.const 3))
+            (else (i32.const 1))))
         (return (i32.const 1))))
     ;; SPI_GETNONCLIENTMETRICS = 0x29: fill NONCLIENTMETRICS struct
     ;; Win9x applications commonly pass uiParam=0 and declare the versioned
@@ -7244,21 +7280,28 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
     ;; layout before writing its five LOGFONT records.
     (if (i32.eq (local.get $arg0) (i32.const 0x29))
       (then
-        (if (local.get $arg2)
-          (then
-            (local.set $buf (call $g2w (local.get $arg2)))
-            (local.set $size (local.get $arg1))
-            (if (i32.eqz (local.get $size))
-              (then (local.set $size (i32.load (local.get $buf)))))
-            (if (i32.lt_u (local.get $size)
-                  (i32.add (i32.const 40) (i32.mul (local.get $lf) (i32.const 5))))
-              (then (return (i32.const 0))))
+        (if (i32.eqz (local.get $arg2)) (then (return (i32.const 0))))
+        (local.set $buf
+          (call $g2w_affine_span (local.get $arg2) (i32.const 4)))
+        (if (i32.eq (local.get $buf) (global.get $NULL_SENTINEL))
+          (then (return (i32.const 0))))
+        (local.set $size (local.get $arg1))
+        (if (i32.eqz (local.get $size))
+          (then (local.set $size (i32.load (local.get $buf)))))
+        (local.set $i
+          (i32.add (i32.const 40) (i32.mul (local.get $lf) (i32.const 5))))
+        (if (i32.lt_u (local.get $size) (local.get $i))
+          (then (return (i32.const 0))))
+        (local.set $buf
+          (call $g2w_affine_span (local.get $arg2) (local.get $i)))
+        (if (i32.eq (local.get $buf) (global.get $NULL_SENTINEL))
+          (then (return (i32.const 0))))
             ;; Initialize the complete Win98 layout. A larger declaration may
             ;; include fields added by newer Windows versions; leave that tail
             ;; alone rather than treating an unbounded caller value as a fill
             ;; length.
             (memory.fill (local.get $buf) (i32.const 0)
-              (i32.add (i32.const 40) (i32.mul (local.get $lf) (i32.const 5))))
+              (local.get $i))
             ;; cbSize, iBorderWidth, iScrollWidth, iScrollHeight, iCaptionWidth, iCaptionHeight
             (i32.store        (local.get $buf)                       (local.get $size))  ;; cbSize
             (i32.store offset=4  (local.get $buf) (i32.const 1))    ;; iBorderWidth
@@ -7293,9 +7336,11 @@ rushOrgEx(hdc, x, y, lppt) — canonical WAT-owned brush origin.
             (local.set $p (i32.add (local.get $p) (local.get $lf)))
             (call $spi_write_logfont (local.get $p) (local.get $wide))  ;; lfStatusFont
             (local.set $p (i32.add (local.get $p) (local.get $lf)))
-            (call $spi_write_logfont (local.get $p) (local.get $wide)))) ;; lfMessageFont
+            (call $spi_write_logfont (local.get $p) (local.get $wide)) ;; lfMessageFont
         (return (i32.const 1))))
-    (i32.const 1))
+    ;; An action we do not model must fail rather than claim success while
+    ;; leaving an output buffer full of stale stack bytes.
+    (i32.const 0))
 
   ;; 389: SystemParametersInfoW — 4 args stdcall
   (func $handle_SystemParametersInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
