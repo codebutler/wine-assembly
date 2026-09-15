@@ -2725,6 +2725,16 @@
   (func (export "get_ck_lut16_runs") (result i32) (global.get $ck_lut16_runs))
   (func (export "get_ck_lut16_px") (result i64) (global.get $ck_lut16_px))
 
+  ;; The colour-keyed 8bpp->8bpp copy fold ($th_ck_copy8_run). Same
+  ;; decode-time off switch as the rest, so an A/B needs two code addresses
+  ;; or a cleared block cache.
+  (func (export "set_ck_copy8") (param $flag i32)
+    (global.set $ck_copy8_enabled (local.get $flag)))
+  (func (export "get_ck_copy8") (result i32) (global.get $ck_copy8_enabled))
+  (func (export "get_ck_copy8_matches") (result i32) (global.get $ck_copy8_matches))
+  (func (export "get_ck_copy8_runs") (result i32) (global.get $ck_copy8_runs))
+  (func (export "get_ck_copy8_px") (result i64) (global.get $ck_copy8_px))
+
   ;; The alpha-blended RGB565 blit fold ($th_ck_blend16_run). The off switch
   ;; is decode-time like every other fold's, so an A/B has to run the two arms
   ;; at different code addresses or clear the block cache between them.

@@ -81,6 +81,15 @@
   (global $ck_lut16_runs    (mut i32) (i32.const 0))
   (global $ck_lut16_px      (mut i64) (i64.const 0))
 
+  ;; $th_ck_copy8_run's colour-keyed 8bpp->8bpp COPY fold (SimGolf's jgl.dll,
+  ;; jgl+0x1003b602). Same keyed diamond as 455 with the palette taken out:
+  ;; the byte is stored straight through instead of being looked up, so it
+  ;; matches none of 455's LUT machinery. Off switch is for A/B only.
+  (global $ck_copy8_enabled (mut i32) (i32.const 1))
+  (global $ck_copy8_matches (mut i32) (i32.const 0))
+  (global $ck_copy8_runs    (mut i32) (i32.const 0))
+  (global $ck_copy8_px      (mut i64) (i64.const 0))
+
   ;; $th_ck_blend16_run's alpha-blended RGB565 blit fold (SimGolf's jgl.dll).
   ;; Off switch is for A/B only; see $try_emit_ck_blend16_run.
   (global $ck_blend16_enabled (mut i32) (i32.const 1))
@@ -844,6 +853,138 @@
     ;; no-shadow-arm form, and the executor reads it as an empty blend range.
     (call $te_raw (i32.or (local.get $key)
       (i32.shl (local.get $blend_lo) (i32.const 8))))
+    (i32.const 1))
+
+  ;; ---- the colour-keyed 8bpp COPY fold ($th_ck_copy8_run) --------------
+  ;; jgl+0x1003b602, and it is what SimGolf's ~48 second "Loading ..." splash
+  ;; is actually doing: measured inside that stall, this two-block loop is
+  ;; 40.7% of ALL block entries, over a working set of only 908 blocks.
+  ;;
+  ;;   head:    cmp byte [S], key
+  ;;            jnb  advance
+  ;;            mov  R8, [S]        ; no table -- the byte IS the pixel
+  ;;            mov  [D], R8
+  ;;   advance: inc  S
+  ;;            inc  D              ; an inc, not `add D,imm8`
+  ;;            dec  C
+  ;;            jnz  head
+  ;;
+  ;; Same keyed diamond as $try_emit_ck_lut16_run with the palette removed,
+  ;; which is exactly why that fold cannot be stretched over it: no LUT load,
+  ;; a byte store rather than a word one, and a dest step of `inc D`. Three
+  ;; independent mismatches, so this gets its own grammar rather than three
+  ;; more optional branches in that one.
+  ;;
+  ;; R8 is an 8-BIT register number (0-3 = al/cl/dl/bl, 4-7 = ah/ch/dh/bh),
+  ;; and the real site uses AH. Its underlying 32-bit register is checked
+  ;; against the three cursors below: a temp that aliased S, D or C would
+  ;; move a cursor every opaque pixel, and the executor holds those in
+  ;; locals, so it would run correct-looking wrong code.
+  (func $try_emit_ck_copy8_run (param $start_eip i32) (result i32)
+    (local $pc i32) (local $p i32) (local $m i32) (local $r32 i32)
+    (local $S i32) (local $D i32) (local $C i32) (local $R i32)
+    (local $head i32) (local $adv i32) (local $exit_eip i32) (local $key i32)
+    (if (i32.eqz (global.get $ck_copy8_enabled)) (then (return (i32.const 0))))
+    (if (i32.or (global.get $code16) (global.get $d_addr16))
+      (then (return (i32.const 0))))
+    (if (global.get $d_seg) (then (return (i32.const 0))))
+    (local.set $head (global.get $d_pc))
+    (local.set $pc (local.get $head))
+
+    ;; cmp byte [S], key
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
+      (then (return (i32.const 0))))
+    (local.set $S (i32.and (local.get $m) (i32.const 7)))
+    (local.set $key (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+
+    ;; jnb advance
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x73))
+      (then (return (i32.const 0))))
+    (local.set $adv (i32.add (i32.add (local.get $pc) (i32.const 2))
+      (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; mov R8, [S] -- 8A /r, and the register side is read out, not required
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8A))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (local.set $R (call $ck_mem0_reg (local.get $m)))
+    (if (i32.lt_s (local.get $R) (i32.const 0)) (then (return (i32.const 0))))
+    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
+      (then (return (i32.const 0))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; mov [D], R8 -- 88 /r, the SAME 8-bit register or this is another loop
+    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x88))
+      (then (return (i32.const 0))))
+    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+    (if (i32.ne (call $ck_mem0_reg (local.get $m)) (local.get $R))
+      (then (return (i32.const 0))))
+    (local.set $D (i32.and (local.get $m) (i32.const 7)))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+
+    ;; The source arm falls through into advance; that fall-through is the
+    ;; join, exactly as in the three-block form of 455.
+    (if (i32.ne (local.get $pc) (local.get $adv))
+      (then (return (i32.const 0))))
+
+    ;; advance: inc S / inc D / dec C / jnz head
+    (local.set $p (local.get $adv))
+    (if (i32.ne (call $gl8 (local.get $p))
+                (i32.add (i32.const 0x40) (local.get $S)))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ne (call $gl8 (local.get $p))
+                (i32.add (i32.const 0x40) (local.get $D)))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (local.set $C (i32.sub (call $gl8 (local.get $p)) (i32.const 0x48)))
+    (if (i32.ge_u (local.get $C) (i32.const 8))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (local.get $p) (i32.const 1)))
+    (if (i32.ne (call $gl8 (local.get $p)) (i32.const 0x75))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.add (i32.add (local.get $p) (i32.const 2))
+          (call $sign_ext8 (call $gl8 (i32.add (local.get $p) (i32.const 1)))))
+          (local.get $head))
+      (then (return (i32.const 0))))
+    (local.set $exit_eip (i32.add (local.get $p) (i32.const 2)))
+
+    ;; Four distinct registers, none of them ESP: the three cursors and the
+    ;; temp's underlying 32-bit register. Written out rather than run through
+    ;; $ck_regs_distinct, which demands FIVE distinct and would reject every
+    ;; match if the temp were passed twice to pad the argument list.
+    (local.set $r32 (select
+      (i32.sub (local.get $R) (i32.const 4)) (local.get $R)
+      (i32.ge_u (local.get $R) (i32.const 4))))
+    (if (i32.eq (i32.popcnt (i32.or
+          (i32.or (i32.shl (i32.const 1) (local.get $S))
+                  (i32.shl (i32.const 1) (local.get $D)))
+          (i32.or (i32.shl (i32.const 1) (local.get $C))
+                  (i32.shl (i32.const 1) (local.get $r32)))))
+          (i32.const 4))
+      (then)
+      (else (return (i32.const 0))))
+    (if (i32.or
+          (i32.or (i32.eq (local.get $S) (i32.const 4))
+                  (i32.eq (local.get $D) (i32.const 4)))
+          (i32.or (i32.eq (local.get $C) (i32.const 4))
+                  (i32.eq (local.get $r32) (i32.const 4))))
+      (then (return (i32.const 0))))
+
+    (global.set $ck_copy8_matches
+      (i32.add (global.get $ck_copy8_matches) (i32.const 1)))
+    (call $te (i32.const 460) (i32.or
+      (i32.or (local.get $S) (i32.shl (local.get $D) (i32.const 4)))
+      (i32.or (i32.shl (local.get $C) (i32.const 8))
+              (i32.shl (local.get $R) (i32.const 12)))))
+    (call $te_raw (local.get $head))
+    (call $te_raw (local.get $exit_eip))
+    (call $te_raw (local.get $key))
     (i32.const 1))
 
   ;; ---- the dest-indexed keyed blit fold ($th_ck_shadow16_run) ----------
@@ -3925,6 +4066,10 @@
               (local.set $done (i32.const 1))
               (br $decode)))
           (if (call $try_emit_ck_lut16_run (local.get $start_eip))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
+          (if (call $try_emit_ck_copy8_run (local.get $start_eip))
             (then
               (local.set $done (i32.const 1))
               (br $decode)))

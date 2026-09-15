@@ -11,7 +11,7 @@
   ;; For byte regs: 0=al,1=cl,2=dl,3=bl,4=ah,5=ch,6=dh,7=bh
 
   (type $handler_t (func (param i32)))
-  (table $handlers 460 funcref)
+  (table $handlers 461 funcref)
 
   (elem (i32.const 0)
     ;; -- Core --
@@ -524,4 +524,5 @@
     $th_ck_shadow16_run       ;; 457: a keyed sprite row with a dest-indexed arm
     $th_block_exec            ;; 458: a region descriptor, registers in locals
     $th_bx_resume             ;; 459: the fallback resume trampoline (empty)
+    $th_ck_copy8_run          ;; 460: a colour-keyed 8bpp->8bpp sprite row
   )

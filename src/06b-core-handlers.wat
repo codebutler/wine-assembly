@@ -2299,6 +2299,92 @@
   ;; was emitted for, so parking there re-enters this handler with the same
   ;; pixel and spins forever. Only the iteration cap, which has made real
   ;; progress first, may resume at the head.
+  ;; The colour-keyed 8bpp->8bpp copy row (handler 460), matched from raw x86
+  ;; by $try_emit_ck_copy8_run, which documents the three-block diamond this
+  ;; replaces. There is no palette and no blend arm, so unlike 455 this one
+  ;; can never bail mid-row: every byte is either transparent or copied.
+  ;;
+  ;; The temp is an 8-BIT register, so it is written back with $set_reg8 and
+  ;; ONLY if some pixel was actually opaque -- a fully transparent row leaves
+  ;; it holding whatever it held before, exactly as the x86 does, and that is
+  ;; not a corner case here: measured on the real site, under 4% of pixels
+  ;; are opaque, so "every pixel was transparent" is a row shape this fold
+  ;; meets constantly rather than a theoretical one.
+  (func $th_ck_copy8_run (param $op i32)
+    (local $tp i32) (local $head_eip i32) (local $exit_eip i32) (local $key i32)
+    (local $S i32) (local $D i32) (local $C i32) (local $R i32)
+    (local $s i32) (local $d i32) (local $c i32)
+    (local $tok i32) (local $cost i32) (local $blocks i32) (local $px i32)
+    (local $iters i32) (local $bailed i32) (local $last i32) (local $touched i32)
+    (local $c0 i32)
+    (local.set $tp (global.get $ip))
+    (local.set $head_eip (i32.load          (local.get $tp)))
+    (local.set $exit_eip (i32.load offset=4 (local.get $tp)))
+    (local.set $key      (i32.load offset=8 (local.get $tp)))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 12)))
+
+    (local.set $S (i32.and                 (local.get $op)                   (i32.const 0xF)))
+    (local.set $D (i32.and (i32.shr_u (local.get $op) (i32.const 4))  (i32.const 0xF)))
+    (local.set $C (i32.and (i32.shr_u (local.get $op) (i32.const 8))  (i32.const 0xF)))
+    (local.set $R (i32.and (i32.shr_u (local.get $op) (i32.const 12)) (i32.const 0xF)))
+    (local.set $s (call $get_reg (local.get $S)))
+    (local.set $d (call $get_reg (local.get $D)))
+    (local.set $c (call $get_reg (local.get $C)))
+
+    ;; Same do-while as the x86: the body runs before `dec C / jnz`, so a
+    ;; zero count means 2^32 pixels and the iteration cap is what bounds it.
+    (block $done (loop $pxl
+      (local.set $tok (call $gl8 (local.get $s)))
+      (if (i32.lt_u (local.get $tok) (local.get $key))
+        (then
+          (call $gs8 (local.get $d) (local.get $tok))
+          (local.set $last (local.get $tok))
+          (local.set $touched (i32.const 1))
+          ;; head (cmp/jnb) + the source arm + advance: 8 ops, 3 blocks.
+          (local.set $cost (i32.add (local.get $cost) (i32.const 8)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 3))))
+        (else
+          ;; head, then straight to advance: 6 ops, 2 blocks.
+          (local.set $cost (i32.add (local.get $cost) (i32.const 6)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 2)))))
+
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (local.set $d (i32.add (local.get $d) (i32.const 1)))
+      ;; $set_flags_dec needs the value BEFORE the decrement as well as after.
+      (local.set $c0 (local.get $c))
+      (local.set $c (i32.sub (local.get $c) (i32.const 1)))
+      (local.set $px (i32.add (local.get $px) (i32.const 1)))
+      (br_if $done (i32.eqz (local.get $c)))
+      (local.set $iters (i32.add (local.get $iters) (i32.const 1)))
+      (if (i32.gt_u (local.get $iters) (i32.const 65536))
+        (then (local.set $bailed (i32.const 1)) (br $done)))
+      (br $pxl)))
+
+    (global.set $block_budget
+      (i32.sub (global.get $block_budget) (local.get $blocks)))
+    (global.set $steps (i32.sub (global.get $steps)
+      (i32.add (local.get $cost) (i32.const 1))))
+    (global.set $ck_copy8_runs (i32.add (global.get $ck_copy8_runs) (i32.const 1)))
+    (global.set $ck_copy8_px
+      (i64.add (global.get $ck_copy8_px) (i64.extend_i32_u (local.get $px))))
+
+    (call $set_reg (local.get $S) (local.get $s))
+    (call $set_reg (local.get $D) (local.get $d))
+    (call $set_reg (local.get $C) (local.get $c))
+    (if (local.get $touched)
+      (then (call $set_reg8 (local.get $R) (local.get $last))))
+    (if (local.get $bailed)
+      (then
+        ;; Park at the head: it re-executes `cmp byte [S],key` and overwrites
+        ;; whatever the last `dec C` left, exactly as the x86 does.
+        (global.set $eip (local.get $head_eip)))
+      (else
+        ;; Fell out of `dec C`, which is the last flag-setting instruction.
+        (call $set_flags_dec (local.get $c0) (local.get $c))
+        (global.set $flag_sign_shift (i32.const 31))
+        (global.set $eip (local.get $exit_eip))))
+    (return_call $branch_end))
+
   (func $th_ck_lut16_run (param $op i32)
     (local $tp i32) (local $head_eip i32) (local $exit_eip i32) (local $dstep i32)
     (local $shadow_eip i32)
