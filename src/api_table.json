@@ -11918,7 +11918,8 @@
     "name": "IDirect3DDevice7_SetTextureStageState",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 2986199398
+    "hash": 2986199398,
+    "handler": "IDirect3DDevice3_SetTextureStageState"
   },
   {
     "id": 1383,
