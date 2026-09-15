@@ -7425,7 +7425,7 @@ gap ends rendering for the whole run**, tens of minutes of load included. When
 a B&W2 drive shows a frozen picture, read `ctx.bwErrors.order[0]` before
 believing anything about the guest.
 
-## The flyover is render-bound: ~6 seconds per draw call
+## The flyover is latency-bound: ~150 ms of wall per draw, ~16 ms of work
 
 drive51 (both linkage fixes in) reached the land at **pick+1567s** — 26 minutes
 after the land click — with `errors=0/0`, `failed 0` and no refused draw at any
@@ -7434,23 +7434,46 @@ validator refused anything, so the numbers below are what the renderer costs
 when it is *working*, not what a poisoned queue looks like.
 
 What follows the land is the cinematic flyover, and it advances about **one
-frame per five to ten minutes**. That is not a stall, and it is not the guest:
+frame per minute or worse**. **Nobody is busy while it does.** Timing every
+DRAW from submit to completion (a wrapper installed live on
+`ctx.d3d9Bridge._submit`) over 90 seconds of flyover:
 
 | measurement | value |
 |---|---|
-| DRAW commands submitted | 10 per 60s wall (~6s per draw call) |
-| guest thread CPU | 0.0% |
-| software-rasterizer worker CPU | 20.9% of one core |
-| box load average | 53 |
+| DRAW commands completed | 536 in 90s (~6/s) |
+| gap between consecutive submits | ~130-160 ms |
+| submit → complete latency | 300-700 ms (median ~400) |
+| guest (main) thread CPU | 5.5 s per 60 s = 9.2% |
+| render-worker thread CPU | 0.44 s per 60 s = 0.7% |
+| CPU actually spent per draw | ~15 ms main + ~1.2 ms worker |
+| wall clock spent per draw | ~150 ms |
 | guest basic blocks retired | 13,964 in 90s (155/s, 727 distinct) |
 | top hot blocks | all in `d3dx9_25` (base `0x2528000`, size `0x253000`) around `+0x10e2xx` |
 
-The guest is *waiting*, not working — a hundred-odd blocks a second is a poll
-loop, and the whole histogram sits in `d3dx9_25`. The wall clock is being spent
-in the render worker, single-threaded, against a box several other agents are
-also using. So the cost model for a B&W2 land run is: **minutes of load per
-minute of guest time, then seconds of rasterizer per draw call.** Quote draws
-per second, not frames per second, when sizing a drive.
+So **about 90% of the wall clock is nobody running at all**, and the software
+path is round-trip-latency-bound, not rasterization-bound: the rasterizer costs
+about a millisecond per draw and the draw still takes a hundred and fifty.
+
+The mechanism is `$d3d_render_park` in `src/09ad-handlers-d3d9.wat:2491` — a
+submitted render command sets `yield_reason = 16`, and `run.js`'s
+`mainExecutionSuspended` (line 5209) parks the whole guest on
+`ctx.waitD3DRender(token)` until the worker answers. The worker is real:
+`createD3DRenderWorker` at `test/run.js:2097` spawns `lib/d3d-render-worker.js`
+on a `worker_thread`, and `ps -M` on the emulator process shows it as a second
+hot thread. But the guest cannot run ahead of it, so off-thread buys no
+parallelism here — every draw is a thread hand-off, and on a box at loadavg
+30-50 (several other agents' runs) the hand-off costs far more than the work it
+carries.
+
+**A correction to the first version of this section**, which read the CPU split
+off the wrong process. `black-white-software-probe.js` only talks to the
+emulator over stdio, so its 0.0% is by design, and the 20.9% belonged to the
+whole `run.js` child — guest thread and render worker together — not to a
+busy rasterizer with an idle guest beside it. Read `ps -M <run.js pid>`, never
+the probe wrapper.
+
+Quote draws per second, not frames per second, when sizing a drive: at ~6/s and
+a few hundred draws to a frame, a flyover frame costs about a minute.
 
 Two smaller facts from the same run, both worth not re-deriving:
 
@@ -7466,3 +7489,31 @@ Also measured, and open: of 241 shaders made this run, **131 were refused** —
 end), plus `vs11=2,err6@1459`. Those refusals do not poison the queue the way
 a refused *draw* does, so the land still renders; what they cost the picture
 has not been measured.
+
+### Is there a GPU path to compare against?
+
+Yes, and it is the *default* everywhere except this harness. `lib/d3d9-host.js`
+takes `backend: 'software' | 'webgl'` and defaults to `webgl`; the software
+rasterizer is the opt-in. What blocks the comparison from the CLI is one line:
+
+```
+test/run.js:122  CLI --d3d9-renderer currently supports software only;
+                 WebGL requires a browser/provider
+```
+
+`lib/headless-gl.js` (`--headless-gl`) does give Node a real GL context — a
+hidden GLFW window on `@node-3d/webgl`, native `Apple M1`, not ANGLE — but it
+is wired to the *OpenGL* frontend (`wglCreateContext`), not to the D3D9 host's
+webgl backend. So the two ways to measure the GPU path today are:
+
+1. **The browser.** `black_white_2_demo` is already registered in `lib/apps.js`
+   with `d3d9Programmable: true` and `bigMemory: true`, and the browser host
+   passes no `d3d9Backend`, so it takes the webgl path. `tools/profile-web-frames.js
+   --app=black_white_2_demo --headful` is the existing driver.
+2. **Wire `headless-gl` into the D3D9 host** so `--d3d9-renderer=webgl` works
+   from the CLI, which would put the GPU path under every tracing flag the CLI
+   has. That is a real change in `test/run.js` + `lib/d3d9-host.js`, not a flag.
+
+Worth doing: the measurement above says the software path loses ~90% of its
+wall clock to the per-draw hand-off, and a GPU backend changes both halves of
+that — the rasterization disappears and the command stream can pipeline.
