@@ -2277,3 +2277,279 @@
       (local.get $arg0) (i32.const 1) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
+
+  ;; Return an ANSI string length only when the complete NUL-terminated input
+  ;; is readable inside the caller-supplied bound. FindExecutable's public
+  ;; buffers are MAX_PATH-sized, so walking beyond 259 bytes would turn a bad
+  ;; pointer or unterminated name into a plausible VFS path.
+  (func $findexec_ansi_len (param $string i32) (param $bound i32) (result i32)
+    (local $i i32)
+    (if (i32.eqz (local.get $string)) (then (return (i32.const -1))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $bound)))
+      (if (call $ptr_range_access_bad
+            (i32.add (local.get $string) (local.get $i))
+            (i32.const 1) (i32.const 0))
+        (then (return (i32.const -1))))
+      (if (i32.eqz (call $gl8 (i32.add (local.get $string) (local.get $i))))
+        (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
+
+  (func $findexec_path_is_absolute (param $path i32) (param $len i32) (result i32)
+    (if (i32.eqz (local.get $len)) (then (return (i32.const 0))))
+    (if (i32.or
+          (i32.eq (call $gl8 (local.get $path)) (i32.const 0x5c))
+          (i32.eq (call $gl8 (local.get $path)) (i32.const 0x2f)))
+      (then (return (i32.const 1))))
+    (i32.and
+      (i32.ge_u (local.get $len) (i32.const 2))
+      (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 1)))
+              (i32.const 0x3a))))
+
+  ;; FindExecutableA(lpFile, lpDirectory, lpResult) -> HINSTANCE-like shell
+  ;; status. This is lookup only: the document must already exist in the VFS,
+  ;; and the answer comes from the Win9x HKCR extension -> ProgID ->
+  ;; shell\open\command chain. It does not launch or synthesize an association.
+  (func $find_executable_a
+      (param $file i32) (param $directory i32) (param $output i32) (result i32)
+    (local $code i32) (local $file_len i32) (local $dir_len i32)
+    (local $document i32) (local $document_len i32)
+    (local $joined i32) (local $joined_len i32)
+    (local $last i32) (local $dot i32) (local $i i32) (local $ch i32)
+    (local $attrs i32) (local $prog i32) (local $command i32)
+    (local $count i32) (local $type i32) (local $h_ext i32)
+    (local $h_class i32) (local $h_command i32) (local $query i32)
+    (local $cmd_len i32) (local $start i32) (local $exe_len i32)
+
+    ;; The documented API assumes a writable MAX_PATH output. In the browser
+    ;; host an invalid guest pointer must become a bounded shell failure rather
+    ;; than a write through the shared NULL sentinel.
+    (local.set $code (i32.const 5)) ;; SE_ERR_ACCESSDENIED
+    (block $done
+      (br_if $done (call $ptr_range_access_bad
+        (local.get $output) (i32.const 260) (i32.const 1)))
+
+      (local.set $code (i32.const 2)) ;; SE_ERR_FNF
+      (local.set $file_len
+        (call $findexec_ansi_len (local.get $file) (i32.const 260)))
+      (br_if $done (i32.le_s (local.get $file_len) (i32.const 0)))
+      (local.set $document (local.get $file))
+      (local.set $document_len (local.get $file_len))
+
+      ;; lpDirectory is the default only for a relative document name. An
+      ;; absolute lpFile keeps its own root, matching other Win32 path APIs.
+      (if (i32.and
+            (i32.eqz (call $findexec_path_is_absolute
+              (local.get $file) (local.get $file_len)))
+            (i32.ne (local.get $directory) (i32.const 0)))
+        (then
+          (local.set $code (i32.const 3)) ;; SE_ERR_PNF
+          (local.set $dir_len
+            (call $findexec_ansi_len (local.get $directory) (i32.const 260)))
+          (br_if $done (i32.le_s (local.get $dir_len) (i32.const 0)))
+          (local.set $attrs (call $host_fs_get_file_attributes
+            (call $g2w (local.get $directory)) (i32.const 0)))
+          (br_if $done
+            (i32.or
+              (i32.eq (local.get $attrs) (i32.const -1))
+              (i32.eqz (i32.and (local.get $attrs) (i32.const 0x10)))))
+          (local.set $joined_len
+            (i32.add (local.get $dir_len) (local.get $file_len)))
+          (local.set $last (call $gl8
+            (i32.add (local.get $directory)
+              (i32.sub (local.get $dir_len) (i32.const 1)))))
+          (if (i32.and
+                (i32.ne (local.get $last) (i32.const 0x5c))
+                (i32.ne (local.get $last) (i32.const 0x2f)))
+            (then (local.set $joined_len
+              (i32.add (local.get $joined_len) (i32.const 1)))))
+          (local.set $code (i32.const 8)) ;; SE_ERR_OOM / resource exhaustion
+          (br_if $done (i32.ge_u (local.get $joined_len) (i32.const 260)))
+          (local.set $joined
+            (call $heap_alloc (i32.add (local.get $joined_len) (i32.const 1))))
+          (br_if $done (i32.eqz (local.get $joined)))
+          (call $guest_strcpy (local.get $joined) (local.get $directory))
+          (if (i32.and
+                (i32.ne (local.get $last) (i32.const 0x5c))
+                (i32.ne (local.get $last) (i32.const 0x2f)))
+            (then
+              (call $gs8 (i32.add (local.get $joined) (local.get $dir_len))
+                (i32.const 0x5c))
+              (local.set $dir_len
+                (i32.add (local.get $dir_len) (i32.const 1)))))
+          (call $guest_strcpy
+            (i32.add (local.get $joined) (local.get $dir_len))
+            (local.get $file))
+          (local.set $document (local.get $joined))
+          (local.set $document_len (local.get $joined_len))))
+
+      (local.set $code (i32.const 2)) ;; missing document, not missing handler
+      (local.set $attrs (call $host_fs_get_file_attributes
+        (call $g2w (local.get $document)) (i32.const 0)))
+      (br_if $done
+        (i32.or
+          (i32.eq (local.get $attrs) (i32.const -1))
+          (i32.ne (i32.and (local.get $attrs) (i32.const 0x10)) (i32.const 0))))
+
+      ;; Find the final component's final dot. Passing its suffix directly to
+      ;; RegOpenKey preserves the leading period required by HKCR file types.
+      (local.set $code (i32.const 31)) ;; SE_ERR_NOASSOC
+      (local.set $i (i32.const 0))
+      (block $extension_done (loop $extension_scan
+        (br_if $extension_done
+          (i32.ge_u (local.get $i) (local.get $document_len)))
+        (local.set $ch (call $gl8 (i32.add (local.get $document) (local.get $i))))
+        (if (i32.or
+              (i32.eq (local.get $ch) (i32.const 0x5c))
+              (i32.eq (local.get $ch) (i32.const 0x2f)))
+          (then (local.set $dot (i32.const 0)))
+          (else
+            (if (i32.eq (local.get $ch) (i32.const 0x2e))
+              (then (local.set $dot
+                (i32.add (local.get $document) (local.get $i)))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $extension_scan)))
+      (br_if $done (i32.eqz (local.get $dot)))
+      (br_if $done (i32.eqz (call $gl8 (i32.add (local.get $dot) (i32.const 1)))))
+
+      (local.set $prog (call $heap_alloc (i32.const 260)))
+      (local.set $command (call $heap_alloc (i32.const 1024)))
+      (local.set $count (call $heap_alloc (i32.const 4)))
+      (local.set $type (call $heap_alloc (i32.const 4)))
+      (local.set $code (i32.const 8))
+      (br_if $done
+        (i32.or
+          (i32.or (i32.eqz (local.get $prog)) (i32.eqz (local.get $command)))
+          (i32.or (i32.eqz (local.get $count)) (i32.eqz (local.get $type)))))
+
+      (local.set $code (i32.const 31))
+      (local.set $h_ext (call $host_reg_open_key
+        (i32.const 0x80000000) (call $g2w (local.get $dot)) (i32.const 0)))
+      (br_if $done (i32.eqz (local.get $h_ext)))
+      (call $gs32 (local.get $count) (i32.const 260))
+      (local.set $query (call $host_reg_query_value
+        (local.get $h_ext) (i32.const 0) (local.get $type)
+        (local.get $prog) (local.get $count) (i32.const 0)))
+      (drop (call $host_reg_close_key (local.get $h_ext)))
+      (local.set $h_ext (i32.const 0))
+      (if (i32.eq (local.get $query) (i32.const 234))
+        (then (local.set $code (i32.const 8)) (br $done)))
+      (local.set $code (i32.const 31))
+      (br_if $done (local.get $query))
+      (br_if $done
+        (i32.and
+          (i32.ne (call $gl32 (local.get $type)) (i32.const 1))
+          (i32.ne (call $gl32 (local.get $type)) (i32.const 2))))
+      (br_if $done
+        (i32.le_s (call $findexec_ansi_len (local.get $prog) (i32.const 260))
+                  (i32.const 0)))
+
+      (local.set $h_class (call $host_reg_open_key
+        (i32.const 0x80000000) (call $g2w (local.get $prog)) (i32.const 0)))
+      (br_if $done (i32.eqz (local.get $h_class)))
+      (local.set $h_command (call $host_reg_open_key
+        (local.get $h_class) "shell\\open\\command" (i32.const 0)))
+      (br_if $done (i32.eqz (local.get $h_command)))
+      (call $gs32 (local.get $count) (i32.const 1024))
+      (local.set $query (call $host_reg_query_value
+        (local.get $h_command) (i32.const 0) (local.get $type)
+        (local.get $command) (local.get $count) (i32.const 0)))
+      (if (i32.eq (local.get $query) (i32.const 234))
+        (then (local.set $code (i32.const 8)) (br $done)))
+      (local.set $code (i32.const 31))
+      (br_if $done (local.get $query))
+      (br_if $done
+        (i32.and
+          (i32.ne (call $gl32 (local.get $type)) (i32.const 1))
+          (i32.ne (call $gl32 (local.get $type)) (i32.const 2))))
+      (local.set $cmd_len
+        (call $findexec_ansi_len (local.get $command) (i32.const 1024)))
+      (br_if $done (i32.le_s (local.get $cmd_len) (i32.const 0)))
+
+      ;; Skip command-line padding, then isolate argv[0]. Quoted paths retain
+      ;; spaces; unquoted paths end at the first command-line whitespace.
+      (local.set $start (i32.const 0))
+      (block $padding_done (loop $padding
+        (br_if $padding_done (i32.ge_u (local.get $start) (local.get $cmd_len)))
+        (local.set $ch (call $gl8
+          (i32.add (local.get $command) (local.get $start))))
+        (br_if $padding_done (i32.gt_u (local.get $ch) (i32.const 0x20)))
+        (local.set $start (i32.add (local.get $start) (i32.const 1)))
+        (br $padding)))
+      (br_if $done (i32.ge_u (local.get $start) (local.get $cmd_len)))
+      (if (i32.eq
+            (call $gl8 (i32.add (local.get $command) (local.get $start)))
+            (i32.const 0x22))
+        (then
+          (local.set $start (i32.add (local.get $start) (i32.const 1)))
+          (local.set $i (local.get $start))
+          (block $quote_done (loop $quote
+            (br_if $quote_done (i32.ge_u (local.get $i) (local.get $cmd_len)))
+            (br_if $quote_done
+              (i32.eq (call $gl8 (i32.add (local.get $command) (local.get $i)))
+                      (i32.const 0x22)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $quote)))
+          (br_if $done (i32.ge_u (local.get $i) (local.get $cmd_len)))
+          (local.set $exe_len (i32.sub (local.get $i) (local.get $start))))
+        (else
+          (local.set $i (local.get $start))
+          (block $token_done (loop $token
+            (br_if $token_done (i32.ge_u (local.get $i) (local.get $cmd_len)))
+            (br_if $token_done
+              (i32.le_u (call $gl8 (i32.add (local.get $command) (local.get $i)))
+                        (i32.const 0x20)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $token)))
+          (local.set $exe_len (i32.sub (local.get $i) (local.get $start)))))
+      (br_if $done (i32.eqz (local.get $exe_len)))
+      (if (i32.ge_u (local.get $exe_len) (i32.const 260))
+        (then (local.set $code (i32.const 8)) (br $done)))
+
+      ;; REG_EXPAND_SZ needs environment expansion. Returning a literal %VAR%
+      ;; path would be a plausible lie, so decline the association until that
+      ;; expansion is modeled; literal REG_EXPAND_SZ values remain usable.
+      (if (i32.eq (call $gl32 (local.get $type)) (i32.const 2))
+        (then
+          (local.set $i (i32.const 0))
+          (block $percent_done (loop $percent
+            (br_if $percent_done (i32.ge_u (local.get $i) (local.get $exe_len)))
+            (br_if $done
+              (i32.eq
+                (call $gl8 (i32.add
+                  (i32.add (local.get $command) (local.get $start)) (local.get $i)))
+                (i32.const 0x25)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $percent)))))
+
+      ;; Transactional output: no failure above has changed even byte zero.
+      (local.set $i (i32.const 0))
+      (block $copy_done (loop $copy
+        (br_if $copy_done (i32.ge_u (local.get $i) (local.get $exe_len)))
+        (call $gs8 (i32.add (local.get $output) (local.get $i))
+          (call $gl8 (i32.add
+            (i32.add (local.get $command) (local.get $start)) (local.get $i))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy)))
+      (call $gs8 (i32.add (local.get $output) (local.get $exe_len)) (i32.const 0))
+      (local.set $code (i32.const 33)))
+
+    (if (local.get $h_ext)
+      (then (drop (call $host_reg_close_key (local.get $h_ext)))))
+    (if (local.get $h_command)
+      (then (drop (call $host_reg_close_key (local.get $h_command)))))
+    (if (local.get $h_class)
+      (then (drop (call $host_reg_close_key (local.get $h_class)))))
+    (if (local.get $type) (then (call $heap_free (local.get $type))))
+    (if (local.get $count) (then (call $heap_free (local.get $count))))
+    (if (local.get $command) (then (call $heap_free (local.get $command))))
+    (if (local.get $prog) (then (call $heap_free (local.get $prog))))
+    (if (local.get $joined) (then (call $heap_free (local.get $joined))))
+    (local.get $code))
+
+  (func $handle_FindExecutableA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $find_executable_a
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))

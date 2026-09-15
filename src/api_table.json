@@ -30106,5 +30106,28 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 3614574446
+  },
+  {
+    "id": 3589,
+    "name": "FindExecutableA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 214887057,
+    "args": [
+      {
+        "name": "lpFile",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpDirectory",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpResult",
+        "type": "LPSTR",
+        "out": true
+      }
+    ],
+    "ret": "HINSTANCE"
   }
 ]
