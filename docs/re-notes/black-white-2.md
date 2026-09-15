@@ -8223,3 +8223,63 @@ the `0x30005` probe to return 1 (it used to accept 0). The stale
 `--d3d9-renderer=webgl` spelling; the working headless command is the one
 without it, `--headless-gl --d3d9-programmable`, and it is what the frozen
 `--control=` sessions in this file use.
+
+### Headless GL profile dialog: first CPU profile without the present readback (2026-09-15, WIP)
+
+Verified after 1eb77ea1, one guest at a time, frozen and stepped over
+`--control=8131`:
+
+```
+node test/run.js --app=black_white_2_demo --headless-gl --d3d9-programmable \
+  --control=8131 --frozen --memory-mb=2048 --quiet-api --quiet-blocks \
+  --batch-size=200000 --max-batches=1000000000 --max-seconds=3600 --no-build \
+  --trace-eip-range=0x00526d93-0x00526d97 --trace-eip-detail --trace-eip-stream
+```
+
+By batch ~4000 (about 15 min at box load 20-30) the game is at the profile
+dialog ("Select Profile" over "New Profile Name: Player") at 640x480, drawn
+through GL and composited into the raster canvas: `ctl.js png` frames are
+~340 KB, the intro's are all-black 2 KB frames (Bink video frames do not reach
+the GL layer headlessly -- not investigated). The intro-object poke
+(`[esi+0x24] = [esi+0x20]-1` on the object traced at `0x00526d93`) works over
+`ctl.js eval` with `exports.guest_read32/guest_write32` while a step runs.
+
+**Sampling the process from inside.** `run.js` has no `--cpu-profile`, but
+`controlEval` exposes `process`, so `process.mainModule.require('inspector')`
+gives a `Session`: `Profiler.enable/start` through one `eval`, step, then
+`Profiler.stop` writes the `.cpuprofile` from its callback (async -- read the
+result flag with a second eval). 60 s at the dialog, 61216 samples, ranked
+with `tools/cpuprof-top.js`:
+
+| self | share | what |
+|---|---|---|
+| 15.3 s | 21.9% | `getCursorPos` -- **mislabelled native GL driver time**: every caller is a `gl.*` call (`updateBuffer`, `bindRenderTarget`, `flush`, `useProgram`); V8 names the binding's native frames after a neighbouring symbol |
+| 11.8 s | 16.9% | `h.log` in run.js -- the per-API-call name decode the CLI does even under `--quiet-api` (a CLI cost, absent in the browser host) |
+| 5.7 s | 8.1% | `drawImage` raster-canvas -- the headless compositor copying the GL layer (CLI-only) |
+| 5.4 s | 7.8% | anonymous run.js next to `h.log` (same logging path) |
+| 4.9 s | 7.1% | `wasm-to-js` |
+| 4.0 s | 5.7% | `copyPayload` + `copy` in d3d-command-stream.js |
+| 1.7 s | 2.4% | `call` d3d9-host.js |
+| 14.6 s | 21.0% | wasm total |
+| 0.06 s | 0.1% | `readPixelsInto` (headless compositor's own readback) |
+
+`readColor` / present-time `readPixels` are absent from the profile: the
+7.2%/4.3% shares the GL present readback had are gone, which is what
+562c1fea was for. The next real levers on this screen are the command-stream
+copies (5.7%) and the wasm-to-js boundary (7.1%); the two run.js logging
+entries and the raster `drawImage` are CLI harness cost and must be
+subtracted before any of this is read as what the browser feels.
+
+**Open, for the next session:**
+- `ctl.js click 250,275` on the dialog's OK (the browser's (313,343) at
+  800x600 scaled to 640x480) did nothing; B&W2 samples the mouse through
+  DirectInput, so try `mousemove`, then `mousedown`, a gap, `mouseup` (see
+  `test/test-cli-di-mouse-control.js` for the sequence the CLI DI path
+  accepts) before assuming the dialog ignores input headlessly.
+- Then the land picker: New Game (197,555) → Continue (400,575) → double
+  DI-click at (165,478), all at 800x600 browser coordinates; scale for the
+  headless 640x480 or pass `--screen=800x600`.
+- A profile of the same screen without `--trace-eip-*` and with the API-log
+  decode measured separately, so the harness share is known.
+- Levers still queued: strip-wide shader VM + four-component sampler for the
+  software path; GL vertex-declaration element types for gameplay.
