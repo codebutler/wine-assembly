@@ -162,6 +162,17 @@
             (call $delphi_seh_continue_search)
             (call $dispatch_delphi_exception_handler)
             (return)))
+        ;; ExceptionContinueExecution (0): the frame handler accepted the
+        ;; exception for continued execution, so the raise is over and the
+        ;; raising code runs on. MSVC's __except_handler3 maps a filter result
+        ;; of EXCEPTION_CONTINUE_EXECUTION (-1) to this disposition; debuggers'
+        ;; conventional thread-name exception is one real caller of that path.
+        (if (i32.eqz (global.get $eax))
+          (then
+            (global.set $eip (global.get $delphi_resume_eip))
+            (global.set $esp (global.get $delphi_resume_esp))
+            (global.set $steps (i32.const 0))
+            (return)))
         ;; Other dispositions should have resumed inside the Delphi runtime.
         ;; If one returns here, fail closed instead of jumping through stale stack.
         (call $host_exit (i32.or (i32.const 0xDE00)
