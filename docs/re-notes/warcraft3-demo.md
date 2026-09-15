@@ -1724,3 +1724,43 @@ Two related corrections for anyone reading older notes or session logs:
 
 The real lever in this phase remains `ijl15.dll!ijlRead` at orig `0x600333d0`:
 six exports, one interceptable call, ~40% of the first load phase.
+
+### CORRECTION: the campaign no longer dies at 2048 virtual-map records
+
+The section above says clicking Campaign "runs the emulator out of virtual-map
+records" — live records climbing to 2048 at ~181s, then the game's own
+"critical error" box. **That bound has been raised**:
+
+```wat
+;; src/01-header.wat:2458
+(global $MAX_VIRTUAL_MAPS i32 (i32.const 8192))
+```
+
+It was 2048 when that measurement was taken (2026-09-11). Best-fit backing-hole
+reuse landed since as well (`5f6d8c5b`). The browser now reaches the campaign's
+loading screen — "Chapter One: Chasing Visions", progress bar advancing, HUD
+reporting 2.2M blocks/s — so the record exhaustion is no longer what ends the
+load. Re-measure before quoting the 181s figure or the 2048 ceiling again.
+
+### Driving the menu headlessly needs DirectInput, not clicks
+
+The click table above was taken in a browser at a larger resolution; headless
+the menu renders at 640x480, so every coordinate in it needs rescaling (Single
+Player is at ~546,113, not 805,165).
+
+More importantly, **absolute clicks do not drive this menu at all.** Measured
+over a `--control` session against a live main menu: `renderer.handleMouseDown`
+/ `handleMouseUp` at the button, held 1.5s, changes nothing; a DirectInput
+button press through `renderer._queueDirectInputMouseButton` at the same spot
+changes nothing; and `renderer.handleRelativeMouseMove(226,-127)` delivered in
+16 steps draws no visible cursor in the captured frame. The game tracks its own
+pointer from relative deltas and samples the button through DirectInput, so a
+headless walk needs `relmousemove` + `di-mousedown`/`di-mouseup`
+(`test/run.js` supports all three as `--input` kinds) calibrated against what
+the game thinks its cursor position is — which the PNG capture does not show.
+
+There is no WC3 driver script in the repo; the notes' original walk was done by
+hand in a browser. Anyone wanting a histogram series over the *map load* needs
+to build that walk first, or drive the browser by hand — `tools/ctl-hist-series.js`
+(which samples a live `--control` session into the several windows
+`tools/hot-loop-census.js` wants) is ready and waiting on it.
