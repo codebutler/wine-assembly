@@ -1547,3 +1547,143 @@ of wall time, so a timer wait would complete early, not late.
 Status after ~73 minutes of run: main menu -> profile -> campaign -> Prologue ->
 (40 min) chapter card -> cinematic letterbox -> here. Non-cinematic gameplay
 with the console visible has still not been reached.
+
+## CORRECTION (2026-09-14): `test/run.js --headless-gl` drives this app, and reaches the menu in 60s
+
+"How to run it" above says `node test/run.js` cannot drive this app at all,
+because `lib/gl-compat.js createContext` needs a `document` and `npm install gl`
+does not build here. **That is no longer true.** `--headless-gl` (test/run.js:856,
+`lib/headless-gl`, backed by `@node-3d/webgl`) gives the OpenGL bridge a real
+drawable factory, and the app reaches its full main menu — Single Player /
+Battle.net / Local Area Network / Options / Credits / Quit, artwork, "1.01 DEMO" —
+inside a single 60-second run:
+
+```bash
+node test/run.js --app=warcraft3_demo --no-threads --headless-gl --quiet-api \
+  --max-seconds=60 --max-batches=99999999 --png=/tmp/wc3.png --no-close
+```
+
+CLAUDE.md's claim that "anything on the OpenGL path can never reach
+`test/run.js`" is stale for the same reason, and so is the advice to reach for
+`tools/browser-handler-hist.js` for this app: `--handler-hist` works directly now.
+
+### The "unable to initialize DirectX" modal is a `wglCreateContext` failure
+
+Without `--headless-gl` the app puts up
+
+> Warcraft III was unable to initialize DirectX. Please ensure you have DirectX
+> 8.1 or newer installed...
+
+and the message is misleading. **No DirectX call fails.** `--trace-api` has d3d8
+succeeding well before it:
+
+```
+#7921 LoadLibraryA("d3d8.dll")
+#7922 GetProcAddress("Direct3DCreate8")
+#7923 Direct3DCreate8(0x78)
+#7924 IDirect3D8_GetAdapterIdentifier(...)        <- fine
+#7925 IDirect3D8_Release(...)
+```
+
+What actually fails is the GL probe the `-opengl` command line asks for:
+
+```
+#8146 GetDeviceCaps(hdc, 12)      => 32
+#8147 ChoosePixelFormat(hdc, ...)
+#8148 DescribePixelFormat(hdc, 1, 0x28, ...)
+#8149 SetPixelFormat(hdc, 1, ...)
+#8150 wglCreateContext(hdc)       <- returns 0 with no drawable factory
+#8151+ ReleaseDC -> SetDeviceGammaRamp -> DestroyWindow
+       -> ChangeDisplaySettingsExA(NULL) -> ShowWindow(HIDE)
+       -> UnregisterClassA               ... the probe window is torn down
+#8248 MessageBoxA  ret=0x0040c93f
+```
+
+So the modal names the wrong subsystem, and chasing DirectX from it is a dead
+end. `wglCreateContext` returning 0 is the whole cause.
+
+### Anything measured without `--headless-gl` measured the stall, not the game
+
+Both scheduler modes hit the modal and then go nowhere, and they stop at the
+*same* place — **8,248 API calls** — so an API census cannot tell them apart:
+
+| run | MessageBox | API calls | batches |
+|---|---|---|---|
+| `--no-threads`, no GL | 1 | 8,248 | 534,330 in 40s (spinning) |
+| `--threads`, no GL | 1 | 8,248 | 89 in 1.1s (stopped) |
+| `--no-threads --headless-gl` | **0** | **688,601** | 38,443 in 40s |
+
+Cooperative burning 534,330 batches without the API count moving past 8,248 is
+the tell: it is not loading anything, it is spinning behind a modal. Any
+cooperative-vs-worker comparison on this app from a non-`--headless-gl` run is
+comparing two flavours of that stall and should be discarded.
+
+### The hot-block profile, confirmed in a configuration that actually runs
+
+60s, `--no-threads --headless-gl --handler-hist --handler-hist-thread=0`,
+29,826 distinct blocks:
+
+```
+0x005f9b96  3,425,488  2.77%  ┐ Game.dll +0x98b96..  the LALR/FDF parser
+0x005f9ba6  2,237,126  1.81%  │
+0x005f9b5f  2,222,690  1.80%  │
+0x005f9b43  2,222,689  1.80%  ┘ <- exactly the 2,222,689 parser tokens
+0x00cadce9  2,582,847  2.09%  ┐ Storm.dll +0x33ce9..  string upcase + hash
+0x00cadd02  2,582,847  2.09%  │
+0x00cadce0  2,582,537  2.09%  ┘
+0x00cad8a0  2,465,080  1.99%
+```
+
+`0x005f9b43`'s hit count matching the independently-counted token total is the
+check that the parser reading is right.
+
+### Caveat the harness reports about itself
+
+```
+[gl] warning: 2 simultaneous GL contexts, but @node-3d/webgl shares one state
+     machine between them; interleaved draws will fight
+```
+
+The menu renders correctly regardless, but a later scene drawing wrong is a
+suspect here before it is a guest bug.
+
+### Worker mode also reaches the menu, and is ~1.9x slower doing it
+
+Same build, same 40s budget, `--headless-gl` on both:
+
+| mode | MessageBox | API calls | batches | wall |
+|---|---|---|---|---|
+| `--no-threads` | 0 | 688,601 | 38,443 | 40.0s |
+| `--threads` | 0 | 395,607 | 24,478 | 43.7s |
+
+So worker mode is genuinely slower here — but **not** for any of the three
+reasons that look obvious, all of which were measured and are false:
+
+- **Not spin loops.** `[spin-park] clock 0 trips` — `$clock_spin_step`
+  (`src/01-header.wat`, `$spin_park_k`=8) is mode-independent and WC3's threads
+  are `yield=1` event waits, so it never parks.
+- **Not RPC round trips.** `--rpc-census` on the threads run: T1 66 sync / 464
+  local, T2 30 sync / 489 local, 96 brokered imports total across the run. A
+  blocking import costs a `postMessage` plus an `Atomics.wait`, but there are
+  not enough of them to matter.
+- **Not a DirectX divergence.** The modal appears in cooperative mode too; it
+  was never a threads-only symptom.
+
+The cause is still open. Note that a *batch* count is not a work unit here
+(see CLAUDE.md on `--batch-size`), so the honest statement is the API-call
+ratio at fixed wall time, not "24,478 vs 38,443 batches".
+
+### The browser is slow, not hung
+
+A `?debug` browser run shows "12 threads in workers" and a grey canvas for a
+long while before the menu appears. That is **expected**, on both counts:
+
+- 12 workers is this app's own shape, not a leak — see "Why 15 worker slots and
+  not 8" above: WC3 keeps 5 threads alive (1 Storm, 1 MSS, 3 CRT) and then asks
+  for 5 more at once, peaking around 10 live.
+- The grey is startup, and it does finish — confirmed by hand, the menu loads
+  if you wait. The CLI reaches the same menu in under 60s; the browser is the
+  same work through the Worker backend.
+
+The often-quoted "40 minutes" figure is the **campaign map load**, not startup.
+Reaching the main menu is a sub-minute operation.
