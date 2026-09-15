@@ -30325,5 +30325,12 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 163771855
+  },
+  {
+    "id": 3616,
+    "name": "wcsncmp",
+    "nargs": 3,
+    "convention": "cdecl",
+    "hash": 2415146938
   }
 ]

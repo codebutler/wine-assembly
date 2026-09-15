@@ -10,6 +10,8 @@ const { bootRenderHarness } = require('./render-helper');
 const ROOT = path.join(__dirname, '..');
 const LEFT = 0x00428000;
 const RIGHT = 0x00428100;
+const apiTable = JSON.parse(fs.readFileSync(
+  path.join(ROOT, 'src', 'api_table.json'), 'utf8'));
 
 const extraWat = String.raw`
   (global $test_wcsncmp_esp_delta (mut i32) (i32.const 0))
@@ -27,6 +29,9 @@ const extraWat = String.raw`
 
   (func (export "test_wcsncmp_esp_delta") (result i32)
     (global.get $test_wcsncmp_esp_delta))
+
+  (func (export "test_lookup_wcsncmp") (result i32)
+    (call $lookup_api_id "wcsncmp"))
 `;
 
 function writeWide(e, addr, units) {
@@ -82,6 +87,14 @@ function writeWide(e, addr, units) {
   assert(body.indexOf('(br_if $done (i32.eqz (local.get $arg2)))') <
     body.indexOf('(call $gl16'),
     'the zero-count guard precedes every wide-character load');
+
+  const api = apiTable.find(entry => entry.name === 'wcsncmp');
+  assert.deepStrictEqual(
+    api && { id: api.id, nargs: api.nargs, convention: api.convention },
+    { id: 3616, nargs: 3, convention: 'cdecl' },
+    'the API registry retains wcsncmp identity and cdecl argument metadata');
+  assert.strictEqual(e.test_lookup_wcsncmp() >>> 0, api.id,
+    'the generated hash table resolves wcsncmp by name');
 
   console.log('PASS  wcsncmp compares a bounded unsigned UTF-16 prefix');
 })().catch(error => {
