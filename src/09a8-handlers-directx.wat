@@ -414,6 +414,21 @@
     (i32.atomic.store offset=20 (global.get $DX_PROCESS_STATE) (local.get $v)))
   (func $dx_primary_pal_set (param $v i32)
     (i32.atomic.store offset=24 (global.get $DX_PROCESS_STATE) (local.get $v)))
+  ;; 1 while a non-DirectDraw guest holds a ChangeDisplaySettings mode. It
+  ;; lives here, in process state, rather than in a mutable WASM global,
+  ;; because a global belongs to ONE INSTANCE: with `--threads` every guest
+  ;; thread has its own instance over this one shared memory, globals are
+  ;; propagated at spawn and never again, and in the browser's worker backend
+  ;; the guest's own main thread is one of those workers. So the guest set the
+  ;; flag in a worker's copy while lib/renderer.js asked the main thread's
+  ;; copy and got 0 -- SimGolf, which takes the display with
+  ;; ChangeDisplaySettingsA(mode, 0), went fullscreen cooperatively and sat in
+  ;; the corner of the desktop in threads mode. Every other field of this
+  ;; record was already here for exactly this reason.
+  (func $dx_display_fullscreen_get (result i32)
+    (i32.atomic.load offset=28 (global.get $DX_PROCESS_STATE)))
+  (func $dx_display_fullscreen_set (param $v i32)
+    (i32.atomic.store offset=28 (global.get $DX_PROCESS_STATE) (local.get $v)))
   ;; 1 once SetDisplayMode has actually chosen a mode. The width/height above
   ;; carry a default, so they cannot answer "is a mode in effect?" on their
   ;; own — and that question decides whether GetSystemMetrics reports the mode

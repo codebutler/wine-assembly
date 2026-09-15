@@ -361,6 +361,19 @@
     (owner "01-header.wat:$WINDOW_RECT_SCRATCH"))
   (region.declare $GDI_BRUSH_DESC (size 0x00000050) (align 0x00000010)
     (owner "10g-gdi-raster.wat:$gdi_brush_sample"))
+  ;; One scanline period of a patterned brush: 64 colours, which is the widest
+  ;; pattern $gdi_brush_x_period will claim. A brush repeats along x, so a row
+  ;; needs this many samples however wide the span is.
+  (region.declare $GDI_BRUSH_ROW (size 0x00000100) (align 0x00000010)
+    (owner "10g-gdi-raster.wat:$gdi_brush_fill_span"))
+  ;; One counter per reason $gdi_raster_bitblt_fast32 hands a blit back to the
+  ;; generic per-pixel path. A decline is not a small cost -- the generic loop
+  ;; re-resolves the clip and the DC state for every pixel of the blit -- so
+  ;; which reason fires is the work list for widening the fast path, and it is
+  ;; the only thing that tells "this app never takes the fast blit" apart from
+  ;; "it takes it and that is not where the time goes".
+  (region.declare $GDI_BITBLT_DECLINE (size 0x00000040) (align 0x00000010)
+    (owner "10g-gdi-raster.wat:$gdi_bitblt_decline"))
   (region.declare $GDI_PALETTE_RESOLVE (size 0x00000400) (align 0x00000010)
     (owner "01-header.wat:$GDI_PALETTE_RESOLVE"))
   (region.declare $GDI_OBJECT_GEN (size 0x00000004) (align 0x00000010)
@@ -445,7 +458,7 @@
     (owner "09c2-treeview.wat:$tv_slot_limit"))
   (region.declare $TV_HANDLE_SEQ (size 0x00000004)
     (owner "01-header.wat:$TV_HANDLE_SEQ"))
-  (region.declare $DX_PROCESS_STATE (size 0x0000001C) (align 0x00000010)
+  (region.declare $DX_PROCESS_STATE (size 0x00000020) (align 0x00000010)
     (owner "09a8-handlers-directx.wat:$dx_display_w_get"))
   (region.declare $LOOP_PROCESS_STATE (size 0x00000004) (align 0x00000010)
     (owner "07b-loop-match.wat:$LOOP_PROCESS_STATE"))

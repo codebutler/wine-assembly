@@ -2036,6 +2036,9 @@
   ;; descriptor so it cannot clobber active line/blit descriptors.
   (global $GDI_BRUSH_DESC i32 (region.addr $GDI_BRUSH_DESC 0))
   (global $GDI_BRUSH_DESC_SIZE i32 (region.size $GDI_BRUSH_DESC))
+  (global $GDI_BRUSH_ROW i32 (region.addr $GDI_BRUSH_ROW 0))
+  (global $GDI_BRUSH_ROW_SIZE i32 (region.size $GDI_BRUSH_ROW))
+  (global $GDI_BITBLT_DECLINE i32 (region.addr $GDI_BITBLT_DECLINE 0))
   ;; Synchronous DIB_PAL_COLORS decoding resolves WORD logical-palette
   ;; indexes into this RGBQUAD table before a raster operation starts.
   (global $GDI_PALETTE_RESOLVE i32 (region.addr $GDI_PALETTE_RESOLVE 0))
@@ -4120,13 +4123,12 @@
   ;; through items without dismissing the dropdown.
   (global $combo_kbd_nav_active (mut i32) (i32.const 0))
 
-  ;; Set by ChangeDisplaySettingsA(lpDevMode, CDS_FULLSCREEN) and cleared by
-  ;; ChangeDisplaySettingsA(NULL, ...), which is how a non-DirectDraw app says
-  ;; "I own the display now" and "I am done" respectively. The compositor reads
-  ;; it through get_display_fullscreen: a full-page, chrome-less takeover is
-  ;; something the guest has to ask for, never something inferred from the
-  ;; shape of a window.
-  (global $display_fullscreen (mut i32) (i32.const 0))
+  ;; "The guest owns the display" USED TO BE A GLOBAL HERE. It is now a field
+  ;; of $DX_PROCESS_STATE ($dx_display_fullscreen_get in 09a8), because a
+  ;; mutable global belongs to one instance and this fact belongs to the
+  ;; process: with worker threads the guest's own main thread runs in a
+  ;; separate instance from the one lib/renderer.js holds, so the flag was set
+  ;; in one copy and read from another. Do not reintroduce it here.
 
   ;; USER remembers the most recently active member of each owner window's
   ;; popup group. This table is process-shared like the HWND/owner records.

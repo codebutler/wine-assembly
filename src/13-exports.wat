@@ -724,8 +724,11 @@
   ;; This is the explicit signal from an app that does not use DirectDraw:
   ;; without it the compositor would have to guess a fullscreen takeover from
   ;; window geometry, which a maximized ordinary app matches.
+  ;; Process state, not a per-instance global -- see $dx_display_fullscreen_get.
+  ;; The renderer calls this on whatever instance it has a handle to, which in
+  ;; the browser's worker backend is NOT the instance the guest ran on.
   (func (export "get_display_fullscreen") (result i32)
-    (global.get $display_fullscreen))
+    (call $dx_display_fullscreen_get))
   ;; The display mode the guest asked for with ChangeDisplaySettings, or 0
   ;; when it never asked. This is the LOGICAL DESKTOP the app laid itself out
   ;; for -- GetSystemMetrics(SM_CXSCREEN) already answers from here -- so the
@@ -745,6 +748,90 @@
   ;; area at (0,0) rather than a screen-coordinate DirectDraw primary.
   (func (export "get_d3d9_windowed_hwnd") (result i32)
     (global.get $d3d9_windowed_hwnd))
+
+  ;; Vertex declarations $d3d9_declaration_create refused. It refuses by
+  ;; returning D3DERR_INVALIDCALL with *out left at 0, which a guest that does
+  ;; not check HRESULTs turns into a NULL declaration and, much later, a draw
+  ;; dropped for having neither a declaration nor an FVF. Without these there
+  ;; is nothing to read: the count says whether it happens at all, the mask
+  ;; says which of the renderer's rules refused (the 0x001..0x4000 bits set in
+  ;; 09ae-d3d9-resources.wat), and the two element words are the first
+  ;; offending D3DVERTEXELEMENT9, which tools/d3d9-decl-decode.js reads.
+  (func (export "get_d3d9_decl_reject_count") (result i32)
+    (global.get $d3d9_decl_reject_count))
+  (func (export "get_d3d9_decl_reject_mask") (result i32)
+    (global.get $d3d9_decl_reject_mask))
+  (func (export "get_d3d9_decl_reject_element") (result i32)
+    (global.get $d3d9_decl_reject_element))
+  (func (export "get_d3d9_decl_reject_element_hi") (result i32)
+    (global.get $d3d9_decl_reject_element_hi))
+  ;; The second slot holds the first refusal whose rule differs from the first
+  ;; one's, with its own reason beside it. B&W2 needs both: it trips stream!=0
+  ;; in its menus and type>4 as the land loads, and one slot reported the
+  ;; second rule as a bare bit with no element to decode.
+  (func (export "get_d3d9_decl_reject_reason") (result i32)
+    (global.get $d3d9_decl_reject_reason))
+  (func (export "get_d3d9_decl_reject_element2") (result i32)
+    (global.get $d3d9_decl_reject_element2))
+  (func (export "get_d3d9_decl_reject_element2_hi") (result i32)
+    (global.get $d3d9_decl_reject_element2_hi))
+  (func (export "get_d3d9_decl_reject_reason2") (result i32)
+    (global.get $d3d9_decl_reject_reason2))
+  ;; Shader creation, counted the same way and for the same reason: a refused
+  ;; CreateVertexShader hands the game NULL, the game binds nothing, and the
+  ;; draw silently falls back to fixed-function vertex processing over a
+  ;; declaration that was written for a shader. The two version words are the
+  ;; first refused first-dword per stage, so they name the profile the game was
+  ;; compiled for (0xfffe0200 = vs_2_0, 0xffff0200 = ps_2_0, and so on).
+  (func (export "get_d3d9_shader_made") (result i32)
+    (global.get $d3d9_shader_made))
+  (func (export "get_d3d9_shader_refused") (result i32)
+    (global.get $d3d9_shader_refused))
+  (func (export "get_d3d9_shader_refused_vs") (result i32)
+    (global.get $d3d9_shader_refused_vs))
+  (func (export "get_d3d9_shader_refused_ps") (result i32)
+    (global.get $d3d9_shader_refused_ps))
+  ;; Zero means the version gate refused the profile outright; anything else is
+  ;; $d3d_ir_error from the validator, with _at the dword offset it stopped at.
+  (func (export "get_d3d9_shader_error_vs") (result i32)
+    (global.get $d3d9_shader_error_vs))
+  (func (export "get_d3d9_shader_error_ps") (result i32)
+    (global.get $d3d9_shader_error_ps))
+  (func (export "get_d3d9_shader_error_at") (result i32)
+    (global.get $d3d9_shader_error_at))
+  ;; The token stream dword the validator stopped on. "519 dwords in" names no
+  ;; instruction; this word's opcode field does.
+  (func (export "get_d3d9_shader_error_token") (result i32)
+    (global.get $d3d9_shader_error_token))
+  ;; The refused vertex shader's whole token stream: a WASM address and a dword
+  ;; count, so a host can read it back and disassemble it. Zero until a vertex
+  ;; shader has actually been refused.
+  (func (export "get_d3d9_shader_error_copy") (result i32)
+    (global.get $d3d9_shader_error_copy))
+  (func (export "get_d3d9_shader_error_copy_words") (result i32)
+    (global.get $d3d9_shader_error_copy_words))
+  ;; Refusals split by requested profile, so the total can be attributed.
+  (func (export "get_d3d9_shader_refused_vs11") (result i32)
+    (global.get $d3d9_shader_refused_vs11))
+  (func (export "get_d3d9_shader_refused_vs20") (result i32)
+    (global.get $d3d9_shader_refused_vs20))
+  (func (export "get_d3d9_shader_refused_ps1x") (result i32)
+    (global.get $d3d9_shader_refused_ps1x))
+  (func (export "get_d3d9_shader_refused_ps20") (result i32)
+    (global.get $d3d9_shader_refused_ps20))
+  (func (export "get_d3d9_shader_refused_other") (result i32)
+    (global.get $d3d9_shader_refused_other))
+  ;; ...and the first validator error in each 1.x bucket. Those are the
+  ;; profiles the front end implements, so a refusal there names a gap inside
+  ;; a compiler we have, not a profile we lack.
+  (func (export "get_d3d9_shader_err_vs11") (result i32)
+    (global.get $d3d9_shader_err_vs11))
+  (func (export "get_d3d9_shader_err_vs11_at") (result i32)
+    (global.get $d3d9_shader_err_vs11_at))
+  (func (export "get_d3d9_shader_err_ps1x") (result i32)
+    (global.get $d3d9_shader_err_ps1x))
+  (func (export "get_d3d9_shader_err_ps1x_at") (result i32)
+    (global.get $d3d9_shader_err_ps1x_at))
   ;; The window a DirectDraw/Direct3D frame should be presented into.
   ;;
   ;; Normally that is $main_hwnd, but $main_hwnd is a *per-instance* mutable
@@ -1096,6 +1183,17 @@
         (param i32) (param i32) (param i32) (param i32) (result i32)
     (call $gdi_brush_sample
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
+  ;; The row filler, exported beside the per-pixel sampler it is an
+  ;; optimization of. $gdi_brush_fill_span samples one period of the brush and
+  ;; repeats it, so it and $gdi_brush_sample are two statements of the same
+  ;; function and can drift; test-wat-gdi-brush-period.js holds them together
+  ;; by filling a row here and comparing it against the sampler pixel by pixel.
+  (func (export "test_gdi_brush_fill_span")
+        (param i32) (param i32) (param i32) (param i32) (param i32)
+        (param i32) (param i32) (result i32)
+    (call $gdi_brush_fill_span
+      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+      (local.get 4) (local.get 5) (local.get 6)))
   ;; The status bar's sizing grip, drawn into any DC. Exported so its Win98
   ;; rib pattern can be asserted without rendering a whole application.
   (func (export "test_statusbar_draw_size_grip") (param i32) (param i32) (param i32)

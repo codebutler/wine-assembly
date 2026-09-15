@@ -1353,7 +1353,7 @@
     ;; Set below, once the mode has actually been accepted, so a DEVMODE that
     ;; names no resolution and a mode no display has both leave it alone.
     (if (i32.eqz (local.get $devmode))
-      (then (global.set $display_fullscreen (i32.const 0))))
+      (then (call $dx_display_fullscreen_set (i32.const 0))))
     (global.set $eax (i32.const 0))  ;; DISP_CHANGE_SUCCESSFUL
     ;; NULL lpDevMode is the documented "back to the registry mode" call, and
     ;; it deliberately does NOT clear the display state here. That state is
@@ -1395,7 +1395,7 @@
     ;; The mode is real and applied: the display is this app's now. Before the
     ;; early return below, so a second call asking for the mode already in
     ;; effect still says so rather than silently dropping the claim.
-    (global.set $display_fullscreen (i32.const 1))
+    (call $dx_display_fullscreen_set (i32.const 1))
     (if (i32.eqz (local.get $changed)) (then (return)))
     ;; The window that owns the display follows the mode, exactly as it does
     ;; for a DirectDraw mode switch: an app that maximized before the switch is
