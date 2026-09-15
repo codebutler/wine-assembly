@@ -94,13 +94,13 @@ async function waitForTexturedFirstPerson(state, filename, timeoutMs = 120000) {
   throw new Error(`timed out waiting for textured first-person gameplay; last check: ${lastError || 'no PNG'}; log: ${state.logPath}`);
 }
 
-const common = (ip, maxSeconds, render) => [
+const common = (ip, maxSeconds, render, batchSize = 20000) => [
   '--app=ut2003_demo', '--vlan-wire', `--vlan-ip=${ip}`,
   ...(render ? ['--headless-gl'] : []),
   '--quiet-api', '--quiet-blocks', '--trace-net',
   '--x87-fusion',
   '--control-stdin', '--vlan-max-waits=100000000',
-  '--tick-ms-per-batch=5', '--batch-size=20000',
+  '--tick-ms-per-batch=5', `--batch-size=${batchSize}`,
   '--max-batches=100000000', `--max-seconds=${maxSeconds}`,
 ];
 
@@ -213,7 +213,11 @@ async function main() {
   // Treat the presented HUD/world pixels as the gameplay readiness signal.
   const server = spawn('server', [
     ...common(SERVER_IP, 700, false),
-    '--args=server DM-Antalus?game=XGame.XDeathmatch -server -nosound',
+    // The dedicated guest advances far faster than the D3D client while the
+    // latter precaches Antalus. An ordinary 20-minute limit can therefore
+    // expire before the client presents its first frame, producing the
+    // post-match "view a different player" prompt instead of live gameplay.
+    '--args=server DM-Antalus?game=XGame.XDeathmatch?TimeLimit=0?GoalScore=0 -server -nosound',
   ], [serverReady, serverReceive]);
   const hub = new ProcessHub();
   hub.add(server.child);
@@ -227,7 +231,9 @@ async function main() {
     // can manufacture a keepalive flood while the client is still loading.
     console.log('ok  UT2003 dedicated server entered Antalus gameplay');
     client = spawn('client', [
-      ...common(CLIENT_IP, 480, true),
+      // 100k retires 18.5% more guest blocks per fixed minute than 20k during
+      // this CPU-bound precache, and matches the browser's normal run slice.
+      ...common(CLIENT_IP, 480, true, 100000),
       '--args=10.77.0.1 -d3d -window -nosound',
     ], [clientSend, clientReady]);
     hub.add(client.child);
@@ -248,9 +254,9 @@ async function main() {
     // DirectInput mouse device exactly as a browser click does.
     let joined = false;
     try { assertJoinPromptGone(readyPng, 'UT2003 client'); joined = true; } catch (_) {}
-    for (let attempt = 0; !joined && attempt < 6; attempt++) {
+    for (let attempt = 0; !joined && attempt < 12; attempt++) {
       client.child.stdin.write(`${JSON.stringify({ cmd: 'mousedown:320:240' })}\n`);
-      await sleep(350);
+      await sleep(1000);
       client.child.stdin.write(`${JSON.stringify({ cmd: 'mouseup:320:240' })}\n`);
       await sleep(4650);
       const probePng = path.join(TMP, 'ut2003-vlan-client.png');
@@ -260,7 +266,7 @@ async function main() {
         assertJoinPromptGone(probePng, 'UT2003 client after Fire');
         joined = true;
       } catch (err) {
-        if (attempt === 5) throw err;
+        if (attempt === 11) throw err;
       }
     }
     client.child.stdin.write(`${JSON.stringify({ action: 'eval', code: GUEST_LOGS })}\n`);
