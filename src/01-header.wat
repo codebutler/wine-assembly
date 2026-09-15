@@ -782,6 +782,9 @@
   (import "host" "fs_volume_label" (func $host_fs_volume_label (param i32 i32 i32 i32) (result i32)))
   ;; fs_volume_label(rootWA, isWide, outWA, maxChars) → characters written,
   ;; NUL-terminated; 0 when the drive has no label of its own.
+  (import "host" "fs_set_volume_label" (func $host_fs_set_volume_label (param i32 i32 i32) (result i32)))
+  ;; fs_set_volume_label(driveIndex, labelGA, chars) → Win32 error code;
+  ;; driveIndex 0 selects the current drive and chars 0 removes the label.
   (import "host" "fs_volume_serial" (func $host_fs_volume_serial (param i32 i32) (result i32)))
   ;; fs_volume_serial(rootWA, isWide) → the mounted volume's serial number, or
   ;; 0 when no mount claims the letter.

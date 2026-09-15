@@ -2204,12 +2204,16 @@
   ;; callable for applications (including WinRAR 3.10) that import the NT and
   ;; Win9x paths together, but never fabricate a descriptor or retained ACL.
   (func $handle_GetKernelObjectSecurity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $file_security_not_supported (local.get $arg4))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (call $handle_GetFileSecurityA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr))
+    (return))
 
   (func $handle_SetKernelObjectSecurity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $file_security_not_supported (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (call $handle_SetFileSecurityA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+    (return))
 
   (func $handle_SetFileSecurityA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $file_security_not_supported (i32.const 0))
@@ -4749,3 +4753,72 @@
         (global.set $eax (i32.const 1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
+
+  ;; Measure an ANSI FAT volume label without reading beyond its documented
+  ;; 11-character maximum plus the required terminator. -1 is an inaccessible
+  ;; string and -2 is an overlong label.
+  (func $set_volume_label_ansi_len (param $label i32) (result i32)
+    (local $i i32)
+    (block $overlong (loop $scan
+      (if (call $ptr_range_access_bad
+            (i32.add (local.get $label) (local.get $i))
+            (i32.const 1) (i32.const 0))
+        (then (return (i32.const -1))))
+      (if (i32.eqz (call $gl8
+            (i32.add (local.get $label) (local.get $i))))
+        (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $overlong (i32.gt_u (local.get $i) (i32.const 11)))
+      (br $scan)))
+    (i32.const -2))
+
+  ;; SetVolumeLabelA(lpRootPathName, lpVolumeName). This Win98 environment
+  ;; exposes FAT writable volumes and immutable CD media. An explicit root is
+  ;; the documented drive-root spelling "X:\\"; NULL selects the current
+  ;; drive. A NULL or empty label removes the existing label.
+  (func $set_volume_label_a_impl
+      (param $root i32) (param $label i32) (result i32)
+    (local $drive i32) (local $first i32) (local $length i32)
+    (if (local.get $root)
+      (then
+        (if (call $ptr_range_access_bad
+              (local.get $root) (i32.const 4) (i32.const 0))
+          (then (return (i32.const 87)))) ;; ERROR_INVALID_PARAMETER
+        (local.set $first
+          (i32.and (call $gl8 (local.get $root)) (i32.const 0xDF)))
+        (if (i32.or
+              (i32.or
+                (i32.lt_u (local.get $first) (i32.const 0x41))
+                (i32.gt_u (local.get $first) (i32.const 0x5A)))
+              (i32.or
+                (i32.ne (call $gl8
+                  (i32.add (local.get $root) (i32.const 1))) (i32.const 0x3A))
+                (i32.or
+                  (i32.ne (call $gl8
+                    (i32.add (local.get $root) (i32.const 2))) (i32.const 0x5C))
+                  (i32.ne (call $gl8
+                    (i32.add (local.get $root) (i32.const 3))) (i32.const 0)))))
+          (then (return (i32.const 123)))) ;; ERROR_INVALID_NAME
+        (local.set $drive
+          (i32.add (i32.sub (local.get $first) (i32.const 0x41))
+                   (i32.const 1)))))
+    (if (local.get $label)
+      (then
+        (local.set $length (call $set_volume_label_ansi_len (local.get $label)))
+        (if (i32.eq (local.get $length) (i32.const -1))
+          (then (return (i32.const 87)))) ;; ERROR_INVALID_PARAMETER
+        (if (i32.eq (local.get $length) (i32.const -2))
+          (then (return (i32.const 154)))))) ;; ERROR_LABEL_TOO_LONG
+    (call $host_fs_set_volume_label
+      (local.get $drive) (local.get $label) (local.get $length)))
+
+  (func $handle_SetVolumeLabelA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $error i32)
+    (local.set $error
+      (call $set_volume_label_a_impl (local.get $arg0) (local.get $arg1)))
+    (if (local.get $error)
+      (then
+        (global.set $last_error (local.get $error))
+        (global.set $eax (i32.const 0)))
+      (else (global.set $eax (i32.const 1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
