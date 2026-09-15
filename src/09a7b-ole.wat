@@ -315,11 +315,14 @@
 
   ;; OleInitialize is CoInitializeEx(COINIT_APARTMENTTHREADED) plus OLE
   ;; services. The runtime's OLE objects are already process-local, while the
-  ;; apartment result and balance are owned here per calling thread.
+  ;; apartment result and balance are owned here per calling thread.  Since
+  ;; there is no additional OLE-service state to initialize, use the same STA
+  ;; entry point rather than maintaining a second copy of its ABI and result
+  ;; handling.
   (func $handle_OleInitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $com_initialize_current (local.get $arg0) (i32.const 2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (call $handle_CoInitialize
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; CoGetMalloc(dwMemContext, ppMalloc) — return a process-local IMalloc
