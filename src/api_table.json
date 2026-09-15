@@ -16905,7 +16905,8 @@
     "name": "GetStringTypeExA",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 4263157666
+    "hash": 4263157666,
+    "handler": "GetStringTypeA"
   },
   {
     "id": 2042,

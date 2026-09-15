@@ -175,7 +175,7 @@ const extra = [
   { name: 'AttachThreadInput', nargs: 3 },
   { name: 'ToAsciiEx', nargs: 6 },
   { name: 'keybd_event', nargs: 4 },
-  { name: 'GetStringTypeExA', nargs: 5 },
+  { name: 'GetStringTypeExA', nargs: 5, handler: 'GetStringTypeA' },
   { name: 'VirtualQuery', nargs: 3 },
   { name: 'WaitForSingleObjectEx', nargs: 3 },
   { name: 'SleepEx', nargs: 2 },
@@ -1441,15 +1441,20 @@ const extra = [
   { name: 'IPersistFile_GetCurFile', nargs: 2 },
 ];
 for (const api of extra) {
+  const ownsHandler = Object.prototype.hasOwnProperty.call(api, 'handler');
   if (!seen.has(api.name)) {
     existing.push({ id: existing.length, ...api, convention: api.convention || 'stdcall', hash: 0 });
     seen.add(api.name);
-  } else if (api.nargs !== undefined || api.args || api.ret || api.convention) {
+  } else if (api.nargs !== undefined || api.args || api.ret || api.convention || ownsHandler) {
     const current = existing.find(entry => entry.name === api.name);
     if (api.nargs !== undefined) current.nargs = api.nargs;
     if (api.args) current.args = api.args;
     if (api.ret) current.ret = api.ret;
     if (api.convention) current.convention = api.convention;
+    if (ownsHandler) {
+      if (api.handler) current.handler = api.handler;
+      else delete current.handler;
+    }
   }
 }
 

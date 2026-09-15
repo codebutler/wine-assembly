@@ -2,6 +2,8 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
 const apiTable = require('../src/api_table.json');
 
@@ -33,13 +35,13 @@ const extraWat = String.raw`
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $eax))
 
-  (func (export "test_get_string_type_a")
-      (param $src i32) (param $count i32) (param $out i32)
+  (func (export "test_get_string_type_ansi")
+      (param $api i32) (param $src i32) (param $count i32) (param $out i32)
       (param $esp0 i32) (result i32)
     (global.set $esp (local.get $esp0))
-    (call $handle_GetStringTypeA
-      (i32.const 0x0409) (i32.const 1) (local.get $src)
-      (local.get $count) (local.get $out) (i32.const 0))
+    (call $dispatch_api_table
+      (local.get $api) (i32.const 0x0409) (i32.const 1)
+      (local.get $src) (local.get $count) (local.get $out) (i32.const 0))
     (global.get $eax))
   (func (export "test_get_string_type_w")
       (param $src i32) (param $count i32) (param $out i32)
@@ -67,6 +69,30 @@ function readWords(e, address, count) {
 }
 
 (async () => {
+  const stringTypeA = apiTable.find(entry => entry.name === 'GetStringTypeA');
+  const stringTypeExA = apiTable.find(entry => entry.name === 'GetStringTypeExA');
+  assert(stringTypeA && stringTypeExA,
+    'both public ANSI character-classification APIs remain registered');
+  assert.strictEqual(stringTypeA.id, 309, 'GetStringTypeA API id remains stable');
+  assert.strictEqual(stringTypeExA.id, 2041, 'GetStringTypeExA API id remains stable');
+  assert.strictEqual(stringTypeA.nargs, 5);
+  assert.strictEqual(stringTypeExA.nargs, 5);
+  assert.strictEqual(stringTypeA.convention, 'stdcall');
+  assert.strictEqual(stringTypeExA.convention, 'stdcall');
+  assert.strictEqual(stringTypeExA.handler, 'GetStringTypeA',
+    'GetStringTypeExA metadata aliases the canonical ANSI classifier');
+
+  const root = path.join(__dirname, '..');
+  const dispatch = fs.readFileSync(
+    path.join(root, 'src/09b2-dispatch-table.generated.wat'), 'utf8');
+  assert.match(dispatch,
+    /;; 2041: GetStringTypeExA[\s\S]*?call \$handle_GetStringTypeA/,
+    'generated dispatch routes GetStringTypeExA through the canonical handler');
+  const lateSource = fs.readFileSync(
+    path.join(root, 'src/09a0b-handlers-base-late.wat'), 'utf8');
+  assert(!lateSource.includes('(func $handle_GetStringTypeExA'),
+    'the duplicate GetStringTypeExA wrapper is absent');
+
   const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
   e.init_thread(1, 0x00400000, 0, 0, 0, 0, 0);
   e.heap_init(0x00420000);
@@ -126,11 +152,16 @@ function readWords(e, address, count) {
   const wide = e.guest_alloc(16) >>> 0;
   const out = e.guest_alloc(16) >>> 0;
   [0x8a, 0x9a, 0x21].forEach((value, index) => e.guest_write8(ansi + index, value));
-  assert.strictEqual(e.test_get_string_type_a(ansi, 3, out, esp0), 1);
-  assert.deepStrictEqual(readWords(e, out, 3), [0x101, 0x102, 0x010],
-    'GetStringTypeA keeps CP1252 byte classification');
-  assert.strictEqual(e.test_get_esp() >>> 0, esp0 + 24,
-    'GetStringTypeA pops five stdcall arguments');
+  for (const api of [stringTypeA, stringTypeExA]) {
+    e.guest_write32(out, 0xdeadbeef);
+    e.guest_write32(out + 4, 0xdeadbeef);
+    assert.strictEqual(e.test_get_string_type_ansi(api.id, ansi, 3, out, esp0), 1,
+      `${api.name} returns TRUE`);
+    assert.deepStrictEqual(readWords(e, out, 3), [0x101, 0x102, 0x010],
+      `${api.name} keeps CP1252 byte classification`);
+    assert.strictEqual(e.test_get_esp() >>> 0, esp0 + 24,
+      `${api.name} pops five stdcall arguments`);
+  }
 
   writeWide(e, wide, [0x008a, 0x0160, 0x0161, 0x0021]);
   assert.strictEqual(e.test_get_string_type_w(wide, 4, out, esp0), 1);
