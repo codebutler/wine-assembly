@@ -30129,5 +30129,33 @@
       }
     ],
     "ret": "HINSTANCE"
+  },
+  {
+    "id": 3590,
+    "name": "IsCharAlphaW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 1675478396,
+    "args": [
+      {
+        "name": "ch",
+        "type": "WCHAR"
+      }
+    ],
+    "ret": "BOOL"
+  },
+  {
+    "id": 3591,
+    "name": "IsCharUpperW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 2669099128,
+    "args": [
+      {
+        "name": "ch",
+        "type": "WCHAR"
+      }
+    ],
+    "ret": "BOOL"
   }
 ]

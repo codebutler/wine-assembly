@@ -3233,9 +3233,11 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 36))) (return)
   )
 
-  ;; Win98 en-US CT_CTYPE1 classification used by GetStringTypeA/W, their Ex
-  ;; variants, and the IsChar family. CT_CTYPE1 bits: C1_UPPER=1 C1_LOWER=2
-  ;; C1_DIGIT=4 C1_SPACE=8 C1_PUNCT=16 C1_CNTRL=32 C1_ALPHA=256.
+  ;; Win98 en-US ANSI-byte CT_CTYPE1 classification used by GetStringTypeA,
+  ;; its Ex variant, and the IsChar*A family.  This input is a CP1252 byte,
+  ;; not a Unicode code unit: e.g. byte 0x8a represents U+0160 (S caron).
+  ;; CT_CTYPE1 bits: C1_UPPER=1 C1_LOWER=2 C1_DIGIT=4 C1_SPACE=8
+  ;; C1_PUNCT=16 C1_CNTRL=32 C1_ALPHA=256.
   (func $ctype1_ascii_flags (param $ch i32) (result i32)
     (local $ct i32) (local $upper i32) (local $lower i32)
     (if (i32.le_u (local.get $ch) (i32.const 31))
@@ -3294,6 +3296,46 @@
     (local.get $ct)
   )
 
+  ;; Win98 en-US Unicode-WCHAR CT_CTYPE1 classification.  Keep this separate
+  ;; from the ANSI-byte table above: U+008A is a C1 control code while CP1252
+  ;; byte 0x8A maps to the uppercase letter U+0160.  The bounded model covers
+  ;; ASCII, Latin-1 letters and the CP1252-only Unicode letters; other Unicode
+  ;; code units are left unclassified rather than guessed from their low byte.
+  (func $ctype1_unicode_flags (param $ch_in i32) (result i32)
+    (local $ch i32) (local $ct i32) (local $ansi i32)
+    (local.set $ch (i32.and (local.get $ch_in) (i32.const 0xffff)))
+    (if (i32.le_u (local.get $ch) (i32.const 0x7f))
+      (then
+        (local.set $ct (call $ctype1_ascii_flags (local.get $ch)))
+        ;; The ANSI helper intentionally preserves its historical byte
+        ;; behavior; Unicode DEL is a control code too.
+        (if (i32.eq (local.get $ch) (i32.const 0x7f))
+          (then (local.set $ct (i32.const 0x20))))
+        (return (local.get $ct))))
+    ;; Unicode C1 control-code range.  These are not the printable characters
+    ;; assigned to CP1252 byte values 0x80..0x9f.
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x80))
+                 (i32.le_u (local.get $ch) (i32.const 0x9f)))
+      (then (return (i32.const 0x20))))
+    ;; Reuse the ANSI helper only where Unicode and CP1252 code points are
+    ;; identical (the printable Latin-1 range).
+    (if (i32.le_u (local.get $ch) (i32.const 0x00ff))
+      (then (return (call $ctype1_ascii_flags (local.get $ch)))))
+    ;; Map the seven alphabetic CP1252 additions back to their ANSI bytes and
+    ;; reuse the one en-US table instead of maintaining two case-range lists.
+    (local.set $ansi (i32.const -1))
+    (if (i32.eq (local.get $ch) (i32.const 0x0152)) (then (local.set $ansi (i32.const 0x8c))))
+    (if (i32.eq (local.get $ch) (i32.const 0x0153)) (then (local.set $ansi (i32.const 0x9c))))
+    (if (i32.eq (local.get $ch) (i32.const 0x0160)) (then (local.set $ansi (i32.const 0x8a))))
+    (if (i32.eq (local.get $ch) (i32.const 0x0161)) (then (local.set $ansi (i32.const 0x9a))))
+    (if (i32.eq (local.get $ch) (i32.const 0x0178)) (then (local.set $ansi (i32.const 0x9f))))
+    (if (i32.eq (local.get $ch) (i32.const 0x017d)) (then (local.set $ansi (i32.const 0x8e))))
+    (if (i32.eq (local.get $ch) (i32.const 0x017e)) (then (local.set $ansi (i32.const 0x9e))))
+    (if (i32.ne (local.get $ansi) (i32.const -1))
+      (then (return (call $ctype1_ascii_flags (local.get $ansi)))))
+    (i32.const 0)
+  )
+
   ;; BOOL IsCharAlphaA(CHAR ch). Win32 promotes the byte argument to a stack
   ;; slot; use the same invariant ANSI classification as GetStringTypeA.
   (func $handle_IsCharAlphaA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3336,16 +3378,35 @@
         (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
+  ;; BOOL IsCharAlphaW/IsCharUpperW(WCHAR ch).  Classify the Unicode code unit
+  ;; rather than interpreting its low byte in the process ANSI code page.
+  (func $handle_IsCharAlphaW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (i32.ne
+        (i32.and
+          (call $ctype1_unicode_flags (local.get $arg0))
+          (i32.const 0x100))
+        (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_IsCharUpperW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (i32.ne
+        (i32.and
+          (call $ctype1_unicode_flags (local.get $arg0))
+          (i32.const 0x01))
+        (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
   ;; GetStringType{A,W} core: one CT_CTYPE1 word per source character. The
   ;; output is an array of WORDs either way; only the source stride differs.
   (func $get_string_type_core (param $src_guest i32) (param $count_in i32)
                               (param $out_guest i32) (param $wide i32) (result i32)
-    (local $i i32) (local $out i32) (local $src i32) (local $count i32) (local $step i32)
+    (local $i i32) (local $out i32) (local $src i32) (local $count i32) (local $flags i32)
     (if (i32.eqz (local.get $src_guest)) (then (return (i32.const 0))))
     (if (i32.eqz (local.get $out_guest)) (then (return (i32.const 0))))
     (local.set $src (call $g2w (local.get $src_guest)))
     (local.set $out (call $g2w (local.get $out_guest)))
-    (local.set $step (select (i32.const 2) (i32.const 1) (local.get $wide)))
     (local.set $count (local.get $count_in))
     (if (i32.eq (local.get $count) (i32.const -1))
       (then (local.set $count (i32.add
@@ -3354,11 +3415,19 @@
         (i32.const 1)))))
     (block $done (loop $next
       (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (if (local.get $wide)
+        (then
+          (local.set $flags
+            (call $ctype1_unicode_flags
+              (i32.load16_u
+                (i32.add (local.get $src) (i32.shl (local.get $i) (i32.const 1)))))))
+        (else
+          (local.set $flags
+            (call $ctype1_ascii_flags
+              (i32.load8_u (i32.add (local.get $src) (local.get $i)))))))
       (i32.store16
         (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 2)))
-        (call $ctype1_ascii_flags
-          (call $load_char (i32.add (local.get $src) (i32.mul (local.get $i) (local.get $step)))
-                           (local.get $wide))))
+        (local.get $flags))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $next)))
     (i32.const 1)
