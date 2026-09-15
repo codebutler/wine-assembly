@@ -7346,7 +7346,7 @@
       (call $handle_IDirect3DDevice7_Clear (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1358: IDirect3DDevice7_SetTransform
-      (call $handle_IDirect3DDevice7_SetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice2_SetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1359: IDirect3DDevice7_GetTransform
       (call $handle_IDirect3DDevice7_GetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))

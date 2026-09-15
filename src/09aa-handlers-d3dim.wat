@@ -1098,11 +1098,6 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
-  ;; IDirect3DDevice7_SetTransform — 3 args (incl. this)
-  (func $handle_IDirect3DDevice7_SetTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $d3dim_set_transform (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
-
   ;; IDirect3DDevice7_GetTransform — 3 args (incl. this)
   (func $handle_IDirect3DDevice7_GetTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_transform (local.get $arg0) (local.get $arg1) (local.get $arg2))

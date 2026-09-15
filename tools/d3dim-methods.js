@@ -119,7 +119,7 @@ const interfaces = [
     { name: 'SetRenderTarget',               nargs: 3 },
     { name: 'GetRenderTarget',               nargs: 2 },
     { name: 'Clear',                         nargs: 7 },
-    { name: 'SetTransform',                  nargs: 3, body: 'SET_XFORM' },
+    { name: 'SetTransform',                  nargs: 3, handler: 'IDirect3DDevice2_SetTransform' },
     { name: 'GetTransform',                  nargs: 3 },
     { name: 'SetViewport',                   nargs: 2 },
     { name: 'MultiplyTransform',             nargs: 3 },
