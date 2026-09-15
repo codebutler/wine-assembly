@@ -94,6 +94,7 @@
 (include "09d-winsock.wat")
 (include "09d1-mpr.wat")
 (include "09d2-tapi.wat")
+(include "09d3-spooler.wat")
 (include "09e-win16-api.wat")
 (include "09e2-win16-dialog.wat")
 (include "09f-win16-ddeml.wat")
