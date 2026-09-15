@@ -4711,7 +4711,8 @@
                 (i32.eqz (i32.and (local.get $style) (i32.const 0x10000000))))
               (i32.and
                 (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0))
-                (i32.ne (i32.and (local.get $style) (i32.const 0x08000000)) (i32.const 0))))
+                (i32.ne (i32.and (local.get $style)
+                          (i32.shl (i32.const 1) (i32.const 27))) (i32.const 0))))
             (i32.and
               (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0))
               (i32.ne
@@ -4865,7 +4866,8 @@
       (if (i32.and
             (i32.and
               (i32.ne (call $wnd_is_effectively_visible (local.get $ch)) (i32.const 0))
-              (i32.eqz (i32.and (local.get $style) (i32.const 0x08000000)))) ;; !WS_DISABLED
+              (i32.eqz (i32.and (local.get $style)
+                         (i32.shl (i32.const 1) (i32.const 27))))) ;; !WS_DISABLED
             (i32.ne (i32.and (local.get $style) (i32.const 0x00010000)) (i32.const 0))) ;; WS_TABSTOP
         (then
           (if (i32.eqz (local.get $first)) (then (local.set $first (local.get $ch))))
@@ -4975,7 +4977,8 @@
       (local.set $style (call $wnd_get_style (local.get $ch)))
       (if (i32.and
             (i32.ne (call $wnd_is_effectively_visible (local.get $ch)) (i32.const 0))
-            (i32.eqz (i32.and (local.get $style) (i32.const 0x08000000))))  ;; !WS_DISABLED
+            (i32.eqz (i32.and (local.get $style)
+                       (i32.shl (i32.const 1) (i32.const 27)))))  ;; !WS_DISABLED
         (then (return (local.get $ch))))
       (br $step)))
     (local.get $focus))
@@ -6628,7 +6631,8 @@
       (local.set $style (call $wnd_get_style (local.get $ch)))
       (if (i32.and
             (i32.and (i32.ne (i32.and (local.get $style) (i32.const 0x10000000)) (i32.const 0))   ;; WS_VISIBLE
-                     (i32.eqz (i32.and (local.get $style) (i32.const 0x08000000))))             ;; !WS_DISABLED
+                     (i32.eqz (i32.and (local.get $style)
+                                (i32.shl (i32.const 1) (i32.const 27)))))                       ;; !WS_DISABLED
             (i32.ne (i32.and (local.get $style) (i32.const 0x00010000)) (i32.const 0)))         ;; WS_TABSTOP
         (then
           (call $set_focus (local.get $ch))

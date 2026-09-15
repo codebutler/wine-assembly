@@ -9,7 +9,7 @@ const CWP_SKIPDISABLED = 0x02;
 const CWP_SKIPTRANSPARENT = 0x04;
 const WS_CHILD = 0x40000000;
 const WS_VISIBLE = 0x10000000;
-const WS_DISABLED = 0x08000000;
+const WS_DISABLED = 1 << 27;
 const WS_EX_TRANSPARENT = 0x20;
 
 (async () => {
