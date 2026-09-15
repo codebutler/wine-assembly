@@ -1130,9 +1130,247 @@
     (call $handle_dx_com_release_basic
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  ;; Shell callers hand these methods pointers rather than sizes. Prove every
+  ;; fixed-size field is one mapped affine span before touching it; $g2w's
+  ;; unmapped sentinel is otherwise readable and would turn a bad out pointer
+  ;; into a plausible successful result.
+  (func $shell_guest_range_mapped (param $ptr i32) (param $size i32) (result i32)
+    (if (i32.or (i32.eqz (local.get $ptr)) (i32.eqz (local.get $size)))
+      (then (return (i32.const 0))))
+    (i32.ne
+      (call $g2w_affine_span (local.get $ptr) (local.get $size))
+      (global.get $NULL_SENTINEL)))
+
+  ;; A private filesystem item must fit SHGetPathFromIDList's MAX_PATH
+  ;; contract. Return -2 for an unmapped input and -1 for a name that does not
+  ;; terminate within MAX_PATH.
+  (func $shell_wide_name_length (param $name i32) (result i32)
+    (local $i i32) (local $p i32)
+    (if (i32.eqz (local.get $name)) (then (return (i32.const -2))))
+    (block $too_long
+      (loop $scan
+        (br_if $too_long (i32.ge_u (local.get $i) (i32.const 260)))
+        (local.set $p
+          (i32.add (local.get $name) (i32.shl (local.get $i) (i32.const 1))))
+        (if (i32.eqz (call $shell_guest_range_mapped (local.get $p) (i32.const 2)))
+          (then (return (i32.const -2))))
+        (if (i32.eqz (call $gl16 (local.get $p)))
+          (then (return (local.get $i))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (i32.const -1))
+
+  (func $shell_guid_hex_part
+      (param $name i32) (param $start i32) (param $count i32) (result i32)
+    (local $i i32) (local $ch i32) (local $digit i32) (local $value i32)
+    (block $done
+      (loop $digits
+        (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $ch
+          (call $gl16
+            (i32.add (local.get $name)
+              (i32.shl (i32.add (local.get $start) (local.get $i)) (i32.const 1)))))
+        (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x30))
+                     (i32.le_u (local.get $ch) (i32.const 0x39)))
+          (then (local.set $digit (i32.sub (local.get $ch) (i32.const 0x30))))
+          (else
+            (local.set $ch (i32.or (local.get $ch) (i32.const 0x20)))
+            (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x61))
+                         (i32.le_u (local.get $ch) (i32.const 0x66)))
+              (then (local.set $digit (i32.sub (local.get $ch) (i32.const 0x57))))
+              (else (return (i32.const -1))))))
+        (local.set $value
+          (i32.or (i32.shl (local.get $value) (i32.const 4)) (local.get $digit)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $digits)))
+    (local.get $value))
+
+  ;; Parse exactly the desktop namespace syntax documented for virtual folder
+  ;; CLSIDs. The result is CSIDL+1 so CSIDL_DESKTOP remains distinguishable
+  ;; from malformed syntax.
+  (func $shell_virtual_csidl_from_wide (param $name i32) (param $len i32) (result i32)
+    (local $d1 i32) (local $d2 i32) (local $d3 i32)
+    (local $d4a i32) (local $d4b i32) (local $d4c i32)
+    (if (i32.ne (local.get $len) (i32.const 40))
+      (then (return (i32.const 0))))
+    (if (i32.or
+          (i32.or
+            (i32.ne (call $gl16 (local.get $name)) (i32.const 58))
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 2))) (i32.const 58)))
+          (i32.or
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 4))) (i32.const 123))
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 78))) (i32.const 125))))
+      (then (return (i32.const 0))))
+    ;; Hyphens after 8-4-4-4 hexadecimal digits.
+    (if (i32.or
+          (i32.or
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 22))) (i32.const 45))
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 32))) (i32.const 45)))
+          (i32.or
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 42))) (i32.const 45))
+            (i32.ne (call $gl16 (i32.add (local.get $name) (i32.const 52))) (i32.const 45))))
+      (then (return (i32.const 0))))
+    (local.set $d1 (call $shell_guid_hex_part (local.get $name) (i32.const 3) (i32.const 8)))
+    (local.set $d2 (call $shell_guid_hex_part (local.get $name) (i32.const 12) (i32.const 4)))
+    (local.set $d3 (call $shell_guid_hex_part (local.get $name) (i32.const 17) (i32.const 4)))
+    (local.set $d4a (call $shell_guid_hex_part (local.get $name) (i32.const 22) (i32.const 4)))
+    (local.set $d4b (call $shell_guid_hex_part (local.get $name) (i32.const 27) (i32.const 4)))
+    (local.set $d4c (call $shell_guid_hex_part (local.get $name) (i32.const 31) (i32.const 8)))
+    (if (i32.and
+          (i32.and (i32.eq (local.get $d1) (i32.const 0x00021400))
+                   (i32.eqz (local.get $d2)))
+          (i32.and
+            (i32.and (i32.eqz (local.get $d3))
+                     (i32.eq (local.get $d4a) (i32.const 0xC000)))
+            (i32.and (i32.eqz (local.get $d4b))
+                     (i32.eq (local.get $d4c) (i32.const 0x00000046)))))
+      (then (return (i32.const 1)))) ;; CSIDL_DESKTOP + 1
+    (if (i32.and
+          (i32.and (i32.eq (local.get $d2) (i32.const 0x3AEA))
+                   (i32.eq (local.get $d3) (i32.const 0x1069)))
+          (i32.and (i32.eq (local.get $d4b) (i32.const 0x0800))
+                   (i32.eq (local.get $d4c) (i32.const 0x2B30309D))))
+      (then
+        (if (i32.and
+              (i32.eq (local.get $d1) (i32.const 0x20D04FE0))
+              (i32.eq (local.get $d4a) (i32.const 0xA2D8)))
+          (then (return (i32.const 0x12)))) ;; CSIDL_DRIVES + 1
+        (if (i32.and
+              (i32.eq (local.get $d1) (i32.const 0x208D2C60))
+              (i32.eq (local.get $d4a) (i32.const 0xA2D7)))
+          (then (return (i32.const 0x13)))))) ;; CSIDL_NETWORK + 1
+    (i32.const 0))
+
+  (func $shell_ansi_path_is_absolute (param $path i32) (param $len i32) (result i32)
+    (local $c0 i32)
+    (if (i32.ge_u (local.get $len) (i32.const 3))
+      (then
+        (local.set $c0 (i32.or (call $gl8 (local.get $path)) (i32.const 0x20)))
+        (if (i32.and
+              (i32.and (i32.ge_u (local.get $c0) (i32.const 0x61))
+                       (i32.le_u (local.get $c0) (i32.const 0x7A)))
+              (i32.and
+                (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 1))) (i32.const 58))
+                (i32.or
+                  (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 2))) (i32.const 47))
+                  (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 2))) (i32.const 92)))))
+          (then (return (i32.const 1))))))
+    ;; A UNC name needs two separators and at least one server-name byte.
+    (if (i32.ge_u (local.get $len) (i32.const 3))
+      (then
+        (if (i32.and
+              (i32.or (i32.eq (call $gl8 (local.get $path)) (i32.const 47))
+                      (i32.eq (call $gl8 (local.get $path)) (i32.const 92)))
+              (i32.and
+                (i32.or
+                  (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 1))) (i32.const 47))
+                  (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 1))) (i32.const 92)))
+                (i32.ne (call $gl8 (i32.add (local.get $path) (i32.const 2))) (i32.const 0))))
+          (then (return (i32.const 1))))))
+    (i32.const 0))
+
   (func $handle_IShellFolder_ParseDisplayName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (local $ppidl i32) (local $attributes_ptr i32) (local $attributes i32)
+    (local $len i32) (local $virtual i32) (local $pidl i32)
+    (local $narrow i32) (local $file_attrs i32) (local $actual i32)
+    ;; this, hwnd, pbc, pszDisplayName, pchEaten are in arg0..arg4;
+    ;; ppidl and pdwAttributes are the sixth and seventh COM arguments.
+    (local.set $ppidl (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $attributes_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (if (i32.eqz (call $shell_guest_range_mapped (local.get $ppidl) (i32.const 4)))
+      (then (global.set $eax (i32.const 0x80004003)) (return))) ;; E_POINTER
+    (call $gs32 (local.get $ppidl) (i32.const 0))
+    (if (local.get $arg4)
+      (then
+        (if (i32.eqz (call $shell_guest_range_mapped (local.get $arg4) (i32.const 4)))
+          (then (global.set $eax (i32.const 0x80004003)) (return)))
+        (call $gs32 (local.get $arg4) (i32.const 0))))
+    (if (local.get $attributes_ptr)
+      (then
+        (if (i32.eqz
+              (call $shell_guest_range_mapped (local.get $attributes_ptr) (i32.const 4)))
+          (then (global.set $eax (i32.const 0x80004003)) (return)))
+        (local.set $attributes (call $gl32 (local.get $attributes_ptr)))))
+    (local.set $len (call $shell_wide_name_length (local.get $arg3)))
+    (if (i32.eq (local.get $len) (i32.const -2))
+      (then (global.set $eax (i32.const 0x80004003)) (return))) ;; E_POINTER
+    (if (i32.le_s (local.get $len) (i32.const 0))
+      (then (global.set $eax (i32.const 0x80070057)) (return))) ;; E_INVALIDARG
+    (local.set $virtual
+      (call $shell_virtual_csidl_from_wide (local.get $arg3) (local.get $len)))
+    (if (local.get $virtual)
+      (then
+        (local.set $pidl
+          (call $shell_virtual_pidl_from_csidl
+            (i32.sub (local.get $virtual) (i32.const 1))))
+        (if (i32.eqz (local.get $pidl))
+          (then (global.set $eax (i32.const 0x8007000E)) (return))) ;; E_OUTOFMEMORY
+        (local.set $actual
+          (call $shell_private_pidl_sfgao (local.get $pidl))))
+      (else
+        (local.set $narrow (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+        (if (i32.eqz (local.get $narrow))
+          (then (global.set $eax (i32.const 0x8007000E)) (return)))
+        ;; The private PIDL is ANSI. Reject code points the runtime's one-byte
+        ;; Win98 code-page model cannot preserve instead of aliasing a name by
+        ;; silently discarding its high byte.
+        (local.set $file_attrs (i32.const 0))
+        (block $converted
+          (loop $narrow_chars
+            (if (i32.ge_u (local.get $file_attrs) (local.get $len))
+              (then (br $converted)))
+            (if (i32.gt_u
+                  (call $gl16
+                    (i32.add (local.get $arg3)
+                      (i32.shl (local.get $file_attrs) (i32.const 1))))
+                  (i32.const 0xFF))
+              (then
+                (call $heap_free (local.get $narrow))
+                (global.set $eax (i32.const 0x80070459)) ;; ERROR_NO_UNICODE_TRANSLATION
+                (return)))
+            (call $gs8
+              (i32.add (local.get $narrow) (local.get $file_attrs))
+              (call $gl16
+                (i32.add (local.get $arg3)
+                  (i32.shl (local.get $file_attrs) (i32.const 1)))))
+            (local.set $file_attrs (i32.add (local.get $file_attrs) (i32.const 1)))
+            (br $narrow_chars)))
+        (call $gs8 (i32.add (local.get $narrow) (local.get $len)) (i32.const 0))
+        (if (i32.eqz
+              (call $shell_ansi_path_is_absolute (local.get $narrow) (local.get $len)))
+          (then
+            (call $heap_free (local.get $narrow))
+            (global.set $eax (i32.const 0x80070057))
+            (return)))
+        ;; ParseDisplayName validates the object unless a bind-context
+        ;; extension says otherwise; this bounded folder supports no such
+        ;; extensions.
+        (local.set $file_attrs
+          (call $host_fs_get_file_attributes (call $g2w (local.get $narrow)) (i32.const 0)))
+        (if (i32.eq (local.get $file_attrs) (i32.const -1))
+          (then
+            (call $heap_free (local.get $narrow))
+            (global.set $eax (i32.const 0x80070002))
+            (return)))
+        (local.set $pidl (call $shell_filesystem_pidl_from_path (local.get $narrow)))
+        (call $heap_free (local.get $narrow))
+        (if (i32.eqz (local.get $pidl))
+          (then (global.set $eax (i32.const 0x8007000E)) (return)))
+        (local.set $actual
+          (i32.and
+            (call $sh_file_sfgao
+              (call $g2w (i32.add (local.get $pidl) (i32.const 6)))
+              (local.get $file_attrs))
+            (i32.const 0x70080000)))))
+    (call $gs32 (local.get $ppidl) (local.get $pidl))
+    (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (local.get $len))))
+    (if (local.get $attributes_ptr)
+      (then
+        (call $gs32 (local.get $attributes_ptr)
+          (i32.and (local.get $attributes) (local.get $actual)))))
+    (global.set $eax (i32.const 0))) ;; S_OK
   (func $handle_IShellFolder_EnumObjects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $vtbl i32) (local $obj i32)
     (if (i32.eqz (local.get $arg3))
@@ -1158,9 +1396,10 @@
   ;; ITEMIDLIST. Besides protecting the comparison, checking the terminating
   ;; zero-sized SHITEMID means equality covers the complete list we own.
   (func $shell_private_pidl_kind (param $pidl i32) (result i32)
-    (local $wa i32) (local $cb i32) (local $tag i32)
+    (local $wa i32) (local $cb i32) (local $tag i32) (local $csidl i32)
     (local $capacity i32) (local $i i32)
-    (if (i32.eqz (local.get $pidl)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $shell_guest_range_mapped (local.get $pidl) (i32.const 6)))
+      (then (return (i32.const 0))))
     (local.set $wa (call $g2w (local.get $pidl)))
     (local.set $cb (i32.load16_u (local.get $wa)))
     (local.set $tag (i32.load offset=2 align=1 (local.get $wa)))
@@ -1168,12 +1407,25 @@
           (i32.eq (local.get $tag) (i32.const 0x50564157)) ;; WAVP
           (i32.eq (local.get $cb) (i32.const 10)))
       (then
-        (if (i32.eqz (i32.load16_u offset=10 (local.get $wa)))
+        (if (i32.eqz
+              (call $shell_guest_range_mapped (local.get $pidl) (i32.const 12)))
+          (then (return (i32.const 0))))
+        (local.set $csidl (i32.load offset=6 align=1 (local.get $wa)))
+        (if (i32.and
+              (i32.eqz (i32.load16_u offset=10 (local.get $wa)))
+              (i32.or
+                (i32.eqz (local.get $csidl))
+                (i32.or (i32.eq (local.get $csidl) (i32.const 0x11))
+                        (i32.eq (local.get $csidl) (i32.const 0x12)))))
           (then (return (i32.const 2))))))
     (if (i32.or
           (i32.ne (local.get $tag) (i32.const 0x50464157)) ;; WAFP
           (i32.or (i32.lt_u (local.get $cb) (i32.const 8))
                   (i32.gt_u (local.get $cb) (i32.const 266))))
+      (then (return (i32.const 0))))
+    (if (i32.eqz
+          (call $shell_guest_range_mapped
+            (local.get $pidl) (i32.add (local.get $cb) (i32.const 2))))
       (then (return (i32.const 0))))
     (if (i32.ne (i32.load16_u (i32.add (local.get $wa) (local.get $cb)))
                 (i32.const 0))
@@ -1191,6 +1443,31 @@
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $scan)))
     (i32.const 0))
+
+  ;; Return this folder's established SFGAO view, 0 for a stale filesystem
+  ;; item, or -1 for a foreign/malformed PIDL.
+  (func $shell_private_pidl_sfgao (param $pidl i32) (result i32)
+    (local $kind i32) (local $attrs i32)
+    (local.set $kind (call $shell_private_pidl_kind (local.get $pidl)))
+    (if (i32.eqz (local.get $kind)) (then (return (i32.const -1))))
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then
+        (return
+          (i32.and (call $sh_file_sfgao (i32.const 0) (i32.const 0x10))
+            (i32.const 0x70080000)))))
+    (local.set $attrs
+      (call $host_fs_get_file_attributes
+        (call $g2w (i32.add (local.get $pidl) (i32.const 6))) (i32.const 0)))
+    (if (i32.eq (local.get $attrs) (i32.const -1))
+      (then (return (i32.const 0))))
+    ;; This IShellFolder's GetUIObjectOf and mutation methods remain
+    ;; unsupported. Do not advertise capability or DROPTARGET bits merely
+    ;; because the shared SHGetFileInfo classifier exposes them elsewhere.
+    (i32.and
+      (call $sh_file_sfgao
+        (call $g2w (i32.add (local.get $pidl) (i32.const 6)))
+        (local.get $attrs))
+      (i32.const 0x70080000)))
 
   ;; CompareIDs returns the ordering as a signed value in HRESULT_CODE. The
   ;; Win98 desktop folder's default rule is name order. Our relative PIDLs
@@ -1238,15 +1515,199 @@
     (global.set $eax (i32.const 0x80004001))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
   (func $handle_IShellFolder_GetAttributesOf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (local $i i32) (local $pidl i32) (local $actual i32) (local $common i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (if (i32.eqz (call $shell_guest_range_mapped (local.get $arg3) (i32.const 4)))
+      (then (global.set $eax (i32.const 0x80004003)) (return))) ;; E_POINTER
+    (local.set $common (call $gl32 (local.get $arg3)))
+    ;; cidl==0 is the documented cache-refresh form. This folder caches no
+    ;; attributes, so the refresh is complete and has no item flags to return.
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (call $gs32 (local.get $arg3) (i32.const 0))
+        (global.set $eax (i32.const 0))
+        (return)))
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (call $gs32 (local.get $arg3) (i32.const 0))
+        (global.set $eax (i32.const 0x80004003))
+        (return)))
+    (if (i32.gt_u (local.get $arg1) (i32.const 0x3FFFFFFF))
+      (then
+        (call $gs32 (local.get $arg3) (i32.const 0))
+        (global.set $eax (i32.const 0x80070057))
+        (return)))
+    (if (i32.eqz
+          (call $shell_guest_range_mapped
+            (local.get $arg2) (i32.shl (local.get $arg1) (i32.const 2))))
+      (then
+        (call $gs32 (local.get $arg3) (i32.const 0))
+        (global.set $eax (i32.const 0x80004003))
+        (return)))
+    (block $done
+      (loop $items
+        (br_if $done (i32.ge_u (local.get $i) (local.get $arg1)))
+        (if (i32.eqz
+              (call $shell_guest_range_mapped
+                (i32.add (local.get $arg2) (i32.shl (local.get $i) (i32.const 2)))
+                (i32.const 4)))
+          (then
+            (call $gs32 (local.get $arg3) (i32.const 0))
+            (global.set $eax (i32.const 0x80004003))
+            (return)))
+        (local.set $pidl
+          (call $gl32
+            (i32.add (local.get $arg2) (i32.shl (local.get $i) (i32.const 2)))))
+        (local.set $actual (call $shell_private_pidl_sfgao (local.get $pidl)))
+        (if (i32.eq (local.get $actual) (i32.const -1))
+          (then
+            (call $gs32 (local.get $arg3) (i32.const 0))
+            (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
+            (return)))
+        (if (i32.eqz (local.get $actual))
+          (then
+            (call $gs32 (local.get $arg3) (i32.const 0))
+            (global.set $eax (i32.const 0x80070002)) ;; stale item
+            (return)))
+        ;; The in/out word is both the query mask and the intersection across
+        ;; every requested child. Never manufacture an unspecified flag.
+        (local.set $common (i32.and (local.get $common) (local.get $actual)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $items)))
+    (call $gs32 (local.get $arg3) (local.get $common))
+    (global.set $eax (i32.const 0)))
   (func $handle_IShellFolder_GetUIObjectOf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0x80004001))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+
+  ;; Write one of the three Win98 desktop namespace names into STRRET.cStr.
+  ;; STRRET_CSTR keeps ownership entirely in the caller's 264-byte structure,
+  ;; which is the native pre-Unicode shell form and needs no hidden allocation.
+  (func $shell_virtual_strret_cstr
+      (param $strret i32) (param $csidl i32) (param $parsing i32)
+    (local $dst i32)
+    (local.set $dst (i32.add (local.get $strret) (i32.const 4)))
+    (call $gs32 (local.get $strret) (i32.const 2)) ;; STRRET_CSTR
+    (if (local.get $parsing)
+      (then
+        (if (i32.eqz (local.get $csidl))
+          (then
+            ;; ::{00021400-0000-0000-C000-000000000046}
+            (call $gs32 (local.get $dst) (i32.const 0x307B3A3A))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 4)) (i32.const 0x31323030))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 8)) (i32.const 0x2D303034))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0x30303030))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 16)) (i32.const 0x3030302D))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 20)) (i32.const 0x30432D30))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 24)) (i32.const 0x302D3030))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 28)) (i32.const 0x30303030))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 32)) (i32.const 0x30303030))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 36)) (i32.const 0x7D363430))
+            (call $gs8 (i32.add (local.get $dst) (i32.const 40)) (i32.const 0))
+            (return)))
+        (if (i32.eq (local.get $csidl) (i32.const 0x11))
+          (then
+            ;; ::{20D04FE0-3AEA-1069-A2D8-08002B30309D}
+            (call $gs32 (local.get $dst) (i32.const 0x327B3A3A))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 4)) (i32.const 0x34304430))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 8)) (i32.const 0x2D304546))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0x41454133))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 16)) (i32.const 0x3630312D))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 20)) (i32.const 0x32412D39))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 24)) (i32.const 0x302D3844))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 28)) (i32.const 0x32303038))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 32)) (i32.const 0x33303342))
+            (call $gs32 (i32.add (local.get $dst) (i32.const 36)) (i32.const 0x7D443930))
+            (call $gs8 (i32.add (local.get $dst) (i32.const 40)) (i32.const 0))
+            (return)))
+        ;; ::{208D2C60-3AEA-1069-A2D7-08002B30309D}
+        (call $gs32 (local.get $dst) (i32.const 0x327B3A3A))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 4)) (i32.const 0x32443830))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 8)) (i32.const 0x2D303643))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0x41454133))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 16)) (i32.const 0x3630312D))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 20)) (i32.const 0x32412D39))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 24)) (i32.const 0x302D3744))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 28)) (i32.const 0x32303038))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 32)) (i32.const 0x33303342))
+        (call $gs32 (i32.add (local.get $dst) (i32.const 36)) (i32.const 0x7D443930))
+        (call $gs8 (i32.add (local.get $dst) (i32.const 40)) (i32.const 0))
+        (return)))
+    (if (i32.eqz (local.get $csidl))
+      (then
+        (call $gs32 (local.get $dst) (i32.const 0x6B736544)) ;; Desk
+        (call $gs32 (i32.add (local.get $dst) (i32.const 4))
+          (i32.const 0x00706F74)) ;; top\0
+        (return)))
+    (if (i32.eq (local.get $csidl) (i32.const 0x11))
+      (then
+        (call $gs32 (local.get $dst) (i32.const 0x4320794D)) ;; My C
+        (call $gs32 (i32.add (local.get $dst) (i32.const 4))
+          (i32.const 0x75706D6F)) ;; ompu
+        (call $gs32 (i32.add (local.get $dst) (i32.const 8))
+          (i32.const 0x00726574)) ;; ter\0
+        (return)))
+    (call $gs32 (local.get $dst) (i32.const 0x7774654E)) ;; Netw
+    (call $gs32 (i32.add (local.get $dst) (i32.const 4))
+      (i32.const 0x206B726F)) ;; ork_
+    (call $gs32 (i32.add (local.get $dst) (i32.const 8))
+      (i32.const 0x6769654E)) ;; Neig
+    (call $gs32 (i32.add (local.get $dst) (i32.const 12))
+      (i32.const 0x726F6268)) ;; hbor
+    (call $gs32 (i32.add (local.get $dst) (i32.const 16))
+      (i32.const 0x646F6F68)) ;; hood
+    (call $gs8 (i32.add (local.get $dst) (i32.const 20)) (i32.const 0)))
+
   (func $handle_IShellFolder_GetDisplayNameOf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (local $kind i32) (local $offset i32) (local $scan i32) (local $ch i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (if (i32.eqz
+          (call $shell_guest_range_mapped (local.get $arg3) (i32.const 264)))
+      (then (global.set $eax (i32.const 0x80004003)) (return))) ;; E_POINTER
+    ;; Leave a valid empty STRRET_CSTR on every item-validation failure.
+    (call $gs32 (local.get $arg3) (i32.const 2))
+    (call $gs8 (i32.add (local.get $arg3) (i32.const 4)) (i32.const 0))
+    (local.set $kind (call $shell_private_pidl_kind (local.get $arg1)))
+    (if (i32.eqz (local.get $kind))
+      (then (global.set $eax (i32.const 0x80070057)) (return))) ;; E_INVALIDARG
+    (if (i32.eq (local.get $kind) (i32.const 2))
+      (then
+        (call $shell_virtual_strret_cstr
+          (local.get $arg3)
+          (i32.load offset=6 align=1 (call $g2w (local.get $arg1)))
+          (i32.and
+            (i32.ne (i32.and (local.get $arg2) (i32.const 0x8000)) (i32.const 0))
+            (i32.eqz (i32.and (local.get $arg2) (i32.const 1)))))
+        (global.set $eax (i32.const 0))
+        (return)))
+    ;; Filesystem bytes already live inside the caller-owned PIDL. STRRET_OFFSET
+    ;; exposes either the absolute parsing path or its final display component
+    ;; without allocating a second buffer.
+    (local.set $offset (i32.const 6))
+    (if (i32.eqz
+          (i32.and
+            (i32.ne (i32.and (local.get $arg2) (i32.const 0x8000)) (i32.const 0))
+            (i32.eqz (i32.and (local.get $arg2) (i32.const 1)))))
+      (then
+        (local.set $scan (i32.add (local.get $arg1) (i32.const 6)))
+        (block $basename_done
+          (loop $basename
+            (local.set $ch (call $gl8 (local.get $scan)))
+            (br_if $basename_done (i32.eqz (local.get $ch)))
+            (if (i32.and
+                  (i32.or (i32.eq (local.get $ch) (i32.const 47))
+                          (i32.eq (local.get $ch) (i32.const 92)))
+                  (i32.ne (call $gl8 (i32.add (local.get $scan) (i32.const 1)))
+                          (i32.const 0)))
+              (then
+                (local.set $offset
+                  (i32.sub (i32.add (local.get $scan) (i32.const 1))
+                           (local.get $arg1)))))
+            (local.set $scan (i32.add (local.get $scan) (i32.const 1)))
+            (br $basename)))))
+    (call $gs32 (local.get $arg3) (i32.const 1)) ;; STRRET_OFFSET
+    (call $gs32 (i32.add (local.get $arg3) (i32.const 4)) (local.get $offset))
+    (global.set $eax (i32.const 0)))
   (func $handle_IShellFolder_SetNameOf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0x80004001))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
