@@ -30071,5 +30071,40 @@
     "nargs": 3,
     "convention": "stdcall",
     "hash": 2609806812
+  },
+  {
+    "id": 3584,
+    "name": "SetConsoleCP",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 482069923
+  },
+  {
+    "id": 3585,
+    "name": "SetConsoleOutputCP",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3394241910
+  },
+  {
+    "id": 3586,
+    "name": "SetConsoleTextAttribute",
+    "nargs": 2,
+    "convention": "stdcall",
+    "hash": 3155047189
+  },
+  {
+    "id": 3587,
+    "name": "PeekConsoleInputW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 4139612790
+  },
+  {
+    "id": 3588,
+    "name": "WriteConsoleInputA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3614574446
   }
 ]

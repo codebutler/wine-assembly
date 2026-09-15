@@ -1754,6 +1754,10 @@
       (then
         (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3589))
+      (then
+        (call $dispatch_api_table_page_14 (i32.sub (local.get $api_id) (i32.const 3584)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+        (return)))
     (call $handle_fallback (local.get $name_ptr) (local.get $api_id))
   )
 
@@ -16203,6 +16207,34 @@
       (return)
     ) ;; fallback
     (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3328)))
+  )
+
+  (func $dispatch_api_table_page_14 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; api ids 3584..3588
+    (block $fallback
+    (block $api_4
+    (block $api_3
+    (block $api_2
+    (block $api_1
+    (block $api_0
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $fallback (local.get $api_id))
+    ) ;; 3584: SetConsoleCP
+      (call $handle_SetConsoleCP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3585: SetConsoleOutputCP
+      (call $handle_SetConsoleOutputCP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3586: SetConsoleTextAttribute
+      (call $handle_SetConsoleTextAttribute (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3587: PeekConsoleInputW
+      (call $handle_PeekConsoleInputW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3588: WriteConsoleInputA
+      (call $handle_WriteConsoleInputA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; fallback
+    (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3584)))
   )
 
   ;; ============================================================

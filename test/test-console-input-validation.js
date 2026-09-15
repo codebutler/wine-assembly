@@ -39,6 +39,15 @@ const extraWat = String.raw`
       (local.get $count) (i32.const 0) (i32.const 0))
     (call $pack_console_input_result))
 
+  (func (export "test_peek_w")
+        (param $handle i32) (param $buffer i32) (param $length i32)
+        (param $count i32) (param $stack i32) (result i64)
+    (global.set $esp (local.get $stack))
+    (call $handle_PeekConsoleInputW
+      (local.get $handle) (local.get $buffer) (local.get $length)
+      (local.get $count) (i32.const 0) (i32.const 0))
+    (call $pack_console_input_result))
+
   (func (export "test_get_count")
         (param $handle i32) (param $count i32) (param $stack i32) (result i64)
     (global.set $esp (local.get $stack))
@@ -75,6 +84,7 @@ const resultOf = packed => ({
     ['ReadConsoleInputA', 4],
     ['ReadConsoleInputW', 4],
     ['PeekConsoleInputA', 4],
+    ['PeekConsoleInputW', 4],
     ['GetNumberOfConsoleInputEvents', 2],
   ]) {
     const api = apiTable.find(entry => entry.name === name);
@@ -82,9 +92,6 @@ const resultOf = packed => ({
     assert.strictEqual(api.nargs, nargs, `${name} argument count`);
     assert.strictEqual(api.convention, 'stdcall', `${name} calling convention`);
   }
-  assert.strictEqual(apiTable.some(entry => entry.name === 'PeekConsoleInputW'), false,
-    'test assumptions changed: PeekConsoleInputW is now exported');
-
   const { exports: wat } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const stack = 0x074ff000;
   const buffer = wat.guest_alloc(40) >>> 0;
@@ -95,11 +102,13 @@ const resultOf = packed => ({
   };
   const invoke = (kind, handle = 1, output = buffer, length = 1, countOut = count) => {
     wat.guest_write32(count, 0xcccccccc);
-    const packed = kind === 'readA'
-      ? wat.test_read_a(handle, output, length, countOut, stack)
-      : kind === 'readW'
-        ? wat.test_read_w(handle, output, length, countOut, stack)
-        : wat.test_peek_a(handle, output, length, countOut, stack);
+    const calls = {
+      readA: wat.test_read_a,
+      readW: wat.test_read_w,
+      peekA: wat.test_peek_a,
+      peekW: wat.test_peek_w,
+    };
+    const packed = calls[kind](handle, output, length, countOut, stack);
     return {
       ...resultOf(packed),
       count: countOut ? wat.guest_read32(count) >>> 0 : undefined,
@@ -111,10 +120,13 @@ const resultOf = packed => ({
   assert.deepStrictEqual(invoke('peekA'),
     { eax: 1, esp: stack + 20, count: 0 });
   assert.strictEqual(wat.test_yield_flag(), 0, 'empty PeekConsoleInputA blocked');
+  assert.deepStrictEqual(invoke('peekW'),
+    { eax: 1, esp: stack + 20, count: 0 });
+  assert.strictEqual(wat.test_yield_flag(), 0, 'empty PeekConsoleInputW blocked');
 
   // A zero-sized read completes without a destination and does not consume or
   // wait, even when a record is pending.
-  for (const kind of ['readA', 'readW', 'peekA']) {
+  for (const kind of ['readA', 'readW', 'peekA', 'peekW']) {
     wat.test_reset_input();
     wat.test_push(0x51, 0x51);
     assert.deepStrictEqual(invoke(kind, 1, 0, 0),
@@ -133,6 +145,10 @@ const resultOf = packed => ({
   assert.strictEqual(read16(10), 0x70);
   assert.strictEqual(read16(14), 0xa9, 'ANSI peek did not narrow Unicode char');
   assert.strictEqual(wat.test_queue_count(), 1, 'peek drained its record');
+  assert.deepStrictEqual(invoke('peekW'),
+    { eax: 1, esp: stack + 20, count: 1 });
+  assert.strictEqual(read16(14), 0x03a9, 'wide peek lost Unicode char');
+  assert.strictEqual(wat.test_queue_count(), 1, 'wide peek drained its record');
   assert.deepStrictEqual(invoke('readW'),
     { eax: 1, esp: stack + 20, count: 1 });
   assert.strictEqual(read16(14), 0x03a9, 'wide read lost Unicode char');
@@ -150,7 +166,7 @@ const resultOf = packed => ({
 
   // Every exported reader rejects the wrong handle before polling or touching
   // caller output, and rejects missing required output pointers.
-  for (const kind of ['readA', 'readW', 'peekA']) {
+  for (const kind of ['readA', 'readW', 'peekA', 'peekW']) {
     wat.test_reset_input();
     wat.test_push(0x52, 0x52);
     wat.guest_write32(buffer, 0xfeedface);

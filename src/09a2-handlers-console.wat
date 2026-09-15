@@ -860,6 +860,21 @@
     (call $console_buffer_finish (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
+  ;; SetConsoleTextAttribute(hConsoleOutput, wAttributes) changes the current
+  ;; attribute of that screen buffer only. Existing cells are untouched; the
+  ;; value is used by later WriteConsole/WriteFile output and input echo.
+  (func $handle_SetConsoleTextAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (global.set $console_attr (i32.and (local.get $arg1) (i32.const 0xFFFF)))
+    (global.set $eax (i32.const 1))
+    (call $console_buffer_finish (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+
   ;; GetConsoleCursorInfo(hConsole, lpConsoleCursorInfo) → BOOL
   (func $handle_GetConsoleCursorInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $p i32)
@@ -1059,6 +1074,36 @@
     (global.set $eax
       (select (global.get $console_cp) (i32.const 0) (call $console_is_attached)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  ;; SetConsoleCP(wCodePageID) / SetConsoleOutputCP(wCodePageID) change the
+  ;; pages owned by the attached console. The pseudo-code-page constants used
+  ;; by conversion APIs are not installed console pages, so require one of the
+  ;; concrete pages that this runtime can actually translate.
+  (func $console_set_code_page (param $cp i32) (param $output i32) (result i32)
+    (if (i32.eqz (call $console_is_attached))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (return (i32.const 0))))
+    (if (i32.or
+          (i32.lt_u (local.get $cp) (i32.const 4))
+          (i32.eqz (call $is_supported_code_page (local.get $cp))))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (return (i32.const 0))))
+    (if (local.get $output)
+      (then (global.set $console_output_cp (local.get $cp)))
+      (else (global.set $console_cp (local.get $cp))))
+    (i32.const 1))
+
+  (func $handle_SetConsoleCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (call $console_set_code_page (local.get $arg0) (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_SetConsoleOutputCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (call $console_set_code_page (local.get $arg0) (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; Validate a signed COORD and clip a linear fill to the end of the loaded
   ;; screen buffer. -1 distinguishes an invalid starting cell from a valid
@@ -2112,6 +2157,17 @@
       (then (return)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
+  ;; PeekConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsRead)
+  ;; shares the real input ring with both ReadConsoleInput variants, but keeps
+  ;; every returned record queued and returns immediately when the ring is
+  ;; empty.
+  (func $handle_PeekConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $console_input_records_api
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (i32.const 1) (i32.const 1))
+      (then (return)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
   ;; Shared ReadConsoleOutputA/W rectangle reader. CHAR_INFO is four bytes in
   ;; both forms; the A form exposes the low console-codepage byte of Char.
   (func $console_read_output (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $wide i32)
@@ -2542,33 +2598,35 @@
     (call $console_buffer_finish (local.get $changed))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
 
-  ;; WriteConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsWritten) → BOOL
-  (func $handle_WriteConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  ;; Shared WriteConsoleInputA/W input-ring writer. INPUT_RECORD is 20 bytes
+  ;; in either form; only KEY_EVENT_RECORD.uChar changes from an eight-bit
+  ;; AsciiChar to a sixteen-bit UnicodeChar.
+  (func $console_write_input
+      (param $handle i32) (param $buffer i32) (param $length i32)
+      (param $count_ptr i32) (param $wide i32)
     (local $source i32) (local $record i32) (local $slot i32)
     (local $count i32) (local $limit i32) (local $i i32) (local $type i32)
-    (if (i32.ne (call $console_handle_resolve (local.get $arg0)) (i32.const 1))
+    (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
         (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
         (return)))
-    (if (i32.or (i32.eqz (local.get $arg3))
-          (i32.and (i32.ne (local.get $arg2) (i32.const 0))
-                   (i32.eqz (local.get $arg1))))
+    (if (i32.or (i32.eqz (local.get $count_ptr))
+          (i32.and (i32.ne (local.get $length) (i32.const 0))
+                   (i32.eqz (local.get $buffer))))
       (then
-        (if (local.get $arg3)
-          (then (i32.store (call $g2w (local.get $arg3)) (i32.const 0))))
+        (if (local.get $count_ptr)
+          (then (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
         (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
         (return)))
     (local.set $count (call $console_input_count))
     (local.set $limit
-      (select (local.get $arg2)
+      (select (local.get $length)
         (i32.sub (global.get $CONSOLE_INPUT_MAX) (local.get $count))
-        (i32.le_u (local.get $arg2)
+        (i32.le_u (local.get $length)
           (i32.sub (global.get $CONSOLE_INPUT_MAX) (local.get $count)))))
-    (local.set $source (call $g2w (local.get $arg1)))
+    (local.set $source (call $g2w (local.get $buffer)))
     (block $done (loop $write
       (br_if $done (i32.ge_u (local.get $i) (local.get $limit)))
       (local.set $record
@@ -2578,7 +2636,11 @@
       (i32.store (local.get $slot) (local.get $type))
       (if (i32.eq (local.get $type) (i32.const 1)) ;; KEY_EVENT
         (then
-          (i32.store offset=4 (local.get $slot) (i32.load16_u offset=14 (local.get $record)))
+          (i32.store offset=4 (local.get $slot)
+            (select
+              (i32.load16_u offset=14 (local.get $record))
+              (i32.load8_u offset=14 (local.get $record))
+              (local.get $wide)))
           (i32.store offset=8 (local.get $slot) (i32.load16_u offset=10 (local.get $record)))
           (i32.store offset=12 (local.get $slot) (i32.load offset=16 (local.get $record)))
           (i32.store offset=16 (local.get $slot)
@@ -2596,9 +2658,19 @@
     (i32.store (global.get $CONSOLE_INPUT) (i32.add (local.get $count) (local.get $limit)))
     (if (local.get $limit)
       (then (drop (call $host_set_event (call $console_input_event)))))
-    (i32.store (call $g2w (local.get $arg3)) (local.get $limit))
-    (global.set $last_error (i32.const 0))
-    (global.set $eax (i32.const 1))
+    (i32.store (call $g2w (local.get $count_ptr)) (local.get $limit))
+    (global.set $eax (i32.const 1)))
+
+  (func $handle_WriteConsoleInputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $console_write_input
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  (func $handle_WriteConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $console_write_input
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; ============================================================
