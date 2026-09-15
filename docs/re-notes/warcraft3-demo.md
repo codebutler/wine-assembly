@@ -1687,3 +1687,40 @@ long while before the menu appears. That is **expected**, on both counts:
 
 The often-quoted "40 minutes" figure is the **campaign map load**, not startup.
 Reaching the main menu is a sub-minute operation.
+
+### Dead lever: the `USECPU` knob in ijl15 is never read
+
+`ijl15.dll` carries the string `USECPU` at `0x600584e0` (`.data1`), referenced
+once from a data table at `0x60050084`, and the DLL imports
+`GetEnvironmentVariableA`. That reads like a documented Intel JPEG Library
+tuning knob you could set to pick a wider SIMD path — worth a look, given
+ijl15 is 40.3% of block entries through the first ~4 minutes of the load.
+
+It is not reachable. A 60s `--headless-gl` load traced with
+`--trace-api=GetEnvironmentVariableA` makes **eight** calls, and every one of
+them is the CRT's own probe:
+
+```
+[API #152]    GetEnvironmentVariableA(lpName="__MSVCRT_HEAP_SELECT", ...) => 0
+[API #364055] GetEnvironmentVariableA(lpName="__MSVCRT_HEAP_SELECT", ...) => 0
+   ... 8 calls, all __MSVCRT_HEAP_SELECT, all returning 0
+```
+
+`USECPU` is never asked for, through the environment or otherwise — ijl15
+imports no registry API at all, so there is no registry path either. Seeding
+it by any mechanism would change nothing, and an A/B against it would measure
+noise. If someone wants the string to matter, the job is to find what reads
+that data table, not to set a variable.
+
+Two related corrections for anyone reading older notes or session logs:
+
+- **A per-app registry seed already exists.** `startupRegistry:` in
+  `lib/apps.js`, applied by both hosts — `lib/browser-shell.js:799` and
+  `test/run.js:4564`. Captain Claw and Funtris use it. There is no gap to fill.
+- **A per-app environment seed does not**, but `test/run.js` already has
+  `--env=NAME=VALUE` plus `setEnvironmentVariable` in `lib/process-boot.js`,
+  so wiring one is small — it is just not worth doing for this app, on this
+  evidence.
+
+The real lever in this phase remains `ijl15.dll!ijlRead` at orig `0x600333d0`:
+six exports, one interceptable call, ~40% of the first load phase.
