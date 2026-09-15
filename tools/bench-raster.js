@@ -29,6 +29,10 @@
 //                                            test, so the shader VM and the
 //                                            framebuffer write almost never run.
 //   flat      ps_1_1 `mov r0,v0`          -- full coverage, no texture at all.
+//   flat8     the same plus 7 `add`       -- eight instructions instead of one,
+//                                            identical in every other respect,
+//                                            so `flat8 - flat` is seven
+//                                            interpreter steps and nothing else.
 //   point     `texld t0` MAGFILTER=POINT  -- adds one texel fetch per pixel.
 //   bilinear  `texld t0` MAGFILTER=LINEAR -- four texel fetches per pixel.
 //   trilinear bilinear + a mip chain      -- eight, across two levels.
@@ -36,10 +40,20 @@
 // So `flat - sliver` is the shading and write half, `point - flat` is what one
 // texture fetch costs, and `bilinear - point` is what the extra three taps cost.
 //
-// WHAT IT FOUND (2026-09-14, 640x480, loaded box, so read the ratios). The
-// sampler is NOT the main cost, and neither is the shader: `sliver` came in at
-// 80-87% of `flat`, meaning a pixel that is never shaded and never written
-// already costs most of a shaded one. Sampling adds a further 35-46% on top.
+// WHAT IT FOUND (2026-09-14, 640x480, loaded box, so read the ratios). Against
+// a ONE-instruction shader the sampler is not the main cost and neither is the
+// VM: `sliver` came in at 80-87% of `flat`, so a pixel that is never shaded and
+// never written already costs most of a shaded one, and sampling adds a further
+// 35-46% on top.
+//
+// `flat8` then showed that reading is an artefact of the shader being one
+// instruction long. Over three runs: setup ~290-320 ns/px, VM entry ~30, and
+// **~42 ns/px for each additional shader instruction** -- about 170ns per 2x2
+// packet to execute at most four f32x4 ops. Extrapolating at those rates, the
+// VM is 19% of a 1-instruction pixel, 55% at eight, and ~74% at twenty. So for
+// any shader a real game ships, the interpreter dominates, and the per-pixel
+// fixed costs below matter less the longer the shader gets. Always say which
+// shader length a share is quoted at.
 //
 // That points at the block in src/09ah-d3d-software.wat that runs per 2x2 quad
 // BEFORE the coverage test (`block $outside` sits after it), for all four lanes
@@ -80,6 +94,15 @@ if (!Number.isInteger(reps) || reps < 1 || reps > 51) throw new Error('--reps mu
 // it declares the stage, samples it and moves that. Identical instruction count
 // either side of the sample, so the arms differ by the fetch and nothing else.
 const PS_FLAT = new Uint32Array([0xffff0101, 1, 0x800f0000, 0x90e40000, 0xffff]);
+// Eight arithmetic instructions instead of one, same pixel count, same
+// coverage, no texture. `flat8 - flat` is seven extra interpreter steps per
+// packet and nothing else, which is how the per-INSTRUCTION cost of the shader
+// VM gets separated from the per-PACKET cost of entering it. ps_1_1 allows
+// exactly 8 arithmetic instructions, so this is the longest legal ps_1_1 arm.
+const PS_FLAT8 = new Uint32Array([0xffff0101,
+  1, 0x800f0000, 0x90e40000,                 // mov r0, v0
+  ...Array.from({ length: 7 }, () => [2, 0x800f0000, 0x80e40000, 0x90e40000]).flat(),
+  0xffff]);                                  // add r0, r0, v0   (x7)
 const PS_TEX = new Uint32Array([0xffff0101,
   0x42, 0xb00f0000,            // tex t0   (t is register type 3)
   1, 0x800f0000, 0xb0e40000,   // mov r0, t0
@@ -129,6 +152,7 @@ function texture(levels, filter) {
 const ARMS = {
   sliver: () => ({ pixelShader: PS_FLAT, textures: [], sliver: true }),
   flat: () => ({ pixelShader: PS_FLAT, textures: [] }),
+  flat8: () => ({ pixelShader: PS_FLAT8, textures: [] }),
   point: () => ({ pixelShader: PS_TEX, textures: [texture(1, 1)] }),
   bilinear: () => ({ pixelShader: PS_TEX, textures: [texture(1, 2)] }),
   trilinear: () => ({ pixelShader: PS_TEX, textures: [texture(9, 2)] }),
