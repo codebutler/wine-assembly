@@ -4503,13 +4503,178 @@
         (call $console_is_attached)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
 
-;; SetupAPI/device notifications are optional for sndvol32. Fail the device
-  ;; registration/enumeration path cleanly so the mixer UI can continue.
+  ;; SetupAPI/device notifications are optional for sndvol32, but an empty
+  ;; device-information set is still a real owned object.  Keep these records
+  ;; in emulator-private shared memory: an HDEVINFO is opaque to the guest, a
+  ;; Worker may destroy a set created by another Worker, and caller-controlled
+  ;; heap bytes must never be forgeable into allocator ownership.
+  ;;
+  ;; SetupDiInfoSet (32 bytes, 32 process-shared records):
+  ;;   +0 published handle/claim  +4 generation  +8 has class GUID
+  ;;   +12 class GUID[16]                         +28 parent HWND
+  (global $SETUPDI_INFO_SETS i32 (region.addr $SETUPDI_INFO_SETS 0))
+  (global $SETUPDI_INFO_SETS_SIZE i32 (region.size $SETUPDI_INFO_SETS))
+  (global $SETUPDI_INFO_SET_COUNT i32 (i32.const 32))
+
+  (func $setupdi_record_addr (param $slot i32) (result i32)
+    (i32.add (global.get $SETUPDI_INFO_SETS)
+      (i32.shl (local.get $slot) (i32.const 5))))
+
+  (func $setupdi_handle_value (param $slot i32) (param $generation i32) (result i32)
+    ;; 0xFC is disjoint from VFS 0x70..0x7F, access tokens 0xFA and file
+    ;; mappings 0xFB. Bits 5..23 carry the nonzero generation.
+    (i32.or (i32.const 0xFC000000)
+      (i32.or
+        (i32.shl
+          (i32.and (local.get $generation) (i32.const 0x0007FFFF))
+          (i32.const 5))
+        (i32.and (local.get $slot) (i32.const 31)))))
+
+  (func $setupdi_record_from_handle (param $handle i32) (result i32)
+    (local $rec i32)
+    (if (i32.ne
+          (i32.and (local.get $handle) (i32.const 0xFF000000))
+          (i32.const 0xFC000000))
+      (then (return (i32.const 0))))
+    (local.set $rec
+      (call $setupdi_record_addr
+        (i32.and (local.get $handle) (i32.const 31))))
+    (if (i32.ne (i32.atomic.load (local.get $rec)) (local.get $handle))
+      (then (return (i32.const 0))))
+    (local.get $rec))
+
+  ;; A 16-byte GUID can cross at most one page boundary.  Its endpoint bytes
+  ;; being mapped proves both pages exist without demanding that their WASM
+  ;; backing be affine; $gl32 then gathers each dword page-safely.
+  (func $setupdi_guid_span_valid (param $guid i32) (result i32)
+    (local $last i32)
+    (if (i32.eqz (local.get $guid)) (then (return (i32.const 0))))
+    (local.set $last (i32.add (local.get $guid) (i32.const 15)))
+    (if (i32.lt_u (local.get $last) (local.get $guid))
+      (then (return (i32.const 0))))
+    (i32.and
+      (i32.ne
+        (call $g2w_affine_span (local.get $guid) (i32.const 1))
+        (global.get $NULL_SENTINEL))
+      (i32.ne
+        (call $g2w_affine_span (local.get $last) (i32.const 1))
+        (global.get $NULL_SENTINEL))))
+
+  (func $setupdi_allocate_record
+      (param $has_guid i32) (param $g0 i32) (param $g1 i32)
+      (param $g2 i32) (param $g3 i32) (param $parent i32) (result i32)
+    (local $slot i32) (local $rec i32) (local $generation i32)
+    (local $handle i32)
+    (block $full (loop $scan
+      (br_if $full
+        (i32.ge_u (local.get $slot) (global.get $SETUPDI_INFO_SET_COUNT)))
+      (local.set $rec (call $setupdi_record_addr (local.get $slot)))
+      (if (i32.eqz
+            (i32.atomic.rmw.cmpxchg (local.get $rec)
+              (i32.const 0) (i32.const -1)))
+        (then
+          (local.set $generation
+            (i32.and
+              (i32.add
+                (i32.atomic.rmw.add offset=4 (local.get $rec) (i32.const 1))
+                (i32.const 1))
+              (i32.const 0x0007FFFF)))
+          (if (i32.eqz (local.get $generation))
+            (then (local.set $generation (i32.const 1))))
+          (i32.atomic.store offset=4 (local.get $rec) (local.get $generation))
+          (local.set $handle
+            (call $setupdi_handle_value (local.get $slot) (local.get $generation)))
+          (i32.atomic.store offset=8 (local.get $rec) (local.get $has_guid))
+          (i32.atomic.store offset=12 (local.get $rec) (local.get $g0))
+          (i32.atomic.store offset=16 (local.get $rec) (local.get $g1))
+          (i32.atomic.store offset=20 (local.get $rec) (local.get $g2))
+          (i32.atomic.store offset=24 (local.get $rec) (local.get $g3))
+          (i32.atomic.store offset=28 (local.get $rec) (local.get $parent))
+          ;; Publish only after every field is initialized.
+          (i32.atomic.store (local.get $rec) (local.get $handle))
+          (return (local.get $handle))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   (func $handle_SetupDiCreateDeviceInfoList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0xffffffff))  ;; INVALID_HANDLE_VALUE
+    (local $set i32) (local $slot i32) (local $style i32)
+    (local $g0 i32) (local $g1 i32) (local $g2 i32) (local $g3 i32)
+    ;; hwndParent is optional, but when present it must name a live top-level
+    ;; window.  The desktop and renderer-owned windows from another process do
+    ;; not have a local WND_RECORDS slot, so use USER's canonical HWND domains
+    ;; and ask the renderer for style only on that non-local path.
+    (if (local.get $arg1)
+      (then
+        (if (i32.eqz (call $window_handle_valid (local.get $arg1)))
+          (then
+            (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+            (global.set $eax (i32.const 0xFFFFFFFF))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))
+        (local.set $slot (call $wnd_table_find (local.get $arg1)))
+        (local.set $style
+          (if (result i32) (i32.ge_s (local.get $slot) (i32.const 0))
+            (then (call $wnd_get_style (local.get $arg1)))
+            (else (call $host_get_window_info (local.get $arg1) (i32.const 0)))))
+        (if (i32.and (local.get $style) (i32.const 0x40000000)) ;; WS_CHILD
+          (then
+            (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+            (global.set $eax (i32.const 0xFFFFFFFF))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))))
+    (if (local.get $arg0)
+      (then
+        (if (i32.eqz (call $setupdi_guid_span_valid (local.get $arg0)))
+          (then
+            (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+            (global.set $eax (i32.const 0xFFFFFFFF))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))
+        (local.set $g0 (call $gl32 (local.get $arg0)))
+        (local.set $g1 (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
+        (local.set $g2 (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
+        (local.set $g3 (call $gl32 (i32.add (local.get $arg0) (i32.const 12))))))
+    (local.set $set (call $setupdi_allocate_record
+      (i32.ne (local.get $arg0) (i32.const 0))
+      (local.get $g0) (local.get $g1) (local.get $g2) (local.get $g3)
+      (local.get $arg1)))
+    (if (i32.eqz (local.get $set))
+      (then
+        (global.set $last_error (i32.const 8)) ;; ERROR_NOT_ENOUGH_MEMORY
+        (global.set $eax (i32.const 0xFFFFFFFF))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (global.set $eax (local.get $set))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   (func $handle_SetupDiDestroyDeviceInfoList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $rec i32)
+    (local.set $rec (call $setupdi_record_from_handle (local.get $arg0)))
+    (if (i32.eqz (local.get $rec))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    ;; Atomically consume the exact published generation. A stale or racing
+    ;; destroy cannot claim the slot that now belongs to another HDEVINFO.
+    (if (i32.ne
+          (i32.atomic.rmw.cmpxchg (local.get $rec)
+            (local.get $arg0) (i32.const -1))
+          (local.get $arg0))
+      (then
+        (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=12 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=16 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=20 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=24 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=28 (local.get $rec) (i32.const 0))
+    (i32.atomic.store (local.get $rec) (i32.const 0))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 

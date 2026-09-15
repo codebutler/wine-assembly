@@ -711,3 +711,9 @@
   ;; privilege names used by LookupPrivilegeValueA.
   (region.declare $TOKEN_OBJECTS (size 0x00000500) (align 0x00000010)
     (owner "09a0-handlers-base.wat:$token_record_addr"))
+  ;; SetupAPI device-information sets are opaque USER-visible handles backed by
+  ;; emulator-private shared records.  Generation bits keep a destroyed handle
+  ;; stale even after its slot is reused by another Worker instance.
+  (region.declare $SETUPDI_INFO_SETS (size 0x00000400) (align 0x00000010)
+    (stride 0x20 (count $SETUPDI_INFO_SET_COUNT))
+    (owner "09a7-handlers-dispatch.wat:$setupdi_record_addr"))
