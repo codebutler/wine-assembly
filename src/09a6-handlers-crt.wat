@@ -415,6 +415,34 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
+  ;; wcsncmp(s1, s2, count) — cdecl. Compare at most count unsigned UTF-16
+  ;; code units, stopping at the first difference or a shared NUL. Keep guest
+  ;; addresses intact so each load may cross a translated-page boundary.
+  (func $handle_wcsncmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32) (local $c1 i32) (local $c2 i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      ;; A zero count compares no characters and must not dereference either
+      ;; pointer. wcsncmp itself performs no invalid-parameter validation.
+      (br_if $done (i32.eqz (local.get $arg2)))
+      (loop $compare
+        (local.set $c1 (call $gl16
+          (i32.add (local.get $arg0)
+            (i32.shl (local.get $i) (i32.const 1)))))
+        (local.set $c2 (call $gl16
+          (i32.add (local.get $arg1)
+            (i32.shl (local.get $i) (i32.const 1)))))
+        (if (i32.ne (local.get $c1) (local.get $c2))
+          (then
+            (global.set $eax (i32.sub (local.get $c1) (local.get $c2)))
+            (br $done)))
+        (br_if $done (i32.eqz (local.get $c1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $compare (i32.lt_u (local.get $i) (local.get $arg2)))))
+    ;; cdecl: the caller removes all three arguments.
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+  )
+
   ;; 727: strcpy(dest, src) — cdecl
   (func $handle_strcpy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dst i32) (local $src i32) (local $ch i32) (local $i i32)
