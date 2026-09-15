@@ -2333,3 +2333,34 @@ output and a working retry. Existing selective blocks/float52/typed92 regression
 Parent8170 repeats81 cases successfully. Shared-worktree full45196 passes
 canonical1188129/compat1188598 bytes, unchanged layout and233 segments; it also
 includes concurrent native clipper work and is not an isolated state-block build.
+
+### User clip-plane state and software execution (2026-09-11)
+
+Six native float4 equations now have real Set/Get, selective recording,
+Capture/Apply, ALL-state capture and Reset coverage. The six equations begin at
+device offset25244 without moving existing fields; later stream bindings bring
+the current device to25596 bytes, while state blocks are25892 bytes. Equations
+preserve raw bits; RS152 enables independently. Host snapshots reserve96 bytes
+and copy all equations before guest mutation, tagging programmable clip space versus
+fixed-function world space. No public clip-plane capability is raised.
+
+The programmable software path geometrically clips against all six user planes
+and existing frustum planes. Deferred setup owns its equations, preserves
+original-edge/point provenance and cancels without publishing pixels. Active
+planes use internal210-triangle batches to keep emitted U16 provenance indices
+within13 bits; larger guest draws are split, not truncated or rejected by this
+internal bound. Zero-mask draws retain their previous allocation layout.
+
+Native43368 passes26 clipping cases and375 legacy pipeline cases; asynchronous
+setup also passes. Adapter81149 and repeat99083 pass all six planes, a211-triangle
+split, immutable inputs, malformed rejection, cancellation and allocation
+retirement. Repeat99083 also passes56 actual clip-plane API/stateblock/reset
+cases and geometry batching regressions. Agent54610 passes typed stateblocks81,
+float52 and typed92; async protocol checks detached world/clip snapshots.
+Shared build74886 passes1188272/1188741 bytes and233 nonoverlapping segments;
+this is a shared-tree build, not an isolated commit verification.
+
+Fixed-function world-space execution is still unimplemented and explicitly
+rejected by software. Active WebGL planes currently reject before GPU access;
+genuine clip-distance lowering is pending, not replaced by fragment discard.
+These are partial adapter improvements, not complete clipping/profile parity.
