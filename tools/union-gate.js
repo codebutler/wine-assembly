@@ -122,6 +122,7 @@ const UNIONS = {
       '$gdi_raster_palette_base':    'GdiBitmap',  // 10g:3746 desc+68 round trip
       '$gdi_raster_channel_mask':    'GdiBitmap',  // 10g:3938 desc+68 round trip
       '$gdi_raster_read_blt_source': 'GdiBitmap',  // 10g:4041/4072 desc+68
+      '$gdi_raster_bitblt_fast32':   'GdiBitmap',  // 10g:4872 desc+68 round trip
       '$gdi_raster_desc_from_bitmap':'GdiBitmap',  // 10g:5736 record_valid
       '$gdi_get_dibits':             'GdiBitmap',  // 10g:5772 desc_from_bitmap first
 
@@ -156,6 +157,7 @@ const UNIONS = {
       // --- brush (type 2) ---
       '$gdi_bitmap_wrap_pattern_brush': 'GdiBrush',// 10a:899 gdi_object_alloc(2,..)
       '$gdi_brush_valid':            'GdiBrush',   // 10g:732 gdi_object_type != 2
+      '$gdi_brush_x_period':         'GdiBrush',   // 10g:932 `+4 == 2`
       '$gdi_brush_solid_color':      'GdiBrush',   // 10g:3552 `+4 == 2`
 
       // --- pen OR brush, genuinely polymorphic through the shared prefix ---
@@ -212,15 +214,15 @@ const UNIONS = {
       // $gdi_brush_sample (10g:775) holds a brush record AND the record of the
       // bitmap named by brush.pattern_bitmap, in one frame, and reads +16 from
       // both. The clearest single-frame demonstration of the union.
-      '10g-gdi-raster.wat:782': 'GdiBrush',        // style
-      '10g-gdi-raster.wat:785': 'GdiBrush',        // color
-      '10g-gdi-raster.wat:791': 'GdiBrush',        // pattern_bitmap
-      '10g-gdi-raster.wat:808': 'GdiBitmap',       // flags   of the pattern bitmap
-      '10g-gdi-raster.wat:815': 'GdiBitmap',       // palette_count
-      '10g-gdi-raster.wat:818': 'GdiBitmap',       // palette
-      '10g-gdi-raster.wat:838': 'GdiBitmap',       // bpp
-      '10g-gdi-raster.wat:856': 'GdiBrush',        // hatch
-      '10g-gdi-raster.wat:882': 'GdiBrush',        // color
+      '10g-gdi-raster.wat:797': 'GdiBrush',        // style
+      '10g-gdi-raster.wat:800': 'GdiBrush',        // color
+      '10g-gdi-raster.wat:806': 'GdiBrush',        // pattern_bitmap
+      '10g-gdi-raster.wat:823': 'GdiBitmap',       // flags   of the pattern bitmap
+      '10g-gdi-raster.wat:830': 'GdiBitmap',       // palette_count
+      '10g-gdi-raster.wat:833': 'GdiBitmap',       // palette
+      '10g-gdi-raster.wat:853': 'GdiBitmap',       // bpp
+      '10g-gdi-raster.wat:871': 'GdiBrush',        // hatch
+      '10g-gdi-raster.wat:897': 'GdiBrush',        // color
     },
   },
 };
