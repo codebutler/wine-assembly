@@ -46,6 +46,14 @@ const extraWat = String.raw`
       (local.get $type) (local.get $value) (i32.const 0) (i32.const 0))
     (global.get $eax))
 
+  (func (export "d3dim_validate")
+      (param $api i32) (param $device i32) (param $passes i32) (result i32)
+    (global.set $esp (i32.const 0x00300000))
+    (call $dispatch_api_table
+      (local.get $api) (local.get $device) (local.get $passes)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+
   (func (export "d3dim_tss_esp") (result i32) (global.get $esp))
 `;
 
@@ -58,20 +66,30 @@ const extraWat = String.raw`
     entry.name === 'IDirect3DDevice3_SetTextureStageState');
   const d7set = apiTable.find(entry =>
     entry.name === 'IDirect3DDevice7_SetTextureStageState');
-  assert(d3 && d7 && d3set && d7set,
-    'all four public Direct3D API identities remain registered');
+  const d3validate = apiTable.find(entry =>
+    entry.name === 'IDirect3DDevice3_ValidateDevice');
+  const d7validate = apiTable.find(entry =>
+    entry.name === 'IDirect3DDevice7_ValidateDevice');
+  assert(d3 && d7 && d3set && d7set && d3validate && d7validate,
+    'all six public Direct3D API identities remain registered');
   assert.strictEqual(d3.id, 1185, 'Device3 API id remains stable');
   assert.strictEqual(d7.id, 1381, 'Device7 API id remains stable');
   assert.strictEqual(d3set.id, 1186, 'Device3 setter API id remains stable');
   assert.strictEqual(d7set.id, 1382, 'Device7 setter API id remains stable');
+  assert.strictEqual(d3validate.id, 1187, 'Device3 ValidateDevice id remains stable');
+  assert.strictEqual(d7validate.id, 1383, 'Device7 ValidateDevice id remains stable');
   assert.strictEqual(d3.nargs, 5);
   assert.strictEqual(d7.nargs, 5);
   assert.strictEqual(d3set.nargs, 5);
   assert.strictEqual(d7set.nargs, 5);
+  assert.strictEqual(d3validate.nargs, 5);
+  assert.strictEqual(d7validate.nargs, 5);
   assert.strictEqual(d7.handler, 'IDirect3DDevice3_GetTextureStageState',
     'Device7 metadata aliases the canonical Device3 handler');
   assert.strictEqual(d7set.handler, 'IDirect3DDevice3_SetTextureStageState',
     'Device7 setter metadata aliases the canonical Device3 handler');
+  assert.strictEqual(d7validate.handler, 'IDirect3DDevice3_ValidateDevice',
+    'Device7 validation metadata aliases the canonical Device3 handler');
 
   const root = path.join(__dirname, '..');
   const dispatch = fs.readFileSync(
@@ -82,12 +100,17 @@ const extraWat = String.raw`
   assert.match(dispatch,
     /;; 1382: IDirect3DDevice7_SetTextureStageState[\s\S]*?call \$handle_IDirect3DDevice3_SetTextureStageState/,
     'generated dispatch routes the Device7 setter through the canonical handler');
+  assert.match(dispatch,
+    /;; 1383: IDirect3DDevice7_ValidateDevice[\s\S]*?call \$handle_IDirect3DDevice3_ValidateDevice/,
+    'generated dispatch routes Device7 validation through the canonical handler');
   const device7Source = fs.readFileSync(
     path.join(root, 'src/09aa-handlers-d3dim.wat'), 'utf8');
   assert(!device7Source.includes('(func $handle_IDirect3DDevice7_GetTextureStageState'),
     'the duplicate Device7 wrapper is absent');
   assert(!device7Source.includes('(func $handle_IDirect3DDevice7_SetTextureStageState'),
     'the duplicate Device7 setter wrapper is absent');
+  assert(!device7Source.includes('(func $handle_IDirect3DDevice7_ValidateDevice'),
+    'the duplicate Device7 validation wrapper is absent');
 
   const { exports: wat } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const device = wat.d3dim_tss_create_device() >>> 0;
@@ -117,7 +140,17 @@ const extraWat = String.raw`
       `${api.name} updates the same retained texture-stage state`);
   }
 
-  console.log('PASS  Direct3D 3/7 texture-stage accessors share stateful handlers');
+  for (const api of [d3validate, d7validate]) {
+    wat.guest_write32(out, 0xdeadbeef);
+    assert.strictEqual(wat.d3dim_validate(api.id, device, out) >>> 0, 0,
+      `${api.name} returns D3D_OK`);
+    assert.strictEqual(wat.guest_read32(out) >>> 0, 1,
+      `${api.name} reports one rendering pass`);
+    assert.strictEqual(wat.d3dim_tss_esp() >>> 0, 0x0030000c,
+      `${api.name} preserves the three-word stdcall cleanup`);
+  }
+
+  console.log('PASS  Direct3D 3/7 state access and validation share canonical handlers');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);

@@ -1257,12 +1257,6 @@
     (call $d3dim_set_texture (local.get $arg0) (local.get $arg1) (local.get $arg2))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
-  ;; IDirect3DDevice7_ValidateDevice — 2 args (incl. this)
-  (func $handle_IDirect3DDevice7_ValidateDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 1))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
-
   ;; IDirect3DDevice7_ApplyStateBlock — 2 args (incl. this)
   (func $handle_IDirect3DDevice7_ApplyStateBlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_stateblock_apply (local.get $arg0) (local.get $arg1))

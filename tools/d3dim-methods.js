@@ -146,7 +146,7 @@ const interfaces = [
     { name: 'SetTexture',                    nargs: 3, body: 'SET_TEX' },
     { name: 'GetTextureStageState',          nargs: 4, handler: 'IDirect3DDevice3_GetTextureStageState' },
     { name: 'SetTextureStageState',          nargs: 4, handler: 'IDirect3DDevice3_SetTextureStageState' },
-    { name: 'ValidateDevice',                nargs: 2 },
+    { name: 'ValidateDevice',                nargs: 2, handler: 'IDirect3DDevice3_ValidateDevice' },
     { name: 'ApplyStateBlock',               nargs: 2 },
     { name: 'CaptureStateBlock',             nargs: 2 },
     { name: 'DeleteStateBlock',              nargs: 2 },

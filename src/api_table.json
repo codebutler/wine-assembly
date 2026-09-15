@@ -11926,7 +11926,8 @@
     "name": "IDirect3DDevice7_ValidateDevice",
     "nargs": 5,
     "convention": "stdcall",
-    "hash": 3001196206
+    "hash": 3001196206,
+    "handler": "IDirect3DDevice3_ValidateDevice"
   },
   {
     "id": 1384,
