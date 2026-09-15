@@ -1845,3 +1845,55 @@ and comes up with the "unable to initialize DirectX" modal and a batch rate
 several times too high — the spin signature. One identical command failed this
 way with three other `run.js` processes on the machine and succeeded on retry.
 **Check for the second `[gl]` line before believing any WC3 measurement.**
+
+### CORRECTION: `--headless-gl` fails because the SCREEN SLEPT, not because the box is busy
+
+The paragraph just above blames a busy box for the intermittent
+`--headless-gl` failure. That was a guess, and it is wrong. Measured:
+
+```
+[gl] context creation FAILED (800x600, 0 already live):
+     No suitable display found for a new GLFW Window.
+```
+
+**`0 already live`** — so it is not contention between two contexts, and the
+concurrent `run.js` processes had nothing to do with it. Asking GLFW directly:
+
+```
+glfw.init()          => true      <-- init SUCCEEDS, so nothing looks wrong
+glfw.getMonitors()   => []        <-- zero displays
+glfw.getPrimaryMonitor() => null
+```
+
+On macOS the display list **goes empty when the screen sleeps**, and
+`glfwInit()` keeps returning true, so there is no failure anywhere near the
+cause. `pmset -g assertions` showed `PreventUserIdleDisplaySleep 0` — nothing
+was holding the screen on, and every failed run here was simply a run that
+started after the Mac had idled. Wake the screen and the same command comes
+straight back with `1 display(s)` and the healthy two-context line.
+
+**The fix when running unattended:**
+
+```bash
+caffeinate -d node test/run.js --app=warcraft3_demo --headless-gl ...
+```
+
+`caffeinate -d` holds the *display* awake; plain `caffeinate` only blocks
+system sleep and does not help. Note the box already runs a plain `caffeinate`
+for other agents' sweeps, which is why system sleep was never the symptom.
+
+Two diagnostics now make this self-reporting instead of a puzzle:
+
+- `lib/headless-gl.js` logs the context-creation failure with its real reason
+  and the live-context count, instead of swallowing it into `loadError` and
+  returning null. Silently returning null is what produced the misleading
+  chain: `wglCreateContext` → 0, guest takes its no-3D-hardware path, and the
+  first visible symptom is an app-level DirectX message box a hundred lines
+  later at several times the normal batch rate.
+- The `--headless-gl` startup line now reports the display count
+  (`headless WebGL enabled (@node-3d/webgl), 1 display(s)`) and refuses up
+  front with `UNUSABLE: ... GLFW sees ZERO displays` when there are none.
+
+So the check before believing a WC3 measurement is the **startup line**, which
+now answers it directly; the "2 simultaneous GL contexts" warning remains a
+good second confirmation that the guest's own context was created.
