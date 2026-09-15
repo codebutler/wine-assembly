@@ -470,7 +470,7 @@ node tools/layout-migrate.js "${GDI_PATH_LAYOUT_ARGS[@]}" --gate > /dev/null || 
 # right+bottom as two 8-byte writes. Calling an 8-byte store a 4-byte field
 # would be the §3.1 widening mistake, so they need an i64 pair spelling that
 # does not exist, not a conversion.
-RECT_LAYOUT_ARGS=(--file=src/09a-handlers.wat --layout=Rect
+RECT_LAYOUT_ARGS=(--file=src/09a-handlers.wat,src/09a5d-handlers-windowpos.wat --layout=Rect
   --base-call='$g2w' --base-local-from-call=rc,wa,rect,rect_w,r,dst,src,s1,s2,a,b,p
   --only-func='$handle_InvalidateRect,$handle_ValidateRect,$handle_GetUpdateRect,$handle_RedrawWindow,$handle_FillRect,$handle_FrameRect,$handle_InvertRect,$handle_DrawEdge,$handle_DrawFocusRect,$handle_DrawFrameControl,$handle_DrawCaptionTempA,$draw_text_ex,$handle_OffsetRect,$handle_InflateRect,$handle_CopyRect,$handle_IntersectRect,$handle_UnionRect,$handle_SubtractRect,$handle_IsRectEmpty,$handle_EqualRect,$handle_PtInRect,$handle_AdjustWindowRectEx,$handle_MapDialogRect,$handle_ScrollWindowEx,$handle_ClipCursor,$handle_MonitorFromRect'
   --memarg)
@@ -510,7 +510,7 @@ node tools/layout-migrate.js "${RECT_LAYOUT_ARGS[@]}" --gate > /dev/null || {
 # `last = p + (n-1)*8`, so neither local is assigned from $g2w on EVERY path and
 # the provenance check cannot pass them. --only-func is what keeps that safe:
 # inside those two functions the local is a POINT* on every path there is.
-POINT_LAYOUT_ARGS=(--file=src/09a-handlers.wat,src/09a4-handlers-gdi.wat,src/09a7-handlers-dispatch.wat
+POINT_LAYOUT_ARGS=(--file=src/09a-handlers.wat,src/09a4-handlers-gdi.wat,src/09a5d-handlers-windowpos.wat,src/09a7-handlers-dispatch.wat
   --layout=Point --layout-from=src/09a-handlers.wat
   --base-call='$g2w' --base-local-from-call=pt,wa --base-local=p,last
   --only-func='$handle_ClientToScreen,$handle_ScreenToClient,$handle_SetBrushOrgEx,$handle_MapWindowPoints,$handle_GetDCOrgEx,$handle_PolylineTo'
