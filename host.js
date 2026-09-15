@@ -963,7 +963,21 @@ class WineAssembly {
     this._audioIdleSince = 0;
     const ac = this._audioCtx;
     if (ac && ac.state === 'suspended') {
-      try { ac.resume(); } catch (_) {}
+      // Same stale-backlog problem the gesture unlock has: whatever was
+      // scheduled before the idle watcher suspended is still queued against a
+      // clock that stopped, and would be paid out ahead of the sound that
+      // just woke us. See _resyncAfterResume in lib/host-audio.js.
+      const resync = () => {
+        const voices = this.hostCtx && this.hostCtx._voices;
+        if (voices && typeof voices._resyncAfterResume === 'function') {
+          try { voices._resyncAfterResume(); } catch (_) {}
+        }
+      };
+      try {
+        const resumed = ac.resume();
+        if (resumed && typeof resumed.then === 'function') resumed.then(resync, () => {});
+        else resync();
+      } catch (_) {}
     }
   }
 
