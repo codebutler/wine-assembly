@@ -214,15 +214,15 @@ const UNIONS = {
       // $gdi_brush_sample (10g:775) holds a brush record AND the record of the
       // bitmap named by brush.pattern_bitmap, in one frame, and reads +16 from
       // both. The clearest single-frame demonstration of the union.
-      '10g-gdi-raster.wat:798': 'GdiBrush',        // style
-      '10g-gdi-raster.wat:801': 'GdiBrush',        // color
-      '10g-gdi-raster.wat:807': 'GdiBrush',        // pattern_bitmap
-      '10g-gdi-raster.wat:824': 'GdiBitmap',       // flags   of the pattern bitmap
-      '10g-gdi-raster.wat:831': 'GdiBitmap',       // palette_count
-      '10g-gdi-raster.wat:834': 'GdiBitmap',       // palette
-      '10g-gdi-raster.wat:854': 'GdiBitmap',       // bpp
-      '10g-gdi-raster.wat:872': 'GdiBrush',        // hatch
-      '10g-gdi-raster.wat:898': 'GdiBrush',        // color
+      '10g-gdi-raster.wat:823': 'GdiBrush',        // style
+      '10g-gdi-raster.wat:826': 'GdiBrush',        // color
+      '10g-gdi-raster.wat:832': 'GdiBrush',        // pattern_bitmap
+      '10g-gdi-raster.wat:849': 'GdiBitmap',       // flags   of the pattern bitmap
+      '10g-gdi-raster.wat:856': 'GdiBitmap',       // palette_count
+      '10g-gdi-raster.wat:859': 'GdiBitmap',       // palette
+      '10g-gdi-raster.wat:879': 'GdiBitmap',       // bpp
+      '10g-gdi-raster.wat:897': 'GdiBrush',        // hatch
+      '10g-gdi-raster.wat:923': 'GdiBrush',        // color
     },
   },
 };

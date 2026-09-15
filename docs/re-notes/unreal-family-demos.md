@@ -101,24 +101,6 @@ executed 27.3 million fused regions and advanced 25,179 batches in 140 seconds
 versus 20,818 without it, about 21% farther on this run. The CLI candidate uses
 `--x87-fusion`; browser runs can opt in with `?x87-fold`.
 
-SSE is now a separate per-app CPU policy rather than a global claim. The
-`ut2003_demo` client and server advertise a Pentium III with CPUID EDX bit 25;
-the default personality and the not-yet-exercised UT2004 entry still hide SSE.
-Following the authentic UT2003 path added the instructions it actually reached:
-exact `SFENCE`, `MOVNTQ`, memory `MOVLPS`, all eight `CMPPS` predicates, and
-`MOVMSKPS`. Unknown SSE encodings continue to trap.
-
-That policy also selects three MSVC/D3DDrv 64-byte MMX copy loops, including a
-79-byte three-register pipelined `MOVNTQ` body at original D3DDrv VA
-`0x10001100`. Each is recognized by a complete address-independent byte hash
-and lowered through H419 to `memory.copy` only for proved-disjoint, page-local
-mappings; overlap and split mappings retain the original instruction ordering.
-The regression compares ordinary decoding with each lowering for copied bytes,
-GPRs, flags, final MMX registers, overlap, page splits, and a one-byte near miss.
-A clean authentic run reaches D3DDrv with no SSE decoder trap, but the shared
-machine was under heavy concurrent load during the final timing run, so that
-run is evidence of compatibility, not a defensible wall-time speedup measure.
-
 The CLI software D3D backend reaches the same engine loop without an
 unimplemented API but rejects its GPU draw opcode; the native/browser WebGL
 backend remains the authoritative graphics verification.
