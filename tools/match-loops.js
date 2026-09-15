@@ -282,7 +282,27 @@ function match(body, opts) {
       const zeroedInBlock = s.roles.some(r =>
         r.kind === 'MOVE' && r.src && r.src.kind === 'imm' && r.src.v === 0
         && r.dst && r.dst.r === acc);
-      if (!zeroedInBlock) return { reject: 'lut-acc-not-zeroed-in-block' };
+      // Evaluate ALL gates and report the complete failing set, never the first
+      // failure. Short-circuiting makes the counts conditional on check order,
+      // which cannot rank the fixes: whichever gate is tested first absorbs
+      // every loop that fails several. The reject string is the sorted set, so
+      // a census can compute each relaxation's true marginal value.
+      const bad = [];
+      if (!zeroedInBlock) bad.push('zero');
+      // 07b-loop-match.wat:2038 -- "one register throughout": the table load
+      // must land back IN the accumulator, not in a third register. StarCraft's
+      // `mov bl,[eax+K]` fails this even though the loop is a textbook LUT.
+      if (pair[1].r.dst.r !== acc) bad.push('result');
+      // :2034/:2035 -- source and destination must stream off the SAME cursor.
+      // Not a semantic need: $th_lut_run already carries separate
+      // src_reg/dst_reg descriptor words, chunks src_ga and dst_ga apart, and
+      // branches on src_reg != dst_reg when advancing and publishing. The limit
+      // is pass 1, which classifies only two ADDIs (first iv, second counter)
+      // and declines a third -- and a two-cursor blit has three.
+      if (pair[0].st.iv !== st.st.iv) bad.push('cursors');
+      // :2042 -- acc must be a/b/c/d; ah/ch/dh/bh are declined explicitly.
+      if (!['a', 'b', 'c', 'd'].includes(acc)) bad.push('acc-abcd');
+      if (bad.length) return { reject: 'lut-gate:' + bad.join('+') };
     }
     return { pattern: 'LUT_RUN', size: st.r.size || 1, stride: st.st.stride };
   }
