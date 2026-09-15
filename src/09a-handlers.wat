@@ -5325,9 +5325,20 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
-  ;; 238: GlobalCompact — STUB: unimplemented
+  ;; 238: GlobalCompact(dwMinFree) — 1 arg stdcall. On Win32 the global and
+  ;; local allocation families are wrappers around the process default heap.
+  ;; The observable operation is therefore the same real coalesce-and-query
+  ;; path as HeapCompact(GetProcessHeap(), 0), including fragmented free runs.
+  ;; dwMinFree is the retained Win16 compatibility hint; it cannot move fixed
+  ;; Win32 allocations and does not change the returned largest block here.
   (func $handle_GlobalCompact (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    ;; HeapCompact owns a two-argument stdcall cleanup (+12 including return),
+    ;; while GlobalCompact owns one (+8). Give the shared handler one synthetic
+    ;; stack word so its cleanup lands at GlobalCompact's documented boundary.
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $handle_HeapCompact
+      (global.get $PROCESS_HEAP_HANDLE) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0) (local.get $name_ptr))
   )
 
   ;; 239: RegOpenKeyA

@@ -966,38 +966,141 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
-  ;; 502: HeapCompact(hHeap, dwFlags) — 2 args stdcall. Returns the size of the
-  ;; largest committed FREE block, which is a real number here: $heap_alloc's
-  ;; free list is a chain of {size, next} headers, so walk it and report the
-  ;; largest usable span. There is no coalescing pass to run — this allocator
-  ;; merges on free — so the walk is the whole of the work, and reporting a
-  ;; made-up number would be worse than the crash it replaces: a caller uses
-  ;; this answer to decide whether its next allocation can succeed.
-  ;; The walk carries $heap_alloc's own three guards (a step cap, arena
-  ;; validation, and the block-header sanity check), because a corrupt link
-  ;; here would hang the emulator inside one WASM call exactly as it would
-  ;; there. Black & White 2's CRT calls this while loading a land.
+  ;; Compact this instance's free list and return its largest usable block, or
+  ;; -1 when the list is malformed. heap_free_impl deliberately prepends in
+  ;; O(1), so unlike the old comment claimed, adjacent frees are not already
+  ;; coalesced. HeapCompact must do that work itself.
+  ;;
+  ;; First validate the complete guest-writable list without mutating it. Then
+  ;; radix-sort the aligned 32-bit block addresses through their 29 meaningful
+  ;; bits. This is O(29*n), bounded, allocation-free, and makes adjacent arena
+  ;; extents neighbors without an O(n^2) pair search. A final linear pass joins
+  ;; consecutive extents only when both belong to the same allocator arena.
+  (func $heap_compact_free_list (result i32)
+    (local $cur i32) (local $next i32) (local $size i32)
+    (local $count i32) (local $bit i32) (local $mask i32)
+    (local $head0 i32) (local $tail0 i32)
+    (local $head1 i32) (local $tail1 i32)
+    (local $largest i32)
+    ;; Validate exact block boundaries, untagged free extents, and a finite
+    ;; list before any link is rewritten. The count cap also rejects cycles.
+    (local.set $cur (global.get $free_list))
+    (block $valid (loop $check
+      (br_if $valid (i32.eqz (local.get $cur)))
+      (local.set $count (i32.add (local.get $count) (i32.const 1)))
+      (if (i32.gt_u (local.get $count) (i32.const 65536))
+        (then (return (i32.const -1))))
+      (local.set $size (call $heap_validate_exact_block
+        (i32.add (local.get $cur) (i32.const 4))))
+      (if (i32.or
+            (i32.eqz (local.get $size))
+            (i32.ne
+              (i32.and (i32.atomic.load (call $g2w (local.get $cur)))
+                (i32.const 7))
+              (i32.const 0)))
+        (then (return (i32.const -1))))
+      (local.set $cur
+        (i32.load offset=4 (call $g2w (local.get $cur))))
+      (br $check)))
+
+    ;; A zero- or one-node list is already sorted; the merge/report pass below
+    ;; handles both without a special return.
+    (local.set $bit (i32.const 3))
+    (block $sorted (loop $radix
+      (br_if $sorted (i32.gt_u (local.get $bit) (i32.const 31)))
+      (local.set $mask (i32.shl (i32.const 1) (local.get $bit)))
+      (local.set $head0 (i32.const 0))
+      (local.set $tail0 (i32.const 0))
+      (local.set $head1 (i32.const 0))
+      (local.set $tail1 (i32.const 0))
+      (local.set $cur (global.get $free_list))
+      (block $partitioned (loop $partition
+        (br_if $partitioned (i32.eqz (local.get $cur)))
+        (local.set $next
+          (i32.load offset=4 (call $g2w (local.get $cur))))
+        (i32.store offset=4 (call $g2w (local.get $cur)) (i32.const 0))
+        (if (i32.and (local.get $cur) (local.get $mask))
+          (then
+            (if (local.get $tail1)
+              (then (i32.store offset=4 (call $g2w (local.get $tail1))
+                (local.get $cur)))
+              (else (local.set $head1 (local.get $cur))))
+            (local.set $tail1 (local.get $cur)))
+          (else
+            (if (local.get $tail0)
+              (then (i32.store offset=4 (call $g2w (local.get $tail0))
+                (local.get $cur)))
+              (else (local.set $head0 (local.get $cur))))
+            (local.set $tail0 (local.get $cur))))
+        (local.set $cur (local.get $next))
+        (br $partition)))
+      (if (local.get $head0)
+        (then
+          (if (local.get $head1)
+            (then (i32.store offset=4 (call $g2w (local.get $tail0))
+              (local.get $head1))))
+          (global.set $free_list (local.get $head0)))
+        (else (global.set $free_list (local.get $head1))))
+      (local.set $bit (i32.add (local.get $bit) (i32.const 1)))
+      (br $radix)))
+
+    ;; Sorted neighbors can be coalesced in place. Keep $cur on a successful
+    ;; join so a run of three or more extents collapses into one block.
+    (local.set $cur (global.get $free_list))
+    (block $done (loop $merge
+      (br_if $done (i32.eqz (local.get $cur)))
+      (local.set $size (i32.atomic.load (call $g2w (local.get $cur))))
+      (local.set $next
+        (i32.load offset=4 (call $g2w (local.get $cur))))
+      (if (i32.and
+            (i32.ne (local.get $next) (i32.const 0))
+            (i32.and
+              (i32.eq (call $heap_arena_find (local.get $cur))
+                      (call $heap_arena_find (local.get $next)))
+              (i32.eq (i32.add (local.get $cur) (local.get $size))
+                      (local.get $next))))
+        (then
+          (i32.store (call $g2w (local.get $cur))
+            (i32.add (local.get $size)
+              (i32.atomic.load (call $g2w (local.get $next)))))
+          (i32.store offset=4 (call $g2w (local.get $cur))
+            (i32.load offset=4 (call $g2w (local.get $next))))
+          (br $merge)))
+      ;; The 4-byte header is not caller-usable space.
+      (if (i32.gt_u (i32.sub (local.get $size) (i32.const 4))
+                    (local.get $largest))
+        (then
+          (local.set $largest
+            (i32.sub (local.get $size) (i32.const 4)))))
+      (local.set $cur (local.get $next))
+      (br $merge)))
+    (local.get $largest))
+
+  ;; 502: HeapCompact(hHeap, dwFlags) — 2 args stdcall. Coalesce adjacent
+  ;; current-owner free extents and return the largest committed free block.
+  ;; Black & White 2's CRT calls this while loading a land; Civ II reaches the
+  ;; same canonical path through GlobalCompact.
   (func $handle_HeapCompact (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $cur i32) (local $bsz i32) (local $largest i32) (local $steps i32)
-    (if (i32.eqz (call $heap_api_handle_valid (local.get $arg0)))
+    (local $largest i32)
+    (if (i32.eqz (call $heap_validate_handle (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))  ;; ERROR_INVALID_HANDLE
         (global.set $eax (i32.const 0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
         (return)))
-    (local.set $cur (global.get $free_list))
-    (block $done (loop $walk
-      (br_if $done (i32.eqz (local.get $cur)))
-      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
-      (br_if $done (i32.gt_u (local.get $steps) (i32.const 65536)))
-      (br_if $done (i32.eqz (call $heap_arena_find (local.get $cur))))
-      (local.set $bsz (i32.load (call $g2w (local.get $cur))))
-      (br_if $done (call $heap_block_bad (local.get $cur) (local.get $bsz)))
-      ;; The 4-byte header is not part of what a caller could allocate.
-      (if (i32.gt_u (i32.sub (local.get $bsz) (i32.const 4)) (local.get $largest))
-        (then (local.set $largest (i32.sub (local.get $bsz) (i32.const 4)))))
-      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
-      (br $walk)))
+    (if (i32.ne (i32.and (local.get $arg1) (i32.const -2)) (i32.const 0))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $largest (call $heap_compact_free_list))
+    (if (i32.eq (local.get $largest) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 87)) ;; corrupt free list
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
     ;; Zero means "no free block", not failure, so clear the error either way.
     (global.set $last_error (i32.const 0))
     (global.set $eax (local.get $largest))
