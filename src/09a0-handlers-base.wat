@@ -706,6 +706,70 @@
         (local.get $ch)))
       (else (call $gs8 (i32.add (local.get $out_g) (local.get $index)) (local.get $ch)))))
 
+  ;; SetLocaleInfo stores user overrides under the same per-user registry key
+  ;; that Win9x's Regional Settings control panel owns. Keeping the values in
+  ;; the host registry rather than a mutable wasm global makes them visible to
+  ;; every real guest-thread instance and lets them survive a browser reload.
+  ;; Only the two writable string values this locale surface actually models
+  ;; have names here; Get-only or otherwise unmodeled LCType values are not
+  ;; accepted merely to make their callers proceed.
+  (func $locale_override_name (param $lctype i32) (param $wide i32) (result i32)
+    (if (i32.eq (local.get $lctype) (i32.const 0x0E)) ;; LOCALE_SDECIMAL
+      (then (return
+        (select "s\0D\0e\0c\0i\0m\0a\0l\0"
+          "sDecimal" (local.get $wide)))))
+    (if (i32.eq (local.get $lctype) (i32.const 0x0F)) ;; LOCALE_STHOUSAND
+      (then (return
+        (select "s\0T\0h\0o\0u\0s\0a\0n\0d\0"
+          "sThousand" (local.get $wide)))))
+    (i32.const 0))
+
+  ;; Read one REG_SZ locale override. -1 means that no override exists and the
+  ;; caller should use its built-in en-US default; 0 is a documented API
+  ;; failure; a positive result is the character count including the NUL.
+  (func $locale_read_override (param $lctype i32) (param $out_g i32)
+      (param $cch i32) (param $wide i32) (result i32)
+    (local $hkey i32) (local $count_g i32) (local $result i32)
+    (local $bytes i32) (local $max_chars i32)
+    (local.set $hkey (call $host_reg_open_key
+      (i32.const 0x80000001) "Control Panel\\International" (i32.const 0))) ;; HKCU
+    (if (i32.eqz (local.get $hkey)) (then (return (i32.const -1))))
+    (local.set $count_g (call $heap_alloc (i32.const 4)))
+    (if (i32.eqz (local.get $count_g))
+      (then
+        (drop (call $host_reg_close_key (local.get $hkey)))
+        (global.set $last_error (i32.const 8)) ;; ERROR_NOT_ENOUGH_MEMORY
+        (return (i32.const 0))))
+    ;; Both supported values are capped at four characters including NUL.
+    ;; Clamp an enormous caller count before converting WCHARs to bytes.
+    (local.set $max_chars
+      (select (local.get $cch) (i32.const 4)
+        (i32.lt_u (local.get $cch) (i32.const 4))))
+    (local.set $bytes
+      (select (local.get $max_chars)
+        (i32.shl (local.get $max_chars) (i32.const 1))
+        (i32.eqz (local.get $wide))))
+    (call $gs32 (local.get $count_g) (local.get $bytes))
+    (local.set $result (call $host_reg_query_value
+      (local.get $hkey) (call $locale_override_name
+        (local.get $lctype) (local.get $wide))
+      (i32.const 0) (local.get $out_g) (local.get $count_g) (local.get $wide)))
+    (local.set $bytes (call $gl32 (local.get $count_g)))
+    (drop (call $host_reg_close_key (local.get $hkey)))
+    (call $heap_free (local.get $count_g))
+    (if (i32.eq (local.get $result) (i32.const 2)) ;; ERROR_FILE_NOT_FOUND
+      (then (return (i32.const -1))))
+    (if (i32.eq (local.get $result) (i32.const 234)) ;; ERROR_MORE_DATA
+      (then
+        (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
+        (return (i32.const 0))))
+    (if (local.get $result)
+      (then
+        (global.set $last_error (local.get $result))
+        (return (i32.const 0))))
+    (select (local.get $bytes) (i32.shr_u (local.get $bytes) (i32.const 1))
+      (i32.eqz (local.get $wide))))
+
   ;; Write the Win98 en-US English country name. Baldur's Gate Chapters I & II
   ;; uses this standard locale query as its North-American release gate.
   (func $locale_write_us_country (param $out_g i32) (param $cch i32)
@@ -735,14 +799,49 @@
   ;; spellings share character counts, including the terminating NUL.
   (func $locale_info (param $lctype i32) (param $out_g i32) (param $cch i32)
       (param $wide i32) (result i32)
-    (local $ch i32)
-    (if (i32.eq (i32.and (local.get $lctype) (i32.const 0xFFFF)) (i32.const 0x1002)) ;; LOCALE_SENGCOUNTRY
+    (local $ch i32) (local $base i32) (local $flags i32) (local $override i32)
+    (if (i32.lt_s (local.get $cch) (i32.const 0))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (return (i32.const 0))))
+    (if (i32.and
+          (i32.gt_u (local.get $cch) (i32.const 0))
+          (i32.eqz (local.get $out_g)))
+      (then
+        (global.set $last_error (i32.const 122)) ;; ERROR_INSUFFICIENT_BUFFER
+        (return (i32.const 0))))
+    (local.set $base (i32.and (local.get $lctype) (i32.const 0xFFFF)))
+    (local.set $flags (i32.and (local.get $lctype) (i32.const 0xFFFF0000)))
+    ;; These string LCType values admit only NOUSEROVERRIDE and USE_CP_ACP.
+    ;; RETURN_NUMBER (and every other bit) is invalid for string data.
+    (if (i32.and
+          (i32.or
+            (i32.eq (local.get $base) (i32.const 0x0E))
+            (i32.or
+              (i32.eq (local.get $base) (i32.const 0x0F))
+              (i32.eq (local.get $base) (i32.const 0x1002))))
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x3FFFFFFF))
+            (i32.const 0)))
+      (then
+        (global.set $last_error (i32.const 1004)) ;; ERROR_INVALID_FLAGS
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $base) (i32.const 0x1002)) ;; LOCALE_SENGCOUNTRY
       (then (return (call $locale_write_us_country
         (local.get $out_g) (local.get $cch) (local.get $wide)))))
+    (if (i32.and
+          (i32.or
+            (i32.eq (local.get $base) (i32.const 0x0E))
+            (i32.eq (local.get $base) (i32.const 0x0F)))
+          (i32.eqz (i32.and (local.get $flags) (i32.const 0x80000000)))) ;; LOCALE_NOUSEROVERRIDE
+      (then
+        (local.set $override (call $locale_read_override
+          (local.get $base) (local.get $out_g) (local.get $cch) (local.get $wide)))
+        (if (i32.ne (local.get $override) (i32.const -1))
+          (then (return (local.get $override))))))
     (local.set $ch (i32.const 0x30))                                   ;; "0"
-    (if (i32.eq (local.get $lctype) (i32.const 0x0E))                  ;; LOCALE_SDECIMAL
+    (if (i32.eq (local.get $base) (i32.const 0x0E))                    ;; LOCALE_SDECIMAL
       (then (local.set $ch (i32.const 0x2E))))                         ;; "."
-    (if (i32.eq (local.get $lctype) (i32.const 0x0F))                  ;; LOCALE_STHOUSAND
+    (if (i32.eq (local.get $base) (i32.const 0x0F))                    ;; LOCALE_STHOUSAND
       (then (local.set $ch (i32.const 0x2C))))                         ;; ","
     (if (i32.eqz (local.get $cch)) (then (return (i32.const 2))))
     (if (i32.or (i32.eqz (local.get $out_g)) (i32.lt_u (local.get $cch) (i32.const 2)))
@@ -765,9 +864,81 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
-  ;; SetLocaleInfoA(Locale, LCType, lpLCData) — accept & drop. Apps persist user prefs here; we don't store them but must return nonzero so callers proceed.
+  ;; SetLocaleInfoA(Locale, LCType, lpLCData) stores the two mutable separator
+  ;; strings this en-US locale surface exposes. Microsoft caps both strings at
+  ;; four characters including NUL; keeping that bound also makes malformed
+  ;; guest pointers fail without an unbounded scan.
   (func $handle_SetLocaleInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (local $base i32) (local $flags i32) (local $len i32) (local $ch i32)
+    (local $result_g i32) (local $hkey i32) (local $error i32)
+    (local.set $base (i32.and (local.get $arg1) (i32.const 0xFFFF)))
+    (local.set $flags (i32.and (local.get $arg1) (i32.const 0xFFFF0000)))
+    (if (i32.ne (i32.and (local.get $flags) (i32.const 0xBFFFFFFF))
+          (i32.const 0))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 1004)) ;; ERROR_INVALID_FLAGS
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (if (i32.or
+          (i32.eqz (call $locale_override_name (local.get $base) (i32.const 0)))
+          (i32.or
+            (i32.eqz (local.get $arg2))
+            (i32.eqz
+              (i32.or
+                (i32.eq (local.get $arg0) (i32.const 0x0409)) ;; en-US
+                (i32.or
+                  (i32.eq (local.get $arg0) (i32.const 0x0400)) ;; USER_DEFAULT
+                  (i32.eq (local.get $arg0) (i32.const 0x0800))))))) ;; SYSTEM_DEFAULT
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (block $terminated (loop $scan
+      (local.set $ch (call $gl8 (i32.add (local.get $arg2) (local.get $len))))
+      (br_if $terminated (i32.eqz (local.get $ch)))
+      (local.set $len (i32.add (local.get $len) (i32.const 1)))
+      (if (i32.ge_u (local.get $len) (i32.const 4))
+        (then
+          (global.set $eax (i32.const 0))
+          (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+          (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+          (return)))
+      (br $scan)))
+    (if (i32.eqz (local.get $len))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (local.set $result_g (call $heap_alloc (i32.const 4)))
+    (if (i32.eqz (local.get $result_g))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (i32.const 8)) ;; ERROR_NOT_ENOUGH_MEMORY
+        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (return)))
+    (call $gs32 (local.get $result_g) (i32.const 0))
+    (local.set $error (call $host_reg_create_key
+      (i32.const 0x80000001) "Control Panel\\International"
+      (local.get $result_g) (i32.const 0) (i32.const 0)))
+    (local.set $hkey (call $gl32 (local.get $result_g)))
+    (if (i32.eqz (local.get $error))
+      (then
+        (local.set $error (call $host_reg_set_value
+          (local.get $hkey) (call $locale_override_name
+            (local.get $base) (i32.const 0))
+          (i32.const 1) (local.get $arg2) ;; REG_SZ
+          (i32.add (local.get $len) (i32.const 1)) (i32.const 0)))))
+    (if (local.get $hkey)
+      (then (drop (call $host_reg_close_key (local.get $hkey)))))
+    (call $heap_free (local.get $result_g))
+    (if (local.get $error)
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $last_error (local.get $error)))
+      (else (global.set $eax (i32.const 1))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 
