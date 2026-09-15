@@ -8040,3 +8040,70 @@ the events when they are queued, then retry.
 
 Artifacts: `$S/rc/gl4/` and `$S/rc/sw2/` (stage PNGs, `*-vs-gl.png` diffs,
 `*.cpuprofile`, `perf.ndjson`) in this session's scratchpad.
+
+### Texture residency: pixels cross to the executor once (2026-09-15)
+
+Every draw used to carry the full decoded RGBA of every bound mip level, and
+each hop copied it again: `copyPayload` in `lib/d3d-command-stream.js`, the
+structured clone into the render worker, `Device.copy` into wasm memory (freed
+with the draw), and on WebGL a `texImage2D` per level per draw. The land
+picker held 8.4 MB of texture bytes in the queue for 51 commands/10 s and the
+in-game scene 18 MB for 22 commands/s; the same bytes, the same textures,
+every frame.
+
+Now `_rememberTexture` in `lib/d3d9-host.js` gives each decoded level a serial
+(`key:'t<n>'`), and a device entry tracks which keys it has already sent
+(`entry.resident`, LRU by insertion order, `maxResidentTextureBytes` 32 MB by
+default — half the worker Device's 64 MB budget). A level goes out as
+`{width,height,key,pixels}` the first time and `{width,height,key}` after that;
+keys the draw does not use are evicted oldest-first when the set is over budget
+and ride on the same DRAW as `textureReleases`, which both executors apply
+before binding anything. Residency commits only after `_issue` accepts the
+draw, and reset clears it on all three sides. Levels too large for the host
+snapshot cache keep the old pixel-per-draw form.
+
+- `lib/d3d9-software-backend.js`: `residentTextures` (key → wasm block, plus a
+  `:bgra` twin for render-target-sampling draws) outside `draw.owned`; a key
+  without pixels that is not resident is `invalid('texture not resident')`.
+- `lib/d3d9-backend.js` (WebGL): `residentPixels` (key → bytes) plus
+  `keyedTextures` (composite key of target + every level key → GL texture).
+  The pixels are kept, not just the texture, because the same keys come back
+  in other compositions — `SetLOD` drops the top levels, a mip-atlas stage
+  lays them out differently — and the first cut, which cached only composed
+  textures, failed `test-d3d9-pipeline-web.js` three ways with "texture not
+  resident". Keyed textures are shared across stages; a stage's own scratch
+  texture is never a keyed one (`stageTexture`).
+- `test/test-d3d9-texture-residency.js`: software Device keyed bind, hit,
+  redundant pixels, unknown key, releases, reset, destroy; host bridge keyed
+  payloads and a zero-budget release sequence.
+
+Measured on the same hub run (software renderer, load 9-18, so fps is ±30%):
+
+| stage | queue bytes held | commands | guest fps | worker copy time |
+|---|---:|---:|---:|---:|
+| profile dialog | 180-330 KB (13-23 inflight) | — | 0.65 (was 0.5-0.7) | — |
+| main menu | 185 KB | 14/s | 0.72-0.77 (was ~1.2 at load 10-43) | — |
+| land picker | 27 KB (was 8.4 MB) | 3.2/s (was 5.1/s) | 0.6-1.1 (was 0.7-1.7) | 0.1% (was ~3%) |
+| in-game scene, old libs | 18 MB | 22/s | 0 | — |
+
+Resident set: 40-63 keys, 10-31 MB; the profile dialog sits at the 32 MB cap
+with the host snapshot cache at 44 MB, but bytes in flight stay in the
+hundreds of KB, so it is not thrashing. Pictures match at every stage (dialog,
+menu, controls, land picker, `$S/rc/sw3/`). The fps did not move, which is
+what the profile said it would do: on these 2D screens the copies were ~3% of
+the worker and the worker is 50% idle waiting on the guest (the ping-pong
+above). The bytes and the copy time are gone; the scene, where 18 MB/frame was
+moving, is where it should show, and this run did not get past the land
+picker's double-click (still open).
+
+WebGL, same hub, profile dialog, 15 s page profile: guest fps 15.5-18.1 (was
+13-16), `copy` 4.9% (was 16%), `texImage2D` no longer in the top 25 at all
+(was 4-5%); what is left of the host is the PRESENT readback (`readColor`
+7.2% + `readPixels` 4.3%). 55 keys / 31.4 MB resident, no errors.
+
+Failure handling: after any draw failure (`call`'s catch, or a deferred error
+reported at the next call) the host forgets its resident set and the next
+draw releases those keys and re-sends what it uses, so a lost upload costs one
+re-send instead of a key that fails "texture not resident" forever. A worker
+that rejects a draw poisons the queue anyway (sticky error); the case this
+guards is the FULL-parked `_issue` path whose late `_submit` refuses.

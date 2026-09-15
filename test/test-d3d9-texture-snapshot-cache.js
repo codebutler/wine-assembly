@@ -68,7 +68,8 @@ function fixture(options = {}, texelWidth = 16, texelHeight = 16) {
 
 const { OPCODES } = require('../lib/d3d-command-stream');
 const draws = f => f.commands.filter(command => command.opcode === OPCODES.DRAW);
-const drawnPixels = command => command.payload.textures[0].levels[0].pixels;
+const drawnLevel = command => command.payload.textures[0].levels[0];
+const drawnPixels = command => drawnLevel(command).pixels;
 
 (async () => {
   // ---- The JS half: one decode, reused across draws --------------------
@@ -88,17 +89,16 @@ const drawnPixels = command => command.payload.textures[0].levels[0].pixels;
     assert.strictEqual(f.bridge._textureSnapshots.get(f.mip).pixels, first,
       'an unchanged texture is not decoded a second time');
     assert.strictEqual(draws(f).length, 2, 'both draws were still published');
-    assert.deepStrictEqual(Array.from(drawnPixels(draws(f)[1]).slice(0, 4)),
-      Array.from(drawnPixels(draws(f)[0]).slice(0, 4)),
-      'and both carry the same picture');
+    // The executor keeps the level under its key, so the second draw names
+    // it and carries no pixels at all (test-d3d9-texture-residency.js).
+    assert.strictEqual(drawnLevel(draws(f)[1]).key, drawnLevel(draws(f)[0]).key, 'and both name the same level');
+    assert.strictEqual(drawnPixels(draws(f)[1]), undefined, 'the second draw carries the key alone');
     // 0x5a5a as R5G6B5: r=11 -> (11<<3)|(11>>>2) = 90, g=18 -> 73, b=26 -> 214.
     assert.deepStrictEqual(Array.from(drawnPixels(draws(f)[0]).slice(0, 4)), [90, 73, 214, 255],
       'the conversion itself is unchanged by caching it');
     // The queue owns a private copy of every payload, so the reused array is
     // never the one a consumer holds -- reuse must not turn into aliasing.
     assert.notStrictEqual(drawnPixels(draws(f)[0]), first, 'the published payload is still a copy');
-    assert.notStrictEqual(drawnPixels(draws(f)[1]), drawnPixels(draws(f)[0]),
-      'and two draws do not share one copy');
 
     // A bumped sequence is the guest saying the texels may have changed.
     new Uint8Array(f.memory, f.texels, f.bytes).fill(0x1f);
@@ -106,6 +106,7 @@ const drawnPixels = command => command.payload.textures[0].levels[0].pixels;
     f.bridge.call(0x30001, f.desc, 0); await f.flush();
     const second = f.bridge._textureSnapshots.get(f.mip).pixels;
     assert.notStrictEqual(second, first, 'a bumped dirty sequence forces a fresh decode');
+    assert.notStrictEqual(drawnLevel(draws(f)[2]).key, drawnLevel(draws(f)[0]).key, 'under a new key');
     // 0x1f1f: r=3 -> 24, g=56 -> 227, b=31 -> 255.
     assert.deepStrictEqual(Array.from(drawnPixels(draws(f)[2]).slice(0, 4)), [24, 227, 255, 255],
       'and the new picture is what is drawn');
