@@ -1892,7 +1892,7 @@
 
 (func $d3d_shader_vm_run (export "d3d_shader_vm_run") (param $ctx i32) (param $budget i32) (result i32)
   (local $program i32) (local $n i32) (local $pc i32) (local $pkt i32) (local $regs i32)
-  (local $dst i32) (local $bits i32) (local $mask v128)
+  (local $dst i32) (local $bits i32) (local $mask v128) (local $wm i32)
   (local $op i32) (local $desc i32) (local $partner i32) (local $step i32) (local $j i32)
   (local $nextpc i32)
   (local $x2 v128) (local $y2 v128) (local $z2 v128) (local $w2 v128)
@@ -2104,8 +2104,15 @@
           (f32x4.lt (v128.load offset=32 (local.get $dst)) (f32x4.splat (f32.const 0))))))
       (i32.store offset=57568 (local.get $ctx) (i32.or (i32.load offset=57568 (local.get $ctx))
         (i32.and (local.get $bits) (i32x4.bitmask (local.get $x)))))))
-    ;; Snapshot ALL source-dependent components before any destination store.
-    (local.set $x (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 0)))
+    ;; Snapshot every source-dependent component this packet can consume, before
+    ;; any destination store. x is consumed by the four ops that publish it
+    ;; outside the commit (36, 38, 47, 54) whatever the mask says, and otherwise
+    ;; only when the mask names it.
+    (local.set $wm (i32.load offset=8 (local.get $pkt)))
+    (if (i32.or (i32.and (local.get $wm) (i32.const 1))
+        (i32.or (i32.or (i32.eq (local.get $op) (i32.const 36)) (i32.eq (local.get $op) (i32.const 38)))
+          (i32.or (i32.eq (local.get $op) (i32.const 47)) (i32.eq (local.get $op) (i32.const 54)))))
+      (then (local.set $x (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 0)))))
     (if (i32.eq (local.get $op) (i32.const 36)) (then
       (v128.store (i32.add (local.get $ctx) (i32.const 57584))
         (v128.bitselect (local.get $x) (v128.load (i32.add (local.get $ctx) (i32.const 57584))) (local.get $mask)))))
@@ -2115,15 +2122,31 @@
       (local.set $dst (i32.add (local.get $ctx) (i32.add (i32.const 62784)
         (i32.shl (i32.sub (i32.load offset=4 (local.get $pkt)) (i32.const 385)) (i32.const 4)))))
       (v128.store (local.get $dst) (v128.bitselect (local.get $x) (v128.load (local.get $dst)) (local.get $mask)))))
-    (local.set $y (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 1)))
-    (local.set $z (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 2)))
-    (local.set $w (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 3)))
+    ;; y/z/w reach nothing but the commit below, and that commit already drops
+    ;; each one the destination write mask does not name -- the ops that read a
+    ;; component OUTSIDE it (36, 38, 47, 54) read x alone, and x is computed
+    ;; above for them whatever the mask says. So an unwritten component was
+    ;; computed and thrown away, and for a sampling op that is an entire extra
+    ;; filtered fetch per unwritten channel. A co-issued pair pays this worst:
+    ;; the alpha packet of the pair names one component and computed four.
+    ;; Skipping is invisible because $d3d_shader_vm_component only reads.
+    (if (i32.and (local.get $wm) (i32.const 2))
+      (then (local.set $y (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 1)))))
+    (if (i32.and (local.get $wm) (i32.const 4))
+      (then (local.set $z (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 2)))))
+    (if (i32.and (local.get $wm) (i32.const 8))
+      (then (local.set $w (call $d3d_shader_vm_component (local.get $regs) (local.get $pkt) (i32.const 3)))))
     ;; Both packets finish source-dependent work before either can write.
     (if (local.get $partner) (then
-      (local.set $x2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 0)))
-      (local.set $y2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 1)))
-      (local.set $z2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 2)))
-      (local.set $w2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 3)))))
+      (local.set $wm (i32.load offset=8 (local.get $partner)))
+      (if (i32.and (local.get $wm) (i32.const 1))
+        (then (local.set $x2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 0)))))
+      (if (i32.and (local.get $wm) (i32.const 2))
+        (then (local.set $y2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 1)))))
+      (if (i32.and (local.get $wm) (i32.const 4))
+        (then (local.set $z2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 2)))))
+      (if (i32.and (local.get $wm) (i32.const 8))
+        (then (local.set $w2 (call $d3d_shader_vm_component (local.get $regs) (local.get $partner) (i32.const 3)))))))
     (if (i32.or (i32.eq (local.get $op) (i32.const 47)) (i32.eq (local.get $op) (i32.const 54))) (then
       (v128.store offset=62816 (local.get $ctx) (v128.bitselect (local.get $x) (v128.load offset=62816 (local.get $ctx)) (local.get $mask)))
       (i32.store offset=62832 (local.get $ctx) (i32.const 1))))
