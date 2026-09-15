@@ -7654,3 +7654,61 @@ The remaining frame cost is the software rasterizer and the interpreter, not
 the bridge: at the time of measurement the render worker held 36 minutes of CPU
 against the main thread's ~49. Removing the decode returns roughly a quarter of
 the wall clock to the guest; it does not make ~550 draws per frame cheap.
+
+## What the software rasterizer actually spends a pixel on (drive52, 2026-09-14)
+
+The previous section named the rasterizer as an open cost without saying what
+in it was expensive. `tools/bench-raster.js` (86398f10) now prices one pixel by
+drawing a single covering quad and changing one thing per arm. Its `sliver` arm
+is the load-bearing one: two hair-thin diagonal triangles with the *same*
+full-screen bounding box, so the 2x2 tile walk and all its per-quad setup run in
+full while ~0.2% of pixels pass the coverage test, meaning the shader VM and the
+framebuffer write almost never execute.
+
+**The sampler is the smaller half.** At 640x480, `sliver` came in at 80-87% of
+the untextured covering quad across several runs. A pixel that is never shaded
+and never written already costs most of a shaded one. Texturing adds a further
+35-46% on top (point/bilinear/trilinear), and the ns/px is flat across a 16x
+range in area (160x120 / 320x240 / 640x480), so the cost is genuinely per-pixel
+and not per-draw setup.
+
+The block responsible is in `src/09ah-d3d-software.wat`'s `$d3d_software_step`,
+and everything in it runs for all four lanes *before* the coverage test — the
+`block $outside` sits after it, because outside lanes are derivative helpers and
+their varyings are real inputs to mip selection.
+
+Two things were fixed there and are measured, tested and committed:
+
+* **24042888** — every varying is perspective-corrected by the same interpolated
+  1/W, and the setup did that 33 times per lane with an `f32.div`. One
+  reciprocal and 33 multiplies instead.
+* **eaa44c1a** — the varying loop is a fixed 28 iterations and the specular loop
+  a fixed 4, regardless of what the shader reads, because no input mask exists
+  on a compiled program. Bounded by the data instead: a varying that is +0 at
+  all three vertices interpolates to zero everywhere in the triangle, so it is
+  scanned once per quad and stored as a literal zero.
+
+**The useful result is that those barely moved the floor (~2.5%).** With 33
+divides and roughly 20 of 32 interpolations per lane removed and the number
+almost unchanged, the per-quad arithmetic is *not* what the setup spends its
+time on.
+
+**The leading remaining suspect is the `memory.fill` of 8192 bytes of temp
+register bank per 2x2 quad** — 128 registers x 64 bytes, zeroed whether a
+ps_1_1 shader uses r0 alone or not. That is 2KB per pixel, ~630MB of zeroing per
+640x480 draw. Substituting 1024 for 8192 and alternating the two builds with the
+order rotated over four pairs: the small fill won 3 of 4 pairs, medians
+337.3 -> 243.2 ns/px on `sliver` (-28%) and 397.8 -> 321.5 on `flat` (-19%).
+Read that as a strong lead, not a settled number: pair 1 went the other way, the
+box sat at load 7-8 with several agents on it, and an earlier non-rotated sweep
+of the same thing produced a much larger apparent win that was mostly falling
+load. **A clean reading needs a quiet machine.**
+
+The fix is not the fill itself but knowing how many temps to zero, and that has
+no home yet: the compiled program header (`0x4453564d`) records no max-temp, and
+the software context has no free slot to cache one in — 224-236 are blend state,
+240-247 the sample counter, 248/252 stencil and flags, and 288 is where the
+vertex array starts. Adding one means moving that boundary, which touches
+`d3d_software_create`, the JS backend's context sizing and the vertex-array base
+arithmetic. That is the next piece of work, and it is an ABI change, not a
+tweak.
