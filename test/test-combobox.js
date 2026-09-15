@@ -115,6 +115,24 @@ async function main() {
 
   const baselineSlots = e.wnd_count_used();
 
+  // Destroying a dropdown before its first open used to leak two halves of
+  // its popup hierarchy: the listbox remained as a live WAT child of the
+  // popup, while the popup's WAT slot was removed without telling the host
+  // renderer. Common dialogs commonly create and destroy filter combos
+  // without opening them, so exercise that exact lifetime before the larger
+  // interaction test reparents the listbox on close.
+  const unopened = e.test_create_combobox(0, 0, 200, 100, CBS_DROPDOWNLIST);
+  const unopenedPopup = e.combobox_get_popup_hwnd(unopened);
+  check('never-opened dropdown creates its renderer popup',
+    unopenedPopup !== 0 && !!renderer.windows[unopenedPopup],
+    `popup=0x${unopenedPopup.toString(16)}`);
+  if (e.wnd_destroy_tree) e.wnd_destroy_tree(unopened - 1);
+  check('never-opened dropdown destroys its complete WAT subtree',
+    e.wnd_count_used() === baselineSlots,
+    `${e.wnd_count_used()} vs ${baselineSlots}`);
+  check('never-opened dropdown removes its renderer popup',
+    !renderer.windows[unopenedPopup]);
+
   // 200x100 combobox, CBS_DROPDOWNLIST. cy budgets the dropped area;
   // closed face is FIELD_H = 21 px.
   const cb = e.test_create_combobox(0, 0, 200, 100, CBS_DROPDOWNLIST);

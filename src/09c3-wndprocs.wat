@@ -6120,11 +6120,15 @@
         (if (local.get $state)
           (then
             (local.set $state_w (call $g2w (local.get $state)))
-            ;; Inner listbox is destroyed by the parent's $wnd_destroy_tree pass.
-            ;; Popup top-level is NOT a child (no parent walk reaches it) so
-            ;; remove its window-table slot explicitly.
+            ;; A dropdown's listbox belongs to the top-level popup from
+            ;; creation until the first close reparents it to the combo.  The
+            ;; dialog's child walk therefore cannot assume it already removed
+            ;; that listbox.  Destroy the owned popup as a real window subtree:
+            ;; this reaches a never-opened listbox, sends the normal destroy
+            ;; messages, and removes both guest and renderer window records.
             (if (call $cb_popup_hwnd (local.get $state_w))
-              (then (call $wnd_table_remove (call $cb_popup_hwnd (local.get $state_w)))))
+              (then (call $wnd_destroy_recursive
+                (call $cb_popup_hwnd (local.get $state_w)))))
             (call $heap_free (call $cb_text_ptr (local.get $state_w)))
             (call $heap_free (local.get $state))
             (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0))))
