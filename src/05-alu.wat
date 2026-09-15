@@ -2459,8 +2459,9 @@
       (else
         (if (i32.eq (global.get $eax) (i32.const 1))
           (then
-            ;; Two personalities, picked by $cpu_mmx_enable so one build can be
-            ;; benchmarked both ways. Advertising MMX on the 486DX signature we
+            ;; CPU features are separately switchable so measured apps can opt
+            ;; into SSE without changing the default personality. Advertising
+            ;; SIMD on the 486DX signature we
             ;; used to report would be self-contradictory -- detection code
             ;; commonly gates on family >= 5 before it even looks at the feature
             ;; bits -- so the MMX personality names the part whose feature set
@@ -2473,14 +2474,19 @@
             ;; monotonic counter; while RDTSC was a mov-zero stub this bit had
             ;; to stay clear, since an app that calibrates with it would divide
             ;; by a zero delta. CX8 (8) is CMPXCHG8B and CMOV (15) is CMOVcc,
-            ;; both decoded in 07-decoder.wat. Bits we do NOT set are equally
-            ;; deliberate: no SSE (25), so the MMX-extension opcodes
-            ;; (pshufw/psadbw/maskmovq/movntq/pextrw/pinsrw) we don't decode
-            ;; stay unreachable, and no extended leaves, which denies 3DNow.
-            (if (global.get $cpu_mmx_enable)
+            ;; both decoded in 07-decoder.wat. No extended leaves are exposed,
+            ;; which continues to deny 3DNow.
+            (if (i32.or (global.get $cpu_mmx_enable) (global.get $cpu_sse_enable))
               (then
-                (global.set $eax (i32.const 0x00000633)) ;; family 6, model 3 (Pentium II)
-                (global.set $edx (i32.const 0x00808111))) ;; FPU|TSC|CX8|CMOV|MMX
+                (global.set $eax
+                  (select (i32.const 0x00000673) ;; family 6, model 7 (Pentium III / SSE)
+                          (i32.const 0x00000633) ;; family 6, model 3 (Pentium II)
+                          (i32.ne (global.get $cpu_sse_enable) (i32.const 0))))
+                (global.set $edx
+                  (i32.or (i32.const 0x00008111) ;; FPU|TSC|CX8|CMOV
+                    (i32.or
+                      (i32.shl (i32.ne (global.get $cpu_mmx_enable) (i32.const 0)) (i32.const 23))
+                      (i32.shl (i32.ne (global.get $cpu_sse_enable) (i32.const 0)) (i32.const 25))))))
               (else
                 (global.set $eax (i32.const 0x00000480)) ;; family 4, model 8 (486DX)
                 (global.set $edx (i32.const 0x00000001)))) ;; FPU present bit (so CRT init passes)

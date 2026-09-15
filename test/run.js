@@ -3734,6 +3734,9 @@ async function main() {
   }
   if (instance.exports.set_process_id) instance.exports.set_process_id(ctx.processId);
   if (NO_MMX && instance.exports.set_cpu_mmx) instance.exports.set_cpu_mmx(0);
+  if ((hasFlag('sse') || APP_ENTRY?.cpuSSE === true) && instance.exports.set_cpu_sse) {
+    instance.exports.set_cpu_sse(1);
+  }
   if (VLAN_IP && instance.exports.set_vlan_local_ip) {
     const octets = VLAN_IP.split('.').map(Number);
     if (octets.length !== 4 || octets.some(o => !(o >= 0 && o <= 255))) {

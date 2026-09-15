@@ -381,6 +381,8 @@
   ;; a CPUID check.
   (func (export "set_cpu_mmx") (param i32) (global.set $cpu_mmx_enable (local.get 0)))
   (func (export "get_cpu_mmx") (result i32) (global.get $cpu_mmx_enable))
+  (func (export "set_cpu_sse") (param i32) (global.set $cpu_sse_enable (local.get 0)))
+  (func (export "get_cpu_sse") (result i32) (global.get $cpu_sse_enable))
   (func (export "get_mmx_exec_count") (result i32) (global.get $mmx_exec_count))
   ;; Test seam for tools/mmx-check.js. $mmx_binop is pure -- two 64-bit inputs
   ;; and a subop id in, one 64-bit result out -- so it can be checked against a

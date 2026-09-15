@@ -692,6 +692,12 @@ class WineAssembly {
     // they are not pumping messages. This remains opt-in per app: the normal
     // path still delivers the callback through the guest message loop.
     this.asyncMultimediaTimer = false;
+    // Decode-time x87 fusion is still opt-in. Browser-shell may enable it for
+    // a measured app without changing the CPU path of every other program.
+    this.x87Fusion = false;
+    // CPUID SSE advertisement is opt-in until each app's reachable SIMD path
+    // has passed an authentic run against the decoder.
+    this.cpuSSE = false;
   }
 
   _normalizePerfLogicalFrame(perf) {
@@ -1965,13 +1971,16 @@ class WineAssembly {
     if (window.WineSuperops && this.instance.exports.set_rle_run) {
       this.instance.exports.set_rle_run(window.WineSuperops.rleRun === false ? 0 : 1);
     }
-    const x87Fusion = window.WineSuperops && window.WineSuperops.x87Fusion === true ? 1 : 0;
+    const x87Fusion = (this.x87Fusion === true ||
+      (window.WineSuperops && window.WineSuperops.x87Fusion === true)) ? 1 : 0;
     if (this.instance.exports.set_x87_pipeline4_fusion) {
       this.instance.exports.set_x87_pipeline4_fusion(x87Fusion);
     }
     if (this.instance.exports.set_x87_affine_fusion) {
       this.instance.exports.set_x87_affine_fusion(x87Fusion);
     }
+    const cpuSSE = this.cpuSSE === true ? 1 : 0;
+    if (this.instance.exports.set_cpu_sse) this.instance.exports.set_cpu_sse(cpuSSE);
     this._wasmModule = wasmModule;
     // Kept so an experimental guest worker can be handed the SAME host import
     // table this instance uses — the point of the broker is that there is one
@@ -1987,6 +1996,9 @@ class WineAssembly {
       }
       if (this.instance.exports.set_x87_affine_fusion) {
         await this.guestWorker.callExport('set_x87_affine_fusion', x87Fusion);
+      }
+      if (this.instance.exports.set_cpu_sse) {
+        await this.guestWorker.callExport('set_cpu_sse', cpuSSE);
       }
     }
     if (this.renderer) {
@@ -2096,6 +2108,7 @@ class WineAssembly {
     // mutable WASM global is instance-local, including the meaningful OFF=0.
     this.threadManager.recordInheritedWasmGlobal('set_x87_pipeline4_fusion', x87Fusion);
     this.threadManager.recordInheritedWasmGlobal('set_x87_affine_fusion', x87Fusion);
+    this.threadManager.recordInheritedWasmGlobal('set_cpu_sse', cpuSSE);
 
     // A room address is a property of this whole process, and the guest reads
     // it the moment it opens a socket, so it has to be in place before the

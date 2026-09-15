@@ -735,6 +735,13 @@ async function main() {
   test('cpuid advertises CMOV', (feat >>> 15) & 1, 1);
   test('cpuid advertises MMX', (feat >>> 23) & 1, 1);
   test('cpuid does not advertise SSE', (feat >>> 25) & 1, 0);
+  e.set_cpu_sse(1);
+  runCode([0xB8, ...le32(1), 0x0F, 0xA2]);
+  test('cpuid advertises SSE after the explicit per-app opt-in',
+    (e.get_edx() >>> 25) & 1, 1);
+  test('SSE personality identifies a Pentium III model',
+    (e.get_eax() >>> 4) & 0xF, 7);
+  e.set_cpu_sse(0);
 
   // Extended leaves must stay absent — that is what denies 3DNow.
   runCode([0xB8, ...le32(0x80000000), 0x0F, 0xA2]);

@@ -4093,8 +4093,8 @@
   (global $mm7 (mut i64) (i64.const 0))
   ;; Per-instance XMM state is naturally per guest thread: both cooperative
   ;; and Worker-backed threads execute in distinct WASM instances. Only the
-  ;; small SSE base used by SDL2 is decoded today, so CPUID continues to keep
-  ;; its SSE feature bit clear until the wider instruction family exists.
+  ;; SSE remains separately advertised per application: the default CPU stays
+  ;; conservative, while measured guests can opt into the implemented path.
   ;; Store each v128 as two i64s: WebAssembly's constant-expression subset
   ;; does not permit a SIMD initializer on every engine we support.
   (global $xmm0l (mut i64) (i64.const 0)) (global $xmm0h (mut i64) (i64.const 0))
@@ -4109,6 +4109,7 @@
   ;; every guest takes its scalar fallback; 1 = set EDX bit 23 (MMX) and let the
   ;; MMX paths run. Exported so a benchmark can A/B the same build.
   (global $cpu_mmx_enable (mut i32) (i32.const 1))
+  (global $cpu_sse_enable (mut i32) (i32.const 0))
   ;; How many MMX instructions the guest actually retired. Without this a
   ;; pixel-identical A/B is ambiguous: it could mean the MMX path is correct,
   ;; or that the guest never took it.
