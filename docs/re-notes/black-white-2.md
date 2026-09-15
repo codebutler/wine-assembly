@@ -7748,3 +7748,59 @@ register set (128 registers x 4 components x N lanes x 4 bytes must stay in
 cache, which is 512KB at N=256), so both changes need a per-program max-temp
 count, and there is no field for one. That single missing number gates the two
 largest wins here.
+
+### The per-quad temp-bank fill, and the number that unblocks batching (5a66a6f5)
+
+Both of the fixes the section above points at want the same missing fact: *how
+much of the shader VM's temp register file can this program actually touch?*
+
+The rasterizer clears that file between pixel packets so a register read before
+it is written reads zero. It is bank 0 of the VM context — 128 registers of 64
+bytes, slots r0..r127 — and the clear was the whole 8192 bytes, once per 2×2
+quad. ps_1_1 lets a shader name eight temps; the bench's `flat` shader names
+one. So the rasterizer was moving 2048 bytes per pixel to make 16 of them mean
+anything.
+
+`$d3d_shader_vm_temp_span` (09ag) walks the compiled program once, when its
+context is created, taking the highest temp slot named as a destination *or* as
+a source, and stores `(max+1)*64` at `ctx+28` — the one word in the context
+header that was documented "reserved" and is below the 288-byte vertex-array
+boundary, so nothing had to move. `$d3d_shader_vm_temp_bytes` reads it back and
+returns the full 8192 for a null, out-of-range or wrong-magic pointer.
+
+Three things that are less arbitrary than they look:
+
+- **Only the unsafe direction is refused.** Clearing more than the program can
+  reach is merely slow. Clearing less hands a packet the *previous* packet's
+  register, because the pixel VM (ctx+148) keeps its banks across triangles and
+  the fill is the only thing that resets them. So every fallback is the whole
+  bank, and the source scan is included even though the IR already refuses a
+  temp read before its write (error 17) — belt and braces, one-time cost.
+- **DEF (14) and the flow-control family (60..72) are skipped.** Those packets
+  repurpose the +4/+8/+16 words for immediates, block indices and branch
+  targets; read as slot numbers they would inflate the span to nonsense.
+- **The one-register floor is load-bearing.** `$d3d_software_output` reads r0
+  out of this bank as the pixel result, so a program that never writes r0 used
+  to read the zero the full-bank fill left behind.
+
+For `mov r0, v0` the per-quad fill goes 8192 → 64 bytes, a 128× reduction, 2048
+B/px → 16 B/px.
+
+**No timing is quoted for it.** The box sat at load 19 while this was written,
+bench reps spread 1.4-4.4×, and two runs of the same arm disagreed by 1.6×
+(sliver 685.3 vs 416.1 ns/px). The correction above was caused by exactly this
+kind of under-measurement, so the size of the win stays open until a quiet box
+is available. What is certain is the byte count, and the byte count is the part
+the next change depends on.
+
+That next change is the one the correction argued for: invert
+`$d3d_shader_vm_run` so the outer loop walks *instructions* and the inner loop
+walks a tile of many pixels, paying the interpreter tax (cancellation check,
+budget check, 64-byte packet load, flag validation, co-issue probe, ~70-way
+if-chain) once per instruction per batch instead of once per four pixels. Batch
+width is bounded by the live register set staying in cache — which is precisely
+`temp_bytes × pixels`, so it could not be chosen before this number existed.
+The batch must stay 2×2-composed so `$d3d_shader_vm_quad_lod`'s finite
+differences still work, and per-lane branching widens the existing execution
+mask from one `v128` to N lanes (ps_1_x has no flow control at all, so the
+common case needs none of it).
