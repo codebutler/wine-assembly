@@ -33,7 +33,8 @@
 ;; DEF14 stores four immediate IEEE words at packet+16 and is hoisted before all
 ;; executable instructions. Matrix9..13 carry source row0 and fixed shape ID.
 ;; Context: magic, program, PC, status, output lane mask, retired,
-;; +24 helper execution mask (0 inherits output mask), +28 reserved; then
+;; +24 helper execution mask (0 inherits output mask), +28 reachable temp-bank
+;; bytes for a caller that clears the bank between packets; then
 ;; 7 banks * 128 registers * 64 bytes (x/y/z/w component vectors).
 ;; Bump tail: four32-byte copied records at57600 (six f32, valid, reserved).
 ;; Tail: four 48-byte sampler records at57376, discard mask at57568.
@@ -856,6 +857,59 @@
     (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $link)))
   (local.get $out))
 
+;; How many bytes of the temp bank a program can actually reach. Bank 0 is
+;; slots 0..127 at regs+0..8191, so a caller that zeroes the whole bank per
+;; pixel packet is clearing 8KB for a shader that may name two registers --
+;; measured as a fifth of an untextured software pixel (tools/bench-raster.js).
+;;
+;; Over-counting is safe here and under-counting is not, so the scan is
+;; deliberately loose: it takes the destination slot and all three source slots
+;; of every packet, keeping only those below 128, and a spurious word can only
+;; raise the maximum. Packets with fewer than three sources carry zero in the
+;; unused words, which names slot 0 and changes nothing.
+;;
+;; DEF14 and the branch/label family 60..72 are skipped outright: they
+;; repurpose the destination and source words as immediate IEEE words, uniform
+;; indices and packet targets, and none of them reads or writes a temp.
+;;
+;; The floor of one register is not defensive clutter. $d3d_software_output
+;; reads r0 straight out of this bank, so a program that never writes r0 -- a
+;; malformed one, since r0 is the pixel output -- used to read the zero the
+;; fill left and would otherwise now read the previous packet's value.
+(func $d3d_shader_vm_temp_span (param $program i32) (result i32)
+  (local $n i32) (local $pc i32) (local $pkt i32) (local $op i32) (local $max i32)
+  (local $j i32) (local $slot i32)
+  (local.set $n (i32.load offset=8 (local.get $program)))
+  (local.set $max (i32.const 0))
+  (block $done (loop $next
+    (br_if $done (i32.ge_u (local.get $pc) (local.get $n)))
+    (local.set $pkt (i32.add (i32.add (local.get $program) (i32.const 16)) (i32.shl (local.get $pc) (i32.const 6))))
+    (local.set $op (i32.load (local.get $pkt)))
+    (if (i32.and (i32.ne (local.get $op) (i32.const 14))
+        (i32.or (i32.lt_u (local.get $op) (i32.const 60)) (i32.gt_u (local.get $op) (i32.const 72))))
+      (then
+        (local.set $slot (i32.load offset=4 (local.get $pkt)))
+        (if (i32.and (i32.lt_u (local.get $slot) (i32.const 128)) (i32.gt_u (local.get $slot) (local.get $max)))
+          (then (local.set $max (local.get $slot))))
+        (local.set $j (i32.const 0))
+        (loop $sources
+          (local.set $slot (i32.load (i32.add (local.get $pkt)
+            (i32.add (i32.const 16) (i32.shl (local.get $j) (i32.const 4))))))
+          (if (i32.and (i32.lt_u (local.get $slot) (i32.const 128)) (i32.gt_u (local.get $slot) (local.get $max)))
+            (then (local.set $max (local.get $slot))))
+          (local.set $j (i32.add (local.get $j) (i32.const 1)))
+          (br_if $sources (i32.lt_u (local.get $j) (i32.const 3))))))
+    (local.set $pc (i32.add (local.get $pc) (i32.const 1)))
+    (br $next)))
+  (i32.shl (i32.add (local.get $max) (i32.const 1)) (i32.const 6)))
+
+;; Bytes of the temp bank this context's program can reach, for a caller that
+;; clears the bank between packets. Never larger than the 8192-byte bank.
+(func $d3d_shader_vm_temp_bytes (export "d3d_shader_vm_temp_bytes") (param $ctx i32) (result i32)
+  (if (i32.eqz (call $d3d_shader_vm_range (local.get $ctx) (i32.const 32))) (then (return (i32.const 8192))))
+  (if (i32.ne (i32.load (local.get $ctx)) (i32.const 0x44534358)) (then (return (i32.const 8192))))
+  (i32.load offset=28 (local.get $ctx)))
+
 (func $d3d_shader_vm_context (export "d3d_shader_vm_context") (param $program i32) (param $mask i32) (result i32)
   (local $ctx i32)
   (if (i32.eqz (call $d3d_shader_vm_range (local.get $program) (i32.const 16))) (then (return (i32.const 0))))
@@ -874,6 +928,9 @@
   (i32.store offset=4 (local.get $ctx) (local.get $program))
   (i32.store offset=12 (local.get $ctx) (i32.const 1))
   (i32.store offset=16 (local.get $ctx) (local.get $mask))
+  ;; Computed once per context rather than per packet: the program is immutable
+  ;; for the life of the context, and every validation it needs has just run.
+  (i32.store offset=28 (local.get $ctx) (call $d3d_shader_vm_temp_span (local.get $program)))
   (local.get $ctx))
 
 (func $d3d_shader_vm_relative (param $regs i32) (param $index i32) (param $component i32) (param $lane i32) (param $limit i32) (param $address_selector i32) (result f32)

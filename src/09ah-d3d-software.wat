@@ -1110,7 +1110,13 @@
     (if (local.get $point) (then
       (if (i32.load offset=200 (local.get $ctx)) (then
         (local.set $sprite (i32.and (i32.load offset=4 (i32.load offset=200 (local.get $ctx))) (i32.const 1)))))))
-    (memory.fill (i32.add (local.get $vm) (i32.const 32)) (i32.const 0) (i32.const 8192))
+    ;; Clear only the temp registers this program can name, not all 128. The
+    ;; bank is 8192 bytes and a ps_1_1 shader may reach two registers of it, so
+    ;; the constant was clearing 2KB per pixel -- about 630MB per 640x480 draw,
+    ;; and a measurable fraction of an untextured pixel. The span is computed
+    ;; once when the VM context is created and can never exceed the bank.
+    (memory.fill (i32.add (local.get $vm) (i32.const 32)) (i32.const 0)
+      (call $d3d_shader_vm_temp_bytes (local.get $vm)))
     ;; The varying loop below is a FIXED 28 iterations and the specular loop a
     ;; fixed 4, run for all four lanes of every quad whether the lane is inside
     ;; the triangle or not -- and a pixel shader that reads one varying pays for
