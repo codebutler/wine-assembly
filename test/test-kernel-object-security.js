@@ -2,6 +2,7 @@
 'use strict';
 
 const assert = require('assert');
+const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
@@ -67,6 +68,10 @@ const extraWat = String.raw`
     (global.get $test_kernel_stack_delta))
   (func (export "test_kernel_last_error") (result i32)
     (global.get $last_error))
+  (func (export "test_lookup_get_kernel_object_security") (result i32)
+    (call $lookup_api_id "GetKernelObjectSecurity"))
+  (func (export "test_lookup_set_kernel_object_security") (result i32)
+    (call $lookup_api_id "SetKernelObjectSecurity"))
 
   (start $test_kernel_security_init)
 `;
@@ -100,6 +105,16 @@ const extraWat = String.raw`
     assert.strictEqual(e.test_kernel_sd_word(0) >>> 0, 0xa1b2c3d4,
       `SetKernelObjectSecurity does not mutate descriptor input for ${label} inputs`);
   }
+
+  const getApi = apiTable.find(api => api.name === 'GetKernelObjectSecurity');
+  const setApi = apiTable.find(api => api.name === 'SetKernelObjectSecurity');
+  assert.deepStrictEqual(
+    [getApi && getApi.nargs, setApi && setApi.nargs], [5, 3],
+    'kernel-object security APIs retain their documented stdcall argument counts');
+  assert.strictEqual(e.test_lookup_get_kernel_object_security() >>> 0, getApi.id,
+    'generated hash table resolves GetKernelObjectSecurity');
+  assert.strictEqual(e.test_lookup_set_kernel_object_security() >>> 0, setApi.id,
+    'generated hash table resolves SetKernelObjectSecurity');
 
   console.log('PASS  Win98 kernel-object security imports fail without fake descriptors');
 })().catch(error => {

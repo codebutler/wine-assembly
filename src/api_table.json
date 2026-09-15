@@ -30311,5 +30311,19 @@
     "nargs": 2,
     "convention": "stdcall",
     "hash": 1309921934
+  },
+  {
+    "id": 3614,
+    "name": "GetKernelObjectSecurity",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 3283796771
+  },
+  {
+    "id": 3615,
+    "name": "SetKernelObjectSecurity",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 163771855
   }
 ]
