@@ -61,6 +61,7 @@ assert.deepStrictEqual(renderer._applyPointerInputHooks(equalizer, 122, 82, 0),
 const root = path.join(__dirname, '..');
 const rendererSource = fs.readFileSync(path.join(root, 'lib', 'renderer-input.js'), 'utf8');
 const shellSource = fs.readFileSync(path.join(root, 'lib', 'browser-shell.js'), 'utf8');
+const cliSource = fs.readFileSync(path.join(root, 'test', 'run.js'), 'utf8');
 assert(!rendererSource.includes('Winamp Equalizer') && !rendererSource.includes('_snapWinamp'),
   'the generic renderer contains no Winamp identity or helper');
 assert(shellSource.includes('sharedRenderer.setInputHooks(wine.processId, app.inputHooks || null)'),
@@ -69,5 +70,10 @@ assert(shellSource.includes('sharedRenderer.setInputHooks(wine.processId, null)'
   'the browser unregisters process input policy on every stop path');
 assert(!shellSource.includes('function autoRunSliceFor'),
   'browser scheduling calls the registry resolver without a redundant wrapper');
+assert(cliSource.includes(
+  'renderer.setInputHooks(instance, (ASSET_ENTRY && ASSET_ENTRY.inputHooks) || null)'),
+  'the CLI keys app input policy by the instance used by renderer windows');
+assert(!cliSource.includes('renderer.setInputHooks(1000,'),
+  'the CLI does not key hooks by a process id absent from its renderer windows');
 
 console.log('PASS app registry owns process-scoped declarative input hooks');
