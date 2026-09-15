@@ -30269,5 +30269,33 @@
     "nargs": 6,
     "convention": "stdcall",
     "hash": 1527885155
+  },
+  {
+    "id": 3608,
+    "name": "ImageList_GetImageCount",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3245391409
+  },
+  {
+    "id": 3609,
+    "name": "GetMenuItemInfoW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 3421837100
+  },
+  {
+    "id": 3610,
+    "name": "SetMenuItemInfoW",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 951695080
+  },
+  {
+    "id": 3611,
+    "name": "ChildWindowFromPointEx",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 1165891804
   }
 ]
