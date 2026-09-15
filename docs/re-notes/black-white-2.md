@@ -8167,3 +8167,25 @@ box at load 20-45 the software renderer's Lionhead intro presented at
 the menu was not reached within a session's patience. Retry on a quiet box:
 `to-menu.sh`, profile OK (313,343), New Game (197,555), Continue (400,575),
 then two `di-mousedown`/`di-mouseup` pairs at the land (165,478).
+
+### GL Present no longer reads the frame back (2026-09-15)
+
+The WebGL executor's `PRESENT` used to `gl.readPixels` the whole target,
+flip and swizzle it to BGRA, and copy it into the render-target DIB on every
+frame -- 7.2% of the main thread as `readColor` (4.3% inside `readPixels`) on
+the profile-dialog profile above, at 17-18 fps. Nothing read that copy: every
+guest path onto the back buffer already fetches it through a readback of its
+own (`LockRect`/`GetDC` via `$d3d9_backbuffer_dc_sync` = `0x30016`,
+`GetRenderTargetData` = `0x30012`, `StretchRect`/`ColorFill` through the
+colour-surface `0x30010`), and `$handle_IDirect3DDevice9_Present` returns on
+the host's 1 before `$dx_present` would touch the DIB. So `_execute`'s
+`PRESENT` now returns only the canvas and the `0x30002` finalize writes
+`dest` only when the value carries pixels, which the software rasterizer's
+still does. Two tests read the DIB straight after a GL Present and were
+asking for the copy: `test-d3d9-pipeline-web.js` now reads through a
+`sync_target` export (the same `0x30016` a guest would issue, routed to the
+bridge), and `test-d3d9-present-web.js` queues a `READBACK` behind each
+`PRESENT` and asserts the present value carries no pixels. Verified on the
+GL tab: the intro and the profile dialog render as before. The profile of
+the dialog with this change is still owed -- the box was at load 30-60 and
+the browser went away mid-session.

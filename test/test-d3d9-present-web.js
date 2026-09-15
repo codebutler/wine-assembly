@@ -11,18 +11,23 @@ const assert=require('assert'),path=require('path'),puppeteer=require('puppeteer
    const op=D3DCommandStream.OPCODES;
    entry.queue=new D3DCommandStream.CommandQueue({deviceId:1,consumer:{execute:c=>bridge._consume(entry,c,x=>bridge._execute(entry,x))}});
    bridge._submit(entry,op.CLEAR,{color:[1,0,0,1],flags:1});
+   // Present carries no pixels on WebGL; a READBACK queued right behind each
+   // one reads the target as it stood at that present, before the next Clear.
    const first=bridge._submit(entry,op.PRESENT,{width:4,height:4,interval:0});
+   const firstPixels=bridge._submit(entry,op.READBACK,{});
    const before=entry.queue.completed;
    const clear=bridge._submit(entry,op.CLEAR,{color:[0,0,1,1],flags:1});
    const second=bridge._submit(entry,op.PRESENT,{width:4,height:4,interval:1});
-   const red=Array.from((await first).pixels.slice(0,4));await clear;
-   const blue=Array.from((await second).pixels.slice(0,4));
+   const secondPixels=bridge._submit(entry,op.READBACK,{});
+   const presentCarriesPixels=Object.prototype.hasOwnProperty.call(await first,'pixels');
+   const red=Array.from((await firstPixels).pixels.slice(0,4));await clear;
+   const blue=Array.from((await secondPixels).pixels.slice(0,4));
    const immediate=bridge._submit(entry,op.PRESENT,{width:4,height:4,interval:0x80000000});
    const sync=typeof immediate.then!=='function',completed=entry.queue.completed;
    bridge._submit(entry,op.RESOURCE_RELEASE,{kind:'device'});await bridge.close();
-   return {before,red,blue,sync,completed};
+   return {before,red,blue,sync,completed,presentCarriesPixels};
   });
-  assert.deepStrictEqual(result,{before:1,red:[0,0,255,255],blue:[255,0,0,255],sync:true,completed:5});
+  assert.deepStrictEqual(result,{before:1,red:[0,0,255,255],blue:[255,0,0,255],sync:true,completed:7,presentCarriesPixels:false});
   console.log('PASS real WebGL RAF presentation: delayed red/blue pixels, ordered Clear, genuine completion and synchronous IMMEDIATE');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

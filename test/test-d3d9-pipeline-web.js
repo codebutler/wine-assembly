@@ -114,6 +114,10 @@ const { compileSrcWasm } = require('./compile-src');
       (global.get $eax))
     (func (export "target_bits") (param $device i32) (result i32)
       (load.field DxObject misc1 (call $d3ddev_rt_entry (local.get $device))))
+    ;; Present no longer copies the GL target into the DIB; this is the
+    ;; readback LockRect and GetDC issue, so the test reads what a guest would.
+    (func (export "sync_target") (param $device i32) (result i32)
+      (call $d3d9_backbuffer_dc_sync (local.get $device) (i32.const 0)))
     ${methods.map(name => `(func (export "${name}") (param $a i32) (param $b i32) (param $c i32)
       (param $d i32) (param $f i32) (result i32)
       (global.set $esp (i32.const 0x00300000))
@@ -151,7 +155,7 @@ const { compileSrcWasm } = require('./compile-src');
         getExports:()=>e,
         enableProgrammable:true,guestToWasm:p=>e.guest_to_wasm(p)>>>0,renderer:()=>renderer,onPresent:()=>presents++});
       host.gpu_gl_call=(op,ptr,aux)=>op===0x30000 ? D3D9Shader.validateMemory(memory.buffer,ptr,aux)
-        : op>=0x30001&&op<=0x30006 ? bridge.call(op,ptr,aux) : 0;
+        : (op>=0x30001&&op<=0x30006)||op===0x30016 ? bridge.call(op,ptr,aux) : 0;
       host.get_window_client_size=()=>16|(16<<16);
       e=(await WebAssembly.instantiate(module,{host})).exports;
       e.init_dx_com_thunks();
@@ -193,7 +197,11 @@ const { compileSrcWasm } = require('./compile-src');
       const queryFinishes=eventFinishes;
       calls.push(e.Present(device));
       const ptr=e.target_bits(device)>>>0;
-      const pixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const px=index=>{
+        if(e.sync_target(device)!==1)throw new Error('target readback did not complete synchronously');
+        return Array.from(new Uint8Array(memory.buffer,ptr+index*4,4));
+      };
+      const pixel=px((8*16+8));
       calls.push(e.clear_target(device,0xff010203));
       write(vsCode,[0xfffe0101,31,0x80000000,0x900f0000,31,0x80000005,0x900f0001,
         1,0xc00f0000,0x90e40000,1,0xe00f0000,0x90e40001,1,0xd00f0000,0xa0e40000,0xffff]);
@@ -207,21 +215,21 @@ const { compileSrcWasm } = require('./compile-src');
       calls.push(e.lock_texture(texture,out));const bits=e.guest_read32(out+4)>>>0;
       e.guest_write32(bits,0xffc8a050);
       calls.push(e.unlock_texture(texture),e.SetTexture(device,0,texture),e.DrawPrimitiveUP(device,4,1,vptr,24),e.Present(device));
-      const texturedPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const texturedPixel=px((8*16+8));
       const iptr=cptr+256;
       // Prefix an unused vertex; index rebasing must preserve the three real UVs.
       floats(vptr,[0,0,0,0,0,0,-1,-1,0.25,1,0.5,0.5,3,-1,0.25,1,0.5,0.5,-1,3,0.25,1,0.5,0.5]);
       write(iptr,[0x00020001,3]);
       floats(cptr,[1,0.5,0.25,1]);calls.push(e.SetVertexShaderConstantF(device,0,cptr,1));
       calls.push(e.indexed(device,vptr,iptr,101,1,3),e.Present(device));
-      const indexedPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const indexedPixel=px((8*16+8));
       // A real >65535 index checks that INDEX32 is not silently narrowed.
       const high=65536,highVertices=0x00800000;
       floats(highVertices+high*24,[-1,-1,0.25,1,0.5,0.5,3,-1,0.25,1,0.5,0.5,-1,3,0.25,1,0.5,0.5]);
       write(iptr,[high,high+1,high+2]);
       floats(cptr,[0.25,1,0.5,1]);calls.push(e.SetVertexShaderConstantF(device,0,cptr,1));
       calls.push(e.indexed(device,highVertices,iptr,102,high,3),e.Present(device));
-      const indexed32Pixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const indexed32Pixel=px((8*16+8));
       const invalid=e.indexed(device,highVertices,iptr,102,high+1,2)>>>0;
       const invalidMessage=bridge.lastError&&bridge.lastError.message;
       calls.push(e.buffer(device,out,0));const vb=e.guest_read32(out)>>>0;
@@ -234,7 +242,7 @@ const { compileSrcWasm } = require('./compile-src');
       floats(cptr,[1,1,1,1]);calls.push(e.SetVertexShaderConstantF(device,0,cptr,1));
       // Offset=24, base=-2 and min=2 jointly address the three real vertices.
       calls.push(e.buffer_draw(device,-2,2,3,1),e.Present(device));
-      const bufferPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const bufferPixel=px((8*16+8));
       const badBufferRange=e.buffer_draw(device,-3,2,3,1)>>>0;
       const badIndexRange=e.buffer_draw(device,-2,2,3,2)>>>0;
       calls.push(e.buffer_lock(vb,out));const lockedDraw=e.buffer_draw(device,-2,2,3,1)>>>0;
@@ -251,7 +259,7 @@ const { compileSrcWasm } = require('./compile-src');
       calls.push(e.GetFVF(device,out));const declarationFVF=e.guest_read32(out);
       floats(cptr,[0.5,0.5,0.5,1]);calls.push(e.SetVertexShaderConstantF(device,0,cptr,1));
       calls.push(e.DrawPrimitive(device,4,1,1),e.Present(device));
-      const declarationPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const declarationPixel=px((8*16+8));
       // Same TEX instruction, specialized from the actual bound resource type.
       calls.push(e.cube_create(device,out));const cube=e.guest_read32(out)>>>0;
       const cubeColors=[0xffff0000,0xff00ff00,0xff0000ff,0xffffff00,0xffff00ff,0xff00ffff];
@@ -267,10 +275,10 @@ const { compileSrcWasm } = require('./compile-src');
       for(const direction of directions){
         floats(vptr,[-1,-1,0.25,1,...direction,3,-1,0.25,1,...direction,-1,3,0.25,1,...direction]);
         calls.push(e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-        cubePixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4)));
+        cubePixels.push(px((8*16+8)));
       }
       calls.push(e.cube_lod(cube,1),e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-      const cubeMipPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const cubeMipPixel=px((8*16+8));
       calls.push(e.sampler_state(device,4,0xff123456),e.sampler_state(device,8,0xbf400000),e.sampler_state(device,9,1));
       const badMipBias=e.sampler_state(device,8,0x7fc00000)>>>0;
       const unsupportedMipState=e.DrawPrimitiveUP(device,4,1,vptr,28)>>>0;
@@ -285,7 +293,7 @@ const { compileSrcWasm } = require('./compile-src');
       calls.push(e.SetTexture(device,0,texture),e.SetFVF(device,0x4102));
       floats(vptr,[-1,-1,0.25,1,0.5,0.5,3,-1,0.25,1,0.5,0.5,-1,3,0.25,1,0.5,0.5]);
       calls.push(e.DrawPrimitiveUP(device,4,1,vptr,24),e.Present(device));
-      const restored2DPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const restored2DPixel=px((8*16+8));
       write(vsCode,[0xfffe0101,1,0xc00f0000,0x90e40000,
         1,0xe00f0000,0xa0e40000,1,0xe00f0001,0xa0e40001,0xffff]);
       write(psCode,[0xffff0101,66,0xb00f0000,66,0xb00f0001,
@@ -298,7 +306,7 @@ const { compileSrcWasm } = require('./compile-src');
         calls.push(e.SetTexture(device,0,reverse?texture:cube),e.SetTexture(device,1,reverse?cube:texture));
         floats(cptr,reverse?[0.5,0.5,0,1,1,0,0,1]:[1,0,0,1,0.5,0.5,0,1]);
         calls.push(e.SetVertexShaderConstantF(device,0,cptr,2),e.DrawPrimitiveUP(device,4,1,vptr,24),e.Present(device));
-        mixedPixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4)));
+        mixedPixels.push(px((8*16+8)));
       }
       const viewportPtr=cptr+800;
       e.guest_write32(viewportPtr+24,0x12345678);
@@ -314,8 +322,8 @@ const { compileSrcWasm } = require('./compile-src');
         e.SetTexture(device,0,texture),e.SetRenderState(device,7,0));
       floats(cptr,[1,0,0,1]);calls.push(e.SetVertexShaderConstantF(device,0,cptr,1));
       calls.push(e.DrawPrimitiveUP(device,4,1,vptr,24),e.Present(device));
-      const viewportPixels=[Array.from(new Uint8Array(memory.buffer,ptr+(3*16+6)*4,4)),
-        Array.from(new Uint8Array(memory.buffer,ptr+(3*16+2)*4,4))];
+      const viewportPixels=[px((3*16+6)),
+        px((3*16+2))];
       // Null shaders select real fixed-function state, not replacement bytecode.
       write(viewportPtr,[0,0,16,16]);floats(viewportPtr+16,[0,1]);
       calls.push(e.SetViewport(device,viewportPtr),e.SetVertexShader(device,0),e.SetPixelShader(device,0),
@@ -334,7 +342,7 @@ const { compileSrcWasm } = require('./compile-src');
         floats(vptr+i*24+16,[0.5,0.5]);
       }
       calls.push(e.DrawPrimitiveUP(device,4,1,vptr,24),e.Present(device));
-      const fixedPixel=Array.from(new Uint8Array(memory.buffer,ptr+(8*16+8)*4,4));
+      const fixedPixel=px((8*16+8));
       // POSITIONT ignores those transforms and uses absolute viewport coordinates.
       calls.push(e.SetFVF(device,0x144),e.SetRenderState(device,22,3));
       for(const [i,x,y] of [[0,2,2],[1,14,2],[2,2,14]]){
@@ -343,18 +351,18 @@ const { compileSrcWasm } = require('./compile-src');
       }
       calls.push(e.SetRenderState(device,15,1),e.SetRenderState(device,25,5),e.SetRenderState(device,24,200),
         e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-      const alphaRejected=Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4));
+      const alphaRejected=px((4*16+4));
       calls.push(e.SetRenderState(device,24,100),e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-      const transformedPixel=Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4));
-      const transformedOutside=Array.from(new Uint8Array(memory.buffer,ptr+(14*16+14)*4,4));
+      const transformedPixel=px((4*16+4));
+      const transformedOutside=px((14*16+14));
       calls.push(e.SetRenderState(device,22,2));
       for(let i=0;i<3;i++)e.guest_write32(vptr+i*28+16,0xff0000ff);
       calls.push(e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-      const culledPixel=Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4));
+      const culledPixel=px((4*16+4));
       calls.push(e.SetRenderState(device,22,3));
       for(let i=0;i<3;i++)e.guest_write32(vptr+i*28+16,0x8000ff00);
       calls.push(e.SetTexture(device,0,0),e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-      const untexturedPixel=Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4));
+      const untexturedPixel=px((4*16+4));
       // A 2x2 one-level texture with MIPFILTER enabled remains complete.
       const gpuDevice=bridge.devices.get(device).device;
       gpuDevice.uploadTexture(0,{width:2,height:2,pixels:new Uint8Array(16).fill(255),
@@ -372,7 +380,7 @@ const { compileSrcWasm } = require('./compile-src');
         calls.push(e.unlock_texture(t),e.SetTexture(device,0,t),e.SetTextureStageState(device,0,5,2));
         for(let i=0;i<3;i++)e.guest_write32(vptr+i*28+16,0xffffffff);
         calls.push(e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-        compressedPixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4)));
+        compressedPixels.push(px((4*16+4)));
       }
       // The three uncompressed widths B&W2's land asks for -- one byte (L8),
       // two (R5G6B5) and three (R8G8B8) -- through the same real GPU path, so
@@ -388,7 +396,7 @@ const { compileSrcWasm } = require('./compile-src');
         calls.push(e.unlock_texture(t),e.SetTexture(device,0,t),e.SetTextureStageState(device,0,5,2));
         for(let i=0;i<3;i++)e.guest_write32(vptr+i*28+16,0xffffffff);
         calls.push(e.DrawPrimitiveUP(device,4,1,vptr,28),e.Present(device));
-        narrowPixels.push(Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4)));
+        narrowPixels.push(px((4*16+4)));
       }
       calls.push(e.SetRenderState(device,28,1));
       const fixedFog=e.DrawPrimitiveUP(device,4,1,vptr,28)>>>0;
@@ -413,7 +421,7 @@ const { compileSrcWasm } = require('./compile-src');
       const floatBits=x=>new Uint32Array(new Float32Array([x]).buffer)[0];
       bumpIDs.forEach((id,i)=>calls.push(e.SetTextureStageState(device,1,id,floatBits(bumpValues[i]))));
       calls.push(e.DrawPrimitiveUP(device,4,1,vptr,16),e.Present(device));
-      const bumpPixel=Array.from(new Uint8Array(memory.buffer,ptr+(4*16+4)*4,4));
+      const bumpPixel=px((4*16+4));
       // Reusing guest storage after submission cannot mutate the owned payload.
       calls.push(e.lock_texture(bumpTexture,out));write(e.guest_read32(out+4),[0]);calls.push(e.unlock_texture(bumpTexture));
       bumpIDs.forEach(id=>calls.push(e.SetTextureStageState(device,1,id,0)));
