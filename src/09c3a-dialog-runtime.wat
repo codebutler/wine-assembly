@@ -92,6 +92,17 @@
       (then (return (call $dialog_default_proc
         (local.get $hwnd) (local.get $msg)
         (local.get $wParam) (local.get $lParam)))))
+    ;; $WNDPROC_BUILTIN is an emulator routing sentinel, not executable guest
+    ;; code. Public SendMessage/CallWindowProc already recognize it; keep this
+    ;; internal synchronous path on the same invariant or an unclassified
+    ;; built-in/common-control window sends 0xFFFE0001 into the x86 decoder.
+    (if (i32.eq (local.get $wp) (global.get $WNDPROC_BUILTIN))
+      (then
+        (if (local.get $ctrl_class)
+          (then (return (call $control_wndproc_dispatch
+            (local.get $hwnd) (local.get $msg)
+            (local.get $wParam) (local.get $lParam)))))
+        (return (i32.const 0))))
     ;; WAT-native (>= 0xFFFF0000)
     (if (i32.ge_u (local.get $wp) (i32.const 0xFFFF0000))
       (then (return (call $wat_wndproc_dispatch
