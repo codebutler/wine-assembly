@@ -476,10 +476,13 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
   )
 
-  ;; 761: OleUninitialize() calls CoUninitialize internally on Windows.
+  ;; 761: OleUninitialize() calls CoUninitialize internally on Windows. The
+  ;; runtime has no additional OLE-service teardown, so keep the public entry
+  ;; point but share the canonical current-thread balance and ABI path.
   (func $handle_OleUninitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $com_uninitialize_current)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
+    (call $handle_CoUninitialize
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; OleRun/OleIsRunning/OleLockRunning maintain real lifecycle state for the
