@@ -62,17 +62,38 @@ assert.deepStrictEqual(specificity('#perf-hud canvas'), [1, 0, 1],
 assert.deepStrictEqual(specificity('#perf-hud#perf-hud canvas'), [2, 0, 1],
   'specificity(): a repeated id counts twice');
 
-// What the HUD actually injects, read out of the source rather than restated,
-// so editing the rule and not this test cannot pass.
-const hudSelectors = [...perfHud.matchAll(/'(#perf-hud[^']*)'/g)].map(m => m[1]);
-assert.ok(hudSelectors.length, 'perf-hud.js still injects an id-scoped rule');
-const hudCanvas = hudSelectors.filter(s => /canvas/.test(s));
-assert.ok(hudCanvas.length, 'perf-hud.js still guards its own canvas');
+// Every overlay whose <canvas> is in this page and survives those rules by
+// SPECIFICITY, read out of the source rather than restated, so editing the
+// rule and not this test cannot pass.
+//
+// The other attached canvases, and why none of them is here: #touch-cursor is
+// exempted by name (`:not(#touch-cursor)`) in the full-bleed rules and lives
+// on <body>, outside #screen-wrap; gpu-backend's presentation canvas is never
+// attached to the document, so no stylesheet reaches it; and the power-off
+// logo is covered by the note below.
+const overlays = [
+  {
+    what: 'lib/perf-hud.js FPS graph',
+    id: '#perf-hud',
+    selectors: [...perfHud.matchAll(/'(#perf-hud[^']*)'/g)].map(m => m[1]),
+  },
+];
+// lib/shutdown.js's power-off logo is the same shape and its rule is only
+// (1,1,1), so several of those full-bleed rules do outrank it -- but it is
+// NOT listed here, because specificity is not what protects it: fit() sets
+// its width and height as inline !important declarations, which outrank every
+// stylesheet rule. Checked, not assumed: test-web-shutdown measures that
+// logo's box inside element fullscreen and passes with the (1,1,1) selector.
+// Requiring it to win on specificity would be a false requirement.
+for (const overlay of overlays) {
+  assert.ok(overlay.selectors.length,
+    `${overlay.what} no longer injects an id-scoped rule`);
+}
 
 // Every selector in index.html's stylesheet that matches a bare canvas and so
-// would also capture the HUD's. A rule naming #perf-hud would be deliberate
-// and is excluded; #touch-cursor and #screen-canvas-stack name other elements
-// the HUD's canvas is not.
+// would also capture an overlay's. A rule naming an overlay by id would be
+// deliberate and is excluded; #touch-cursor and #screen-canvas-stack name
+// other elements these canvases are not.
 // Comments come out FIRST: index.html's stylesheet is heavily commented, and
 // prose sitting just above a rule is otherwise swept up as part of its
 // selector (a 27-word "selector" at specificity (2,0,27) that outranks
@@ -86,46 +107,61 @@ const competing = [...css.matchAll(/(^|[}\n])([^{}@]+)\{/g)]
   .split(',')
   .map(s => s.trim())
   .filter(s => /(^|[\s>+~])canvas(?![\w-])/.test(s))
-  .filter(s => !/#perf-hud|#touch-cursor(?![\w-])\s*\{?$/.test(s))
   .filter(s => !/#screen-canvas-stack/.test(s))
-  .filter(s => !s.includes('#perf-hud'));
+  .filter(s => !overlays.some(o => s.includes(o.id)));
 
 assert.ok(competing.length >= 2,
   `expected index.html to still style bare canvases, found ${competing.length}`);
 
-// Only an UNCONDITIONAL guard counts. A state-gated one
-// (`#screen-wrap:fullscreen #perf-hud canvas`, (2,1,1)) scores higher than the
-// rule that has to carry every other state, so ranking by the best selector
-// would have called the old, broken list healthy. Rank by the weakest-case
-// rule that is always in force instead: no class, no pseudo-class, no id but
-// the HUD's own.
-const unconditional = hudCanvas.filter(s => !/[.:]|#(?!perf-hud\b)/.test(s));
-assert.ok(unconditional.length,
-  'perf-hud.js must guard its canvas with a rule that applies in every page'
-  + ` state; found only state-gated ones: ${hudCanvas.join(' | ')}`);
-const best = unconditional.map(specificity).sort(compare).pop();
 let checked = 0;
-for (const selector of competing) {
-  const theirs = specificity(selector);
-  assert.ok(compare(best, theirs) > 0,
-    `the HUD canvas rule ${show(best)} does not outrank\n  ${selector}\n  ${show(theirs)}`
-    + '\nAdd specificity to the HUD rule in lib/perf-hud.js -- repeat its id,'
-    + ' do not enumerate another body state.');
-  checked++;
+for (const overlay of overlays) {
+  const guards = overlay.selectors.filter(s => /(^|[\s>+~])canvas(?![\w-])/.test(s));
+  assert.ok(guards.length, `${overlay.what} no longer guards its own canvas`);
+
+  // Only an UNCONDITIONAL guard counts. A state-gated one
+  // (`#screen-wrap:fullscreen #perf-hud canvas`, (2,1,1)) scores higher than
+  // the rule that has to carry every OTHER state, so ranking by the best
+  // selector would have called the old, broken list healthy. Rank by the
+  // weakest rule that is always in force. "Gated" here means it depends on
+  // something outside the overlay -- <body>, <html>, a pseudo-class, or a
+  // foreign id. A class on the canvas itself (.logo) is not a gate: the
+  // element always carries it.
+  const unconditional = guards.filter(s => !/\b(?:body|html)\b|:|#(?!\w)/
+    .test(s.split(overlay.id).join(' ')));
+  assert.ok(unconditional.length,
+    `${overlay.what} must guard its canvas with a rule that applies in every`
+    + ` page state; found only gated ones: ${guards.join(' | ')}`);
+
+  const best = unconditional.map(specificity).sort(compare).pop();
+  for (const selector of competing) {
+    const theirs = specificity(selector);
+    assert.ok(compare(best, theirs) > 0,
+      `${overlay.what}: its canvas rule ${show(best)} does not outrank\n`
+      + `  ${selector}\n  ${show(theirs)}\n`
+      + 'Add specificity by repeating the overlay id -- do NOT enumerate'
+      + ' another body state, that is the list that goes stale.');
+    checked++;
+  }
+  console.log(`      ${overlay.what}: ${show(best)} beats all ${competing.length}`
+    + `  [${unconditional.join(', ')}]`);
 }
 
 // The regression itself, pinned so the reasoning above cannot rot: the guard
-// this replaced really did lose to the rule index.html grew, and the state it
-// lost in is the only state the HUD runs in. The FPS toggle lives in the
-// ?debug toolbar, and ?debug is precisely what makes `:not(.no-debug)` true.
-const offender = 'body:not(.no-debug).exclusive-fullscreen canvas:not(#touch-cursor)';
-assert.ok(css.includes('.exclusive-fullscreen canvas:not(#touch-cursor)'),
-  'index.html still has the full-bleed exclusive-fullscreen canvas rule');
-assert.ok(compare(specificity('#perf-hud canvas'), specificity(offender)) < 0,
-  'the historical single-id guard is supposed to LOSE to the offender; if this'
-  + ' fails the calculator is wrong, not the shell');
-assert.ok(compare(best, specificity(offender)) > 0,
-  'the current guard must beat it');
+// this replaced really did lose to a rule index.html grew, in the state the
+// HUD actually appears in. The FPS toggle lives in the ?debug toolbar, and
+// ?debug is precisely what makes `:not(.no-debug)` true -- so the variant its
+// old list did cover (no-debug) was the one it can never run in.
+for (const [was, offender, why] of [
+  ['#perf-hud canvas',
+    'body:not(.no-debug).exclusive-fullscreen canvas:not(#touch-cursor)',
+    'the FPS graph in a ?debug session on an app that takes the display'],
+]) {
+  assert.ok(css.includes(offender.replace(/^body[^ ]* /, '')),
+    `index.html still has the full-bleed rule behind "${why}"`);
+  assert.ok(compare(specificity(was), specificity(offender)) < 0,
+    `"${was}" is supposed to LOSE to "${offender}" -- that is the bug this`
+    + ' test pins. If this fails the calculator is wrong, not the shell.');
+}
 
-console.log(`PASS  unconditional HUD canvas rule '${unconditional.join("','")}'`
-  + ` ${show(best)} outranks all ${checked} bare-canvas rules in index.html`);
+console.log(`PASS  ${overlays.length} overlay canvases outrank every full-bleed`
+  + ` rule in index.html (${checked} comparisons), none by naming a body state`);
