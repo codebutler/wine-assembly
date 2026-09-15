@@ -2121,7 +2121,23 @@
     "name": "GetEnvironmentVariableA",
     "nargs": 3,
     "convention": "stdcall",
-    "hash": 3285486435
+    "hash": 3285486435,
+    "args": [
+      {
+        "name": "lpName",
+        "type": "LPCSTR"
+      },
+      {
+        "name": "lpBuffer",
+        "type": "LPSTR",
+        "out": true
+      },
+      {
+        "name": "nSize",
+        "type": "DWORD"
+      }
+    ],
+    "ret": "DWORD"
   },
   {
     "id": 231,
