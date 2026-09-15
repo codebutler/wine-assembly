@@ -806,3 +806,90 @@ Lock/Unlock trace.
 - Use `--watch-log` on `0x631e8c`, `0x631e98`, and `0x631e9c` only as clock
   plumbing. Confirm any proposed frame boundary against canvas hashes while
   Smacker counts and DirectSound/Storm `#261` counts remain flat.
+
+### `0x004b4880` is the GRP blit nest, it is 30% of gameplay, and it is NOT folded
+
+Measured 2026-09-15 in a frozen `--control` session at supply 15-16/42, main
+thread, `--no-threads`. One 100-batch window: 23,252,268 block entries,
+115,770,179 ops (**5.0 ops/block**), of which the `0x4b48xx` nest is **30.0%**.
+It is the single hottest thing in the game, well ahead of Storm's decompressor.
+
+The shape is an RLE sprite blitter with a palette LUT at `0x4e8701`. A token
+byte at `[ebp]` selects one of three arms from the head at `0x4b4892`:
+
+| arm | token | what it does |
+|---|---|---|
+| `0x4b48e3` | `dl & 0x80` | transparent skip -- `add edi, edx`, touches no memory |
+| `0x4b48d7` | `dl & 0x40` | **fill run** -- one LUT'd byte stored `edx` times (self-loop) |
+| `0x4b48aa` | else | **literal run** -- per byte `[ebp]` -> LUT -> `[edi-1]` (self-loop) |
+
+Both inner loops are **self-loops**, so `$loop_match_block` does see them, and
+`tools/match-loops.js` accepts both statically (`0x4b48aa` LUT_RUN size=1
+stride=1, `0x4b48d7` FILL_RUN size=1 stride=1). The runtime matcher declines
+both. `--loopmatch-stats` for the main instance over a run that reaches
+gameplay: **self-loop blocks decoded 10426, matched 4**, `bounded LUT matches 0`.
+
+Do not mistake the hit counts for folded runs. In the same window `0x4b48aa`
+was entered 1,797,797 times against 382,721 entries of its exit block
+`0x4b48bb` -- 4.7 entries per run, i.e. one block transfer per *pixel*.
+`0x4b48d7` is 16x per run. A folded loop would enter once per run.
+
+**Why `0x4b48aa` declines, exactly.** `src/07b-loop-match.wat:1910` (and the
+bounded twin at :2237) is a hard gate, `zero_cnt != 1 -> decline`, and the
+comment at :1848 states the rule: the LUT accumulator must have been zeroed
+*in-block*, because a byte load writes only the low 8 bits and the table read
+has to be provably bounded to 0..255. StarCraft's `xor eax, eax` is at
+`0x4b48a7` -- in the **predecessor** block, not the loop body. Every LUT loop
+that does match (Heroes II `0x004c755d`, StarCraft's own `0x4848e0` /
+`0x49e073`) carries its `xor` inside the body. That one condition is the whole
+difference.
+
+`0x4b48d7` declines for a different reason: the runtime matcher has **no
+generic FILL_RUN family at all**. Its fill lowerings are the exact AoE ones
+(`$loop_aoe_fill`); `FILL_RUN` exists only in `tools/match-loops.js`, which
+models the design doc rather than the shipped WAT. Do not read a static match
+as a claim about the runtime.
+
+Ops emitted for the two bodies, from `--trace-loopmatch` + `loopmatch-decode.js`:
+
+```
+block 0x4b48aa  7 ops        block 0x4b48d7  4 ops
+   28 th_load8_ro  op=0x5       29 th_store8_ro op=0x7
+   64 th_inc_r     op=0x5       64 th_inc_r     op=0x7
+   28 th_load8_ro  op=0x30      65 th_dec_r     op=0x2
+   64 th_inc_r     op=0x7      312 th_jcc_nz    op=0x0
+   65 th_dec_r     op=0x2
+   29 th_store8_ro op=0x37
+  312 th_jcc_nz    op=0x0
+```
+
+Every op carries a classified role, so role classification is not the blocker.
+
+### Cost per game frame is flat, and it is not view-dependent
+
+Eleven 150-batch windows (30s game time each) in one frozen session, counting
+block entries at `0x004411e7` as frames:
+
+```
+241040  244968  227524  249220  256626  234888  244560  246776  254041
+busy base view 240838      fully fogged view 212016
+```
+
+Spread is +-8% around ~240k. Moving the camera to fully-fogged black terrain --
+no sprites drawn at all -- lowered it only 13.6%, so **~85% of a game frame's
+cost is view-independent**. The `0x4b48aa` literal-run block does drop out of
+first place under fog (`0x4b48d7` leads there instead), so it is genuinely the
+sprite work; it just is not what sets the floor.
+
+CORRECTION to the "82,818 blocks per game frame" baseline recorded above: that
+figure is a whole-run average (38,096,358 blocks / 460 frames) that includes
+boot, menus and the intro, where frames are cheap. It is not comparable to an
+in-gameplay window, and the "3.6x growth as units are built" reading taken from
+comparing the two does not survive. Against gameplay-only windows, per-frame
+cost has been flat at ~240k throughout, from supply 12/42 to 16/42.
+
+Where the hot loop *did* shift is between scenes, not with unit count: in an
+earlier gameplay window Storm cluster A (`7c108b/97/ad/ce`) led at 15.68% and
+`0x4b48aa` was not on top; in these windows cluster A is 5-8% and the
+`0x4b48xx` nest is 30%. Per `tools/hot-loop-census.js`'s rule, read the spread
+across windows, not one window.
