@@ -9,6 +9,8 @@ const RSRC_RVA = 0x16000;
 const DATA_RVA = 0x17000;
 
 const extraWat = String.raw`
+  (global $test_statusbar_dispatch_eip (mut i32) (i32.const 0))
+
   (func (export "test_create_statusbar") (param $text_g i32) (result i32)
     (local $hwnd i32) (local $slot i32)
     (local.set $hwnd (global.get $next_hwnd))
@@ -54,6 +56,28 @@ const extraWat = String.raw`
     (call $paint_drain_native_control_paints))
   (func (export "test_statusbar_drain") (result i32)
     (call $paint_drain_native_control_paints))
+  (func (export "test_statusbar_dispatch_erase")
+      (param $hwnd i32) (param $msg_g i32) (result i32)
+    (local $before i32)
+    ;; Match the real registered COMCTL32 status: its layout wndproc is x86,
+    ;; while USER's dispatch boundary owns the WAT shared-surface mirror.
+    (call $wnd_table_set (local.get $hwnd) (i32.const 0x00401000))
+    (call $gs32 (local.get $msg_g) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $msg_g) (i32.const 4)) (i32.const 0x0014))
+    (call $gs32 (i32.add (local.get $msg_g) (i32.const 8))
+      (i32.add (local.get $hwnd) (i32.const 0x40000)))
+    (call $gs32 (i32.add (local.get $msg_g) (i32.const 12)) (i32.const 0))
+    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (global.get $esp))
+    (call $gs32 (global.get $esp) (i32.const 0x00401234))
+    (global.set $eip (i32.const 0x0040AAAA))
+    (call $handle_DispatchMessageA
+      (local.get $msg_g)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.set $test_statusbar_dispatch_eip (global.get $eip))
+    (i32.sub (global.get $esp) (local.get $before)))
+  (func (export "test_statusbar_dispatch_eip") (result i32)
+    (global.get $test_statusbar_dispatch_eip))
   (func (export "test_string_load_w")
       (param $hinst i32) (param $id i32) (param $buf_g i32) (result i32)
     (local $len i32)
@@ -186,6 +210,14 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_menu_help(0x011f, 0xffff0000, 0, main, IMAGE_BASE, status, ids), 32);
   assert.strictEqual(title(status), 'Ready',
     'the menu-close sentinel restores the ordinary status pane');
+
+  const eraseMsg = e.guest_alloc(16) >>> 0;
+  assert.strictEqual(e.test_statusbar_dispatch_erase(status, eraseMsg), 8,
+    'native status erase completes as the one-argument DispatchMessage call');
+  assert.strictEqual(e.test_statusbar_dispatch_eip() >>> 0, 0x0040aaaa,
+    'native status erase is completed by USER without entering the guest wndproc');
+  assert.strictEqual(e.get_eax() >>> 0, 1,
+    'native status erase reports that its face was painted');
 
   assert(e.test_statusbar_state_ptr(status), 'status bar owns its two text panes');
   e.test_destroy_statusbar(status);

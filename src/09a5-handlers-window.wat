@@ -2490,6 +2490,24 @@
     ;; expose stale view/scrollbar pixels.
     (if (i32.and
           (call $statusbar_native_is (call $gl32 (local.get $arg0)))
+          (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 4))) (i32.const 0x0014)))
+      (then
+        ;; COMCTL32's queued erase is delivered after the eager exposure pass.
+        ;; If its incomplete guest painter is allowed to own that message it
+        ;; leaves a flat gray bar, then GetMessage sleeps with no paint left to
+        ;; restore the retained caption. The WAT mirror fills the whole face,
+        ;; so finish the erase with that authoritative paint atomically.
+        (call $nc_flags_clear (call $gl32 (local.get $arg0)) (i32.const 2))
+        (call $update_clear_hwnd (call $gl32 (local.get $arg0)))
+        (call $paint_flag_clear_hwnd (call $gl32 (local.get $arg0)))
+        (drop (call $statusbar_wndproc
+          (call $gl32 (local.get $arg0)) (i32.const 0x000F)
+          (i32.const 0) (i32.const 0)))
+        (global.set $eax (i32.const 1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (i32.and
+          (call $statusbar_native_is (call $gl32 (local.get $arg0)))
           (i32.eq (call $gl32 (i32.add (local.get $arg0) (i32.const 4))) (i32.const 0x000F)))
       (then
         (call $update_clear_hwnd (call $gl32 (local.get $arg0)))
