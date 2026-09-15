@@ -1292,7 +1292,13 @@ class WineAssembly {
             for (let i = 0; i < Math.min(entry.nargs || 0, 8); i++) {
               raw.push(ex.guest_read32((esp + 4 + i * 4) >>> 0) >>> 0);
             }
-            suffix = `(${raw.map(v => `0x${v.toString(16).padStart(8, '0')}`).join(', ')})`;
+            // The word at ESP on entry to a stdcall thunk is the return
+            // address, i.e. the instruction after the call. "Which of the 117
+            // callers was this one" is the question every API trace ends at,
+            // and the answer is already on the guest stack.
+            const ret = ex.guest_read32(esp) >>> 0;
+            suffix = `(${raw.map(v => `0x${v.toString(16).padStart(8, '0')}`).join(', ')})`
+              + ` ret=0x${ret.toString(16).padStart(8, '0')}`;
             // Browser acceptance tests occasionally need to distinguish two
             // calls whose raw pointers are different but opaque. Keep the
             // normal lightweight trace unchanged; the opt-in detail flag
@@ -1689,15 +1695,105 @@ class WineAssembly {
   // the entire accumulated log and forces a layout on each call, so a long
   // session got steadily slower at exactly the moments the user was interacting.
   // Appending a text node is O(1), and the ring keeps the DOM bounded.
+  // The two blocks that ran before EIP went to zero, each named relative to the
+  // module it lives in. A raw runtime address is useless against a disassembly
+  // -- every DLL is relocated -- and `module+0xVA` is the form every tool here
+  // (disasm_fn, xrefs, --count, --break) already takes.
+  _exitSiteText() {
+    const ex = this.instance && this.instance.exports;
+    if (!ex || !ex.get_dbg_prev_eip) return '';
+    const hex = v => '0x' + ((v >>> 0).toString(16).padStart(8, '0'));
+    const name = addr => {
+      let best = null;
+      for (const key of Object.keys(this.moduleBases || {})) {
+        if (key.indexOf('.') < 0) continue;     // both spellings map to one entry
+        const m = this.moduleBases[key];
+        if (addr >= m.loadAddr && (!best || m.loadAddr > best.m.loadAddr)) best = { key, m };
+      }
+      if (!best) return hex(addr);
+      return `${best.key}+${hex(addr - best.m.loadAddr + best.m.origBase)}`;
+    };
+    const prev = ex.get_dbg_prev_eip() >>> 0;
+    const prev2 = ex.get_dbg_prev2_eip ? ex.get_dbg_prev2_eip() >>> 0 : 0;
+    // The registers as the last block left them. A NULL call is almost always
+    // an indirect one, so `this` and the table it was read through are what
+    // says WHICH object was not set up -- and they are gone the moment
+    // anything else runs.
+    const reg = (n, get) => (get ? ` ${n}=${hex(get.call(ex) >>> 0)}` : '');
+    // Walk the EBP frame chain for the callers. The last block is usually a
+    // two-instruction dispatch thunk shared by a hundred call sites, so it
+    // names the mechanism and never the subsystem; the frames do.
+    let frames = '';
+    if (ex.get_ebp && ex.guest_read32) {
+      const seen = [];
+      let ebp = ex.get_ebp() >>> 0;
+      for (let i = 0; i < 8 && ebp && !seen.includes(ebp); i++) {
+        seen.push(ebp);
+        const ret = ex.guest_read32((ebp + 4) >>> 0) >>> 0;
+        if (!ret) break;
+        frames += `\n    frame ${i}: ${hex(ret)} (${name(ret)})`;
+        ebp = ex.guest_read32(ebp) >>> 0;
+      }
+    }
+    return `last block ${hex(prev)} (${name(prev)})` +
+      (prev2 ? `, before it ${hex(prev2)} (${name(prev2)})` : '') +
+      reg('eax', ex.get_eax) + reg('ecx', ex.get_ecx) + reg('edx', ex.get_edx) +
+      reg('esi', ex.get_esi) + reg('esp', ex.get_esp) + frames;
+  }
+
   logToUI(msg) {
     if (typeof window !== 'undefined' && window.WINE_RUNTIME_LOGGING === false) return;
     console.log(msg);
     const el = document.getElementById('log');
     if (!el) return;
-    el.appendChild(document.createTextNode(msg + '\n'));
-    const MAX_LOG_NODES = 2000;
-    while (el.childNodes.length > MAX_LOG_NODES) el.removeChild(el.firstChild);
-    el.scrollTop = el.scrollHeight;
+    // Appending a text node invalidates layout, and reading scrollHeight on
+    // the very next line forces the browser to redo that layout before it can
+    // answer. Interleaved once per line over this pane's 2000 nodes, that
+    // measured 4.3ms A LINE, against the 26us the same three operations cost
+    // when they are not interleaved -- 165x, and enough to saturate the main
+    // thread at ~230 lines a second. An API-heavy guest passes that without
+    // trying: Warcraft III makes ~690k Win32 calls in 40s, and every input
+    // event logs a line of its own.
+    //
+    // So buffer the text and touch the DOM once per animation frame: one
+    // append and one scroll for the whole frame, however many lines arrived
+    // in it. Where there is no requestAnimationFrame -- the vm context
+    // test-runtime-log-toggle.js runs host.js in -- write through
+    // synchronously, so "the line reached the pane" stays observable on the
+    // call itself.
+    const MAX_LOG_LINES = 2000;
+    const queue = this._logQueue || (this._logQueue = []);
+    queue.push(msg);
+    // The pane never shows more than MAX_LOG_LINES, so text queued beyond
+    // that within one frame is work whose result is discarded before anyone
+    // could see it.
+    if (queue.length > MAX_LOG_LINES) queue.splice(0, queue.length - MAX_LOG_LINES);
+    if (this._logFlushQueued) return;
+    const flush = () => {
+      this._logFlushQueued = false;
+      const pane = document.getElementById('log');
+      const lines = this._logQueue;
+      this._logQueue = [];
+      if (!pane || !lines.length) return;
+      const node = document.createTextNode(lines.join('\n') + '\n');
+      pane.appendChild(node);
+      // Track lines per appended node. The cap is a number of LINES, and one
+      // node now holds a whole frame's worth, so trimming by childNodes would
+      // drop an unpredictable amount of history instead of one line.
+      const chunks = this._logChunks || (this._logChunks = []);
+      chunks.push({ node, lines: lines.length });
+      let total = 0;
+      for (const chunk of chunks) total += chunk.lines;
+      while (chunks.length > 1 && total > MAX_LOG_LINES) {
+        const oldest = chunks.shift();
+        total -= oldest.lines;
+        if (oldest.node.parentNode === pane) pane.removeChild(oldest.node);
+      }
+      pane.scrollTop = pane.scrollHeight;
+    };
+    if (typeof requestAnimationFrame !== 'function') { flush(); return; }
+    this._logFlushQueued = true;
+    requestAnimationFrame(flush);
   }
 
   async ensureUiFontsReady() {
@@ -1777,8 +1873,31 @@ class WineAssembly {
     // machine happens to have, at whatever metrics it happens to use.
     await this.loadSubstituteFonts();
 
-    // Create shared memory externally
-    this.memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
+    // Create shared memory externally. 8192 pages (512MB) is what every device
+    // gets; an app that has been measured to exhaust the 316MB sparse backing
+    // pool may ask for more with `bigMemory: true` in lib/apps.js, and
+    // everything above 0x20000000 becomes the extension backing window. The
+    // import is (memory 8192 32768 shared), so the same wasm accepts any of
+    // these, and a device that cannot spare the pages simply fails here
+    // instead of mysteriously later -- so step down rather than refusing to
+    // launch at all, and let the app hit the original ceiling.
+    //
+    // 2GB rather than 1GB because B&W2's land load was measured needing it:
+    // 792MB of backing live when the loader asks for one more 430MB range,
+    // against the 828MB a 1GB memory provides.
+    const ladder = this.bigMemory ? [32768, 16384, 8192] : [8192];
+    let lastError = null;
+    for (const pages of ladder) {
+      try {
+        this.memory = new WebAssembly.Memory({ initial: pages, maximum: pages, shared: true });
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        console.warn(`[wine] ${pages / 16}MB guest memory refused (${e && e.message})`);
+      }
+    }
+    if (lastError) throw lastError;
     imports.host.memory = this.memory;
     // Kept so stop() can put it back to null. Every closure in getImports()
     // captures this object, and several of them outlive the app (the audio
@@ -2615,6 +2734,19 @@ class WineAssembly {
         this.hostCtx && this.hostCtx.sharedAudio);
       results = _loadDlls(this.instance.exports, this.memory.buffer, exeBytes, readyConfigs, console.log, opts);
     }
+    // Where a `module+0xVA` probe in the browser gets its arithmetic from. The
+    // original image base is only on disk: the loader copies sections, not the
+    // DOS/PE headers, so reading it back out of guest memory yields 0 and every
+    // resolved address silently comes out one image base too low. run.js keeps
+    // the same map for the same reason; this is its browser twin.
+    this.moduleBases = this.moduleBases || {};
+    for (let i = 0; results && i < results.length; i++) {
+      const r = results[i];
+      if (!r || !r.name) continue;
+      const entry = { loadAddr: r.loadAddr >>> 0, origBase: r.origBase >>> 0 };
+      this.moduleBases[String(r.name).toLowerCase()] = entry;
+      this.moduleBases[String(r.name).toLowerCase().replace(/\.[^.]+$/, '')] = entry;
+    }
     // Cooperative threads get their DLL set (and the DllMain entry caller) from
     // here; the worker backend loads them inside each worker instead.
     if (this.threadManager && this.threadManager.setLoadedDlls) {
@@ -3366,7 +3498,7 @@ class WineAssembly {
         if (perf) perf.mark('present', performance.now() - presentStart);
 
         if (!r.eip && !r.yield) {
-          self.logToUI('--- Program exited (worker) ---');
+          self.logToUI(`--- Program exited (worker) --- ${self._exitSiteText()}`);
           self.stop({ repaint: false });
           return;
         }
@@ -4180,7 +4312,13 @@ class WineAssembly {
           }
         }
         if (!self.instance.exports.get_eip() && !self.instance.exports.get_yield_reason()) {
-          self.logToUI('--- Program exited ---');
+          // EIP zero is two very different endings wearing one message: a
+          // guest that returned out of its entry point, and a guest that
+          // called through a NULL function pointer. Only the last two blocks
+          // tell them apart, and an app that runs in the browser alone -- the
+          // whole GL corpus -- has no run.js `[eip-zero]` line to fall back
+          // on, so report them here.
+          self.logToUI(`--- Program exited --- ${self._exitSiteText()}`);
           self.stop();
           return;
         }
