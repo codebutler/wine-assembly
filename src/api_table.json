@@ -30220,5 +30220,19 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 2180451371
+  },
+  {
+    "id": 3601,
+    "name": "CreatePropertySheetPageW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3809260253
+  },
+  {
+    "id": 3602,
+    "name": "PropertySheetW",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3425593140
   }
 ]

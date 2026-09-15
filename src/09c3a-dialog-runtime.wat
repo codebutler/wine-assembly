@@ -661,6 +661,11 @@
   ;; CreatePropertySheetPageA. The page itself remains application code: its
   ;; resource template is loaded normally and its DLGPROC receives the standard
   ;; initialization and PSN_* notifications.
+  ;; PROPSHEETHEADERA/W share one 32-bit layout. This bit selects how inline
+  ;; page string/resource pointers are interpreted; opaque page handles retain
+  ;; their own encoding in the owned page record.
+  (global $propsheet_pages_wide (mut i32) (i32.const 0))
+
   (func $propsheet_resolve_page (param $index i32) (result i32)
     (local $pages_w i32) (local $psp_g i32) (local $psp_w i32)
     (local $size i32) (local $flags i32) (local $page i32)
@@ -838,12 +843,20 @@
     (global.set $steps (i32.const 0)))
 
   (func $propsheet_show_page (param $index i32) (result i32)
-    (local $psp_g i32) (local $psp_w i32) (local $size i32)
+    (local $psp_g i32) (local $psp_w i32) (local $size i32) (local $flags i32)
+    (local $wide i32)
     (local $page i32) (local $hinst i32) (local $template i32) (local $proc i32)
     (local.set $psp_g (call $propsheet_resolve_page (local.get $index)))
     (if (i32.eqz (local.get $psp_g)) (then (return (i32.const 0))))
     (local.set $psp_w (call $g2w (local.get $psp_g)))
     (local.set $size (i32.load (local.get $psp_w)))
+    (local.set $flags (i32.load offset=4 (local.get $psp_w)))
+    (if (global.get $propsheet_pages_are_handles)
+      (then
+        (local.set $wide
+          (call $propsheet_page_is_wide (local.get $psp_g))))
+      (else
+        (local.set $wide (global.get $propsheet_pages_wide))))
     ;; A page already visited owns a live dialog. Show that exact HWND again;
     ;; do not repeat PSPCB_CREATE, WM_INITDIALOG, resource loading, or control
     ;; construction, because Win98 preserves the page between activations.
@@ -876,12 +889,17 @@
     (local.set $page (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $wnd_table_set (local.get $page) (global.get $WNDPROC_DIALOG))
+    (call $wnd_unicode_set (local.get $page) (local.get $wide))
     (drop (call $dialog_proc_set (local.get $page) (local.get $proc)))
     (call $wnd_set_parent (local.get $page) (global.get $propsheet_frame_hwnd))
     (call $push_rsrc_ctx (local.get $hinst))
     ;; Zero controls is valid: installers commonly use an empty page template
     ;; and create all controls from WM_INITDIALOG.
-    (drop (call $dlg_load (local.get $page) (local.get $template)))
+    (if (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+      (then (global.set $dlg_indirect_template_ptr (local.get $template))))
+    (if (local.get $wide)
+      (then (drop (call $dlg_load_w (local.get $page) (local.get $template))))
+      (else (drop (call $dlg_load (local.get $page) (local.get $template)))))
     (call $pop_rsrc_ctx)
     ;; COMCTL strips WS_DISABLED from a page template and owns visibility.
     (drop (call $wnd_set_style (local.get $page)
@@ -986,15 +1004,18 @@
       (then (return (i32.const 0))))
     (i32.const 1))
 
-  (func $create_property_sheet (param $header_g i32) (result i32)
+  (func $create_property_sheet
+      (param $header_g i32) (param $wide i32) (result i32)
     (local $header_w i32) (local $flags i32) (local $owner i32)
-    (local $caption_g i32) (local $caption_w i32) (local $dlg i32)
+    (local $caption_g i32) (local $caption_w i32) (local $caption_copy i32)
+    (local $caption_len i32) (local $dlg i32)
     (local $start i32)
     (local.set $header_w (call $g2w (local.get $header_g)))
     (if (i32.eqz (call $propsheet_header_valid (local.get $header_w)))
       (then (return (i32.const 0))))
     (local.set $flags (i32.load offset=4 (local.get $header_w)))
     (global.set $propsheet_header (local.get $header_g))
+    (global.set $propsheet_pages_wide (local.get $wide))
     (global.set $propsheet_page_count (i32.load offset=24 (local.get $header_w)))
     (global.set $propsheet_pages (i32.load offset=32 (local.get $header_w)))
     (global.set $propsheet_pages_are_handles
@@ -1015,18 +1036,40 @@
         (return (i32.const 0))))
     (local.set $owner (i32.load offset=8 (local.get $header_w)))
     (local.set $caption_g (i32.load offset=20 (local.get $header_w)))
-    (local.set $caption_w (select (call $g2w (local.get $caption_g)) (i32.const 0) (local.get $caption_g)))
+    (if (local.get $caption_g)
+      (then
+        (if (local.get $wide)
+          (then
+            (local.set $caption_len (call $guest_wcslen (local.get $caption_g)))
+            (local.set $caption_copy
+              (call $heap_alloc (i32.add (local.get $caption_len) (i32.const 1))))
+            (if (i32.eqz (local.get $caption_copy))
+              (then
+                (call $propsheet_page_hwnds_release)
+                (call $propsheet_release_pages)
+                (return (i32.const 0))))
+            (drop (call $wide_to_ansi
+              (local.get $caption_g) (local.get $caption_copy)
+              (i32.add (local.get $caption_len) (i32.const 1))))
+            (local.set $caption_w (call $g2w (local.get $caption_copy))))
+          (else
+            (local.set $caption_w (call $g2w (local.get $caption_g)))
+            (local.set $caption_len (call $strlen (local.get $caption_w)))))))
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $host_register_dialog_frame
       (local.get $dlg) (local.get $owner) (local.get $caption_w)
       (i32.const 440) (i32.const 310) (i32.const 1))
     (call $wnd_table_set (local.get $dlg) (global.get $WNDPROC_CTRL_NATIVE))
+    (call $wnd_unicode_set (local.get $dlg) (local.get $wide))
     (call $wnd_set_owner (local.get $dlg) (local.get $owner))
     (drop (call $wnd_set_style (local.get $dlg) (i32.const 0x90C80000)))
     (call $ctrl_table_set (call $wnd_table_find (local.get $dlg)) (i32.const 32) (i32.const 0))
     (if (local.get $caption_w)
-      (then (call $title_table_set (local.get $dlg) (local.get $caption_w) (call $strlen (local.get $caption_w)))))
+      (then (call $title_table_set
+        (local.get $dlg) (local.get $caption_w) (local.get $caption_len))))
+    (if (local.get $caption_copy)
+      (then (call $heap_free (local.get $caption_copy))))
     (call $defwndproc_do_nccalcsize (local.get $dlg))
     (call $nc_flags_set (local.get $dlg) (i32.const 3))
     (call $dlg_fill_bkgnd (local.get $dlg))

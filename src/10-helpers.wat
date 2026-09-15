@@ -6566,12 +6566,12 @@
       (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
       (br $walk))))
 
-  ;; $dlg_load(dlg_hwnd, dlg_id) → ctrl_count
+  ;; $dlg_load_impl(dlg_hwnd, dlg_id, wide) → ctrl_count
   ;;
   ;; Single entry point for building a dialog from an RT_DIALOG template.
-  ;; Walks the PE resource (via $find_resource — handles both integer IDs
-  ;; and guest string pointers for named entries like freecell's
-  ;; "STATISTICS"), stores the header fields in WND_DLG_RECORDS[slot],
+  ;; Walks the PE resource using the caller's ANSI/UTF-16 named-resource
+  ;; encoding (integer IDs are identical), stores the header fields in
+  ;; WND_DLG_RECORDS[slot],
   ;; allocates one HWND per control with $next_hwnd, fills CONTROL_TABLE,
   ;; sets CONTROL_GEOM, and sends WM_CREATE with a synthesised
   ;; CREATESTRUCT so native control wndprocs initialise their state.
@@ -6580,7 +6580,8 @@
   ;; The caller is expected to have already registered $dlg_hwnd in
   ;; WND_RECORDS via $wnd_table_set — $dlg_load uses the slot index as
   ;; the key into WND_DLG_RECORDS.
-  (func $dlg_load (param $dlg_hwnd i32) (param $dlg_id i32) (result i32)
+  (func $dlg_load_impl
+      (param $dlg_hwnd i32) (param $dlg_id i32) (param $wide i32) (result i32)
     (local $data_entry i32) (local $rva i32) (local $wa i32) (local $p i32)
     (local $style i32) (local $ex_style i32) (local $ctrl_count i32)
     (local $dlg_x i32) (local $dlg_y i32) (local $dlg_cx i32) (local $dlg_cy i32)
@@ -6609,8 +6610,14 @@
         (local.set $wa (call $g2w (global.get $dlg_indirect_template_ptr)))
         (global.set $dlg_indirect_template_ptr (i32.const 0)))
       (else
-        ;; Walk PE directory; also captures $rsrc_matched_eid for named entries
-        (local.set $data_entry (call $find_resource (i32.const 5) (local.get $dlg_id)))
+        ;; Walk PE directory; also captures $rsrc_matched_eid for named entries.
+        (if (local.get $wide)
+          (then
+            (local.set $data_entry
+              (call $find_resource_w (i32.const 5) (local.get $dlg_id))))
+          (else
+            (local.set $data_entry
+              (call $find_resource (i32.const 5) (local.get $dlg_id)))))
         (if (i32.eqz (local.get $data_entry)) (then (return (i32.const 0))))
         (local.set $dlg_key (global.get $rsrc_matched_eid))
         ;; Read RVA from data entry → WASM linear address of template
@@ -6982,6 +6989,17 @@
     (call $heap_free (local.get $cs))
     (call $dlg_seed_focus (local.get $dlg_hwnd))
     (return (local.get $ctrl_count)))
+
+  ;; Keep every existing ANSI dialog caller on its historical entry point.
+  ;; Unicode property pages use the same parser after selecting UTF-16 named
+  ;; resource lookup; RT_DIALOG payloads themselves are always Unicode.
+  (func $dlg_load (param $dlg_hwnd i32) (param $dlg_id i32) (result i32)
+    (call $dlg_load_impl
+      (local.get $dlg_hwnd) (local.get $dlg_id) (i32.const 0)))
+
+  (func $dlg_load_w (param $dlg_hwnd i32) (param $dlg_id i32) (result i32)
+    (call $dlg_load_impl
+      (local.get $dlg_hwnd) (local.get $dlg_id) (i32.const 1)))
 
   ;; $dlg_place_owner_relative(dlg_hwnd)
   ;;

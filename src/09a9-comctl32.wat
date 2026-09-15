@@ -1417,13 +1417,14 @@
   ;; points at the copied public structure so WM_INITDIALOG can receive the
   ;; documented lParam; the two private words immediately before it retain the
   ;; live marker and exact extent. The heap header is another four bytes back.
-  (global $PROPSHEET_PAGE_MAGIC i32 (i32.const 0x31475050)) ;; "PPG1"
+  (global $PROPSHEET_PAGE_MAGIC_A i32 (i32.const 0x31475050)) ;; "PPG1"
+  (global $PROPSHEET_PAGE_MAGIC_W i32 (i32.const 0x57475050)) ;; "PPGW"
 
   ;; Return the private header's wasm address, or zero for NULL, stale, foreign,
   ;; truncated, and forged handles. Translate the guest allocation only once.
   (func $propsheet_page_record (param $page i32) (result i32)
     (local $block i32) (local $block_w i32) (local $block_size i32)
-    (local $raw_w i32) (local $size i32)
+    (local $raw_w i32) (local $size i32) (local $magic i32)
     (if (i32.or
           (i32.lt_u (local.get $page) (i32.const 12))
           (i32.ne (i32.and (local.get $page) (i32.const 7)) (i32.const 4)))
@@ -1438,7 +1439,10 @@
           (call $heap_block_bad (local.get $block) (local.get $block_size)))
       (then (return (i32.const 0))))
     (local.set $raw_w (i32.add (local.get $block_w) (i32.const 4)))
-    (if (i32.ne (i32.load (local.get $raw_w)) (global.get $PROPSHEET_PAGE_MAGIC))
+    (local.set $magic (i32.load (local.get $raw_w)))
+    (if (i32.and
+          (i32.ne (local.get $magic) (global.get $PROPSHEET_PAGE_MAGIC_A))
+          (i32.ne (local.get $magic) (global.get $PROPSHEET_PAGE_MAGIC_W)))
       (then (return (i32.const 0))))
     (local.set $size (i32.load offset=4 (local.get $raw_w)))
     (if (i32.or
@@ -1448,6 +1452,16 @@
             (i32.sub (local.get $block_size) (i32.const 12))))
       (then (return (i32.const 0))))
     (local.get $raw_w))
+
+  ;; A/W page records have identical 32-bit field offsets and extents. Their
+  ;; marker retains the one material distinction: named resource and display
+  ;; string pointers in a W record address UTF-16 code units.
+  (func $propsheet_page_is_wide (param $page i32) (result i32)
+    (local $raw_w i32)
+    (local.set $raw_w (call $propsheet_page_record (local.get $page)))
+    (if (i32.eqz (local.get $raw_w)) (then (return (i32.const 0))))
+    (i32.eq (i32.load (local.get $raw_w))
+      (global.get $PROPSHEET_PAGE_MAGIC_W)))
 
   ;; Invoke a page callback as the real three-argument stdcall. This mirrors the
   ;; bounded synchronous guest-call path used by EDITSTREAM and SendMessage:
@@ -1550,42 +1564,37 @@
     (call $heap_free (i32.sub (local.get $page) (i32.const 8)))
     (i32.const 1))
 
-  ;; CreatePropertySheetPageA(lppsp) — 1 arg, returns HPROPSHEETPAGE.
+  ;; Shared 32-bit PROPSHEETPAGEA/W allocator. A and W have the same field
+  ;; layout; $wide is retained only for later string/resource interpretation.
   ;; Win98 accepts 40..4096-byte structures and rejects flag bits above bit 15.
   ;; On the Win98 path, structures newer than the 40-byte base receive the
   ;; return-ignored PSPCB_ADDREF here. PSPCB_CREATE belongs to page-dialog
   ;; materialization, and PSPCB_RELEASE is delivered exactly once on teardown.
-  (func $handle_CreatePropertySheetPageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $create_property_sheet_page
+      (param $source i32) (param $wide i32) (result i32)
     (local $src_w i32) (local $size i32) (local $flags i32)
-    (local $raw i32) (local $raw_w i32)
-    (if (i32.eqz (local.get $arg0))
-      (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-        (return)))
-    (local.set $src_w (call $g2w (local.get $arg0)))
+    (local $raw i32) (local $raw_w i32) (local $page i32)
+    (if (i32.eqz (local.get $source)) (then (return (i32.const 0))))
+    (local.set $src_w (call $g2w (local.get $source)))
     (local.set $size (i32.load (local.get $src_w)))
     (local.set $flags (i32.load offset=4 (local.get $src_w)))
     (if (i32.or
           (i32.or (i32.lt_u (local.get $size) (i32.const 40))
                   (i32.gt_u (local.get $size) (i32.const 0x1000)))
           (i32.ne (i32.and (local.get $flags) (i32.const 0xFFFF0000)) (i32.const 0)))
-      (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-        (return)))
+      (then (return (i32.const 0))))
     (local.set $raw (call $heap_alloc (i32.add (local.get $size) (i32.const 8))))
-    (if (i32.eqz (local.get $raw))
-      (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-        (return)))
+    (if (i32.eqz (local.get $raw)) (then (return (i32.const 0))))
     (local.set $raw_w (call $g2w (local.get $raw)))
-    (i32.store (local.get $raw_w) (global.get $PROPSHEET_PAGE_MAGIC))
+    (i32.store (local.get $raw_w)
+      (select
+        (global.get $PROPSHEET_PAGE_MAGIC_W)
+        (global.get $PROPSHEET_PAGE_MAGIC_A)
+        (local.get $wide)))
     (i32.store offset=4 (local.get $raw_w) (local.get $size))
     (memory.copy (i32.add (local.get $raw_w) (i32.const 8))
       (local.get $src_w) (local.get $size))
-    (local.set $arg0 (i32.add (local.get $raw) (i32.const 8)))
+    (local.set $page (i32.add (local.get $raw) (i32.const 8)))
     ;; Match Win98's ordering by incrementing the optional parent reference
     ;; after allocation succeeds and before the optional ADDREF callback.
     (call $propsheet_page_ref_change
@@ -1594,12 +1603,22 @@
     (if (i32.gt_u (local.get $size) (i32.const 40))
       (then
         (drop (call $propsheet_page_callback
-          (local.get $arg0) (i32.add (local.get $raw_w) (i32.const 8))
+          (local.get $page) (i32.add (local.get $raw_w) (i32.const 8))
           (i32.const 0))))) ;; PSPCB_ADDREF
     ;; A reentrant callback may have destroyed the handle itself.
-    (if (i32.eqz (call $propsheet_page_record (local.get $arg0)))
-      (then (local.set $arg0 (i32.const 0))))
-    (global.set $eax (local.get $arg0))
+    (if (i32.eqz (call $propsheet_page_record (local.get $page)))
+      (then (local.set $page (i32.const 0))))
+    (local.get $page))
+
+  ;; CreatePropertySheetPageA/W(lppsp) — 1 arg, returns HPROPSHEETPAGE.
+  (func $handle_CreatePropertySheetPageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (call $create_property_sheet_page (local.get $arg0) (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_CreatePropertySheetPageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax
+      (call $create_property_sheet_page (local.get $arg0) (i32.const 1)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; DestroyPropertySheetPage(hPSPage) — 1 arg, returns BOOL.
@@ -1608,18 +1627,19 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
-  ;; PropertySheetA(lppsph) — 1 arg, returns int (>0 if user clicked OK).
+  ;; PropertySheetA/W(lppsph) — 1 arg, returns int (>0 if user clicked OK).
   ;; The frame and guest-backed pages are built by the USER control layer;
   ;; park this synchronous API on the same modal pump as the common dialogs.
-  (func $handle_PropertySheetA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+  (func $sub_property_sheet_entry (param $header i32) (param $wide i32)
     (local $dlg i32)
-    (if (i32.eqz (local.get $arg0))
+    (if (i32.eqz (local.get $header))
       (then
         (global.set $eax (i32.const -1))
         (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
         (return)))
     (call $modal_capture_nonvolatile)
-    (local.set $dlg (call $create_property_sheet (local.get $arg0)))
+    (local.set $dlg
+      (call $create_property_sheet (local.get $header) (local.get $wide)))
     (if (i32.eqz (local.get $dlg))
       (then
         (global.set $modal_restore_pending (i32.const 0))
@@ -1628,6 +1648,12 @@
         (return)))
     (call $modal_begin (local.get $dlg) (i32.const 8))
   )
+
+  (func $handle_PropertySheetA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $sub_property_sheet_entry (local.get $arg0) (i32.const 0)))
+
+  (func $handle_PropertySheetW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $sub_property_sheet_entry (local.get $arg0) (i32.const 1)))
 
   ;; ImageList_SetBkColor(himl, clrBk) — 2 args, returns old bk color
   (func $handle_ImageList_SetBkColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
