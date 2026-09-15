@@ -12,13 +12,33 @@
 // so the "how many loops do we match" number comes from the predicate that
 // would be implemented in WAT, and every rejection is attributed to a reason.
 //
-// Fidelity note: the real matcher runs on EMITTED THREADED OPS, which are more
-// canonical than disassembly (ModRM/SIB already resolved, one handler per
-// operation shape). This static approximation should therefore be a LOWER
-// bound on the match rate, not an upper one.
+// Fidelity note -- CORRECTED 2026-09-15. This file used to claim it was a
+// LOWER bound on the runtime match rate, on the reasoning that threaded ops are
+// more canonical than disassembly. Measured, it is an UPPER bound and a loose
+// one: on starcraft.exe this tool matches 90 loops while the shipped matcher in
+// src/07b-loop-match.wat matches 4 (`--loopmatch-stats`: "self-loop blocks
+// decoded 10426 matched 4"). The predicates here model the DESIGN DOC; the WAT
+// carries extra preconditions the design does not mention. A match here is a
+// candidate, never a claim about what the emulator will fold.
+//
+// --runtime-gates closes the part of that gap we have actually verified, so a
+// census can ask "would the shipped matcher take this?" instead of "would the
+// design?". It models ONE gate, the one that is load-bearing for real blitters:
+//
+//   LUT_RUN requires the table-index accumulator to be zeroed INSIDE the loop
+//   body (src/07b-loop-match.wat:1910 and :2237, `zero_cnt != 1 -> decline`).
+//   A byte load writes only the low 8 bits, so without an in-block `xor r,r`
+//   the WAT cannot prove the table index is 0..255 and declines. Compilers
+//   routinely hoist that xor out of the loop -- StarCraft's hottest loop,
+//   0x4b48aa, is exactly this and is 30% of gameplay block entries.
+//
+// It does NOT model every WAT precondition, so --runtime-gates is still an
+// upper bound; it is just a much tighter one. Do not read a match under it as
+// a guarantee either -- confirm with --trace-loopmatch on a real run.
 //
 //   node tools/match-loops.js <pe> [<pe>...] [--max-body=24] [--list]
 //                                  [--list=COPY_RUN] [--why] [--json]
+//                                  [--runtime-gates]
 const path = require('path');
 const { findLoops } = require(path.join(__dirname, 'find-loops.js'));
 
@@ -190,7 +210,8 @@ function summarize(body) {
 
 // -------------------------------------------------------------- predicates --
 // Returns {pattern, stride} or {reject: reason}.
-function match(body) {
+function match(body, opts) {
+  const runtimeGates = !!(opts && opts.runtimeGates);
   const s = summarize(body);
   if (s.calls.length) return { reject: 'call' };
   if (s.others.length) return { reject: 'unknown-op:' + s.others[0].mnem };
@@ -251,8 +272,18 @@ function match(body) {
     const pair = feeds(a, b) ? [a, b] : feeds(b, a) ? [b, a] : null;
     if (!pair) return { reject: 'two-loads-independent' };
     if (st.r.src.kind !== 'reg' || st.r.src.r !== pair[1].r.dst.r) return { reject: 'store-src-not-lut' };
-    // the table load is indexed, not streamed -- re-check: only the first
-    // load and the store need to move with an induction variable.
+    // The shipped WAT needs the accumulator zeroed in-block to prove the table
+    // index is 0..255; see the --runtime-gates note at the top of this file.
+    // pair[0] is the streamed load whose destination indexes the table load,
+    // i.e. the accumulator. `role()` turns `xor r,r` into a MOVE of imm 0, and
+    // reg() folds al/ax/eax to one name, so this compares like with like.
+    if (runtimeGates) {
+      const acc = pair[0].r.dst.r;
+      const zeroedInBlock = s.roles.some(r =>
+        r.kind === 'MOVE' && r.src && r.src.kind === 'imm' && r.src.v === 0
+        && r.dst && r.dst.r === acc);
+      if (!zeroedInBlock) return { reject: 'lut-acc-not-zeroed-in-block' };
+    }
     return { pattern: 'LUT_RUN', size: st.r.size || 1, stride: st.st.stride };
   }
   return { reject: 'unclassified' };
@@ -325,6 +356,10 @@ if (require.main === module) {
   const files = args.filter(a => !a.startsWith('--'));
   const opt = (n, d) => { const a = args.find(x => x.startsWith('--' + n + '=')); return a ? a.slice(n.length + 3) : d; };
   const has = n => args.some(a => a === '--' + n || a.startsWith('--' + n + '='));
+  // Apply the verified subset of src/07b-loop-match.wat's extra preconditions,
+  // so the census answers "would the emulator fold this?" and not merely
+  // "would the design doc?". See the note at the top of this file.
+  const MOPT = { runtimeGates: has('runtime-gates') };
   if (!files.length) { console.error('usage: match-loops.js <pe> [<pe>...] [--max-body=N] [--list[=PATTERN]] [--why] [--json]'); process.exit(1); }
   const MAXB = parseInt(opt('max-body', '24'), 10);
   const LIST = has('list') ? (opt('list', '') || '*') : null;
@@ -352,7 +387,7 @@ if (require.main === module) {
         r.cells += written.length;
         r.sunkStores += written.reduce((a, c) => a + c.stores, 0);
         if (written.every(c => c.safety === 'clean')) r.clean++; else r.guard++;
-        if (match(lp.body).reject) r.newOnly++;
+        if (match(lp.body, MOPT).reject) r.newOnly++;
         if (PLIST) {
           console.log(`${path.basename(f)} 0x${lp.va.toString(16)}  `
             + written.map(c => `[${c.addr}] ${c.kind}/${c.safety}`).join('  '));
@@ -402,7 +437,7 @@ if (require.main === module) {
     const row = { file: f, total: loops.length, matched: 0, unit: 0 };
     for (const p of PATTERNS) row[p] = 0;
     for (const lp of loops) {
-      const m = match(lp.body);
+      const m = match(lp.body, MOPT);
       if (m.reject) { whyAll.set(m.reject, (whyAll.get(m.reject) || 0) + 1); continue; }
       row[m.pattern]++; row.matched++;
       if (Math.abs(m.stride) === m.size) row.unit++;
