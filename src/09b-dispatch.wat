@@ -1195,6 +1195,16 @@
           (then
             (call $console_ctrl_continue)
             (return)))
+        ;; InitCommonControlsEx mixed ICC_LINK_CLASS|legacy request. Authentic
+        ;; Win98 COMCTL32 has returned from the masked legacy half, exposing
+        ;; ICCT, the temporary structure, and the original stdcall frame.
+        ;; Preserve its BOOL in EAX while completing the original RET 4.
+        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x54434349))
+          (then
+            (global.set $eip
+              (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (return)))
         ;; WH_KEYBOARD callbacks use this existing one-callback thunk with a
         ;; tiny typed context. KeyboardProc's stdcall return leaves KHK1 at
         ;; ESP; restore the USER caller and the successful Get/PeekMessage

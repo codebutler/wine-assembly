@@ -7300,16 +7300,98 @@
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
-  ;; 309: InitCommonControlsEx(lpInitCtrls). The browser's common-control
-  ;; classes are registered cumulatively and remain available once requested,
-  ;; but the Win98-era two-DWORD structure is still part of the API contract.
+  ;; Find the authentic mapped COMCTL32 export, not the native IAT override.
+  ;; The DLL table is process-shared while dll_count is synchronized into each
+  ;; worker instance, so resolving on the rare initialization call is safer
+  ;; than caching a guest address in a per-instance mutable global.
+  (func $guest_comctl32_init_common_controls_ex (result i32)
+    (local $idx i32) (local $tbl i32) (local $base i32)
+    (local $exp_rva i32) (local $name_rva i32)
+    (block $missing (loop $scan
+      (br_if $missing (i32.ge_u (local.get $idx) (global.get $dll_count)))
+      (local.set $tbl (i32.add (global.get $DLL_TABLE)
+        (i32.mul (local.get $idx) (i32.const 32))))
+      (local.set $base (i32.load (local.get $tbl)))
+      (local.set $exp_rva (i32.load offset=8 (local.get $tbl)))
+      (if (local.get $exp_rva)
+        (then
+          (local.set $name_rva (i32.load offset=12
+            (call $g2w (i32.add (local.get $base) (local.get $exp_rva)))))
+          (if (i32.and
+                (i32.ne (local.get $name_rva) (i32.const 0))
+                (call $dll_name_match
+                  (i32.add (local.get $base) (local.get $name_rva))
+                  "COMCTL32.dll"))
+            (then
+              (return (call $resolve_name_export
+                (local.get $idx) "InitCommonControlsEx"))))))
+      (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; 309: InitCommonControlsEx(lpInitCtrls). Authentic Win98 COMCTL32 must see
+  ;; the flags it supports so its optional classes are actually registered.
+  ;; WAT supplies only the later ICC_LINK_CLASS compatibility gap. Microsoft
+  ;; documents the initialization as cumulative, so a mixed request first
+  ;; runs the authentic legacy half and then returns its exact BOOL result.
   (func $handle_InitCommonControlsEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg0)
+    (local $flags i32) (local $guest i32) (local $caller_esp i32)
+    (global.set $eax (i32.const 0))
+    (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax
-          (i32.eq (call $gl32 (local.get $arg0)) (i32.const 8))))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (if (i32.ne (call $gl32 (local.get $arg0)) (i32.const 8))
+      (then
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $flags (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
+    ;; The documented ICC_* namespace occupies the low 16 bits. Do not claim
+    ;; that an unknown newer class was registered when neither backend did it.
+    (if (i32.and (local.get $flags) (i32.const 0xffff0000))
+      (then
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $guest (call $guest_comctl32_init_common_controls_ex))
+    ;; Without a mapped authentic DLL, retain the existing native common-
+    ;; control compatibility path. Built-in controls need no guest registration.
+    (if (i32.eqz (local.get $guest))
+      (then
+        (global.set $eax (i32.const 1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    ;; Pure Win98-era requests run in authentic COMCTL32 with the caller's
+    ;; original stdcall frame. Its RET 4 returns straight to the API caller.
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x8000)))
+      (then
+        (global.set $eip (local.get $guest))
+        (global.set $handler_set_eip (i32.const 1))
+        (global.set $steps (i32.const 0))
+        (return)))
+    ;; ICC_LINK_CLASS alone is implemented by the WAT SysLink control. Passing
+    ;; it to authentic Win98 COMCTL32 would make the compatibility call fail.
+    (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x7fff)))
+      (then
+        (global.set $eax (i32.const 1))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    ;; Mixed LINK|legacy request. Keep the caller-owned structure untouched;
+    ;; place a masked copy and typed continuation between this call frame and
+    ;; the authentic callee. After its RET 4, CACA0011 sees ICCT at ESP.
+    (local.set $caller_esp (global.get $esp))
+    (call $gs32 (i32.sub (local.get $caller_esp) (i32.const 20))
+      (global.get $font_enum_ret_thunk))
+    (call $gs32 (i32.sub (local.get $caller_esp) (i32.const 16))
+      (i32.sub (local.get $caller_esp) (i32.const 8)))
+    (call $gs32 (i32.sub (local.get $caller_esp) (i32.const 12))
+      (i32.const 0x54434349)) ;; "ICCT"
+    (call $gs32 (i32.sub (local.get $caller_esp) (i32.const 8)) (i32.const 8))
+    (call $gs32 (i32.sub (local.get $caller_esp) (i32.const 4))
+      (i32.and (local.get $flags) (i32.const 0x7fff)))
+    (global.set $esp (i32.sub (local.get $caller_esp) (i32.const 20)))
+    (global.set $eip (local.get $guest))
+    (global.set $handler_set_eip (i32.const 1))
+    (global.set $steps (i32.const 0))
   )
 
   ;; OleInitialize lives with the other COM/OLE apartment handlers in
