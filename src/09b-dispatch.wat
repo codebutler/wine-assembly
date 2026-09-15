@@ -553,6 +553,14 @@
               (then (global.set $eip (global.get $wndproc_addr))))
             (global.set $steps (i32.const 0))
             (return)))
+        ;; MDI child identity and activation are USER state, not contingent on
+        ;; whether the application happened to chain WM_CREATE through
+        ;; DefMDIChildProc. Register every successfully created immediate child
+        ;; of an MDICLIENT before its CreateWindowEx/WM_MDICREATE call returns.
+        (if (i32.eq
+              (call $ctrl_table_get_class (call $wnd_get_parent (local.get $arg0)))
+              (i32.const 33))
+          (then (drop (call $mdi_client_register_child (local.get $arg0)))))
         (global.set $eip (call $gl32 (global.get $esp)))
         (global.set $eax (local.get $arg0))
         (global.set $esp (i32.add (global.get $esp) (i32.const 12)))

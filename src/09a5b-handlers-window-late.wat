@@ -1432,6 +1432,18 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
     (call $gl32 (i32.add (local.get $state) (i32.const 8))))
 
+  ;; Reserve the next command ID from CLIENTCREATESTRUCT.idFirstChild before
+  ;; CreateWindowEx publishes the child. USER uses this as the child hMenu/ID;
+  ;; DefFrameProc later recognizes the same value in the frame's Window menu.
+  (func $mdi_client_take_child_id (param $client i32) (result i32)
+    (local $state i32) (local $id i32)
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (local.set $id (call $gl32 (i32.add (local.get $state) (i32.const 12))))
+    (call $gs32 (i32.add (local.get $state) (i32.const 12))
+      (i32.add (local.get $id) (i32.const 1)))
+    (local.get $id))
+
   ;; Generic $set_focus relies on a built-in control's WM_SETFOCUS procedure
   ;; to publish $focus_hwnd. An MDI child normally has an application wndproc,
   ;; so publish first (as SetFocus does) and then notify both windows. This also
@@ -1487,10 +1499,8 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
     (if (i32.eqz (call $ctrl_table_get_id (local.get $child)))
       (then
-        (local.set $id (call $gl32 (i32.add (local.get $state) (i32.const 12))))
-        (drop (call $ctrl_table_set_id (local.get $child) (local.get $id)))
-        (call $gs32 (i32.add (local.get $state) (i32.const 12))
-          (i32.add (local.get $id) (i32.const 1)))))
+        (local.set $id (call $mdi_client_take_child_id (local.get $client)))
+        (drop (call $ctrl_table_set_id (local.get $child) (local.get $id)))))
     (drop (call $mdi_client_activate (local.get $client) (local.get $child)))
     (i32.const 1))
 

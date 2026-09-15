@@ -42,10 +42,11 @@ try {
     '--no-close',
     '--quiet-api',
     '--quiet-blocks',
-    '--trace-api=DefFrameProcA,CreateWindowExA,GetMessageA',
+    '--trace-api=DefFrameProcA,SendMessageA,CreateWindowExA,DefMDIChildProcA,GetMessageA',
     '--batch-size=25000',
-    '--max-batches=40',
+    '--max-batches=80',
     '--max-seconds=20',
+    '--input=0:wait-title-command:Dependency_Walker:100:57601:open,0:wait-dlg-control:1:100,1:open-dlg-pick:depends.exe,2:dump-children:65538:mdi-client',
   ], {
     cwd: ROOT,
     encoding: 'utf8',
@@ -66,9 +67,13 @@ try {
     'MDICLIENT creation did not return a real window handle');
   assert(/GetMessageA\(/.test(output),
     'Dependency Walker did not reach its normal message loop');
-  assert(/Stats: 7\d{3} API calls/.test(output),
-    'Dependency Walker did not sustain its full startup path');
-  console.log('PASS  authentic Dependency Walker clears DefFrameProcA + MDICLIENT and reaches GetMessageA');
+  assert(/SendMessageA\(hwnd=hwnd:0x00010002, msg=544, wP=0, lP=0x[0-9a-f]+\)/i.test(output),
+    'authentic MFC document path did not request WM_MDICREATE');
+  assert(!/Failed to create empty document/.test(output),
+    `WM_MDICREATE still failed MFC document creation:\n${output.slice(-8000)}`);
+  assert(/dump-children:mdi-client: parent=0x10002 .*hwnd=0x[0-9a-f]+ .*parent=0x10002 .*proc=0x(?!fffe|ffff)[0-9a-f]+/i.test(output),
+    `Dependency Walker did not create its registered MFC MDI child:\n${output.slice(-8000)}`);
+  console.log('PASS  authentic Dependency Walker opens an executable through a real MDI child');
 } finally {
   fs.rmSync(temp, { recursive: true, force: true });
 }

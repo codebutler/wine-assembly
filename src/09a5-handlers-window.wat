@@ -3358,7 +3358,8 @@
   ;; Synchronous: call WndProc(hwnd, msg, wParam, lParam) directly
   (func $handle_SendMessageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $wndproc i32) (local $ctrl_class i32) (local $sm_ret i32) (local $owner_tid i32)
-    (local $post_kind i32)
+    (local $post_kind i32) (local $mdi i32) (local $mdi_style i32) (local $mdi_id i32)
+    (local $mdi_eip i32)
     (call $richedit_note_charformat_message
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
     ;; These two compatibility paths need work after the real native WndProc
@@ -3389,6 +3390,74 @@
         (global.set $yield_reason (i32.const 10))
         (global.set $yield_flag (i32.const 1))
         (global.set $steps (i32.const 0))
+        (return)))
+    ;; WM_MDICREATE is not an ordinary call into the MDICLIENT default proc:
+    ;; USER creates a real child window and returns its HWND only after the
+    ;; child's synchronous WM_NCCREATE/WM_CREATE sequence has completed. Turn
+    ;; the live SendMessage frame into a CreateWindowEx frame so the existing
+    ;; class lookup, MFC CBT hook, creation callbacks, failure return, and
+    ;; stdcall continuation remain authoritative instead of duplicating them.
+    ;;
+    ;; MDICREATESTRUCTA: class, title, owner, x, y, cx, cy, style, lParam.
+    ;; CREATESTRUCT.lpCreateParams must receive the MDICREATESTRUCT itself,
+    ;; not its final application-defined lParam member.
+    (if (i32.and
+          (i32.eq (local.get $arg1) (i32.const 0x0220)) ;; WM_MDICREATE
+          (i32.and
+            (i32.eq (call $ctrl_table_get_class (local.get $arg0)) (i32.const 33))
+            (i32.ne (local.get $arg3) (i32.const 0))))
+      (then
+        (local.set $mdi (local.get $arg3))
+        (local.set $ret_addr (call $gl32 (global.get $esp)))
+        (local.set $mdi_eip (global.get $eip))
+        (local.set $mdi_id (call $mdi_client_take_child_id (local.get $arg0)))
+        ;; Win98 USER supplies the standard MDI-child frame styles in addition
+        ;; to those requested by the application.
+        (local.set $mdi_style
+          (i32.or (call $gl32 (i32.add (local.get $mdi) (i32.const 28)))
+                  (i32.const 0x46CF0000)))
+        ;; A SendMessage frame is 20 bytes and a CreateWindowEx frame is 52.
+        ;; Grow downward by their 32-byte difference; CreateWindowEx then pops
+        ;; directly back to the original SendMessage caller.
+        (global.set $esp (i32.sub (global.get $esp) (i32.const 32)))
+        (call $gs32 (global.get $esp) (local.get $ret_addr))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (i32.const 0x40)) ;; WS_EX_MDICHILD
+        (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (call $gl32 (local.get $mdi)))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (call $gl32 (i32.add (local.get $mdi) (i32.const 4))))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $mdi_style))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 20)) (call $gl32 (i32.add (local.get $mdi) (i32.const 12))))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (call $gl32 (i32.add (local.get $mdi) (i32.const 16))))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (call $gl32 (i32.add (local.get $mdi) (i32.const 20))))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (call $gl32 (i32.add (local.get $mdi) (i32.const 24))))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 36)) (local.get $arg0))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 40)) (local.get $mdi_id))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 44)) (call $gl32 (i32.add (local.get $mdi) (i32.const 8))))
+        (call $gs32 (i32.add (global.get $esp) (i32.const 48)) (local.get $mdi))
+        (if (global.get $sendmessage_wide)
+          (then
+            (call $handle_CreateWindowExW
+              (i32.const 0x40)
+              (call $gl32 (local.get $mdi))
+              (call $gl32 (i32.add (local.get $mdi) (i32.const 4)))
+              (local.get $mdi_style)
+              (call $gl32 (i32.add (local.get $mdi) (i32.const 12)))
+              (local.get $name_ptr)))
+          (else
+            (call $handle_CreateWindowExA
+              (i32.const 0x40)
+              (call $gl32 (local.get $mdi))
+              (call $gl32 (i32.add (local.get $mdi) (i32.const 4)))
+              (local.get $mdi_style)
+              (call $gl32 (i32.add (local.get $mdi) (i32.const 12)))
+              (local.get $name_ptr))))
+        ;; WAT-native child classes finish creation without a continuation;
+        ;; publish their MDI identity here. Guest wndprocs finish through the
+        ;; CACA0027 child-create continuation, which performs the same step
+        ;; only after WM_CREATE has accepted the window.
+        (if (i32.and
+              (i32.ne (global.get $eax) (i32.const 0))
+              (i32.eq (global.get $eip) (local.get $mdi_eip)))
+          (then (drop (call $mdi_client_register_child (global.get $eax)))))
         (return)))
     ;; EM_FORMATRANGE. The Win98 RichEdit DLL's printer message path cannot
     ;; reliably preserve its LRESULT through the emulated native wndproc (it

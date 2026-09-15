@@ -6749,14 +6749,20 @@
   ;; differ, and only when the target is one of our own controls: XP Sound
   ;; Recorder fills its format combo with CB_ADDSTRING of LoadStringW text, and
   ;; reading that UTF-16 as bytes left every row showing just its first letter.
+  (global $sendmessage_wide (mut i32) (i32.const 0))
   (func $handle_SendMessageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $narrow i32)
     (local.set $narrow
       (call $msg_narrow_text_lparam (local.get $arg0) (local.get $arg1) (local.get $arg3)))
+    ;; WM_MDICREATE's MDICREATESTRUCT embeds class/title pointers whose
+    ;; encoding follows SendMessageW. The shared A dispatcher reads this flag
+    ;; only while it translates that message into CreateWindowExW.
+    (global.set $sendmessage_wide (i32.const 1))
     (call $handle_SendMessageA
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (select (local.get $narrow) (local.get $arg3) (local.get $narrow))
       (local.get $arg4) (local.get $name_ptr))
+    (global.set $sendmessage_wide (i32.const 0))
     (if (local.get $narrow) (then (call $heap_free (local.get $narrow))))
   )
 

@@ -67,6 +67,10 @@ const extraWat = String.raw`
     (global.get $focus_hwnd))
   (func (export "test_child_id") (param $child i32) (result i32)
     (call $ctrl_table_get_id (local.get $child)))
+  (func (export "test_parent") (param $hwnd i32) (result i32)
+    (call $wnd_get_parent (local.get $hwnd)))
+  (func (export "test_style") (param $hwnd i32) (result i32)
+    (call $wnd_get_style (local.get $hwnd)))
   (func (export "test_set_proc") (param $hwnd i32) (param $proc i32)
     (call $wnd_table_set (local.get $hwnd) (local.get $proc)))
   (func (export "test_client_message")
@@ -121,6 +125,45 @@ const extraWat = String.raw`
     (global.set $test_mdi_delta (i32.sub (global.get $esp) (local.get $before)))
     (global.set $esp (local.get $saved))
     (global.get $eax))
+
+  ;; Exercise the public synchronous SendMessage contract with a WAT-native
+  ;; child class, so WM_MDICREATE can finish entirely inside this export. The
+  ;; authentic Dependency Walker acceptance below covers the guest-wndproc +
+  ;; MFC CBT continuation path.
+  (func (export "test_mdi_create")
+      (param $client i32) (param $class i32) (param $title i32)
+      (param $wide i32) (result i32)
+    (local $saved i32) (local $before i32) (local $mdi i32) (local $child i32)
+    (local.set $mdi (call $heap_alloc (i32.const 36)))
+    (call $gs32 (local.get $mdi) (local.get $class))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 4)) (local.get $title))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 8)) (global.get $image_base))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 12)) (i32.const 3))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 16)) (i32.const 4))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 20)) (i32.const 120))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 24)) (i32.const 80))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 28)) (i32.const 0x10000000))
+    (call $gs32 (i32.add (local.get $mdi) (i32.const 32)) (i32.const 0x12345678))
+    (local.set $saved (global.get $esp))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
+    (local.set $before (global.get $esp))
+    (call $gs32 (global.get $esp) (i32.const 0x76543210))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $client))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0x0220))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $mdi))
+    (if (local.get $wide)
+      (then (call $handle_SendMessageW
+        (local.get $client) (i32.const 0x0220) (i32.const 0) (local.get $mdi)
+        (i32.const 0) (i32.const 0)))
+      (else (call $handle_SendMessageA
+        (local.get $client) (i32.const 0x0220) (i32.const 0) (local.get $mdi)
+        (i32.const 0) (i32.const 0))))
+    (local.set $child (global.get $eax))
+    (global.set $test_mdi_delta (i32.sub (global.get $esp) (local.get $before)))
+    (global.set $esp (local.get $saved))
+    (call $heap_free (local.get $mdi))
+    (local.get $child))
 
   (func (export "test_mdi_delta") (result i32)
     (global.get $test_mdi_delta))
@@ -230,6 +273,38 @@ const extraWat = String.raw`
   keys.add(0x10); // VK_SHIFT
   assert.strictEqual(e.test_translate(client, msg), 1,
     'Ctrl+Shift+F6 is translated in the reverse direction');
+
+  const createFrame = e.test_make_frame() >>> 0;
+  const createClient = e.test_make_client(createFrame, 0x5678, 0xea00) >>> 0;
+  const ansiClass = e.guest_alloc(16) >>> 0;
+  const ansiTitle = e.guest_alloc(16) >>> 0;
+  new Uint8Array(memory.buffer).set(Buffer.from('STATIC\0', 'ascii'), toWasm(ansiClass));
+  new Uint8Array(memory.buffer).set(Buffer.from('ansi child\0', 'ascii'), toWasm(ansiTitle));
+  const ansiChild = e.test_mdi_create(createClient, ansiClass, ansiTitle, 0) >>> 0;
+  assert(ansiChild, 'WM_MDICREATE returns the created ANSI child HWND');
+  assert.strictEqual(e.test_mdi_delta(), 20,
+    'WM_MDICREATE preserves SendMessageA stdcall cleanup');
+  assert.strictEqual(e.test_parent(ansiChild) >>> 0, createClient,
+    'WM_MDICREATE parents the new window to the MDI client');
+  assert.strictEqual(e.test_child_id(ansiChild), 0xea00,
+    'WM_MDICREATE assigns CLIENTCREATESTRUCT.idFirstChild as the child ID');
+  assert.strictEqual(
+    e.test_style(ansiChild) >>> 0,
+    (0x10000000 | 0x46cf0000) >>> 0,
+    'WM_MDICREATE adds the documented standard MDI-child styles');
+
+  const wideClass = e.guest_alloc(32) >>> 0;
+  const wideTitle = e.guest_alloc(32) >>> 0;
+  new Uint8Array(memory.buffer).set(Buffer.from('STATIC\0', 'utf16le'), toWasm(wideClass));
+  new Uint8Array(memory.buffer).set(Buffer.from('wide child\0', 'utf16le'), toWasm(wideTitle));
+  const wideChild = e.test_mdi_create(createClient, wideClass, wideTitle, 1) >>> 0;
+  assert(wideChild, 'WM_MDICREATE returns the created Unicode child HWND');
+  assert.strictEqual(e.test_mdi_delta(), 20,
+    'WM_MDICREATE preserves SendMessageW stdcall cleanup');
+  assert.strictEqual(e.test_child_id(wideChild), 0xea01,
+    'ANSI and Unicode creation share the next Window-menu command ID');
+  assert.strictEqual(e.test_active(createClient) >>> 0, wideChild,
+    'a successfully created MDI child becomes active');
 
   const api = JSON.parse(fs.readFileSync(path.join(ROOT, 'src', 'api_table.json')));
   for (const [name, nargs] of [
