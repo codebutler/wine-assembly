@@ -7862,3 +7862,70 @@ Fixing that means producing all four components of a sample once, which means
 is the next piece, and it is a prerequisite for batching in the same way the
 temp span was: until an instruction costs one pass instead of four, widening the
 outer loop amortizes the smaller half of the tax.
+
+### Measured at last: the profile and the three-build A/B (2026-09-14, load 3.3-4.7)
+
+The box finally went quiet, so the numbers the sections above refused to quote
+exist now. Two measurements, both with `tools/bench-raster.js` at 640×480.
+
+**Where a pixel's time goes** — V8 `--cpu-prof` with `--no-wasm-inlining` so
+callees are charged instead of being folded into `$d3d_software_step`, names
+resolved through `tools/func-index.js` against a fresh `combined.wat`. Self
+time, share of all wasm samples, one arm per profile, 8 reps each:
+
+| function | `flat8` (8 ALU instr) | `bilinear` (1 texld) |
+|---|---:|---:|
+| `$d3d_software_step` (per-quad setup, varying loops inline) | **38.7%** | **31.6%** |
+| `$d3d_shader_vm_source_row` (operand gather) | 14.5% | — |
+| `$d3d_shader_vm_run` (packet decode + dispatch) | 12.5% | 2.2% |
+| `$d3d_software_interp` | 4.5% | 3.8% |
+| `$d3d_shader_vm_component` | 4.4% | 2.7% |
+| `$d3d_shader_vm_alu_fast` + `_alu` | 5.5% | — |
+| `$d3d_shader_vm_write` + `_commit` | 5.6% | — |
+| `$d3d_shader_vm_texel` | — | **17.5%** |
+| `$d3d_shader_vm_address` (wrap/clamp per texel) | — | 7.4% |
+| `$d3d_shader_vm_sample` / `_sample_level` / `_sample_face_lod` | — | 18.0% |
+| edge / inside / channel / output / fragment_pass | 7.5% | 5.0% |
+
+Grouped: on `flat8` the rasterizer is ~51% and the VM ~47%; on `bilinear` the
+rasterizer is ~40%, the **sampler family ~46%**, and the VM proper ~6%. The
+sampler's 46% is for *one* instruction, and `$d3d_shader_vm_texel` alone is
+17.5% — that is the 64-calls-per-quad shape from the previous section showing
+up as time. No-inlining inflates the leaf call overhead (`source_row`, `texel`)
+somewhat relative to the shipped build, so read the groups, not the decimals.
+
+**What the three commits bought** — three builds, one bench each, order rotated
+every round, median of three rounds. `prefill` is `5a66a6f5^`, `fill` adds the
+temp-span fill (5a66a6f5), `all` adds the ALU fast path and mask gating
+(78cc3c5d, 524978da). ns/px:
+
+| build | sliver | flat | flat8 | bilinear | ns per ALU instr (`(flat8−flat)/7`) |
+|---|---:|---:|---:|---:|---:|
+| prefill | 150.4 | 193.1 | 335.1 | 359.6 | 20.3 |
+| fill | 108.8 | 151.8 | 296.3 | 318.0 | 20.6 |
+| all | 114.0 | 142.6 | 263.8 | 328.6 | **17.3** |
+
+The fill: **−28% on sliver, −21% on flat, −12% on flat8 and bilinear.** It ran
+before the coverage test, per quad in the bounding box, so it was charged to
+pixels that were never shaded — which is why the setup-only `sliver` arm moves
+the most. The earlier "spurious −30%" was in fact about right; it was the
+rotation I trusted and the box that was wrong.
+
+The VM commits: **−16% per ALU instruction** (20.6 → 17.3 ns), −6% on `flat`,
+−11% on `flat8`; `sliver` and `bilinear` do not touch the changed code and
+their ±3-5% is the noise floor — an identical build run nine times across 90 s
+drifted +12% end to end from thermal ramp, so nothing under ~10% is visible
+here even at load 3.5 without interleaving.
+
+Absolute scale for the record: at load 17-20 earlier tonight `flat` measured
+431-887 ns/px; at load 3.5 it is 143. The loaded box was 3-6× slower and its
+run-to-run spread was wider than every effect being measured.
+
+**What this says about the next step.** Per-quad setup in `$d3d_software_step`
+is the largest single item on *both* arms and it is the part that scales with
+bounding-box area rather than coverage — so the quad early-out (test the three
+edge functions first; skip the interpolation entirely for an all-outside quad)
+is now the top item by evidence, not just by structure. On textured pixels the
+four-components-at-once sampler is second and worth about as much as the VM
+work was on ALU pixels. The interpreter tax in `$d3d_shader_vm_run` proper is
+12.5% of an 8-instruction pixel: real, but third.

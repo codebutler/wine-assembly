@@ -55,6 +55,18 @@
 // fixed costs below matter less the longer the shader gets. Always say which
 // shader length a share is quoted at.
 //
+// MEASURED ON A QUIET BOX (2026-09-14, load 3.5, 640x480, three builds rotated,
+// median of three rounds, ns/px): the per-quad temp-bank fill (5a66a6f5) was
+// -28% sliver / -21% flat / -12% flat8; the ALU fast path + mask gating
+// (78cc3c5d, 524978da) took an ALU instruction from 20.6 to 17.3 ns/px. The
+// noise floor: an IDENTICAL build run nine times over 90s drifted +12% from
+// thermal ramp alone, so never read a <10% difference off two consecutive runs
+// of this tool -- interleave, and compare medians. For WHERE the time goes,
+// `node --cpu-prof --no-wasm-inlining tools/bench-raster.js --arms=X` then
+// tools/func-index.js on the hot indices (regenerate build/combined.wat first
+// or the names are off by the functions added since): $d3d_software_step is
+// 32-39% of every arm; the sampler family is ~46% of `bilinear`.
+//
 // That points at the block in src/09ah-d3d-software.wat that runs per 2x2 quad
 // BEFORE the coverage test (`block $outside` sits after it), for all four lanes
 // whether they are inside the triangle or not:
