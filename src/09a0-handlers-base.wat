@@ -2191,10 +2191,25 @@
   ;; exports callable for binaries that import them unconditionally, but report
   ;; the same unsupported result instead of pretending an ACL mutation stuck.
   (func $file_security_not_supported (param $length_needed i32)
-    (if (local.get $length_needed)
+    (if (i32.and
+          (i32.ne (local.get $length_needed) (i32.const 0))
+          (i32.eqz (call $ptr_range_access_bad
+            (local.get $length_needed) (i32.const 4) (i32.const 1))))
       (then (call $gs32 (local.get $length_needed) (i32.const 0))))
     (global.set $last_error (i32.const 120)) ;; ERROR_CALL_NOT_IMPLEMENTED
     (global.set $eax (i32.const 0)))
+
+  ;; Windows 9x does not attach the NT access-control security descriptors used
+  ;; by Get/SetKernelObjectSecurity to kernel handles. Keep these ADVAPI32 names
+  ;; callable for applications (including WinRAR 3.10) that import the NT and
+  ;; Win9x paths together, but never fabricate a descriptor or retained ACL.
+  (func $handle_GetKernelObjectSecurity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $file_security_not_supported (local.get $arg4))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+
+  (func $handle_SetKernelObjectSecurity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $file_security_not_supported (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_SetFileSecurityA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $file_security_not_supported (i32.const 0))
