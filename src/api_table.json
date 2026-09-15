@@ -30234,5 +30234,26 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3425593140
+  },
+  {
+    "id": 3603,
+    "name": "BackupRead",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1746579395
+  },
+  {
+    "id": 3604,
+    "name": "BackupWrite",
+    "nargs": 7,
+    "convention": "stdcall",
+    "hash": 1925425218
+  },
+  {
+    "id": 3605,
+    "name": "BackupSeek",
+    "nargs": 6,
+    "convention": "stdcall",
+    "hash": 1803842155
   }
 ]

@@ -2553,3 +2553,578 @@
     (global.set $eax (call $find_executable_a
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  ;; BackupRead/BackupWrite expose a byte stream made of WIN32_STREAM_ID
+  ;; headers followed by their payloads. The Win98 VFS has exactly one kind
+  ;; of persistent file data: the unnamed data stream. Keep that boundary
+  ;; explicit rather than fabricating ACLs, EAs, hard links, or named streams.
+  ;;
+  ;; The opaque guest-heap context is deliberately shared by all three APIs:
+  ;;   +0  magic, +4 direction (1 read, 2 write), +8 file handle
+  ;;   +12 phase (0 header, 1 payload, 2 end), +16 header progress
+  ;;   +20 payload bytes remaining, +24 original payload size
+  ;;   +28 host byte-count scratch, +32 the 20-byte stream header
+  (global $BACKUP_CONTEXT_MAGIC i32 (i32.const 0x31504b42)) ;; "BKP1"
+  (global $BACKUP_CONTEXT_SIZE i32 (i32.const 56))
+
+  (func $backup_context_abort (param $slot i32) (param $mode i32) (result i32)
+    (local $ctx i32) (local $wa i32)
+    (if (call $ptr_range_access_bad
+          (local.get $slot) (i32.const 4) (i32.const 1))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (return (i32.const 0))))
+    (local.set $ctx (call $gl32 (local.get $slot)))
+    ;; An empty slot has no allocation to release. This makes cleanup safe
+    ;; after a failed first call while retaining the required non-NULL slot.
+    (if (i32.eqz (local.get $ctx))
+      (then (return (i32.const 1))))
+    (if (call $ptr_range_bad
+          (local.get $ctx) (global.get $BACKUP_CONTEXT_SIZE))
+      (then
+        (global.set $last_error (i32.const 87))
+        (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $ctx)))
+    (if (i32.or
+          (i32.ne (i32.load (local.get $wa))
+                  (global.get $BACKUP_CONTEXT_MAGIC))
+          (i32.ne (i32.load offset=4 (local.get $wa)) (local.get $mode)))
+      (then
+        (global.set $last_error (i32.const 87))
+        (return (i32.const 0))))
+    ;; Poison before freeing so a copied/stale context value cannot pass the
+    ;; signature check unless the allocator has legitimately reused it.
+    (i32.store (local.get $wa) (i32.const 0))
+    (call $heap_free (local.get $ctx))
+    (call $gs32 (local.get $slot) (i32.const 0))
+    (i32.const 1))
+
+  ;; BackupRead(hFile, buffer, count, bytesRead, abort, processSecurity,
+  ;;            context) -- 7-argument stdcall.
+  (func $handle_BackupRead (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $slot i32) (local $ctx i32) (local $wa i32)
+    (local $size i32) (local $phase i32) (local $header i32)
+    (local $remaining i32) (local $done i32) (local $chunk i32)
+    (local $bytes i32) (local $lazy i32) (local $i i32)
+    (local $old_phase i32) (local $old_header i32) (local $old_remaining i32)
+    (local.set $slot
+      (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+
+    ;; Microsoft documents an abort call as context-only: all other arguments
+    ;; are ignored, including a stale file handle and buffer pointers.
+    (if (local.get $arg4)
+      (then
+        (global.set $eax
+          (call $backup_context_abort (local.get $slot) (i32.const 1)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+
+    (global.set $eax (i32.const 0))
+    (if (i32.or
+          (call $ptr_range_access_bad
+            (local.get $slot) (i32.const 4) (i32.const 1))
+          (i32.or
+            (call $ptr_range_access_bad
+              (local.get $arg3) (i32.const 4) (i32.const 1))
+            (i32.and
+              (i32.ne (local.get $arg2) (i32.const 0))
+              (i32.ne
+                (call $ptr_range_access_bad
+                  (local.get $arg1) (local.get $arg2) (i32.const 1))
+                (i32.const 0)))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+    (call $gs32 (local.get $arg3) (i32.const 0))
+    ;; The documented contract requires room beyond the fixed 20-byte
+    ;; WIN32_STREAM_ID header. A zero-length call remains useful for the
+    ;; documented end-of-stream probe, but other undersized calls fail.
+    (if (i32.and
+          (i32.ne (local.get $arg2) (i32.const 0))
+          (i32.le_u (local.get $arg2) (i32.const 20)))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+    (local.set $ctx (call $gl32 (local.get $slot)))
+    (if (i32.eqz (local.get $ctx))
+      (then
+        (local.set $size (call $host_fs_get_file_size (local.get $arg0)))
+        (if (i32.eq (local.get $size) (i32.const -1))
+          (then
+            (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        ;; BackupRead describes the whole unnamed stream, independent of a
+        ;; cursor the caller happened to leave on the newly supplied handle.
+        (if (i32.eq
+              (call $host_fs_set_file_pointer
+                (local.get $arg0) (i32.const 0) (i32.const 0))
+              (i32.const -1))
+          (then
+            (global.set $last_error (i32.const 25)) ;; ERROR_SEEK
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $ctx (call $heap_alloc (global.get $BACKUP_CONTEXT_SIZE)))
+        (if (i32.eqz (local.get $ctx))
+          (then
+            (global.set $last_error (i32.const 8)) ;; ERROR_NOT_ENOUGH_MEMORY
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $wa (call $g2w (local.get $ctx)))
+        (memory.fill (local.get $wa) (i32.const 0)
+          (global.get $BACKUP_CONTEXT_SIZE))
+        (i32.store (local.get $wa) (global.get $BACKUP_CONTEXT_MAGIC))
+        (i32.store offset=4 (local.get $wa) (i32.const 1))
+        (i32.store offset=8 (local.get $wa) (local.get $arg0))
+        (i32.store offset=20 (local.get $wa) (local.get $size))
+        (i32.store offset=24 (local.get $wa) (local.get $size))
+        ;; WIN32_STREAM_ID without a name is a fixed 20-byte wire header.
+        (i32.store offset=32 (local.get $wa) (i32.const 1)) ;; BACKUP_DATA
+        (i32.store offset=40 (local.get $wa) (local.get $size))
+        (call $gs32 (local.get $slot) (local.get $ctx)))
+      (else
+        (if (call $ptr_range_bad
+              (local.get $ctx) (global.get $BACKUP_CONTEXT_SIZE))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $wa (call $g2w (local.get $ctx)))
+        (if (i32.or
+              (i32.ne (i32.load (local.get $wa))
+                      (global.get $BACKUP_CONTEXT_MAGIC))
+              (i32.or
+                (i32.ne (i32.load offset=4 (local.get $wa)) (i32.const 1))
+                (i32.ne (i32.load offset=8 (local.get $wa)) (local.get $arg0))))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))))
+
+    (local.set $phase (i32.load offset=12 (local.get $wa)))
+    (local.set $header (i32.load offset=16 (local.get $wa)))
+    (local.set $remaining (i32.load offset=20 (local.get $wa)))
+    (local.set $old_phase (local.get $phase))
+    (local.set $old_header (local.get $header))
+    (local.set $old_remaining (local.get $remaining))
+
+    ;; Keep header progress explicit so retry/error rollback remains atomic.
+    ;; A conforming first call has room for this whole fixed header.
+    (if (i32.and
+          (i32.eqz (local.get $phase))
+          (i32.lt_u (local.get $done) (local.get $arg2)))
+      (then
+        (local.set $chunk
+          (i32.sub (i32.const 20) (local.get $header)))
+        (if (i32.gt_u (local.get $chunk)
+                      (i32.sub (local.get $arg2) (local.get $done)))
+          (then
+            (local.set $chunk
+              (i32.sub (local.get $arg2) (local.get $done)))))
+        ;; Byte helpers keep this tiny header copy correct even when a caller's
+        ;; guest buffer straddles separately backed virtual pages.
+        (local.set $i (i32.const 0))
+        (block $read_header_done (loop $read_header
+          (br_if $read_header_done (i32.ge_u (local.get $i) (local.get $chunk)))
+          (call $gs8
+            (i32.add (i32.add (local.get $arg1) (local.get $done)) (local.get $i))
+            (i32.load8_u
+              (i32.add
+                (i32.add (local.get $wa) (i32.const 32))
+                (i32.add (local.get $header) (local.get $i)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $read_header)))
+        (local.set $header (i32.add (local.get $header) (local.get $chunk)))
+        (local.set $done (i32.add (local.get $done) (local.get $chunk)))
+        (i32.store offset=16 (local.get $wa) (local.get $header))
+        (if (i32.eq (local.get $header) (i32.const 20))
+          (then
+            (local.set $phase
+              (select (i32.const 2) (i32.const 1)
+                (i32.eqz (local.get $remaining))))
+            (i32.store offset=12 (local.get $wa) (local.get $phase))))))
+
+    (if (i32.and
+          (i32.eq (local.get $phase) (i32.const 1))
+          (i32.lt_u (local.get $done) (local.get $arg2)))
+      (then
+        (local.set $chunk
+          (i32.sub (local.get $arg2) (local.get $done)))
+        (if (i32.gt_u (local.get $chunk) (local.get $remaining))
+          (then (local.set $chunk (local.get $remaining))))
+        (i32.store offset=28 (local.get $wa) (i32.const 0))
+        (if (i32.eqz (call $host_fs_read_file
+              (local.get $arg0)
+              (i32.add (local.get $arg1) (local.get $done))
+              (local.get $chunk)
+              (i32.add (local.get $ctx) (i32.const 28))))
+          (then
+            ;; Restore call-entry progress because a lazy read retries the
+            ;; complete API call with the same guest buffer and arguments.
+            (i32.store offset=12 (local.get $wa) (local.get $old_phase))
+            (i32.store offset=16 (local.get $wa) (local.get $old_header))
+            (i32.store offset=20 (local.get $wa) (local.get $old_remaining))
+            (local.set $lazy (call $host_fs_read_pending))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (if (i32.eq (local.get $lazy) (i32.const 1))
+              (then (call $io_block (i32.const 32)))
+              (else (global.set $last_error (i32.const 30)))) ;; ERROR_READ_FAULT
+            (return)))
+        (local.set $bytes
+          (i32.load offset=28 (local.get $wa)))
+        ;; A file truncated after its stream header (or a broken host bridge)
+        ;; must not produce an endless series of successful zero-byte calls
+        ;; while the advertised payload still has bytes remaining.
+        (if (i32.and
+              (i32.ne (local.get $chunk) (i32.const 0))
+              (i32.eqz (local.get $bytes)))
+          (then
+            (i32.store offset=12 (local.get $wa) (local.get $old_phase))
+            (i32.store offset=16 (local.get $wa) (local.get $old_header))
+            (i32.store offset=20 (local.get $wa) (local.get $old_remaining))
+            (global.set $last_error (i32.const 30))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $done (i32.add (local.get $done) (local.get $bytes)))
+        (local.set $remaining (i32.sub (local.get $remaining) (local.get $bytes)))
+        (i32.store offset=20 (local.get $wa) (local.get $remaining))
+        (if (i32.eqz (local.get $remaining))
+          (then (i32.store offset=12 (local.get $wa) (i32.const 2))))))
+    (call $gs32 (local.get $arg3) (local.get $done))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+
+  ;; BackupWrite(hFile, buffer, count, bytesWritten, abort, processSecurity,
+  ;;             context) -- 7-argument stdcall.
+  (func $handle_BackupWrite (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $slot i32) (local $ctx i32) (local $wa i32)
+    (local $phase i32) (local $header i32) (local $remaining i32)
+    (local $done i32) (local $chunk i32) (local $bytes i32)
+    (local $ok i32) (local $i i32)
+    (local $old_phase i32) (local $old_header i32) (local $old_remaining i32)
+    (local.set $slot
+      (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (if (local.get $arg4)
+      (then
+        (global.set $eax
+          (call $backup_context_abort (local.get $slot) (i32.const 2)))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+
+    (global.set $eax (i32.const 0))
+    (if (i32.or
+          (call $ptr_range_access_bad
+            (local.get $slot) (i32.const 4) (i32.const 1))
+          (i32.or
+            (call $ptr_range_access_bad
+              (local.get $arg3) (i32.const 4) (i32.const 1))
+            (i32.and
+              (i32.ne (local.get $arg2) (i32.const 0))
+              (i32.ne
+                (call $ptr_range_bad (local.get $arg1) (local.get $arg2))
+                (i32.const 0)))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+    (call $gs32 (local.get $arg3) (i32.const 0))
+    (if (i32.and
+          (i32.ne (local.get $arg2) (i32.const 0))
+          (i32.le_u (local.get $arg2) (i32.const 20)))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+    (if (i32.eq
+          (call $host_fs_get_file_size (local.get $arg0)) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 6))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+
+    (local.set $ctx (call $gl32 (local.get $slot)))
+    (if (i32.eqz (local.get $ctx))
+      (then
+        (if (i32.eq
+              (call $host_fs_set_file_pointer
+                (local.get $arg0) (i32.const 0) (i32.const 0))
+              (i32.const -1))
+          (then
+            (global.set $last_error (i32.const 25))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $ctx (call $heap_alloc (global.get $BACKUP_CONTEXT_SIZE)))
+        (if (i32.eqz (local.get $ctx))
+          (then
+            (global.set $last_error (i32.const 8))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $wa (call $g2w (local.get $ctx)))
+        (memory.fill (local.get $wa) (i32.const 0)
+          (global.get $BACKUP_CONTEXT_SIZE))
+        (i32.store (local.get $wa) (global.get $BACKUP_CONTEXT_MAGIC))
+        (i32.store offset=4 (local.get $wa) (i32.const 2))
+        (i32.store offset=8 (local.get $wa) (local.get $arg0))
+        (call $gs32 (local.get $slot) (local.get $ctx)))
+      (else
+        (if (call $ptr_range_bad
+              (local.get $ctx) (global.get $BACKUP_CONTEXT_SIZE))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $wa (call $g2w (local.get $ctx)))
+        (if (i32.or
+              (i32.ne (i32.load (local.get $wa))
+                      (global.get $BACKUP_CONTEXT_MAGIC))
+              (i32.or
+                (i32.ne (i32.load offset=4 (local.get $wa)) (i32.const 2))
+                (i32.ne (i32.load offset=8 (local.get $wa)) (local.get $arg0))))
+          (then
+            (global.set $last_error (i32.const 87))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))))
+
+    (local.set $phase (i32.load offset=12 (local.get $wa)))
+    (local.set $header (i32.load offset=16 (local.get $wa)))
+    (local.set $remaining (i32.load offset=20 (local.get $wa)))
+    (local.set $old_phase (local.get $phase))
+    (local.set $old_header (local.get $header))
+    (local.set $old_remaining (local.get $remaining))
+
+    (if (i32.and
+          (i32.eqz (local.get $phase))
+          (i32.lt_u (local.get $done) (local.get $arg2)))
+      (then
+        (local.set $chunk
+          (i32.sub (i32.const 20) (local.get $header)))
+        (if (i32.gt_u (local.get $chunk)
+                      (i32.sub (local.get $arg2) (local.get $done)))
+          (then
+            (local.set $chunk
+              (i32.sub (local.get $arg2) (local.get $done)))))
+        (local.set $i (i32.const 0))
+        (block $write_header_done (loop $write_header
+          (br_if $write_header_done (i32.ge_u (local.get $i) (local.get $chunk)))
+          (i32.store8
+            (i32.add
+              (i32.add (local.get $wa) (i32.const 32))
+              (i32.add (local.get $header) (local.get $i)))
+            (call $gl8
+              (i32.add
+                (i32.add (local.get $arg1) (local.get $done))
+                (local.get $i))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $write_header)))
+        (local.set $header (i32.add (local.get $header) (local.get $chunk)))
+        (local.set $done (i32.add (local.get $done) (local.get $chunk)))
+        (i32.store offset=16 (local.get $wa) (local.get $header))
+        (if (i32.eq (local.get $header) (i32.const 20))
+          (then
+            ;; Accept only the default data stream shape that the VFS can
+            ;; actually restore. Header rejection occurs before any file byte
+            ;; is written, including when header and payload share one call.
+            (if (i32.or
+                  (i32.ne (i32.load offset=32 (local.get $wa)) (i32.const 1))
+                  (i32.or
+                    (i32.ne (i32.load offset=36 (local.get $wa)) (i32.const 0))
+                    (i32.or
+                      (i32.ne (i32.load offset=44 (local.get $wa)) (i32.const 0))
+                      (i32.ne (i32.load offset=48 (local.get $wa)) (i32.const 0)))))
+              (then
+                (i32.store offset=12 (local.get $wa) (local.get $old_phase))
+                (i32.store offset=16 (local.get $wa) (local.get $old_header))
+                (i32.store offset=20 (local.get $wa) (local.get $old_remaining))
+                (global.set $last_error (i32.const 50))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+                (return)))
+            (local.set $remaining (i32.load offset=40 (local.get $wa)))
+            (i32.store offset=20 (local.get $wa) (local.get $remaining))
+            (i32.store offset=24 (local.get $wa) (local.get $remaining))
+            (local.set $phase
+              (select (i32.const 2) (i32.const 1)
+                (i32.eqz (local.get $remaining))))
+            (i32.store offset=12 (local.get $wa) (local.get $phase))
+            (if (i32.eqz (local.get $remaining))
+              (then
+                (if (i32.eqz
+                      (call $host_fs_set_end_of_file (local.get $arg0)))
+                  (then
+                    (i32.store offset=12 (local.get $wa) (local.get $old_phase))
+                    (i32.store offset=16 (local.get $wa) (local.get $old_header))
+                    (i32.store offset=20 (local.get $wa) (local.get $old_remaining))
+                    (global.set $last_error (i32.const 29))
+                    (global.set $esp
+                      (i32.add (global.get $esp) (i32.const 32)))
+                    (return)))))))))
+
+    (if (i32.and
+          (i32.eq (local.get $phase) (i32.const 1))
+          (i32.lt_u (local.get $done) (local.get $arg2)))
+      (then
+        (local.set $chunk
+          (i32.sub (local.get $arg2) (local.get $done)))
+        (if (i32.gt_u (local.get $chunk) (local.get $remaining))
+          (then (local.set $chunk (local.get $remaining))))
+        (local.set $ok (call $host_fs_write_file
+          (local.get $arg0)
+          (i32.add (local.get $arg1) (local.get $done))
+          (local.get $chunk)
+          (i32.add (local.get $ctx) (i32.const 28))))
+        (if (i32.eqz (local.get $ok))
+          (then
+            (i32.store offset=12 (local.get $wa) (local.get $old_phase))
+            (i32.store offset=16 (local.get $wa) (local.get $old_header))
+            (i32.store offset=20 (local.get $wa) (local.get $old_remaining))
+            (global.set $last_error (i32.const 29)) ;; ERROR_WRITE_FAULT
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $bytes (i32.load offset=28 (local.get $wa)))
+        (if (i32.and
+              (i32.ne (local.get $chunk) (i32.const 0))
+              (i32.eqz (local.get $bytes)))
+          (then
+            (i32.store offset=12 (local.get $wa) (local.get $old_phase))
+            (i32.store offset=16 (local.get $wa) (local.get $old_header))
+            (i32.store offset=20 (local.get $wa) (local.get $old_remaining))
+            (global.set $last_error (i32.const 29))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        ;; A successful host write may still be short. Consume exactly the
+        ;; bytes it reports so the caller can retry the unconsumed suffix.
+        (if (i32.gt_u (local.get $bytes) (local.get $chunk))
+          (then
+            (global.set $last_error (i32.const 29))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (return)))
+        (local.set $done (i32.add (local.get $done) (local.get $bytes)))
+        (local.set $remaining (i32.sub (local.get $remaining) (local.get $bytes)))
+        (i32.store offset=20 (local.get $wa) (local.get $remaining))
+        (if (i32.eqz (local.get $remaining))
+          (then
+            ;; Restoring BACKUP_DATA defines its complete length. Remove a
+            ;; stale tail when the destination existed and was longer.
+            (if (i32.eqz
+                  (call $host_fs_set_end_of_file (local.get $arg0)))
+              (then
+                (global.set $last_error (i32.const 29))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+                (return)))
+            (local.set $phase (i32.const 2))
+            (i32.store offset=12 (local.get $wa) (local.get $phase))))))
+
+    ;; One context describes one destination file. Bytes following its sole
+    ;; unnamed data stream would begin another (unsupported) stream header.
+    (if (i32.and
+          (i32.eq (local.get $phase) (i32.const 2))
+          (i32.lt_u (local.get $done) (local.get $arg2)))
+      (then
+        (global.set $last_error (i32.const 50))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (return)))
+    (call $gs32 (local.get $arg3) (local.get $done))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+
+  ;; BackupSeek seeks forward only inside the current stream payload. It
+  ;; never crosses a header; an overlong request advances to the end of this
+  ;; stream, reports the actual distance, and fails as documented.
+  (func $handle_BackupSeek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $slot i32) (local $ctx i32) (local $wa i32)
+    (local $phase i32) (local $remaining i32) (local $actual i32)
+    (local $chunk i32) (local $left i32) (local $moved i32)
+    (local $complete i32) (local $seek_failed i32)
+    (local.set $slot
+      (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $eax (i32.const 0))
+    (if (i32.or
+          (call $ptr_range_access_bad
+            (local.get $arg3) (i32.const 4) (i32.const 1))
+          (i32.or
+            (call $ptr_range_access_bad
+              (local.get $arg4) (i32.const 4) (i32.const 1))
+            (call $ptr_range_bad (local.get $slot) (i32.const 4))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
+    (call $gs32 (local.get $arg3) (i32.const 0))
+    (call $gs32 (local.get $arg4) (i32.const 0))
+    (local.set $ctx (call $gl32 (local.get $slot)))
+    (if (i32.or
+          (i32.eqz (local.get $ctx))
+          (call $ptr_range_bad
+            (local.get $ctx) (global.get $BACKUP_CONTEXT_SIZE)))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
+    (local.set $wa (call $g2w (local.get $ctx)))
+    (if (i32.or
+          (i32.ne (i32.load (local.get $wa))
+                  (global.get $BACKUP_CONTEXT_MAGIC))
+          (i32.or
+            (i32.ne (i32.load offset=8 (local.get $wa)) (local.get $arg0))
+            (i32.and
+              (i32.ne (i32.load offset=4 (local.get $wa)) (i32.const 1))
+              (i32.ne (i32.load offset=4 (local.get $wa)) (i32.const 2)))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
+    (if (i32.eq
+          (call $host_fs_get_file_size (local.get $arg0)) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 6))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
+    (local.set $phase (i32.load offset=12 (local.get $wa)))
+    (local.set $remaining (i32.load offset=20 (local.get $wa)))
+    ;; Header bytes are not stream payload and BackupSeek cannot cross them.
+    (if (i32.eqz (local.get $phase))
+      (then
+        (global.set $last_error (i32.const 25)) ;; ERROR_SEEK
+        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (return)))
+
+    ;; A nonzero high half necessarily exceeds our bounded (<4 GB) VFS
+    ;; stream. Otherwise compare the low halves unsigned.
+    (local.set $complete
+      (i32.and
+        (i32.eqz (local.get $arg2))
+        (i32.le_u (local.get $arg1) (local.get $remaining))))
+    (local.set $actual
+      (select (local.get $arg1) (local.get $remaining) (local.get $complete)))
+    (local.set $left (local.get $actual))
+    ;; The host bridge takes a signed i32 delta. Split a large forward seek
+    ;; so every individual FILE_CURRENT movement stays nonnegative.
+    (block $seek_done (loop $seek
+      (br_if $seek_done (i32.eqz (local.get $left)))
+      (local.set $chunk (local.get $left))
+      (if (i32.gt_u (local.get $chunk) (i32.const 0x7fffffff))
+        (then (local.set $chunk (i32.const 0x7fffffff))))
+      (if (i32.eq
+            (call $host_fs_set_file_pointer
+              (local.get $arg0) (local.get $chunk) (i32.const 1))
+            (i32.const -1))
+        (then
+          (local.set $seek_failed (i32.const 1))
+          (br $seek_done)))
+      (local.set $left (i32.sub (local.get $left) (local.get $chunk)))
+      (local.set $moved (i32.add (local.get $moved) (local.get $chunk)))
+      (br $seek)))
+    (local.set $remaining (i32.sub (local.get $remaining) (local.get $moved)))
+    (i32.store offset=20 (local.get $wa) (local.get $remaining))
+    (if (i32.eqz (local.get $remaining))
+      (then (i32.store offset=12 (local.get $wa) (i32.const 2))))
+    (call $gs32 (local.get $arg3) (local.get $moved))
+    ;; Since actual never exceeds 32 bits, its high half is always zero.
+    (call $gs32 (local.get $arg4) (i32.const 0))
+    (if (i32.and
+          (i32.ne (local.get $complete) (i32.const 0))
+          (i32.eqz (local.get $seek_failed)))
+      (then (global.set $eax (i32.const 1)))
+      (else (global.set $last_error (i32.const 25))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
