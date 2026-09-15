@@ -753,9 +753,217 @@
     (if (local.get $dir) (then (call $heap_free (local.get $dir))))
   )
 
-  ;; 501: HeapValidate — STUB: unimplemented
+  ;; Prove that a guest pointer names an exact allocator block boundary. The
+  ;; header at ptr-4 is not evidence by itself: an interior pointer can have a
+  ;; plausible aligned dword planted in the caller's payload. Start at the
+  ;; authoritative arena base and follow each extent until the requested
+  ;; header is reached. Return its aligned size (including the header), or zero
+  ;; for an interior, unmapped, malformed, or stale pointer.
+  (func $heap_validate_exact_block (param $guest_ptr i32) (result i32)
+    (local $block i32) (local $rec i32) (local $cur i32)
+    (local $allocated_end i32) (local $reserved_end i32)
+    (local $wa i32) (local $raw i32) (local $size i32) (local $next i32)
+    (if (i32.or
+          (i32.lt_u (local.get $guest_ptr) (i32.const 4))
+          (i32.ne (i32.and (local.get $guest_ptr) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (local.set $cur (i32.atomic.load (local.get $rec)))
+    (local.set $reserved_end (i32.load offset=4 (local.get $rec)))
+    (local.set $allocated_end (i32.atomic.load offset=8 (local.get $rec)))
+    (block $invalid (loop $walk
+      (br_if $invalid (i32.ge_u (local.get $cur) (local.get $allocated_end)))
+      (br_if $invalid (i32.gt_u (local.get $cur) (local.get $block)))
+      (local.set $wa (call $g2w (local.get $cur)))
+      (local.set $raw (i32.atomic.load (local.get $wa)))
+      ;; Bit zero is GlobalAlloc's live tag; bits 1..2 are always malformed.
+      (br_if $invalid (i32.ne (i32.and (local.get $raw) (i32.const 6)) (i32.const 0)))
+      (local.set $size (i32.and (local.get $raw) (i32.const -8)))
+      (br_if $invalid (i32.lt_u (local.get $size) (i32.const 16)))
+      (local.set $next (i32.add (local.get $cur) (local.get $size)))
+      (br_if $invalid (i32.le_u (local.get $next) (local.get $cur)))
+      (br_if $invalid (i32.gt_u (local.get $next) (local.get $allocated_end)))
+      (br_if $invalid (i32.gt_u (local.get $next) (local.get $reserved_end)))
+      (if (i32.eq (local.get $cur) (local.get $block))
+        (then (return (local.get $size))))
+      (br_if $invalid (i32.gt_u (local.get $next) (local.get $block)))
+      (local.set $cur (local.get $next))
+      (br $walk)))
+    (i32.const 0))
+
+  ;; A block header remains structurally valid after free, so exact-boundary
+  ;; validation alone would accept it. Walk this instance's allocator list to
+  ;; prove the requested block is absent. The list is itself guest-writable;
+  ;; malformed links and cycles make the proof fail rather than reaching g2w
+  ;; through an unchecked address or spinning forever.
+  (func $heap_validate_free_list_excludes (param $target i32) (result i32)
+    (local $cur i32) (local $raw i32) (local $steps i32)
+    (local.set $cur (global.get $free_list))
+    (block $valid (loop $walk
+      (br_if $valid (i32.eqz (local.get $cur)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (if (i32.gt_u (local.get $steps) (i32.const 65536))
+        (then (return (i32.const 0))))
+      (if (i32.eqz
+            (call $heap_validate_exact_block
+              (i32.add (local.get $cur) (i32.const 4))))
+        (then (return (i32.const 0))))
+      (local.set $raw (i32.atomic.load (call $g2w (local.get $cur))))
+      ;; Free blocks have an untagged aligned extent.
+      (if (i32.ne (i32.and (local.get $raw) (i32.const 7)) (i32.const 0))
+        (then (return (i32.const 0))))
+      (if (i32.eq (local.get $cur) (local.get $target))
+        (then (return (i32.const 0))))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (br $walk)))
+    (i32.const 1))
+
+  ;; Arena live-byte accounting is shared across Worker instances, while each
+  ;; instance owns a private free-list head. If another instance owns a free
+  ;; block in this arena, its header is indistinguishable from a live header to
+  ;; this instance. In that case do not guess: only call a target live when the
+  ;; shared live-byte count plus every locally provable free extent accounts
+  ;; for the entire published block chain. This can conservatively reject a
+  ;; live neighbor of a cross-instance free, but it cannot bless that freed
+  ;; block as allocated.
+  (func $heap_validate_arena_accounts_live
+      (param $rec i32) (param $target i32) (result i32)
+    (local $base i32) (local $allocated_end i32) (local $total i32)
+    (local $live i32) (local $free i32) (local $cur i32)
+    (local $cur_rec i32) (local $size i32) (local $steps i32)
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (local.set $base (i32.atomic.load (local.get $rec)))
+    (local.set $allocated_end (i32.atomic.load offset=8 (local.get $rec)))
+    (if (i32.lt_u (local.get $allocated_end) (local.get $base))
+      (then (return (i32.const 0))))
+    (local.set $total (i32.sub (local.get $allocated_end) (local.get $base)))
+    (local.set $live (i32.atomic.load offset=12 (local.get $rec)))
+    (if (i32.gt_u (local.get $live) (local.get $total))
+      (then (return (i32.const 0))))
+    (local.set $cur (global.get $free_list))
+    (block $list_done (loop $list
+      (br_if $list_done (i32.eqz (local.get $cur)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (if (i32.gt_u (local.get $steps) (i32.const 65536))
+        (then (return (i32.const 0))))
+      (local.set $size (call $heap_validate_exact_block
+        (i32.add (local.get $cur) (i32.const 4))))
+      (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))
+      (if (i32.ne
+            (i32.and (i32.atomic.load (call $g2w (local.get $cur))) (i32.const 7))
+            (i32.const 0))
+        (then (return (i32.const 0))))
+      (local.set $cur_rec (call $heap_arena_find (local.get $cur)))
+      (if (i32.eq (local.get $cur) (local.get $target))
+        (then (return (i32.const 0))))
+      (if (i32.eq (local.get $cur_rec) (local.get $rec))
+        (then
+          (if (i32.lt_u (i32.add (local.get $free) (local.get $size)) (local.get $free))
+            (then (return (i32.const 0))))
+          (local.set $free (i32.add (local.get $free) (local.get $size)))))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (br $list)))
+    (if (i32.lt_u (i32.add (local.get $live) (local.get $free)) (local.get $live))
+      (then (return (i32.const 0))))
+    (i32.eq (i32.add (local.get $live) (local.get $free)) (local.get $total)))
+
+  (func $heap_validate_live_block (param $guest_ptr i32) (result i32)
+    (local $block i32) (local $rec i32)
+    (if (i32.eqz (call $heap_validate_exact_block (local.get $guest_ptr)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (call $heap_validate_arena_accounts_live (local.get $rec) (local.get $block)))
+
+  ;; Validate every published arena and every block extent the current
+  ;; allocator can observe. Private HeapCreate handles share this one process
+  ;; allocator in our model, so whole-heap validation is intentionally the same
+  ;; structural scan for either kind of recognized heap handle.
+  (func $heap_validate_all_arenas (result i32)
+    (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32) (local $reserved_end i32) (local $allocated_end i32)
+    (local $cur i32) (local $raw i32) (local $size i32) (local $next i32)
+    (local $steps i32)
+    (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+    (if (i32.gt_u (local.get $count) (i32.const 1024))
+      (then (return (i32.const 0))))
+    (block $arenas_done (loop $arena
+      (br_if $arenas_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
+      (local.set $base (i32.atomic.load (local.get $rec)))
+      (if (local.get $base) (then
+        (local.set $reserved_end (i32.load offset=4 (local.get $rec)))
+        (local.set $allocated_end (i32.atomic.load offset=8 (local.get $rec)))
+        (if (i32.or
+              (i32.ne (i32.and (local.get $base) (i32.const 7)) (i32.const 0))
+              (i32.or
+                (i32.le_u (local.get $reserved_end) (local.get $base))
+                (i32.or
+                  (i32.lt_u (local.get $allocated_end) (local.get $base))
+                  (i32.gt_u (local.get $allocated_end) (local.get $reserved_end)))))
+          (then (return (i32.const 0))))
+        (local.set $cur (local.get $base))
+        (local.set $steps (i32.const 0))
+        (block $blocks_done (loop $block
+          (br_if $blocks_done (i32.eq (local.get $cur) (local.get $allocated_end)))
+          (if (i32.gt_u (local.get $cur) (local.get $allocated_end))
+            (then (return (i32.const 0))))
+          (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+          (if (i32.gt_u (local.get $steps) (i32.const 65536))
+            (then (return (i32.const 0))))
+          (local.set $raw (i32.atomic.load (call $g2w (local.get $cur))))
+          (if (i32.ne (i32.and (local.get $raw) (i32.const 6)) (i32.const 0))
+            (then (return (i32.const 0))))
+          (local.set $size (i32.and (local.get $raw) (i32.const -8)))
+          (if (i32.lt_u (local.get $size) (i32.const 16))
+            (then (return (i32.const 0))))
+          (local.set $next (i32.add (local.get $cur) (local.get $size)))
+          (if (i32.or
+                (i32.le_u (local.get $next) (local.get $cur))
+                (i32.or
+                  (i32.gt_u (local.get $next) (local.get $allocated_end))
+                  (i32.gt_u (local.get $next) (local.get $reserved_end))))
+            (then (return (i32.const 0))))
+          (local.set $cur (local.get $next))
+          (br $block)))
+        (if (i32.eqz
+              (call $heap_validate_arena_accounts_live
+                (local.get $rec) (i32.const 0)))
+          (then (return (i32.const 0))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $arena)))
+    (call $heap_validate_free_list_excludes (i32.const 0)))
+
+  ;; A private heap handle is an allocator-owned live record, not merely an
+  ;; arbitrary readable address containing the HEAP magic. The fixed process
+  ;; handle is the one exception because it is intentionally not heap memory.
+  (func $heap_validate_handle (param $handle i32) (result i32)
+    (if (i32.eq (local.get $handle) (global.get $PROCESS_HEAP_HANDLE))
+      (then (return (i32.const 1))))
+    (if (i32.eqz (call $heap_validate_live_block (local.get $handle)))
+      (then (return (i32.const 0))))
+    (i32.eq (call $gl32 (local.get $handle)) (global.get $PRIVATE_HEAP_MAGIC)))
+
+  ;; 501: HeapValidate(hHeap, dwFlags, lpMem) → BOOL. Microsoft documents
+  ;; HEAP_NO_SERIALIZE as the sole call flag (and warns callers not to use it
+  ;; for the process heap); it changes locking policy, not the structures being
+  ;; checked here. A non-NULL pointer must be a live allocation; NULL scans
+  ;; every arena invariant this allocator actually maintains. HeapValidate
+  ;; deliberately never changes last error, on either success or failure.
   (func $handle_HeapValidate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $valid i32)
+    (block $done
+      (br_if $done
+        (i32.ne (i32.and (local.get $arg1) (i32.const -2)) (i32.const 0)))
+      (br_if $done (i32.eqz (call $heap_validate_handle (local.get $arg0))))
+      (if (local.get $arg2)
+        (then (local.set $valid (call $heap_validate_live_block (local.get $arg2))))
+        (else (local.set $valid (call $heap_validate_all_arenas)))))
+    (global.set $eax (local.get $valid))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
   )
 
   ;; 502: HeapCompact(hHeap, dwFlags) — 2 args stdcall. Returns the size of the
