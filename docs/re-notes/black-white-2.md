@@ -8107,3 +8107,63 @@ draw releases those keys and re-sends what it uses, so a lost upload costs one
 re-send instead of a key that fails "texture not resident" forever. A worker
 that rejects a draw poisons the queue anyway (sticky error); the case this
 guards is the FULL-parked `_issue` path whose late `_submit` refuses.
+
+### Present pipelined one frame deep, and the worker posted to in order (2026-09-15)
+
+Two changes to the asynchronous software path in `lib/d3d9-host.js`, both
+aimed at the ping-pong the residency profile left behind (worker ~50% idle
+waiting for the guest, guest parked waiting for the worker):
+
+1. **The bridge's queue consumer is now `ordered`.** `CommandQueue` executes
+   one command at a time unless its consumer says it preserves order; the
+   worker proxy (`WorkerConsumer`) does, but the bridge wrapped it in a plain
+   `{execute}` and so every deferred draw was posted to the worker only after
+   the previous one's completion message had come back -- one main-thread hop
+   per command, both threads idle inside it. Posts now go out as they are
+   submitted, chained per device (`entry.postChain`) so a Present that waits
+   for its display boundary still holds every later post behind it.
+2. **Present is pipelined one frame deep** (`_pipelinePresent`). Present N+1
+   leaves its own PRESENT in flight and parks the guest on PRESENT N, whose
+   pixels land at the address Present N named; the WAT side then presents
+   that frame (`$dx_present`, result 0) -- one frame behind, never a
+   half-built one. The first Present after creation or a Reset still blocks on
+   itself so the first frame is on screen before a load; the one after it has
+   nothing older to wait for and returns at once, re-presenting the published
+   frame. Reset and Release drop the frame in flight; a frame that fails in
+   flight surfaces as -1 at the next call on the device (`deferredError`).
+   Cost: a frame drawn once and then not presented again reaches the screen
+   only at the next Present. GL entries are synchronous and unchanged.
+
+`test/test-d3d9-present-pipeline.js` covers both with a fake ordered consumer
+(first blocks, second returns at once, third parks on the second, per-Present
+destinations, reset/release/failure). `test-d3d9-guest-render-worker.js` now
+expects the large draw to publish at the *third* Present.
+
+Live, on the hub with load 20-50 (numbers describe the machine): the Lionhead
+intro presents at ~0.4/s with the bridge showing `presented:true`,
+`pendingPresent:true`, one parked request, 3-8 commands in flight at the
+worker (was 1 by construction). The render worker profiled over 15 s is 56%
+idle at 1.85M blocks/s -- the guest is the bottleneck on this box, not the
+hand-off. The menu/dialog comparison against 0.65-0.77 fps is still to be
+taken on a quiet box.
+
+### DirectInput button edges are stamped when queued (2026-09-15)
+
+`dwTimeStamp` used to be `host_get_ticks` at drain time, so every record
+drained by one `GetDeviceData` carried the poll's tick (see the open item
+above). A ring word for a button edge now carries the wall-clock millisecond
+it was queued at in its low 28 bits, type 1..4 in the high nibble
+(`lib/renderer-input.js` `_queueDirectInputMouseEvent`); the drain
+(`$di_mouse_event_stamp` in `src/09a8-handlers-directx.wat`) stamps the record
+with `ticks_now - ((real_time_ms_now - queued) & 0x0FFFFFFF)`, i.e. the guest
+tick of the click itself, whatever clock the harness synthesises for
+`get_ticks`. Motion words have no room for a stamp and keep the poll tick, as
+does a bare 1..4 (the shape tests push directly). `test-directinput-device.js`
+checks two presses queued 1.5 s apart and drained in one poll are stamped
+1.5 s apart. The land-picker retry with this build is still owed: on the
+box at load 20-45 the software renderer's Lionhead intro presented at
+0.25-0.4/s (guest at 1.6-2.0M blocks/s), and the intro breakpoint skip
+(`$S/rc/skip-all-intros.sh`) reported no hits on software in three runs, so
+the menu was not reached within a session's patience. Retry on a quiet box:
+`to-menu.sh`, profile OK (313,343), New Game (197,555), Continue (400,575),
+then two `di-mousedown`/`di-mouseup` pairs at the land (165,478).

@@ -431,6 +431,31 @@ const extraWat = `
   assert.deepStrictEqual([wat.guest_read32(count), wat.guest_read32(data), wat.guest_read32(data + 4)],
     [1, 12, 0], 'second one-record poll receives the queued left-button release');
 
+  // The browser stamps a button edge with the wall-clock millisecond it was
+  // queued at (type in the high nibble, time in the low 28 bits). Two presses
+  // 1.5 s apart that drain in ONE poll are stamped 1.5 s apart, at the ticks
+  // of the clicks, not both with the poll's tick. A bare code stays unstamped.
+  const stampedAt = ms => ((1 << 28) | (ms & 0x0FFFFFFF)) | 0;
+  const queuedAt = Date.now();
+  wat.test_di_mouse_queue_event(stampedAt(queuedAt - 3000));
+  wat.test_di_mouse_queue_event(((2 << 28) | ((queuedAt - 2900) & 0x0FFFFFFF)) | 0);
+  wat.test_di_mouse_queue_event(stampedAt(queuedAt - 1500));
+  wat.test_di_mouse_queue_event(2);
+  wat.guest_write32(count, 4);
+  assert.strictEqual(wat.test_di_mouse_get_data(mouse, data, count, 0) >>> 0, 0);
+  assert.strictEqual(wat.guest_read32(count), 4);
+  const stamps = [0, 16, 32, 48].map(offset => wat.guest_read32(data + offset + 8) | 0);
+  const drainedAt = Date.now() & 0x7FFFFFFF;
+  assert.deepStrictEqual([0, 16, 32, 48].map(offset => [wat.guest_read32(data + offset), wat.guest_read32(data + offset + 4)]),
+    [[12, 0x80], [12, 0], [12, 0x80], [12, 0]], 'stamped edges decode like bare ones');
+  const near = (actual, expected, why) =>
+    assert(Math.abs(actual - expected) < 400, `${why}: ${actual} vs ${expected}`);
+  near(stamps[0], (queuedAt - 3000) & 0x7FFFFFFF, 'first press is stamped when it was queued');
+  near(stamps[1], (queuedAt - 2900) & 0x7FFFFFFF, 'release likewise');
+  near(stamps[2], (queuedAt - 1500) & 0x7FFFFFFF, 'second press likewise');
+  near(stamps[2] - stamps[0], 1500, 'the gap between the presses is the real gap');
+  near(stamps[3], drainedAt, 'an unstamped edge keeps the poll tick');
+
   // A fast diagonal move followed immediately by a click must preserve the
   // event order. Delivering button edges before Y hit-tests at the old row.
   wat.test_di_mouse_queue_event((5 << 28) | 7);

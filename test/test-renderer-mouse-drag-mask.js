@@ -61,11 +61,13 @@ r.handleMouseUp(80, 90, 1);
 assert.strictEqual(r.getAsyncKeyState(0x01), 0, 'GetAsyncKeyState after consumed mouseup should report not held');
 const directInputWords = new Int32Array(directInputMemory.buffer);
 const directInputBase = RegionMap.BASE.DI_MOUSE_INPUT_STATE >>> 2;
+// Ring words carry the edge type in the high nibble over the wall-clock
+// millisecond the edge was queued at.
 assert.deepStrictEqual([
   Atomics.load(directInputWords, directInputBase + 2),
   Atomics.load(directInputWords, directInputBase + 3),
-  Atomics.load(directInputWords, directInputBase + 4),
-  Atomics.load(directInputWords, directInputBase + 5),
+  Atomics.load(directInputWords, directInputBase + 4) >>> 28,
+  Atomics.load(directInputWords, directInputBase + 5) >>> 28,
 ], [0, 2, 1, 2], 'renderer should retain mouse down and up as separate DirectInput edges');
 
 const orderedRenderer = new Win98Renderer(canvas);
@@ -85,8 +87,8 @@ assert.deepStrictEqual([
   Atomics.load(orderedWords, directInputBase + 3),
   Atomics.load(orderedWords, directInputBase + 4),
   Atomics.load(orderedWords, directInputBase + 5),
-  Atomics.load(orderedWords, directInputBase + 6),
-  Atomics.load(orderedWords, directInputBase + 7),
+  Atomics.load(orderedWords, directInputBase + 6) >>> 28,
+  Atomics.load(orderedWords, directInputBase + 7) >>> 28,
 ], [0, 4, (5 << 28) | 20, (6 << 28) | 30, 1, 2],
 'renderer should queue pointer motion before the click that follows it');
 
@@ -109,10 +111,13 @@ const burstTail = Atomics.load(burstWords, directInputBase + 3) >>> 0;
 const burstEvents = Array.from({ length: burstTail - burstHead }, (_, i) =>
   Atomics.load(burstWords, directInputBase + 4 + ((burstHead + i) & 63)) >>> 0);
 const signedMotion = event => (event << 4) >> 4;
-assert.deepStrictEqual(burstEvents.slice(-4).map(event => event >>> 28), [5, 6, 0, 0],
-  'overflowed X/Y motion should flush immediately before the reserved click edges');
-assert.deepStrictEqual(burstEvents.slice(-2), [1, 2],
-  'a saturated motion queue must retain both click edges');
+assert.deepStrictEqual(burstEvents.slice(-4).map(event => event >>> 28), [5, 6, 1, 2],
+  'overflowed X/Y motion should flush immediately before the reserved click edges, ' +
+  'and a saturated motion queue must retain both click edges');
+// A button edge carries the wall-clock millisecond it was queued at.
+const burstStampedAt = Date.now() & 0x0FFFFFFF;
+for (const edge of burstEvents.slice(-2))
+  assert(((burstStampedAt - (edge & 0x0FFFFFFF)) & 0x0FFFFFFF) < 5000, 'click edges are stamped at queue time');
 assert.deepStrictEqual([
   burstEvents.filter(event => (event >>> 28) === 5).reduce((sum, event) => sum + signedMotion(event), 0),
   burstEvents.filter(event => (event >>> 28) === 6).reduce((sum, event) => sum + signedMotion(event), 0),

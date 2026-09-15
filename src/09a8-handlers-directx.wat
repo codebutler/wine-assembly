@@ -8400,16 +8400,36 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $di_mouse_data_write (param $base i32) (param $cb i32) (param $index i32)
-                             (param $ofs i32) (param $data i32)
+                             (param $ofs i32) (param $data i32) (param $stamp i32)
     (local $rec i32)
     (local.set $rec (i32.add (local.get $base)
       (i32.mul (local.get $index) (local.get $cb))))
     ;; DIDEVICEOBJECTDATA (DX5): dwOfs, dwData, dwTimeStamp, dwSequence.
     (call $gs32 (local.get $rec) (local.get $ofs))
     (call $gs32 (i32.add (local.get $rec) (i32.const 4)) (local.get $data))
-    (call $gs32 (i32.add (local.get $rec) (i32.const 8)) (call $host_get_ticks))
+    (call $gs32 (i32.add (local.get $rec) (i32.const 8)) (local.get $stamp))
     (call $gs32 (i32.add (local.get $rec) (i32.const 12))
       (global.get $di_mouse_data_sequence)))
+
+  ;; dwTimeStamp for one queued ring word. A button edge carries the wall-clock
+  ;; millisecond it was queued at in its low 28 bits (lib/renderer-input.js),
+  ;; so its record is stamped with the guest tick of that moment: now, less
+  ;; the real time that has passed since. Everything drained in one poll used
+  ;; to carry the poll's own tick, and a game that measures a double-click by
+  ;; the gap between two press records saw a gap of zero -- or, when the two
+  ;; presses reached it a frame apart, a gap of one whole frame. Motion words
+  ;; have no room for a stamp and keep the poll time, as does a bare button
+  ;; code (the shape the tests push directly).
+  (func $di_mouse_event_stamp (param $event i32) (param $event_type i32) (result i32)
+    (local $now i32)
+    (local.set $now (call $host_get_ticks))
+    (if (i32.and (i32.gt_u (local.get $event) (i32.const 4))
+                 (i32.le_u (local.get $event_type) (i32.const 4)))
+      (then
+        (return (i32.sub (local.get $now)
+          (i32.and (i32.sub (call $host_real_time_ms) (local.get $event))
+                   (i32.const 0x0FFFFFFF))))))
+    (local.get $now))
 
   (func $di_mouse_button_commit_state (param $event i32)
     (if (i32.eq (local.get $event) (i32.const 1))
@@ -8559,7 +8579,8 @@
                 (select (i32.const 0x80) (i32.const 0)
                   (i32.ne (i32.and (local.get $event_type) (i32.const 1)) (i32.const 0))))))
           (call $di_mouse_data_write (local.get $arg2) (local.get $arg1)
-            (local.get $delivered) (local.get $ofs) (local.get $data))
+            (local.get $delivered) (local.get $ofs) (local.get $data)
+            (call $di_mouse_event_stamp (local.get $event) (local.get $event_type)))
           (if (local.get $commit)
             (then
               (if (i32.le_u (local.get $event_type) (i32.const 4))
@@ -8579,7 +8600,7 @@
             (local.set $data (select (i32.const 0x80) (i32.const 0)
               (i32.ne (i32.and (local.get $buttons) (i32.const 1)) (i32.const 0))))
             (call $di_mouse_data_write (local.get $arg2) (local.get $arg1)
-              (local.get $delivered) (i32.const 12) (local.get $data))
+              (local.get $delivered) (i32.const 12) (local.get $data) (call $host_get_ticks))
             (local.set $delivered (i32.add (local.get $delivered) (i32.const 1)))
             (if (local.get $commit)
               (then
@@ -8596,7 +8617,7 @@
             (local.set $data (select (i32.const 0x80) (i32.const 0)
               (i32.ne (i32.and (local.get $buttons) (i32.const 2)) (i32.const 0))))
             (call $di_mouse_data_write (local.get $arg2) (local.get $arg1)
-              (local.get $delivered) (i32.const 13) (local.get $data))
+              (local.get $delivered) (i32.const 13) (local.get $data) (call $host_get_ticks))
             (local.set $delivered (i32.add (local.get $delivered) (i32.const 1)))
             (if (local.get $commit)
               (then
