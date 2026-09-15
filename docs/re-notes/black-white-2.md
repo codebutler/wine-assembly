@@ -7804,3 +7804,61 @@ The batch must stay 2×2-composed so `$d3d_shader_vm_quad_lod`'s finite
 differences still work, and per-lane branching widens the existing execution
 mask from one `v128` to N lanes (ps_1_x has no flow control at all, so the
 common case needs none of it).
+
+### Reading the interpreter before rewriting it: the tax is not where the packet loop is (78cc3c5d, 524978da)
+
+The plan above was to invert `$d3d_shader_vm_run` — outer loop over
+instructions, inner loop over a tile of pixels — so the per-instruction
+interpreter work is paid once per batch instead of once per 2×2 quad. Reading
+the interpreter first to size that change found that most of the per-instruction
+cost is **not** in `$d3d_shader_vm_run` at all, and batching cannot reach it.
+
+`$d3d_shader_vm_run` decodes a packet once per quad: cancellation check, budget
+check, 64-byte packet load, flag validation, co-issue probe, and a linear chain
+over the opcode ranges. All of that is per *packet*, and batching amortizes it.
+
+But the value of an instruction is produced by `$d3d_shader_vm_component`, and
+**that is called once per component — four times per instruction.** Inside it is
+a second, longer linear chain, ~20 compound tests deep, and it is re-walked on
+every one of those four calls. Batching does not amortize any of it: it is
+per-quad work no matter how the outer loop is shaped.
+
+Three separate multipliers were sitting in there.
+
+**The plain-ALU set walked the whole chain.** MOV/ADD/SUB/MAD/MUL/MIN/MAX match
+nothing above the tail, so the most common ops in a shader were the ones that
+paid the most to be found — ~80 compound tests per instruction. `78cc3c5d`
+answers the set before the chain, four tests per instruction instead.
+
+**Operands were gathered by arity-blind strict evaluation.** Wasm evaluates call
+arguments strictly, so the tail's three-source call to `$d3d_shader_vm_alu`
+gathered three registers whatever the op read: a MOV performed two register
+gathers and discarded both, every binary op one. Per instruction that is 12
+gathers where 4, 8 or 12 were wanted. `78cc3c5d` fetches lazily.
+
+**Unwritten components were computed anyway.** `$d3d_shader_vm_run` snapshotted
+all four components and handed them to `$d3d_shader_vm_commit`, which then
+dropped the ones the destination write mask did not name. A co-issued pair is
+the worst case — the alpha packet names one component and computed four, so
+three quarters of its work was dead. `524978da` follows the mask, except for the
+four ops (36, 38, 47, 54) that publish x outside the commit.
+
+Neither commit is measured. The box has been at load 17-20 all evening, an
+interleaved order-rotated A/B could not separate two builds, and one of four
+runs was internally incoherent (base `flat8` came in *under* base `flat`). The
+counts above are the certain part and none of them needs a quiet machine.
+
+**And the same shape is still there, larger, in the sampler.** Because
+`component` runs per component, `$d3d_shader_vm_sample` is invoked per
+component — and it takes `comp` all the way down to `$d3d_shader_vm_texel`. So
+one full-mask bilinear `texld` on one quad does 4 components × 4 lanes × 4 taps
+= **64 `$d3d_shader_vm_texel` calls**, each redoing the wrap/clamp address
+arithmetic for x and y, to read 16 texels. Three quarters of the addressing, the
+coordinate wrap and the mip level selection is repeated per channel, and the
+four channels of a texel are four separate byte loads of one dword.
+
+Fixing that means producing all four components of a sample once, which means
+`component` can no longer be the per-component function for sampling ops. That
+is the next piece, and it is a prerequisite for batching in the same way the
+temp span was: until an instruction costs one pass instead of four, widening the
+outer loop amortizes the smaller half of the tax.
