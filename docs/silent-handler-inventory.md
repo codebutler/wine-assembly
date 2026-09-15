@@ -388,3 +388,10 @@ clean integrated tree instead of blessing any new unconditional success.
 2026-09-14: 290 -> 289. OutputDebugStringA now sends its bounded ANSI payload
 to the browser/CLI debugger sink. NULL remains an optional no-op, and an
 inaccessible guest range cannot turn diagnostic output into an emulator crash.
+
+2026-09-14: 289 -> 288. CommDlgExtendedError now reports retained COMDLG32
+failure state instead of an unconditional zero. Common-dialog entry points
+validate their complete Win98 caller structures before reserving a window,
+entering modal state, allocating printer objects, or writing caller memory;
+documented size, Find/Replace-buffer, font-range, and default-printer failures
+remain distinguishable from an ordinary Cancel.

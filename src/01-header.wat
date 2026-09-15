@@ -3474,6 +3474,10 @@
   (global $printer_page_count (mut i32) (i32.const 0))
   (global $common_dialog_kind (mut i32) (i32.const 0)) ;; 1=page setup, 2=print
   (global $common_dialog_struct (mut i32) (i32.const 0))
+  ;; CommDlgExtendedError is separate from GetLastError. Common-dialog entry
+  ;; points clear it before validating their caller-owned structure; Cancel
+  ;; therefore remains distinguishable from a synchronous validation error.
+  (global $common_dialog_error (mut i32) (i32.const 0))
 
   ;; ---- Modal dialog (Open/Save/Color/Font/...) state ----
   ;;

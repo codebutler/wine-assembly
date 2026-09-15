@@ -297,8 +297,20 @@
   (func $handle_PrintDlgA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dlg i32) (local $owner i32) (local $flags i32)
     (local $devmode i32) (local $devnames i32) (local $devnames_wa i32)
-    (call $modal_capture_nonvolatile)
+    (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 66) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (local.set $flags (call $gl32 (i32.add (local.get $arg0) (i32.const 20))))
+    (if (i32.and
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x00000400)) (i32.const 0))
+          (i32.or
+            (i32.ne (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 0))
+            (i32.ne (call $gl32 (i32.add (local.get $arg0) (i32.const 12))) (i32.const 0))))
+      (then (call $common_dialog_fail (i32.const 0x1003)) (return)))
+    (call $modal_capture_nonvolatile)
     ;; Stable DEVMODEA/DEVNAMES handles. Global handles are direct guest heap
     ;; pointers in this runtime, so GlobalLock remains identity as MFC expects.
     (local.set $devmode (call $heap_alloc (i32.const 156)))
@@ -356,8 +368,20 @@
   (func $handle_PrintDlgW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dlg i32) (local $owner i32) (local $flags i32)
     (local $devmode i32) (local $devnames i32) (local $dn_w i32)
-    (call $modal_capture_nonvolatile)
+    (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 66) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (local.set $flags (call $gl32 (i32.add (local.get $arg0) (i32.const 20))))
+    (if (i32.and
+          (i32.ne (i32.and (local.get $flags) (i32.const 0x00000400)) (i32.const 0))
+          (i32.or
+            (i32.ne (call $gl32 (i32.add (local.get $arg0) (i32.const 8))) (i32.const 0))
+            (i32.ne (call $gl32 (i32.add (local.get $arg0) (i32.const 12))) (i32.const 0))))
+      (then (call $common_dialog_fail (i32.const 0x1003)) (return)))
+    (call $modal_capture_nonvolatile)
     (local.set $devmode (call $heap_alloc (i32.const 220)))
     (memory.fill (call $g2w (local.get $devmode)) (i32.const 0) (i32.const 220))
     (call $gs16 (i32.add (local.get $devmode) (i32.const 68)) (i32.const 220)) ;; dmSize
@@ -863,7 +887,12 @@
   ;; basic-colors swatch grid. On OK, writes chosen COLORREF into
   ;; CHOOSECOLOR.rgbResult at +0x0C.
   (func $handle_ChooseColorA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32)
+    (local $dlg i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 36) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (call $modal_capture_nonvolatile)
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))

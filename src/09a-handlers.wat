@@ -4531,6 +4531,43 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
+  ;; Validate a caller-owned common-dialog structure without touching it. A
+  ;; readable but wrong lStructSize is CDERR_STRUCTSIZE; a NULL, unmapped, or
+  ;; truncated structure is the runtime's safe CDERR_INITIALIZATION failure.
+  ;; $alternate_size is zero when the structure has only one accepted Win98
+  ;; layout. OPENFILENAME also accepts the later 88-byte layout because the
+  ;; existing A/W handlers already expose that compatible front door.
+  (func $common_dialog_validate_struct
+      (param $ptr i32) (param $win98_size i32) (param $alternate_size i32)
+      (result i32)
+    (local $header i32) (local $size i32)
+    (if (i32.eqz (local.get $ptr))
+      (then (return (i32.const 2)))) ;; CDERR_INITIALIZATION
+    (local.set $header (call $g2w_affine_span (local.get $ptr) (i32.const 4)))
+    (if (i32.eq (local.get $header) (global.get $NULL_SENTINEL))
+      (then (return (i32.const 2)))) ;; CDERR_INITIALIZATION
+    (local.set $size (i32.load (local.get $header)))
+    (if (i32.eqz
+          (i32.or
+            (i32.eq (local.get $size) (local.get $win98_size))
+            (i32.and
+              (i32.ne (local.get $alternate_size) (i32.const 0))
+              (i32.eq (local.get $size) (local.get $alternate_size)))))
+      (then (return (i32.const 1)))) ;; CDERR_STRUCTSIZE
+    (if (i32.eq
+          (call $g2w_affine_span (local.get $ptr) (local.get $size))
+          (global.get $NULL_SENTINEL))
+      (then (return (i32.const 2)))) ;; CDERR_INITIALIZATION
+    (i32.const 0))
+
+  (func $common_dialog_fail (param $error i32)
+    (global.set $common_dialog_error (local.get $error))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $common_dialog_extended_error (result i32)
+    (global.get $common_dialog_error))
+
   ;; 199: GetOpenFileNameA(lpOFN) — show modal Open dialog
   ;;
   ;; Builds a WAT-driven Open dialog (class 12), parks EIP at the
@@ -4539,7 +4576,12 @@
   ;; OFN.lpstrFile and calls $modal_done(1/0) on OK/Cancel. The pump
   ;; restores eax/eip/esp on the next interpreter pass after that.
   (func $handle_GetOpenFileNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32)
+    (local $dlg i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 76) (i32.const 88)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (call $modal_capture_nonvolatile)
     (global.set $opendlg_wide (i32.const 0))
     (local.set $dlg (global.get $next_hwnd))
@@ -4555,7 +4597,12 @@
   ;; controls, while filter parsing and the selected output buffer honor the
   ;; Unicode OPENFILENAME contract.
   (func $handle_GetOpenFileNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32)
+    (local $dlg i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 76) (i32.const 88)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (call $modal_capture_nonvolatile)
     (global.set $opendlg_wide (i32.const 1))
     (local.set $dlg (global.get $next_hwnd))
@@ -4603,7 +4650,19 @@
   ;; 201: ChooseFontA(lpCF) — show the WAT-driven Font picker with face/
   ;; style/size listboxes. On OK, writes chosen size back to LOGFONT.lfHeight.
   (func $handle_ChooseFontA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32)
+    (local $dlg i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 60) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
+    ;; CF_LIMITSIZE: the maximum point size must not precede the minimum.
+    (if (i32.and
+          (i32.ne (i32.and (call $gl32 (i32.add (local.get $arg0) (i32.const 20)))
+                            (i32.const 0x00002000)) (i32.const 0))
+          (i32.lt_s (call $gl32 (i32.add (local.get $arg0) (i32.const 56)))
+                    (call $gl32 (i32.add (local.get $arg0) (i32.const 52)))))
+      (then (call $common_dialog_fail (i32.const 0x2002)) (return)))
     (call $modal_capture_nonvolatile)
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
@@ -4613,7 +4672,19 @@
 
   ;; 202: FindTextA(lpFR) — create modeless Find dialog, return HWND
   (func $handle_FindTextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $hwnd i32) (local $owner i32)
+    (local $hwnd i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 40) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
+    (if (i32.or
+          (i32.eqz (call $gl16 (i32.add (local.get $arg0) (i32.const 24))))
+          (i32.eq (call $g2w_affine_span
+            (call $gl32 (i32.add (local.get $arg0) (i32.const 16)))
+            (call $gl16 (i32.add (local.get $arg0) (i32.const 24))))
+            (global.get $NULL_SENTINEL)))
+      (then (call $common_dialog_fail (i32.const 0x4001)) (return)))
     (local.set $hwnd (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     ;; Read hwndOwner from FINDREPLACE struct at offset +4
@@ -4630,7 +4701,26 @@
   ;; This is commonly resolved dynamically by MFC, so it must participate in
   ;; the normal API hash/GetProcAddress path even when no PE imports it.
   (func $handle_ReplaceTextA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $hwnd i32) (local $owner i32)
+    (local $hwnd i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 40) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
+    (if (i32.or
+          (i32.or
+            (i32.eqz (call $gl16 (i32.add (local.get $arg0) (i32.const 24))))
+            (i32.eq (call $g2w_affine_span
+              (call $gl32 (i32.add (local.get $arg0) (i32.const 16)))
+              (call $gl16 (i32.add (local.get $arg0) (i32.const 24))))
+              (global.get $NULL_SENTINEL)))
+          (i32.or
+            (i32.eqz (call $gl16 (i32.add (local.get $arg0) (i32.const 26))))
+            (i32.eq (call $g2w_affine_span
+              (call $gl32 (i32.add (local.get $arg0) (i32.const 20)))
+              (call $gl16 (i32.add (local.get $arg0) (i32.const 26))))
+              (global.get $NULL_SENTINEL))))
+      (then (call $common_dialog_fail (i32.const 0x4001)) (return)))
     (local.set $hwnd (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (local.set $owner (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
@@ -4641,7 +4731,12 @@
 
   ;; 203: PageSetupDlgA(lpPS) — show placeholder modal dialog
   (func $handle_PageSetupDlgA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32) (local $flags i32)
+    (local $dlg i32) (local $owner i32) (local $flags i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 84) (i32.const 0)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (call $modal_capture_nonvolatile)
     (local.set $flags (call $gl32 (i32.add (local.get $arg0) (i32.const 16))))
     ;; PAGESETUPDLG ptPaperSize + rtMinMargin + rtMargin. WordPad requests
@@ -4677,9 +4772,10 @@
     (call $create_page_setup_dialog (local.get $dlg) (local.get $owner))
     (call $modal_begin (local.get $dlg) (i32.const 8)))
 
-  ;; 204: CommDlgExtendedError() — return 0 (no error)
+  ;; 204: CommDlgExtendedError() — report the latest common-dialog failure.
+  ;; Reading the value does not consume it. Cancel paths leave zero.
   (func $handle_CommDlgExtendedError (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $common_dialog_extended_error))
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))  ;; stdcall, 0 args
   )
 
@@ -5714,7 +5810,12 @@
   ;; 248: GetSaveFileNameA(lpOFN) — show modal Save As dialog
   ;; Same UI as GetOpenFileName, just kind=1 → "Save As" title + "Save" button.
   (func $handle_GetSaveFileNameA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32)
+    (local $dlg i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 76) (i32.const 88)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (call $modal_capture_nonvolatile)
     (global.set $opendlg_wide (i32.const 0))
     (local.set $dlg (global.get $next_hwnd))
@@ -5729,7 +5830,12 @@
   ;; the XP Sound Recorder (a Unicode app) trapped on File > Save and
   ;; File > Save As instead of showing a dialog.
   (func $handle_GetSaveFileNameW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $dlg i32) (local $owner i32)
+    (local $dlg i32) (local $owner i32) (local $error i32)
+    (global.set $common_dialog_error (i32.const 0))
+    (local.set $error (call $common_dialog_validate_struct
+      (local.get $arg0) (i32.const 76) (i32.const 88)))
+    (if (local.get $error)
+      (then (call $common_dialog_fail (local.get $error)) (return)))
     (call $modal_capture_nonvolatile)
     (global.set $opendlg_wide (i32.const 1))
     (local.set $dlg (global.get $next_hwnd))
