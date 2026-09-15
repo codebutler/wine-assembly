@@ -45,7 +45,7 @@ async function waitFor(state, re, what, timeoutMs = 300000) {
 
 const common = ip => [
   '--app=ut2003_demo', '--vlan-wire', `--vlan-ip=${ip}`,
-  '--quiet-api', '--quiet-blocks', '--trace-net',
+  '--headless-gl', '--quiet-api', '--quiet-blocks', '--trace-net',
   '--trace-api=WSAStartup,socket,setsockopt,getsockopt,getsockname,bind,ioctlsocket,sendto,recvfrom,select,WSAGetLastError,closesocket',
   '--control-stdin', '--vlan-max-waits=100000000',
   '--max-batches=100000000', '--max-seconds=280',

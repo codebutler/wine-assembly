@@ -101,4 +101,36 @@ const last = (64 * 1 - 1) * 4;
 assert.strictEqual(rp[last + 2], 255, 'right edge stale: drawing buffer was not resized');
 
 hgl.destroyContext(gl2);
+
+// D3D9 uses this same factory in Node. Its capability probe must not require a
+// browser document, and its short-lived probe context must be released before
+// the real device asks the singleton native GL provider for another drawable.
+const { Bridge } = require('../lib/d3d9-host');
+const memory = new ArrayBuffer(128 * 1024);
+let d3dCanvasRequests = 0;
+const bridge = new Bridge({
+  backend: 'webgl', enableProgrammable: true,
+  getMemory: () => memory, guestToWasm: p => p,
+  renderer: () => ({ windows: { 1: {} }, getWindowCanvas() {} }),
+  createCanvas: (w, h) => { d3dCanvasRequests++; return createCanvas(w, h); },
+});
+const programmable = bridge.call(0x30005, 0, 0);
+assert.ok(programmable === 0 || programmable === 1, 'invalid D3D9 capability result');
+assert.strictEqual(d3dCanvasRequests, 1, 'D3D9 capability probe did not use the headless canvas factory');
+assert.strictEqual(hgl.liveContextCount(), 0, 'D3D9 capability probe leaked its native context');
+
+const desc = 0x100, program = 0x1000, outputState = 0x8000;
+const dv = new DataView(memory);
+dv.setUint32(desc, 7, true);
+dv.setUint32(desc + 4, program, true);
+dv.setUint32(desc + 12, 16, true);
+dv.setUint32(desc + 16, 16, true);
+dv.setUint32(desc + 20, 1, true);
+dv.setUint32(desc + 40, outputState, true);
+assert.strictEqual(bridge.call(0x30003, desc, 0), 1,
+  `D3D9 device creation failed headless: ${bridge.lastError || 'unknown error'}`);
+assert.strictEqual(hgl.liveContextCount(), 1, 'D3D9 device did not own a native context');
+assert.strictEqual(bridge.call(0x30004, 0, 7), 1, 'D3D9 device release failed');
+assert.strictEqual(hgl.liveContextCount(), 0, 'D3D9 device release leaked its native context');
+
 console.log('PASS test-headless-gl');
