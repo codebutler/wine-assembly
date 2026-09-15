@@ -972,7 +972,7 @@ class WineAssembly {
     this._audioIdleTimer = setInterval(() => {
       const ac = this._audioCtx;
       if (!ac || ac.state !== 'running') { this._audioIdleSince = 0; return; }
-      if (this._isAudioHot()) { this._audioIdleSince = 0; return; }
+      if (this._audioNeedsContext()) { this._audioIdleSince = 0; return; }
       const now = this._audioSchedulerNow();
       if (!this._audioIdleSince) { this._audioIdleSince = now; return; }
       if (now - this._audioIdleSince < WineAssembly.AUDIO_IDLE_SUSPEND_MS) return;
@@ -3282,6 +3282,33 @@ class WineAssembly {
       Number(shared.cdAudioHotUntilMs) || 0);
     return hotUntil > this._audioSchedulerNow()
       || !!(shared.directSoundLoopingVoices && shared.directSoundLoopingVoices.size);
+  }
+
+  // Is anything audible in flight? SUPERSET of _isAudioHot(), and the two must
+  // not be merged: _isAudioHot() also selects a short interpreter quantum
+  // (see the audioHot branch in the run loop), which is right for a guest that
+  // has to refill PCM buffers and pointless for one that does not.
+  //
+  // MIDI and MCI are exactly that second case -- notes and waveaudio are
+  // scheduled ahead into Web Audio and the guest refills nothing -- yet they
+  // had NO term in either predicate, so a MIDI song longer than
+  // AUDIO_IDLE_SUSPEND_MS had its AudioContext suspended out from under it
+  // mid-playback. Adding them here keeps the context alive without touching
+  // the emulator's scheduling quantum.
+  _audioNeedsContext() {
+    if (this._isAudioHot()) return true;
+    const shared = this._sharedAudio || (this.hostCtx && this.hostCtx.sharedAudio);
+    if (!shared) return false;
+    if ((Number(shared.midiHotUntilMs) || 0) > this._audioSchedulerNow()) return true;
+    // cdaudio is excluded: it already has its own term in _isAudioHot() via
+    // cdAudioHotUntilMs, and its devices stay 'playing' across a stopped disc.
+    const mci = shared.mci;
+    if (mci && mci.devices) {
+      for (const dev of mci.devices.values()) {
+        if (dev && dev.state === 'playing' && dev.type !== 'cdaudio') return true;
+      }
+    }
+    return false;
   }
 
   // Called once per step from the worker-budget calculation, so it used to
