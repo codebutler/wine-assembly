@@ -30332,5 +30332,12 @@
     "nargs": 3,
     "convention": "cdecl",
     "hash": 2415146938
+  },
+  {
+    "id": 3617,
+    "name": "EnumClipboardFormats",
+    "nargs": 1,
+    "convention": "stdcall",
+    "hash": 3863844570
   }
 ]

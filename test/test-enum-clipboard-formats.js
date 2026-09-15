@@ -2,6 +2,7 @@
 'use strict';
 
 const assert = require('assert');
+const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
@@ -39,6 +40,8 @@ const extraWat = String.raw`
     (global.set $last_error (local.get $value)))
   (func (export "test_enum_get_last_error") (result i32)
     (global.get $last_error))
+  (func (export "test_enum_clipboard_formats_id") (result i32)
+    (call $lookup_api_id "EnumClipboardFormats"))
 `;
 
 const ERROR_SUCCESS = 0;
@@ -49,6 +52,14 @@ const ESP0 = 0x07390000;
 
 (async () => {
   const { exports: e } = await bootRenderHarness({ extraWat, fonts: 'none' });
+
+  const api = apiTable.find(entry => entry.name === 'EnumClipboardFormats');
+  assert.deepStrictEqual(
+    api && { id: api.id, nargs: api.nargs, convention: api.convention },
+    { id: 3617, nargs: 1, convention: 'stdcall' },
+    'EnumClipboardFormats retains its append-only API identity and ABI');
+  assert.strictEqual(e.test_enum_clipboard_formats_id() >>> 0, 3617,
+    'the generated hash table resolves EnumClipboardFormats by name');
 
   function enumerate(format) {
     const result = e.test_enum_clipboard_formats(format, ESP0) >>> 0;
