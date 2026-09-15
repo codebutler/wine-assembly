@@ -270,5 +270,46 @@ function fixture(options={}) {
   assert.match(String(late.bridge.lastError),/invalid NORMAL\/specular input/,
     'the original message survives, not "earlier render command failed"');
 
+  // Bytes are the real backpressure, and the command count is the weaker half.
+  // The queue charges each payload against what is still FREE, and a deferred
+  // command holds its copy until it retires -- so the capacity that the old
+  // command-by-command fence always met empty is now shared. Measured on Black
+  // & White 2: its land draws carry 2048x1024 texture payloads of about 8 MB,
+  // eight in flight exhausted the 64 MB queue, and the refusal was FATAL rather
+  // than slow because the queue's error is sticky (457 failed draws, then
+  // "render worker stopped"). Past a quarter of the capacity, stop deferring.
+  const tight=fixture({maxDeferredCommands:32,commandCapacityBytes:40000});
+  tight.initialized.resolve();await tick();
+  assert.strictEqual(tight.bridge.call(0x30001,tight.desc,0),1,'the first draw defers, well under the watermark');
+  const fenced=tight.bridge.call(0x30001,tight.desc,0);
+  assert(fenced<=-2,'past a quarter of the queue capacity a draw fences instead of deferring');
+  assert.notStrictEqual(fenced,-1,'and it must fence, never fail -- a refused draw poisons the stream');
+
+  // The watermark is checked before the payload size is known, so a draw that
+  // is large relative to what the in-flight ones left can still come back FULL.
+  // That is backpressure too, and must reach the guest as a park, not an error:
+  // drain the deferred commands, which restores the empty queue the fencing
+  // path always submitted into, then submit for real.
+  {
+    const bridge=fixture({maxDeferredCommands:32}).bridge;
+    const gate=deferred();let calls=0;
+    const full=Object.assign(new Error('render payload exceeds available byte budget'),{code:'FULL'});
+    const entry={async:true,deferred:new Set([gate.promise]),queue:{generation:1,bytes:0,capacityBytes:1<<20,
+      submit(){if(++calls===1)throw full;return {sequence:1,generation:1,value:{},status:'completed'};},
+      fence(){return Promise.resolve();}}};
+    const token=bridge._issue(entry,OP.DRAW,{});
+    assert(token<=-2,'a FULL deferred draw parks the guest rather than failing it');
+    assert.strictEqual(calls,1,'and does not retry until the in-flight commands have drained');
+    gate.resolve();await tick();await tick();
+    assert.strictEqual(calls,2,'the drained retry submits for real');
+    assert.strictEqual(bridge._poll(token),1,'and the guest resumes with success');
+    // A payload too large for an EMPTY queue is still a failure, exactly as it
+    // was before deferral existed -- there is nothing left to drain for it.
+    const alone={async:true,deferred:new Set(),queue:{generation:1,bytes:0,capacityBytes:1<<20,
+      submit(){throw full;},fence(){return Promise.resolve();}}};
+    assert.throws(()=>bridge._issue(alone,OP.DRAW,{}),/exceeds available byte budget/,
+      'with nothing in flight, an oversized payload still fails');
+  }
+
   console.log('PASS D3D9 async continuation protocol: snapshots, fences, single poll, Present lifetime, errors and bounds');
 })().catch(error=>{console.error(error);process.exitCode=1;});
