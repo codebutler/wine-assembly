@@ -1,0 +1,87 @@
+#!/usr/bin/env node
+'use strict';
+
+// Direct3D 3 and 7 expose the same GetTextureStageState contract.  The API
+// table keeps both public identities and vtable slots, but dispatches them to
+// one state-reading implementation so revisions cannot drift.
+
+const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const { bootRenderHarness } = require('./render-helper');
+const apiTable = require('../src/api_table.json');
+
+const extraWat = String.raw`
+  (func (export "d3dim_tss_create_device") (result i32)
+    (local $obj i32) (local $entry i32) (local $state i32)
+    (local.set $obj
+      (call $dx_create_com_obj (i32.const 20) (i32.const 0x53000000)))
+    (if (i32.eqz (local.get $obj)) (then (return (i32.const 0))))
+    (local.set $entry (call $dx_from_this (local.get $obj)))
+    (local.set $state (call $heap_alloc (i32.const 4096)))
+    (call $d3ddev_init_state (local.get $state))
+    (i32.store offset=16 (local.get $entry) (local.get $state))
+    (local.get $obj))
+
+  (func (export "d3dim_tss_seed")
+      (param $device i32) (param $stage i32) (param $type i32) (param $value i32)
+    (call $d3dim_set_tss
+      (local.get $device) (local.get $stage) (local.get $type) (local.get $value)))
+
+  (func (export "d3dim_tss_get")
+      (param $api i32) (param $device i32) (param $stage i32)
+      (param $type i32) (param $out i32) (result i32)
+    (global.set $esp (i32.const 0x00300000))
+    (call $dispatch_api_table
+      (local.get $api) (local.get $device) (local.get $stage)
+      (local.get $type) (local.get $out) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+
+  (func (export "d3dim_tss_esp") (result i32) (global.get $esp))
+`;
+
+(async () => {
+  const d3 = apiTable.find(entry =>
+    entry.name === 'IDirect3DDevice3_GetTextureStageState');
+  const d7 = apiTable.find(entry =>
+    entry.name === 'IDirect3DDevice7_GetTextureStageState');
+  assert(d3 && d7, 'both public Direct3D API identities remain registered');
+  assert.strictEqual(d3.id, 1185, 'Device3 API id remains stable');
+  assert.strictEqual(d7.id, 1381, 'Device7 API id remains stable');
+  assert.strictEqual(d3.nargs, 5);
+  assert.strictEqual(d7.nargs, 5);
+  assert.strictEqual(d7.handler, 'IDirect3DDevice3_GetTextureStageState',
+    'Device7 metadata aliases the canonical Device3 handler');
+
+  const root = path.join(__dirname, '..');
+  const dispatch = fs.readFileSync(
+    path.join(root, 'src/09b2-dispatch-table.generated.wat'), 'utf8');
+  assert.match(dispatch,
+    /;; 1381: IDirect3DDevice7_GetTextureStageState[\s\S]*?call \$handle_IDirect3DDevice3_GetTextureStageState/,
+    'generated dispatch routes Device7 through the canonical handler');
+  const device7Source = fs.readFileSync(
+    path.join(root, 'src/09aa-handlers-d3dim.wat'), 'utf8');
+  assert(!device7Source.includes('(func $handle_IDirect3DDevice7_GetTextureStageState'),
+    'the duplicate Device7 wrapper is absent');
+
+  const { exports: wat } = await bootRenderHarness({ extraWat, fonts: 'none' });
+  const device = wat.d3dim_tss_create_device() >>> 0;
+  assert(device, 'created a state-backed legacy Direct3D device');
+  const out = 0x00310000;
+  wat.d3dim_tss_seed(device, 7, 11, 0x11223344);
+
+  for (const api of [d3, d7]) {
+    wat.guest_write32(out, 0xdeadbeef);
+    assert.strictEqual(wat.d3dim_tss_get(api.id, device, 7, 11, out) >>> 0, 0,
+      `${api.name} returns D3D_OK`);
+    assert.strictEqual(wat.guest_read32(out) >>> 0, 0x11223344,
+      `${api.name} reads the same retained texture-stage state`);
+    assert.strictEqual(wat.d3dim_tss_esp() >>> 0, 0x00300014,
+      `${api.name} preserves the five-word stdcall cleanup`);
+  }
+
+  console.log('PASS  Direct3D 3/7 texture-stage getters share one stateful handler');
+})().catch(error => {
+  console.error(error && error.stack || error);
+  process.exit(1);
+});

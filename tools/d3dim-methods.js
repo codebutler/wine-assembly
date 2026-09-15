@@ -144,7 +144,7 @@ const interfaces = [
     { name: 'ComputeSphereVisibility',       nargs: 6 },
     { name: 'GetTexture',                    nargs: 3 },
     { name: 'SetTexture',                    nargs: 3, body: 'SET_TEX' },
-    { name: 'GetTextureStageState',          nargs: 4 },
+    { name: 'GetTextureStageState',          nargs: 4, handler: 'IDirect3DDevice3_GetTextureStageState' },
     { name: 'SetTextureStageState',          nargs: 4, body: 'SET_TSS' },
     { name: 'ValidateDevice',                nargs: 2 },
     { name: 'ApplyStateBlock',               nargs: 2 },
