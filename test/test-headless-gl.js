@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const hgl = require('../lib/headless-gl');
 const { createCanvas } = require('../lib/canvas-compat');
+const { WebGLBackend } = require('../lib/gpu-backend');
 
 // The canvas and bridge can both work while the CLI still forgets to connect
 // them. Keep the opt-in wiring pinned here: that omission made --headless-gl
@@ -44,7 +45,31 @@ assert.ok(canvas.getContext('2d'), '2d context unavailable after webgl');
 assert.strictEqual(canvas.getContext('webgl'), gl, 'gl context lost after asking for 2d');
 
 console.log('renderer:', gl.getParameter(gl.RENDERER),
-  '| version:', gl.getParameter(gl.VERSION));
+  '| version:', gl.getParameter(gl.VERSION),
+  '| shading language:', gl.getParameter(gl.SHADING_LANGUAGE_VERSION));
+
+// Generated D3D/OpenGL shaders are GLSL ES. The native provider exposes
+// desktop GLSL 1.10, where an ES precision statement is a syntax error unless
+// the generic backend ports it. Test an actual program, not just clear().
+const gpu = new WebGLBackend(canvas);
+const precisionProgram = gpu.createProgram(
+  'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }',
+  'precision highp float; void main(){ gl_FragColor=vec4(1.,0.,1.,1.); }',
+  ['p'], []);
+assert.ok(precisionProgram && precisionProgram.handle,
+  'native headless context did not compile an ESSL precision shader');
+const precisionBuffer = gpu.createBuffer();
+gpu.updateBuffer(precisionBuffer, gl.ARRAY_BUFFER,
+  new Float32Array([-1, -1, 3, -1, -1, 3]));
+gpu.setViewport(0, 0, W, H);
+gpu.draw({ program: precisionProgram, vertexBuffer: precisionBuffer,
+  stride: 8, attributes: [{ name: 'p', size: 2, offset: 0 }],
+  mode: gl.TRIANGLES, count: 3 });
+gpu.present();
+const center = ((H >> 1) * W + (W >> 1)) * 4;
+assert.deepStrictEqual(Array.from(canvas._data.slice(center, center + 4)), [255, 0, 255, 255],
+  'backend present did not publish the completed native GL frame to the compositor canvas');
+gpu.destroy();
 
 // --- the pixels must reach the byte array the compositor reads -------------
 // Green, and NOT the colour a zeroed buffer would be, so a no-op read cannot

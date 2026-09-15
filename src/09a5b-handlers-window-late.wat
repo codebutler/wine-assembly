@@ -2072,6 +2072,72 @@ Layout(hdc) -> DWORD — return 0 (LTR layout)
     (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
+  ;; Return the materialized clipboard format after $current. USER keeps an
+  ;; ordered list; our bounded clipboard has four concrete entries instead:
+  ;; opaque/DIB, registered RTF, and the ANSI/OEM text conversion pair. Keep
+  ;; the richer formats first, as applications are instructed to publish them.
+  ;; -1 means $current was not one of the currently available formats; zero is
+  ;; the normal end-of-enumeration result.
+  (func $clipboard_enum_next (param $current i32) (result i32)
+    (local $seen i32) (local $candidate i32)
+    (local.set $seen (i32.eqz (local.get $current)))
+
+    (if (i32.and
+          (i32.ne (global.get $clipboard_binary_format) (i32.const 0))
+          (i32.ne (global.get $clipboard_binary_ptr) (i32.const 0)))
+      (then
+        (local.set $candidate (global.get $clipboard_binary_format))
+        (if (local.get $seen) (then (return (local.get $candidate))))
+        (if (i32.eq (local.get $current) (local.get $candidate))
+          (then (local.set $seen (i32.const 1))))))
+
+    (if (i32.and
+          (i32.ne (global.get $clipboard_rtf_format_id) (i32.const 0))
+          (i32.gt_u (global.get $clipboard_rtf_len) (i32.const 0)))
+      (then
+        (local.set $candidate (global.get $clipboard_rtf_format_id))
+        (if (local.get $seen) (then (return (local.get $candidate))))
+        (if (i32.eq (local.get $current) (local.get $candidate))
+          (then (local.set $seen (i32.const 1))))))
+
+    (if (i32.gt_u (global.get $clipboard_len) (i32.const 0))
+      (then
+        ;; CF_TEXT is the stored representation. CF_OEMTEXT follows as the
+        ;; system-provided conversion exposed by GetClipboardData.
+        (local.set $candidate (i32.const 1))
+        (if (local.get $seen) (then (return (local.get $candidate))))
+        (if (i32.eq (local.get $current) (local.get $candidate))
+          (then (local.set $seen (i32.const 1))))
+        (local.set $candidate (i32.const 7))
+        (if (local.get $seen) (then (return (local.get $candidate))))
+        (if (i32.eq (local.get $current) (local.get $candidate))
+          (then (local.set $seen (i32.const 1))))))
+
+    (select (i32.const 0) (i32.const -1) (local.get $seen)))
+
+  ;; EnumClipboardFormats(format). The clipboard must remain open across the
+  ;; sequence. A zero result with ERROR_SUCCESS is the documented end marker;
+  ;; zero with another error is a failure.
+  (func $handle_EnumClipboardFormats (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $next_format i32)
+    (if (i32.eqz (global.get $clipboard_open))
+      (then
+        (global.set $last_error (i32.const 1418)) ;; ERROR_CLIPBOARD_NOT_OPEN
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (return)))
+    (local.set $next_format (call $clipboard_enum_next (local.get $arg0)))
+    (if (i32.eq (local.get $next_format) (i32.const -1))
+      (then
+        (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+        (global.set $eax (i32.const 0)))
+      (else
+        (global.set $eax (local.get $next_format))
+        (if (i32.eqz (local.get $next_format))
+          (then (global.set $last_error (i32.const 0))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+  )
+
   ;; EmptyClipboard() — clear all supported clipboard data, notify the old
   ;; owner synchronously, then make the opening HWND the new owner.
   (func $handle_EmptyClipboard (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
