@@ -1275,12 +1275,53 @@ GetTopWindow(hWnd) — 1 arg stdcall
     (global.set $eax (call $wnd_max_get (local.get $arg0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
-  ;; 654: SetParent — STUB: unimplemented
-  ;; SetParent(hWndChild=arg0, hWndNewParent=arg1) — returns previous parent (0 if none).
+  ;; 654: SetParent(hWndChild, hWndNewParent) — previous parent, or NULL on
+  ;; failure. NULL and our fixed desktop HWND both select the internal root.
+  ;; SetParent deliberately does not rewrite WS_CHILD/WS_POPUP; callers own
+  ;; those compatibility style changes.
   (func $handle_SetParent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $parent i32) (local $walk i32) (local $depth i32)
+    ;; Neither half of the window model may observe a reparenting that USER
+    ;; rejected. In particular, $wnd_set_parent itself is intentionally void,
+    ;; so validate handles and ancestry before calling it or the renderer.
+    (if (i32.lt_s (call $wnd_table_find (local.get $arg0)) (i32.const 0))
+      (then
+        (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (local.set $parent
+      (select (i32.const 0) (local.get $arg1)
+        (i32.or
+          (i32.eqz (local.get $arg1))
+          (i32.eq (local.get $arg1) (i32.const 0x00010000)))))
+    (if (i32.and
+          (i32.ne (local.get $parent) (i32.const 0))
+          (i32.lt_s (call $wnd_table_find (local.get $parent)) (i32.const 0)))
+      (then
+        (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    ;; Reject a direct or indirect cycle. Besides being invalid USER state,
+    ;; one would make coordinate conversion recurse WAT -> host -> WAT.
+    (local.set $walk (local.get $parent))
+    (block $valid_parent (loop $ancestors
+      (br_if $valid_parent (i32.eqz (local.get $walk)))
+      (if (i32.or
+            (i32.eq (local.get $walk) (local.get $arg0))
+            (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+        (then
+          (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
+          (global.set $eax (i32.const 0))
+          (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+          (return)))
+      (local.set $walk (call $wnd_get_parent (local.get $walk)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $ancestors)))
     (global.set $eax (call $wnd_get_parent (local.get $arg0)))
-    (call $wnd_set_parent (local.get $arg0) (local.get $arg1))
-    (call $host_set_parent (local.get $arg0) (local.get $arg1))
+    (call $wnd_set_parent (local.get $arg0) (local.get $parent))
+    (call $host_set_parent (local.get $arg0) (local.get $parent))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
