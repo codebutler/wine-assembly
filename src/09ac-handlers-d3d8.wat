@@ -104,28 +104,62 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   (func $handle_IDirect3D8_CheckDeviceType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Windowed/fullscreen and back-buffer formats are accepted for adapter 0
-    ;; on the HAL device exposed by this compatibility layer.
-    (drop (local.get $arg3))
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x8876086c)
-        (i32.and (i32.eqz (local.get $arg1)) (i32.eq (local.get $arg2) (i32.const 1)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (local $windowed i32)
+    ;; this, Adapter, CheckType, DisplayFormat and BackBufferFormat are the five
+    ;; direct dispatcher arguments.  Windowed is the sixth COM argument.
+    (local.set $windowed (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (if (local.get $arg1) (then
+      (global.set $eax (i32.const 0x8876086c)) (return))) ;; D3DERR_INVALIDCALL
+    (if (i32.ne (local.get $arg2) (i32.const 1)) (then
+      (global.set $eax (i32.const 0x8876086b)) (return))) ;; D3DERR_INVALIDDEVICE
+    ;; The sole enumerated display mode is X8R8G8B8.  Its back buffer may add
+    ;; alpha, but otherwise must have the same RGB layout.  The shared backend
+    ;; supports both its advertised windowed and fullscreen paths.
+    (if (i32.or (i32.ne (local.get $arg3) (i32.const 22))
+          (i32.and (i32.ne (local.get $arg4) (i32.const 22))
+                   (i32.ne (local.get $arg4) (i32.const 21)))) (then
+      (global.set $eax (i32.const 0x8876086a)) (return))) ;; D3DERR_NOTAVAILABLE
+    (drop (local.get $windowed))
+    (global.set $eax (i32.const 0)))
 
   (func $handle_IDirect3D8_CheckDeviceFormat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x8876086c)
-        (i32.and (i32.eqz (local.get $arg1)) (i32.eq (local.get $arg2) (i32.const 1)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (local $rtype i32) (local $format i32)
+    ;; RType and CheckFormat are arguments six and seven including this.
+    (local.set $rtype (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $format (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (if (i32.or (local.get $arg1) (i32.ne (local.get $arg2) (i32.const 1))) (then
+      (global.set $eax (i32.const 0x8876086c)) (return))) ;; D3DERR_INVALIDCALL
+    ;; Only X8R8G8B8 is exposed as an adapter mode.  Of the D3D8 resource
+    ;; families, only ordinary 2D textures currently have a complete create,
+    ;; lock and sampling path.  Ask the same format gate CreateTexture uses so
+    ;; capability negotiation can never promise a texture it then refuses.
+    (if (i32.or (i32.ne (local.get $arg3) (i32.const 22))
+          (i32.or (local.get $arg4) (i32.ne (local.get $rtype) (i32.const 3)))) (then
+      (global.set $eax (i32.const 0x8876086a)) (return))) ;; D3DERR_NOTAVAILABLE
+    (if (i32.eqz (call $d3d9_texture_format_supported (local.get $format))) (then
+      (global.set $eax (i32.const 0x8876086a)) (return)))
+    (global.set $eax (i32.const 0)))
 
   (func $handle_IDirect3D8_CheckDeviceMultiSampleType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; The backend exposes the no-multisample mode only.
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x8876086a)
-        (i32.and (i32.eqz (local.get $arg1))
-          (i32.and (i32.eq (local.get $arg2) (i32.const 1))
-            (i32.eqz (local.get $arg4))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (local $multisample i32)
+    ;; arg4 is Windowed; MultiSampleType is the sixth COM argument on-stack.
+    (local.set $multisample (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (if (i32.or (local.get $arg1) (i32.gt_u (local.get $multisample) (i32.const 16))) (then
+      (global.set $eax (i32.const 0x8876086c)) (return))) ;; D3DERR_INVALIDCALL
+    (if (i32.ne (local.get $arg2) (i32.const 1)) (then
+      (global.set $eax (i32.const 0x8876086b)) (return))) ;; D3DERR_INVALIDDEVICE
+    ;; The backend exposes no antialias target.  NONE works for either
+    ;; windowed/fullscreen mode on the two 32-bit color surface layouts it can
+    ;; present; every real multisample technique is unavailable.
+    (if (i32.or (local.get $multisample)
+          (i32.and (i32.ne (local.get $arg3) (i32.const 22))
+                   (i32.ne (local.get $arg3) (i32.const 21)))) (then
+      (global.set $eax (i32.const 0x8876086a)) (return))) ;; D3DERR_NOTAVAILABLE
+    (drop (local.get $arg4))
+    (global.set $eax (i32.const 0)))
 
   (func $d3d8_fill_caps (param $out i32) (result i32)
     (local $caps i32)

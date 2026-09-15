@@ -63,10 +63,30 @@ const { bootRenderHarness } = require('./render-helper');
       (global.set $esp (i32.const 0x074ff000))
       (call $handle_IDirect3D8_QueryInterface (local.get $this) (local.get $iid)
         (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
-    (func (export "d3d8_check_format") (result i32)
+    (func (export "d3d8_check_type") (param $adapter i32) (param $type i32)
+      (param $display i32) (param $backbuffer i32) (param $windowed i32) (result i32)
       (global.set $esp (i32.const 0x074ff000))
-      (call $handle_IDirect3D8_CheckDeviceFormat (i32.const 0) (i32.const 0)
-        (i32.const 1) (i32.const 22) (i32.const 0) (i32.const 0)) (global.get $eax))
+      (call $gs32 (i32.const 0x074ff018) (local.get $windowed))
+      (call $handle_IDirect3D8_CheckDeviceType (i32.const 0) (local.get $adapter)
+        (local.get $type) (local.get $display) (local.get $backbuffer) (i32.const 0))
+      (global.get $eax))
+    (func (export "d3d8_check_format") (param $adapter i32) (param $type i32)
+      (param $adapter_format i32) (param $usage i32) (param $rtype i32)
+      (param $check_format i32) (result i32)
+      (global.set $esp (i32.const 0x074ff000))
+      (call $gs32 (i32.const 0x074ff018) (local.get $rtype))
+      (call $gs32 (i32.const 0x074ff01c) (local.get $check_format))
+      (call $handle_IDirect3D8_CheckDeviceFormat (i32.const 0) (local.get $adapter)
+        (local.get $type) (local.get $adapter_format) (local.get $usage) (i32.const 0))
+      (global.get $eax))
+    (func (export "d3d8_check_multisample") (param $adapter i32) (param $type i32)
+      (param $format i32) (param $windowed i32) (param $multisample i32) (result i32)
+      (global.set $esp (i32.const 0x074ff000))
+      (call $gs32 (i32.const 0x074ff018) (local.get $multisample))
+      (call $handle_IDirect3D8_CheckDeviceMultiSampleType (i32.const 0)
+        (local.get $adapter) (local.get $type) (local.get $format)
+        (local.get $windowed) (i32.const 0))
+      (global.get $eax))
     (func (export "d3d8_create_device") (param $pp i32) (param $out i32) (result i32)
       (global.set $esp (i32.const 0x074ff000))
       (call $gs32 (i32.const 0x074ff018) (local.get $pp))
@@ -173,8 +193,58 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.guest_read32(p + 0xc8), 96);
   assert.strictEqual(e.guest_read32(p - 4) >>> 0, 0xdeadbeef);
   assert.strictEqual(e.guest_read32(p + 0xd4) >>> 0, 0xdeadbeef);
-  assert.strictEqual(e.d3d8_check_format() >>> 0, 0);
-  assert.strictEqual(e.get_esp() >>> 0, 0x074ff020);
+  const D3D_OK = 0;
+  const D3DERR_NOTAVAILABLE = 0x8876086a;
+  const D3DERR_INVALIDDEVICE = 0x8876086b;
+  const D3DERR_INVALIDCALL = 0x8876086c;
+  const checkCapability = (fn, args, expected, esp, label) => {
+    assert.strictEqual(fn(...args) >>> 0, expected >>> 0, label);
+    assert.strictEqual(e.get_esp() >>> 0, esp, `${label}: exact stdcall cleanup`);
+  };
+  checkCapability(e.d3d8_check_type, [0, 1, 22, 22, 0], D3D_OK, 0x074ff01c,
+    'fullscreen X8R8G8B8 device tuple is available');
+  checkCapability(e.d3d8_check_type, [0, 1, 22, 21, 1], D3D_OK, 0x074ff01c,
+    'windowed alpha back buffer with identical RGB layout is available');
+  checkCapability(e.d3d8_check_type, [1, 1, 22, 22, 1], D3DERR_INVALIDCALL, 0x074ff01c,
+    'nonexistent adapter is an invalid call');
+  checkCapability(e.d3d8_check_type, [0, 2, 22, 22, 1], D3DERR_INVALIDDEVICE, 0x074ff01c,
+    'unexposed device type is an invalid device');
+  checkCapability(e.d3d8_check_type, [0, 1, 21, 21, 1], D3DERR_NOTAVAILABLE, 0x074ff01c,
+    'alpha display format is not an exposed adapter mode');
+  checkCapability(e.d3d8_check_type, [0, 1, 22, 23, 1], D3DERR_NOTAVAILABLE, 0x074ff01c,
+    'back buffer with a different RGB layout is unavailable');
+  for (const format of [0x31545844, 0x33545844, 0x35545844]) {
+    checkCapability(e.d3d8_check_format, [0, 1, 22, 0, 3, format], D3D_OK, 0x074ff020,
+      `UT2003 texture format 0x${format.toString(16)} is backed by CreateTexture`);
+  }
+  checkCapability(e.d3d8_check_format, [0, 1, 22, 0, 3, 24], D3DERR_NOTAVAILABLE,
+    0x074ff020, 'unsupported texture storage format is unavailable');
+  checkCapability(e.d3d8_check_format, [0, 1, 22, 1, 3, 22], D3DERR_NOTAVAILABLE,
+    0x074ff020, 'unmodeled render-target usage is unavailable');
+  checkCapability(e.d3d8_check_format, [0, 1, 22, 0, 1, 22], D3DERR_NOTAVAILABLE,
+    0x074ff020, 'unimplemented surface resource path is unavailable');
+  checkCapability(e.d3d8_check_format, [1, 1, 22, 0, 3, 22], D3DERR_INVALIDCALL,
+    0x074ff020, 'format query rejects nonexistent adapter');
+  checkCapability(e.d3d8_check_format, [0, 2, 22, 0, 3, 22], D3DERR_INVALIDCALL,
+    0x074ff020, 'format query rejects unsupported device type');
+  checkCapability(e.d3d8_check_format, [0, 1, 21, 0, 3, 22], D3DERR_NOTAVAILABLE,
+    0x074ff020, 'format query rejects an unexposed adapter format');
+  checkCapability(e.d3d8_check_multisample, [0, 1, 22, 0, 0], D3D_OK, 0x074ff01c,
+    'fullscreen no-multisample mode is available');
+  checkCapability(e.d3d8_check_multisample, [0, 1, 21, 1, 0], D3D_OK, 0x074ff01c,
+    'windowed no-multisample mode reads the final stack argument');
+  checkCapability(e.d3d8_check_multisample, [0, 1, 22, 0, 1], D3DERR_NOTAVAILABLE,
+    0x074ff01c, 'nonmaskable multisampling is unavailable');
+  checkCapability(e.d3d8_check_multisample, [0, 1, 22, 1, 2], D3DERR_NOTAVAILABLE,
+    0x074ff01c, 'two-sample antialiasing is unavailable');
+  checkCapability(e.d3d8_check_multisample, [0, 1, 22, 1, 17], D3DERR_INVALIDCALL,
+    0x074ff01c, 'out-of-range multisample type is invalid');
+  checkCapability(e.d3d8_check_multisample, [1, 1, 22, 1, 0], D3DERR_INVALIDCALL,
+    0x074ff01c, 'multisample query rejects nonexistent adapter');
+  checkCapability(e.d3d8_check_multisample, [0, 2, 22, 1, 0], D3DERR_INVALIDDEVICE,
+    0x074ff01c, 'multisample query rejects unexposed device type');
+  checkCapability(e.d3d8_check_multisample, [0, 1, 23, 1, 0], D3DERR_NOTAVAILABLE,
+    0x074ff01c, 'multisample query rejects unsupported target format');
   const pp = p + 0x500;
   const out = pp + 0x80;
   for (let i = 0; i < 13; i++) e.guest_write32(pp + i * 4, 0);

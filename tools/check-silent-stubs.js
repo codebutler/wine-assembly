@@ -272,8 +272,12 @@ const digest = crypto.createHash('sha256')
 // generation-tagged window/interface registrations and routes matching audio
 // topology changes as WM_DEVICECHANGE. UnregisterDeviceNotification consumes
 // only the exact live HDEVNOTIFY instead of accepting arbitrary handles.
-const EXPECTED_COUNT = 276;
-const EXPECTED_SHA256 = '752d3bc71fec596d2e2a633958a53647434720799e0e2e3774cfbfa7072f3cc3';
+// 2026-09-15: 276 -> 273. D3D8 device-type, texture-format and multisample
+// capability queries now validate their complete COM argument tuples against
+// the exposed adapter and shared texture backend. The multisample query reads
+// its real final stack argument instead of mistaking Windowed for the mode.
+const EXPECTED_COUNT = 273;
+const EXPECTED_SHA256 = '6873938aef7a95d6ddd6f26e7fb253304fe310d2b9bb24b2c426977f8b5ba2b1';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
