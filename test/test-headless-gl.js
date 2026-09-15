@@ -154,8 +154,26 @@ const bridge = new Bridge({
   renderer: () => ({ windows: { 1: {} }, getWindowCanvas() {} }),
   createCanvas: (w, h) => { d3dCanvasRequests++; return createCanvas(w, h); },
 });
+// The three WebGL *_VECTORS limits are GLES enums a desktop context rejects;
+// unmapped they returned garbage AND queued GL_INVALID_ENUM, which failed the
+// probe below after a pixel-exact draw. A native GL context must report them
+// like a browser does: a sane count and a clean error queue.
+{
+  const limitGl = createCanvas(4, 4).getContext('webgl');
+  limitGl.getError();
+  for (const [name, floor] of [['MAX_VERTEX_UNIFORM_VECTORS', 96],
+    ['MAX_FRAGMENT_UNIFORM_VECTORS', 16], ['MAX_VARYING_VECTORS', 8]]) {
+    const value = limitGl.getParameter(limitGl[name]);
+    const error = limitGl.getError();
+    assert.strictEqual(error, 0, `${name} query left GL error ${error}`);
+    assert.ok(Number.isInteger(value) && value >= floor && value <= 65536,
+      `${name} = ${value}, not a WebGL-shaped limit`);
+  }
+  hgl.destroyContext(limitGl);
+}
 const programmable = bridge.call(0x30005, 0, 0);
-assert.ok(programmable === 0 || programmable === 1, 'invalid D3D9 capability result');
+assert.strictEqual(programmable, 1,
+  'D3D9 programmable-caps probe failed on a real native GL context (VS1.1/PS1.1 would be reported absent)');
 assert.strictEqual(d3dCanvasRequests, 1, 'D3D9 capability probe did not use the headless canvas factory');
 assert.strictEqual(hgl.liveContextCount(), 0, 'D3D9 capability probe leaked its native context');
 

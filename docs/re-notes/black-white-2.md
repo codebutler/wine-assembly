@@ -8189,3 +8189,37 @@ bridge), and `test-d3d9-present-web.js` queues a `READBACK` behind each
 GL tab: the intro and the profile dialog render as before. The profile of
 the dialog with this change is still owed -- the box was at load 30-60 and
 the browser went away mid-session.
+
+### Headless GL: the D3D9 caps probe failed on two binding bugs (2026-09-15)
+
+`--headless-gl --d3d9-programmable` reached the game's own startup check and
+put up `[MessageBox] "Fatal Error": "... Pixel Shader version 1.1 ..."`,
+while the same build in Chrome ran fine. The caps come from `$d3d9_fill_caps`
+(`src/09ad-handlers-d3d9.wat`), which writes VS 1.1 / PS 1.1 only when host
+op `0x30005` returns 1, and on the webgl backend that is `Backend.probe` in
+`lib/d3d9-backend.js`: a 4x4 device, three `getParameter` limit checks, one
+VS1.1/PS1.1 textured triangle, then `readPixels` and `getError() === 0`.
+Replayed step by step outside the emulator (scratch scripts, not committed):
+the triangle came back pixel-exact, `[100,40,80,255]`, and the probe still
+returned false because the error queue was not empty. Two causes, both in
+`@node-3d/webgl` on the GL 2.1 legacy context GLFW creates on macOS:
+
+- `MAX_VERTEX_UNIFORM_VECTORS` / `MAX_FRAGMENT_UNIFORM_VECTORS` /
+  `MAX_VARYING_VECTORS` are GLES enums the binding passes straight to
+  `glGetIntegerv`; desktop GL rejects them with `GL_INVALID_ENUM` and the
+  query returns uninitialised stack (25693024). `lib/headless-gl.js` now
+  answers those three from the desktop `*_COMPONENTS` limits divided by four
+  (1024 vertex uniform vectors on the M1).
+- `gl.depthRange(near, far)` raises `GL_INVALID_OPERATION` and does not apply
+  (`depthRange(0.25,0.75)` leaves `DEPTH_RANGE` at `[0,1]`). The D3D9 draw
+  path sets it from the viewport's minZ/maxZ before every draw. The shim drops
+  the error when the requested range is the one already in effect (the 0..1
+  every B&W2 viewport asks for) and logs once when the binding really could
+  not apply a different range, so a stuck depth range is never silent.
+
+`test/test-headless-gl.js` now requires the three limits to answer cleanly and
+the `0x30005` probe to return 1 (it used to accept 0). The stale
+`test/run.js:122` note above still holds for the *explicit*
+`--d3d9-renderer=webgl` spelling; the working headless command is the one
+without it, `--headless-gl --d3d9-programmable`, and it is what the frozen
+`--control=` sessions in this file use.
