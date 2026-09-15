@@ -1838,6 +1838,100 @@
     (if (i32.and (local.get $buffer) (local.get $chars))
       (then (i32.store8 (call $g2w (local.get $buffer)) (i32.const 0)))))
 
+  ;; Shell-link string state is object-owned. Callers commonly build these
+  ;; values in temporary setup buffers, so retaining their pointer makes a
+  ;; later Get* observe overwritten memory. Allocate the replacement before
+  ;; releasing the old value so an allocation failure leaves state intact.
+  ;; selector: 0=path/misc0, 1=arguments/misc1, 2=working directory/misc2.
+  (func $shell_link_set_string (param $this i32) (param $source i32)
+      (param $selector i32) (param $dirty_bit i32) (result i32)
+    (local $entry i32) (local $copy i32) (local $old i32)
+    (if (i32.eqz (local.get $source))
+      (then
+        ;; SetPath historically rejects NULL; the two optional strings retain
+        ;; their existing NULL-as-clear behavior.
+        (if (i32.eqz (local.get $selector))
+          (then (return (i32.const 0x80070057)))) ;; E_INVALIDARG
+        (local.set $entry (call $dx_from_this (local.get $this)))
+        (if (i32.eq (local.get $selector) (i32.const 1))
+          (then
+            (local.set $old (load.field DxObject misc1 (local.get $entry)))
+            (store.field DxObject misc1 (local.get $entry) (i32.const 0)))
+          (else
+            (local.set $old (load.field DxObject misc2 (local.get $entry)))
+            (store.field DxObject misc2 (local.get $entry) (i32.const 0))))
+        (if (local.get $old) (then (call $heap_free (local.get $old))))
+        (store.field DxObject flags (local.get $entry)
+          (i32.or (load.field DxObject flags (local.get $entry)) (local.get $dirty_bit)))
+        (return (i32.const 0))))
+    (local.set $copy (call $guest_strdup (local.get $source)))
+    (if (i32.eqz (local.get $copy))
+      (then (return (i32.const 0x8007000E)))) ;; E_OUTOFMEMORY
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (if (i32.eqz (local.get $selector))
+      (then
+        (local.set $old (load.field DxObject misc0 (local.get $entry)))
+        (store.field DxObject misc0 (local.get $entry) (local.get $copy)))
+      (else
+        (if (i32.eq (local.get $selector) (i32.const 1))
+          (then
+            (local.set $old (load.field DxObject misc1 (local.get $entry)))
+            (store.field DxObject misc1 (local.get $entry) (local.get $copy)))
+          (else
+            (local.set $old (load.field DxObject misc2 (local.get $entry)))
+            (store.field DxObject misc2 (local.get $entry) (local.get $copy))))))
+    (if (local.get $old) (then (call $heap_free (local.get $old))))
+    (store.field DxObject flags (local.get $entry)
+      (i32.or (load.field DxObject flags (local.get $entry)) (local.get $dirty_bit)))
+    (i32.const 0))
+
+  ;; Copy at most cch-1 bytes and always terminate when a non-empty output
+  ;; buffer is supplied. The return value is the stored pointer so GetPath can
+  ;; distinguish its documented S_OK (path retrieved) from S_FALSE (no path).
+  (func $shell_link_get_string (param $this i32) (param $buffer i32)
+      (param $chars i32) (param $selector i32) (result i32)
+    (local $entry i32) (local $stored i32)
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (if (i32.eqz (local.get $selector))
+      (then (local.set $stored (load.field DxObject misc0 (local.get $entry))))
+      (else
+        (if (i32.eq (local.get $selector) (i32.const 1))
+          (then (local.set $stored (load.field DxObject misc1 (local.get $entry))))
+          (else (local.set $stored (load.field DxObject misc2 (local.get $entry)))))))
+    (if (local.get $buffer)
+      (then
+        (if (i32.gt_s (local.get $chars) (i32.const 0))
+          (then
+            (if (local.get $stored)
+              (then (call $guest_strncpy
+                (local.get $buffer) (local.get $stored) (local.get $chars)))
+              (else (call $gs8 (local.get $buffer) (i32.const 0))))))))
+    (local.get $stored))
+
+  ;; IShellLinkA and IPersistFile are wrappers around one DxObject and share
+  ;; its reference count. Only the final Release retires their three owned
+  ;; strings; non-final releases leave state available through every wrapper.
+  (func $shell_link_release (param $this i32) (result i32)
+    (local $entry i32) (local $rc i32) (local $owned i32)
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (local.set $rc
+      (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
+    (store.field DxObject refcount (local.get $entry) (local.get $rc))
+    (if (i32.le_s (local.get $rc) (i32.const 0))
+      (then
+        (local.set $owned (load.field DxObject misc0 (local.get $entry)))
+        (if (local.get $owned) (then (call $heap_free (local.get $owned))))
+        (local.set $owned (load.field DxObject misc1 (local.get $entry)))
+        (if (local.get $owned) (then (call $heap_free (local.get $owned))))
+        (local.set $owned (load.field DxObject misc2 (local.get $entry)))
+        (if (local.get $owned) (then (call $heap_free (local.get $owned))))
+        (store.field DxObject misc0 (local.get $entry) (i32.const 0))
+        (store.field DxObject misc1 (local.get $entry) (i32.const 0))
+        (store.field DxObject misc2 (local.get $entry) (i32.const 0))
+        (call $dx_free (local.get $entry))
+        (return (i32.const 0))))
+    (local.get $rc))
+
   (func $handle_IShellLinkA_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (call $shell_link_query_interface
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
@@ -1845,11 +1939,15 @@
   (func $handle_IShellLinkA_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectMusic_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IShellLinkA_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirectMusic_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+    (global.set $eax (call $shell_link_release (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IShellLinkA_GetPath (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $shell_link_empty_a (local.get $arg1) (local.get $arg2))
+    (local $stored i32)
+    (local.set $stored (call $shell_link_get_string
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
     (if (local.get $arg3) (then (call $zero_memory (call $g2w (local.get $arg3)) (i32.const 320))))
-    (global.set $eax (i32.const 1)) ;; S_FALSE: no resolvable target in this host
+    ;; S_FALSE is reserved for a link which has no target path.
+    (global.set $eax (select (i32.const 0) (i32.const 1) (i32.ne (local.get $stored) (i32.const 0))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
   (func $handle_IShellLinkA_GetIDList (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
@@ -1868,22 +1966,22 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IShellLinkA_GetWorkingDirectory (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $shell_link_empty_a (local.get $arg1) (local.get $arg2))
+    (drop (call $shell_link_get_string
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 2)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IShellLinkA_SetWorkingDirectory (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (store.field DxObject misc2 (call $dx_from_this (local.get $arg0)) (local.get $arg1))
-    (call $shell_link_mark (local.get $arg0) (i32.const 4))
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $shell_link_set_string
+      (local.get $arg0) (local.get $arg1) (i32.const 2) (i32.const 4)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IShellLinkA_GetArguments (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $shell_link_empty_a (local.get $arg1) (local.get $arg2))
+    (drop (call $shell_link_get_string
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IShellLinkA_SetArguments (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (store.field DxObject misc1 (call $dx_from_this (local.get $arg0)) (local.get $arg1))
-    (call $shell_link_mark (local.get $arg0) (i32.const 8))
-    (global.set $eax (i32.const 0))
+    (global.set $eax (call $shell_link_set_string
+      (local.get $arg0) (local.get $arg1) (i32.const 1) (i32.const 8)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
   (func $handle_IShellLinkA_GetHotkey (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs16 (local.get $arg1) (i32.const 0))))
@@ -1920,9 +2018,8 @@
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
   (func $handle_IShellLinkA_SetPath (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (store.field DxObject misc0 (call $dx_from_this (local.get $arg0)) (local.get $arg1))
-    (call $shell_link_mark (local.get $arg0) (i32.const 512))
-    (global.set $eax (select (i32.const 0) (i32.const 0x80070057) (i32.ne (local.get $arg1) (i32.const 0))))
+    (global.set $eax (call $shell_link_set_string
+      (local.get $arg0) (local.get $arg1) (i32.const 0) (i32.const 512)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   (func $handle_IPersistFile_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1932,7 +2029,8 @@
   (func $handle_IPersistFile_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectMusic_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IPersistFile_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_IDirectMusic_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+    (global.set $eax (call $shell_link_release (local.get $arg0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
   (func $handle_IPersistFile_GetClassID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then

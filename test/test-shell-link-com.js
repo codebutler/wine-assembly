@@ -30,6 +30,37 @@ const extraWat = String.raw`
   (func (export "test_release_basic") (param $this i32) (result i32)
     (call $dx_com_release_basic (local.get $this)))
 
+  (func (export "test_shell_link_string") (param $this i32) (param $which i32) (result i32)
+    (local $entry i32)
+    (local.set $entry (call $dx_from_this (local.get $this)))
+    (if (result i32) (i32.eqz (local.get $which))
+      (then (load.field DxObject misc0 (local.get $entry)))
+      (else
+        (if (result i32) (i32.eq (local.get $which) (i32.const 1))
+          (then (load.field DxObject misc1 (local.get $entry)))
+          (else (load.field DxObject misc2 (local.get $entry)))))))
+
+  (func (export "test_heap_free_again") (param $ptr i32) (result i32)
+    (call $heap_free_impl (local.get $ptr) (i32.const 0)))
+
+  (global $test_shell_link_last_esp (mut i32) (i32.const 0))
+  (func (export "test_shell_link_get_path")
+      (param $this i32) (param $buffer i32) (param $chars i32)
+      (param $find_data i32) (param $flags i32) (result i32)
+    (local $saved_esp i32) (local $result i32)
+    (local.set $saved_esp (global.get $esp))
+    (global.set $esp (i32.const 0x30000))
+    (call $handle_IShellLinkA_GetPath
+      (local.get $this) (local.get $buffer) (local.get $chars)
+      (local.get $find_data) (local.get $flags) (i32.const 0))
+    (local.set $result (global.get $eax))
+    (global.set $test_shell_link_last_esp (global.get $esp))
+    (global.set $esp (local.get $saved_esp))
+    (local.get $result))
+
+  (func (export "test_shell_link_get_path_esp") (result i32)
+    (global.get $test_shell_link_last_esp))
+
   (func (export "test_live_count") (result i32)
     (local $i i32) (local $count i32)
     (block $done (loop $scan
@@ -79,6 +110,22 @@ async function main() {
   const write = (guest, value) => e.guest_write32(guest, value >>> 0);
   const alloc = bytes => e.guest_alloc(bytes) >>> 0;
 
+  function ansi(text) {
+    const bytes = Buffer.from(text, 'latin1');
+    const guest = alloc(bytes.length + 1);
+    new Uint8Array(memory.buffer).set(bytes, wa(guest));
+    dv.setUint8(wa(guest) + bytes.length, 0);
+    return guest;
+  }
+
+  function readAnsi(guest, max = 4096) {
+    const bytes = new Uint8Array(memory.buffer);
+    let end = wa(guest);
+    const limit = end + max;
+    while (end < limit && bytes[end]) end++;
+    return Buffer.from(bytes.subarray(wa(guest), end)).toString('latin1');
+  }
+
   function wide(text) {
     const guest = alloc((text.length + 1) * 2);
     for (let i = 0; i < text.length; i++) {
@@ -120,11 +167,74 @@ async function main() {
   assert(Array.from({ length: 21 }, (_, slot) => read(read(shell) + slot * 4)).every(Boolean),
     'IShellLinkA exposes all 21 methods');
 
-  assert.strictEqual(callMethod(shell, 20, wide('C:\\Games\\Pocket Tanks\\ptanks.exe')), 0,
+  const pathSource = ansi('C:\\Games\\Pocket Tanks\\ptanks.exe');
+  const argsSource = ansi('-windowed');
+  const workSource = ansi('C:\\Games\\Pocket Tanks');
+  const pathOut = alloc(260);
+  const argsOut = alloc(32);
+  const workOut = alloc(32);
+  const findData = alloc(320);
+
+  new Uint8Array(memory.buffer).fill(0xcc, wa(pathOut), wa(pathOut) + 260);
+  new Uint8Array(memory.buffer).fill(0xcc, wa(findData), wa(findData) + 320);
+  assert.strictEqual(e.test_shell_link_get_path(shell, pathOut, 260, findData, 0), 1,
+    'GetPath reports S_FALSE before a target is configured');
+  assert.strictEqual(readAnsi(pathOut), '', 'empty GetPath output is terminated');
+  assert(new Uint8Array(memory.buffer).subarray(wa(findData), wa(findData) + 320).every(byte => byte === 0),
+    'GetPath initializes optional WIN32_FIND_DATAA output');
+  assert.strictEqual(e.test_shell_link_get_path_esp() >>> 0, 0x30018,
+    'GetPath consumes this plus four stdcall arguments');
+
+  assert.strictEqual(callMethod(shell, 20, pathSource), 0,
     'SetPath succeeds');
-  assert.strictEqual(callMethod(shell, 11, wide('-windowed')), 0, 'SetArguments succeeds');
-  assert.strictEqual(callMethod(shell, 9, wide('C:\\Games\\Pocket Tanks')), 0,
+  assert.strictEqual(callMethod(shell, 11, argsSource), 0, 'SetArguments succeeds');
+  assert.strictEqual(callMethod(shell, 9, workSource), 0,
     'SetWorkingDirectory succeeds');
+
+  const ownedPath = e.test_shell_link_string(shell, 0) >>> 0;
+  const ownedArgs = e.test_shell_link_string(shell, 1) >>> 0;
+  const ownedWork = e.test_shell_link_string(shell, 2) >>> 0;
+  assert(ownedPath && ownedPath !== pathSource, 'SetPath owns a private string copy');
+  assert(ownedArgs && ownedArgs !== argsSource, 'SetArguments owns a private string copy');
+  assert(ownedWork && ownedWork !== workSource, 'SetWorkingDirectory owns a private string copy');
+
+  dv.setUint8(wa(pathSource), 'X'.charCodeAt(0));
+  dv.setUint8(wa(argsSource), 'Y'.charCodeAt(0));
+  dv.setUint8(wa(workSource), 'Z'.charCodeAt(0));
+  assert.strictEqual(e.test_shell_link_get_path(shell, pathOut, 260, 0, 0), 0,
+    'GetPath reports S_OK when a configured target is retrieved');
+  assert.strictEqual(readAnsi(pathOut), 'C:\\Games\\Pocket Tanks\\ptanks.exe',
+    'GetPath survives caller-buffer mutation');
+  assert.strictEqual(callMethod(shell, 10, argsOut, 32), 0);
+  assert.strictEqual(readAnsi(argsOut), '-windowed', 'GetArguments returns owned state');
+  assert.strictEqual(callMethod(shell, 8, workOut, 32), 0);
+  assert.strictEqual(readAnsi(workOut), 'C:\\Games\\Pocket Tanks',
+    'GetWorkingDirectory returns owned state');
+
+  assert.strictEqual(e.test_shell_link_get_path(shell, pathOut, 5, 0, 0), 0);
+  assert.strictEqual(readAnsi(pathOut), 'C:\\G', 'GetPath honors cch including the terminator');
+  assert.strictEqual(callMethod(shell, 10, argsOut, 5), 0);
+  assert.strictEqual(readAnsi(argsOut), '-win', 'GetArguments truncates to cch-1 and terminates');
+  assert.strictEqual(callMethod(shell, 8, workOut, 8), 0);
+  assert.strictEqual(readAnsi(workOut), 'C:\\Game',
+    'GetWorkingDirectory truncates to cch-1 and terminates');
+
+  assert.strictEqual(callMethod(shell, 20, 0), 0x80070057,
+    'SetPath rejects a null input without discarding its target');
+  assert.strictEqual(e.test_shell_link_string(shell, 0) >>> 0, ownedPath,
+    'failed SetPath preserves the owned target');
+
+  const replacementSource = ansi('D:\\Tools\\ptanks.exe');
+  assert.strictEqual(callMethod(shell, 20, replacementSource), 0,
+    'SetPath replaces an existing target');
+  const finalOwnedPath = e.test_shell_link_string(shell, 0) >>> 0;
+  assert(finalOwnedPath && finalOwnedPath !== replacementSource && finalOwnedPath !== ownedPath,
+    'replacement target has a new private owner');
+  assert.strictEqual(e.test_heap_free_again(ownedPath), 0,
+    'successful replacement frees the previous owned target once');
+  assert.strictEqual(e.test_shell_link_get_path(shell, pathOut, 260, 0, 0), 0);
+  assert.strictEqual(readAnsi(pathOut), 'D:\\Tools\\ptanks.exe',
+    'GetPath returns replacement state');
 
   const persistOut = alloc(4);
   assert.strictEqual(callMethod(shell, 0, iid(0x0000010b), persistOut), 0,
@@ -180,9 +290,16 @@ async function main() {
     [0x00021401, 0, 0x000000c0, 0x46000000], 'GetClassID is exact');
   assert.strictEqual(callMethod(persist, 4), 1, 'saved link reports clean state');
 
-  assert.strictEqual(callMethod(persist, 2), 1, 'IPersistFile reference balances');
-  assert.strictEqual(callMethod(shell, 2), 0, 'final Shell Link release destroys the object');
+  assert.strictEqual(callMethod(shell, 2), 1, 'IShellLinkA release preserves the persistence wrapper');
+  assert.strictEqual(callMethod(persist, 2), 0,
+    'final IPersistFile release destroys the shared Shell Link object');
   assert.strictEqual(e.test_live_count(), 0, 'direct QueryInterface path leaks no object');
+  assert.strictEqual(e.test_shell_link_string(shell, 0), 0, 'final Release clears the path owner');
+  assert.strictEqual(e.test_shell_link_string(shell, 1), 0, 'final Release clears the argument owner');
+  assert.strictEqual(e.test_shell_link_string(shell, 2), 0, 'final Release clears the directory owner');
+  assert.strictEqual(e.test_heap_free_again(finalOwnedPath), 0, 'final Release frees the path copy once');
+  assert.strictEqual(e.test_heap_free_again(ownedArgs), 0, 'final Release frees the argument copy once');
+  assert.strictEqual(e.test_heap_free_again(ownedWork), 0, 'final Release frees the directory copy once');
 
   const clsid = clsidShellLink();
   const shellIid = iid(0x000214ee);
