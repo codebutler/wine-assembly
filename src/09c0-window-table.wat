@@ -1337,6 +1337,19 @@
     (local $d0 i32) (local $d1 i32)
     (local.set $d0 (i32.or (i32.load (local.get $wa)) (i32.const 0x20202020)))
     (local.set $d1 (i32.or (i32.load offset=4 (local.get $wa)) (i32.const 0x20202020)))
+    ;; "mdic" + "lien" + "t\0" -> USER's preregistered MDICLIENT class.
+    ;; It is not a common control, but it belongs in this named-system-class
+    ;; resolver because unlike Button/Edit it has no MAKEINTATOM spelling.
+    (if (i32.and
+          (i32.eq (local.get $d0) (i32.const 0x6369646d))
+          (i32.and
+            (i32.eq (local.get $d1) (i32.const 0x6e65696c))
+            (i32.and
+              (i32.eq
+                (i32.or (i32.load8_u offset=8 (local.get $wa)) (i32.const 0x20))
+                (i32.const 0x74))
+              (i32.eqz (i32.load8_u offset=9 (local.get $wa))))))
+      (then (return (i32.const 33))))
     ;; "syst"+"reev" -> TreeView
     (if (i32.and (i32.eq (local.get $d0) (i32.const 0x74737973))
                  (i32.eq (local.get $d1) (i32.const 0x76656572)))

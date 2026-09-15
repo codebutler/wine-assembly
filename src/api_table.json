@@ -30558,5 +30558,19 @@
     "nargs": 0,
     "convention": "stdcall",
     "hash": 3422743039
+  },
+  {
+    "id": 3649,
+    "name": "DefFrameProcA",
+    "nargs": 5,
+    "convention": "stdcall",
+    "hash": 210521364
+  },
+  {
+    "id": 3650,
+    "name": "DefMDIChildProcA",
+    "nargs": 4,
+    "convention": "stdcall",
+    "hash": 954991421
   }
 ]

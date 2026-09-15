@@ -1637,6 +1637,10 @@
     ;; Class 32 = COMCTL32 PropertySheetA wizard frame.
     (if (i32.eq (local.get $class) (i32.const 32))
       (then (return (call $propsheet_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
+    ;; Class 33 = USER's preregistered MDICLIENT window.
+    (if (i32.eq (local.get $class) (i32.const 33))
+      (then (return (call $mdiclient_wndproc
+        (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; Other classes: return 0 (DefWindowProc)
     (i32.const 0)
   )

@@ -1416,19 +1416,386 @@ GetTopWindow(hWnd) — 1 arg stdcall
   (func $handle_GetMessageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_GetMessageA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
-  ;; 648: DefFrameProcW — STUB: unimplemented
+  ;; MDICLIENT's private state, allocated on WM_CREATE:
+  ;;   +0 hWindowMenu from CLIENTCREATESTRUCT
+  ;;   +4 idFirstChild
+  ;;   +8 active MDI child HWND
+  ;;  +12 next child command ID
+  (func $mdi_client_state (param $client i32) (result i32)
+    (if (i32.ne (call $ctrl_table_get_class (local.get $client)) (i32.const 33))
+      (then (return (i32.const 0))))
+    (call $wnd_get_state_ptr (local.get $client)))
+
+  (func $mdi_client_active (param $client i32) (result i32)
+    (local $state i32)
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (call $gl32 (i32.add (local.get $state) (i32.const 8))))
+
+  ;; Generic $set_focus relies on a built-in control's WM_SETFOCUS procedure
+  ;; to publish $focus_hwnd. An MDI child normally has an application wndproc,
+  ;; so publish first (as SetFocus does) and then notify both windows. This also
+  ;; prevents a child that chains WM_SETFOCUS to DefMDIChildProc from recursing.
+  (func $mdi_set_focus (param $child i32)
+    (local $old i32)
+    (local.set $old (global.get $focus_hwnd))
+    (if (i32.eq (local.get $old) (local.get $child)) (then (return)))
+    (global.set $focus_hwnd (local.get $child))
+    (if (local.get $old)
+      (then (drop (call $wnd_send_message
+        (local.get $old) (i32.const 0x0008) (local.get $child) (i32.const 0)))))
+    (if (local.get $child)
+      (then (drop (call $wnd_send_message
+        (local.get $child) (i32.const 0x0007) (local.get $old) (i32.const 0))))))
+
+  ;; Select a live immediate child, tell both sides of the transition, and
+  ;; move keyboard focus to the newly active MDI child.
+  (func $mdi_client_activate (param $client i32) (param $child i32) (result i32)
+    (local $state i32) (local $old i32)
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (if (i32.and
+          (i32.ne (local.get $child) (i32.const 0))
+          (i32.ne (call $wnd_get_parent (local.get $child)) (local.get $client)))
+      (then (return (i32.const 0))))
+    (local.set $old (call $gl32 (i32.add (local.get $state) (i32.const 8))))
+    (if (i32.eq (local.get $old) (local.get $child))
+      (then
+        (if (local.get $child) (then (call $mdi_set_focus (local.get $child))))
+        (return (i32.const 1))))
+    (call $gs32 (i32.add (local.get $state) (i32.const 8)) (local.get $child))
+    (if (local.get $old)
+      (then (drop (call $wnd_send_message
+        (local.get $old) (i32.const 0x0222)
+        (local.get $old) (local.get $child))))) ;; WM_MDIACTIVATE
+    (if (local.get $child)
+      (then
+        (call $host_set_window_zorder (local.get $child) (i32.const 0))
+        (drop (call $wnd_send_message
+          (local.get $child) (i32.const 0x0222)
+          (local.get $old) (local.get $child)))
+        (call $mdi_set_focus (local.get $child))))
+    (i32.const 1))
+
+  ;; Give a newly created MDI child the next CLIENTCREATESTRUCT command ID
+  ;; when CreateWindowEx did not provide one, then make the first/new child
+  ;; active. The ID is what DefFrameProc receives from the frame's Window menu.
+  (func $mdi_client_register_child (param $child i32) (result i32)
+    (local $client i32) (local $state i32) (local $id i32)
+    (local.set $client (call $wnd_get_parent (local.get $child)))
+    (local.set $state (call $mdi_client_state (local.get $client)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $ctrl_table_get_id (local.get $child)))
+      (then
+        (local.set $id (call $gl32 (i32.add (local.get $state) (i32.const 12))))
+        (drop (call $ctrl_table_set_id (local.get $child) (local.get $id)))
+        (call $gs32 (i32.add (local.get $state) (i32.const 12))
+          (i32.add (local.get $id) (i32.const 1)))))
+    (drop (call $mdi_client_activate (local.get $client) (local.get $child)))
+    (i32.const 1))
+
+  (func $mdi_client_next_child (param $client i32) (param $from i32) (param $previous i32) (result i32)
+    (local $next i32)
+    (if (i32.eqz (local.get $from))
+      (then (local.set $from (call $mdi_client_active (local.get $client)))))
+    (if (local.get $previous)
+      (then (local.set $next (call $wnd_find_prev_sibling (local.get $from))))
+      (else (local.set $next (call $wnd_find_next_sibling (local.get $from)))))
+    (if (i32.eqz (local.get $next))
+      (then
+        (if (local.get $previous)
+          (then (local.set $next (call $wnd_find_last_child (local.get $client))))
+          (else (local.set $next (call $wnd_find_first_child (local.get $client)))))))
+    (local.get $next))
+
+  ;; USER's preregistered MDICLIENT default procedure. This is deliberately a
+  ;; bounded Win98 slice: creation state, activation/query/navigation, child
+  ;; destruction, and menu replacement. Arrangement is intentionally left to
+  ;; a later child-aware renderer path: the generic arrange host API targets
+  ;; desktop top-level windows, not children of one MDICLIENT.
+  (func $mdiclient_wndproc (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
+    (local $state i32) (local $ccs i32) (local $child i32) (local $next i32)
+    (local $frame i32) (local $old_menu i32) (local $new_menu i32)
+    (if (i32.eq (local.get $msg) (i32.const 0x0001)) ;; WM_CREATE
+      (then
+        (local.set $state (call $heap_alloc (i32.const 16)))
+        (if (i32.eqz (local.get $state)) (then (return (i32.const -1))))
+        (memory.fill (call $g2w (local.get $state)) (i32.const 0) (i32.const 16))
+        (local.set $ccs (call $gl32 (local.get $lParam))) ;; CREATESTRUCT.lpCreateParams
+        (if (local.get $ccs)
+          (then
+            (call $gs32 (local.get $state) (call $gl32 (local.get $ccs)))
+            (call $gs32 (i32.add (local.get $state) (i32.const 4))
+              (call $gl32 (i32.add (local.get $ccs) (i32.const 4))))
+            (call $gs32 (i32.add (local.get $state) (i32.const 12))
+              (call $gl32 (i32.add (local.get $ccs) (i32.const 4))))))
+        (call $wnd_set_state_ptr (local.get $hwnd) (local.get $state))
+        (return (i32.const 0))))
+    (local.set $state (call $mdi_client_state (local.get $hwnd)))
+    (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0002)) ;; WM_DESTROY
+      (then
+        (call $heap_free (local.get $state))
+        (call $wnd_set_state_ptr (local.get $hwnd) (i32.const 0))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0007)) ;; WM_SETFOCUS
+      (then
+        (local.set $child (call $mdi_client_active (local.get $hwnd)))
+        (if (local.get $child) (then (call $mdi_set_focus (local.get $child))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0222)) ;; WM_MDIACTIVATE
+      (then
+        (drop (call $mdi_client_activate (local.get $hwnd) (local.get $wParam)))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0229)) ;; WM_MDIGETACTIVE
+      (then
+        (local.set $child (call $mdi_client_active (local.get $hwnd)))
+        (if (local.get $lParam)
+          (then (call $gs32 (local.get $lParam) (call $wnd_max_get (local.get $child)))))
+        (return (local.get $child))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0224)) ;; WM_MDINEXT
+      (then
+        (local.set $next (call $mdi_client_next_child
+          (local.get $hwnd) (local.get $wParam)
+          (i32.ne (local.get $lParam) (i32.const 0))))
+        (if (local.get $next)
+          (then (drop (call $mdi_client_activate (local.get $hwnd) (local.get $next)))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0221)) ;; WM_MDIDESTROY
+      (then
+        (local.set $child (local.get $wParam))
+        (if (i32.eq (call $wnd_get_parent (local.get $child)) (local.get $hwnd))
+          (then
+            (local.set $next (call $mdi_client_next_child
+              (local.get $hwnd) (local.get $child) (i32.const 0)))
+            (if (i32.eq (local.get $next) (local.get $child))
+              (then (local.set $next (i32.const 0))))
+            (drop (call $mdi_client_activate (local.get $hwnd) (local.get $next)))
+            (call $wnd_destroy_recursive (local.get $child))))
+        (return (i32.const 0))))
+    (if (i32.or
+          (i32.eq (local.get $msg) (i32.const 0x0225)) ;; WM_MDIMAXIMIZE
+          (i32.eq (local.get $msg) (i32.const 0x0223))) ;; WM_MDIRESTORE
+      (then
+        (local.set $child (local.get $wParam))
+        (if (i32.eq (call $wnd_get_parent (local.get $child)) (local.get $hwnd))
+          (then
+            (drop (call $wnd_send_message
+              (local.get $child) (i32.const 0x0112)
+              (select (i32.const 0xF030) (i32.const 0xF120)
+                (i32.eq (local.get $msg) (i32.const 0x0225)))
+              (i32.const 0)))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0230)) ;; WM_MDISETMENU
+      (then
+        (local.set $frame (call $wnd_get_parent (local.get $hwnd)))
+        (local.set $old_menu (call $menu_source_get (local.get $frame)))
+        (local.set $new_menu (local.get $wParam))
+        (if (local.get $new_menu)
+          (then
+            (if (i32.eq
+                  (i32.and (local.get $new_menu) (i32.const 0xFFFF0000))
+                  (i32.const 0x00BE0000))
+              (then (local.set $new_menu
+                (i32.and (local.get $new_menu) (i32.const 0xFFFF)))))
+            (call $menu_load (local.get $frame) (local.get $new_menu))
+            (call $host_set_menu (local.get $frame) (local.get $new_menu))
+            (call $defwndproc_do_nccalcsize (local.get $frame))
+            (call $paint_flag_set_inv (local.get $frame))))
+        (if (local.get $lParam)
+          (then (call $gs32 (local.get $state) (local.get $lParam))))
+        (return (local.get $old_menu))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0234)) ;; WM_MDIREFRESHMENU
+      (then (return (call $menu_source_get (call $wnd_get_parent (local.get $hwnd))))))
+    (i32.const 0))
+
+  ;; DefFrameProc's MDI-specific messages. Return one when consumed; all
+  ;; others must pass through the encoding-matched DefWindowProc entry.
+  (func $mdi_frame_message (param $frame i32) (param $client i32)
+      (param $msg i32) (param $wParam i32) (param $lParam i32) (result i32)
+    (local $child i32) (local $wh i32) (local $w i32) (local $h i32)
+    (if (i32.eqz (call $mdi_client_state (local.get $client)))
+      (then (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0111)) ;; WM_COMMAND
+      (then
+        (local.set $child (call $ctrl_find_by_id
+          (local.get $client) (i32.and (local.get $wParam) (i32.const 0xFFFF))))
+        (if (local.get $child)
+          (then
+            (drop (call $mdi_client_activate (local.get $client) (local.get $child)))
+            (return (i32.const 1))))))
+    ;; MDI child activation is independent of frame activation. When the frame
+    ;; changes active state, USER asks the last active child to repaint its
+    ;; nonclient area, then still gives the frame's DefWindowProc its turn.
+    (if (i32.eq (local.get $msg) (i32.const 0x0086)) ;; WM_NCACTIVATE
+      (then
+        (local.set $child (call $mdi_client_active (local.get $client)))
+        (if (local.get $child)
+          (then (drop (call $wnd_send_message
+            (local.get $child) (local.get $msg)
+            (local.get $wParam) (local.get $lParam)))))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0007)) ;; WM_SETFOCUS
+      (then
+        (local.set $child (call $mdi_client_active (local.get $client)))
+        (call $mdi_set_focus (select (local.get $child) (local.get $client)
+          (i32.ne (local.get $child) (i32.const 0))))
+        (return (i32.const 1))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0005)) ;; WM_SIZE
+      (then
+        (local.set $wh (local.get $lParam))
+        (local.set $w (i32.and (local.get $wh) (i32.const 0xFFFF)))
+        (local.set $h (i32.and (i32.shr_u (local.get $wh) (i32.const 16)) (i32.const 0xFFFF)))
+        (call $host_move_window (local.get $client)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 4))
+        (call $ctrl_geom_sync (local.get $client)
+          (i32.const 0) (i32.const 0) (local.get $w) (local.get $h) (i32.const 4))
+        (drop (call $wnd_send_message
+          (local.get $client) (i32.const 0x0005) (local.get $wParam) (local.get $lParam)))
+        (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; MDI-child messages that add behavior beyond DefWindowProc. The caller
+  ;; owns the encoding-specific fallback and stdcall cleanup.
+  (func $mdi_child_message (param $child i32) (param $msg i32)
+      (param $wParam i32) (param $lParam i32) (result i32)
+    (local $client i32) (local $next i32) (local $cmd i32)
+    (local.set $client (call $wnd_get_parent (local.get $child)))
+    (if (i32.eqz (call $mdi_client_state (local.get $client)))
+      (then (return (i32.const 0))))
+    (if (i32.or
+          (i32.eq (local.get $msg) (i32.const 0x0001))  ;; WM_CREATE
+          (i32.or
+            (i32.eq (local.get $msg) (i32.const 0x0022)) ;; WM_CHILDACTIVATE
+            (i32.eq (local.get $msg) (i32.const 0x0007)))) ;; WM_SETFOCUS
+      (then
+        (drop (call $mdi_client_register_child (local.get $child)))
+        (return (i32.const 1))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0002)) ;; WM_DESTROY
+      (then
+        (if (i32.eq (call $mdi_client_active (local.get $client)) (local.get $child))
+          (then
+            (local.set $next (call $mdi_client_next_child
+              (local.get $client) (local.get $child) (i32.const 0)))
+            (if (i32.eq (local.get $next) (local.get $child))
+              (then (local.set $next (i32.const 0))))
+            (drop (call $mdi_client_activate (local.get $client) (local.get $next)))))
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $msg) (i32.const 0x0112)) ;; WM_SYSCOMMAND
+      (then
+        (local.set $cmd (i32.and (local.get $wParam) (i32.const 0xFFF0)))
+        (if (i32.or
+              (i32.eq (local.get $cmd) (i32.const 0xF040)) ;; SC_NEXTWINDOW
+              (i32.eq (local.get $cmd) (i32.const 0xF050))) ;; SC_PREVWINDOW
+          (then
+            (drop (call $mdiclient_wndproc
+              (local.get $client) (i32.const 0x0224) (local.get $child)
+              (i32.eq (local.get $cmd) (i32.const 0xF050))))
+            (return (i32.const 1))))))
+    (i32.const 0))
+
+  ;; Default MDI frame processing. The MDI-specific branches are filled in
+  ;; below; every other message retains DefWindowProc's encoding-specific
+  ;; behavior. DefFrameProc has one extra HWND argument, so add the remaining
+  ;; dword after DefWindowProc consumes its normal four-argument frame.
   (func $handle_DefFrameProcW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (if (call $mdi_frame_message
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (local.get $arg4))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (call $handle_DefWindowProcW
+      (local.get $arg0) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (i32.const 0) (local.get $name_ptr))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
   )
 
-  ;; 649: TranslateMDISysAccel — STUB: unimplemented
+  ;; Translate the documented MDI Ctrl+F4 / Ctrl+F6 system accelerators. Key-up
+  ;; is consumed too, but only key-down sends the WM_SYSCOMMAND.
   (func $handle_TranslateMDISysAccel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (local $msg i32) (local $message i32) (local $vk i32)
+    (local $active i32) (local $command i32)
+    (if (i32.and
+          (i32.ne (local.get $arg1) (i32.const 0))
+          (i32.ne (call $mdi_client_state (local.get $arg0)) (i32.const 0)))
+      (then
+        (local.set $msg (call $g2w (local.get $arg1)))
+        (local.set $message (i32.load offset=4 (local.get $msg)))
+        (local.set $vk (i32.load offset=8 (local.get $msg)))
+        (if (i32.and
+              (i32.or
+                (i32.eq (local.get $message) (i32.const 0x0100))
+                (i32.eq (local.get $message) (i32.const 0x0101)))
+              (i32.ne
+                (i32.and (call $host_get_key_down_state (i32.const 0x11)) (i32.const 0x8000))
+                (i32.const 0)))
+          (then
+            (if (i32.eq (local.get $vk) (i32.const 0x73))
+              (then (local.set $command (i32.const 0xF060)))) ;; Ctrl+F4: SC_CLOSE
+            (if (i32.eq (local.get $vk) (i32.const 0x75))
+              (then
+                (local.set $command
+                  (select (i32.const 0xF050) (i32.const 0xF040)
+                    (i32.ne
+                      (i32.and (call $host_get_key_down_state (i32.const 0x10)) (i32.const 0x8000))
+                      (i32.const 0)))))))) ;; Ctrl+[Shift+]F6
+        (if (local.get $command)
+          (then
+            (if (i32.eq (local.get $message) (i32.const 0x0100))
+              (then
+                (local.set $active (call $mdi_client_active (local.get $arg0)))
+                (if (local.get $active)
+                  (then (drop (call $wnd_send_message
+                    (local.get $active) (i32.const 0x0112)
+                    (local.get $command) (i32.const 0)))))))
+            (global.set $eax (i32.const 1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )
 
-;; 651: DefMDIChildProcW — STUB: unimplemented
+  ;; Default MDI child processing falls through to the ordinary default
+  ;; procedure for messages with no MDI-specific action.
   (func $handle_DefMDIChildProcW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $crash_unimplemented (local.get $name_ptr))
+    (if (call $mdi_child_message
+          (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (call $handle_DefWindowProcW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr))
+  )
+
+  ;; ANSI spellings are distinct USER32 exports, even though all of the MDI
+  ;; state and non-text messages are shared with the W entry points.
+  (func $handle_DefFrameProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $mdi_frame_message
+          (local.get $arg0) (local.get $arg1) (local.get $arg2)
+          (local.get $arg3) (local.get $arg4))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (call $handle_DefWindowProcA
+      (local.get $arg0) (local.get $arg2) (local.get $arg3) (local.get $arg4)
+      (i32.const 0) (local.get $name_ptr))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+  )
+
+  (func $handle_DefMDIChildProcA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (call $mdi_child_message
+          (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
+      (then
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (call $handle_DefWindowProcA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
+      (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; 652: InvertRect(hdc, lpRect) — 2 args stdcall
