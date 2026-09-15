@@ -7579,3 +7579,78 @@ The land renders and the flyover is faster, but this is still the cinematic.
 The input poll has not gone nonzero on any drive yet and ESC does not skip the
 cinematic, so interactive gameplay remains the open blocker — and it is not on
 the render path at all.
+
+## Interactive gameplay reached, and the cost of the picture (drive52, 2026-09-14)
+
+**The previous section's closing paragraph is wrong and is superseded.** It
+said interactive gameplay was the open blocker and that the run was stuck in a
+cinematic. It was not: the same drive52, left to run, is in the tutorial land
+with the village, the villagers, both advisors animating, and a camera that
+answers the arrow keys. Two inputs, each held ~2500 batches, measured against
+an idle control:
+
+| step | frames differ |
+|---|---|
+| idle, 25s apart, no input | **0 of 307200 pixels** (byte-identical) |
+| `key 38` (up) | 41531 px, 13.5%, box 0,7 640x413 |
+| `key 39` (right) | 44154 px, 14.4%, box 0,8 640x412 |
+
+The idle control is what makes those two numbers mean something: the scene does
+not animate between frames on its own at this cadence, so a whole-viewport
+change after a key is the camera, not the clock. The second shot shows the
+terrain panned and the villagers moved across the frame. Input was never
+broken — the earlier "input is not consumed" reading came from sampling while
+the land was still loading.
+
+The `intro` object the probe watches is also not the cinematic: it reports
+`frame 3, target 636, finishFrame 1`, i.e. already finished by its own exit
+test. Do not read a stalled `frame` there as a stalled game.
+
+### What is actually slow: one frame in ~30s, and 97.8% of it was redundant
+
+Presents, not draws, are the frame clock here — draws ran at p50 12.97/s in the
+gameplay window while presents moved twice in 63s. The scene costs ~550 draws
+per present.
+
+Measured on the live process, not estimated (a timing wrapper around
+`ctx.d3d9Bridge.call` and the device's `queue.submit`, over 56.1s of wall
+clock):
+
+| | |
+|---|---|
+| `bridge.call`, 679 draws | 16.49s (29% of wall clock), 23ms per draw |
+| of which `CommandQueue.submit`, `copyPayload` included | **0.78s** |
+| descriptor **build** | **15.72s — 28% of all wall clock** |
+
+So the payload copy was never the problem. Building the descriptor was, and
+inside it the texture snapshot: `lib/d3d9-host.js` decoded every bound mip
+level from guest bytes on **every draw**, a fresh `Uint8Array(w*h*4)` and a
+per-texel conversion loop each time. A census of the same scene over 62s:
+
+| | |
+|---|---|
+| draws | 1226 |
+| mip levels bound | 10128 |
+| **distinct** mip levels | **598** |
+| repeat bindings | 94.1% |
+| texels re-converted | 1.01 billion |
+| texels genuinely new | 22.4 million |
+| **redundant conversion work** | **97.8%** |
+| decoded working set | 81.4 MB RGBA, largest level 4 MB |
+
+Fixed in 39fd25cc by caching the converted level per mip record, keyed by its
+address and validated by the dirty sequence at mip+28. That invariant already
+existed and needed no new code: guest code reaches texels only through
+LockRect, the draw path refuses a level that is still locked, and
+`$handle_IDirect3DTexture9_UnlockRect` (`09ad-handlers-d3d9.wat:2089`) bumps
++28. A mip address can be reused by a new texture whose sequence restarts, so a
+hit also re-checks a sparse sample of the source bytes — a backstop against
+reuse, not a change detector. 192 MB LRU budget, chosen from the 81.4 MB
+working set above.
+
+### What this does not fix
+
+The remaining frame cost is the software rasterizer and the interpreter, not
+the bridge: at the time of measurement the render worker held 36 minutes of CPU
+against the main thread's ~49. Removing the decode returns roughly a quarter of
+the wall clock to the guest; it does not make ~550 draws per frame cheap.
