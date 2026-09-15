@@ -3277,18 +3277,27 @@
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
     (i32.load offset=4 (local.get $sw)))
-  ;; $field: 0 = flags, 1 = id, 2 = itemData.
+  ;; $field: 0 = flags, 1 = id, 2 = legacy payload (text when present,
+  ;; otherwise dwItemData), 3 = submenu, 4 = raw text.
   (func (export "test_menu_item_field") (param $hmenu i32) (param $index i32) (param $field i32) (result i32)
-    (local $sw i32)
+    (local $sw i32) (local $rec i32)
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
     (if (i32.ge_u (local.get $index) (i32.load offset=4 (local.get $sw)))
       (then (return (i32.const -1))))
+    (local.set $rec
+      (i32.add (local.get $sw)
+        (i32.add (i32.const 16)
+          (i32.mul (local.get $index) (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
+    (if (i32.eq (local.get $field) (i32.const 2))
+      (then
+        (return
+          (select
+            (i32.load offset=16 (local.get $rec))
+            (i32.load offset=8 (local.get $rec))
+            (i32.ne (i32.load offset=16 (local.get $rec)) (i32.const 0))))))
     (i32.load
-      (i32.add
-        (i32.add (local.get $sw)
-          (i32.add (i32.const 16) (i32.mul (local.get $index) (i32.const 16))))
-        (i32.mul (local.get $field) (i32.const 4)))))
+      (i32.add (local.get $rec) (i32.mul (local.get $field) (i32.const 4)))))
 
   ;; Atom tables — exercised by test/test-atom-table.js. The A/W and
   ;; local/global split is the part worth pinning: the same name in different

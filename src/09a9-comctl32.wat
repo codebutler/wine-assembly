@@ -352,6 +352,27 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; stdcall, 5 args
   )
 
+  ;; ImageList_GetImageCount(himl) — 1 arg, returns the logical image count.
+  ;; HIMAGELIST is our existing tagged 36-byte record; invalid, NULL, and
+  ;; destroyed handles have no images and return zero without changing the
+  ;; caller's last-error value (the common-controls contract defines none).
+  (func $handle_ImageList_GetImageCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sw i32)
+    (global.set $eax (i32.const 0))
+    (if (local.get $arg0)
+      (then
+        ;; A forged non-NULL handle must not turn the validity-tag load into a
+        ;; WebAssembly bounds trap. Validate the complete record in one affine
+        ;; guest mapping before dereferencing any field.
+        (local.set $sw
+          (call $g2w_affine_span (local.get $arg0) (i32.const 36)))
+        (if (i32.and
+              (i32.ne (local.get $sw) (global.get $NULL_SENTINEL))
+              (i32.eq (i32.load offset=32 (local.get $sw)) (i32.const 0x4C4D4948)))
+          (then (global.set $eax (i32.load offset=12 (local.get $sw)))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+  )
+
   ;; ImageList_Destroy(himl) — 1 arg, returns BOOL
   (func $handle_ImageList_Destroy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $sw i32) (local $icons i32) (local $count i32) (local $bitmap i32)

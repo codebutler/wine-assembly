@@ -3109,17 +3109,20 @@
   )
 
   ;; 129: ChildWindowFromPoint(hWndParent, POINT). POINT is passed by value.
-  ;; Convert the parent-client point to screen coordinates and use the shared
-  ;; HWND-tree hit tester. Win32 returns the parent when no child contains it.
+  ;; The shared USER query core searches immediate children in Z order and,
+  ;; unlike the input router, includes hidden, disabled, and transparent ones.
   (func $handle_ChildWindowFromPoint (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $child i32)
-    (local.set $child (call $wnd_child_from_point_deep
-      (local.get $arg0)
-      (i32.add (call $wnd_client_screen_x (local.get $arg0)) (local.get $arg1))
-      (i32.add (call $wnd_client_screen_y (local.get $arg0)) (local.get $arg2))))
-    (global.set $eax
-      (select (local.get $child) (local.get $arg0) (local.get $child)))
+    (global.set $eax (call $wnd_child_from_point_immediate
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+  )
+
+  ;; ChildWindowFromPointEx(hWndParent, POINT, flags). POINT consumes two stack
+  ;; dwords in the 32-bit ABI; flags is the fourth argument dword.
+  (func $handle_ChildWindowFromPointEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $wnd_child_from_point_immediate
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
   )
 
   ;; 130: ScreenToClient

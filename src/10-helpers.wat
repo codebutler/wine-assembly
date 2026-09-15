@@ -4671,6 +4671,76 @@
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 20)) (local.get $x))
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 24)) (local.get $y)))
 
+  ;; USER's ChildWindowFromPoint family searches only immediate children and
+  ;; resolves overlaps in child Z order. $px/$py are parent-client coordinates;
+  ;; flags are CWP_SKIPINVISIBLE(1), CWP_SKIPDISABLED(2), and
+  ;; CWP_SKIPTRANSPARENT(4). With no matching child, a point inside the client
+  ;; area returns the parent itself; an invalid parent or outside point returns
+  ;; NULL. This API geometry is deliberately separate from the deep input
+  ;; router below, whose class-specific click-through rules are not USER state.
+  (func $wnd_child_from_point_immediate
+      (param $parent i32) (param $px i32) (param $py i32) (param $flags i32)
+      (result i32)
+    (local $slot i32) (local $ch i32) (local $style i32)
+    (local $sx i32) (local $sy i32) (local $x i32) (local $y i32)
+    (local $w i32) (local $h i32) (local $rank i32)
+    (local $best i32) (local $best_rank i32)
+    (if (i32.lt_s (call $wnd_table_find (local.get $parent)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (if (i32.or
+          (i32.or (i32.lt_s (local.get $px) (i32.const 0))
+                  (i32.lt_s (local.get $py) (i32.const 0)))
+          (i32.or
+            (i32.ge_s (local.get $px) (call $wnd_client_w_for_clip (local.get $parent)))
+            (i32.ge_s (local.get $py) (call $wnd_client_h_for_clip (local.get $parent)))))
+      (then (return (i32.const 0))))
+    (local.set $sx
+      (i32.add (call $wnd_client_screen_x (local.get $parent)) (local.get $px)))
+    (local.set $sy
+      (i32.add (call $wnd_client_screen_y (local.get $parent)) (local.get $py)))
+    (local.set $slot (i32.const 0))
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $parent) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (local.set $ch (call $wnd_slot_hwnd (local.get $slot)))
+      (local.set $style (call $wnd_get_style (local.get $ch)))
+      (if (i32.or
+            (i32.or
+              (i32.and
+                (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+                (i32.eqz (i32.and (local.get $style) (i32.const 0x10000000))))
+              (i32.and
+                (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0))
+                (i32.ne (i32.and (local.get $style) (i32.const 0x08000000)) (i32.const 0))))
+            (i32.and
+              (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0))
+              (i32.ne
+                (i32.and (call $ctrl_get_ex_style (local.get $ch)) (i32.const 0x20))
+                (i32.const 0))))
+        (then
+          (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+          (br $scan)))
+      (local.set $x (call $wnd_window_screen_x (local.get $ch)))
+      (local.set $y (call $wnd_window_screen_y (local.get $ch)))
+      (local.set $w (call $wnd_screen_w (local.get $ch)))
+      (local.set $h (call $wnd_screen_h (local.get $ch)))
+      (if (i32.and
+            (i32.and (i32.ge_s (local.get $sx) (local.get $x))
+                     (i32.lt_s (local.get $sx) (i32.add (local.get $x) (local.get $w))))
+            (i32.and (i32.ge_s (local.get $sy) (local.get $y))
+                     (i32.lt_s (local.get $sy) (i32.add (local.get $y) (local.get $h)))))
+        (then
+          (local.set $rank (call $wnd_z_get (local.get $ch)))
+          (if (i32.or
+                (i32.eqz (local.get $best))
+                (i32.gt_s (local.get $rank) (local.get $best_rank)))
+            (then
+              (local.set $best (local.get $ch))
+              (local.set $best_rank (local.get $rank))))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (select (local.get $best) (local.get $parent) (local.get $best)))
+
   ;; Deep child WindowFromPoint helper. JS supplies only the browser point and
   ;; current top-level candidate; USER-style child visibility/geometry/class
   ;; filtering stays in WAT with the rest of the HWND tree.
