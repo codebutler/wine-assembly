@@ -93,6 +93,12 @@
   ;; move_window(hwnd, x, y, w, h, flags)  flags: SWP_NOSIZE=1, SWP_NOMOVE=2
   (import "host" "get_window_rect" (func $host_get_window_rect (param i32 i32)))
   ;; get_window_rect(hwnd, wasmRectPtr) — writes left,top,right,bottom as i32s
+  (import "host" "draw_animated_rects"
+    (func $host_draw_animated_rects
+      (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+  ;; draw_animated_rects(hwnd,idAni,from LTRB,to LTRB) — guest RECTs are
+  ;; copied to scalar host arguments so sparse/non-affine pages never leak as
+  ;; a flat JS pointer. Coordinates remain relative to hwnd's client origin.
   (import "host" "destroy_window" (func $host_destroy_window (param i32)))
   ;; destroy_window(hwnd) — remove from renderer's window table
   (import "host" "draw_text" (func $host_draw_text (param i32 i32 i32 i32 i32)))

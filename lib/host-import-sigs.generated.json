@@ -1,6 +1,6 @@
 {
   "generated_from": "src/01-header.wat",
-  "count": 243,
+  "count": 244,
   "sigs": {
     "log": {
       "params": [
@@ -268,6 +268,23 @@
         "i32"
       ],
       "results": []
+    },
+    "draw_animated_rects": {
+      "params": [
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32",
+        "i32"
+      ],
+      "results": [
+        "i32"
+      ]
     },
     "destroy_window": {
       "params": [

@@ -3729,11 +3729,41 @@
     (global.set $eax (local.get $prev))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; BOOL DrawAnimatedRects(HWND, int, const RECT*, const RECT*). The animation
-  ;; is cosmetic; completing it synchronously preserves the Win32 contract and
-  ;; lets controls continue their selection/update path.
+  ;; BOOL DrawAnimatedRects(HWND, int, const RECT*, const RECT*). Win98 RegEdit
+  ;; passes the legacy selector 1 after mapping both pane rectangles into the
+  ;; main window's client coordinates. Later headers document IDANI_CAPTION=3;
+  ;; USER accepts the three legacy animation selectors and rejects everything
+  ;; else. Copy each field through guest translation because a RECT may cross
+  ;; adjacent guest pages whose host backing is deliberately non-contiguous.
   (func $handle_DrawAnimatedRects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
+    (if (i32.or
+          (i32.eqz (call $window_handle_valid (local.get $arg0)))
+          (i32.or
+            (i32.or
+              (i32.lt_s (local.get $arg1) (i32.const 1))
+              (i32.gt_s (local.get $arg1) (i32.const 3)))
+            (i32.or
+              (call $ptr_range_access_bad
+                (local.get $arg2) (i32.const 16) (i32.const 0))
+              (call $ptr_range_access_bad
+                (local.get $arg3) (i32.const 16) (i32.const 0)))))
+      (then
+        ;; DrawAnimatedRects has no documented GetLastError contract.
+        (global.set $eax (i32.const 0))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (return)))
+    (global.set $eax
+      (call $host_draw_animated_rects
+        (local.get $arg0)
+        (local.get $arg1)
+        (call $gl32 (local.get $arg2))
+        (call $gl32 (i32.add (local.get $arg2) (i32.const 4)))
+        (call $gl32 (i32.add (local.get $arg2) (i32.const 8)))
+        (call $gl32 (i32.add (local.get $arg2) (i32.const 12)))
+        (call $gl32 (local.get $arg3))
+        (call $gl32 (i32.add (local.get $arg3) (i32.const 4)))
+        (call $gl32 (i32.add (local.get $arg3) (i32.const 8)))
+        (call $gl32 (i32.add (local.get $arg3) (i32.const 12)))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
   ;; ACCEL contains only byte/word scalar fields, so the Unicode entry point

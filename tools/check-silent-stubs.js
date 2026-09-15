@@ -262,8 +262,11 @@ const digest = crypto.createHash('sha256')
 // empty, optionally class-associated device information set instead of always
 // failing, and SetupDiDestroyDeviceInfoList atomically consumes only a live
 // matching handle instead of reporting success for arbitrary/stale values.
-const EXPECTED_COUNT = 280;
-const EXPECTED_SHA256 = '3414b95b654c6d4ac55dc7bbf735dc84ee96aeefd136e220fd24f0162fdc31da';
+// 2026-09-15: 280 -> 279. DrawAnimatedRects now validates its HWND, legacy
+// Win98 animation selector and both readable RECTs, then schedules a clipped
+// client-coordinate wire-frame transition instead of reporting false success.
+const EXPECTED_COUNT = 279;
+const EXPECTED_SHA256 = '6173b38c0de84346a98b09fc1d961773b08fd96ccc2136ee7834ae8601df47bf';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
