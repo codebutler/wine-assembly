@@ -30339,5 +30339,19 @@
     "nargs": 1,
     "convention": "stdcall",
     "hash": 3863844570
+  },
+  {
+    "id": 3618,
+    "name": "QueryDosDeviceA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 1618565044
+  },
+  {
+    "id": 3619,
+    "name": "DefineDosDeviceA",
+    "nargs": 3,
+    "convention": "stdcall",
+    "hash": 538560389
   }
 ]

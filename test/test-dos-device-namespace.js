@@ -7,6 +7,7 @@
 // in the process.  This test deliberately does not open a mapped name: the
 // browser has no kernel device object behind these namespace junctions.
 const assert = require('assert');
+const apiTable = require('../src/api_table.json');
 const { bootRenderHarness } = require('./render-helper');
 
 const EXTRA_WAT = String.raw`
@@ -34,6 +35,10 @@ const EXTRA_WAT = String.raw`
     (global.set $last_error (local.get $value)))
   (func (export "test_get_last_error") (result i32)
     (global.get $last_error))
+  (func (export "test_query_dos_device_id") (result i32)
+    (call $lookup_api_id "QueryDosDeviceA"))
+  (func (export "test_define_dos_device_id") (result i32)
+    (call $lookup_api_id "DefineDosDeviceA"))
 `;
 
 const DDD_RAW_TARGET_PATH = 0x1;
@@ -101,6 +106,19 @@ function callDefine(e, flags, name, target) {
   const e = main.exports;
   const h = helpers(e);
   const out = h.alloc(2048);
+
+  for (const [name, expectedId, lookup] of [
+    ['QueryDosDeviceA', 3618, e.test_query_dos_device_id],
+    ['DefineDosDeviceA', 3619, e.test_define_dos_device_id],
+  ]) {
+    const api = apiTable.find(entry => entry.name === name);
+    assert.deepStrictEqual(
+      api && { id: api.id, nargs: api.nargs, convention: api.convention },
+      { id: expectedId, nargs: 3, convention: 'stdcall' },
+      `${name} keeps its append-only API identity and ABI`);
+    assert.strictEqual(lookup() >>> 0, expectedId,
+      `the generated hash table resolves ${name}`);
+  }
 
   e.test_set_last_error(LAST_ERROR_SENTINEL);
   let size = callQuery(e, h.writeA('c:'), out, 2048);
