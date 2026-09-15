@@ -3453,6 +3453,10 @@ class WineAssembly {
         if (self.renderer && self.renderer.beginWorkerGuestSlice) {
           self.renderer.beginWorkerGuestSlice();
         }
+        // The step PARKS here for the whole rendezvous, so this wall time is the
+        // step's time — see the mark below for why it cannot be r.ms.
+        const perfRendezvousStart = perf ? performance.now() : 0;
+        let perfRendezvousMs = 0;
         try {
           if (typeof window !== 'undefined' && window.WINE_THREADS_SERIAL) {
             // Diagnostic only: the same slices, one at a time. A bug that appears
@@ -3464,6 +3468,7 @@ class WineAssembly {
             [r, threadsRun] = await Promise.all([runMain(), runThreads()]);
           }
         } finally {
+          if (perf) perfRendezvousMs = performance.now() - perfRendezvousStart;
           if (self.renderer && self.renderer.endWorkerGuestSlice) {
             self.renderer.endWorkerGuestSlice();
           }
@@ -3498,10 +3503,29 @@ class WineAssembly {
         if (perf) {
           perf.countBlocks(Math.max(0, ranBlocks) +
             (self.threadManager ? self.threadManager.lastWorkerSliceBlocks || 0 : 0));
-          // Off-thread time is reported as thread time, not main time: it did
-          // not block this thread, and calling it 'guest' here would make the
-          // HUD's phase shares mean something different than in the other mode.
-          perf.mark('workers', r.ms || 0);
+          // Off-thread time is reported as thread time, not main time: calling
+          // it 'guest' here would make the HUD's phase shares mean something
+          // different than in the other mode.
+          //
+          // It is the WALL time of the rendezvous, not r.ms. This used to mark
+          // r.ms — the main guest worker's SELF-REPORTED slice time — on the
+          // reasoning that off-thread work does not block this thread. It does:
+          // the step is an async function and awaits the Promise.all above, so
+          // every millisecond the guest threads spend is a millisecond this
+          // step is parked. r.ms also says nothing at all about the OTHER
+          // guest threads, which is most of the work.
+          //
+          // perf-hud.js computes `other` as total-main-workers-present, so all
+          // of that landed in the residual with no name on it, and the HUD drew
+          // a fully busy machine as main 0% / workers ~0% / other 40-55%.
+          // Measured on a real iPhone running StarCraft, 69910 steps over 49s:
+          // 67.8% of WALL CLOCK was inside the awaited runWorkerSlices, of
+          // which only 3.3% was its synchronous part. One spike step reported
+          // workers=0.16ms beside an awaited call that took 34.06ms.
+          //
+          // Cooperative mode was never affected: its mark brackets a
+          // synchronous runBudgeted.
+          perf.mark('workers', perfRendezvousMs);
         }
         if (r.trapped) {
           const g = r.regs || {};
