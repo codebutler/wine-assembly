@@ -377,3 +377,14 @@ initial/maximum values, and reports ERROR_ALREADY_EXISTS; opens and creates own
 references until the last CloseHandle destroys the name. Events, mutexes, and
 semaphores now also share one case-sensitive process namespace, so a cross-type
 name collision fails with ERROR_INVALID_HANDLE instead of creating two objects.
+
+2026-09-14: 330 -> 290 cumulative audit. The executable pin had not followed
+the mainline implementation stream since September 11, leaving every clean
+build red even though the inventory moved downward. The reviewed delta covers
+the intervening stateful USER/GDI/DirectX, console, locale, shell, heap, token,
+security, filesystem, and compatibility work; the ratchet is banked at the
+clean integrated tree instead of blessing any new unconditional success.
+
+2026-09-14: 290 -> 289. OutputDebugStringA now sends its bounded ANSI payload
+to the browser/CLI debugger sink. NULL remains an optional no-op, and an
+inaccessible guest range cannot turn diagnostic output into an emulator crash.
