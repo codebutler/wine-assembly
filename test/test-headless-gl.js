@@ -54,10 +54,12 @@ console.log('renderer:', gl.getParameter(gl.RENDERER),
 const gpu = new WebGLBackend(canvas);
 const precisionProgram = gpu.createProgram(
   'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }',
-  'precision highp float; uniform highp vec4 tint; void main(){ gl_FragColor=tint; }',
+  '#extension GL_OES_standard_derivatives : require\n' +
+  'precision highp float; uniform highp vec4 tint; void main(){' +
+  ' float slope=dFdx(gl_FragCoord.x); gl_FragColor=tint*max(slope,1.0); }',
   ['p'], ['tint']);
 assert.ok(precisionProgram && precisionProgram.handle,
-  'native headless context did not compile an ESSL precision shader');
+  'native headless context did not port ESSL precision/derivative syntax');
 const precisionBuffer = gpu.createBuffer();
 gpu.updateBuffer(precisionBuffer, gl.ARRAY_BUFFER,
   new Float32Array([-1, -1, 3, -1, -1, 3]));

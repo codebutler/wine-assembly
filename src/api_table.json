@@ -29591,7 +29591,7 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 3204463305,
-    "handler": "IDirect3DDevice9_GetTextureStageState"
+    "handler": "IDirect3DDevice8_GetTextureStageState"
   },
   {
     "id": 3522,
@@ -29599,7 +29599,7 @@
     "nargs": 4,
     "convention": "stdcall",
     "hash": 4187755405,
-    "handler": "IDirect3DDevice9_SetTextureStageState"
+    "handler": "IDirect3DDevice8_SetTextureStageState"
   },
   {
     "id": 3523,

@@ -27,6 +27,10 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(deviceMethods[76].name, 'SetVertexShader');
   assert.strictEqual(deviceMethods[76].handler, undefined,
     'D3D8 SetVertexShader uses its ABI-aware FVF wrapper');
+  assert.strictEqual(deviceMethods[62].handler, undefined,
+    'D3D8 GetTextureStageState maps its embedded sampler-state namespace');
+  assert.strictEqual(deviceMethods[63].handler, undefined,
+    'D3D8 SetTextureStageState maps its embedded sampler-state namespace');
   assert.strictEqual(deviceMethods[16].handler, undefined,
     'D3D8 GetBackBuffer inserts the implicit D3D9 swap-chain index');
   const deviceRows = deviceMethods.map(m => table.find(a => a.name === `IDirect3DDevice8_${m.name}`));
@@ -81,6 +85,16 @@ const { bootRenderHarness } = require('./render-helper');
       (global.set $esp (i32.const 0x074ff000))
       (call $handle_IDirect3DDevice8_SetIndices (local.get $dev) (local.get $buffer)
         (local.get $base) (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+    (func (export "d3d8_set_tss") (param $dev i32) (param $stage i32)
+      (param $type i32) (param $value i32) (result i32)
+      (global.set $esp (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice8_SetTextureStageState (local.get $dev) (local.get $stage)
+        (local.get $type) (local.get $value) (i32.const 0) (i32.const 0)) (global.get $eax))
+    (func (export "d3d8_get_tss") (param $dev i32) (param $stage i32)
+      (param $type i32) (param $out i32) (result i32)
+      (global.set $esp (i32.const 0x074ff000))
+      (call $handle_IDirect3DDevice8_GetTextureStageState (local.get $dev) (local.get $stage)
+        (local.get $type) (local.get $out) (i32.const 0) (i32.const 0)) (global.get $eax))
     (func (export "d3d8_index_base") (param $dev i32) (result i32)
       (local $state i32)
       (local.set $state (call $d3d9_program_state (local.get $dev)))
@@ -188,6 +202,18 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.d3d8_set_indices(device, 0, 0) >>> 0, 0,
     'D3D8 SetIndices clears the D3D9 index binding at base zero');
   assert.strictEqual(e.get_esp() >>> 0, 0x074ff010);
+  for (const [type, value] of [[13, 2], [14, 3], [15, 0xff336699], [16, 2],
+    [17, 2], [18, 2], [19, 0x3f000000], [20, 1], [21, 1], [25, 3]]) {
+    assert.strictEqual(e.d3d8_set_tss(device, 2, type, value) >>> 0, 0,
+      `D3D8 sampler-bearing TSS ${type} is accepted`);
+    e.guest_write32(out, 0xdeadbeef);
+    assert.strictEqual(e.d3d8_get_tss(device, 2, type, out) >>> 0, 0);
+    assert.strictEqual(e.guest_read32(out) >>> 0, value >>> 0,
+      `D3D8 sampler-bearing TSS ${type} round-trips through the D3D9 sampler bank`);
+    assert.strictEqual(e.get_esp() >>> 0, 0x074ff014);
+  }
+  assert.notStrictEqual(e.d3d8_set_tss(device, 0, 32, 1) >>> 0, 0,
+    'D3D9-only constant texture-stage state remains invalid through D3D8');
   e.guest_write32(out, 0);
   assert.strictEqual(e.d3d8_get_render_target(device, out) >>> 0, 0,
     'D3D8 GetRenderTarget inserts D3D9 render-target index zero');

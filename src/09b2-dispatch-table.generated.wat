@@ -15947,10 +15947,10 @@
       (call $handle_IDirect3DDevice9_SetTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3521: IDirect3DDevice8_GetTextureStageState
-      (call $handle_IDirect3DDevice9_GetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice8_GetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3522: IDirect3DDevice8_SetTextureStageState
-      (call $handle_IDirect3DDevice9_SetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice8_SetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 3523: IDirect3DDevice8_ValidateDevice
       (call $handle_IDirect3DDevice9_ValidateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))

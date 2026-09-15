@@ -305,6 +305,42 @@
         (call $gs32 (i32.add (local.get $state) (i32.const 1692)) (local.get $arg2))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
+  ;; D3D8 keeps sampler controls in D3DTEXTURESTAGESTATETYPE. D3D9 moved
+  ;; those same controls into D3DSAMPLERSTATETYPE, so forwarding the numeric
+  ;; type to the D3D9 texture-stage handler rejected every address/filter call.
+  ;; Return the D3D9 sampler-state number, or zero for a true shared TSS.
+  (func $d3d8_sampler_type (param $type i32) (result i32)
+    (if (result i32) (i32.lt_u (i32.sub (local.get $type) (i32.const 13)) (i32.const 2))
+      (then (i32.sub (local.get $type) (i32.const 12)))
+      (else (if (result i32) (i32.lt_u (i32.sub (local.get $type) (i32.const 15)) (i32.const 7))
+        (then (i32.sub (local.get $type) (i32.const 11)))
+        (else (select (i32.const 3) (i32.const 0)
+          (i32.eq (local.get $type) (i32.const 25))))))))
+
+  (func $handle_IDirect3DDevice8_GetTextureStageState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sampler i32)
+    (local.set $sampler (call $d3d8_sampler_type (local.get $arg2)))
+    (if (local.get $sampler)
+      (then (call $d3d9_sampler_state (local.get $arg0) (local.get $arg1)
+        (local.get $sampler) (local.get $arg3) (i32.const 1)))
+      (else (if (i32.eq (local.get $arg2) (i32.const 32))
+        (then (global.set $eax (i32.const 0x8876086c)))
+        (else (call $d3d9_texture_stage_state (local.get $arg0) (local.get $arg1)
+          (local.get $arg2) (local.get $arg3) (i32.const 1))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  (func $handle_IDirect3DDevice8_SetTextureStageState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sampler i32)
+    (local.set $sampler (call $d3d8_sampler_type (local.get $arg2)))
+    (if (local.get $sampler)
+      (then (call $d3d9_sampler_state (local.get $arg0) (local.get $arg1)
+        (local.get $sampler) (local.get $arg3) (i32.const 0)))
+      (else (if (i32.eq (local.get $arg2) (i32.const 32))
+        (then (global.set $eax (i32.const 0x8876086c)))
+        (else (call $d3d9_texture_stage_state (local.get $arg0) (local.get $arg1)
+          (local.get $arg2) (local.get $arg3) (i32.const 0))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
   ;; D3D8 exposes only render target zero and binds its color/depth pair in a
   ;; single call. D3D9 split those operations and added a target index.
   (func $handle_IDirect3DDevice8_SetRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

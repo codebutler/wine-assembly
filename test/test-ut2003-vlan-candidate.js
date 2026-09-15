@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Authentic UT2003 demo listen server + direct-connect client on one vln/1
+// Authentic UT2003 demo dedicated server + direct-connect client on one vln/1
 // segment. This remains a candidate gate until both sides reach gameplay.
 
 'use strict';
@@ -52,20 +52,53 @@ async function waitFor(state, re, what, timeoutMs = 300000) {
   throw new Error(`timed out waiting for ${what}; log: ${state.logPath}`);
 }
 
-async function waitForGuestLog(state, re, what, timeoutMs = 180000) {
+async function waitForGameplayFrame(state, filename, timeoutMs = 300000) {
   const deadline = Date.now() + timeoutMs;
+  let lastError;
   while (Date.now() < deadline) {
-    if (state.hits.has(re)) return;
-    if (state.exited) throw new Error(`${state.name} exited (${exitReason(state)}) before ${what}; log: ${state.logPath}`);
-    state.child.stdin.write(`${JSON.stringify({ action: 'eval', code: GUEST_LOGS })}\n`);
-    await sleep(2000);
+    if (state.exited) throw new Error(`${state.name} exited (${exitReason(state)}) before rendering gameplay; log: ${state.logPath}`);
+    try { fs.unlinkSync(filename); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+    requestPng(state, filename);
+    await sleep(2500);
+    if (fs.existsSync(filename)) {
+      try {
+        assertRenderedScene(filename, 'UT2003 client');
+        assertGameplayChrome(filename, 'UT2003 client');
+        return;
+      } catch (err) { lastError = err; }
+    }
+    await sleep(2500);
   }
-  throw new Error(`timed out waiting for ${what}; log: ${state.logPath}`);
+  throw new Error(`timed out waiting for a rendered gameplay frame; last check: ${lastError || 'no PNG'}; log: ${state.logPath}`);
 }
 
-const common = (ip, maxSeconds) => [
+async function waitForTexturedFirstPerson(state, filename, timeoutMs = 120000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    if (state.exited) throw new Error(`${state.name} exited (${exitReason(state)}) before textured first-person gameplay; log: ${state.logPath}`);
+    try { fs.unlinkSync(filename); } catch (err) { if (err.code !== 'ENOENT') throw err; }
+    requestPng(state, filename);
+    await sleep(2500);
+    if (fs.existsSync(filename)) {
+      try {
+        assertRenderedScene(filename, 'UT2003 client after Fire');
+        assertGameplayChrome(filename, 'UT2003 client after Fire');
+        assertJoinPromptGone(filename, 'UT2003 client after Fire');
+        assertTexturedFirstPerson(filename, 'UT2003 client after Fire');
+        return;
+      } catch (err) { lastError = err; }
+    }
+    await sleep(2500);
+  }
+  throw new Error(`timed out waiting for textured first-person gameplay; last check: ${lastError || 'no PNG'}; log: ${state.logPath}`);
+}
+
+const common = (ip, maxSeconds, render) => [
   '--app=ut2003_demo', '--vlan-wire', `--vlan-ip=${ip}`,
-  '--headless-gl', '--quiet-api', '--quiet-blocks', '--trace-net',
+  ...(render ? ['--headless-gl'] : []),
+  '--quiet-api', '--quiet-blocks', '--trace-net',
+  '--x87-fusion',
   '--control-stdin', '--vlan-max-waits=100000000',
   '--tick-ms-per-batch=5', '--batch-size=20000',
   '--max-batches=100000000', `--max-seconds=${maxSeconds}`,
@@ -110,62 +143,130 @@ function assertRenderedScene(filename, label) {
   throw new Error(`${label} did not publish a rendered gameplay frame (${colors.size} sampled colors): ${filename}`);
 }
 
+function assertGameplayChrome(filename, label) {
+  const png = PNG.sync.read(fs.readFileSync(filename));
+  const bottomColors = new Set();
+  let bright = 0, samples = 0;
+  // The loading screen is richly coloured too, but its bottom strip is nearly
+  // uniform and dark. Gameplay/join frames contain the HUD and prompt here.
+  for (let y = Math.max(0, png.height - 50); y < png.height; y++) {
+    for (let x = 0; x < png.width; x++) {
+      const at = (y * png.width + x) * 4;
+      const r = png.data[at], g = png.data[at + 1], b = png.data[at + 2];
+      bottomColors.add(`${r},${g},${b}`);
+      if (r + g + b > 600) bright++;
+      samples++;
+    }
+  }
+  if (bottomColors.size < 512 || bright / samples < 0.01) {
+    throw new Error(`${label} still resembles a loading/non-gameplay frame ` +
+      `(bottom colors=${bottomColors.size}, bright=${(bright / samples).toFixed(4)}): ${filename}`);
+  }
+}
+
+function assertTexturedFirstPerson(filename, label) {
+  const png = PNG.sync.read(fs.readFileSync(filename));
+  let paleGray = 0, samples = 0;
+  // The broken D3D8-capability path rendered the entire first-person weapon as
+  // flat pale gray. Antalus has no comparably large pale patch in this stable
+  // lower-right viewport region once the weapon material is sampled.
+  for (let y = 180; y < Math.min(430, png.height); y++) {
+    for (let x = 420; x < png.width; x++) {
+      const at = (y * png.width + x) * 4;
+      const r = png.data[at], g = png.data[at + 1], b = png.data[at + 2];
+      if (Math.max(r, g, b) - Math.min(r, g, b) < 8 && r > 180) paleGray++;
+      samples++;
+    }
+  }
+  if (paleGray / samples > 0.12) {
+    throw new Error(`${label} contains the flat-gray missing-material signature ` +
+      `(${(paleGray / samples).toFixed(4)}): ${filename}`);
+  }
+}
+
+function assertJoinPromptGone(filename, label) {
+  const png = PNG.sync.read(fs.readFileSync(filename));
+  let bright = 0, samples = 0;
+  // Spectator/join mode paints the large white "Press [Fire] to join" text
+  // across the bottom centre. Once the pawn is possessed this part of the HUD
+  // is transparent; health and ammo remain confined to the two corners.
+  for (let y = 440; y < png.height; y++) {
+    for (let x = 120; x < Math.min(520, png.width); x++) {
+      const at = (y * png.width + x) * 4;
+      if (png.data[at] + png.data[at + 1] + png.data[at + 2] > 600) bright++;
+      samples++;
+    }
+  }
+  if (bright / samples >= 0.05) {
+    throw new Error(`${label} still contains the spectator join-prompt signature ` +
+      `(${(bright / samples).toFixed(4)} bright bottom-centre pixels): ${filename}`);
+  }
+}
+
 async function main() {
-  const serverReady = /\[SetWindowText\] "Antalus: DM-Antalus \(\d+ players\)"/;
+  const serverReady = /\[SetWindowText\] "Unreal Tournament 2003 \(Running\)"/;
   const serverReceive = /arrived DGRAM 10\.77\.0\.2:/;
   const clientSend = /\[net\] -> type6 10\.77\.0\.2:\d+ -> 10\.77\.0\.1:7777 len=46/;
-  // A network client deliberately retains the generic UT2003 window caption.
-  // The guest log's player handoff is the stable point at which it owns a
-  // viewport in the replicated Antalus level; the screenshot then proves the
-  // D3D scene and join prompt are actually visible.
-  const clientGameplay = /xPlayer setplayer WindowsViewport/;
+  const clientReady = /\[SetWindowText\] "Unreal Tournament 2003 \(Running\)"/;
+  // A network client deliberately retains the generic UT2003 window caption,
+  // and its in-memory log can stop mid-line while the world is already live.
+  // Treat the presented HUD/world pixels as the gameplay readiness signal.
   const server = spawn('server', [
-    ...common(SERVER_IP, 700),
-    '--args=DM-Antalus?game=XGame.XDeathmatch?listen -d3d -window -nosound',
+    ...common(SERVER_IP, 700, false),
+    '--args=server DM-Antalus?game=XGame.XDeathmatch -server -nosound',
   ], [serverReady, serverReceive]);
   const hub = new ProcessHub();
   hub.add(server.child);
   let client;
   try {
     await waitFor(server, serverReady, 'the listen server to enter Antalus gameplay');
-    console.log('ok  UT2003 listen server entered Antalus gameplay');
+    // The graphical listen server consumed a second native GL context and
+    // repeatedly starved the client during its level GC. UT2003's own server
+    // commandlet keeps the same game/net code without a rendered world. Keep
+    // full slices: tiny slices advance its per-batch clock too quickly and
+    // can manufacture a keepalive flood while the client is still loading.
+    console.log('ok  UT2003 dedicated server entered Antalus gameplay');
     client = spawn('client', [
-      ...common(CLIENT_IP, 480),
+      ...common(CLIENT_IP, 480, true),
       '--args=10.77.0.1 -d3d -window -nosound',
-    ], [clientSend, clientGameplay]);
+    ], [clientSend, clientReady]);
     hub.add(client.child);
     await waitFor(client, clientSend, 'the client to send a datagram');
     console.log('ok  UT2003 client sent its native UDP protocol datagram');
     await waitFor(server, serverReceive, 'the server to receive the client datagram');
     console.log('ok  UT2003 server received the client datagram across vln/1');
-    await waitForGuestLog(client, clientGameplay, 'the client to enter Antalus gameplay');
-    console.log('ok  UT2003 client entered Antalus gameplay');
-    await sleep(10000);
+    // Capturing before this point asks the canvas for a 2D context before the
+    // guest creates D3D. Native canvases cannot then be converted to WebGL.
+    await waitFor(client, clientReady, 'the client to create its D3D viewport');
+    console.log('ok  UT2003 client created its D3D viewport');
     const readyPng = path.join(TMP, 'ut2003-vlan-client-ready.png');
-    requestPng(client, readyPng);
-    await sleep(3000);
-    assertRenderedScene(readyPng, 'UT2003 client');
+    await waitForGameplayFrame(client, readyPng);
     console.log('ok  UT2003 client published a rendered Antalus frame');
     // The replicated client arrives as a spectator and asks for its configured
-    // Fire action before spawning. Drive the real DirectInput mouse button,
-    // not a window-message shortcut, then give the server time to acknowledge
-    // the spawn before photographing both viewpoints.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      client.child.stdin.write(`${JSON.stringify({ cmd: 'di-mousedown:1' })}\n`);
+    // Fire action before spawning. Drive the renderer's real pointer path: it
+    // focuses/hit-tests the viewport, queues WM_LBUTTONDOWN/UP, and updates the
+    // DirectInput mouse device exactly as a browser click does.
+    let joined = false;
+    try { assertJoinPromptGone(readyPng, 'UT2003 client'); joined = true; } catch (_) {}
+    for (let attempt = 0; !joined && attempt < 6; attempt++) {
+      client.child.stdin.write(`${JSON.stringify({ cmd: 'mousedown:320:240' })}\n`);
       await sleep(350);
-      client.child.stdin.write(`${JSON.stringify({ cmd: 'di-mouseup:1' })}\n`);
-      await sleep(650);
+      client.child.stdin.write(`${JSON.stringify({ cmd: 'mouseup:320:240' })}\n`);
+      await sleep(4650);
+      const probePng = path.join(TMP, 'ut2003-vlan-client.png');
+      requestPng(client, probePng);
+      await sleep(1500);
+      try {
+        assertJoinPromptGone(probePng, 'UT2003 client after Fire');
+        joined = true;
+      } catch (err) {
+        if (attempt === 5) throw err;
+      }
     }
-    await sleep(10000);
     client.child.stdin.write(`${JSON.stringify({ action: 'eval', code: GUEST_LOGS })}\n`);
-    const serverPng = path.join(TMP, 'ut2003-vlan-server.png');
     const clientPng = path.join(TMP, 'ut2003-vlan-client.png');
-    requestPng(server, serverPng);
-    requestPng(client, clientPng);
-    await sleep(3000);
-    assertRenderedScene(serverPng, 'UT2003 server');
-    assertRenderedScene(clientPng, 'UT2003 client after Fire');
-    console.log('ok  UT2003 server and client retained rendered gameplay after Fire');
+    await waitForTexturedFirstPerson(client, clientPng);
+    console.log('ok  UT2003 client retained textured first-person gameplay after Fire');
     server.child.stdin.write(`${JSON.stringify({ action: 'quit' })}\n`);
     client.child.stdin.write(`${JSON.stringify({ action: 'quit' })}\n`);
     await sleep(1000);

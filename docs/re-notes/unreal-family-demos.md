@@ -24,7 +24,7 @@ enforced by `tools/install-unreal-demo.js`.
 | --- | --- | ---: | --- |
 | Unreal Special Edition | InstallShield bootstrap launched `_INS*.MP`; license and destination flow completed | 191 MB, `System/Unreal.exe` SHA-256 `5fbc5853a8669a802446ac12e102351053bc6a5ce9f554b03483eb634269f408` | Software launch loads `SoftDrv`, opens `WindowsViewport0`, initializes the game engine/player, and renders the playable intro |
 | Unreal Tournament 348 | Unreal `System/Setup.exe` completed | 104 MB, `System/UnrealTournament.exe` | Reaches the renderer-selection wizard |
-| UT2003 2206 | Unreal `System/Setup.exe` completed with the shipped `MSVCR70.dll` | 344 MB, `System/UT2003.exe` SHA-256 `97e027dc9765f048beacfa461bc93c71ba1831cd3e8dff0cd7d71c1b478f88a2` | The D3D8 wrapper now renders the animated intro, main menu, and interactive Instant Action map-selection screen in a real browser WebGL backend |
+| UT2003 2206 | Unreal `System/Setup.exe` completed with the shipped `MSVCR70.dll` | 344 MB, `System/UT2003.exe` SHA-256 `97e027dc9765f048beacfa461bc93c71ba1831cd3e8dff0cd7d71c1b478f88a2` | The D3D8 wrapper renders textured first-person Antalus gameplay; an authentic dedicated server and direct-connect client exchange the native protocol over `vln/1` |
 | UT2004 new demo | Unreal `System/Setup.exe` completed with the shipped `MSVCR71.dll` | 525 MB, `System/UT2004.exe` SHA-256 `2a95e2fa8c22ae94eb1c361fdb49ea8ec44c5e2a93faa00831308c01e951db8d` | Uses the same pre-renderer D3D8 probe; further post-probe launch diagnosis remains |
 
 Seeding the bundled Visual C++ runtimes matters. Without `MSVCR70.dll`, the
@@ -73,16 +73,37 @@ vertex/index buffers and fixed-function declarations, retains D3D8's
 swap-chain argument of `GetBackBuffer`. Unsupported methods remain explicit
 failures rather than silent successes.
 
-An authentic `-d3d -window -nosound` browser run renders the publisher intro,
-the full UT2003 main menu, and the live `Instant Action | Select Map` screen
-with the Antalus preview. The no-sound flag isolates graphics from the separate
-missing Vorbis `ov_open` import. The CLI software D3D backend reaches the same
-engine loop without an unimplemented API but rejects its GPU draw opcode; the
-browser WebGL backend is therefore the authoritative graphics verification.
-Interactive gameplay is not yet claimed: repeated headful Chrome runs became
-unstable while automating the final Play click, although the setup UI remained
-live and animated. Captures are `/private/tmp/ut2003-d3d8-headful-film/f007-080s.png`
-and `/private/tmp/ut2003-d3d8-instant-keyboard.png`.
+An authentic `-d3d -window -nosound` run now reaches textured first-person
+gameplay on DM-Antalus. The no-sound flag isolates graphics from the separate
+missing Vorbis `ov_open` import. `test/test-ut2003-vlan-candidate.js` runs the
+game's own non-rendering dedicated-server mode beside a direct-connect client.
+It verifies native UDP in both directions over `vln/1`, waits for D3D device
+creation before taking a PNG, rejects the loading screen and spectator join
+prompt, and rejects the flat-pale weapon signature that exposed the rendering
+bug.
+
+That bug had two layers. D3D8 sampler controls are texture-stage states
+13--21 and 25, but D3D9 moved them into sampler-state slots 1--10. Forwarding
+the D3D8 numbers directly to the D3D9 texture-stage bank returned
+`D3DERR_INVALIDCALL`, leaving filter and address state at defaults. Translating
+those states activates the mip-atlas shaders; the native headless desktop GLSL
+1.10 compiler then rejected their ESSL-only
+`GL_OES_standard_derivatives : require` directive even though `dFdx`/`dFdy`
+are core there. The desktop port now removes only that directive. The corrected
+capture has a textured dark-metal/green assault rifle and textured terrain
+rather than the former nearly uniform white weapon.
+
+A fixed-wall-time profile of the map-load window (batches 6000--12000) retired
+938 million handler operations. Raw x87 instructions were 26.85% of them, with
+no single block over 2.23%, so the load is broad Unreal transform/material
+work rather than one stuck loop. Enabling the existing experimental x87 fold
+executed 27.3 million fused regions and advanced 25,179 batches in 140 seconds
+versus 20,818 without it, about 21% farther on this run. The CLI candidate uses
+`--x87-fusion`; browser runs can opt in with `?x87-fold`.
+
+The CLI software D3D backend reaches the same engine loop without an
+unimplemented API but rejects its GPU draw opcode; the native/browser WebGL
+backend remains the authoritative graphics verification.
 
 ## UT3 API analysis
 
