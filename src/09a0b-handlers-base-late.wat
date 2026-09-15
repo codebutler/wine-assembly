@@ -2338,3 +2338,614 @@
     (call $atom_narrow_free (local.get $arg0) (local.get $narrow))
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
+
+  ;; Win9x has one machine/process DOS-device namespace rather than the
+  ;; per-logon Local/Global split introduced later.  Keep the mutable mapping
+  ;; stack in shared memory so calls made by different Worker instances see
+  ;; one coherent namespace.  These definitions are namespace metadata only:
+  ;; they are intentionally not treated as fabricated file/device handles by
+  ;; CreateFile or the browser VFS.
+  ;;
+  ;; DOS_DEVICE_NAMESPACE layout:
+  ;;   +0x000 lock owner/depth, +0x008 next sequence
+  ;;   +0x010 immutable system-target strings
+  ;;   +0x100 32 records, 0x160 bytes each:
+  ;;     +0 active, +4 sequence, +8 name length, +12 target length
+  ;;     +0x10 name[64], +0x50 target[260]
+  (global $DOS_DEVICE_NAMESPACE i32 (region.addr $DOS_DEVICE_NAMESPACE 0))
+  (global $DOS_DEVICE_NAMESPACE_SIZE i32 (region.size $DOS_DEVICE_NAMESPACE))
+  (global $DOS_DEVICE_RECORD_SIZE i32 (i32.const 0x160))
+  (global $DOS_DEVICE_RECORD_MAX i32 (i32.const 32))
+  (data (region.addr $DOS_DEVICE_NAMESPACE 0x010) "\\Device\\HarddiskVolume1\00")
+  (data (region.addr $DOS_DEVICE_NAMESPACE 0x030) "\\Device\\CdRom0\00")
+  (data (region.addr $DOS_DEVICE_NAMESPACE 0x040) "\\Device\\VfsVolume\00")
+  (data (region.addr $DOS_DEVICE_NAMESPACE 0x070) "\\??\\\00")
+  (data (region.addr $DOS_DEVICE_NAMESPACE 0x078) "\\??\\UNC\\\00")
+
+  (func $dos_device_record (param $index i32) (result i32)
+    (i32.add (region.addr $DOS_DEVICE_NAMESPACE 0x100)
+      (i32.mul (local.get $index) (global.get $DOS_DEVICE_RECORD_SIZE))))
+
+  ;; Bounded ANSI input measurement. -1 is an inaccessible pointer and -2 is
+  ;; a readable string with no terminator inside the supplied bound.
+  (func $dos_device_ansi_len
+      (param $string i32) (param $bound i32) (result i32)
+    (local $i i32)
+    (if (i32.eqz (local.get $string)) (then (return (i32.const -1))))
+    (block $full (loop $scan
+      (br_if $full (i32.ge_u (local.get $i) (local.get $bound)))
+      (if (call $ptr_range_access_bad
+            (i32.add (local.get $string) (local.get $i))
+            (i32.const 1) (i32.const 0))
+        (then (return (i32.const -1))))
+      (if (i32.eqz (call $gl8 (i32.add (local.get $string) (local.get $i))))
+        (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -2))
+
+  ;; Device names are at most 63 bytes in this bounded namespace.  The final
+  ;; colon is legal only for a drive letter; a trailing slash is never legal.
+  ;; -1/-2 retain the measurement errors, -3 is invalid name syntax.
+  (func $dos_device_name_len (param $name i32) (result i32)
+    (local $len i32) (local $last i32) (local $first i32)
+    (local.set $len
+      (call $dos_device_ansi_len (local.get $name) (i32.const 64)))
+    (if (i32.lt_s (local.get $len) (i32.const 0))
+      (then (return (local.get $len))))
+    (if (i32.eqz (local.get $len)) (then (return (i32.const -3))))
+    (local.set $last (call $gl8
+      (i32.add (local.get $name) (i32.sub (local.get $len) (i32.const 1)))))
+    (if (i32.or (i32.eq (local.get $last) (i32.const 0x5c))
+                 (i32.eq (local.get $last) (i32.const 0x2f)))
+      (then (return (i32.const -3))))
+    (if (i32.eq (local.get $last) (i32.const 0x3a))
+      (then
+        (if (i32.ne (local.get $len) (i32.const 2))
+          (then (return (i32.const -3))))
+        (local.set $first (call $tolower (call $gl8 (local.get $name))))
+        (if (i32.or (i32.lt_u (local.get $first) (i32.const 0x61))
+                     (i32.gt_u (local.get $first) (i32.const 0x7a)))
+          (then (return (i32.const -3))))))
+    (local.get $len))
+
+  (func $dos_device_name_equals_record
+      (param $name i32) (param $len i32) (param $record i32) (result i32)
+    (local $i i32)
+    (if (i32.ne (local.get $len) (i32.load offset=8 (local.get $record)))
+      (then (return (i32.const 0))))
+    (block $equal (loop $compare
+      (br_if $equal (i32.ge_u (local.get $i) (local.get $len)))
+      (if (i32.ne
+            (call $tolower (call $gl8
+              (i32.add (local.get $name) (local.get $i))))
+            (call $tolower (i32.load8_u
+              (i32.add (local.get $record)
+                (i32.add (i32.const 0x10) (local.get $i))))))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $compare)))
+    (i32.const 1))
+
+  (func $dos_device_records_same_name
+      (param $a i32) (param $b i32) (result i32)
+    (local $i i32) (local $len i32)
+    (local.set $len (i32.load offset=8 (local.get $a)))
+    (if (i32.ne (local.get $len) (i32.load offset=8 (local.get $b)))
+      (then (return (i32.const 0))))
+    (block $equal (loop $compare
+      (br_if $equal (i32.ge_u (local.get $i) (local.get $len)))
+      (if (i32.ne
+            (i32.load8_u (i32.add (local.get $a)
+              (i32.add (i32.const 0x10) (local.get $i))))
+            (i32.load8_u (i32.add (local.get $b)
+              (i32.add (i32.const 0x10) (local.get $i)))))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $compare)))
+    (i32.const 1))
+
+  (func $dos_device_copy_name_to_record
+      (param $name i32) (param $len i32) (param $record i32)
+    (local $i i32) (local $ch i32)
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+      (local.set $ch (call $gl8 (i32.add (local.get $name) (local.get $i))))
+      (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x61))
+                   (i32.le_u (local.get $ch) (i32.const 0x7a)))
+        (then (local.set $ch (i32.sub (local.get $ch) (i32.const 0x20)))))
+      (i32.store8 (i32.add (local.get $record)
+        (i32.add (i32.const 0x10) (local.get $i))) (local.get $ch))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (i32.store8 (i32.add (local.get $record)
+      (i32.add (i32.const 0x10) (local.get $len))) (i32.const 0)))
+
+  ;; A non-raw target is representable when it is an absolute drive or UNC
+  ;; path.  It is stored in the documented object-path form under \\??\\.
+  ;; Return output length, -2 for overflow, or -3 for a relative DOS path.
+  (func $dos_device_target_output_len
+      (param $path i32) (param $source_len i32) (param $raw i32) (result i32)
+    (local $first i32) (local $second i32) (local $third i32) (local $length i32)
+    (if (local.get $raw) (then (return (local.get $source_len))))
+    (if (i32.ge_u (local.get $source_len) (i32.const 2))
+      (then
+        (local.set $first (call $gl8 (local.get $path)))
+        (local.set $second (call $gl8 (i32.add (local.get $path) (i32.const 1))))
+        (if (i32.and
+              (i32.or (i32.eq (local.get $first) (i32.const 0x5c))
+                      (i32.eq (local.get $first) (i32.const 0x2f)))
+              (i32.or (i32.eq (local.get $second) (i32.const 0x5c))
+                      (i32.eq (local.get $second) (i32.const 0x2f))))
+          (then
+            (local.set $length (i32.add (local.get $source_len) (i32.const 6)))
+            (return (select (local.get $length) (i32.const -2)
+              (i32.le_u (local.get $length) (i32.const 259))))))))
+    (if (i32.ge_u (local.get $source_len) (i32.const 3))
+      (then
+        (local.set $first (call $tolower (call $gl8 (local.get $path))))
+        (local.set $second (call $gl8 (i32.add (local.get $path) (i32.const 1))))
+        (local.set $third (call $gl8 (i32.add (local.get $path) (i32.const 2))))
+        (if (i32.and
+              (i32.and (i32.ge_u (local.get $first) (i32.const 0x61))
+                       (i32.le_u (local.get $first) (i32.const 0x7a)))
+              (i32.and (i32.eq (local.get $second) (i32.const 0x3a))
+                (i32.or (i32.eq (local.get $third) (i32.const 0x5c))
+                        (i32.eq (local.get $third) (i32.const 0x2f)))))
+          (then
+            (local.set $length (i32.add (local.get $source_len) (i32.const 4)))
+            (return (select (local.get $length) (i32.const -2)
+              (i32.le_u (local.get $length) (i32.const 259))))))))
+    (i32.const -3))
+
+  (func $dos_device_target_char
+      (param $path i32) (param $raw i32) (param $index i32) (result i32)
+    (local $unc i32) (local $ch i32)
+    (if (local.get $raw)
+      (then (return (call $gl8 (i32.add (local.get $path) (local.get $index))))))
+    (local.set $unc
+      (i32.and
+        (i32.or (i32.eq (call $gl8 (local.get $path)) (i32.const 0x5c))
+                (i32.eq (call $gl8 (local.get $path)) (i32.const 0x2f)))
+        (i32.or (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 1))) (i32.const 0x5c))
+                (i32.eq (call $gl8 (i32.add (local.get $path) (i32.const 1))) (i32.const 0x2f)))))
+    (if (local.get $unc)
+      (then
+        (if (i32.lt_u (local.get $index) (i32.const 8))
+          (then (return (i32.load8_u
+            (i32.add (region.addr $DOS_DEVICE_NAMESPACE 0x078)
+              (local.get $index))))))
+        (local.set $ch (call $gl8 (i32.add (local.get $path)
+          (i32.sub (local.get $index) (i32.const 6))))))
+      (else
+        (if (i32.lt_u (local.get $index) (i32.const 4))
+          (then (return (i32.load8_u
+            (i32.add (region.addr $DOS_DEVICE_NAMESPACE 0x070)
+              (local.get $index))))))
+        (local.set $ch (call $gl8 (i32.add (local.get $path)
+          (i32.sub (local.get $index) (i32.const 4)))))))
+    (select (i32.const 0x5c) (local.get $ch)
+      (i32.eq (local.get $ch) (i32.const 0x2f))))
+
+  (func $dos_device_write_target_to_record
+      (param $path i32) (param $raw i32) (param $length i32) (param $record i32)
+    (local $i i32)
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $length)))
+      (i32.store8 (i32.add (local.get $record)
+        (i32.add (i32.const 0x50) (local.get $i)))
+        (call $dos_device_target_char
+          (local.get $path) (local.get $raw) (local.get $i)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (i32.store8 (i32.add (local.get $record)
+      (i32.add (i32.const 0x50) (local.get $length))) (i32.const 0)))
+
+  (func $dos_device_record_target_matches
+      (param $record i32) (param $path i32) (param $raw i32)
+      (param $length i32) (param $exact i32) (result i32)
+    (local $i i32) (local $stored i32)
+    (local.set $stored (i32.load offset=12 (local.get $record)))
+    (if (i32.lt_u (local.get $stored) (local.get $length))
+      (then (return (i32.const 0))))
+    (if (i32.and (local.get $exact)
+                 (i32.ne (local.get $stored) (local.get $length)))
+      (then (return (i32.const 0))))
+    (block $equal (loop $compare
+      (br_if $equal (i32.ge_u (local.get $i) (local.get $length)))
+      (if (i32.ne
+            (i32.load8_u (i32.add (local.get $record)
+              (i32.add (i32.const 0x50) (local.get $i))))
+            (call $dos_device_target_char
+              (local.get $path) (local.get $raw) (local.get $i)))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $compare)))
+    (i32.const 1))
+
+  (func $dos_device_guest_drive_letter
+      (param $name i32) (param $len i32) (param $mask i32) (result i32)
+    (local $letter i32) (local $bit i32)
+    (if (i32.ne (local.get $len) (i32.const 2))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl8 (i32.add (local.get $name) (i32.const 1)))
+                (i32.const 0x3a))
+      (then (return (i32.const 0))))
+    (local.set $letter (call $tolower (call $gl8 (local.get $name))))
+    (if (i32.or (i32.lt_u (local.get $letter) (i32.const 0x61))
+                 (i32.gt_u (local.get $letter) (i32.const 0x7a)))
+      (then (return (i32.const 0))))
+    (local.set $bit (i32.sub (local.get $letter) (i32.const 0x61)))
+    (select (i32.sub (local.get $letter) (i32.const 0x20)) (i32.const 0)
+      (i32.ne (i32.and (local.get $mask)
+        (i32.shl (i32.const 1) (local.get $bit))) (i32.const 0))))
+
+  (func $dos_device_record_drive_letter
+      (param $record i32) (param $mask i32) (result i32)
+    (local $letter i32) (local $bit i32)
+    (if (i32.ne (i32.load offset=8 (local.get $record)) (i32.const 2))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.load8_u offset=0x11 (local.get $record)) (i32.const 0x3a))
+      (then (return (i32.const 0))))
+    (local.set $letter (call $tolower
+      (i32.load8_u offset=0x10 (local.get $record))))
+    (local.set $bit (i32.sub (local.get $letter) (i32.const 0x61)))
+    (select (i32.sub (local.get $letter) (i32.const 0x20)) (i32.const 0)
+      (i32.and
+        (i32.le_u (local.get $bit) (i32.const 25))
+        (i32.ne (i32.and (local.get $mask)
+          (i32.shl (i32.const 1) (local.get $bit))) (i32.const 0)))))
+
+  (func $dos_device_system_target_len (param $letter i32) (result i32)
+    (select (i32.const 23)
+      (select (i32.const 14) (i32.const 18)
+        (i32.eq (local.get $letter) (i32.const 0x44)))
+      (i32.eq (local.get $letter) (i32.const 0x43))))
+
+  ;; Copy one system drive mapping and return the new guest output offset.
+  (func $dos_device_write_system_target
+      (param $letter i32) (param $out i32) (result i32)
+    (local $src i32) (local $len i32) (local $i i32)
+    (local.set $len (call $dos_device_system_target_len (local.get $letter)))
+    (local.set $src
+      (select (region.addr $DOS_DEVICE_NAMESPACE 0x010)
+        (select (region.addr $DOS_DEVICE_NAMESPACE 0x030)
+                (region.addr $DOS_DEVICE_NAMESPACE 0x040)
+          (i32.eq (local.get $letter) (i32.const 0x44)))
+        (i32.eq (local.get $letter) (i32.const 0x43))))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
+      (if (i32.and (i32.eq (local.get $len) (i32.const 18))
+                   (i32.eq (local.get $i) (i32.const 17)))
+        (then (call $gs8 (i32.add (local.get $out) (local.get $i))
+          (local.get $letter)))
+        (else (call $gs8 (i32.add (local.get $out) (local.get $i))
+          (i32.load8_u (i32.add (local.get $src) (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (call $gs8 (i32.add (local.get $out) (local.get $len)) (i32.const 0))
+    (i32.add (local.get $out) (i32.add (local.get $len) (i32.const 1))))
+
+  (func $dos_device_write_record_target
+      (param $record i32) (param $out i32) (result i32)
+    (local $i i32) (local $len i32)
+    (local.set $len (i32.load offset=12 (local.get $record)))
+    (block $done (loop $copy
+      (br_if $done (i32.gt_u (local.get $i) (local.get $len)))
+      (call $gs8 (i32.add (local.get $out) (local.get $i))
+        (i32.load8_u (i32.add (local.get $record)
+          (i32.add (i32.const 0x50) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (i32.add (local.get $out) (i32.add (local.get $len) (i32.const 1))))
+
+  (func $dos_device_write_record_name
+      (param $record i32) (param $out i32) (result i32)
+    (local $i i32) (local $len i32)
+    (local.set $len (i32.load offset=8 (local.get $record)))
+    (block $done (loop $copy
+      (br_if $done (i32.gt_u (local.get $i) (local.get $len)))
+      (call $gs8 (i32.add (local.get $out) (local.get $i))
+        (i32.load8_u (i32.add (local.get $record)
+          (i32.add (i32.const 0x10) (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    (i32.add (local.get $out) (i32.add (local.get $len) (i32.const 1))))
+
+  (func $dos_device_record_is_current_name
+      (param $record i32) (result i32)
+    (local $i i32) (local $other i32)
+    (block $current (loop $scan
+      (br_if $current
+        (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+      (local.set $other (call $dos_device_record (local.get $i)))
+      (if (i32.and
+            (i32.and (i32.ne (local.get $other) (local.get $record))
+                     (i32.ne (i32.load (local.get $other)) (i32.const 0)))
+            (i32.and
+              (i32.gt_u (i32.load offset=4 (local.get $other))
+                        (i32.load offset=4 (local.get $record)))
+              (i32.ne (call $dos_device_records_same_name
+                (local.get $record) (local.get $other)) (i32.const 0))))
+        (then (return (i32.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 1))
+
+  (func $query_dos_device_a
+      (param $name i32) (param $target i32) (param $max i32) (result i32)
+    (local $name_len i32) (local $mask i32) (local $letter i32)
+    (local $required i32) (local $out i32) (local $i i32)
+    (local $record i32) (local $best i32) (local $best_seq i32)
+    (local $before_seq i32) (local $seq i32) (local $error i32)
+    (local $result i32) (local $j i32) (local $other i32)
+    (if (local.get $name)
+      (then
+        (local.set $name_len (call $dos_device_name_len (local.get $name)))
+        (if (i32.lt_s (local.get $name_len) (i32.const 0))
+          (then
+            (global.set $last_error
+              (select (i32.const 87) (i32.const 123)
+                (i32.eq (local.get $name_len) (i32.const -1))))
+            (return (i32.const 0))))))
+    ;; The host call stays outside the process-table lock.
+    (local.set $mask (call $host_fs_logical_drive_mask))
+    (call $lock_acquire (region.addr $DOS_DEVICE_NAMESPACE 0x000))
+    (block $done
+      (if (local.get $name)
+        (then
+          (local.set $letter (call $dos_device_guest_drive_letter
+            (local.get $name) (local.get $name_len) (local.get $mask)))
+          (local.set $i (i32.const 0))
+          (block $count_done (loop $count
+            (br_if $count_done
+              (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+            (local.set $record (call $dos_device_record (local.get $i)))
+            (if (i32.and (i32.ne (i32.load (local.get $record)) (i32.const 0))
+                         (i32.ne (call $dos_device_name_equals_record
+                           (local.get $name) (local.get $name_len) (local.get $record))
+                           (i32.const 0)))
+              (then (local.set $required (i32.add (local.get $required)
+                (i32.add (i32.load offset=12 (local.get $record)) (i32.const 1))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $count)))
+          (if (local.get $letter)
+            (then (local.set $required (i32.add (local.get $required)
+              (i32.add (call $dos_device_system_target_len (local.get $letter))
+                       (i32.const 1))))))
+          (if (i32.eqz (local.get $required))
+            (then (local.set $error (i32.const 2)) (br $done)))
+          (local.set $required (i32.add (local.get $required) (i32.const 1))))
+        (else
+          ;; Enumeration starts with every VFS-visible drive letter.
+          (local.set $required (i32.const 1)) ;; extra final NUL
+          (local.set $i (i32.const 0))
+          (block $drives_done (loop $drives
+            (br_if $drives_done (i32.ge_u (local.get $i) (i32.const 26)))
+            (if (i32.ne (i32.and (local.get $mask)
+                  (i32.shl (i32.const 1) (local.get $i))) (i32.const 0))
+              (then (local.set $required
+                (i32.add (local.get $required) (i32.const 3)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $drives)))
+          ;; Add one name for each current custom definition not already
+          ;; represented by a mounted drive letter.
+          (local.set $i (i32.const 0))
+          (block $custom_done (loop $custom
+            (br_if $custom_done
+              (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+            (local.set $record (call $dos_device_record (local.get $i)))
+            (if (i32.and
+                  (i32.and (i32.ne (i32.load (local.get $record)) (i32.const 0))
+                           (i32.eqz (call $dos_device_record_drive_letter
+                             (local.get $record) (local.get $mask))))
+                  (call $dos_device_record_is_current_name (local.get $record)))
+              (then (local.set $required (i32.add (local.get $required)
+                (i32.add (i32.load offset=8 (local.get $record)) (i32.const 1))))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $custom)))))
+      (if (i32.lt_u (local.get $max) (local.get $required))
+        (then (local.set $error (i32.const 122)) (br $done)))
+      (if (call $ptr_range_access_bad
+            (local.get $target) (local.get $required) (i32.const 1))
+        (then (local.set $error (i32.const 87)) (br $done)))
+      (local.set $out (local.get $target))
+      (if (local.get $name)
+        (then
+          ;; Emit newest mapping first by repeatedly selecting the highest
+          ;; sequence below the one emitted previously.
+          (local.set $before_seq (i32.const -1))
+          (block $records_done (loop $records
+            (local.set $best (i32.const 0))
+            (local.set $best_seq (i32.const 0))
+            (local.set $i (i32.const 0))
+            (block $select_done (loop $select
+              (br_if $select_done
+                (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+              (local.set $record (call $dos_device_record (local.get $i)))
+              (local.set $seq (i32.load offset=4 (local.get $record)))
+              (if (i32.and
+                    (i32.and (i32.ne (i32.load (local.get $record)) (i32.const 0))
+                             (i32.ne (call $dos_device_name_equals_record
+                               (local.get $name) (local.get $name_len) (local.get $record))
+                               (i32.const 0)))
+                    (i32.and (i32.lt_u (local.get $seq) (local.get $before_seq))
+                             (i32.gt_u (local.get $seq) (local.get $best_seq))))
+                (then
+                  (local.set $best (local.get $record))
+                  (local.set $best_seq (local.get $seq))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $select)))
+            (br_if $records_done (i32.eqz (local.get $best)))
+            (local.set $out (call $dos_device_write_record_target
+              (local.get $best) (local.get $out)))
+            (local.set $before_seq (local.get $best_seq))
+            (br $records)))
+          (if (local.get $letter)
+            (then (local.set $out (call $dos_device_write_system_target
+              (local.get $letter) (local.get $out))))))
+        (else
+          (local.set $i (i32.const 0))
+          (block $write_drives_done (loop $write_drives
+            (br_if $write_drives_done (i32.ge_u (local.get $i) (i32.const 26)))
+            (if (i32.ne (i32.and (local.get $mask)
+                  (i32.shl (i32.const 1) (local.get $i))) (i32.const 0))
+              (then
+                (call $gs8 (local.get $out) (i32.add (i32.const 0x41) (local.get $i)))
+                (call $gs8 (i32.add (local.get $out) (i32.const 1)) (i32.const 0x3a))
+                (call $gs8 (i32.add (local.get $out) (i32.const 2)) (i32.const 0))
+                (local.set $out (i32.add (local.get $out) (i32.const 3)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $write_drives)))
+          (local.set $before_seq (i32.const -1))
+          (block $write_custom_done (loop $write_custom
+            (local.set $best (i32.const 0))
+            (local.set $best_seq (i32.const 0))
+            (local.set $i (i32.const 0))
+            (block $select_custom_done (loop $select_custom
+              (br_if $select_custom_done
+                (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+              (local.set $record (call $dos_device_record (local.get $i)))
+              (local.set $seq (i32.load offset=4 (local.get $record)))
+              (if (i32.and
+                    (i32.and
+                      (i32.and (i32.ne (i32.load (local.get $record)) (i32.const 0))
+                               (i32.eqz (call $dos_device_record_drive_letter
+                                 (local.get $record) (local.get $mask))))
+                      (call $dos_device_record_is_current_name (local.get $record)))
+                    (i32.and (i32.lt_u (local.get $seq) (local.get $before_seq))
+                             (i32.gt_u (local.get $seq) (local.get $best_seq))))
+                (then
+                  (local.set $best (local.get $record))
+                  (local.set $best_seq (local.get $seq))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $select_custom)))
+            (br_if $write_custom_done (i32.eqz (local.get $best)))
+            (local.set $out (call $dos_device_write_record_name
+              (local.get $best) (local.get $out)))
+            (local.set $before_seq (local.get $best_seq))
+            (br $write_custom)))))
+      (call $gs8 (local.get $out) (i32.const 0))
+      (local.set $result (local.get $required)))
+    (call $lock_release (region.addr $DOS_DEVICE_NAMESPACE 0x000))
+    (if (local.get $error)
+      (then (global.set $last_error (local.get $error))))
+    (local.get $result))
+
+  (func $define_dos_device_a
+      (param $flags i32) (param $name i32) (param $target i32) (result i32)
+    (local $name_len i32) (local $source_len i32) (local $target_len i32)
+    (local $remove i32) (local $raw i32) (local $exact i32)
+    (local $i i32) (local $record i32) (local $free i32)
+    (local $best i32) (local $best_seq i32) (local $seq i32)
+    (local $error i32) (local $result i32)
+    (local.set $remove (i32.and (local.get $flags) (i32.const 0x2)))
+    (local.set $raw (i32.and (local.get $flags) (i32.const 0x1)))
+    (local.set $exact (i32.and (local.get $flags) (i32.const 0x4)))
+    (if (i32.or
+          (i32.ne (i32.and (local.get $flags) (i32.const 0xfffffff0)) (i32.const 0))
+          (i32.and (i32.eqz (local.get $remove))
+                   (i32.ne (local.get $exact) (i32.const 0))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (return (i32.const 0))))
+    (local.set $name_len (call $dos_device_name_len (local.get $name)))
+    (if (i32.lt_s (local.get $name_len) (i32.const 0))
+      (then
+        (global.set $last_error
+          (select (i32.const 87) (i32.const 123)
+            (i32.eq (local.get $name_len) (i32.const -1))))
+        (return (i32.const 0))))
+    (if (local.get $target)
+      (then
+        (local.set $source_len
+          (call $dos_device_ansi_len (local.get $target) (i32.const 260)))
+        (if (i32.lt_s (local.get $source_len) (i32.const 0))
+          (then
+            (global.set $last_error
+              (select (i32.const 87) (i32.const 206)
+                (i32.eq (local.get $source_len) (i32.const -1))))
+            (return (i32.const 0))))))
+    (if (i32.and (i32.eqz (local.get $remove))
+                 (i32.or (i32.eqz (local.get $target))
+                         (i32.eqz (local.get $source_len))))
+      (then
+        (global.set $last_error (i32.const 87))
+        (return (i32.const 0))))
+    (if (i32.ne (local.get $source_len) (i32.const 0))
+      (then
+        (local.set $target_len (call $dos_device_target_output_len
+          (local.get $target) (local.get $source_len) (local.get $raw)))
+        (if (i32.lt_s (local.get $target_len) (i32.const 0))
+          (then
+            (global.set $last_error
+              (select (i32.const 206) (i32.const 123)
+                (i32.eq (local.get $target_len) (i32.const -2))))
+            (return (i32.const 0))))))
+    (call $lock_acquire (region.addr $DOS_DEVICE_NAMESPACE 0x000))
+    (block $done
+      (if (local.get $remove)
+        (then
+          (local.set $i (i32.const 0))
+          (block $find_done (loop $find
+            (br_if $find_done
+              (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+            (local.set $record (call $dos_device_record (local.get $i)))
+            (local.set $seq (i32.load offset=4 (local.get $record)))
+            (if (i32.and
+                  (i32.and (i32.ne (i32.load (local.get $record)) (i32.const 0))
+                           (i32.ne (call $dos_device_name_equals_record
+                             (local.get $name) (local.get $name_len) (local.get $record))
+                             (i32.const 0)))
+                  (i32.and (i32.gt_u (local.get $seq) (local.get $best_seq))
+                    (i32.or (i32.eqz (local.get $source_len))
+                      (call $dos_device_record_target_matches
+                        (local.get $record) (local.get $target) (local.get $raw)
+                        (local.get $target_len) (local.get $exact)))))
+              (then
+                (local.set $best (local.get $record))
+                (local.set $best_seq (local.get $seq))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $find)))
+          (if (i32.eqz (local.get $best))
+            (then (local.set $error (i32.const 2)) (br $done)))
+          (i32.store (local.get $best) (i32.const 0))
+          (local.set $result (i32.const 1)))
+        (else
+          (local.set $i (i32.const 0))
+          (block $free_done (loop $find_free
+            (br_if $free_done
+              (i32.ge_u (local.get $i) (global.get $DOS_DEVICE_RECORD_MAX)))
+            (local.set $record (call $dos_device_record (local.get $i)))
+            (if (i32.eqz (i32.load (local.get $record)))
+              (then (local.set $free (local.get $record)) (br $free_done)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $find_free)))
+          (if (i32.eqz (local.get $free))
+            (then (local.set $error (i32.const 8)) (br $done)))
+          (local.set $seq (i32.add
+            (i32.load (region.addr $DOS_DEVICE_NAMESPACE 0x008)) (i32.const 1)))
+          (if (i32.eqz (local.get $seq)) (then (local.set $seq (i32.const 1))))
+          (i32.store (region.addr $DOS_DEVICE_NAMESPACE 0x008) (local.get $seq))
+          (call $dos_device_copy_name_to_record
+            (local.get $name) (local.get $name_len) (local.get $free))
+          (call $dos_device_write_target_to_record
+            (local.get $target) (local.get $raw) (local.get $target_len) (local.get $free))
+          (i32.store offset=4 (local.get $free) (local.get $seq))
+          (i32.store offset=8 (local.get $free) (local.get $name_len))
+          (i32.store offset=12 (local.get $free) (local.get $target_len))
+          (i32.store (local.get $free) (i32.const 1))
+          (local.set $result (i32.const 1)))))
+    (call $lock_release (region.addr $DOS_DEVICE_NAMESPACE 0x000))
+    (if (local.get $error) (then (global.set $last_error (local.get $error))))
+    (local.get $result))
+
+  (func $handle_QueryDosDeviceA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $query_dos_device_a
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_DefineDosDeviceA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $define_dos_device_a
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))

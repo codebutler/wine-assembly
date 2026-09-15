@@ -606,6 +606,12 @@
   ;; process whose API calls arrive through more than one Worker instance.
   (region.declare $SHELL_FILE_INFO (size 0x00000080) (align 0x00000010)
     (owner "09a9-comctl32.wat:$SHELL_FILE_INFO"))
+  ;; One Win9x-style process/system DOS-device namespace.  The first page is
+  ;; lock/header/string storage; the tail is 32 x 0x160-byte mapping records.
+  ;; Keeping it in shared memory makes DefineDosDevice calls visible across
+  ;; the main and Worker WASM instances without inventing host device I/O.
+  (region.declare $DOS_DEVICE_NAMESPACE (size 0x00002D00) (align 0x00000010)
+    (owner "09a0b-handlers-base-late.wat:$dos_device_record"))
   ;; Flat guest page table. One packed i32 per 4KB guest page covers
   ;; the complete 32-bit address space. Keep it outside $DIRECT_WINDOW: these
   ;; are emulator-private PTEs, never bytes a guest pointer may address. The
