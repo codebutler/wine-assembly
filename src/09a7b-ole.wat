@@ -4011,7 +4011,9 @@
       (call $heap_payload_size_unchecked (local.get $payload)))
     (call $gs32 (i32.add (local.get $stream) (i32.const 24)) (i32.const 0))
     (call $gs32 (i32.add (local.get $stream) (i32.const 32)) (i32.const 1))
-    (if (i32.and (local.get $old_data) (local.get $old_owned))
+    (if (i32.and
+          (i32.ne (local.get $old_data) (i32.const 0))
+          (i32.ne (local.get $old_owned) (i32.const 0)))
       (then (call $heap_free (local.get $old_data))))
     (i32.const 0))
 
