@@ -54,14 +54,15 @@ console.log('renderer:', gl.getParameter(gl.RENDERER),
 const gpu = new WebGLBackend(canvas);
 const precisionProgram = gpu.createProgram(
   'attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }',
-  'precision highp float; void main(){ gl_FragColor=vec4(1.,0.,1.,1.); }',
-  ['p'], []);
+  'precision highp float; uniform highp vec4 tint; void main(){ gl_FragColor=tint; }',
+  ['p'], ['tint']);
 assert.ok(precisionProgram && precisionProgram.handle,
   'native headless context did not compile an ESSL precision shader');
 const precisionBuffer = gpu.createBuffer();
 gpu.updateBuffer(precisionBuffer, gl.ARRAY_BUFFER,
   new Float32Array([-1, -1, 3, -1, -1, 3]));
 gpu.setViewport(0, 0, W, H);
+gpu.setUniform(precisionProgram, 'tint', '4f', [1, 0, 1, 1]);
 gpu.draw({ program: precisionProgram, vertexBuffer: precisionBuffer,
   stride: 8, attributes: [{ name: 'p', size: 2, offset: 0 }],
   mode: gl.TRIANGLES, count: 3 });

@@ -133,11 +133,38 @@
     (local.set $caps (call $g2w (local.get $out)))
     (call $zero_memory (local.get $caps) (i32.const 0xd4))
     (i32.store (local.get $caps) (i32.const 1))       ;; DeviceType = HAL
+    ;; Advertise the fixed-function surface the shared WebGL backend actually
+    ;; implements. Leaving every bitfield zero made UE2 disable mipmaps and
+    ;; material paths even though CreateTexture and the fixed-function compiler
+    ;; handle them. Keep cube/volume textures, anisotropy, hardware T&L and
+    ;; programmable shaders clear: their D3D8 entry points are not implemented.
+    (i32.store offset=0x0c (local.get $caps) (i32.const 0x00080000)) ;; CANRENDERWINDOWED
+    (i32.store offset=0x1c (local.get $caps) (i32.const 0x00088f00)) ;; DevCaps
+    (i32.store offset=0x20 (local.get $caps) (i32.const 0x00000ef0)) ;; PrimitiveMiscCaps
+    (i32.store offset=0x24 (local.get $caps) (i32.const 0x00600190)) ;; RasterCaps
+    (i32.store offset=0x28 (local.get $caps) (i32.const 0x000000ff)) ;; ZCmpCaps
+    (i32.store offset=0x2c (local.get $caps) (i32.const 0x000007ff)) ;; SrcBlendCaps
+    (i32.store offset=0x30 (local.get $caps) (i32.const 0x000007ff)) ;; DestBlendCaps
+    (i32.store offset=0x34 (local.get $caps) (i32.const 0x000000ff)) ;; AlphaCmpCaps
+    (i32.store offset=0x38 (local.get $caps) (i32.const 0x00084208)) ;; ShadeCaps
+    (i32.store offset=0x3c (local.get $caps) (i32.const 0x00004405)) ;; TextureCaps
+    (i32.store offset=0x40 (local.get $caps) (i32.const 0x03030300)) ;; TextureFilterCaps
+    (i32.store offset=0x4c (local.get $caps) (i32.const 0x00000017)) ;; TextureAddressCaps
+    (i32.store offset=0x54 (local.get $caps) (i32.const 0x0000001f)) ;; LineCaps
     (i32.store offset=0x58 (local.get $caps) (i32.const 4096))
     (i32.store offset=0x5c (local.get $caps) (i32.const 4096))
+    (i32.store offset=0x64 (local.get $caps) (i32.const 8192)) ;; MaxTextureRepeat
+    (i32.store offset=0x68 (local.get $caps) (i32.const 4096)) ;; MaxTextureAspectRatio
+    (i32.store offset=0x6c (local.get $caps) (i32.const 1))    ;; MaxAnisotropy
+    (f32.store offset=0x70 (local.get $caps) (f32.const 1e10)) ;; MaxVertexW
+    (i32.store offset=0x88 (local.get $caps) (i32.const 0x000000ff)) ;; StencilCaps
+    (i32.store offset=0x8c (local.get $caps) (i32.const 8)) ;; eight FVF texcoords
+    (i32.store offset=0x90 (local.get $caps) (i32.const 0x03feffff)) ;; TextureOpCaps
     (i32.store offset=0x94 (local.get $caps) (i32.const 8))
     (i32.store offset=0x98 (local.get $caps) (i32.const 8))
+    (i32.store offset=0x9c (local.get $caps) (i32.const 0x0000003b)) ;; VertexProcessingCaps
     (i32.store offset=0xa0 (local.get $caps) (i32.const 8)) ;; MaxActiveLights
+    (f32.store offset=0xb0 (local.get $caps) (f32.const 1)) ;; MaxPointSize
     ;; Zero here means the device cannot draw a single primitive. UE2 records
     ;; these limits and later sizes/splits its dynamic batches from them.
     (i32.store offset=0xb4 (local.get $caps) (i32.const 1048575)) ;; MaxPrimitiveCount
