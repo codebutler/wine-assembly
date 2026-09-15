@@ -636,7 +636,8 @@
     (local $pc i32) (local $p i32) (local $m i32) (local $sib i32)
     (local $S i32) (local $D i32) (local $C i32) (local $T i32) (local $L i32)
     (local $head i32) (local $adv i32) (local $shadow i32) (local $exit_eip i32)
-    (local $dstep i32)
+    (local $dstep i32) (local $key i32) (local $blend_lo i32)
+    (local $has_shadow i32)
     (if (i32.eqz (global.get $ck_lut16_enabled)) (then (return (i32.const 0))))
     (if (i32.or (global.get $code16) (global.get $d_addr16))
       (then (return (i32.const 0))))
@@ -644,16 +645,20 @@
     (local.set $head (global.get $d_pc))
     (local.set $pc (local.get $head))
 
-    ;; cmp byte [S], 0xFF
+    ;; cmp byte [S], key
     (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
       (then (return (i32.const 0))))
     (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
     (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
       (then (return (i32.const 0))))
     (local.set $S (i32.and (local.get $m) (i32.const 7)))
-    (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2)))
-                (i32.const 0xFF))
-      (then (return (i32.const 0))))
+    ;; The colour key is READ, not required to be 0xFF. jgl.dll writes this
+    ;; same loop with 0xFE at half its sites (0xFE and 0xFF are both
+    ;; transparent there), and a hardcoded constant rejected every one of
+    ;; them. Any imm8 is legal: the transparent test is `tok >= key` either
+    ;; way, and $ck_mem0 has already pinned this to the 3-byte `80 /7 ib`
+    ;; form, so the length arithmetic below does not move with it.
+    (local.set $key (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
     (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
 
     ;; jnb advance
@@ -675,25 +680,45 @@
       (then (return (i32.const 0))))
     (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
 
-    ;; cmp byte [S], 0xF8 -- the same S, or this is a different loop
-    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x80))
-      (then (return (i32.const 0))))
-    (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
-    (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
-      (then (return (i32.const 0))))
-    (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
-      (then (return (i32.const 0))))
-    (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2)))
-                (i32.const 0xF8))
-      (then (return (i32.const 0))))
-    (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
+    ;; The shadow/blend arm is OPTIONAL, and that is what this fold used to
+    ;; get wrong. Eight sites in this one DLL write the same loop as a THREE
+    ;; block diamond with no blend arm at all -- strictly simpler, and every
+    ;; one of them was rejected because the grammar demanded the arm be
+    ;; there. Four of the eight even use the 0xFF this once insisted on, so
+    ;; the missing arm alone was the blocker.
+    ;;
+    ;; The discriminator is exact rather than heuristic: with an arm the next
+    ;; byte is `cmp byte [S],imm8` (0x80); without one it is `mov T8,[S]`
+    ;; (0x8A). A malformed 0x80 still fails the full validation below and
+    ;; declines, exactly as before.
+    (local.set $has_shadow
+      (i32.eq (call $gl8 (local.get $pc)) (i32.const 0x80)))
+    ;; blend_lo == key makes the blend range empty by construction, which is
+    ;; how the executor runs both forms through one test instead of two.
+    (local.set $blend_lo (local.get $key))
+    (if (local.get $has_shadow)
+      (then
+        ;; cmp byte [S], blend_lo -- the same S, or this is a different loop
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (if (i32.eqz (call $ck_mem0 (local.get $m) (i32.const 7)))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $S))
+          (then (return (i32.const 0))))
+        (local.set $blend_lo
+          (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+        ;; An arm whose low bound is above the key would describe a blend
+        ;; range the transparent test has already swallowed -- not this
+        ;; shape, and the executor's ordered comparisons would misread it.
+        (if (i32.gt_u (local.get $blend_lo) (local.get $key))
+          (then (return (i32.const 0))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
 
-    ;; jnb shadow
-    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x73))
-      (then (return (i32.const 0))))
-    (local.set $shadow (i32.add (i32.add (local.get $pc) (i32.const 2))
-      (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
-    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+        ;; jnb shadow
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x73))
+          (then (return (i32.const 0))))
+        (local.set $shadow (i32.add (i32.add (local.get $pc) (i32.const 2))
+          (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 2)))))
 
     ;; mov T8, [S]
     (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8A))
@@ -740,19 +765,30 @@
     (local.set $D (i32.and (local.get $m) (i32.const 7)))
     (local.set $pc (i32.add (local.get $pc) (i32.const 3)))
 
-    ;; jmp advance -- the source arm's only exit, and it must land where the
-    ;; transparent arm's jnb did or the two arms are not one diamond.
-    (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0xEB))
-      (then (return (i32.const 0))))
-    (if (i32.ne (i32.add (i32.add (local.get $pc) (i32.const 2))
-          (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1)))))
-          (local.get $adv))
-      (then (return (i32.const 0))))
-    (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
-    ;; The shadow arm has to begin exactly here, or the `jnb` above jumps into
-    ;; the middle of code this decode never looked at.
-    (if (i32.ne (local.get $pc) (local.get $shadow))
-      (then (return (i32.const 0))))
+    ;; The source arm's only exit, and it must reach `advance` or the two
+    ;; arms are not one diamond. With a shadow arm that means an explicit
+    ;; `jmp advance` hopping over it; without one there is nothing to hop
+    ;; over, so the arm FALLS THROUGH and the fall-through is the join.
+    (if (local.get $has_shadow)
+      (then
+        ;; jmp advance
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0xEB))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.add (i32.add (local.get $pc) (i32.const 2))
+              (call $sign_ext8 (call $gl8 (i32.add (local.get $pc) (i32.const 1)))))
+              (local.get $adv))
+          (then (return (i32.const 0))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+        ;; The shadow arm has to begin exactly here, or the `jnb` above jumps
+        ;; into the middle of code this decode never looked at.
+        (if (i32.ne (local.get $pc) (local.get $shadow))
+          (then (return (i32.const 0)))))
+      (else
+        ;; Falling through anywhere but `advance` means the transparent arm's
+        ;; jnb and the source arm rejoin at different places, which is some
+        ;; other loop wearing this one's opcodes.
+        (if (i32.ne (local.get $pc) (local.get $adv))
+          (then (return (i32.const 0))))))
 
     ;; advance: inc S / add D,imm8 / dec C / jnz head
     (local.set $p (local.get $adv))
@@ -802,6 +838,12 @@
     (call $te_raw (local.get $exit_eip))
     (call $te_raw (local.get $dstep))
     (call $te_raw (local.get $shadow))
+    ;; Fifth word: the two thresholds. They do not fit in the operand beside
+    ;; five register numbers, and the executor already walks a raw word list,
+    ;; so this costs a load rather than a bit-squeeze. blend_lo == key is the
+    ;; no-shadow-arm form, and the executor reads it as an empty blend range.
+    (call $te_raw (i32.or (local.get $key)
+      (i32.shl (local.get $blend_lo) (i32.const 8))))
     (i32.const 1))
 
   ;; ---- the dest-indexed keyed blit fold ($th_ck_shadow16_run) ----------

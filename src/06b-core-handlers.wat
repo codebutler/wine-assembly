@@ -2285,8 +2285,10 @@
   ;; four block transfers plus six or thirteen dispatches; here a pixel is one
   ;; $gl8, one $gl16 and one $gs16.
   ;;
-  ;; Two arms are run and the third is declined: 0xFF advances without
-  ;; storing, anything below 0xF8 stores tbl16[b], and 0xF8..0xFE (the shadow
+  ;; Both thresholds come from the descriptor, so one executor runs the
+  ;; four-block diamond and the three-block form that has no shadow arm at
+  ;; all. Two arms are run and the third is declined: >= key advances without
+  ;; storing, below blend_lo stores tbl16[b], and blend_lo..key-1 (the shadow
   ;; blend) ends the fold for this dispatch by jumping into the shadow arm
   ;; itself with the cursors still on that pixel and T already zeroed, which
   ;; is exactly the state the head's `xor T,T / cmp / jnb` would have left.
@@ -2304,12 +2306,33 @@
     (local $s i32) (local $d i32) (local $c i32) (local $x i32) (local $l i32)
     (local $tok i32) (local $cost i32) (local $blocks i32) (local $px i32)
     (local $iters i32) (local $bailed i32) (local $c0 i32)
+    (local $key i32) (local $blend_lo i32)
+    (local $src_cost i32) (local $src_blocks i32)
     (local.set $tp (global.get $ip))
     (local.set $head_eip (i32.load          (local.get $tp)))
     (local.set $exit_eip (i32.load offset=4 (local.get $tp)))
     (local.set $dstep    (i32.load offset=8 (local.get $tp)))
     (local.set $shadow_eip (i32.load offset=12 (local.get $tp)))
-    (global.set $ip (i32.add (local.get $tp) (i32.const 16)))
+    ;; Fifth word: key in the low byte, blend_lo in the next. A descriptor
+    ;; with blend_lo == key has no shadow arm and can never bail into one.
+    (local.set $key (i32.and (i32.load offset=16 (local.get $tp))
+      (i32.const 0xFF)))
+    (local.set $blend_lo (i32.and
+      (i32.shr_u (i32.load offset=16 (local.get $tp)) (i32.const 8))
+      (i32.const 0xFF)))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 20)))
+
+    ;; A pixel costs what the shape it replaced costs, and the two shapes do
+    ;; not cost the same: the four-block form runs cmp/jnb, xor/cmp/jnb,
+    ;; mov/mov/mov/jmp, advance = 13 ops over 4 blocks, while the three-block
+    ;; form has no second test and no jmp -- cmp/jnb, xor/mov/mov/mov,
+    ;; advance = 10 ops over 3 blocks. Billing the larger figure for the
+    ;; smaller shape would buy the guest extra work whenever the fold is on
+    ;; and make a fold-on/fold-off comparison meaningless.
+    (local.set $src_cost (select (i32.const 13) (i32.const 10)
+      (i32.ne (local.get $blend_lo) (local.get $key))))
+    (local.set $src_blocks (select (i32.const 4) (i32.const 3)
+      (i32.ne (local.get $blend_lo) (local.get $key))))
 
     (local.set $S (i32.and                 (local.get $op)                   (i32.const 0xF)))
     (local.set $D (i32.and (i32.shr_u (local.get $op) (i32.const 4))  (i32.const 0xF)))
@@ -2327,7 +2350,7 @@
     ;; The iteration cap below is what keeps that from hanging a batch.
     (block $done (loop $pxl
       (local.set $tok (call $gl8 (local.get $s)))
-      (if (i32.lt_u (local.get $tok) (i32.const 0xF8))
+      (if (i32.lt_u (local.get $tok) (local.get $blend_lo))
         (then
           ;; source arm: xor T,T / mov T8,[S] / mov T16,[L+T*2] / mov [D],T16.
           ;; The xor is why T ends up holding the zero-extended table word and
@@ -2335,10 +2358,13 @@
           (local.set $x (call $gl16
             (i32.add (local.get $l) (i32.shl (local.get $tok) (i32.const 1)))))
           (call $gs16 (local.get $d) (local.get $x))
-          (local.set $cost (i32.add (local.get $cost) (i32.const 13)))
-          (local.set $blocks (i32.add (local.get $blocks) (i32.const 4))))
+          (local.set $cost (i32.add (local.get $cost) (local.get $src_cost)))
+          (local.set $blocks (i32.add (local.get $blocks) (local.get $src_blocks))))
         (else
-          (if (i32.lt_u (local.get $tok) (i32.const 0xFF))
+          ;; Unreachable when blend_lo == key: the range is empty, so a
+          ;; descriptor with no shadow arm never reaches $shadow_eip (which
+          ;; is 0 for that form and would be a jump into nothing).
+          (if (i32.lt_u (local.get $tok) (local.get $key))
             (then
               ;; shadow arm: hand the pixel back to the interpreter, in the
               ;; state the two head blocks would have left it in. Three
@@ -2384,10 +2410,10 @@
     (call $set_reg (local.get $T) (local.get $x))
     (if (i32.eq (local.get $bailed) (i32.const 2))
       (then
-        ;; Flags are the head's `cmp byte [S],0xF8`, which is what the guest
-        ;; would be carrying into the shadow arm.
-        (call $set_flags_sub (local.get $tok) (i32.const 0xF8)
-          (i32.sub (local.get $tok) (i32.const 0xF8)))
+        ;; Flags are the head's `cmp byte [S],blend_lo`, which is what the
+        ;; guest would be carrying into the shadow arm.
+        (call $set_flags_sub (local.get $tok) (local.get $blend_lo)
+          (i32.sub (local.get $tok) (local.get $blend_lo)))
         (global.set $flag_sign_shift (i32.const 7))
         (global.set $eip (local.get $shadow_eip)))
     (else
