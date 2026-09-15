@@ -2437,32 +2437,725 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
   )
 
-  ;; Minimal no-audio BASS shim. Handles are dummy nonzero tokens because many
-  ;; games treat a failed load as fatal even when the sound is nonessential.
-  ;; Constant compatibility calls live beside their ABI rows in api_table.json;
-  ;; only the stateful dummy-handle loaders remain hand-written here.
-  (global $BASS_DUMMY_HANDLE i32 (i32.const 0x0BA55001))
+  ;; --- BASS 2.x PCM compatibility --------------------------------------
+  ;; Pocket Tanks 1.6 loads its effects through BASS_SampleLoad and then
+  ;; obtains short-lived HCHANNELs. These are real, typed handles backed by the
+  ;; shared host VoiceManager; tracker music and compressed streams remain
+  ;; truthful failures until the emulator has decoders for those formats.
+  ;;
+  ;; BASS_STATE layout:
+  ;;   +0 initialized, +4 output started, +8 global sample volume (0..10000)
+  ;;   +12 sample generation, +16 channel generation, +20 play serial
+  ;;   +24 config 5, +28 config 6, +32 init frequency
+  ;;   +0x40 sixteen per-thread BASS error dwords
+  ;;   +0x80 64 Sample records (40 bytes)
+  ;;   +0xA80 128 Channel records (28 bytes)
+  ;; Sample:  handle, allocation, PCM guest ptr/len, rate, chans, bits, max, flags
+  ;; Channel: handle, sample, host voice, byte position, state, serial, volume
+  (global $BASS_STATE i32 (region.addr $BASS_STATE 0))
+  (global $BASS_STATE_SIZE i32 (i32.const 0x1900))
+  (global $BASS_SAMPLE_MAX i32 (i32.const 64))
+  (global $BASS_CHANNEL_MAX i32 (i32.const 128))
+  (global $BASS_SAMPLE_STRIDE i32 (i32.const 40))
+  (global $BASS_CHANNEL_STRIDE i32 (i32.const 28))
 
-  ;; BASS_SampleLoad(filetype, file, offset:QWORD, length, max, flags) -> HSAMPLE
+  (func $bass_error_addr (result i32)
+    (local $slot i32)
+    (local.set $slot (i32.sub (global.get $current_thread_id) (i32.const 1)))
+    (if (i32.ge_u (local.get $slot) (i32.const 16))
+      (then (local.set $slot (i32.const 0))))
+    (i32.add (global.get $BASS_STATE)
+      (i32.add (i32.const 0x40) (i32.shl (local.get $slot) (i32.const 2)))))
+
+  (func $bass_set_error (param $error i32)
+    (i32.store (call $bass_error_addr) (local.get $error)))
+
+  (func $bass_sample_addr (param $slot i32) (result i32)
+    (i32.add (global.get $BASS_STATE)
+      (i32.add (i32.const 0x80)
+        (i32.mul (local.get $slot) (global.get $BASS_SAMPLE_STRIDE)))))
+
+  (func $bass_channel_addr (param $slot i32) (result i32)
+    (i32.add (global.get $BASS_STATE)
+      (i32.add (i32.const 0xA80)
+        (i32.mul (local.get $slot) (global.get $BASS_CHANNEL_STRIDE)))))
+
+  ;; Exact-record equality is the generation check: freeing and reallocating a
+  ;; slot produces a new handle, so a stale HSAMPLE/HCHANNEL cannot name its
+  ;; replacement.
+  (func $bass_sample_from_handle (param $handle i32) (result i32)
+    (local $slot i32) (local $record i32)
+    (if (i32.ne (i32.and (local.get $handle) (i32.const 0xFF000000))
+                (i32.const 0xB1000000))
+      (then (return (i32.const 0))))
+    (local.set $slot (i32.sub (i32.and (local.get $handle) (i32.const 0xFF))
+                             (i32.const 1)))
+    (if (i32.ge_u (local.get $slot) (global.get $BASS_SAMPLE_MAX))
+      (then (return (i32.const 0))))
+    (local.set $record (call $bass_sample_addr (local.get $slot)))
+    (if (i32.ne (i32.load (local.get $record)) (local.get $handle))
+      (then (return (i32.const 0))))
+    (local.get $record))
+
+  (func $bass_channel_from_handle (param $handle i32) (result i32)
+    (local $slot i32) (local $record i32)
+    (if (i32.ne (i32.and (local.get $handle) (i32.const 0xFF000000))
+                (i32.const 0xB2000000))
+      (then (return (i32.const 0))))
+    (local.set $slot (i32.sub (i32.and (local.get $handle) (i32.const 0xFF))
+                             (i32.const 1)))
+    (if (i32.ge_u (local.get $slot) (global.get $BASS_CHANNEL_MAX))
+      (then (return (i32.const 0))))
+    (local.set $record (call $bass_channel_addr (local.get $slot)))
+    (if (i32.ne (i32.load (local.get $record)) (local.get $handle))
+      (then (return (i32.const 0))))
+    (local.get $record))
+
+  (func $bass_next_handle (param $kind i32) (param $slot i32) (result i32)
+    (local $seq_addr i32) (local $seq i32)
+    (local.set $seq_addr (i32.add (global.get $BASS_STATE)
+      (select (i32.const 16) (i32.const 12) (i32.eq (local.get $kind) (i32.const 2)))))
+    (local.set $seq (i32.and (i32.add (i32.load (local.get $seq_addr)) (i32.const 1))
+                            (i32.const 0xFFFF)))
+    (if (i32.eqz (local.get $seq)) (then (local.set $seq (i32.const 1))))
+    (i32.store (local.get $seq_addr) (local.get $seq))
+    (i32.or
+      (select (i32.const 0xB2000000) (i32.const 0xB1000000)
+        (i32.eq (local.get $kind) (i32.const 2)))
+      (i32.or (i32.shl (local.get $seq) (i32.const 8))
+              (i32.add (local.get $slot) (i32.const 1)))))
+
+  (func $bass_close_channel_record (param $record i32) (param $release i32)
+    (local $voice i32)
+    (local.set $voice (i32.load offset=8 (local.get $record)))
+    (if (local.get $voice)
+      (then
+        (if (local.get $release)
+          (then (drop (call $host_voice_close (local.get $voice))))
+          (else (drop (call $host_voice_stop (local.get $voice)))))))
+    (if (local.get $release)
+      (then (call $zero_memory (local.get $record) (global.get $BASS_CHANNEL_STRIDE)))
+      (else
+        (i32.store offset=12 (local.get $record) (i32.const 0))
+        (i32.store offset=16 (local.get $record) (i32.const 1)))))
+
+  (func $bass_effective_volume (param $channel i32) (result i32)
+    (i32.div_u
+      (i32.mul (i32.load offset=24 (local.get $channel))
+               (i32.load offset=8 (global.get $BASS_STATE)))
+      (i32.const 10000)))
+
+  (func $bass_start_channel (param $channel i32) (result i32)
+    (local $sample i32) (local $voice i32)
+    (local.set $sample
+      (call $bass_sample_from_handle (i32.load offset=4 (local.get $channel))))
+    (if (i32.eqz (local.get $sample)) (then (return (i32.const 0))))
+    (local.set $voice (i32.load offset=8 (local.get $channel)))
+    (if (i32.eqz (local.get $voice))
+      (then
+        (local.set $voice (call $host_voice_open
+          (i32.load offset=16 (local.get $sample))
+          (i32.load offset=20 (local.get $sample))
+          (i32.load offset=24 (local.get $sample))))
+        (if (i32.eqz (local.get $voice)) (then (return (i32.const 0))))
+        (i32.store offset=8 (local.get $channel) (local.get $voice))))
+    (call $host_voice_set_volume_linear
+      (local.get $voice) (call $bass_effective_volume (local.get $channel)))
+    (drop (call $host_voice_play_ring
+      (local.get $voice)
+      (call $g2w (i32.load offset=8 (local.get $sample)))
+      (i32.load offset=12 (local.get $sample))
+      (i32.load offset=12 (local.get $channel))
+      (i32.ne (i32.and (i32.load offset=36 (local.get $sample)) (i32.const 4))
+              (i32.const 0))))
+    (i32.store offset=16 (local.get $channel) (i32.const 2))
+    (i32.const 1))
+
+  ;; Returns 1 for a bounded RIFF/WAVE PCM image and writes the raw PCM offset,
+  ;; byte length, sample rate, channel count and bits/sample into out+0..16.
+  (func $bass_parse_pcm_wave (param $data i32) (param $size i32) (param $out i32)
+        (result i32)
+    (local $riff_size i32) (local $limit i32) (local $off i32) (local $id i32) (local $chunk i32)
+    (local $next i32) (local $fmt i32) (local $pcm i32) (local $rate i32)
+    (local $channels i32) (local $bits i32) (local $align i32)
+    (if (i32.lt_u (local.get $size) (i32.const 12)) (then (return (i32.const 0))))
+    (if (i32.or
+          (i32.ne (i32.load (local.get $data)) (i32.const 0x46464952))
+          (i32.ne (i32.load offset=8 (local.get $data)) (i32.const 0x45564157)))
+      (then (return (i32.const 0))))
+    (local.set $riff_size (i32.load offset=4 (local.get $data)))
+    (if (i32.or (i32.lt_u (local.get $riff_size) (i32.const 4))
+                (i32.gt_u (local.get $riff_size) (i32.sub (local.get $size) (i32.const 8))))
+      (then (return (i32.const 0))))
+    (local.set $limit (i32.add (local.get $riff_size) (i32.const 8)))
+    (local.set $off (i32.const 12))
+    (block $done (loop $chunks
+      (br_if $done (i32.gt_u (i32.add (local.get $off) (i32.const 8)) (local.get $limit)))
+      (local.set $id (i32.load (i32.add (local.get $data) (local.get $off))))
+      (local.set $chunk (i32.load (i32.add (local.get $data)
+        (i32.add (local.get $off) (i32.const 4)))))
+      (if (i32.gt_u (local.get $chunk)
+                    (i32.sub (local.get $limit) (i32.add (local.get $off) (i32.const 8))))
+        (then (return (i32.const 0))))
+      (if (i32.eq (local.get $id) (i32.const 0x20746D66)) ;; "fmt "
+        (then
+          (if (i32.lt_u (local.get $chunk) (i32.const 16))
+            (then (return (i32.const 0))))
+          (local.set $fmt (i32.add (local.get $data)
+            (i32.add (local.get $off) (i32.const 8))))
+          (if (i32.ne (i32.load16_u (local.get $fmt)) (i32.const 1))
+            (then (return (i32.const -1))))
+          (local.set $channels (i32.load16_u offset=2 (local.get $fmt)))
+          (local.set $rate (i32.load offset=4 (local.get $fmt)))
+          (local.set $align (i32.load16_u offset=12 (local.get $fmt)))
+          (local.set $bits (i32.load16_u offset=14 (local.get $fmt)))
+          (if (i32.or
+                (i32.or (i32.lt_u (local.get $channels) (i32.const 1))
+                        (i32.gt_u (local.get $channels) (i32.const 2)))
+                (i32.or (i32.lt_u (local.get $rate) (i32.const 1000))
+                        (i32.gt_u (local.get $rate) (i32.const 192000))))
+            (then (return (i32.const -1))))
+          (if (i32.and (i32.ne (local.get $bits) (i32.const 8))
+                       (i32.ne (local.get $bits) (i32.const 16)))
+            (then (return (i32.const -1))))
+          (if (i32.ne (local.get $align)
+                (i32.mul (local.get $channels) (i32.div_u (local.get $bits) (i32.const 8))))
+            (then (return (i32.const -1))))
+          (local.set $pcm (i32.const 1))))
+      (if (i32.eq (local.get $id) (i32.const 0x61746164)) ;; "data"
+        (then
+          (if (i32.eqz (local.get $chunk)) (then (return (i32.const -2))))
+          (i32.store (local.get $out) (i32.add (local.get $off) (i32.const 8)))
+          (i32.store offset=4 (local.get $out) (local.get $chunk))))
+      (local.set $next (i32.add (i32.add (local.get $off) (i32.const 8))
+        (i32.add (local.get $chunk) (i32.and (local.get $chunk) (i32.const 1)))))
+      (br_if $done (i32.le_u (local.get $next) (local.get $off)))
+      (if (i32.gt_u (local.get $next) (local.get $limit))
+        (then (return (i32.const 0))))
+      (local.set $off (local.get $next))
+      (br $chunks)))
+    (if (i32.or (i32.eqz (local.get $fmt))
+                (i32.eqz (i32.load offset=4 (local.get $out))))
+      (then (return (i32.const 0))))
+    (i32.store offset=8 (local.get $out) (local.get $rate))
+    (i32.store offset=12 (local.get $out) (local.get $channels))
+    (i32.store offset=16 (local.get $out) (local.get $bits))
+    (i32.const 1))
+
+  (func $handle_BASS_Init (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.load (global.get $BASS_STATE))
+      (then
+        (global.set $eax (i32.const 0))
+        (call $bass_set_error (i32.const 14))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (if (i32.and (i32.ne (local.get $arg0) (i32.const -1))
+                 (i32.gt_u (local.get $arg0) (i32.const 1)))
+      (then
+        (global.set $eax (i32.const 0))
+        (call $bass_set_error (i32.const 23))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (if (i32.or (i32.lt_u (local.get $arg1) (i32.const 8000))
+                (i32.gt_u (local.get $arg1) (i32.const 192000)))
+      (then
+        (global.set $eax (i32.const 0))
+        (call $bass_set_error (i32.const 20))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (return)))
+    (call $zero_memory (global.get $BASS_STATE) (global.get $BASS_STATE_SIZE))
+    (i32.store (global.get $BASS_STATE) (i32.const 1))
+    (i32.store offset=4 (global.get $BASS_STATE) (i32.const 1))
+    (i32.store offset=8 (global.get $BASS_STATE) (i32.const 10000))
+    (i32.store offset=32 (global.get $BASS_STATE) (local.get $arg1))
+    (call $bass_set_error (i32.const 0))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+
+  (func $handle_BASS_PluginLoad (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $handle i32)
+    (global.set $eax (i32.const 0))
+    (if (i32.eqz (local.get $arg0))
+      (then (call $bass_set_error (i32.const 20)))
+      (else
+        (local.set $handle (call $host_fs_create_file
+          (call $g2w (local.get $arg0)) (i32.const 0x80000000)
+          (i32.const 3) (i32.const 0x80) (i32.const 0)))
+        (if (i32.eq (local.get $handle) (i32.const -1))
+          (then (call $bass_set_error (i32.const 2)))
+          (else
+            (drop (call $host_fs_close_handle (local.get $handle)))
+            (call $bass_set_error (i32.const 41))))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+
+  (func $handle_BASS_Start (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32) (local $channel i32)
+    (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+      (then (global.set $eax (i32.const 0)) (call $bass_set_error (i32.const 8)))
+      (else
+        (i32.store offset=4 (global.get $BASS_STATE) (i32.const 1))
+        (loop $resume
+          (local.set $channel (call $bass_channel_addr (local.get $i)))
+          (if (i32.eq (i32.load offset=16 (local.get $channel)) (i32.const 2))
+            (then (drop (call $bass_start_channel (local.get $channel)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $resume (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX))))
+        (call $bass_set_error (i32.const 0))
+        (global.set $eax (i32.const 1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  (func $handle_BASS_SetConfig (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32) (local $channel i32) (local $voice i32)
+    (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+      (then
+        (global.set $eax (i32.const 0))
+        (call $bass_set_error (i32.const 8))
+        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (return)))
+    (if (i32.eq (local.get $arg0) (i32.const 4))
+      (then
+        (if (i32.gt_u (local.get $arg1) (i32.const 10000))
+          (then
+            (global.set $eax (i32.const 0))
+            (call $bass_set_error (i32.const 20))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (return)))
+        (i32.store offset=8 (global.get $BASS_STATE) (local.get $arg1))
+        (loop $volume
+          (local.set $channel (call $bass_channel_addr (local.get $i)))
+          (local.set $voice (i32.load offset=8 (local.get $channel)))
+          (if (local.get $voice)
+            (then (call $host_voice_set_volume_linear
+              (local.get $voice) (call $bass_effective_volume (local.get $channel)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $volume (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX)))))
+      (else
+        (if (i32.eq (local.get $arg0) (i32.const 5))
+          (then (i32.store offset=24 (global.get $BASS_STATE) (local.get $arg1)))
+          (else
+            (if (i32.eq (local.get $arg0) (i32.const 6))
+              (then (i32.store offset=28 (global.get $BASS_STATE) (local.get $arg1)))
+              (else
+                (global.set $eax (i32.const 0))
+                (call $bass_set_error (i32.const 20))
+                (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+                (return)))))))
+    (call $bass_set_error (i32.const 0))
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+
+  ;; BASS_SampleLoad(mem, file, offset:QWORD, length, max, flags) -> HSAMPLE.
+  ;; The VFS bytes are copied into an owned heap block before validation; host
+  ;; playback receives only the bounded raw PCM subrange inside that copy.
   (func $handle_BASS_SampleLoad (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $BASS_DUMMY_HANDLE))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
-  )
+    (local $max i32) (local $flags i32) (local $handle i32) (local $file_size i32)
+    (local $size i32) (local $blk i32) (local $data_guest i32) (local $data i32)
+    (local $ok i32) (local $parse i32) (local $out i32) (local $i i32)
+    (local $record i32) (local $sample_handle i32)
+    (global.set $eax (i32.const 0))
+    (local.set $max (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (if (i32.or (i32.ne (local.get $arg0) (i32.const 0))
+                  (i32.eqz (local.get $arg1)))
+        (then (call $bass_set_error (i32.const 20)) (br $done)))
+      (if (i32.or (i32.eqz (local.get $max))
+                  (i32.gt_u (local.get $max) (global.get $BASS_CHANNEL_MAX)))
+        (then (call $bass_set_error (i32.const 20)) (br $done)))
+      (if (local.get $arg3)
+        (then (call $bass_set_error (i32.const 20)) (br $done)))
+      (local.set $handle (call $host_fs_create_file
+        (call $g2w (local.get $arg1)) (i32.const 0x80000000)
+        (i32.const 3) (i32.const 0x80) (i32.const 0)))
+      (if (i32.eq (local.get $handle) (i32.const -1))
+        (then (call $bass_set_error (i32.const 2)) (br $done)))
+      (local.set $file_size (call $host_fs_get_file_size (local.get $handle)))
+      (if (i32.or (i32.eq (local.get $file_size) (i32.const -1))
+                  (i32.gt_u (local.get $arg2) (local.get $file_size)))
+        (then
+          (drop (call $host_fs_close_handle (local.get $handle)))
+          (call $bass_set_error (i32.const 20)) (br $done)))
+      (local.set $size (select (local.get $arg4)
+        (i32.sub (local.get $file_size) (local.get $arg2))
+        (i32.ne (local.get $arg4) (i32.const 0))))
+      (if (i32.or
+            (i32.or (i32.lt_u (local.get $size) (i32.const 12))
+                    (i32.gt_u (local.get $size) (i32.const 0x01000000)))
+            (i32.gt_u (local.get $size) (i32.sub (local.get $file_size) (local.get $arg2))))
+        (then
+          (drop (call $host_fs_close_handle (local.get $handle)))
+          (call $bass_set_error (i32.const 41)) (br $done)))
+      (drop (call $host_fs_set_file_pointer (local.get $handle) (local.get $arg2) (i32.const 0)))
+      (local.set $blk (call $heap_alloc (i32.add (local.get $size) (i32.const 24))))
+      (if (i32.eqz (local.get $blk))
+        (then
+          (drop (call $host_fs_close_handle (local.get $handle)))
+          (call $bass_set_error (i32.const 1)) (br $done)))
+      (local.set $data_guest (i32.add (local.get $blk) (i32.const 24)))
+      (i32.store (call $g2w (local.get $blk)) (i32.const 0))
+      (local.set $ok (call $host_fs_read_file
+        (local.get $handle) (local.get $data_guest) (local.get $size) (local.get $blk)))
+      (drop (call $host_fs_close_handle (local.get $handle)))
+      (if (i32.or (i32.eqz (local.get $ok))
+                  (i32.ne (i32.load (call $g2w (local.get $blk))) (local.get $size)))
+        (then
+          (call $heap_free (local.get $blk))
+          (call $bass_set_error (i32.const 2)) (br $done)))
+      (local.set $data (call $g2w (local.get $data_guest)))
+      (local.set $out (i32.add (local.get $data) (i32.const -20)))
+      (local.set $parse (call $bass_parse_pcm_wave
+        (local.get $data) (local.get $size) (local.get $out)))
+      (if (i32.ne (local.get $parse) (i32.const 1))
+        (then
+          (call $heap_free (local.get $blk))
+          (call $bass_set_error
+            (select
+              (select (i32.const 31) (i32.const 6)
+                (i32.eq (local.get $parse) (i32.const -2)))
+              (i32.const 41)
+              (i32.ne (local.get $parse) (i32.const 0))))
+          (br $done)))
+      (block $found (loop $slots
+        (local.set $record (call $bass_sample_addr (local.get $i)))
+        (br_if $found (i32.eqz (i32.load (local.get $record))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $slots (i32.lt_u (local.get $i) (global.get $BASS_SAMPLE_MAX)))))
+      (if (i32.ge_u (local.get $i) (global.get $BASS_SAMPLE_MAX))
+        (then
+          (call $heap_free (local.get $blk))
+          (call $bass_set_error (i32.const 1)) (br $done)))
+      (local.set $sample_handle (call $bass_next_handle (i32.const 1) (local.get $i)))
+      (i32.store (local.get $record) (local.get $sample_handle))
+      (i32.store offset=4 (local.get $record) (local.get $blk))
+      (i32.store offset=8 (local.get $record)
+        (i32.add (local.get $data_guest) (i32.load (local.get $out))))
+      (i32.store offset=12 (local.get $record) (i32.load offset=4 (local.get $out)))
+      (i32.store offset=16 (local.get $record) (i32.load offset=8 (local.get $out)))
+      (i32.store offset=20 (local.get $record) (i32.load offset=12 (local.get $out)))
+      (i32.store offset=24 (local.get $record) (i32.load offset=16 (local.get $out)))
+      (i32.store offset=28 (local.get $record) (local.get $max))
+      (i32.store offset=36 (local.get $record) (local.get $flags))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (local.get $sample_handle)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
-  ;; BASS_SampleGetChannel(handle, onlynew) -> HCHANNEL
   (func $handle_BASS_SampleGetChannel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $BASS_DUMMY_HANDLE))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-  )
+    (local $sample i32) (local $i i32) (local $channel i32) (local $free i32)
+    (local $count i32) (local $oldest i32) (local $old_serial i32)
+    (local $handle i32) (local $voice i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $sample (call $bass_sample_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $sample))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (loop $scan
+        (local.set $channel (call $bass_channel_addr (local.get $i)))
+        (if (i32.eqz (i32.load (local.get $channel)))
+          (then (if (i32.eqz (local.get $free)) (then (local.set $free (local.get $channel)))))
+          (else
+            ;; Reap completed one-shots before enforcing this sample's max.
+            (if (i32.and
+                  (i32.eq (i32.load offset=16 (local.get $channel)) (i32.const 2))
+                  (i32.and
+                    (i32.ne (i32.load offset=8 (local.get $channel)) (i32.const 0))
+                    (i32.and
+                      (i32.ne (i32.load offset=4 (global.get $BASS_STATE)) (i32.const 0))
+                      (i32.eqz (call $host_voice_is_playing
+                        (i32.load offset=8 (local.get $channel)))))))
+              (then
+                (call $bass_close_channel_record (local.get $channel) (i32.const 1))
+                (if (i32.eqz (local.get $free)) (then (local.set $free (local.get $channel))))))
+            (if (i32.eq (i32.load offset=4 (local.get $channel)) (local.get $arg0))
+              (then
+                (local.set $count (i32.add (local.get $count) (i32.const 1)))
+                (if (i32.or (i32.eqz (local.get $oldest))
+                            (i32.lt_u (i32.load offset=20 (local.get $channel)) (local.get $old_serial)))
+                  (then
+                    (local.set $oldest (local.get $channel))
+                    (local.set $old_serial (i32.load offset=20 (local.get $channel)))))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $scan (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX))))
+      (if (i32.ge_u (local.get $count) (i32.load offset=28 (local.get $sample)))
+        (then
+          (if (local.get $arg1)
+            (then (call $bass_set_error (i32.const 18)) (br $done)))
+          (local.set $free (local.get $oldest))
+          (call $bass_close_channel_record (local.get $free) (i32.const 1))))
+      (if (i32.eqz (local.get $free))
+        (then (call $bass_set_error (i32.const 18)) (br $done)))
+      (local.set $i (i32.div_u
+        (i32.sub (local.get $free) (region.addr $BASS_STATE 0xA80))
+        (global.get $BASS_CHANNEL_STRIDE)))
+      (local.set $handle (call $bass_next_handle (i32.const 2) (local.get $i)))
+      (i32.store (local.get $free) (local.get $handle))
+      (i32.store offset=4 (local.get $free) (local.get $arg0))
+      (i32.store offset=16 (local.get $free) (i32.const 1))
+      (i32.store offset=20 (local.get $free)
+        (i32.add (i32.load offset=20 (global.get $BASS_STATE)) (i32.const 1)))
+      (i32.store offset=20 (global.get $BASS_STATE)
+        (i32.load offset=20 (local.get $free)))
+      (i32.store offset=24 (local.get $free) (i32.const 65535))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (local.get $handle)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
-  ;; BASS_StreamCreateFile(filetype, file, offset:QWORD, length:QWORD, flags) -> HSTREAM
+  (func $handle_BASS_SampleStop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sample i32) (local $i i32) (local $channel i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $sample (call $bass_sample_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $sample))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (loop $stop
+        (local.set $channel (call $bass_channel_addr (local.get $i)))
+        (if (i32.eq (i32.load offset=4 (local.get $channel)) (local.get $arg0))
+          (then (call $bass_close_channel_record (local.get $channel) (i32.const 0))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $stop (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX))))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_BASS_SampleFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $sample i32) (local $i i32) (local $channel i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $sample (call $bass_sample_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $sample))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (loop $release
+        (local.set $channel (call $bass_channel_addr (local.get $i)))
+        (if (i32.eq (i32.load offset=4 (local.get $channel)) (local.get $arg0))
+          (then (call $bass_close_channel_record (local.get $channel) (i32.const 1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $release (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX))))
+      (call $heap_free (i32.load offset=4 (local.get $sample)))
+      (call $zero_memory (local.get $sample) (global.get $BASS_SAMPLE_STRIDE))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_BASS_ChannelPlay (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $channel i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $channel (call $bass_channel_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $channel))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      ;; restart=FALSE on an already-playing channel leaves its cursor alone.
+      (if (i32.and (i32.eqz (local.get $arg1))
+            (i32.and
+              (i32.eq (i32.load offset=16 (local.get $channel)) (i32.const 2))
+              (i32.and
+                (i32.ne (i32.load offset=4 (global.get $BASS_STATE)) (i32.const 0))
+                (i32.and
+                  (i32.ne (i32.load offset=8 (local.get $channel)) (i32.const 0))
+                  (i32.ne (call $host_voice_is_playing
+                    (i32.load offset=8 (local.get $channel))) (i32.const 0))))))
+        (then
+          (call $bass_set_error (i32.const 0))
+          (global.set $eax (i32.const 1))
+          (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+          (return)))
+      (if (local.get $arg1)
+        (then
+          (if (i32.load offset=8 (local.get $channel))
+            (then (drop (call $host_voice_stop (i32.load offset=8 (local.get $channel))))))
+          (i32.store offset=12 (local.get $channel) (i32.const 0))))
+      (i32.store offset=16 (local.get $channel) (i32.const 2))
+      (if (i32.load offset=4 (global.get $BASS_STATE))
+        (then
+          (if (i32.eqz (call $bass_start_channel (local.get $channel)))
+            (then (call $bass_set_error (i32.const 3)) (br $done)))))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+
+  (func $handle_BASS_ChannelPause (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $channel i32) (local $voice i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $channel (call $bass_channel_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $channel))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (if (i32.ne (i32.load offset=16 (local.get $channel)) (i32.const 2))
+        (then (call $bass_set_error (i32.const 24)) (br $done)))
+      (local.set $voice (i32.load offset=8 (local.get $channel)))
+      (if (local.get $voice)
+        (then
+          (i32.store offset=12 (local.get $channel) (call $host_voice_get_pos (local.get $voice)))
+          (drop (call $host_voice_stop (local.get $voice)))))
+      (i32.store offset=16 (local.get $channel) (i32.const 3))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_BASS_ChannelStop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $channel i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $channel (call $bass_channel_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $channel))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (call $bass_close_channel_record (local.get $channel) (i32.const 0))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_BASS_ChannelSetPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $channel i32) (local $sample i32) (local $was_playing i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $channel (call $bass_channel_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $channel))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (local.set $sample (call $bass_sample_from_handle (i32.load offset=4 (local.get $channel))))
+      (if (i32.or (i32.or (local.get $arg2) (local.get $arg3))
+                  (i32.gt_u (local.get $arg1) (i32.load offset=12 (local.get $sample))))
+        (then (call $bass_set_error (i32.const 7)) (br $done)))
+      (local.set $was_playing
+        (i32.eq (i32.load offset=16 (local.get $channel)) (i32.const 2)))
+      (if (i32.load offset=8 (local.get $channel))
+        (then (drop (call $host_voice_stop (i32.load offset=8 (local.get $channel))))))
+      (i32.store offset=12 (local.get $channel) (local.get $arg1))
+      (if (i32.and (local.get $was_playing)
+                   (i32.ne (i32.load offset=4 (global.get $BASS_STATE)) (i32.const 0)))
+        (then (drop (call $bass_start_channel (local.get $channel)))))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+
+  (func $handle_BASS_ChannelSetAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $channel i32) (local $value f32) (local $volume i32)
+    (global.set $eax (i32.const 0))
+    (block $done
+      (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+        (then (call $bass_set_error (i32.const 8)) (br $done)))
+      (local.set $channel (call $bass_channel_from_handle (local.get $arg0)))
+      (if (i32.eqz (local.get $channel))
+        (then (call $bass_set_error (i32.const 5)) (br $done)))
+      (local.set $value (f32.reinterpret_i32 (local.get $arg2)))
+      (if (i32.or (i32.ne (local.get $arg1) (i32.const 2))
+                  (i32.eqz (i32.and (f32.ge (local.get $value) (f32.const 0))
+                                    (f32.le (local.get $value) (f32.const 1)))))
+        (then (call $bass_set_error (i32.const 20)) (br $done)))
+      (local.set $volume
+        (i32.trunc_sat_f32_u (f32.mul (local.get $value) (f32.const 65535))))
+      (i32.store offset=24 (local.get $channel) (local.get $volume))
+      (if (i32.load offset=8 (local.get $channel))
+        (then (call $host_voice_set_volume_linear
+          (i32.load offset=8 (local.get $channel))
+          (call $bass_effective_volume (local.get $channel)))))
+      (call $bass_set_error (i32.const 0))
+      (global.set $eax (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  ;; Compressed streams and tracker modules are deliberately unavailable: a
+  ;; nonzero token would promise audio that this build cannot decode.
   (func $handle_BASS_StreamCreateFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $BASS_DUMMY_HANDLE))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
-  )
+    (call $bass_set_error (select (i32.const 41) (i32.const 8)
+      (i32.ne (i32.load (global.get $BASS_STATE)) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
-  ;; BASS_MusicLoad(filetype, file, offset:QWORD, length, flags, freq) -> HMUSIC
   (func $handle_BASS_MusicLoad (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (global.get $BASS_DUMMY_HANDLE))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
-  )
+    (call $bass_set_error (select (i32.const 41) (i32.const 8)
+      (i32.ne (i32.load (global.get $BASS_STATE)) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+
+  (func $handle_BASS_StreamFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $bass_set_error (select (i32.const 5) (i32.const 8)
+      (i32.ne (i32.load (global.get $BASS_STATE)) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $handle_BASS_MusicFree (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $bass_set_error (select (i32.const 5) (i32.const 8)
+      (i32.ne (i32.load (global.get $BASS_STATE)) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
+  (func $bass_pause_all
+    (local $i i32) (local $channel i32) (local $voice i32)
+    (loop $pause
+      (local.set $channel (call $bass_channel_addr (local.get $i)))
+      (if (i32.eq (i32.load offset=16 (local.get $channel)) (i32.const 2))
+        (then
+          (local.set $voice (i32.load offset=8 (local.get $channel)))
+          (if (local.get $voice)
+            (then
+              (i32.store offset=12 (local.get $channel)
+                (call $host_voice_get_pos (local.get $voice)))
+              (drop (call $host_voice_stop (local.get $voice)))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $pause (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX)))))
+
+  (func $handle_BASS_Pause (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+      (then (global.set $eax (i32.const 0)) (call $bass_set_error (i32.const 8)))
+      (else
+        (call $bass_pause_all)
+        (i32.store offset=4 (global.get $BASS_STATE) (i32.const 0))
+        (call $bass_set_error (i32.const 0))
+        (global.set $eax (i32.const 1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  (func $handle_BASS_Stop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32) (local $channel i32)
+    (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+      (then (global.set $eax (i32.const 0)) (call $bass_set_error (i32.const 8)))
+      (else
+        (loop $stop
+          (local.set $channel (call $bass_channel_addr (local.get $i)))
+          (if (i32.load (local.get $channel))
+            (then (call $bass_close_channel_record (local.get $channel) (i32.const 0))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $stop (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX))))
+        (i32.store offset=4 (global.get $BASS_STATE) (i32.const 0))
+        (call $bass_set_error (i32.const 0))
+        (global.set $eax (i32.const 1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  (func $handle_BASS_ErrorGetCode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.load (call $bass_error_addr)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+
+  (func $handle_BASS_Free (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32) (local $record i32)
+    (if (i32.eqz (i32.load (global.get $BASS_STATE)))
+      (then (global.set $eax (i32.const 0)) (call $bass_set_error (i32.const 8)))
+      (else
+        (loop $channels
+          (local.set $record (call $bass_channel_addr (local.get $i)))
+          (if (i32.load (local.get $record))
+            (then (call $bass_close_channel_record (local.get $record) (i32.const 1))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $channels (i32.lt_u (local.get $i) (global.get $BASS_CHANNEL_MAX))))
+        (local.set $i (i32.const 0))
+        (loop $samples
+          (local.set $record (call $bass_sample_addr (local.get $i)))
+          (if (i32.load (local.get $record))
+            (then (call $heap_free (i32.load offset=4 (local.get $record)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br_if $samples (i32.lt_u (local.get $i) (global.get $BASS_SAMPLE_MAX))))
+        (call $zero_memory (global.get $BASS_STATE) (global.get $BASS_STATE_SIZE))
+        (call $bass_set_error (i32.const 0))
+        (global.set $eax (i32.const 1))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))

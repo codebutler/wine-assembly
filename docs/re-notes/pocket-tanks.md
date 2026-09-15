@@ -67,6 +67,13 @@ the shot. They are written to
 `build/pocket-tanks-candidate/gameplay-a.png` and `gameplay-b.png`; the original
 installer completion frame is retained beside them.
 
-Pocket Tanks uses the legacy BASS API. Wine-Assembly's compatibility handlers
-let this shareware build reach visual gameplay when that historical audio DLL is
-not available, but this gate does not claim working game music or sound effects.
+Pocket Tanks uses the legacy BASS API. Wine-Assembly now loads the installed
+PCM WAVE effects through the VFS into typed BASS sample/channel handles and
+plays them through the shared host voice mixer; pause, stop, channel limits and
+freeing reach the same real voice lifecycle used by DirectSound and waveOut.
+`test/test-bass-pcm.js` pins that path independently of the candidate package.
+
+The two installed `.it` tracker songs and compressed stream formats remain an
+explicit boundary: `BASS_MusicLoad` and `BASS_StreamCreateFile` return a real
+BASS format error and no handle because the emulator has no tracker/stream
+decoder. The gameplay gate therefore claims working sound effects, not music.

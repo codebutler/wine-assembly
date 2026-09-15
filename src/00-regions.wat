@@ -151,6 +151,12 @@
   ;; not an address (docs/watx-region-safety-design.md 5.1).
   (region.declare $WAVE_OUT_SHARED (size 0x00000010) (align 0x00000010)
     (owner "01-header.wat:$WAVE_OUT_SHARED"))
+  ;; Process-wide BASS 2.x compatibility state. The first 0x80 bytes hold the
+  ;; device/configuration words and sixteen per-guest-thread error slots,
+  ;; followed by 64 Sample records and 128 Channel records. Sample PCM itself
+  ;; remains heap-owned so BASS_SampleFree can release the copied VFS image.
+  (region.declare $BASS_STATE (size 0x00001900) (align 0x00000100)
+    (owner "09a3-handlers-audio.wat:$bass_sample_addr"))
   (region.declare $SCROLL_TABLE (size 0x00001800) (align 0x00000010)
     (owner "09c0-window-table.wat:$scroll_record_addr"))
   (region.declare $FLASH_TABLE (size 0x00000100) (align 0x00000010)

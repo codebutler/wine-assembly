@@ -93,14 +93,14 @@ function assertCall(exports, name, eax, espDelta) {
 
   assertCall(exports, 'call_bass_init', 1, 24);
   assertCall(exports, 'call_bass_plugin_load', 0, 12);
-  assertCall(exports, 'call_bass_sample_load', 0x0BA55001, 32);
-  assertCall(exports, 'call_bass_channel_play', 1, 12);
-  assertCall(exports, 'call_bass_channel_set_position', 1, 20);
-  assertCall(exports, 'call_bass_channel_pause', 1, 8);
-  assertCall(exports, 'call_bass_error_get_code', 0, 4);
+  assertCall(exports, 'call_bass_sample_load', 0, 32);
+  assertCall(exports, 'call_bass_channel_play', 0, 12);
+  assertCall(exports, 'call_bass_channel_set_position', 0, 20);
+  assertCall(exports, 'call_bass_channel_pause', 0, 8);
+  assertCall(exports, 'call_bass_error_get_code', 5, 4);
   assertCall(exports, 'call_bass_free', 1, 4);
 
-  console.log('PASS  BASS compatibility handlers preserve stdcall cleanup');
+  console.log('PASS  BASS handlers preserve stdcall cleanup and reject fake handles');
 })().catch(error => {
   console.error(error && error.stack || error);
   process.exit(1);
