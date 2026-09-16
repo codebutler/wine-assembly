@@ -205,6 +205,97 @@ function alignPageEnd(p, room) {
   assert.strictEqual(e.get_loop_lut_runs(), jazzRuns + 1,
     'Jazz absolute-table loop uses one H418 run');
 
+  // StarCraft shareware's hot GRP blit at 0x4b48aa is the general form: the
+  // zeroing xor is hoisted OUT of the loop, the source and destination stream
+  // off two different cursors (ebp/edi) with a third register counting, and the
+  // table byte lands in a result register (bl) distinct from the index
+  // accumulator (al). Its high bits are loop-invariant, so they fold into the
+  // table base once; ebx's high bits belong to the caller and must survive.
+  const scCode = tableGa => Uint8Array.from([
+    0x8a, 0x45, 0x00,                   // mov al,[ebp+0]      <- loop head
+    0x45,                               // inc ebp
+    0x8a, 0x98, ...le32(tableGa),       // mov bl,[eax+table]
+    0x47,                               // inc edi
+    0x4a,                               // dec edx
+    0x88, 0x5f, 0xff,                   // mov [edi-1],bl
+    0x75, 0xef,                         // jnz head
+    0xc3,
+  ]);
+  const scSrc = (rowArena + 0x800) >>> 0;
+  // Its own table arena: the shared `table` above is still read by later cases.
+  const scTableBase = (rowArena + 0x8000) >>> 0;
+  const scInput = Array.from({ length: 137 }, (_, i) => (i * 23 + 9) & 0xff);
+  put(scSrc, scInput);
+  // Two accumulator high-bit settings: zero, and a nonzero window the guest's
+  // own `[eax+disp]` would reach. Both must agree with ordinary decoding.
+  for (const accHigh of [0x00000000, 0x00000500]) {
+    const scTable = (scTableBase + accHigh) >>> 0;
+    const scLut = Array.from({ length: 256 }, (_, i) => (i * 61 + 7) & 0xff);
+    put(scTable, scLut);
+    const scDst = (rowArena + 0xc00) >>> 0;
+    const scBaselineDst = (rowArena + 0xd00) >>> 0;
+    const ebxEntry = 0xfeed7700 >>> 0;
+    const scSetup = dest => () => {
+      e.set_eax(accHigh); e.set_ebx(ebxEntry); e.set_edx(scInput.length);
+      e.set_ebp(scSrc); e.set_edi(dest);
+    };
+    // edi is reported relative to that arm's own destination: the two arms
+    // write to different buffers on purpose, so only the advance is comparable.
+    const scState = dest => ({
+      eax: e.get_eax() >>> 0, ebx: e.get_ebx() >>> 0, edx: e.get_edx() >>> 0,
+      ebp: e.get_ebp() >>> 0, edi: ((e.get_edi() >>> 0) - dest) | 0,
+      cf: e.test_lut_cf(), zf: e.test_lut_zf(), sf: e.test_lut_sf(),
+      of: e.test_lut_of(),
+    });
+
+    put(scBaselineDst, new Uint8Array(scInput.length).fill(0x5a));
+    e.set_loop_lut_emit(0);
+    const scOffRuns = e.get_loop_lut_runs();
+    runAt(scCode(scTableBase), scSetup(scBaselineDst));
+    const scBaselineState = scState(scBaselineDst);
+    const scBaselineBytes = get(scBaselineDst, scInput.length);
+    assert.strictEqual(e.get_loop_lut_runs(), scOffRuns, 'StarCraft gate suppresses H418');
+    assert.deepStrictEqual(scBaselineBytes, scInput.map(v => scLut[v]),
+      `StarCraft ordinary GRP remap output (accHigh=0x${accHigh.toString(16)})`);
+
+    put(scDst, new Uint8Array(scInput.length).fill(0x5a));
+    e.set_loop_lut_emit(1);
+    const scRuns = e.get_loop_lut_runs();
+    runAt(scCode(scTableBase), scSetup(scDst));
+    assert.deepStrictEqual(get(scDst, scInput.length), scBaselineBytes,
+      `StarCraft lowered GRP remap output (accHigh=0x${accHigh.toString(16)})`);
+    assert.deepStrictEqual(scState(scDst), scBaselineState,
+      `StarCraft lowered loop preserves every observable register and flag (accHigh=0x${accHigh.toString(16)})`);
+    assert.strictEqual(e.get_ebx() >>> 0, (ebxEntry & 0xffffff00 | scLut[scInput.at(-1)]) >>> 0,
+      'StarCraft result register keeps the caller high bits');
+    assert.strictEqual(e.get_eax() >>> 0, (accHigh | scInput.at(-1)) >>> 0,
+      'StarCraft accumulator keeps its invariant high bits');
+    assert.strictEqual(e.get_loop_lut_runs(), scRuns + 1,
+      'StarCraft two-cursor hoisted-zero loop uses one H418 run');
+  }
+
+  // Near miss: a third cursor with no role at all. The body increments esi,
+  // which is neither stream nor counter, so the fold would silently drop it.
+  const scStray = Uint8Array.from([
+    0x8a, 0x45, 0x00,                   // mov al,[ebp+0]
+    0x45,                               // inc ebp
+    0x8a, 0x98, ...le32(scTableBase),   // mov bl,[eax+table]
+    0x47,                               // inc edi
+    0x46,                               // inc esi
+    0x4a,                               // dec edx
+    0x88, 0x5f, 0xff,                   // mov [edi-1],bl
+    0x75, 0xee,                         // jnz head
+    0xc3,
+  ]);
+  const strayRuns = e.get_loop_lut_runs();
+  runAt(scStray, () => {
+    e.set_eax(0); e.set_ebx(0); e.set_edx(4); e.set_esi(0x1000);
+    e.set_ebp(scSrc); e.set_edi((rowArena + 0xe00) >>> 0);
+  });
+  assert.strictEqual(e.get_esi() >>> 0, 0x1004, 'stray cursor still advances');
+  assert.strictEqual(e.get_loop_lut_runs(), strayRuns,
+    'a fourth inc/dec with no role is declined, not folded');
+
   // Jazz's dominant lighting kernel at 0x474e04 is a straight-line span that
   // its compiler already unrolled eight pixels wide. H431 mode 2 recognizes
   // the whole semantic unit: two selected rows of a 64K table, eight in-place
