@@ -17,15 +17,24 @@ canvas are all 640×480; both surfaces are 8 bpp with pitch 640. Sampled primary
 indices through the active palette exactly match the displayed RGB bytes.
 The primary itself contains the map-only frame. Offscreen slot 2 retains the
 map and right sidebar, but lacks the outer border (`/private/tmp/heroes-surface-2.png`).
-The game eventually composes the complete HUD into the primary. During the
-map-only and restoration interval, the DX trace contains no Lock, Unlock,
-Blt, Flip or Present: the game writes through a retained surface pointer, and
-the host's canonical-surface `Flush id=0x200001` and fallback `Upload slot=1`
-publish whatever bytes are present at that moment. Therefore a generic
-"wait for Unlock/Flip" fix would freeze the game, since neither marks this
-frame boundary. A presentation fix needs a verified Heroes-specific completion
-signal or a narrowly scoped HUD-frame policy that preserves scene transitions;
-neither has been established here.
+The game eventually composes the complete HUD into the primary. A filtered
+Win32 API trace over the same frozen route corrected an initial misleading
+host-import trace: the bad image **does** follow a DirectDraw
+Unlock→Blt→Lock cycle at batch 2116. The ordinary edge pan uses that same
+cycle with the same callsites and arguments. Both also call `InvalidateRect`
+on the map viewport `(16,16)-(463,463)`; the movement path does not have a
+special Win32 call that declares its HUD complete. In a 21-batch window around
+the bad frame there are four Unlock/Blt/Lock cycles, four invalidations, 30
+PeekMessageA calls and four GetMessageA calls. An 80-batch edge-pan window
+has 14 cycles, 14 invalidations, 92 PeekMessageA calls and 13 GetMessageA
+calls. Sleep, WaitMessage, Flip and timeGetTime occur in neither window.
+The trace is `/private/tmp/heroes-differential.log`; reproduced images are
+`/private/tmp/heroes-diff-bad.png` and `/private/tmp/heroes-diff-edge.png`.
+The host's canonical-surface `Flush id=0x200001` and fallback `Upload slot=1`
+can therefore publish the map-only primary after a normal DirectDraw cycle.
+A fix needs a verified game-specific completed-frame signal or a narrowly
+scoped HUD-frame policy that preserves scene transitions; neither has been
+established here.
 
 `test/binaries/candidates/heroes-2-demo/files/H2DEMOW.EXE`, registry id
 `heroes2_demo` (`lib/apps.js`). Reaches the adventure map headlessly — see
