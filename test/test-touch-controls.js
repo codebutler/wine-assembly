@@ -224,10 +224,18 @@ assert.strictEqual(TouchControls.el.style.display, 'block', 'a layout shows the 
 TouchControls.sync([{ name: 'notepad' }], renderer);
 assert.notStrictEqual(TouchControls.layout, LAYOUT, 'sync drops the layout when the app closes');
 assert.strictEqual(TouchControls.layout.chrome, true, 'and falls back to the bare chrome');
+assert(TouchControls.el.classList.contains('tc-chrome'),
+  'bare keyboard chrome gets its edge-placement scope');
+const touchStyle = head.children.find(el => el.id === 'touch-controls-style');
+assert(touchStyle.textContent.includes(
+  'padding-right: calc(4px + env(safe-area-inset-right, 0px))'),
+  'landscape bare chrome hugs the right safe-area edge');
 assert.strictEqual(TouchControls.isVisible(), false, 'which is not "game controls up"');
 // And with nothing running at all, the overlay goes away entirely.
 TouchControls.sync([], renderer);
 assert.strictEqual(TouchControls.layout, null, 'no app, no layout');
+assert(!TouchControls.el.classList.contains('tc-chrome'),
+  'chrome edge-placement scope clears with the app');
 assert.strictEqual(TouchControls.el.style.display, 'none', 'no layout hides the overlay');
 assert.strictEqual(TouchControls.isVisible(), false, 'a hidden overlay is not visible');
 TouchControls.destroy();
