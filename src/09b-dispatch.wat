@@ -861,7 +861,7 @@
             (drop (call $post_queue_remove_at (i32.const 0)))
             (local.set $queued (i32.const 1)))
           (else
-            (local.set $queue_msg_ptr (call $w2g (call $paint_scratch_take)))
+            (local.set $queue_msg_ptr (call $w2g (global.get $USER_QUEUE_MSG_SCRATCH)))
             (if (call $shared_post_queue_read (local.get $queue_msg_ptr) (i32.const 1))
               (then
                 (local.set $arg0 (call $gl32 (local.get $queue_msg_ptr)))

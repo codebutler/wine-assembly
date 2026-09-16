@@ -2302,7 +2302,7 @@
     (if (global.get $pending_input_packed) (then (return (i32.const 1))))
     (if (call $post_queue_total_count) (then (return (i32.const 1))))
     (if (call $shared_post_queue_read
-          (call $w2g (call $paint_scratch_take)) (i32.const 0))
+          (call $w2g (global.get $USER_QUEUE_MSG_SCRATCH)) (i32.const 0))
       (then (return (i32.const 1))))
     (if (global.get $pending_wm_size) (then (return (i32.const 1))))
     ;; Bit 3 is persistent state: it records that DefWindowProc owns the

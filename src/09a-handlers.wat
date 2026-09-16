@@ -734,7 +734,7 @@
   (func $shared_post_queue_purge_hwnd (param $hwnd i32)
     (local $tid i32) (local $msg_ptr i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
-    (local.set $msg_ptr (call $w2g (call $paint_scratch_take)))
+    (local.set $msg_ptr (call $w2g (global.get $USER_QUEUE_MSG_SCRATCH)))
     (local.set $tid (i32.const 1))
     (block $done (loop $queues
       (br_if $done (i32.gt_u (local.get $tid) (i32.const 16)))

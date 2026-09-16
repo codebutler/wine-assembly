@@ -11,6 +11,25 @@ the original remains the desktop edition and the remake is separately
 selectable as `rodent2000`. See [rodent2000.md](rodent2000.md) for the remake's
 OLE picture startup fix and gameplay command.
 
+## Shared USER queue scratch overrun (2026-09-16)
+
+The 2026-09-15 queue-unification commit `7d4342eb` made ordinary same-thread
+posts use the shared USER queue. Its internal reads passed a 16-byte
+`PAINT_SCRATCH` rectangle slot as the output buffer for a 28-byte Win32 `MSG`.
+At the final slot of the paint ring, the twelve overflow bytes landed in the
+adjacent `WND_CLASS_SLOT_TABLE`. Rodent's board (`hwnd=0x10005`) changed from
+class slot 22 (`cbWndExtra=6`) to slot 0 (`cbWndExtra=0`); the VB runtime then
+followed an invalid far callback and trapped at `0x00650151`. This explains
+why the failure moved with paint scheduling and phone orientation.
+
+Internal queue reads now use a dedicated 32-byte MSG scratch region. The
+non-removing pending-message probe, modal pump, and window-destruction purge
+all use it; guest-supplied MSG buffers continue to be written directly.
+`test-user-queue-msg-scratch.js` holds a post through sixteen pending probes
+and checks the adjacent class-slot canary. The full Rodent/Rattler gameplay
+test, Win16 WaitMessage, Win32 queue/filter tests, and a 375×667 Chrome
+portrait launch pass on the repaired build.
+
 ## High Scores close corruption and invisible saved names (2026-09-10)
 
 Two independent bugs reproduced in non-isolated Chrome with the compatibility

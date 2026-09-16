@@ -1983,6 +1983,8 @@
   (global $THREAD_MSG_QUEUES_SIZE i32 (region.size $THREAD_MSG_QUEUES))
   (global $THREAD_MSG_QUEUES_HIGH i32 (region.addr $THREAD_MSG_QUEUES_HIGH 0))
   (global $THREAD_MSG_QUEUES_HIGH_SIZE i32 (region.size $THREAD_MSG_QUEUES_HIGH))
+  (global $USER_QUEUE_MSG_SCRATCH i32 (region.addr $USER_QUEUE_MSG_SCRATCH 0))
+  (global $USER_QUEUE_MSG_SCRATCH_SIZE i32 (region.size $USER_QUEUE_MSG_SCRATCH))
   (global $THREAD_MSG_QUEUE_STRIDE i32 (i32.const 0x00000410))
   (global $THREAD_MSG_QUEUE_MAX i32 (i32.const 64))
   ;; Timer metadata that must be process-wide rather than per-instance.

@@ -25,9 +25,10 @@
   ;; "a ring of 16 RECTs" for the same reason.
   ;;
   ;; Emulator-private, NOT a guest ABI: the address handed out is a WASM linear
-  ;; address. Call sites using one as a guest MSG out-buffer convert it through
-  ;; $w2g first; timer helpers consume the WASM address directly. Neither names
-  ;; a PaintRect field, so they are not sites of this layout.
+  ;; address. Never pass a slot to a full MSG writer: MSG is 28 bytes, and an
+  ;; overrun of the final 16-byte slot reaches WND_CLASS_SLOT_TABLE. Internal
+  ;; queue reads use USER_QUEUE_MSG_SCRATCH; timer helpers only write the first
+  ;; four words of a slot.
   (layout PaintRect
     (field left   i32)   ;; +0
     (field top    i32)   ;; +4
