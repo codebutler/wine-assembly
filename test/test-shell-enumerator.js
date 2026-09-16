@@ -132,7 +132,9 @@ const extraWat = String.raw`
   const E_INVALIDARG = 0x80070057;
   const SHCONTF_FOLDERS = 0x20;
   const SHCONTF_NONFOLDERS = 0x40;
-  const SFGAO_FOLDER = 0x20000000;
+  // Spell the flag as its documented bit so the region-address census does
+  // not mistake its value for today's coincident THREAD_RPC exclusive end.
+  const SFGAO_FOLDER = 1 << 29;
   const SFGAO_FILESYSANCESTOR = 0x10000000;
   const stack = e.test_shell_stack_base() >>> 0;
   const out = alloc(4);
