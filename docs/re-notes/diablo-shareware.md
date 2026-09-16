@@ -2837,3 +2837,42 @@ the async tick-before-resume ordering. A fresh cross-origin-isolated Chrome
 launch reached 940 guest-main Worker slices over an 8-second sample after
 creating `"DIABLO"`, with a changing 640x480 screen and no unsupported-yield
 stop.
+
+## The dominant gameplay loop is a full-screen XLAT palette pass (2026-09-15)
+
+A Worker-backend profile taken only after loading `spawn_0.sv` corrected the
+earlier coarse-clock CLI result that made empty Storm polling look dominant.
+During a post-movement dungeon window, block `0x00441ab9` retired
+110,334,612 iterations in ten seconds:
+
+```
+mov al,[edi]
+xlat
+stosb
+loop 0x00441ab9
+```
+
+The enclosing loops set 640 columns and 352 rows, so this is a complete
+225,280-byte palette translation repeated at roughly 49 Hz. Its four handlers
+were about 46% of all decoded guest instructions in that window. Existing
+H418 LUT_RUN did not recognize implicit XLAT/STOSB registers or LOOP, and the
+existing RLE fold did not participate.
+
+H418 now has an implicit-register mode for this exact six-byte x86 spelling.
+The LOOP decoder can replace the three body operations already emitted even
+when the backward target is an interior entry of a larger cached block—the
+shape Diablo actually creates—while the ordinary post-block matcher remains a
+fallback for a standalone self-loop. The executor preserves ECX's do-while
+wrap behavior, EAX's upper 24 bits, DF-directed EDI, lazy flags, guest address
+translation, self-modifying-code invalidation, and slice/block accounting.
+The existing LUT gate remains the rollback switch; dedicated candidate,
+match, run, and byte counters distinguish recognition from execution.
+
+`test/test-xlat-stosb-lut-run.js` compares ordinary and lowered execution for
+forward and backward traversal, a page crossing, preserved flags/registers,
+the `mov ecx,imm32` row-head form, step-quantum continuation, gate-off behavior,
+and a LOOPE near miss. The focused test, adjacent LUT/TREE_FOLD suites, direct
+canonical/compat compilation, and the complete repository build pass. The
+legacy 4,100-batch CLI gameplay acceptance did not finish under its five-minute
+guard on the loaded shared machine (batch 2,715), so that timeout is not being
+reported as gameplay acceptance or as a regression.

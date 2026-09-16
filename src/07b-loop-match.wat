@@ -39,6 +39,14 @@
   (global $loop_lut_bounded_matches (mut i32) (i32.const 0))
   (global $loop_lut_runs (mut i32) (i32.const 0))
   (global $loop_lut_bytes (mut i64) (i64.const 0))
+  ;; Diablo's full-screen in-place palette pass uses the compact string-op
+  ;; spelling `mov al,[edi] / xlat / stosb / loop`. It is the same semantic
+  ;; LUT family as H418, but none of those three implicit-register operations
+  ;; has a role in the generic register-dataflow matcher.
+  (global $loop_xlat_stosb_matches (mut i32) (i32.const 0))
+  (global $loop_xlat_stosb_candidates (mut i32) (i32.const 0))
+  (global $loop_xlat_stosb_runs (mut i32) (i32.const 0))
+  (global $loop_xlat_stosb_bytes (mut i64) (i64.const 0))
   (global $loop_lut16_matches (mut i32) (i32.const 0))
   (global $loop_lut16_runs (mut i32) (i32.const 0))
   (global $loop_lut16_bytes (mut i64) (i64.const 0))
@@ -1505,11 +1513,19 @@
     ;; widening lives here, where the word layout (+8 fall, +12 target) is the
     ;; one thing being relied on, and H404 has exactly that.
     (if (i32.eqz (i32.or
-                   (call $loop_is_jcc (load.field LoopOp handler (local.get $p)))
+                   (i32.or
+                     (call $loop_is_jcc (load.field LoopOp handler (local.get $p)))
+                     (i32.eq (load.field LoopOp handler (local.get $p)) (i32.const 46)))
                    (i32.eq (load.field LoopOp handler (local.get $p)) (i32.const 404))))
       (then (return (i32.const 0))))
-    ;; words after the header: +8 fall-through, +12 target
-    (i32.eq (i32.load offset=12 (local.get $p)) (local.get $start_eip)))
+    ;; Jcc/H404 store fall-through then target. LOOP is the lone conditional
+    ;; branch with the reverse descriptor order: target then fall-through.
+    (i32.eq
+      (i32.load offset=8
+        (i32.add (local.get $p)
+          (select (i32.const 0) (i32.const 4)
+            (i32.eq (load.field LoopOp handler (local.get $p)) (i32.const 46)))))
+      (local.get $start_eip)))
 
   ;; Flag-gated decode-time dump: marker, entry EIP, op count, then
   ;; (handler index, operand) per op. Decoded by tools/loopmatch-decode.js.
@@ -2107,6 +2123,121 @@
     (call $te_raw (local.get $fall))
     (call $te_raw (local.get $start_eip))
     (call $te_raw (local.get $n))
+    (i32.const 1))
+
+  ;; Exact implicit-register LUT spelling used by Diablo at 0x00441ab9:
+  ;;
+  ;;   mov al,[edi] / xlat / stosb / loop ^
+  ;;
+  ;; Prove the complete six-byte x86 spelling rather than its internal op
+  ;; packaging. That packaging can include a fall-through predecessor when a
+  ;; page run first discovers the target; the guest bytes are the stronger and
+  ;; stable boundary. E2 FA proves plain 32-bit LOOP back by six bytes rather
+  ;; than LOOPE/LOOPNE or an address-size-overridden CX form.
+  (func $loop_try_emit_xlat_stosb_tail
+    (param $target i32) (param $fall i32) (result i32)
+    (local $n i32) (local $p i32)
+    (if (global.get $code16) (then (return (i32.const 0))))
+    ;; E2 FA encodes this target by definition. Derive it from the consumed
+    ;; bytes instead of depending on the decoder's temporary branch-target
+    ;; local, which can name the enclosing page-run entry for an interior edge.
+    (local.set $target (i32.sub (local.get $fall) (i32.const 6)))
+    (if (i32.or
+          (i32.ne (call $gl32 (local.get $target)) (i32.const 0xAAD7078A))
+          (i32.ne (call $gl16 (i32.add (local.get $target) (i32.const 4)))
+            (i32.const 0xFAE2)))
+      (then (return (i32.const 0))))
+    (global.set $loop_xlat_stosb_candidates
+      (i32.add (global.get $loop_xlat_stosb_candidates) (i32.const 1)))
+    (if (i32.lt_u (global.get $op_index_n) (i32.const 3))
+      (then (return (i32.const 0))))
+    (local.set $n (global.get $op_index_n))
+    (local.set $p (call $loop_op_at (i32.sub (local.get $n) (i32.const 3))))
+    (if (i32.or
+          (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 28))
+          (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (i32.const 7)))
+      (then (return (i32.const 0))))
+    (if (i32.ne (i32.load offset=8 (local.get $p)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $p (call $loop_op_at (i32.sub (local.get $n) (i32.const 2))))
+    (if (i32.or
+          (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 280))
+          (load.field.memarg LoopOp operand (local.get $p)))
+      (then (return (i32.const 0))))
+    (local.set $p (call $loop_op_at (i32.sub (local.get $n) (i32.const 1))))
+    (if (i32.or
+          (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 88))
+          (load.field.memarg LoopOp operand (local.get $p)))
+      (then (return (i32.const 0))))
+
+    (global.set $loop_xlat_stosb_matches
+      (i32.add (global.get $loop_xlat_stosb_matches) (i32.const 1)))
+    (global.set $loop_matched_blocks
+      (i32.add (global.get $loop_matched_blocks) (i32.const 1)))
+    (if (i32.eqz (global.get $loop_lut_emit_enabled))
+      (then (return (i32.const 0))))
+
+    ;; Keep any prefix ops in this block and replace only the three already
+    ;; emitted body ops plus the LOOP currently being decoded.
+    (local.set $p (call $loop_op_at (i32.sub (local.get $n) (i32.const 3))))
+    (global.set $thread_alloc (local.get $p))
+    (global.set $op_index_n (i32.sub (local.get $n) (i32.const 3)))
+    (call $te (global.get $LOOP_SUPEROP_LUT) (i32.const 0x10))
+    (call $te_raw (local.get $fall))
+    (call $te_raw (local.get $target))
+    (call $te_raw (i32.const 4))
+    (i32.const 1))
+
+  (func $loop_try_xlat_stosb
+    (param $start_eip i32) (param $tstart i32) (result i32)
+    (local $fall i32) (local $back i32) (local $preset i32) (local $prefixed i32)
+    (if (global.get $code16) (then (return (i32.const 0))))
+    (if (i32.and
+          (i32.eq (call $gl32 (local.get $start_eip)) (i32.const 0xAAD7078A))
+          (i32.eq (call $gl16 (i32.add (local.get $start_eip) (i32.const 4)))
+            (i32.const 0xFAE2)))
+      (then
+        (local.set $back (local.get $start_eip))
+        (local.set $fall (i32.add (local.get $start_eip) (i32.const 6))))
+      (else
+        ;; Diablo's cache first discovers the inner loop through the row head,
+        ;; so the compiled block is `mov ecx,640` plus the six-byte loop and
+        ;; later branches directly to its interior. Accept the address-neutral
+        ;; MOV-ECX-immediate spelling as one semantic block too.
+        (if (i32.or
+              (i32.ne (call $gl8 (local.get $start_eip)) (i32.const 0xB9))
+              (i32.or
+                (i32.ne (call $gl32 (i32.add (local.get $start_eip) (i32.const 5)))
+                  (i32.const 0xAAD7078A))
+                (i32.ne (call $gl16 (i32.add (local.get $start_eip) (i32.const 9)))
+                  (i32.const 0xFAE2))))
+          (then (return (i32.const 0))))
+        (local.set $preset (call $gl32 (i32.add (local.get $start_eip) (i32.const 1))))
+        (local.set $prefixed (i32.const 1))
+        (local.set $back (i32.add (local.get $start_eip) (i32.const 5)))
+        (local.set $fall (i32.add (local.get $start_eip) (i32.const 11)))))
+
+    (global.set $loop_xlat_stosb_matches
+      (i32.add (global.get $loop_xlat_stosb_matches) (i32.const 1)))
+    (global.set $loop_matched_blocks
+      (i32.add (global.get $loop_matched_blocks) (i32.const 1)))
+    (if (global.get $loop_trace)
+      (then
+        (call $host_log_i32 (i32.const 0x100B0010))
+        (call $host_log_i32 (local.get $start_eip))))
+    (if (i32.eqz (global.get $loop_lut_emit_enabled))
+      (then (return (i32.const 0))))
+
+    (global.set $thread_alloc (local.get $tstart))
+    (global.set $op_index_n (i32.const 0))
+    ;; H418 bit 4 selects the implicit-register descriptor; bit 5 includes the
+    ;; leading MOV ECX,imm32 value as a fourth word.
+    (call $te (global.get $LOOP_SUPEROP_LUT)
+      (select (i32.const 0x30) (i32.const 0x10) (local.get $prefixed)))
+    (call $te_raw (local.get $fall))
+    (call $te_raw (local.get $back))
+    (call $te_raw (i32.const 4))
+    (if (local.get $prefixed) (then (call $te_raw (local.get $preset))))
     (i32.const 1))
 
   ;; ------------------------------------------------------------------
@@ -4925,6 +5056,11 @@
     (if (global.get $op_index_poison) (then (return)))
     (if (call $region_try_install (local.get $start_eip) (local.get $tstart))
       (then (return)))
+    ;; The Diablo row head includes MOV ECX,imm before a branch-to-interior
+    ;; LOOP. It is not a block-entry self-loop, so its exact-byte proof must run
+    ;; before the generic self-loop gate.
+    (if (call $loop_try_xlat_stosb (local.get $start_eip) (local.get $tstart))
+      (then (return)))
     (if (i32.eqz (call $loop_is_selfloop (local.get $start_eip))) (then (return)))
     (global.set $loop_selfloop_blocks
       (i32.add (global.get $loop_selfloop_blocks) (i32.const 1)))
@@ -5384,6 +5520,85 @@
   ;; ------------------------------------------------------------------
   ;; 418: the universal LUT_RUN super-op.
   ;; ------------------------------------------------------------------
+  ;; H418 op bit 4 carries the compact implicit-register descriptor emitted by
+  ;; $loop_try_xlat_stosb: fall, back and original per-iteration cost.
+  (func $th_xlat_stosb_lut_run (param $op i32)
+    (local $fall i32) (local $back i32) (local $cost i32)
+    (local $count i32) (local $trips i32) (local $allowed i32)
+    (local $iters i32) (local $byte i32) (local $step i32) (local $prefixed i32)
+    (local.set $fall (call $read_thread_word))
+    (local.set $back (call $read_thread_word))
+    (local.set $cost (call $read_thread_word))
+    (local.set $prefixed (i32.and (local.get $op) (i32.const 0x20)))
+    (if (local.get $prefixed)
+      (then (global.set $ecx (call $read_thread_word))))
+    (local.set $count (global.get $ecx))
+    ;; LOOP is a do-while. ECX=0 therefore means 2^32 iterations; represent
+    ;; that wrapped distance as UINT_MAX and let the normal step quantum split
+    ;; it rather than hanging inside one handler invocation.
+    (local.set $trips
+      (select (local.get $count) (i32.const -1)
+        (i32.ne (local.get $count) (i32.const 0))))
+    (local.set $allowed
+      (i32.div_u
+        (i32.add
+          (select (global.get $steps) (i32.const 0)
+            (i32.gt_s (global.get $steps) (i32.const 0)))
+          (i32.sub (local.get $cost) (i32.const 1)))
+        (local.get $cost)))
+    (if (i32.eqz (local.get $allowed))
+      (then (local.set $allowed (i32.const 1))))
+    (local.set $iters
+      (select (local.get $trips) (local.get $allowed)
+        (i32.lt_u (local.get $trips) (local.get $allowed))))
+    (local.set $step
+      (select (i32.const -1) (i32.const 1) (global.get $df)))
+
+    (local.set $trips (local.get $iters))
+    (loop $pixels
+      ;; Preserve the original ordering and alias behavior: the source and
+      ;; destination are the same byte, and either may overlap the XLAT table.
+      (local.set $byte (call $gl8 (global.get $edi)))
+      (global.set $eax
+        (i32.or (i32.and (global.get $eax) (i32.const 0xFFFFFF00))
+          (local.get $byte)))
+      ;; Match H280's translation path exactly: XLAT uses DS:[EBX+AL].
+      (local.set $byte
+        (i32.load8_u (call $g2w
+          (i32.add (global.get $ebx) (local.get $byte)))))
+      (global.set $eax
+        (i32.or (i32.and (global.get $eax) (i32.const 0xFFFFFF00))
+          (local.get $byte)))
+      (call $gs8 (global.get $edi) (local.get $byte))
+      (global.set $edi (i32.add (global.get $edi) (local.get $step)))
+      (global.set $ecx (i32.sub (global.get $ecx) (i32.const 1)))
+      (local.set $trips (i32.sub (local.get $trips) (i32.const 1)))
+      (br_if $pixels (local.get $trips)))
+
+    ;; No instruction in this spelling writes arithmetic flags.
+    (global.set $steps
+      (i32.sub (global.get $steps)
+        (i32.add
+          (i32.sub (i32.mul (local.get $iters) (local.get $cost)) (i32.const 1))
+          (select (i32.const 1) (i32.const 0) (local.get $prefixed)))))
+    (global.set $block_budget
+      (i32.sub (global.get $block_budget)
+        (i32.sub (local.get $iters) (i32.const 1))))
+    (global.set $loop_lut_runs
+      (i32.add (global.get $loop_lut_runs) (i32.const 1)))
+    (global.set $loop_lut_bytes
+      (i64.add (global.get $loop_lut_bytes)
+        (i64.extend_i32_u (local.get $iters))))
+    (global.set $loop_xlat_stosb_runs
+      (i32.add (global.get $loop_xlat_stosb_runs) (i32.const 1)))
+    (global.set $loop_xlat_stosb_bytes
+      (i64.add (global.get $loop_xlat_stosb_bytes)
+        (i64.extend_i32_u (local.get $iters))))
+    (global.set $eip
+      (select (local.get $back) (local.get $fall)
+        (i32.ne (global.get $ecx) (i32.const 0))))
+    (return_call $branch_end))
+
   ;; Both recognizers emit the descriptor documented above. Cursors advance
   ;; after each access; match time folds any original pre-access increment into
   ;; the displacement. term_kind selects count-to-zero or unsigned source-bound
@@ -5416,6 +5631,9 @@
     (local $tbl_wa i32)
     (local $chunk i32) (local $trips i32) (local $allowed i32)
     (local $n i32) (local $index i32) (local $cont i32)
+
+    (if (i32.and (local.get $op) (i32.const 0x10))
+      (then (return_call $th_xlat_stosb_lut_run (local.get $op))))
 
     ;; Read the fixed descriptor off one base. These runs are often short, so
     ;; avoiding 22/28 helper calls matters to the cost this optimization is

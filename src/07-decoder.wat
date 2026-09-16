@@ -5531,8 +5531,16 @@
           (local.set $imm (i32.sub (i32.const 0xE2) (local.get $op))) ;; 0=LOOP, 1=LOOPE, 2=LOOPNE
           ;; bit 4 = addr16 (0x67 prefix): use CX instead of ECX as counter
           (if (local.get $prefix_67) (then (local.set $imm (i32.or (local.get $imm) (i32.const 0x10)))))
+          (local.set $a (call $branch_target (local.get $disp)))
+          ;; A backward LOOP target may be an interior entry of the block being
+          ;; emitted, so the post-block self-loop pass never sees it as a head.
+          ;; Give the exact XLAT/STOSB suffix a chance to replace itself here.
+          (if (i32.and
+                (i32.eqz (local.get $imm))
+                (call $loop_try_emit_xlat_stosb_tail (local.get $a) (global.get $d_pc)))
+            (then (local.set $done (i32.const 1)) (br $decode)))
           (call $te (i32.const 46) (local.get $imm))
-          (call $te_raw (call $branch_target (local.get $disp)))
+          (call $te_raw (local.get $a))
           (call $te_raw (global.get $d_pc))
           (local.set $done (i32.const 1)) (br $decode)))
 
