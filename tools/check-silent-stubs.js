@@ -284,8 +284,10 @@ const digest = crypto.createHash('sha256')
 // and stored by the renderer instead of promising every combination works.
 // 2026-09-15: 267 -> 266. GetOutlineTextMetricsA/W now return selected
 // TrueType outline metrics and bounded name data instead of always failing.
-const EXPECTED_COUNT = 266;
-const EXPECTED_SHA256 = '6dfdc46b22ff4c8bf94ef92f32c1806cc431f4a79e405aa93a3e8789cb13af55';
+// 2026-09-15: 266 -> 265. D3D8/9 ValidateDevice now validates the current
+// one-pass pipeline and writes pNumPasses instead of returning false success.
+const EXPECTED_COUNT = 265;
+const EXPECTED_SHA256 = '10379259436b1407ac866ac535602fe70f508a850a16e3b65720ed1ef4250dcf';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

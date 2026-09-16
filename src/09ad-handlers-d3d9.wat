@@ -1641,9 +1641,143 @@
     (call $d3d9_sampler_state (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
 
+  ;; Validate the fixed pixel pipeline against the same six-stage operation and
+  ;; argument subset lowered by $d3d_fixed_compile_cascade5.  A bound pixel
+  ;; shader ignores texture-stage blending state, so its already-validated IR
+  ;; is a one-pass configuration here.  The fixed compiler itself owns the
+  ;; D3DTA source/modifier gate; reuse it so ValidateDevice cannot drift from
+  ;; what DrawPrimitive will accept.
+  (func $d3d9_validate_fixed_state (param $state i32) (result i32)
+    (local $stage i32) (local $row i32) (local $texture i32) (local $bound i32)
+    (local $color i32) (local $alpha i32) (local $last i32) (local $arg i32)
+    (local $texture_wa i32)
+    (if (call $gl32 (i32.add (local.get $state) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $last (i32.const 1))
+    (block $six_done (loop $stages
+      (br_if $six_done (i32.ge_u (local.get $stage) (i32.const 6)))
+      (local.set $row (i32.add (local.get $state)
+        (i32.add (i32.const 20664) (i32.mul (local.get $stage) (i32.const 132)))))
+      (local.set $texture (call $gl32
+        (i32.add (local.get $state) (call $d3d9_texture_offset (local.get $stage)))))
+      (local.set $bound (i32.ne (local.get $texture) (i32.const 0)))
+      (local.set $color (call $gl32 (i32.add (local.get $row) (i32.const 4))))
+      ;; DISABLE, and the documented default SELECTARG1/TEXTURE with no bound
+      ;; texture, terminate the cascade exactly as the draw path does.
+      (if (i32.or (i32.eq (local.get $color) (i32.const 1))
+        (i32.and (i32.eq (call $gl32 (i32.add (local.get $row) (i32.const 8))) (i32.const 2))
+          (i32.eqz (local.get $bound)))) (then
+        (return (select (i32.const 0x88760821) (i32.const 0)
+          (i32.ne (local.get $last) (i32.const 1))))))
+      (if (i32.or (i32.lt_u (local.get $color) (i32.const 2))
+        (i32.gt_u (local.get $color) (i32.const 26))) (then
+        (return (i32.const 0x88760819)))) ;; D3DERR_UNSUPPORTEDCOLOROPERATION
+      (local.set $alpha (call $gl32 (i32.add (local.get $row) (i32.const 16))))
+      (if (i32.or (i32.lt_u (local.get $alpha) (i32.const 1))
+        (i32.and (i32.gt_u (local.get $alpha) (i32.const 17))
+          (i32.and (i32.ne (local.get $alpha) (i32.const 24))
+            (i32.and (i32.ne (local.get $alpha) (i32.const 25))
+              (i32.ne (local.get $alpha) (i32.const 26)))))) (then
+        (return (i32.const 0x8876081b)))) ;; D3DERR_UNSUPPORTEDALPHAOPERATION
+      ;; RESULTARG is writable only to CURRENT or TEMP.  The final active stage
+      ;; must publish CURRENT; the fixed compiler rejects a cascade ending in
+      ;; a private TEMP value for the same reason.
+      (local.set $last (call $gl32 (i32.add (local.get $row) (i32.const 112))))
+      (if (i32.eqz (local.get $last)) (then (local.set $last (i32.const 1))))
+      (if (i32.and (i32.ne (local.get $last) (i32.const 1))
+        (i32.ne (local.get $last) (i32.const 5))) (then
+        (return (i32.const 0x88760821)))) ;; D3DERR_CONFLICTINGRENDERSTATE
+
+      ;; Bump operations consume their signed V8U8 2D texture directly.  This
+      ;; is the format/kind gate used by the software renderer before lowering.
+      (if (i32.or (i32.eq (local.get $color) (i32.const 22))
+        (i32.eq (local.get $color) (i32.const 23))) (then
+        (if (i32.eqz (local.get $texture)) (then
+          (return (i32.const 0x88760818))))
+        (local.set $texture_wa (call $g2w (local.get $texture)))
+        (if (i32.or (i32.eq (i32.load offset=12 (local.get $texture_wa)) (i32.const 5))
+          (i32.ne (i32.load offset=36 (local.get $texture_wa)) (i32.const 62))) (then
+          (return (i32.const 0x88760818)))) ;; D3DERR_WRONGTEXTUREFORMAT
+        ;; The six bump matrix/scale words must all be finite.
+        (local.set $arg (i32.const 7))
+        (block $bump_done (loop $bump
+          (if (i32.eq (local.get $arg) (i32.const 11))
+            (then (local.set $arg (i32.const 22))))
+          (br_if $bump_done (i32.ge_u (local.get $arg) (i32.const 24)))
+          (if (i32.eq (i32.and (call $gl32 (i32.add (local.get $row)
+            (i32.mul (local.get $arg) (i32.const 4)))) (i32.const 0x7f800000))
+            (i32.const 0x7f800000)) (then (return (i32.const 0x88760821))))
+          (local.set $arg (i32.add (local.get $arg) (i32.const 1)))
+          (br $bump)))))
+
+      ;; Check only operands each operation consumes, matching the native
+      ;; cascade lowerer.  $d3d_fixed_cascade_arg is the source of truth for
+      ;; the supported D3DTA bases and COMPLEMENT/ALPHAREPLICATE modifiers.
+      (if (i32.and (i32.and (i32.ne (local.get $color) (i32.const 22))
+          (i32.ne (local.get $color) (i32.const 23)))
+        (i32.ne (local.get $color) (i32.const 3))) (then
+        (if (i32.lt_s (call $d3d_fixed_cascade_arg
+          (call $gl32 (i32.add (local.get $row) (i32.const 8)))
+          (local.get $stage) (local.get $bound)) (i32.const 0)) (then
+          (return (i32.const 0x8876081a)))))) ;; D3DERR_UNSUPPORTEDCOLORARG
+      (if (i32.and (i32.and (i32.and (i32.ne (local.get $color) (i32.const 22))
+          (i32.ne (local.get $color) (i32.const 23)))
+        (i32.ne (local.get $color) (i32.const 2)))
+        (i32.ne (local.get $color) (i32.const 17))) (then
+        (if (i32.lt_s (call $d3d_fixed_cascade_arg
+          (call $gl32 (i32.add (local.get $row) (i32.const 12)))
+          (local.get $stage) (local.get $bound)) (i32.const 0)) (then
+          (return (i32.const 0x8876081a))))))
+      (if (i32.ge_u (local.get $color) (i32.const 25)) (then
+        (if (i32.lt_s (call $d3d_fixed_cascade_arg
+          (call $gl32 (i32.add (local.get $row) (i32.const 104)))
+          (local.get $stage) (local.get $bound)) (i32.const 0)) (then
+          (return (i32.const 0x8876081a))))))
+      (if (i32.and (i32.ne (local.get $alpha) (i32.const 1))
+        (i32.ne (local.get $alpha) (i32.const 3))) (then
+        (if (i32.lt_s (call $d3d_fixed_cascade_arg
+          (call $gl32 (i32.add (local.get $row) (i32.const 20)))
+          (local.get $stage) (local.get $bound)) (i32.const 0)) (then
+          (return (i32.const 0x8876081c)))))) ;; D3DERR_UNSUPPORTEDALPHAARG
+      (if (i32.and (i32.and (i32.ne (local.get $alpha) (i32.const 1))
+        (i32.ne (local.get $alpha) (i32.const 2)))
+        (i32.ne (local.get $alpha) (i32.const 17))) (then
+        (if (i32.lt_s (call $d3d_fixed_cascade_arg
+          (call $gl32 (i32.add (local.get $row) (i32.const 24)))
+          (local.get $stage) (local.get $bound)) (i32.const 0)) (then
+          (return (i32.const 0x8876081c))))))
+      (if (i32.ge_u (local.get $alpha) (i32.const 25)) (then
+        (if (i32.lt_s (call $d3d_fixed_cascade_arg
+          (call $gl32 (i32.add (local.get $row) (i32.const 108)))
+          (local.get $stage) (local.get $bound)) (i32.const 0)) (then
+          (return (i32.const 0x8876081c))))))
+      (local.set $stage (i32.add (local.get $stage) (i32.const 1)))
+      (br $stages)))
+    ;; The renderer and its advertised caps own six blend stages.  Stage 6 can
+    ;; only be ignored when it naturally terminates the chain; an actually
+    ;; active seventh operation is not silently advertised as renderable.
+    (local.set $row (i32.add (local.get $state) (i32.const 21456)))
+    (local.set $color (call $gl32 (i32.add (local.get $row) (i32.const 4))))
+    (if (i32.and (i32.ne (local.get $color) (i32.const 1))
+      (i32.ne (call $gl32 (i32.add (local.get $row) (i32.const 8))) (i32.const 2)))
+      (then (return (i32.const 0x8876081d)))) ;; D3DERR_TOOMANYOPERATIONS
+    (select (i32.const 0x88760821) (i32.const 0)
+      (i32.ne (local.get $last) (i32.const 1))))
+
   ;; IDirect3DDevice9_ValidateDevice — 2 args (incl. this)
   (func $handle_IDirect3DDevice9_ValidateDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $state i32) (local $out i32)
+    (global.set $eax (i32.const 0x8876086c))
+    (local.set $state (call $d3d9_program_state (local.get $arg0)))
+    (local.set $out (call $d3d9_state_bytes (local.get $arg1) (i32.const 4)))
+    (if (i32.and (i32.ne (local.get $state) (i32.const 0))
+      (i32.ne (local.get $out) (i32.const 0))) (then
+      (if (call $gl32 (i32.add (local.get $state) (i32.const 21776)))
+        (then (global.set $eax (i32.const 0x88760868)))
+        (else
+          (global.set $eax (call $d3d9_validate_fixed_state (local.get $state)))
+          (if (i32.eqz (global.get $eax)) (then
+            (i32.store (local.get $out) (i32.const 1))))))))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
 
   ;; IDirect3DDevice9_SetPaletteEntries — 3 args (incl. this)
