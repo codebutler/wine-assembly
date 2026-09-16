@@ -77,6 +77,11 @@ function colorCountInRect(png, rgb, left, top, right, bottom) {
   return count;
 }
 
+function rgbAt(png, x, y) {
+  const i = (y * png.width + x) * 4;
+  return [png.data[i], png.data[i + 1], png.data[i + 2]];
+}
+
 function darkCountInRect(png, left, top, right, bottom) {
   let count = 0;
   for (let y = top; y < bottom; y++) {
@@ -310,6 +315,10 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       50, 87, 510, 91);
     assert(exposedPageWhite < 40,
       `WinRAR tab left its exposed property-page band white (${exposedPageWhite} white pixels)`);
+    assert.deepStrictEqual(rgbAt(integrationPng, 25, 25), [128, 128, 128],
+      'modal Settings paints the obscured WinRAR owner caption inactive');
+    assert.deepStrictEqual(rgbAt(integrationPng, 42, 42), [0, 0, 128],
+      'modal Settings paints its foreground caption active');
     assert(fs.existsSync(rapidPagesFramePath),
       'WinRAR did not capture rapid property-page switching');
     const rapidPagesPng = PNG.sync.read(fs.readFileSync(rapidPagesFramePath));
@@ -325,6 +334,8 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
     const toolbarColor = saturatedCountInRect(mainPng, 35, 65, 411, 120);
     assert(toolbarColor > 1000,
       `WinRAR toolbar was still blank after Settings closed (${toolbarColor} colored pixels)`);
+    assert.deepStrictEqual(rgbAt(mainPng, 25, 25), [0, 0, 128],
+      'closing Settings restores WinRAR main-window active caption');
     // WinRAR binds SHGFI_SYSICONINDEX as LVSIL_SMALL. Its first six visible
     // rows are files and row seven is the Formats directory: the old fake
     // HIMAGELIST=1 drew dark placeholders, while an incorrectly ordered strip

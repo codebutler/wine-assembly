@@ -584,12 +584,6 @@
       (then (return (i32.const 3))))
     (i32.const 0))
 
-  ;; Formats the color-surface allocator really stores. Both are represented
-  ;; by the same 32-bit backing; the X format simply ignores destination alpha.
-  (func $d3d9_color_target_format (param $format i32) (result i32)
-    (i32.or (i32.eq (local.get $format) (i32.const 21)) ;; D3DFMT_A8R8G8B8
-      (i32.eq (local.get $format) (i32.const 22)))) ;; D3DFMT_X8R8G8B8
-
   (func $d3d9_mode_width (param $mode i32) (result i32)
     (if (i32.eq (local.get $mode) (i32.const 1)) (then (return (i32.const 800))))
     (if (i32.eq (local.get $mode) (i32.const 2)) (then (return (i32.const 1024))))
@@ -706,25 +700,7 @@
 
   ;; IDirect3D9_CheckDeviceType — 6 args (incl. this)
   (func $handle_IDirect3D9_CheckDeviceType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $windowed i32)
-    (local.set $windowed (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $eax (i32.const 0x8876086c)) ;; D3DERR_INVALIDCALL
-    (block $done
-      (br_if $done (local.get $arg1)) ;; only D3DADAPTER_DEFAULT exists
-      (br_if $done (i32.ne (local.get $arg2) (i32.const 1))) ;; only HAL exists
-      (global.set $eax (i32.const 0x8876086a)) ;; D3DERR_NOTAVAILABLE
-      (br_if $done (i32.eqz (call $d3d9_mode_count (local.get $arg3))))
-      (if (local.get $windowed)
-        (then
-          ;; UNKNOWN asks for the current display format in windowed mode.
-          (br_if $done (i32.and (i32.ne (local.get $arg4) (i32.const 0))
-            (i32.eqz (call $d3d9_color_target_format (local.get $arg4))))))
-        (else
-          ;; Fullscreen cannot color-convert. The renderer only exposes its
-          ;; 32-bit display mode; A8/X8 is the permitted alpha-only mismatch.
-          (br_if $done (i32.ne (local.get $arg3) (i32.const 22)))
-          (br_if $done (i32.eqz (call $d3d9_color_target_format (local.get $arg4))))))
-      (global.set $eax (i32.const 0)))
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
   ;; IDirect3D9_CheckDeviceFormat(this, Adapter, DeviceType, AdapterFormat,
@@ -774,17 +750,7 @@
 
   ;; IDirect3D9_CheckDepthStencilMatch — 6 args (incl. this)
   (func $handle_IDirect3D9_CheckDepthStencilMatch (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $depth_format i32)
-    (local.set $depth_format (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $eax (i32.const 0x8876086c)) ;; D3DERR_INVALIDCALL
-    (block $done
-      (br_if $done (local.get $arg1)) ;; only D3DADAPTER_DEFAULT exists
-      (br_if $done (i32.ne (local.get $arg2) (i32.const 1))) ;; only HAL exists
-      (global.set $eax (i32.const 0x8876086a)) ;; D3DERR_NOTAVAILABLE
-      (br_if $done (i32.eqz (call $d3d9_mode_count (local.get $arg3))))
-      (br_if $done (i32.eqz (call $d3d9_color_target_format (local.get $arg4))))
-      (br_if $done (i32.eqz (call $d3d9_depth_format (local.get $depth_format))))
-      (global.set $eax (i32.const 0)))
+    (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
 
   ;; IDirect3D9_CheckDeviceFormatConversion — 5 args (incl. this)

@@ -587,6 +587,7 @@
   (func $defwndproc_do_ncpaint (param $hwnd i32)
     (local $rect i32) (local $w i32) (local $h i32)
     (local $style i32) (local $flags i32) (local $is_child i32) (local $has_caption i32)
+    (local $foreground i32)
     (local $title_wa i32) (local $title_len i32)
     (local $hdc i32) (local $slot i32) (local $base i32) (local $aux i32)
     (local $cl i32) (local $ct i32) (local $cr i32) (local $cb i32)
@@ -602,10 +603,23 @@
       (then (return)))
     ;; Flags
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
-    (local.set $flags (i32.const 1))                                ;; active (TODO: focus-aware)
+    (local.set $is_child (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
+    ;; A child/MDI caption keeps the long-standing active rendering selected
+    ;; by its parent.  For a top-level caption, USER's renderer-wide
+    ;; foreground HWND is authoritative: GetForegroundWindow may temporarily
+    ;; return NULL during activation, in which case no top-level caption is
+    ;; painted active.
+    (local.set $foreground (call $host_foreground_window))
+    (local.set $flags
+      (i32.or
+        (local.get $is_child)
+        (i32.and
+          (i32.ne (local.get $foreground) (i32.const 0))
+          (i32.eq (local.get $hwnd) (local.get $foreground)))))
+    ;; FlashWindow reverses the current active/inactive appearance; it does
+    ;; not replace the underlying activation state.
     (if (call $get_flash_state_slot (local.get $hwnd))
       (then (local.set $flags (i32.xor (local.get $flags) (i32.const 1)))))
-    (local.set $is_child (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
     (local.set $has_caption
       (i32.or
         (i32.eq (i32.and (local.get $style) (i32.const 0x00C00000))

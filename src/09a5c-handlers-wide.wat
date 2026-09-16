@@ -231,6 +231,14 @@
     (call $paint_flag_clear_hwnd (local.get $arg0))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+    ;; WM_NCPAINT is encoding-neutral. Keep A/W on the same WAT-native
+    ;; non-client painter so activation, flashing and frame metrics cannot
+    ;; diverge between otherwise identical windows.
+    (if (i32.eq (local.get $arg1) (i32.const 0x0085))
+    (then
+    (call $defwndproc_do_ncpaint (local.get $arg0))
+    (global.set $eax (i32.const 0))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
   )
