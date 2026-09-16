@@ -893,3 +893,41 @@ earlier gameplay window Storm cluster A (`7c108b/97/ad/ce`) led at 15.68% and
 `0x4b48aa` was not on top; in these windows cluster A is 5-8% and the
 `0x4b48xx` nest is 30%. Per `tools/hot-loop-census.js`'s rule, read the spread
 across windows, not one window.
+
+## Frozen interactive mission smoke on `0fd9aeb7` (2026-09-16)
+
+A clean checkout built both WASM artifacts and ran the shipped entry with:
+
+```sh
+node test/run.js --app=starcraft_shareware --no-build --no-threads --quiet-api --no-close --repaint-every=50 --max-seconds=3600 --batch-size=100000 --stuck-after=100000000 --control=8125 --frozen
+```
+
+`node tools/ctl.js -s :8125` drove and photographed each stage. At batch 120
+a click at `(320,240)` skipped the opening material;
+batch 670 showed the mission briefing, and a click at `(545,393)` started it.
+Batch 870 showed the Tips dialog; a click at `(198,261)` dismissed it. Batch
+970 showed unobstructed gameplay. Selecting four marines required a drag from
+`(115,100)` to `(190,185)`, with five frozen steps between mouse down, move,
+and up. A right click at `(360,190)` moved them visibly by batch 1110. Later
+movement produced combat and one dead marine: supply fell from 12/42 to
+11/42 and the selected unit count fell from four to three at batch 1440.
+Gameplay still rendered at batch 1740, without a runtime trap or error modal.
+
+After `exports.reset_handler_hist(); exports.set_handler_hist_enabled(1)`, the
+hot-block histogram counted visits to the actual verifier at `0x004411e7`:
+
+| Batch | Verifier hits | Block entries | Blocks per additional verifier hit |
+|---:|---:|---:|---:|
+| 1110 | 288 | 38,901,221 | — |
+| 1440 | 1,148 | 136,027,670 | 112,938 |
+| 1740 | 2,043 | 227,043,629 | 101,694 |
+
+The game kept updating through the battle, and this bounded sample shows no
+increase in block cost per update. Node `heapUsed` was 23.3, 22.5, and
+23.6 MB at those same points; WASM memory stayed at its fixed 512 MiB.
+`rss` fluctuated 94.7, 56.0, and 101.9 MB, so it does not support a monotonic
+leak claim. The main thread's `ESP` was `0x074ffd94` at batch 1440 and
+`0x074ffe68` at batch 1740; those two snapshots do not diagnose stack drift
+across all guest calls. This smoke is shorter and less busy than the late
+large battle that originally crashed, so it is evidence of mission and combat
+functionality, not proof that the old crash cannot recur.
