@@ -198,8 +198,30 @@ async function waitForGameplay(page) {
     });
     assert(/bind\s+"?w"?\s+"\+forward"/i.test(controlConfig) &&
       /bind\s+"?a"?\s+"\+moveleft"/i.test(controlConfig) &&
+      /bind\s+"?ENTER"?\s+"\+attack"/i.test(controlConfig) &&
       /set\s+freelook\s+"?1"?/i.test(controlConfig),
     `modern first-launch controls were not mounted: ${controlConfig.slice(0, 500)}`);
+
+    // Actual Quake 3.14 guest state, not just the host's key bookkeeping.
+    // Key bindings: 0x4d6c60; in_attack: 0xac13a0 (down[2], timing, state).
+    const attackState = () => page.evaluate(() => {
+      const e = sharedRenderer.wasm.exports;
+      return { key: e.guest_read32(0xac13a0), state: e.guest_read32(0xac13b0) };
+    });
+    await page.keyboard.down('Enter');
+    try {
+      await page.waitForFunction(() => {
+        const e = sharedRenderer.wasm.exports;
+        return e.guest_read32(0xac13a0) === 13 && (e.guest_read32(0xac13b0) & 1);
+      }, { timeout: 30000 });
+    } finally {
+      await page.keyboard.up('Enter');
+    }
+    await page.waitForFunction(() => {
+      const e = sharedRenderer.wasm.exports;
+      return e.guest_read32(0xac13a0) === 0 && !(e.guest_read32(0xac13b0) & 1);
+    }, { timeout: 30000 });
+    assert.strictEqual((await attackState()).state & 1, 0, 'Fire release stops attack in the guest');
 
     const beforeKey = await readFrame(page);
     saveFrame(beforeKey, path.join(OUT, 'before-key.png'));

@@ -82,7 +82,7 @@ global.document = {
   addEventListener: (...args) => body.addEventListener(...args),
   removeEventListener: (...args) => body.removeEventListener(...args),
 };
-global.window = { addEventListener() {}, removeEventListener() {}, innerHeight: 844 };
+global.window = Object.assign(makeEl('window'), { innerHeight: 844 });
 global.location = { search: '' };
 
 const touchEvent = (changed, active = changed) => ({
@@ -398,6 +398,58 @@ TouchControls.destroy();
   right.dispatch('touchend', touchEvent([touch(71, 0, 0)]));
   assert.ok(!entry.repeatTimer && !entry.repeatInterval,
     'releasing disarms the repeat -- a stuck repeat would walk the board on its own');
+  TouchControls.destroy();
+}
+
+// Quake II's fixed arrows hold movement while another finger fires or aims.
+{
+  const app = require('../lib/apps').APPS.quake2_demo;
+  assert.strictEqual(app.mobileTouch, 'trackpad');
+  const mouse = [];
+  TouchControls.install({ document: global.document, renderer: {
+    ...renderer, _mouseX: 320, _mouseY: 240,
+    handleMouseDown: (x, y, b) => mouse.push(['down', b]),
+    handleMouseUp: (x, y, b) => mouse.push(['up', b]),
+  } });
+  TouchControls.setLayout(app.touchControls);
+  const pad = TouchControls._widgets.find(el => el.className === 'tc-cross');
+  const up = pad.children.find(el => el._tcDir === 'up');
+  const right = pad.children.find(el => el._tcDir === 'right');
+  const fire = TouchControls._widgets.find(el => el.textContent === 'Fire');
+  keys.length = 0;
+  up.dispatch('touchstart', touchEvent([touch(170, 0, 0)]));
+  right.dispatch('touchstart', touchEvent([touch(171, 0, 0)]));
+  fire.dispatch('touchstart', touchEvent([touch(172, 0, 0)]));
+  assert.deepStrictEqual(keys, [['down', 0x26], ['down', 0x44], ['down', 0x0D]]);
+  assert.deepStrictEqual(mouse, [], 'aiming and firing need no synthetic mouse click');
+  assert(!TouchControls._touches.get(170).repeatTimer, 'movement must stay held between frames');
+  up.dispatch('touchcancel', touchEvent([touch(170, 0, 0)]));
+  assert.deepStrictEqual(keys.at(-1), ['up', 0x26]);
+  assert(TouchControls._held.has(0x44), 'cancelling forward preserves strafe');
+  TouchControls.releaseAll();
+  assert.deepStrictEqual(keys.slice(-2), [['up', 0x44], ['up', 0x0D]]);
+  assert.strictEqual(TouchControls._held.size, 0);
+  for (const [label, vk] of [['Esc', 0x1B], ['Fire', 0x0D]]) {
+    const button = TouchControls._widgets.find(el => el.textContent === label);
+    keys.length = 0;
+    button.dispatch('touchstart', touchEvent([touch(173, 0, 0)]));
+    button.dispatch('touchend', touchEvent([touch(173, 0, 0)]));
+    assert.deepStrictEqual(keys, [['down', vk], ['up', vk]], label + ' sends one menu key');
+  }
+  for (const event of ['touchend', 'touchcancel', 'blur', 'pagehide', 'visibilitychange']) {
+    keys.length = 0;
+    fire.dispatch('touchstart', touchEvent([touch(174, 0, 0)]));
+    if (event === 'visibilitychange') {
+      global.document.hidden = true;
+      body.dispatch(event, {});
+      global.document.hidden = false;
+    } else {
+      // No target dispatch: canvas capture may stop it reaching the button.
+      global.window.dispatch(event, touchEvent([touch(174, 0, 0)], []));
+    }
+    assert.deepStrictEqual(keys, [['down', 0x0D], ['up', 0x0D]], event + ' releases Fire');
+    assert(!fire.classList.contains('tc-down'));
+  }
   TouchControls.destroy();
 }
 
@@ -784,8 +836,8 @@ TouchControls.destroy();
     [{ mouseButton: 0, label: 'Jump', pos: 'br' }],
     'public Blobby should expose its shipped mouse-control jump action');
   assert.deepStrictEqual(APPS.quake2_demo.touchControls.dpad.vks,
-    { up: 0x57, down: 0x53, left: 0x41, right: 0x44 },
-    'Quake II phone movement should use its bundled WASD bindings');
+    { up: 0x26, down: 0x28, left: 0x41, right: 0x44 },
+    'Quake II up/down serve menus and movement, A/D strafe');
   assert.strictEqual(APPS.halflife_uplink.mobileTouch, 'trackpad',
     'Half-Life should combine its WASD pad with deterministic trackpad look');
   assert.strictEqual(APPS.deus_ex_demo.mobileTouch, 'trackpad',

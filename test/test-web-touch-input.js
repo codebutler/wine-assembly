@@ -316,6 +316,37 @@ try {
   assert.deepStrictEqual(releases.at(-1), { x: 320, y: 200, button: 0 },
     'held trackpad drag releases the guest button exactly once');
 
+  // Quake II dedicates the canvas to aiming. Neither a short tap, a second
+  // tap/hold, nor a long press may synthesize a mouse button.
+  runningApps[0].touchControls = { aimOnly: true, aimSensitivity: 5 };
+  const aimDowns = downs.length, aimUps = releases.length;
+  // Compatibility mouse events are a separate browser entry point.
+  canvas.onmousedown({ ...event, sourceCapabilities: { firesTouchEvents: true } });
+  canvas.onmouseup({ ...event, sourceCapabilities: { firesTouchEvents: true } });
+  const oldMatchMedia = global.matchMedia;
+  global.matchMedia = () => ({ matches: true });
+  canvas.onmousedown(event); // Safari need not supply sourceCapabilities.
+  canvas.onmouseup(event);
+  if (oldMatchMedia === undefined) delete global.matchMedia;
+  else global.matchMedia = oldMatchMedia;
+  assert.strictEqual(downs.length, aimDowns, 'mobile compatibility events cannot fire');
+  assert.strictEqual(releases.length, aimUps, 'ignored clicks emit no unmatched release');
+  for (const id of [80, 81]) {
+    const aim = finger(id, 100, 100);
+    touchStart(tev([aim], [aim]));
+    assert.strictEqual(pendingInputTimer, null, 'aiming never arms a long-press click');
+    (listeners.get('touchend') || []).at(-1)(tev([], [aim]));
+  }
+  const aim = finger(82, 100, 100);
+  touchStart(tev([aim], [aim]));
+  (listeners.get('touchmove') || []).at(-1)(tev([finger(82, 120, 110)]));
+  assert.deepStrictEqual(relativeMoves.at(-1), { x: 100, y: 50 },
+    'Quake touch sensitivity amplifies aiming without changing ordinary trackpad deltas');
+  (listeners.get('touchcancel') || []).at(-1)(tev([], [aim]));
+  assert.strictEqual(downs.length, aimDowns, 'aim gestures generate no clicks');
+  assert.strictEqual(releases.length, aimUps, 'aim gestures generate no stray releases');
+  delete runningApps[0].touchControls;
+
   // Config remains authoritative for games whose live cursor behavior is a
   // false positive or false negative.
   runningApps[0].mobileTouch = 'direct';

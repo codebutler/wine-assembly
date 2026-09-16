@@ -64,6 +64,20 @@ assert.deepStrictEqual([renderer._mouseX, renderer._mouseY], [440, 280],
 assert.deepStrictEqual([diWords[diMouseState], diWords[diMouseState + 1]], [40, -20],
   'successive physical movement should accumulate until DirectInput consumes it');
 
+// FPS engines capture the mouse for aiming without holding any button.
+// Capture changes the recipient, never the physical button mask.
+guestExports.get_capture_hwnd = () => 7;
+for (const mask of [0, 1, 2, 0]) {
+  renderer.inputQueue.length = 0;
+  renderer._mouseButtonsMask = mask;
+  renderer.handleRelativeMouseMove(2, 0);
+  const captured = renderer.inputQueue.find(e => e.msg === 0x0200);
+  assert(captured, 'captured aiming queues mouse movement');
+  assert.strictEqual(captured.wParam, mask,
+    'capture must not invent Mouse1 when a finger only aims');
+}
+delete guestExports.get_capture_hwnd;
+
 guestExports.clip_cursor_active = () => 0;
 assert.strictEqual(renderer.wantsRelativeMouse(640, 480), false,
   'releasing ClipCursor should leave ordinary desktop pointer semantics intact');
