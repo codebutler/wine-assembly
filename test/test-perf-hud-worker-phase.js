@@ -108,4 +108,24 @@ ok(marked.other === 0, 'and `other` goes to zero -- nothing unexplained is left'
 const over = runStep(5, 40);
 ok(over.other === 0, 'an over-marked phase clamps the residual at zero rather than going negative');
 
-console.log(`\nPASS  ${checks}/${checks} checks passed`);
+// A phone profile needs the guest Worker's own fold counters, not the empty
+// page-side WASM instance. This is one RPC per streaming tick, never per step.
+let counterReads = 0;
+stubWindow.wineShell = { runningApps: [{
+  name: 'diablo_shareware',
+  wine: { running: true, guestWorker: { readExports: names => {
+    counterReads++;
+    assert(names.includes('get_loop_xlat_stosb_runs'));
+    return Promise.resolve({ get_loop_xlat_stosb_runs: 42 });
+  } } },
+}] };
+perf.streamUrl = '/api/perf';
+perf._sampleGuestCounters();
+perf._sampleGuestCounters();
+ok(counterReads === 1, 'concurrent stream ticks do not pile up Worker counter reads');
+Promise.resolve().then(() => {
+  ok(perf._guestCounters.app === 'diablo_shareware' &&
+     perf._guestCounters.values.get_loop_xlat_stosb_runs === 42,
+  'the Worker fold count is retained for the next streamed batch');
+  console.log(`\nPASS  ${checks}/${checks} checks passed`);
+}).catch(error => { console.error(error); process.exitCode = 1; });
