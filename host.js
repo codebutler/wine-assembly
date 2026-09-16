@@ -1987,6 +1987,17 @@ class WineAssembly {
     // implementation of every host call, not two.
     this._mainImports = imports;
     await this._maybeStartGuestWorker(wasmModule);
+    // Opt-in A/B for the counted dword-copy superinstruction. Configure both
+    // decoders before any PE bytes are loaded or translated; ordinary runs
+    // retain the conservative off default.
+    const copy32Counted = typeof location !== 'undefined' &&
+      new URLSearchParams(location.search).has('copy32-counted') ? 1 : 0;
+    if (copy32Counted && this.instance.exports.set_loop_copy32_counted_emit) {
+      this.instance.exports.set_loop_copy32_counted_emit(1);
+      if (this.guestWorker) {
+        await this.guestWorker.callExport('set_loop_copy32_counted_emit', 1);
+      }
+    }
     // In real-thread mode slot 0 owns a second WASM instance in a Worker.
     // Configure that live decoder too; the browser-thread instance above is
     // then only an ownership token and host-call mirror.

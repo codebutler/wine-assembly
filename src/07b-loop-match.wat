@@ -53,6 +53,9 @@
   (global $loop_copy32_matches (mut i32) (i32.const 0))
   (global $loop_copy32_runs (mut i32) (i32.const 0))
   (global $loop_copy32_bytes (mut i64) (i64.const 0))
+  (global $loop_copy32_counted_matches (mut i32) (i32.const 0))
+  (global $loop_copy32_counted_runs (mut i32) (i32.const 0))
+  (global $loop_copy32_counted_bulk_bytes (mut i64) (i64.const 0))
   (global $loop_avg_matches (mut i32) (i32.const 0))
   (global $loop_avg_runs (mut i32) (i32.const 0))
   (global $loop_avg_pixels (mut i64) (i64.const 0))
@@ -119,6 +122,17 @@
       (if (result i32) (local.get $flag)
         (then (i32.or (local.get $state) (i32.const 2)))
         (else (i32.and (local.get $state) (i32.const 0xfffffffd))))))
+  ;; Independently gated: the counted dword form has a different overlap and
+  ;; flag proof from the historically unsafe generic byte COPY_RUN.
+  (func $loop_copy32_counted_emit_get (result i32)
+    (i32.and (i32.atomic.load (global.get $LOOP_PROCESS_STATE)) (i32.const 4)))
+  (func $loop_copy32_counted_emit_set (param $flag i32)
+    (local $state i32)
+    (local.set $state (i32.atomic.load (global.get $LOOP_PROCESS_STATE)))
+    (i32.atomic.store (global.get $LOOP_PROCESS_STATE)
+      (if (result i32) (local.get $flag)
+        (then (i32.or (local.get $state) (i32.const 4)))
+        (else (i32.and (local.get $state) (i32.const 0xfffffffb))))))
   ;; Exact six-op AoE grid-fill lowering. Independently switchable for
   ;; same-process semantic and timing A/Bs; the production default is on.
   (global $loop_aoe_fill_emit_enabled (mut i32) (i32.const 1))
@@ -3271,6 +3285,82 @@
   ;; This recognizer is exact in role order but register/displacement generic.
   ;; All four registers must differ: otherwise one of the cursor bumps or the
   ;; load would change a later address/bound in the same original iteration.
+  ;; Universal MOV r32,[src] / ADD src,4 / MOV [dst],r32 / ADD dst,4 /
+  ;; DEC count / JNZ entry. Diablo's 32-pixel row blitters use this exact
+  ;; shape, but the proof is register- and address-independent. The four
+  ;; registers must differ so no cursor/count alias changes an address mid-run.
+  (func $loop_try_copy32_counted
+    (param $start_eip i32) (param $tstart i32) (result i32)
+    (local $p i32) (local $fn i32) (local $src i32) (local $dst i32)
+    (local $scratch i32) (local $count i32) (local $src_disp i32)
+    (local $dst_disp i32) (local $fall i32) (local $back i32) (local $mask i32)
+    (if (i32.ne (global.get $op_index_n) (i32.const 6))
+      (then (return (i32.const 0))))
+    (local.set $p (call $loop_op_at (i32.const 0)))
+    (local.set $fn (load.field LoopOp handler (local.get $p)))
+    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
+                (i32.gt_u (local.get $fn) (i32.const 346)))
+      (then (return (i32.const 0))))
+    (local.set $src (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $scratch (load.field.memarg LoopOp operand (local.get $p)))
+    (local.set $src_disp (i32.load offset=8 (local.get $p)))
+    (local.set $p (call $loop_op_at (i32.const 1)))
+    (if (i32.or (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 3))
+                (i32.or (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $src))
+                        (i32.ne (i32.load offset=8 (local.get $p)) (i32.const 4))))
+      (then (return (i32.const 0))))
+    (local.set $p (call $loop_op_at (i32.const 2)))
+    (local.set $fn (load.field LoopOp handler (local.get $p)))
+    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 347))
+                (i32.gt_u (local.get $fn) (i32.const 354)))
+      (then (return (i32.const 0))))
+    (local.set $dst (i32.sub (local.get $fn) (i32.const 347)))
+    (if (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $scratch))
+      (then (return (i32.const 0))))
+    (local.set $dst_disp (i32.load offset=8 (local.get $p)))
+    (local.set $p (call $loop_op_at (i32.const 3)))
+    (if (i32.or (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 3))
+                (i32.or (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $dst))
+                        (i32.ne (i32.load offset=8 (local.get $p)) (i32.const 4))))
+      (then (return (i32.const 0))))
+    (local.set $p (call $loop_op_at (i32.const 4)))
+    (if (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 65))
+      (then (return (i32.const 0))))
+    (local.set $count (load.field.memarg LoopOp operand (local.get $p)))
+    (local.set $p (call $loop_op_at (i32.const 5)))
+    (if (i32.ne (load.field LoopOp handler (local.get $p)) (i32.const 312))
+      (then (return (i32.const 0))))
+    (local.set $fall (i32.load offset=8 (local.get $p)))
+    (local.set $back (i32.load offset=12 (local.get $p)))
+    (if (i32.ne (local.get $back) (local.get $start_eip))
+      (then (return (i32.const 0))))
+    (if (i32.or (i32.ge_u (local.get $scratch) (i32.const 8))
+                (i32.ge_u (local.get $count) (i32.const 8)))
+      (then (return (i32.const 0))))
+    (local.set $mask
+      (i32.or (i32.shl (i32.const 1) (local.get $src))
+        (i32.or (i32.shl (i32.const 1) (local.get $dst))
+          (i32.or (i32.shl (i32.const 1) (local.get $scratch))
+                  (i32.shl (i32.const 1) (local.get $count))))))
+    (if (i32.ne (i32.popcnt (local.get $mask)) (i32.const 4))
+      (then (return (i32.const 0))))
+    (global.set $loop_copy32_counted_matches
+      (i32.add (global.get $loop_copy32_counted_matches) (i32.const 1)))
+    (if (i32.eqz (call $loop_copy32_counted_emit_get))
+      (then (return (i32.const 0))))
+    (global.set $thread_alloc (local.get $tstart))
+    (global.set $op_index_n (i32.const 0))
+    (call $te (global.get $LOOP_SUPEROP_COPY) (i32.const 0x80000004))
+    (call $te_raw (local.get $src))
+    (call $te_raw (local.get $dst))
+    (call $te_raw (local.get $scratch))
+    (call $te_raw (local.get $count))
+    (call $te_raw (local.get $src_disp))
+    (call $te_raw (local.get $dst_disp))
+    (call $te_raw (local.get $fall))
+    (call $te_raw (local.get $back))
+    (i32.const 1))
+
   (func $loop_try_copy32_bounded
     (param $start_eip i32) (param $tstart i32) (result i32)
     (local $p i32) (local $fn i32) (local $op i32)
@@ -4114,6 +4204,92 @@
   ;; once at exit. It is one extra store against six eliminated dispatches, and
   ;; it means the destination range is allowed to cover the counter's own
   ;; address -- which is not a shape worth reasoning about at match time.
+  ;; Counted dword copy. The common 8-dword, mapped, page-local, physically
+  ;; disjoint row takes one Wasm memory.copy. All other cases keep the x86
+  ;; load-before-store order with mapping-aware dword accesses, including
+  ;; overlap and page crossings. The loop remains budget-bounded and publishes
+  ;; EAX, cursors, ECX, and DEC flags (including the ADD EDI carry).
+  (func $th_copy32_counted
+    (local $src_reg i32) (local $dst_reg i32) (local $scratch_reg i32)
+    (local $count_reg i32) (local $src_disp i32) (local $dst_disp i32)
+    (local $fall i32) (local $back i32) (local $src i32) (local $dst i32)
+    (local $count i32) (local $last i32) (local $old_dst i32)
+    (local $old_count i32) (local $iterations i32) (local $charge i32)
+    (local $src_ga i32) (local $dst_ga i32) (local $src_wa i32)
+    (local $dst_wa i32) (local $bulk i32)
+    (local.set $src_reg (call $read_thread_word))
+    (local.set $dst_reg (call $read_thread_word))
+    (local.set $scratch_reg (call $read_thread_word))
+    (local.set $count_reg (call $read_thread_word))
+    (local.set $src_disp (call $read_thread_word))
+    (local.set $dst_disp (call $read_thread_word))
+    (local.set $fall (call $read_thread_word))
+    (local.set $back (call $read_thread_word))
+    (local.set $src (call $get_reg (local.get $src_reg)))
+    (local.set $dst (call $get_reg (local.get $dst_reg)))
+    (local.set $count (call $get_reg (local.get $count_reg)))
+    (local.set $src_ga (i32.add (local.get $src) (local.get $src_disp)))
+    (local.set $dst_ga (i32.add (local.get $dst) (local.get $dst_disp)))
+    (if (i32.and (i32.eq (local.get $count) (i32.const 8))
+          (i32.and (i32.ge_s (global.get $steps) (i32.const 47))
+            (i32.and
+              (i32.le_u (i32.and (local.get $src_ga) (i32.const 0xfff)) (i32.const 4064))
+              (i32.le_u (i32.and (local.get $dst_ga) (i32.const 0xfff)) (i32.const 4064)))))
+      (then
+        (local.set $src_wa (call $g2w (local.get $src_ga)))
+        (local.set $dst_wa (call $g2w (local.get $dst_ga)))
+        (if (i32.and
+              (i32.and (i32.ne (local.get $src_wa) (global.get $NULL_SENTINEL))
+                       (i32.ne (local.get $dst_wa) (global.get $NULL_SENTINEL)))
+              (i32.or
+                (i32.le_u (i32.add (local.get $src_wa) (i32.const 32)) (local.get $dst_wa))
+                (i32.le_u (i32.add (local.get $dst_wa) (i32.const 32)) (local.get $src_wa))))
+          (then (local.set $bulk (i32.const 1))))))
+    (if (local.get $bulk)
+      (then
+        (local.set $last (call $gl32 (i32.add (local.get $src_ga) (i32.const 28))))
+        (call $invalidate_code_write (local.get $dst_ga) (i32.const 32))
+        (memory.copy (local.get $dst_wa) (local.get $src_wa) (i32.const 32))
+        (local.set $old_dst (i32.add (local.get $dst) (i32.const 28)))
+        (local.set $old_count (i32.const 1))
+        (local.set $src (i32.add (local.get $src) (i32.const 32)))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 32)))
+        (local.set $count (i32.const 0))
+        (local.set $iterations (i32.const 8))
+        (local.set $charge (i32.const 48))
+        (global.set $loop_copy32_counted_bulk_bytes
+          (i64.add (global.get $loop_copy32_counted_bulk_bytes) (i64.const 32))))
+      (else
+        (block $done (loop $copy
+          (local.set $old_dst (local.get $dst))
+          (local.set $old_count (local.get $count))
+          (local.set $last (call $gl32
+            (i32.add (local.get $src) (local.get $src_disp))))
+          (call $gs32 (i32.add (local.get $dst) (local.get $dst_disp)) (local.get $last))
+          (local.set $src (i32.add (local.get $src) (i32.const 4)))
+          (local.set $dst (i32.add (local.get $dst) (i32.const 4)))
+          (local.set $count (i32.sub (local.get $count) (i32.const 1)))
+          (local.set $iterations (i32.add (local.get $iterations) (i32.const 1)))
+          (local.set $charge (i32.add (local.get $charge) (i32.const 6)))
+          (br_if $done (i32.eqz (local.get $count)))
+          (br_if $done
+            (i32.ge_u (i32.sub (local.get $charge) (i32.const 1))
+                      (global.get $steps)))
+          (br $copy)))))
+    (call $set_reg (local.get $src_reg) (local.get $src))
+    (call $set_reg (local.get $dst_reg) (local.get $dst))
+    (call $set_reg (local.get $scratch_reg) (local.get $last))
+    (call $set_reg (local.get $count_reg) (local.get $count))
+    (call $set_flags_add (local.get $old_dst) (i32.const 4) (local.get $dst))
+    (call $set_flags_dec (local.get $old_count) (local.get $count))
+    (global.set $steps
+      (i32.sub (global.get $steps) (i32.sub (local.get $charge) (i32.const 1))))
+    (global.set $loop_copy32_counted_runs
+      (i32.add (global.get $loop_copy32_counted_runs) (i32.const 1)))
+    (global.set $eip
+      (select (local.get $back) (local.get $fall)
+        (i32.ne (local.get $count) (i32.const 0)))))
+
   (func $th_copy_run (param $op i32)
     (local $src_reg i32) (local $src_stride i32) (local $src_disp i32)
     (local $dst_reg i32) (local $dst_stride i32) (local $dst_disp i32)
@@ -4131,6 +4307,8 @@
 
     (if (i32.lt_s (local.get $op) (i32.const 0))
       (then
+        (if (i32.eq (local.get $op) (i32.const 0x80000004))
+          (then (return_call $th_copy32_counted)))
         (if (i32.eq (local.get $op) (i32.const 0x80000001))
           (then (return_call $th_mmx_copy64 (local.get $op))))
         (if (i32.eq (local.get $op) (i32.const 0x80000002))
@@ -5085,6 +5263,8 @@
     (if (call $loop_try_avg_shift_cursor (local.get $start_eip) (local.get $tstart))
       (then (return)))
     (if (call $loop_try_avg_round_cursor (local.get $start_eip) (local.get $tstart))
+      (then (return)))
+    (if (call $loop_try_copy32_counted (local.get $start_eip) (local.get $tstart))
       (then (return)))
     (if (call $loop_try_copy32_bounded (local.get $start_eip) (local.get $tstart))
       (then (return)))
