@@ -276,8 +276,11 @@ const digest = crypto.createHash('sha256')
 // capability queries now validate their complete COM argument tuples against
 // the exposed adapter and shared texture backend. The multisample query reads
 // its real final stack argument instead of mistaking Windowed for the mode.
-const EXPECTED_COUNT = 272;
-const EXPECTED_SHA256 = 'cbbe04d93991774f1fe24a934ee6186250ef84908cf33b9aed7d05719368e507';
+// 2026-09-15: 272 -> 271. D3D9 CheckDeviceMultiSampleType now validates the
+// complete tuple against the render/depth creators: only NONE and their stored
+// formats succeed, unsupported techniques fail, and quality count is written.
+const EXPECTED_COUNT = 271;
+const EXPECTED_SHA256 = '4f52b7d3bbe27840f416209e08e1c77ff691ceb3ef2d8d4c5b3c582959c5f0f6';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

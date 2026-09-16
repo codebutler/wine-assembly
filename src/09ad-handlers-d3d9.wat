@@ -722,7 +722,30 @@
 
   ;; IDirect3D9_CheckDeviceMultiSampleType — 7 args (incl. this)
   (func $handle_IDirect3D9_CheckDeviceMultiSampleType (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
+    (local $multisample i32) (local $quality_levels i32)
+    (local.set $multisample (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $quality_levels (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (global.set $eax (i32.const 0x8876086c)) ;; D3DERR_INVALIDCALL
+    (block $done
+      (br_if $done (local.get $arg1)) ;; only D3DADAPTER_DEFAULT exists
+      (if (i32.ne (local.get $arg2) (i32.const 1)) (then
+        (global.set $eax (i32.const 0x8876086b)) ;; D3DERR_INVALIDDEVICE
+        (br $done)))
+      (br_if $done (i32.gt_u (local.get $multisample) (i32.const 16)))
+      (global.set $eax (i32.const 0x8876086a)) ;; D3DERR_NOTAVAILABLE
+      ;; The render-target and depth-surface create paths only implement NONE.
+      (br_if $done (local.get $multisample))
+      (br_if $done (i32.eqz (i32.or
+        (i32.eq (local.get $arg3) (i32.const 21)) ;; D3DFMT_A8R8G8B8
+        (i32.or (i32.eq (local.get $arg3) (i32.const 22)) ;; D3DFMT_X8R8G8B8
+          (call $d3d9_depth_format (local.get $arg3))))))
+      (if (local.get $quality_levels) (then
+        (if (i32.eqz (call $d3d9_state_bytes (local.get $quality_levels) (i32.const 4))) (then
+          (global.set $eax (i32.const 0x8876086c))
+          (br $done)))
+        ;; NONE has one usable quality index: zero.
+        (call $gs32 (local.get $quality_levels) (i32.const 1))))
+      (global.set $eax (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
 
   ;; IDirect3D9_CheckDepthStencilMatch — 6 args (incl. this)
