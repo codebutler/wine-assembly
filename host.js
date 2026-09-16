@@ -3591,7 +3591,9 @@ class WineAssembly {
         }
         // Every yield the WAT actually raises is handled here: 1 wait, 2 exit
         // (caught above as eip=0), 3 com_load_dll, 5 load_library, 6
-        // modal_dialog, 7 message_wait, 8 net_wait, 12 io_wait. Reason 4
+        // modal_dialog, 7 message_wait, 8 net_wait, 9 critical-section wait,
+        // 10 cross-thread send, 12 io_wait, 13 vblank_wait, 14/15 spin parks
+        // and 16 D3D render wait. Reason 4
         // (help_load) is named in thread-manager.js's map but is never set by
         // any WAT or JS path, so there is nothing to port for it. The fallback
         // below stays as a guard for anything added later.
@@ -3656,6 +3658,27 @@ class WineAssembly {
             pvfs.pendingRead = null;
           }
           await self.guestWorker.callExport('clear_yield');
+        } else if (r.yield === 13) {
+          // vblank_wait: the live instance is in the guest-main Worker, not
+          // self.instance. Route the display tick and yield clear to that
+          // owner, in order, then retry the parked thunk. Scheduling another
+          // slice before the rAF would just rediscover reason 13 in a hot loop.
+          const advanceVblank = async () => {
+            await self.guestWorker.callExport('vblank_tick');
+            await self.guestWorker.callExport('clear_yield');
+          };
+          // Frozen stepping defines one step as one display beat; waiting for
+          // a real compositor frame would make step:N cost N frames of wall
+          // time and let a supposedly frozen game animate independently.
+          if (self._frozen) {
+            await advanceVblank();
+            if (self.running) self._scheduleStep(step, 0);
+            return;
+          }
+          self._awaitVblank(() => {
+            if (self.running) self._scheduleStep(step, 0);
+          }, advanceVblank);
+          return;
         } else if (r.yield === 14 || r.yield === 15) {
           // A spin park in the worker that carries the guest's MAIN thread.
           // Clearing re-enters the parked call on its next slice. This branch
@@ -3953,14 +3976,22 @@ class WineAssembly {
   //
   // (The headless CLI has no rAF at all and keeps the guest-clock model in
   // src/09a8-handlers-directx.wat. The two are meant to differ.)
-  _awaitVblank(resume) {
+  _awaitVblank(resume, advance) {
     const ex = this.instance && this.instance.exports;
     const tick = () => {
       this._vblankPending = null;
       if (this._vblankTimer) { clearTimeout(this._vblankTimer); this._vblankTimer = 0; }
       this._vblankRafId = 0;
-      try { if (ex && ex.vblank_tick) ex.vblank_tick(); } catch (_) {}
-      resume();
+      let pending = null;
+      try {
+        if (advance) pending = advance();
+        else if (ex && ex.vblank_tick) ex.vblank_tick();
+      } catch (_) {}
+      // The cooperative instance advances synchronously. A guest-main Worker
+      // has to route both vblank_tick and clear_yield across its message link;
+      // do not schedule the retry until those writes reached the owning WASM.
+      if (pending && typeof pending.then === 'function') pending.then(resume, resume);
+      else resume();
     };
     // A display faster than 60 Hz would double the pace of any game that
     // counts vblanks — DirectDraw-era software was written for a ~60 Hz CRT

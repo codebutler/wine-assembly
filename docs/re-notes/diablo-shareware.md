@@ -2809,3 +2809,31 @@ the production change then repeated that result in a fresh isolated Chrome run:
 real Worker backend, T1+T2 active, rendered HUD, and no Data File Error.
 `test/test-worker-thread-scheduler.js` holds two unsignaled events with queued
 browser input and asserts the wait remains parked until both events are set.
+
+## Threads launch stopped at vblank yield 13 (2026-09-15)
+
+With the browser's global Threads switch enabled, Diablo reached creation of
+the `"DIABLO"` window and then stopped immediately with:
+
+```
+[threads] yield 13 is not supported in worker mode yet
+```
+
+`IDirectDraw::WaitForVerticalBlank` raises reason 13. The cooperative browser
+loop already parks it on `_awaitVblank()` and advances it from the next
+`requestAnimationFrame`; spawned guest workers also recognize the reason. The
+guest-main Worker loop was the only missing consumer, so its catch-all treated
+an ordinary display wait as a fatal new host sequence.
+
+The guest-main branch now uses the same rAF pacing, but routes `vblank_tick`
+and `clear_yield` through `guestWorker.callExport()` in that order. This is
+load-bearing: `self.instance` is the idle browser-side instance in this mode,
+and scheduling another slice before the display tick merely rediscovers reason
+13 in a hot loop. Frozen mode advances one vblank immediately per explicit
+step, matching the existing cooperative contract.
+
+`test/test-browser-worker-vblank-yield.js` pins the owning-instance routing and
+the async tick-before-resume ordering. A fresh cross-origin-isolated Chrome
+launch reached 940 guest-main Worker slices over an 8-second sample after
+creating `"DIABLO"`, with a changing 640x480 screen and no unsupported-yield
+stop.
