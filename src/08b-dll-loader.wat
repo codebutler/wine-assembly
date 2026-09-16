@@ -1,7 +1,7 @@
   ;; ============================================================
   ;; DLL LOADER — Load PE DLLs into guest address space
   ;; ============================================================
-  ;; DLL_TABLE layout at DLL_TABLE global: 32 bytes per DLL, max 16 DLLs = 512 bytes
+  ;; DLL_TABLE layout at DLL_TABLE global: 32 bytes per DLL, max 32 DLLs = 1024 bytes
   ;; +0:  load_addr (guest)
   ;; +4:  size_of_image
   ;; +8:  export_dir_rva
@@ -20,10 +20,16 @@
     (local $preferred_base i32) (local $delta i32)
     (local $import_rva i32) (local $export_rva i32) (local $export_size i32)
     (local $reloc_rva i32) (local $reloc_size i32)
-    (local $entry_rva i32) (local $characteristics i32)
+    (local $entry_rva i32) (local $tls_rva i32) (local $characteristics i32)
     (local $dll_idx i32) (local $tbl_ptr i32)
-    (local $src i32) (local $dst i32)
+    (local $src i32) (local $dst i32) (local $header_size i32)
     (local $rsrc_rva_d i32) (local $rsrc_size_d i32) (local $rsrc_ptr i32)
+
+    ;; Every DLL has entries in three fixed parallel tables. Refuse the load
+    ;; before mapping a section when no row remains; the former unchecked 17th
+    ;; load wrote its DLL metadata over DLL_RSRC_TABLE.
+    (if (i32.ge_u (global.get $dll_count) (global.get $DLL_TABLE_CAPACITY))
+      (then (return (i32.const 0))))
 
     ;; Validate MZ
     (if (i32.ne (i32.load16_u (global.get $PE_STAGING)) (i32.const 0x5A4D))
@@ -40,12 +46,27 @@
     (local.set $entry_rva (i32.load (i32.add (local.get $pe_off) (i32.const 40))))
     (local.set $delta (i32.sub (local.get $load_addr) (local.get $preferred_base)))
 
+    ;; Keep the mapped DLL's DOS/PE headers just as $load_pe keeps the
+    ;; executable's. VirtualQuery can then derive MEM_IMAGE page protection
+    ;; from the authentic section table after PE_STAGING is reused by another
+    ;; module, rather than growing a second per-DLL metadata format.
+    (local.set $header_size (i32.load (i32.add (local.get $pe_off) (i32.const 84))))
+    (if (i32.gt_u (local.get $header_size) (local.get $size))
+      (then (local.set $header_size (local.get $size))))
+    (if (local.get $header_size)
+      (then (call $memcpy (call $g2w (local.get $load_addr))
+        (global.get $PE_STAGING) (local.get $header_size))))
+
     ;; Read data directories
     (local.set $export_rva (i32.load (i32.add (local.get $pe_off) (i32.const 120))))
     (local.set $export_size (i32.load (i32.add (local.get $pe_off) (i32.const 124))))
     (local.set $import_rva (i32.load (i32.add (local.get $pe_off) (i32.const 128))))
     (local.set $reloc_rva (i32.load (i32.add (local.get $pe_off) (i32.const 160))))
     (local.set $reloc_size (i32.load (i32.add (local.get $pe_off) (i32.const 164))))
+    ;; IMAGE_DIRECTORY_ENTRY_TLS (9). A DLL with static TLS cannot suppress
+    ;; thread notifications because its runtime needs them to initialize each
+    ;; thread's static TLS block.
+    (local.set $tls_rva (i32.load (i32.add (local.get $pe_off) (i32.const 192))))
     ;; Resource data directory = entry #2 (offset 136 in optional header)
     (local.set $rsrc_rva_d  (i32.load (i32.add (local.get $pe_off) (i32.const 136))))
     (local.set $rsrc_size_d (i32.load (i32.add (local.get $pe_off) (i32.const 140))))
@@ -91,6 +112,9 @@
     (local.set $rsrc_ptr (i32.add (global.get $DLL_RSRC_TABLE) (i32.mul (local.get $dll_idx) (i32.const 8))))
     (i32.store (local.get $rsrc_ptr)                         (local.get $rsrc_rva_d))
     (i32.store (i32.add (local.get $rsrc_ptr) (i32.const 4)) (local.get $rsrc_size_d))
+    (i32.store
+      (i32.add (global.get $DLL_FLAGS_TABLE) (i32.shl (local.get $dll_idx) (i32.const 2)))
+      (i32.ne (local.get $tls_rva) (i32.const 0)))
 
     ;; Parse export directory
     (if (i32.ne (local.get $export_rva) (i32.const 0))
@@ -102,20 +126,65 @@
 
     (global.set $dll_count (i32.add (global.get $dll_count) (i32.const 1)))
 
-    ;; Advance heap_ptr past loaded DLL so heap doesn't overlap DLL memory
+    ;; Push the low heap past this DLL image so allocations don't land on its
+    ;; code. This has to move the PROCESS cursor in shared memory, not $heap_ptr:
+    ;; that global now bounds one instance's private arena, so raising it here
+    ;; would leave every other instance still reserving over the image.
     (local.set $dst (i32.and
       (i32.add (i32.add (local.get $load_addr)
         (i32.load (i32.add (local.get $pe_off) (i32.const 80)))) ;; SizeOfImage
         (i32.const 0xFFF))
       (i32.const 0xFFFFF000)))
-    (if (i32.gt_u (local.get $dst) (global.get $heap_ptr))
-      (then (global.set $heap_ptr (local.get $dst))
-            (global.set $heap_base (local.get $dst))))
+    (call $heap_reserve_below (local.get $dst))
 
     ;; Return DllMain entry point
     (if (result i32) (i32.ne (local.get $entry_rva) (i32.const 0))
       (then (i32.add (local.get $load_addr) (local.get $entry_rva)))
       (else (i32.const 0))))
+
+  ;; Resolve a live dynamic-library module handle to its DLL_TABLE slot.
+  ;; The executable image is deliberately absent: DisableThreadLibraryCalls
+  ;; accepts a DLL module, not GetModuleHandle(NULL)'s executable handle.
+  (func $dll_index_from_module (param $module i32) (result i32)
+    (local $i i32)
+    (block $missing (loop $scan
+      (br_if $missing (i32.ge_u (local.get $i) (global.get $dll_count)))
+      (if (i32.eq (i32.load (i32.add (global.get $DLL_TABLE)
+            (i32.mul (local.get $i) (i32.const 32)))) (local.get $module))
+        (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const -1))
+
+  ;; Return 1 only when this loaded DLL still wants DLL_THREAD_ATTACH/DETACH.
+  ;; Exported because both cooperative and real browser Worker creation must
+  ;; consult the same process-shared loader state immediately before calling
+  ;; DllMain; caching this decision in JS would race a later disable call.
+  (func $dll_thread_notifications_enabled (export "dll_thread_notifications_enabled")
+      (param $module i32) (result i32)
+    (local $index i32)
+    (local.set $index (call $dll_index_from_module (local.get $module)))
+    (if (result i32) (i32.lt_s (local.get $index) (i32.const 0))
+      (then (i32.const 0))
+      (else (i32.eqz (i32.and
+        (i32.load (i32.add (global.get $DLL_FLAGS_TABLE)
+          (i32.shl (local.get $index) (i32.const 2))))
+        (i32.const 2))))))
+
+  ;; Mark a DLL as notification-free. Return 0 for an invalid module or a DLL
+  ;; whose PE advertises static TLS, exactly the two documented failure classes.
+  (func $dll_disable_thread_notifications (param $module i32) (result i32)
+    (local $index i32) (local $flags_ptr i32) (local $flags i32)
+    (local.set $index (call $dll_index_from_module (local.get $module)))
+    (if (i32.lt_s (local.get $index) (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $flags_ptr (i32.add (global.get $DLL_FLAGS_TABLE)
+      (i32.shl (local.get $index) (i32.const 2))))
+    (local.set $flags (i32.load (local.get $flags_ptr)))
+    (if (i32.and (local.get $flags) (i32.const 1))
+      (then (return (i32.const 0))))
+    (i32.store (local.get $flags_ptr) (i32.or (local.get $flags) (i32.const 2)))
+    (i32.const 1))
 
   ;; Process base relocations: apply delta to all HIGHLOW fixups
   (func $process_relocations (param $load_addr i32) (param $reloc_rva i32) (param $reloc_size i32) (param $delta i32)
@@ -240,82 +309,197 @@
   ;; them is loaded. The math entries route CRT float helpers to the host FPU;
   ;; the comctl32 entry papers over a genuine Win98-vs-XP version gap.
   (func $native_override_export_api_id (param $name_wa i32) (result i32)
-    (if (call $str_eq (local.get $name_wa) (i32.const 0x300))
-      (then (return (call $lookup_api_id (i32.const 0x300))))) ;; ceil
-    (if (call $str_eq (local.get $name_wa) (i32.const 0x305))
-      (then (return (call $lookup_api_id (i32.const 0x305))))) ;; sqrt
-    (if (call $str_eq (local.get $name_wa) (i32.const 0x30A))
-      (then (return (call $lookup_api_id (i32.const 0x30A))))) ;; sin
-    (if (call $str_eq (local.get $name_wa) (i32.const 0x30E))
-      (then (return (call $lookup_api_id (i32.const 0x30E))))) ;; pow
-    (if (call $str_eq (local.get $name_wa) (i32.const 0x312))
-      (then (return (call $lookup_api_id (i32.const 0x312))))) ;; _CIpow
+    ;; MSVC emits _ftol at every float/double-to-integer conversion.  Running
+    ;; the authentic 21-instruction MSVCRT wrapper through the threaded x86
+    ;; core is especially expensive in vertex-colour loops; the native handler
+    ;; implements the same x87 pop, truncation and EDX:EAX result directly.
+    (if (i32.eq (call $lookup_api_id (local.get $name_wa)) (i32.const 759))
+      (then (return (i32.const 759)))) ;; _ftol
+    (if (call $str_eq (local.get $name_wa) "ceil")
+      (then (return (call $lookup_api_id "ceil"))))
+    (if (call $str_eq (local.get $name_wa) "sqrt")
+      (then (return (call $lookup_api_id "sqrt"))))
+    (if (call $str_eq (local.get $name_wa) "sin")
+      (then (return (call $lookup_api_id "sin"))))
+    (if (call $str_eq (local.get $name_wa) "pow")
+      (then (return (call $lookup_api_id "pow"))))
+    (if (call $str_eq (local.get $name_wa) "_CIpow")
+      (then (return (call $lookup_api_id "_CIpow"))))
     ;; Win98's comctl32 rejects every ICC_* bit in 0x7fff8000, so an XP-era
     ;; caller asking for ICC_LINK_CLASS (0x8000) gets FALSE and quits. The
     ;; classes themselves are registered from the DLL's DllMain, so answering
     ;; natively costs nothing and matches how a newer comctl32 would behave.
-    (if (call $str_eq (local.get $name_wa) (i32.const 0x11E30))
-      (then (return (call $lookup_api_id (i32.const 0x11E30))))) ;; InitCommonControlsEx
+    (if (call $str_eq (local.get $name_wa) "InitCommonControlsEx")
+      (then (return (call $lookup_api_id "InitCommonControlsEx"))))
     (i32.const -1))
 
   ;; WinSock 1.1 commonly imports WSOCK32 by ordinal. Resolve ordinals for
   ;; APIs already handled by the normal dispatch table; leave unsupported
   ;; ordinals explicit so they still produce the diagnostic marker below.
+  (func $guest_name_has_basename8_ci
+        (param $name i32)
+        (param $c0 i32) (param $c1 i32) (param $c2 i32) (param $c3 i32)
+        (param $c4 i32) (param $c5 i32) (param $c6 i32) (param $c7 i32)
+        (result i32)
+    (local $start i32) (local $scan i32) (local $c i32)
+    (if (i32.eqz (local.get $name)) (then (return (i32.const 0))))
+    (block $base_done (loop $base
+      (local.set $c (call $gl8 (i32.add (local.get $name) (local.get $scan))))
+      (br_if $base_done (i32.eqz (local.get $c)))
+      (if (i32.or
+            (i32.or (i32.eq (local.get $c) (i32.const 92))
+                    (i32.eq (local.get $c) (i32.const 47)))
+            (i32.eq (local.get $c) (i32.const 58)))
+        (then (local.set $start (i32.add (local.get $scan) (i32.const 1)))))
+      (local.set $scan (i32.add (local.get $scan) (i32.const 1)))
+      (br $base)))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (local.get $start)))) (local.get $c0)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 1))))) (local.get $c1)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 2))))) (local.get $c2)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 3))))) (local.get $c3)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 4))))) (local.get $c4)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 5))))) (local.get $c5)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 6))))) (local.get $c6)) (then (return (i32.const 0))))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 7))))) (local.get $c7)) (then (return (i32.const 0))))
+    (call $guest_name_tail_is_dll
+      (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 8)))))
+
+  (func $guest_name_is_ws2_32_ci (param $name i32) (result i32)
+    (local $start i32) (local $scan i32) (local $c i32)
+    (if (i32.eqz (local.get $name)) (then (return (i32.const 0))))
+    (block $base_done (loop $base
+      (local.set $c (call $gl8 (i32.add (local.get $name) (local.get $scan))))
+      (br_if $base_done (i32.eqz (local.get $c)))
+      (if (i32.or
+            (i32.or (i32.eq (local.get $c) (i32.const 92))
+                    (i32.eq (local.get $c) (i32.const 47)))
+            (i32.eq (local.get $c) (i32.const 58)))
+        (then (local.set $start (i32.add (local.get $scan) (i32.const 1)))))
+      (local.set $scan (i32.add (local.get $scan) (i32.const 1)))
+      (br $base)))
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (local.get $start)))) (i32.const 0x77)) (then (return (i32.const 0)))) ;; w
+    (if (i32.ne (call $tolower (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 1))))) (i32.const 0x73)) (then (return (i32.const 0)))) ;; s
+    (if (i32.ne (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 2)))) (i32.const 0x32)) (then (return (i32.const 0)))) ;; 2
+    (if (i32.ne (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 3)))) (i32.const 0x5F)) (then (return (i32.const 0)))) ;; _
+    (if (i32.ne (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 4)))) (i32.const 0x33)) (then (return (i32.const 0)))) ;; 3
+    (if (i32.ne (call $gl8 (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 5)))) (i32.const 0x32)) (then (return (i32.const 0)))) ;; 2
+    (call $guest_name_tail_is_dll
+      (i32.add (local.get $name) (i32.add (local.get $start) (i32.const 6)))))
+
   (func $system_ordinal_api_id (param $dll_name_ga i32) (param $ordinal i32) (result i32)
     ;; Authentic Win98 SE KERNEL32.DLL: ordinal 99 is unnamed, RVA 0x1e260.
     ;; Its native body takes one BOOL refresh flag and returns the current
     ;; TIME_ZONE_ID_* classification (0 unknown, 1 standard, 2 daylight).
-    (if (call $dll_name_match (local.get $dll_name_ga) (i32.const 0x11DB0))
+    (if (call $dll_name_match (local.get $dll_name_ga) "KERNEL32.dll")
       (then
         (if (i32.eq (local.get $ordinal) (i32.const 99))
-          (then (return (call $lookup_api_id (i32.const 0x11DBD))))) ;; KERNEL32_Ordinal99
+          (then (return (call $lookup_api_id "KERNEL32_Ordinal99"))))
       ))
-    (if (call $dll_name_match (local.get $dll_name_ga) (i32.const 0x11300))
+    (if (i32.or
+          (call $dll_name_match (local.get $dll_name_ga) "WSOCK32.dll")
+          (call $guest_name_is_ws2_32_ci (local.get $dll_name_ga)))
       (then
-        (if (i32.eq (local.get $ordinal) (i32.const 115)) (then (return (call $lookup_api_id (i32.const 0x1130C))))) ;; WSAStartup
-        (if (i32.eq (local.get $ordinal) (i32.const 116)) (then (return (call $lookup_api_id (i32.const 0x11317))))) ;; WSACleanup
-        (if (i32.eq (local.get $ordinal) (i32.const 111)) (then (return (call $lookup_api_id (i32.const 0x11322))))) ;; WSAGetLastError
-        (if (i32.eq (local.get $ordinal) (i32.const 23))  (then (return (call $lookup_api_id (i32.const 0x11332))))) ;; socket
-        (if (i32.eq (local.get $ordinal) (i32.const 3))   (then (return (call $lookup_api_id (i32.const 0x11339))))) ;; closesocket
-        (if (i32.eq (local.get $ordinal) (i32.const 4))   (then (return (call $lookup_api_id (i32.const 0x11345))))) ;; connect
-        (if (i32.eq (local.get $ordinal) (i32.const 19))  (then (return (call $lookup_api_id (i32.const 0x1134D))))) ;; send
-        (if (i32.eq (local.get $ordinal) (i32.const 16))  (then (return (call $lookup_api_id (i32.const 0x11352))))) ;; recv
-        (if (i32.eq (local.get $ordinal) (i32.const 52))  (then (return (call $lookup_api_id (i32.const 0x11357))))) ;; gethostbyname
-        (if (i32.eq (local.get $ordinal) (i32.const 9))   (then (return (call $lookup_api_id (i32.const 0x11365))))) ;; htons
-        (if (i32.eq (local.get $ordinal) (i32.const 10))  (then (return (call $lookup_api_id (i32.const 0x1136B))))) ;; inet_addr
-        (if (i32.eq (local.get $ordinal) (i32.const 18))  (then (return (call $lookup_api_id (i32.const 0x11375))))) ;; select
-        (if (i32.eq (local.get $ordinal) (i32.const 21))  (then (return (call $lookup_api_id (i32.const 0x1137C))))) ;; setsockopt
-        (if (i32.eq (local.get $ordinal) (i32.const 12))  (then (return (call $lookup_api_id (i32.const 0x11387))))) ;; ioctlsocket
-        (if (i32.eq (local.get $ordinal) (i32.const 1))   (then (return (call $lookup_api_id (i32.const 0x11393))))) ;; accept
-        (if (i32.eq (local.get $ordinal) (i32.const 2))   (then (return (call $lookup_api_id (i32.const 0x1139A))))) ;; bind
-        (if (i32.eq (local.get $ordinal) (i32.const 13))  (then (return (call $lookup_api_id (i32.const 0x1139F))))) ;; listen
-        (if (i32.eq (local.get $ordinal) (i32.const 22))  (then (return (call $lookup_api_id (i32.const 0x113A6))))) ;; shutdown
-        (if (i32.eq (local.get $ordinal) (i32.const 15))  (then (return (call $lookup_api_id (i32.const 0x113AF))))) ;; ntohs
-        (if (i32.eq (local.get $ordinal) (i32.const 11))  (then (return (call $lookup_api_id (i32.const 0x113B5))))) ;; inet_ntoa
-        (if (i32.eq (local.get $ordinal) (i32.const 151)) (then (return (call $lookup_api_id (i32.const 0x113BF))))) ;; __WSAFDIsSet
-        (if (i32.eq (local.get $ordinal) (i32.const 112)) (then (return (call $lookup_api_id (i32.const 0x113CC))))) ;; WSASetLastError
-        ;; Names beyond this point live in the 0x11D80 block — see 01-header.wat.
-        (if (i32.eq (local.get $ordinal) (i32.const 14))   (then (return (call $lookup_api_id (i32.const 0x11D80))))) ;; ntohl
-        (if (i32.eq (local.get $ordinal) (i32.const 1001)) (then (return (call $lookup_api_id (i32.const 0x11D86))))) ;; WsControl
+        (if (i32.eq (local.get $ordinal) (i32.const 115)) (then (return (call $lookup_api_id "WSAStartup"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 116)) (then (return (call $lookup_api_id "WSACleanup"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 111)) (then (return (call $lookup_api_id "WSAGetLastError"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 23))  (then (return (call $lookup_api_id "socket"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 3))   (then (return (call $lookup_api_id "closesocket"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 4))   (then (return (call $lookup_api_id "connect"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 5))   (then (return (call $lookup_api_id "getpeername"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 6))   (then (return (call $lookup_api_id "getsockname"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 7))   (then (return (call $lookup_api_id "getsockopt"))))
+        ;; htonl and ntohl are the same byte swap on this little-endian guest.
+        (if (i32.eq (local.get $ordinal) (i32.const 8))   (then (return (call $lookup_api_id "ntohl"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 19))  (then (return (call $lookup_api_id "send"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 16))  (then (return (call $lookup_api_id "recv"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 20))  (then (return (call $lookup_api_id "sendto"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 17))  (then (return (call $lookup_api_id "recvfrom"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 52))  (then (return (call $lookup_api_id "gethostbyname"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 9))   (then (return (call $lookup_api_id "htons"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 10))  (then (return (call $lookup_api_id "inet_addr"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 11))  (then (return (call $lookup_api_id "inet_ntoa"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 18))  (then (return (call $lookup_api_id "select"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 21))  (then (return (call $lookup_api_id "setsockopt"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 12))  (then (return (call $lookup_api_id "ioctlsocket"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 1))   (then (return (call $lookup_api_id "accept"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 2))   (then (return (call $lookup_api_id "bind"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 13))  (then (return (call $lookup_api_id "listen"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 14))  (then (return (call $lookup_api_id "ntohl"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 15))  (then (return (call $lookup_api_id "ntohs"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 22))  (then (return (call $lookup_api_id "shutdown"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 15))  (then (return (call $lookup_api_id "ntohs"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 11))  (then (return (call $lookup_api_id "inet_ntoa"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 151)) (then (return (call $lookup_api_id "__WSAFDIsSet"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 112)) (then (return (call $lookup_api_id "WSASetLastError"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 14))   (then (return (call $lookup_api_id "ntohl"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 5))    (then (return (call $lookup_api_id "getpeername"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 57))   (then (return (call $lookup_api_id "gethostname"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 101))  (then (return (call $lookup_api_id "WSAAsyncSelect"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 1001)) (then (return (call $lookup_api_id "WsControl"))))
       ))
     ;; WINMM. Welcome98 imports PlaySound purely by ordinal; the name is
     ;; resolved from the real Win98 winmm.dll export table rather than guessed
     ;; (tools/pe-exports.js --ordinal=2).
-    (if (call $dll_name_match (local.get $dll_name_ga) (i32.const 0x113DC))
+    (if (call $dll_name_match (local.get $dll_name_ga) "winmm.dll")
       (then
-        (if (i32.eq (local.get $ordinal) (i32.const 2)) (then (return (call $lookup_api_id (i32.const 0x113E6))))) ;; PlaySoundA
+        (if (i32.eq (local.get $ordinal) (i32.const 2)) (then (return (call $lookup_api_id "PlaySoundA"))))
+      ))
+    ;; Authentic Win98 DPLAYX exports (ordinals read off the retail DX6
+    ;; dplayx.dll with tools/pe-exports.js, not guessed). RollerCoaster Tycoon
+    ;; imports 1 and 2 by ordinal only. $guest_name_is_static_system_dll
+    ;; answers a *1-based* list position, and the list is
+    ;; ole32/user32/comctl32/dplayx/ddraw/dsound/d3drm — so dplayx is 4 and
+    ;; dsound is 6. The DSOUND rule below used to say 4 and therefore claimed
+    ;; every dplayx ordinal: RCT's ordinal 2 came back as DirectSoundEnumerateA,
+    ;; whose handler pushes four callback arguments where DirectPlayEnumerateA's
+    ;; callback pops five (`ret 0x14`), and the resulting stack skew returned the
+    ;; guest to EIP 0 before it ever created a window.
+    (if (i32.eq (call $guest_name_is_static_system_dll (local.get $dll_name_ga))
+                (i32.const 4))
+      (then
+        (if (i32.eq (local.get $ordinal) (i32.const 1)) (then (return (i32.const 1232)))) ;; DirectPlayCreate
+        (if (i32.eq (local.get $ordinal) (i32.const 2)) (then (return (i32.const 1234)))) ;; DirectPlayEnumerateA
+        (if (i32.eq (local.get $ordinal) (i32.const 4)) (then (return (i32.const 1235)))) ;; DirectPlayLobbyCreateA
+        (if (i32.eq (local.get $ordinal) (i32.const 9)) (then (return (i32.const 1233)))) ;; DirectPlayEnumerate
+      ))
+    ;; Authentic Win98 DSOUND exports. Diablo II's D2Sound imports both by
+    ;; ordinal: 2 enumerates the default driver, then 1 creates it. DSOUND is
+    ;; entry 6 in STATIC_SYS_DLL_NAMES' 1-based numbering; those API ids are
+    ;; append-only table positions and therefore as stable as the generated
+    ;; dispatch itself.
+    (if (i32.eq (call $guest_name_is_static_system_dll (local.get $dll_name_ga))
+                (i32.const 6))
+      (then
+        (if (i32.eq (local.get $ordinal) (i32.const 1)) (then (return (i32.const 976))))  ;; DirectSoundCreate
+        (if (i32.eq (local.get $ordinal) (i32.const 2)) (then (return (i32.const 1236)))) ;; DirectSoundEnumerateA
+      ))
+    ;; Authentic Win98 COMCTL32 ordinal 17 is InitCommonControls. InstallShield
+    ;; setup helpers (including Heroes III's chkreqs.dll) import it without a
+    ;; name. Match the module stem directly so a full path works as well.
+    (if (call $guest_name_has_basename8_ci
+          (local.get $dll_name_ga)
+          (i32.const 0x63) (i32.const 0x6f) (i32.const 0x6d) (i32.const 0x63)
+          (i32.const 0x74) (i32.const 0x6c) (i32.const 0x33) (i32.const 0x32)) ;; comctl32
+      (then
+        (if (i32.eq (local.get $ordinal) (i32.const 17))
+          (then (return (i32.const 877)))) ;; InitCommonControls
       ))
     ;; OLEAUT32. Kodak Imaging imports the VARIANT/BSTR set by ordinal only.
-    (if (call $dll_name_match (local.get $dll_name_ga) (i32.const 0x11500))
+    (if (call $dll_name_match (local.get $dll_name_ga) "oleaut32.dll")
       (then
-        (if (i32.eq (local.get $ordinal) (i32.const 2))  (then (return (call $lookup_api_id (i32.const 0x1150D))))) ;; SysAllocString
-        (if (i32.eq (local.get $ordinal) (i32.const 4))  (then (return (call $lookup_api_id (i32.const 0x1151C))))) ;; SysAllocStringLen
-        (if (i32.eq (local.get $ordinal) (i32.const 6))  (then (return (call $lookup_api_id (i32.const 0x1152E))))) ;; SysFreeString
-        (if (i32.eq (local.get $ordinal) (i32.const 7))  (then (return (call $lookup_api_id (i32.const 0x1153C))))) ;; SysStringLen
-        (if (i32.eq (local.get $ordinal) (i32.const 8))  (then (return (call $lookup_api_id (i32.const 0x11549))))) ;; VariantInit
-        (if (i32.eq (local.get $ordinal) (i32.const 9))  (then (return (call $lookup_api_id (i32.const 0x11555))))) ;; VariantClear
-        (if (i32.eq (local.get $ordinal) (i32.const 10)) (then (return (call $lookup_api_id (i32.const 0x11562))))) ;; VariantCopy
-        (if (i32.eq (local.get $ordinal) (i32.const 420)) (then (return (call $lookup_api_id (i32.const 0x11E50))))) ;; OleCreateFontIndirect
+        (if (i32.eq (local.get $ordinal) (i32.const 2))  (then (return (call $lookup_api_id "SysAllocString"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 4))  (then (return (call $lookup_api_id "SysAllocStringLen"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 6))  (then (return (call $lookup_api_id "SysFreeString"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 7))  (then (return (call $lookup_api_id "SysStringLen"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 8))  (then (return (call $lookup_api_id "VariantInit"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 9))  (then (return (call $lookup_api_id "VariantClear"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 10)) (then (return (call $lookup_api_id "VariantCopy"))))
+        ;; InstallShield 11 imports the binary-BSTR helpers by ordinal. Keep
+        ;; these in the guest resolver as well as the host fallback so loaded
+        ;; DLL imports cannot depend on which resolver path reached them.
+        (if (i32.eq (local.get $ordinal) (i32.const 149)) (then (return (call $lookup_api_id "SysStringByteLen"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 150)) (then (return (call $lookup_api_id "SysAllocStringByteLen"))))
+        (if (i32.eq (local.get $ordinal) (i32.const 420)) (then (return (call $lookup_api_id "OleCreateFontIndirect"))))
       ))
     (i32.const -1))
 
@@ -341,12 +525,18 @@
     (local $desc_ptr i32) (local $ilt_rva i32) (local $iat_rva i32)
     (local $ilt_ptr i32) (local $iat_ptr i32) (local $entry i32) (local $thunk_addr i32)
     (local $dll_name_rva i32) (local $dll_name_ptr i32)
-    (local $resolved_dll i32) (local $resolved_addr i32) (local $api_id i32)
+    (local $resolved_dll i32) (local $resolved_addr i32) (local $api_id i32) (local $hint_name_wa i32)
     (local.set $desc_ptr (call $g2w (i32.add (local.get $load_addr) (local.get $import_rva))))
     (block $id (loop $dl
       (local.set $ilt_rva (i32.load (local.get $desc_ptr)))
       (local.set $iat_rva (i32.load (i32.add (local.get $desc_ptr) (i32.const 16))))
-      (br_if $id (i32.eqz (local.get $ilt_rva)))
+      ;; OriginalFirstThunk is optional. As in the main PE loader, a stripped
+      ;; image keeps its lookup entries in FirstThunk until we overwrite them.
+      ;; FirstThunk is required for a live descriptor, so use it to recognize
+      ;; the terminator and as the lookup-table fallback.
+      (br_if $id (i32.eqz (local.get $iat_rva)))
+      (if (i32.eqz (local.get $ilt_rva))
+        (then (local.set $ilt_rva (local.get $iat_rva))))
       ;; Get imported DLL name
       (local.set $dll_name_rva (i32.load (i32.add (local.get $desc_ptr) (i32.const 12))))
       (local.set $dll_name_ptr (i32.add (local.get $load_addr) (local.get $dll_name_rva)))
@@ -371,7 +561,10 @@
                   (call $g2w (i32.add (local.get $load_addr) (i32.add (local.get $entry) (i32.const 2))))))))
             (i32.store (local.get $iat_ptr) (local.get $resolved_addr)))
           (else
-            ;; System DLL — create thunk
+            ;; System DLL — create thunk. LoadLibrary can run on any guest
+            ;; thread, so the index comes from the process-wide cursor rather
+            ;; than this instance's count (see $thunk_reserve).
+            (global.set $num_thunks (call $thunk_reserve))
             (local.set $thunk_addr (i32.add
               (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
                        (global.get $GUEST_BASE))
@@ -379,17 +572,18 @@
             (i32.store (local.get $iat_ptr) (local.get $thunk_addr))
             (if (i32.eqz (i32.and (local.get $entry) (i32.const 0x80000000)))
               (then
+                (local.set $hint_name_wa
+                  (call $g2w (i32.add (local.get $load_addr) (local.get $entry))))
                 (local.set $api_id (call $import_hint_override_api_id
                   (local.get $dll_name_ptr)
-                  (call $g2w (i32.add (local.get $load_addr) (local.get $entry)))))
+                  (local.get $hint_name_wa)))
                 (if (i32.ne (local.get $api_id) (i32.const -1))
                   (then
                     (i32.store
                       (i32.add (global.get $THUNK_BASE)
                         (i32.mul (global.get $num_thunks) (i32.const 8)))
                       (i32.or (i32.const 0x80000000)
-                        (i32.load16_u
-                          (call $g2w (i32.add (local.get $load_addr) (local.get $entry))))))
+                        (i32.load16_u (local.get $hint_name_wa))))
                     (i32.store
                       (i32.add
                         (i32.add (global.get $THUNK_BASE)
@@ -415,8 +609,16 @@
                           (i32.add (local.get $load_addr)
                             (i32.add (local.get $entry) (i32.const 2)))))))))
               (else
-                (local.set $api_id (call $system_ordinal_api_id
-                  (local.get $dll_name_ptr) (i32.and (local.get $entry) (i32.const 0xFFFF))))
+                ;; A DLL import needs the same WAT-first, host-fallback ordinal
+                ;; resolver as the main executable.  Calling only the static
+                ;; WAT table here made host-mapped system exports (notably the
+                ;; authentic DPLAYX ordinal set) turn into ORD diagnostics
+                ;; when imported by a loaded DLL, even though the identical
+                ;; import from an EXE resolved correctly.
+                (local.set $api_id (call $resolve_import_ordinal
+                  (local.get $dll_name_ptr)
+                  (call $g2w (local.get $dll_name_ptr))
+                  (i32.and (local.get $entry) (i32.const 0xFFFF))))
                 (if (i32.ne (local.get $api_id) (i32.const -1))
                   (then
                     (i32.store (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
@@ -499,6 +701,9 @@
                 (local.set $api_id (call $native_override_export_api_id (local.get $name_wa)))
                 (if (i32.ne (local.get $api_id) (i32.const -1))
                   (then
+                    ;; Same reservation as above: this patching path runs
+                    ;; whenever a DLL loads, on whichever thread loaded it.
+                    (global.set $num_thunks (call $thunk_reserve))
                     (local.set $thunk_addr (i32.add
                       (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
                                (global.get $GUEST_BASE))
@@ -527,7 +732,7 @@
   ;; engine loads a help file's own DLL when a registered macro is called,
   ;; without a round trip through the host.
   (func $next_dll_addr (export "get_next_dll_addr") (result i32)
-    (local $addr i32) (local $after_dll i32)
+    (local $addr i32) (local $after_dll i32) (local $mark i32)
     (if (global.get $dll_count)
       (then
         ;; After last loaded DLL
@@ -540,10 +745,15 @@
         (local.set $after_dll (i32.and
           (i32.add (i32.add (global.get $image_base) (global.get $exe_size_of_image)) (i32.const 0xFFF))
           (i32.const 0xFFFFF000)))))
-    ;; Return max(after_dll, page_aligned(heap_ptr)) to avoid overwriting heap
-    (if (result i32) (i32.gt_u (global.get $heap_ptr) (local.get $after_dll))
-      (then (i32.and (i32.add (global.get $heap_ptr) (i32.const 0xFFF)) (i32.const 0xFFFFF000)))
+    ;; Return max(after_dll, page_aligned(low-heap watermark)) to avoid
+    ;; overwriting the heap. The watermark is the top of every instance's
+    ;; reserved arena, which is what has to be cleared — one instance's
+    ;; $heap_ptr would say nothing about the others'.
+    (local.set $mark (call $heap_low_watermark))
+    (if (result i32) (i32.gt_u (local.get $mark) (local.get $after_dll))
+      (then (i32.and (i32.add (local.get $mark) (i32.const 0xFFF)) (i32.const 0xFFFFF000)))
       (else (local.get $after_dll))))
 
   (func (export "get_exe_size_of_image") (result i32) (global.get $exe_size_of_image))
   (func (export "get_dll_count") (result i32) (global.get $dll_count))
+  (func (export "get_dll_capacity") (result i32) (global.get $DLL_TABLE_CAPACITY))

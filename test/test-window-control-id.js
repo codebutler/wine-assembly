@@ -9,42 +9,42 @@ const extraWat = String.raw`
   (func (export "test_call_SetWindowLongA_id")
     (param $hwnd i32) (param $id i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetWindowLongA
       (local.get $hwnd) (i32.const -12) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_GetDlgCtrlID")
     (param $hwnd i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetDlgCtrlID
       (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_GetWindowLongA_id")
     (param $hwnd i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetWindowLongA
       (local.get $hwnd) (i32.const -12) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_GetWindowLongA_hinstance")
     (param $hwnd i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetWindowLongA
       (local.get $hwnd) (i32.const -6) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_window_hinstance")
     (param $hwnd i32) (param $hinstance i32)
@@ -53,22 +53,22 @@ const extraWat = String.raw`
   (func (export "test_call_SetWindowContextHelpId")
     (param $hwnd i32) (param $help_id i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetWindowContextHelpId
       (local.get $hwnd) (local.get $help_id) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_GetQueueStatus")
     (param $flags i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetQueueStatus
       (local.get $flags) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_post_queue_count") (param $count i32)
     (global.set $post_queue_count (local.get $count)))
@@ -80,23 +80,39 @@ const extraWat = String.raw`
       (local.get $hwnd) (i32.const 1) (i32.const 2)
       (i32.const 30) (i32.const 40))
     (local.set $before (call $update_get_rect (local.get $hwnd) (i32.const 0)))
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_DefWindowProcA
       (local.get $hwnd) (i32.const 0x000F) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.or (i32.shl (local.get $before) (i32.const 1))
       (call $update_get_rect (local.get $hwnd) (i32.const 0))))
 
   (func (export "test_call_GetDlgItem_id")
     (param $parent i32) (param $id i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetDlgItem
       (local.get $parent) (local.get $id) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+
+  (func (export "test_create_button_with_id")
+    (param $id i32) (result i32)
+    (local $parent i32)
+    (local.set $parent (global.get $next_hwnd))
+    (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
+    (call $wnd_table_set (local.get $parent) (global.get $WNDPROC_BUILTIN))
+    (drop (call $wnd_set_style (local.get $parent) (i32.const 0x90000000)))
+    (call $ctrl_create_child
+      (local.get $parent) (i32.const 1) (local.get $id)
+      (i32.const 0) (i32.const 0) (i32.const 75) (i32.const 23)
+      (i32.const 0x50010000) (i32.const 0)))
+
+  (func (export "test_button_state_id")
+    (param $hwnd i32) (result i32)
+    (i32.load offset=12 (call $g2w (call $wnd_get_state_ptr (local.get $hwnd)))))
 `;
 
 (async () => {
@@ -136,6 +152,14 @@ const extraWat = String.raw`
     'the old child ID no longer resolves');
   assert.strictEqual(e.test_call_GetDlgItem_id(parent, 0xEA21) >>> 0, child,
     'the replacement child ID resolves to the saved view');
+
+  const button = e.test_create_button_with_id(0) >>> 0;
+  assert.strictEqual(e.test_button_state_id(button), 0,
+    'BUTTON starts with the hMenu-derived creation ID in native state');
+  assert.strictEqual(e.test_call_SetWindowLongA_id(button, 0x1234), 0,
+    'SetWindowLongA(GWL_ID) returns BUTTON\'s previous zero ID');
+  assert.strictEqual(e.test_button_state_id(button), 0x1234,
+    'SetWindowLongA(GWL_ID) synchronizes BUTTON notification state');
 
   assert.strictEqual(e.test_call_SetWindowLongA_id(0x7FFFFFFF, 1), 0,
     'an invalid window is not assigned a control ID');

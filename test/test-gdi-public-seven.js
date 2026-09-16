@@ -6,7 +6,29 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const { readWatSourceClosure } = require('./wat-source-closure');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 const { fontMounts } = require('../lib/font-substitutions');
+
+const gdiSource = readWatSourceClosure();
+function watFunction(source, name) {
+  const start = source.indexOf(`(func $${name}`);
+  assert(start >= 0, `missing ${name}`);
+  let depth = 0;
+  for (let index = start; index < source.length; index++) {
+    if (source[index] === '(') depth++;
+    else if (source[index] === ')' && --depth === 0) return source.slice(start, index + 1);
+  }
+  throw new Error(`unterminated ${name}`);
+}
+for (const suffix of ['A', 'W']) {
+  const legacy = watFunction(gdiSource, `handle_GetCharWidth${suffix}`);
+  assert(legacy.includes(`call $handle_GetCharWidth32${suffix}`),
+    `legacy GetCharWidth${suffix} must delegate to its canonical 32-bit handler`);
+  assert(!legacy.includes('$gdi_font_char_widths'),
+    `legacy GetCharWidth${suffix} must not retain a second width-query body`);
+}
 
 (async () => {
   const harness = await bootRenderHarness({
@@ -28,73 +50,91 @@ const { fontMounts } = require('../lib/font-substitutions');
       (func (export "test_public_call_CreateDIBPatternBrush")
             (param i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
         (call $handle_CreateDIBPatternBrush
           (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
       (func (export "test_public_call_CreateDiscardableBitmap")
             (param i32 i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
         (call $handle_CreateDiscardableBitmap
           (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
           (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
       (func (export "test_public_call_GetCharWidth32A")
             (param i32 i32 i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
         (call $handle_GetCharWidth32A
           (local.get 0) (local.get 1) (local.get 2) (local.get 3)
           (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
+      (func (export "test_public_call_GetCharWidthA")
+            (param i32 i32 i32 i32) (result i32)
+        (local $saved i32)
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+        (call $handle_GetCharWidthA
+          (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+          (i32.const 0) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
       (func (export "test_public_call_GetCharWidth32W")
             (param i32 i32 i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
         (call $handle_GetCharWidth32W
           (local.get 0) (local.get 1) (local.get 2) (local.get 3)
           (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
+      (func (export "test_public_call_GetCharWidthW")
+            (param i32 i32 i32 i32) (result i32)
+        (local $saved i32)
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+        (call $handle_GetCharWidthW
+          (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+          (i32.const 0) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
       (func (export "test_public_call_GetCharacterPlacementW")
             (param i32 i32 i32 i32 i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get 5))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get 5))
         (call $handle_GetCharacterPlacementW
           (local.get 0) (local.get 1) (local.get 2) (local.get 3)
           (local.get 4) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
       (func (export "test_public_call_InvertRgn")
             (param i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
         (call $handle_InvertRgn
           (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
       (func (export "test_public_call_PolyPolyline")
             (param i32 i32 i32 i32) (result i32)
         (local $saved i32)
-        (local.set $saved (global.get $esp))
+        (local.set $saved (i32.load offset=16 (global.get $reg_base)))
         (call $handle_PolyPolyline
           (local.get 0) (local.get 1) (local.get 2) (local.get 3)
           (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $saved))
-        (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+        (i32.load offset=0 (global.get $reg_base)))
     `,
   });
   const { exports: wat, memory, hostCtx } = harness;
   const bytes = new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  const wa = guest => RegionMap.g2w(guest, imageBase);
   const allocZero = size => {
     const pointer = wat.guest_alloc(size) >>> 0;
     bytes.fill(0, wa(pointer), wa(pointer) + size);
@@ -182,7 +222,13 @@ const { fontMounts } = require('../lib/font-substitutions');
   assert.strictEqual(wat.test_public_call_GetCharWidth32A(hdc, 65, 67, widths), 1);
   assert.deepStrictEqual([0, 1, 2].map(index => wat.guest_read32(widths + index * 4)),
     bitmapWidths);
+  assert.strictEqual(wat.test_public_call_GetCharWidthA(hdc, 65, 67, widths), 1);
+  assert.deepStrictEqual([0, 1, 2].map(index => wat.guest_read32(widths + index * 4)),
+    bitmapWidths);
   assert.strictEqual(wat.test_public_call_GetCharWidth32W(hdc, 65, 67, widths), 1);
+  assert.deepStrictEqual([0, 1, 2].map(index => wat.guest_read32(widths + index * 4)),
+    bitmapWidths);
+  assert.strictEqual(wat.test_public_call_GetCharWidthW(hdc, 65, 67, widths), 1);
   assert.deepStrictEqual([0, 1, 2].map(index => wat.guest_read32(widths + index * 4)),
     bitmapWidths);
 

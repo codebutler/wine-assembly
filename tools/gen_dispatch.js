@@ -9,6 +9,20 @@ const fs = require('fs');
 const path = require('path');
 
 const apiTable = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'src', 'api_table.json'), 'utf8'));
+
+// Two spellings of the x86 GPRs: the historical per-instance wasm globals, and
+// the per-thread register file in linear memory ($reg_base, slots +0 eax /
+// +16 esp). The generated table must match whichever the tree declares, or the
+// build's own staleness check fires on every run. Read it from 01-header.wat
+// rather than a flag so the generator cannot drift from the source it feeds.
+const REGFILE = /\(global \$reg_base \(mut i32\)/.test(
+  fs.readFileSync(path.join(__dirname, '..', 'src', '01-header.wat'), 'utf8'));
+const getR = r => REGFILE
+  ? `(i32.load offset=${{ eax: 0, esp: 16 }[r]} (global.get $reg_base))`
+  : `(global.get $${r})`;
+const setR = (r, v) => REGFILE
+  ? `(i32.store offset=${{ eax: 0, esp: 16 }[r]} (global.get $reg_base) ${v})`
+  : `(global.set $${r} ${v})`;
 const outPath = path.join(__dirname, '..', 'src', '09b2-dispatch-table.generated.wat');
 
 // --check: generate in memory and compare with the file on disk. Used as a build
@@ -30,7 +44,229 @@ const N = apiTable.length;
 const out = [];
 const PAGE_SIZE = 256;
 
+function watName(name, label) {
+  if (!/^[A-Za-z0-9_?@$]+$/.test(name)) {
+    fatal(`${label} has invalid WAT identifier ${JSON.stringify(name)}`);
+  }
+  return name;
+}
+
+function watI32(value) {
+  return value > 0x7fffffff ? `0x${value.toString(16)}` : String(value);
+}
+
+// Hand-written fast paths and the COM-vtable bootstrap still need a few IDs,
+// but their source must never bake in api_table.json's current array indexes.
+// Emit the names beside the generated dispatcher so an append/reorder repair
+// updates every consumer through the existing `gen_dispatch.js --check` gate.
+const namedApiIds = [
+  ['MsgWaitForMultipleObjects', 'API_ID_MsgWaitForMultipleObjects'],
+  ['PeekMessageA', 'API_ID_PeekMessageA'],
+  ['PeekMessageW', 'API_ID_PeekMessageW'],
+  ['IDirectDraw_QueryInterface', 'API_ID_IDirectDraw_BASE'],
+  ['IAMMultiMediaStream_QueryInterface', 'API_ID_IAMMultiMediaStream_BASE'],
+  ['IShellLinkA_QueryInterface', 'API_ID_IShellLinkA_BASE'],
+  ['IPersistFile_QueryInterface', 'API_ID_IPersistFile_BASE'],
+  ['IDirect3DShader9_QueryInterface', 'API_ID_IDirect3DShader9_BASE'],
+  ['IDirect3DBuffer9_QueryInterface', 'API_ID_IDirect3DBuffer9_BASE'],
+  ['IDirect3DVertexDeclaration9_QueryInterface', 'API_ID_IDirect3DVertexDeclaration9_BASE'],
+  ['IDirect3DStateBlock9_QueryInterface', 'API_ID_IDirect3DStateBlock9_BASE'],
+  ['IDirect3DQuery9_QueryInterface', 'API_ID_IDirect3DQuery9_BASE'],
+  ['IDirect3DCubeTexture9_QueryInterface', 'API_ID_IDirect3DCubeTexture9_BASE'],
+  ['IDirect3DTexture8_QueryInterface', 'API_ID_IDirect3DTexture8_BASE'],
+];
+
+out.push('  ;; Named API ids consumed by hand-written dispatch fast paths.');
+out.push('  ;; Generated from api_table.json; never replace these with array indexes.');
+for (const [name, symbol] of namedApiIds) {
+  const matches = apiTable.filter(api => api.name === name);
+  if (matches.length !== 1) {
+    fatal(`named API id ${name} must match exactly one api_table.json entry (found ${matches.length})`);
+    continue;
+  }
+  out.push(`  (global $${symbol} i32 (i32.const ${matches[0].id}))`);
+}
+out.push('');
+
+// Constant compatibility stubs are data, not behavior worth transcribing in
+// a hand-written handler file.  The explicit pop count keeps unusual calling
+// conventions reviewable; stdcall rows are additionally checked against nargs.
+const stubApis = apiTable.filter(api => api.stub !== undefined);
+const stubHandlers = new Set();
+for (const api of stubApis) {
+  const stub = api.stub;
+  if (!stub || typeof stub !== 'object' || Array.isArray(stub) ||
+      Object.keys(stub).some(key => key !== 'pop' && key !== 'ret') ||
+      !Number.isInteger(stub.pop) || stub.pop < 0 || stub.pop % 4 !== 0 ||
+      !Number.isInteger(stub.ret) || stub.ret < -0x80000000 || stub.ret > 0xffffffff) {
+    fatal(`API ${api.name} stub must be {"pop": aligned nonnegative integer, "ret": i32 integer}`);
+    continue;
+  }
+  if (api.handler) {
+    fatal(`API ${api.name} cannot combine stub metadata with a handler alias`);
+    continue;
+  }
+  if (api.convention === 'stdcall' && Number.isInteger(api.nargs) &&
+      stub.pop !== 4 * (api.nargs + 1)) {
+    fatal(`API ${api.name} stub pop ${stub.pop} disagrees with stdcall nargs ${api.nargs}`);
+  }
+  const handler = watName(api.name, `API ${api.name} stub handler`);
+  if (stubHandlers.has(handler)) fatal(`duplicate generated stub handler $handle_${handler}`);
+  stubHandlers.add(handler);
+}
+if (stubApis.length) {
+  out.push('  ;; ============================================================');
+  out.push('  ;; CONSTANT API STUBS — GENERATED, do not edit');
+  out.push('  ;; Opted in with stub:{pop,ret} in api_table.json.');
+  out.push('  ;; ============================================================');
+}
+for (const api of stubApis) {
+  if (!stubHandlers.has(api.name)) continue;
+  out.push(`  ;; ${api.name}: pop ${api.stub.pop}, return ${watI32(api.stub.ret)}`);
+  out.push(`  (func $handle_${api.name} (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)`);
+  out.push(`    ${setR('eax', `(i32.const ${watI32(api.stub.ret)})`)}`);
+  out.push(`    ${setR('esp', `(i32.add ${getR('esp')} (i32.const ${api.stub.pop}))`)})`);
+  out.push('');
+}
+
+// Test-only direct-call exports used by focused WAT harnesses.  These have one
+// mechanical ABI: expose the API's declared arguments, zero-fill the handler's
+// remaining argument registers/name pointer, and restore ESP after the stdcall
+// handler advances it.  Anything needing a synthetic stack frame or other
+// setup remains hand-written in 13-exports.wat.
+const testCallApis = apiTable.filter(api => api.test_call === true);
+for (const api of apiTable) {
+  if (api.test_call !== undefined && api.test_call !== true) {
+    fatal(`API ${api.name} test_call must be true when present`);
+  }
+}
+if (testCallApis.length) {
+  out.push('  ;; ============================================================');
+  out.push('  ;; TEST-CALL EXPORTS — GENERATED, do not edit');
+  out.push('  ;; Opted in with test_call:true in api_table.json.');
+  out.push('  ;; ============================================================');
+}
+for (const api of testCallApis) {
+  if (!Number.isInteger(api.nargs) || api.nargs < 0 || api.nargs > 5) {
+    fatal(`API ${api.name} test_call requires integer nargs in range 0..5`);
+    continue;
+  }
+  const handler = watName(api.handler || api.name, `API ${api.name} handler`);
+  const params = Array.from({ length: api.nargs }, (_, i) => ` (param $arg${i} i32)`).join('');
+  const args = Array.from({ length: 5 }, (_, i) =>
+    i < api.nargs ? `(local.get $arg${i})` : '(i32.const 0)');
+  args.push('(i32.const 0)');
+  out.push(`  (func (export "test_call_${api.name}")${params} (result i32)`);
+  out.push('    (local $saved_esp i32)');
+  out.push(`    (local.set $saved_esp ${getR('esp')})`);
+  out.push(`    (call $handle_${handler}`);
+  out.push(`      ${args.slice(0, 3).join(' ')}`);
+  out.push(`      ${args.slice(3).join(' ')})`);
+  out.push(`    ${setR('esp', '(local.get $saved_esp)')}`);
+  out.push(`    ${getR('eax')})`);
+}
+if (testCallApis.length) out.push('');
+
+// OpenGL/WGL exports share one ABI bridge. `words` counts physical 32-bit
+// stack words (GLdouble consumes two), while api_table nargs remains the
+// source-level argument count used by tracing.
+const gpuApis = new Map([
+  ['glAlphaFunc', 2], ['glBlendFunc', 2], ['glClear', 1], ['glClearColor', 4],
+  ['glCullFace', 1], ['glDepthFunc', 1], ['glDepthMask', 1], ['glDepthRange', 4],
+  ['glDisable', 1], ['glDrawBuffer', 1], ['glEnable', 1], ['glFinish', 0],
+  ['glGetError', 0], ['glGetFloatv', 2], ['glGetString', 1], ['glPointSize', 1],
+  ['glPolygonMode', 2], ['glReadPixels', 7], ['glScissor', 4], ['glShadeModel', 1],
+  ['glViewport', 4], ['glBegin', 1], ['glEnd', 0], ['glColor3f', 3],
+  ['glColor3fv', 1], ['glColor4f', 4], ['glColor4fv', 1], ['glColor4ubv', 1],
+  ['glTexCoord2f', 2], ['glVertex2f', 2], ['glVertex3f', 3], ['glVertex3fv', 1],
+  ['glFrustum', 12], ['glLoadIdentity', 0], ['glLoadMatrixf', 1],
+  ['glMatrixMode', 1], ['glOrtho', 12], ['glPopMatrix', 0], ['glPushMatrix', 0],
+  ['glRotatef', 4], ['glScalef', 3], ['glTranslatef', 3], ['glBindTexture', 2],
+  ['glDeleteTextures', 2], ['glTexEnvf', 3], ['glTexImage2D', 9],
+  ['glTexParameterf', 3], ['glTexSubImage2D', 9], ['wglCreateContext', 1],
+  ['wglDeleteContext', 1], ['wglGetProcAddress', 1], ['wglMakeCurrent', 2],
+  ['wglChoosePixelFormat', 2], ['wglDescribePixelFormat', 4],
+  ['wglSetPixelFormat', 3],
+  // Legacy ref_gl.dll dynamically asks for this spelling. Opcode 55 is the
+  // same backend-neutral present operation used by GDI32!SwapBuffers.
+  ['wglSwapBuffers', 1],
+  // Appended after the stable GL/WGL opcode range. GoldSrc uses the scalar
+  // unsigned-byte colour entry point for world geometry and polygon offset
+  // for coplanar decals.
+  ['glColor4ub', 4],
+  ['glPolygonOffset', 2],
+  ['glColor3ubv', 1],
+  // GLU matrix helpers are appended after the stable GL/WGL/GPU range.
+  // Their GLdouble arguments consume two physical stack dwords each.
+  ['gluPerspective', 8],
+  ['gluLookAt', 18],
+  ['gluBuild2DMipmaps', 7],
+  ['gluOrtho2D', 8],
+  // Win98-era intros use immediate-mode normals even when lighting is toggled
+  // only for a subset of their geometry. Keep these appended so every older
+  // command-stream opcode stays stable.
+  ['glNormal3f', 3],
+  ['glNormal3fv', 1],
+  ['glIsEnabled', 1],
+  ['glColorMaterial', 2],
+  ['glLightfv', 3],
+  ['glMaterialfv', 3],
+  ['glLightModelfv', 2],
+  ['glLightModeli', 2],
+  ['glMaterialf', 3],
+  ['glLightf', 3],
+  ['glPixelStorei', 2],
+  ['glGenTextures', 2],
+  ['glHint', 2],
+  ['glPushAttrib', 1],
+  ['glPopAttrib', 0],
+  ['glFogfv', 2],
+  ['glFogf', 2],
+  ['glFogi', 2],
+  ['glFrontFace', 1],
+  ['glTexEnvi', 3],
+  ['glTexGeni', 3],
+  ['glTexGenf', 3],
+  ['glTexGenfv', 3],
+  // SimGolf Terrain.dll's measured OpenGL 1.1 imports. Client arrays are
+  // compiled locally by GLCommandStream so guest pointers retain call-time semantics.
+  ['glEnableClientState', 1],
+  ['glArrayElement', 1],
+  ['glVertexPointer', 4],
+  ['glNormalPointer', 3],
+  ['glRotated', 8],
+  ['glVertex2fv', 1],
+  ['glMateriali', 3],
+  ['glFlush', 0],
+  ['glLineWidth', 1],
+  ['glTexCoord2fv', 1],
+  ['glTexParameteri', 3],
+  ['glVertex2i', 2],
+  ['gluBuild1DMipmaps', 6],
+  // Warcraft III turns the vertex-array path back off between its UI and
+  // world passes, so the disable half has to exist too.
+  ['glDisableClientState', 1],
+  // Warcraft III's world pass is indexed client arrays with colour and texture
+  // coordinates, and it queries integer limits before choosing its texture path.
+  ['glTexCoordPointer', 4],
+  ['glColorPointer', 4],
+  ['glDrawElements', 4],
+  ['glGetIntegerv', 2],
+  ['glReadBuffer', 1],
+  // ARB_multitexture, reached through wglGetProcAddress rather than the import
+  // table. Warcraft III's text pass depends on the per-unit client-array split
+  // these entry points select.
+  ['glActiveTextureARB', 1],
+  ['glClientActiveTextureARB', 1],
+  ['glMultiTexCoord2fARB', 3],
+]);
+const gpuApiOrder = [...gpuApis.keys()];
+
 function handlerCall(api) {
+  const gpuOpcode = gpuApiOrder.indexOf(api.name);
+  if (gpuOpcode >= 0) {
+    return `      (call $handle_gpu_api (i32.const ${gpuOpcode}) (i32.const ${gpuApis.get(api.name)}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+  }
   const vbDdSlot = api.name.match(/^IVBDirectDraw7_DirectSlot(\d+)$/);
   if (vbDdSlot) {
     const slot = parseInt(vbDdSlot[1], 10);
@@ -57,7 +293,8 @@ function handlerCall(api) {
     const slot = parseInt(daSlot[2], 10);
     return `      (call $handle_IDirectAnimationDA${iface}_DirectSlot (i32.const ${slot}) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
   }
-  return `      (call $handle_${api.name} (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
+  const handler = watName(api.handler || api.name, `API ${api.name} handler alias`);
+  return `      (call $handle_${handler} (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))`;
 }
 
 out.push('  ;; ============================================================');
@@ -173,6 +410,25 @@ comInterfaces.push({ prefix: 'IDirectInput7', global: 'DX_VTBL_DINPUT7', extends
 // methods. Tail again, same registry-offset reason.
 comInterfaces.push({ prefix: 'IDirectInputDevice2', global: 'DX_VTBL_DIDEV2', extends: 'IDirectInputDevice' });
 
+// Surface3 adds SetSurfaceDesc to Surface2. Keep it at the absolute tail so
+// every established cross-thread vtable registry offset remains stable.
+comInterfaces.push({ prefix: 'IDirectDrawSurface3', global: 'DX_VTBL_DDSURF3', extends: 'IDirectDrawSurface2' });
+
+// D3D9 swap chains were added after every established interface. Keep this at
+// the absolute tail so worker-thread registry offsets remain append-only.
+comInterfaces.push({ prefix: 'IDirect3DSwapChain9', global: 'DX_VTBL_D3DSWAP9' });
+
+// Listener is an auxiliary view of a primary DirectSound buffer. Append it
+// after every established interface so registry offsets remain stable.
+comInterfaces.push({ prefix: 'IDirectSound3DListener', global: 'DX_VTBL_DS3DLISTENER' });
+comInterfaces.push({ prefix: 'IDirectPlay4', global: 'DX_VTBL_DPLAY4', extends: 'IDirectPlay3' });
+comInterfaces.push({ prefix: 'IDirectPlayLobby3', global: 'DX_VTBL_DPLAYLOBBY3', extends: 'IDirectPlayLobby2' });
+
+// D3D8 factory and device. Keep them at the absolute registry tail so no
+// established worker-thread vtable offset moves.
+const { vtableGlobals: d3d8Vtables } = require('./d3d8-methods');
+for (const v of d3d8Vtables) comInterfaces.push(v);
+
 // Build a map of prefix → { startId, count } from the api_table
 const byName = new Map(apiTable.map(a => [a.name, a]));
 const ifaceInfo = new Map();
@@ -192,7 +448,21 @@ for (const iface of comInterfaces) {
         'COM vtable slots are computed as startId + slot, so this table would call the wrong method.');
     }
   }
-  ifaceInfo.set(iface.prefix, { startId, count: methods.length });
+  let slotApiIds = null;
+  if (iface.methods) {
+    slotApiIds = iface.methods.map(method => {
+      const api = byName.get(`${iface.prefix}_${method}`);
+      if (!api) {
+        fatal(`${iface.prefix} vtable method ${method} has no api_table.json entry`);
+        return startId;
+      }
+      return api.id;
+    });
+    if (slotApiIds.length !== methods.length) {
+      fatal(`${iface.prefix} vtable order has ${slotApiIds.length} slots but ${methods.length} APIs`);
+    }
+  }
+  ifaceInfo.set(iface.prefix, { startId, count: methods.length, slotApiIds });
 }
 
 out.push('');
@@ -202,6 +472,7 @@ out.push('  ;; Generated by tools/gen_dispatch.js from api_table.json');
 out.push('  ;; ============================================================');
 out.push('  (func $init_dx_com_thunks (export "init_dx_com_thunks")');
 
+const builtVtableCounts = new Map();
 for (const iface of comInterfaces) {
   const info = ifaceInfo.get(iface.prefix);
   if (!info) continue;
@@ -209,13 +480,25 @@ for (const iface of comInterfaces) {
     // Extended interface: copy parent vtable + append extra methods
     const parentInfo = ifaceInfo.get(iface.extends);
     if (!parentInfo) { fatal(`COM interface ${iface.prefix} extends ${iface.extends}, which has no methods in api_table.json`); continue; }
-    const totalCount = parentInfo.count + info.count;
-    out.push(`    ;; ${iface.prefix}: extends ${iface.extends} (${parentInfo.count}) + ${info.count} extra = ${totalCount} total, extra at api_id ${info.startId}`);
+    // The parent may itself extend another interface. Copy its full generated
+    // vtable, not only the methods declared directly on that parent.
+    const parentCount = builtVtableCounts.get(iface.extends) || parentInfo.count;
+    const totalCount = parentCount + info.count;
+    out.push(`    ;; ${iface.prefix}: extends ${iface.extends} (${parentCount}) + ${info.count} extra = ${totalCount} total, extra at api_id ${info.startId}`);
     out.push(`    (global.set $${iface.global} (call $extend_com_vtable`);
-    out.push(`      (global.get $${ifaceInfo.get(iface.extends) ? comInterfaces.find(c => c.prefix === iface.extends).global : '??'}) (i32.const ${parentInfo.count}) (i32.const ${info.startId}) (i32.const ${totalCount})))`);
+    out.push(`      (global.get $${ifaceInfo.get(iface.extends) ? comInterfaces.find(c => c.prefix === iface.extends).global : '??'}) (i32.const ${parentCount}) (i32.const ${info.startId}) (i32.const ${totalCount})))`);
+    builtVtableCounts.set(iface.prefix, totalCount);
   } else {
     out.push(`    ;; ${iface.prefix}: ${info.count} methods starting at api_id ${info.startId}`);
     out.push(`    (global.set $${iface.global} (call $init_com_vtable (i32.const ${info.startId}) (i32.const ${info.count})))`);
+    if (info.slotApiIds) {
+      for (let slot = 0; slot < info.slotApiIds.length; slot++) {
+        const apiId = info.slotApiIds[slot];
+        if (apiId === info.startId + slot) continue;
+        out.push(`    (call $set_com_vtable_slot_api_id (global.get $${iface.global}) (i32.const ${slot}) (i32.const ${apiId}))`);
+      }
+    }
+    builtVtableCounts.set(iface.prefix, info.count);
   }
 }
 

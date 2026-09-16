@@ -13,22 +13,31 @@ const path = require('path');
 const crypto = require('crypto');
 
 const BERRRY_KEY = process.env.BERRRY_KEY;
-if (!BERRRY_KEY) { console.error('Missing BERRRY_KEY env var (try: set -a; . .env.berrry; set +a)'); process.exit(1); }
 const API_BASE = 'https://berrry.app/api/nomcp/' + BERRRY_KEY;
 const SUBDOMAIN = 'wine-assembly';
 const ROOT = path.resolve(__dirname, '..');
 
 // Text file extensions (served as-is)
-const TEXT_EXTS = new Set(['.html', '.js', '.json', '.wat', '.css', '.md', '.webmanifest', '.ini']);
+const TEXT_EXTS = new Set(['.html', '.js', '.json', '.wat', '.css', '.md', '.webmanifest', '.ini', '.xml']);
 
-// Skip these root text files
-const SKIP_FILES = new Set(['package.json', 'package-lock.json']);
+// Skip these root text files. The Markdown entries are working notes for
+// the people and agents in this tree (an outreach plan, a TODO snapshot, a
+// review, agent instructions) and were being served verbatim from the site
+// root; README.md and PROJECT_STORY.md stay public on purpose.
+const SKIP_FILES = new Set(['package.json', 'package-lock.json',
+  'MARKETING.md', 'TODOS.md', 'fable-review.md', 'AGENTS.md', 'CLAUDE.md', 'sources.md']);
 
 // Directories to skip entirely
 const SKIP_DIRS = new Set(['node_modules', '.git', '.claude', 'scratch', 'tools', 'test', 'build', 'binaries']);
 
 // Directories that contain binary assets (base64-encoded)
-const BINARY_DIRS = ['binaries', 'icons', 'build'];
+const BINARY_DIRS = ['binaries', 'icons', 'build', 'screenshots/apps', 'screenshots/og'];
+
+// berrry rejects any single file over this with HTTP 400. Oversized binary
+// assets are therefore published as name.part000, name.part001, ...; the web
+// loader tries that convention only when the unsplit name returns 404.
+const SERVER_MAX_FILE_SIZE = 20 * 1024 * 1024;
+const ASSET_PART_SIZE = 10 * 1024 * 1024;
 
 // Skip individual large files (>500KB) that aren't essential
 const MAX_BINARY_SIZE = 500 * 1024;
@@ -43,11 +52,60 @@ const LARGE_OK_PATHS = new Set([
   'binaries/wep32-community/Funpack/FunPack.dll',
   'binaries/wep32-community/QBlackjack/QuickBlackjack.exe',
   'binaries/plus98/DIALOG.BMP',
+  'screenshots/apps/heroes2_demo.png',
+  'screenshots/apps/rct.png',
+  'screenshots/og/heroes2_demo.png',
+  'screenshots/og/rct.png',
 ]);
 
 
 // Binary extensions to include
 const BINARY_EXTS = new Set(['.exe', '.dll', '.manifest', '.hlp', '.chm', '.bmp', '.ico', '.cur', '.wav', '.mp3', '.mid', '.m3u', '.dat', '.inf', '.ini', '.txt', '.png', '.wasm']);
+
+// berrry stores a file whose name contains a space and then cannot serve it:
+// it appears in the app's own file manifest but every request 404s, under %20,
+// `+` and %2520 alike, cache-busted. 31 of RCT's data files are named that way
+// ("Tracks/Big Twister.TD4"), and `requiredFiles: true` turns each 404 into a
+// failed launch. So publish those under a space-free name; WineAssembly's
+// fetchAssetBytes retries it on 404, the same way it retries .partNNN.
+function publishName(rel) {
+  return rel.replace(/ /g, '_');
+}
+
+function encodeBinaryBytes(rel, raw) {
+  rel = publishName(rel);
+  if (raw.length <= SERVER_MAX_FILE_SIZE) {
+    return [{ name: rel, content: raw.toString('base64'), encoding: 'base64' }];
+  }
+  const files = [];
+  for (let offset = 0, index = 0; offset < raw.length; offset += ASSET_PART_SIZE, index++) {
+    const part = raw.subarray(offset, Math.min(raw.length, offset + ASSET_PART_SIZE));
+    files.push({
+      name: rel + '.part' + String(index).padStart(3, '0'),
+      content: part.toString('base64'),
+      encoding: 'base64',
+    });
+  }
+  // A short part marks EOF, so stale higher-numbered parts left by Berry after
+  // a file shrinks are never appended. Exact multiples need an empty marker.
+  if (raw.length % ASSET_PART_SIZE === 0) {
+    files.push({
+      name: rel + '.part' + String(files.length).padStart(3, '0'),
+      content: '',
+      encoding: 'base64',
+    });
+  }
+  return files;
+}
+
+function encodeBinaryFile(rel, full) {
+  const files = encodeBinaryBytes(rel, fs.readFileSync(full));
+  if (files.length > 1) {
+    console.log('  SPLIT: ' + rel + ' -> ' + files.length + ' parts (' +
+      (fs.statSync(full).size / 1024).toFixed(0) + 'KB)');
+  }
+  return files;
+}
 
 function walk(dir, base, filter) {
   const results = [];
@@ -70,8 +128,38 @@ function walk(dir, base, filter) {
   return results;
 }
 
+// Which build is the phone actually running? Nothing on the page could say,
+// so "it still looks like the old version" had no answer short of guessing at
+// caches. Written fresh on every deploy, picked up by the root-level text
+// sweep below, and shown as a Win98-style desktop watermark. Not committed:
+// it is a property of a deploy, not of the tree.
+function writeBuildInfo() {
+  let sha = 'unknown';
+  try {
+    sha = require('child_process').execSync('git rev-parse --short HEAD',
+      { cwd: ROOT, encoding: 'utf-8' }).trim();
+  } catch (_) { /* a tree without git still deploys */ }
+  const dirty = (() => {
+    try {
+      return require('child_process').execSync('git status --porcelain',
+        { cwd: ROOT, encoding: 'utf-8' }).trim().length > 0;
+    } catch (_) { return false; }
+  })();
+  const stamp = `${sha}${dirty ? '+' : ''} ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
+  fs.writeFileSync(path.join(ROOT, 'build-info.js'),
+    `// Generated by tools/deploy-berrry.js. Not committed.\n` +
+    `window.WINE_BUILD = ${JSON.stringify(stamp)};\n`);
+  return stamp;
+}
+
 function collectTextFiles() {
   const files = [];
+  writeBuildInfo();
+  // Static pages (story.html, docs/**/*.html, sitemap.xml) are rendered from
+  // the repo's Markdown right before upload, so the served story is never
+  // behind PROJECT_STORY.md and the docs index never misses a new note.
+  const site = require('./gen-site-pages');
+  site.writePages(site.generatePages());
   // Root-level text files
   for (const entry of fs.readdirSync(ROOT)) {
     const ext = path.extname(entry);
@@ -88,6 +176,18 @@ function collectTextFiles() {
     const found = walk(dir, subdir, (name) => TEXT_EXTS.has(path.extname(name)));
     for (const f of found)
       files.push({ name: f.rel, content: fs.readFileSync(f.full, 'utf-8') });
+  }
+  // docs/: only the rendered .html pages, never the raw Markdown, JSON
+  // status ledgers or the DOS corpus report tree.
+  for (const subdir of ['apps', 'articles', 'design', 'docs', 'docs/re-notes']) {
+    const dir = path.join(ROOT, subdir);
+    if (!fs.existsSync(dir)) continue;
+    for (const entry of fs.readdirSync(dir)) {
+      if (path.extname(entry) !== '.html') continue;
+      const full = path.join(dir, entry);
+      if (fs.statSync(full).isFile())
+        files.push({ name: `${subdir}/${entry}`, content: fs.readFileSync(full, 'utf-8') });
+    }
   }
   return files;
 }
@@ -116,13 +216,36 @@ const NOT_REDISTRIBUTABLE = new Set([
   'binaries/dlls/msvcrt20.dll',  // Win98 SE OEM, local-only
 ]);
 
+// Registry-named assets that live outside binaries/. The prefix test below is
+// what stops a deploy from shipping test/binaries/candidates wholesale — most
+// of that tree is multi-hundred-MB game data we have no right to publish — so
+// an entry here is a per-app decision made against that app's own terms, not a
+// relaxation of the rule.
+//
+// Heroes II demo: its own license.txt clause (2) — "Feel free to give copies of
+// this demonstration version ... to your friends, as long as you don't sell
+// it." Same footing as the RCT shareware already live.
+const PUBLISHABLE_OUTSIDE_BINARIES = [
+  'test/binaries/candidates/heroes-2-demo/files/',
+  // Blizzard explicitly permits non-commercial mirroring of its unmodified
+  // demos when every original file remains present.  This directory retains
+  // SCDemo.exe plus the complete payload installed from that exact archive.
+  'test/binaries/candidates/starcraft-demo-official/',
+  'packages/freeware/dxball/',
+  'packages/freeware/blobby-volley/',
+];
+
 function desktopAssetPaths() {
   const { APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS, appFileUrl } =
     require(path.join(ROOT, 'lib', 'apps.js'));
   const { DLL_PATHS } = require(path.join(ROOT, 'lib', 'dll-registry.js'));
+  const { win16StageableModules } = require(path.join(ROOT, 'lib', 'dll-loader.js'));
+  const { win16FileCandidates } = require(path.join(ROOT, 'lib', 'vfs-seed.js'));
   const out = new Set();
+  const publishable = p => p.startsWith('binaries/') ||
+    PUBLISHABLE_OUTSIDE_BINARIES.some(root => p.startsWith(root));
   const add = p => {
-    if (!p || !p.startsWith('binaries/')) return;
+    if (!p || !publishable(p)) return;
     if (NOT_REDISTRIBUTABLE.has(p)) { blocked.add(p); return; }
     out.add(p);
   };
@@ -138,7 +261,40 @@ function desktopAssetPaths() {
     // A bare DLL name is resolved through the registry below, not here.
     for (const d of app.dlls || []) if (d.includes('/')) add(d);
     // `win16Modules` names NE modules the page fetches from the exe's own
-    // directory by candidate filename, not paths — those still do not ship.
+    // directory by candidate filename, not paths. Static imports are fetched
+    // the same way after the browser reads the NE module table. Resolve both
+    // sets here through the loader's own filename rules: otherwise a deploy
+    // can contain the EXE but omit the VBRUN/helper DLLs it needs to start.
+    const exe = app.exe && path.join(ROOT, app.exe);
+    if (exe && fs.existsSync(exe)) {
+      const bytes = fs.readFileSync(exe);
+      const mz = bytes.length >= 0x40 && bytes[0] === 0x4d && bytes[1] === 0x5a;
+      const ne = mz ? bytes.readUInt32LE(0x3c) : 0;
+      if (ne && ne + 2 <= bytes.length && bytes[ne] === 0x4e && bytes[ne + 1] === 0x45) {
+        const dir = path.posix.dirname(app.exe);
+        const entries = fs.readdirSync(path.join(ROOT, dir));
+        const actualName = new Map();
+        for (const entry of entries) {
+          const key = entry.toLowerCase();
+          if (!actualName.has(key)) actualName.set(key, entry);
+        }
+        const modules = [...new Set([
+          ...win16StageableModules(bytes),
+          ...(app.win16Modules || []),
+        ])];
+        for (const module of modules) {
+          for (const file of win16FileCandidates(module)) {
+            // On a case-insensitive checkout existsSync says that every case
+            // variant exists. Publish the directory entry's real spelling
+            // once, not six aliases of the same inode.
+            const entry = actualName.get(file.toLowerCase());
+            if (!entry) continue;
+            add(path.posix.join(dir, entry));
+            break;
+          }
+        }
+      }
+    }
     for (const f of app.files || []) add(appFileUrl(f));
   }
   // Any app can LoadLibrary any of these at runtime, so they all ship.
@@ -167,7 +323,7 @@ function collectBinaries() {
       console.log('  LARGE: ' + rel + ' (' + (stat.size / 1024).toFixed(0) + 'KB)');
     }
     seen.add(rel);
-    files.push({ name: rel, content: fs.readFileSync(full).toString('base64'), encoding: 'base64' });
+    files.push(...encodeBinaryFile(rel, full));
   }
 
   // icons/ and build/ have no registry; they are whole directories the page
@@ -186,7 +342,7 @@ function collectBinaries() {
         console.log('  SKIP (too large): ' + f.rel + ' (' + (stat.size / 1024).toFixed(0) + 'KB)');
         continue;
       }
-      files.push({ name: f.rel, content: fs.readFileSync(f.full).toString('base64'), encoding: 'base64' });
+      files.push(...encodeBinaryFile(f.rel, f.full));
     }
   }
   return files;
@@ -307,13 +463,32 @@ function loadExplicitFiles(relList) {
   const files = [];
   for (const originalRel of relList) {
     const rel = originalRel.replace(/\\/g, '/').replace(/^\.\//, '');
-    const full = path.resolve(ROOT, rel);
-    if (!fs.existsSync(full)) { console.error('SKIP missing: ' + rel); continue; }
-    const ext = path.extname(rel).toLowerCase();
+    let sourceRel = rel;
+    let requestedPart = null;
+    let full = path.resolve(ROOT, sourceRel);
+    if (!fs.existsSync(full)) {
+      const match = rel.match(/^(.*)\.part\d{3}$/);
+      if (match && fs.existsSync(path.resolve(ROOT, match[1]))) {
+        sourceRel = match[1];
+        requestedPart = rel;
+        full = path.resolve(ROOT, sourceRel);
+      } else {
+        console.error('SKIP missing: ' + rel);
+        continue;
+      }
+    }
+    const ext = path.extname(sourceRel).toLowerCase();
     if (TEXT_EXTS.has(ext)) {
-      files.push({ name: rel, content: fs.readFileSync(full, 'utf-8') });
+      files.push({ name: publishName(sourceRel), content: fs.readFileSync(full, 'utf-8') });
     } else {
-      files.push({ name: rel, content: fs.readFileSync(full).toString('base64'), encoding: 'base64' });
+      const encoded = encodeBinaryFile(sourceRel, full);
+      if (requestedPart) {
+        const part = encoded.find(f => f.name === requestedPart);
+        if (part) files.push(part);
+        else console.error('SKIP missing generated part: ' + requestedPart);
+      } else {
+        files.push(...encoded);
+      }
     }
   }
   return files;
@@ -336,7 +511,29 @@ function fileByteSize(file) {
 }
 
 // Shared by deploy and rollback so both stay under the same request ceiling.
-const BATCH_LIMIT = 950 * 1024; // stay under berrry.app body limit
+// Leave headroom for multipart framing while taking advantage of Berry's new
+// 20MiB file support. A larger single file still occupies a batch by itself.
+const BATCH_LIMIT = 19 * 1024 * 1024;
+
+// Two halves by byte size, not by count: one 15MiB file beside twenty small
+// ones splits usefully only if the split follows the bytes. Both halves are
+// non-empty by construction -- a "split" that hands back the same batch is an
+// infinite retry loop, which is exactly what a size test alone produces when
+// the biggest file is last.
+function splitInHalf(batch) {
+  const half = batch.reduce((n, f) => n + fileByteSize(f), 0) / 2;
+  const a = [], b = [];
+  let n = 0;
+  for (const f of batch) {
+    if (!a.length || (n + fileByteSize(f) <= half && b.length === 0)) {
+      a.push(f); n += fileByteSize(f);
+    } else {
+      b.push(f);
+    }
+  }
+  if (!b.length) b.push(a.pop());
+  return [a, b];
+}
 
 function splitIntoBatches(files) {
   const batches = [];
@@ -354,7 +551,16 @@ function splitIntoBatches(files) {
 }
 
 async function fetchServerManifest() {
-  const r = await fetch(API_BASE + '/apps/' + SUBDOMAIN + '/files');
+  // The manifest 500s now and then and succeeds on the next call. Without a
+  // retry that transient drops the whole diff -- which means either no deploy
+  // at all, or a --full one that re-uploads 69MB to change three files.
+  let r = null;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    r = await fetch(API_BASE + '/apps/' + SUBDOMAIN + '/files');
+    if (r.ok) break;
+    console.error('  manifest fetch attempt ' + attempt + ' failed: ' + r.status);
+    await new Promise(res => setTimeout(res, 2000 * attempt));
+  }
   if (!r.ok) { console.error('Failed to fetch manifest:', r.status); return null; }
   const j = await r.json();
   const map = new Map();
@@ -511,6 +717,14 @@ async function deploy() {
   let textFiles, binFiles;
   if (filesArg) {
     const list = filesArg.slice('--files='.length).split(',').filter(Boolean);
+    // The watermark rides along whether or not it was asked for. It is the
+    // only thing on the page that can answer "is the phone on the new build",
+    // and an explicit list is exactly when it goes stale: the deploy pushes
+    // new code under a stamp naming the previous one, so the watermark says
+    // the reload did not take when it did. writeBuildInfo() otherwise runs
+    // only inside collectTextFiles(), which this branch never reaches.
+    writeBuildInfo();
+    if (!list.includes('build-info.js')) list.push('build-info.js');
     console.log('Uploading explicit file list (' + list.length + '):');
     const explicit = loadExplicitFiles(list);
     for (const f of explicit) {
@@ -534,6 +748,18 @@ async function deploy() {
   }
 
   let allFiles = [...textFiles, ...binFiles];
+
+  // publishName() folds spaces to underscores, so two distinct source files can
+  // in principle land on one published name. That would silently serve the
+  // wrong bytes, so refuse the deploy instead.
+  const byName = new Map();
+  for (const f of allFiles) {
+    if (byName.has(f.name)) {
+      throw new Error('Published-name collision: ' + f.name +
+        ' (space-folding two different source files onto one name)');
+    }
+    byName.set(f.name, true);
+  }
 
   // What would go up, without going up: the asset set is derived now, so
   // "which files does this deploy think the site is made of" is a question
@@ -592,8 +818,20 @@ async function deploy() {
       if (r.status >= 400) return;
     } else {
       console.log('Updating (batch ' + (i + 1) + '/' + batches.length + ', ' + batches[i].length + ' files, ' + transport + ')...');
-      const r = await api('PUT', '/apps/' + SUBDOMAIN, body);
+      let r = await api('PUT', '/apps/' + SUBDOMAIN, body);
       console.log('Result:', r.status);
+      // 413 means the batch, not the deploy, is too big: the request ceiling
+      // sits below BATCH_LIMIT for this payload. Halving and retrying costs one
+      // wasted request and finds the real ceiling by itself, which beats
+      // aborting a deploy that then has to be re-run from a fresh manifest --
+      // and beats hand-tuning a constant every time the server moves it.
+      if (r.status === 413 && batches[i].length > 1) {
+        const rest = splitInHalf(batches[i]);
+        console.log('  413: splitting this batch into ' + rest.length + ' smaller ones');
+        batches.splice(i, 1, ...rest);
+        i -= 1;
+        continue;
+      }
       if (r.status >= 400 && r.status !== 404) {
         throw new Error(`batch ${i + 1}/${batches.length} failed with HTTP ${r.status}`
           + ` — the site now has batches 1..${i} of this deploy and the previous`
@@ -641,7 +879,8 @@ async function verifyServed() {
   }
   // Only re-upload what still exists locally; a file the repo dropped is
   // supposed to be gone, and its 404 is the correct answer.
-  const local = missing.filter(n => fs.existsSync(path.join(ROOT, n)));
+  const local = missing.filter(n => fs.existsSync(path.join(ROOT, n)) ||
+    (/\.part\d{3}$/.test(n) && fs.existsSync(path.join(ROOT, n.replace(/\.part\d{3}$/, '')))));
   console.log(`${missing.length} stored-but-not-served file(s); ${local.length} still in the repo:`);
   for (const n of missing) console.log(`  ${n}${local.includes(n) ? '' : '  (gone locally, leaving it)'}`);
   if (!local.length) return;
@@ -655,4 +894,17 @@ async function verifyServed() {
   console.log('Re-uploaded. Run --verify again to confirm.');
 }
 
-deploy().catch(e => { console.error(e); process.exit(1); });
+if (require.main === module) {
+  if (!BERRRY_KEY) {
+    console.error('Missing BERRRY_KEY env var (try: set -a; . .env.berrry; set +a)');
+    process.exit(1);
+  }
+  deploy().catch(e => { console.error(e); process.exit(1); });
+}
+
+module.exports = {
+  ASSET_PART_SIZE,
+  SERVER_MAX_FILE_SIZE,
+  encodeBinaryBytes,
+  desktopAssetPaths,
+};

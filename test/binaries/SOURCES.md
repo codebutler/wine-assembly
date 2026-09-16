@@ -1,6 +1,29 @@
 # Test Binary Sources
 
-All test binaries sourced from publicly archived Microsoft software on archive.org.
+Test binary provenance is recorded below; most fixtures come from publicly
+archived software on archive.org.
+
+## Windows 98 Demo/Shareware Games A-D
+
+**`win98-games-a-d/`** — complete A-through-D collection of Windows game
+demos and shareware, including both already-installed game trees and standalone
+installer executables.
+
+Source: `https://archive.org/details/win-98-games-a-d.-7z`
+File: `Win98_Games-A-D.7z`
+
+The archive downloaded on 2026-09-03 was 7,169,873,753 bytes. Its MD5
+`7610b389f075be9f4ea8b521157e87d2` and SHA-1
+`c53417bcc617790d9671ec385c49ee6f018846c9` match the Internet Archive
+metadata. It expands to 9,469 files in 425 directories (7,780,521,509 bytes),
+with 71 top-level game entries.
+
+Extraction:
+
+```bash
+mkdir -p test/binaries/win98-games-a-d
+7z x -o'test/binaries/win98-games-a-d' downloads/Win98_Games-A-D.7z
+```
 
 ## Entertainment Pack
 
@@ -67,6 +90,12 @@ that link the 80x87 emulator. Both are recorded in `dlls/SOURCES.md`.
   ```
 - Remakes copied into `wep32-community/`: bricks (Klotski), EMPIPE (Pipe Dream), Funtris/Peaks/Pyramid/FourStones (Funpack: Tetris/TriPeaks/Tut's Tomb/Tic Tac Drop), JigSawedME, Pawn (Chess), QuickBlackjack, Rodent2000, Runenlegen (Stones), Tetravex, tworld (Chip's Challenge, needs SDL), Winarc (Pegs/Krypto/LifeGen bundle), CWordZap
 - Flash-based games in the archive (JezzBall, Maxwell's Maniac, Fuji Golf) are skipped — they need Flash Player, not a PE runtime.
+- **Bricks sound files** (`wep32-community/Bricks/bricks00.wav` … `bricks14.wav`): not in `wep32.7z`, which has only `bricks.exe` + `brk1.dll`. The game plays them with `PlaySound("bricks%02i.wav")` from the exe directory and is silent without them. They come from the author's site (`www.bricks-game.de`, the address in the exe's about strings), via the Wayback Machine:
+  ```bash
+  curl -L -A Mozilla -o sound.zip "https://web.archive.org/web/20071025093930id_/http://bricks-game.de/winbricks/sound.zip"
+  unzip sound.zip -d wep32-community/Bricks/
+  ```
+  The same site also archived `winbricks/bricks1/bricks1.zip` (a 2016 build with `bricks15/16.wav` and eleven language exes); the 2007 `sound.zip` is the set that matches the 2004 exe in the 7z.
 
 ## Plus! 98
 
@@ -305,6 +334,34 @@ Downloaded to profile DirectDraw and Direct3D surfaces. Each SFX/installer extra
 
 MW3 extracted via `unshield x data1.cab`. Other SFX archives extracted with `7z`.
 
+### 2000 top-selling games demo audit
+
+Audited 2026-08-27 after comparing the ten games in the requested reference
+image with Archive.org packages and, where available, each package's bundled
+license. “Available at no charge” is not treated as permission to redistribute:
+only an authentic playable demo whose license permits complete unmodified
+noncommercial copies qualifies for corpus distribution.
+
+| Game | Result | Evidence |
+|------|--------|----------|
+| The Sims | Excluded | Archive item `sim1999demo` is a January 1999 prototype, not a public demo, and supplies no redistribution grant. |
+| Who Wants to Be a Millionaire | Excluded | `millionaire-2` is a Flash-projector package with no bundled redistribution license; `who-wants-to-be-a-millionaire-freeserve-demo-1` is a 304 MB cover-disc image, not a separately licensed redistributable package. |
+| RollerCoaster Tycoon | Existing local fixture, **not distribution-cleared** | `rct/English/license.txt` says it is not intended for duplication or mass distribution and prohibits distributing the CD-ROM without prior written consent. This audit does not change the existing fixture. |
+| Diablo II | Already covered and distributable | `candidates/diablo-2-demo-installer/installed-extracted/license.txt` identifies the build as Shareware and grants the right to install or distribute additional copies on an unlimited number of computers, subject to the rest of the agreement. |
+| Icewind Dale | Local-only candidate; excluded from redistribution | `icewind_dale_eng_demo/README.TXT` in Archive item `icewind_dale_eng_demo` says the software may not be copied or distributed electronically or otherwise. The ignored fixture and dedicated smoke test are for private local compatibility work only. |
+| Sim Theme Park | Excluded | `redump-id-91256` is a noninteractive rolling-demo disc; `themeparkworldminigame` is a promotional Flash projector. Neither is a playable Win32 game demo with a redistribution grant. |
+| Age of Empires II | Already covered and distributable | `aoe2/aoe2_ex/EULA.RTF` permits true and complete copies, with the EULA and notices intact, for noncommercial distribution. |
+| Grand Prix 3 | Excluded | The official 118 MB demo is preserved as `GP3_DEMO.ZIP`, but its bundled Hasbro license grants personal/private use and says the product may not be copied or transferred without prior written consent. |
+| Command & Conquer: Red Alert 2 | Excluded | No official demo/shareware release was found. The later XWIS multiplayer package is not a demo, and XWIS explicitly states that EA did not release Red Alert 2 as freeware. |
+| Deus Ex | Local-only candidate; excluded from redistribution | `System/license.int` inside Archive item `DeusExDemo` limits use to private/domestic use and prohibits further copies. It permits only a one-time transfer of the entire product when the sender retains no copy. The ignored fixture and dedicated smoke test are for private local compatibility work only. |
+
+Consequently this audit adds no new *distributed* binary fixture: the two
+qualifying releases (Diablo II Shareware and the Age of Empires II trial) were
+already in the corpus. Icewind Dale and Deus Ex now have pinned recipes and
+tests beneath the ignored local candidate pool, but their files must not be
+committed, deployed, or rehosted. The remaining packages stay external
+research references unless a rights holder supplies broader terms.
+
 ## Candidate corpus (`candidates/`)
 
 The optional CLI-only candidate pool is described by
@@ -358,3 +415,94 @@ cabextract -F 'mmsys.cpl' -d test/binaries/dlls scratch/win98cabs/BASE4.CAB
 | File | Why |
 |------|-----|
 | mmsys.cpl | Sound Recorder's Edit > Audio Properties does `LoadLibrary("MMSYS.CPL")` then `GetProcAddress("ShowMMCPLPropertySheet")` (ordinal 5). Without it the app probes, fails and silently gives up. |
+
+## Tracker module fixture
+
+**`devhell1.xm`** — used by the `winamp_mod` app entry, which points Winamp at
+`in_mod.dll` (the Mikamp/MikMod module decoder) instead of `in_mp3.dll`.
+
+Source: `https://opengameart.org/content/2-creepy-background-songs` — "2 creepy
+background songs" by **sauer2**, released **CC0 1.0** (public domain
+dedication), downloaded as `modules_0.zip`. The archive holds two MilkyTracker
+XM modules; `devhell1.xm` is the larger (8765 bytes, XM 1.04, 8 channels,
+6 patterns, 4 instruments, 6 orders). CC0 imposes no attribution requirement,
+so it can be redistributed with the fixture pool without conditions.
+
+```bash
+curl -sL -o /tmp/modules_0.zip https://opengameart.org/sites/default/files/modules_0.zip
+unzip -o -d /tmp/modules /tmp/modules_0.zip
+cp /tmp/modules/devhell1.xm binaries/devhell1.xm
+```
+
+## Demoscene
+
+**Heaven Seven (final Windows build)** — Exceed's winning 64K intro from
+Mekka & Symposium 2000. The web launcher uses `HEAVEN7W.EXE`; the archive also
+contains a DOS build and the original release notes.
+
+- Source: `https://archive.scene.org/pub/parties/2000/mekkasymposium00/in64/h7-final.zip`
+- Archive size: 172,380 bytes
+- Archive SHA-256: `c3904ff7172d767ca68f08d4f562dc523e025c7cbdb957f85dc95138ae054b10`
+- `HEAVEN7W.EXE` size: 65,536 bytes
+- `HEAVEN7W.EXE` SHA-256: `3171d7bbe7faf70d5f3a6f6e24292e33a5007316156734a63b42cdf2f8805453`
+- Destination: `demoscene/heaven-seven/HEAVEN7W.EXE`
+
+```bash
+curl -fL -o /tmp/h7-final.zip \
+  https://archive.scene.org/pub/parties/2000/mekkasymposium00/in64/h7-final.zip
+unzip -j /tmp/h7-final.zip HEAVEN7W.EXE -d binaries/demoscene/heaven-seven
+```
+
+**Cashcow** — Aardbei's Windows 64K intro, placed fourth at DreamHack 1999.
+The launcher passes the release's documented `w` switch for windowed 512x384
+output. The group archive also contains its original notes and batch files.
+
+- Source: `https://archive.scene.org/pub/demos/groups/aardbei/aardbei_cashcow.zip`
+- Archive size: 83,365 bytes
+- Archive SHA-256: `696e90198573d13050548760ebcbe0c808e6d55be2ffabd50d525785bc432246`
+- `cashcow.exe` size: 81,899 bytes
+- `cashcow.exe` SHA-256: `4c77dabf9bce091b16df267bfc230f0d9b063da1b23b77148348b20d4c151ea2`
+- Destination: `demoscene/cashcow/CASHCOW.EXE`
+
+```bash
+curl -fL -o /tmp/aardbei_cashcow.zip \
+  https://archive.scene.org/pub/demos/groups/aardbei/aardbei_cashcow.zip
+unzip -j /tmp/aardbei_cashcow.zip cashcow.exe -d binaries/demoscene/cashcow
+mv binaries/demoscene/cashcow/cashcow.exe binaries/demoscene/cashcow/CASHCOW.EXE
+```
+
+**Bakkslide 7 (Win32 port)** — Hellcore & Omnicolour's 2003 Windows port of
+their first-place Takeover 1999 64K intro. Its setup dialog exposes fullscreen,
+4:3-window, wide-window, and MMX-transfer choices; the launcher starts its
+working 4:3-window MMX-transfer path automatically.
+
+- Source: `https://archive.scene.org/pub/parties/1999/takeover99/in64/bakkslide7_win32.zip`
+- Archive size: 95,227 bytes
+- Archive SHA-256: `9b1d861588d1be3a20c5243d8cf19c10d7225e31a12dca373ae8d8f43b6ffe48`
+- `bakkslide7_win32.exe` size: 95,744 bytes
+- `bakkslide7_win32.exe` SHA-256: `4b7303a5e94728d5f1ad8cb6e6d5dddfb105eb33a14bec556a6d1a4758ebf4b9`
+- Destination: `demoscene/bakkslide7/BAKKSLIDE7.EXE`
+
+```bash
+curl -fL -o /tmp/bakkslide7-win32.zip \
+  https://archive.scene.org/pub/parties/1999/takeover99/in64/bakkslide7_win32.zip
+unzip -j /tmp/bakkslide7-win32.zip bakkslide7_win32.exe -d binaries/demoscene/bakkslide7
+mv binaries/demoscene/bakkslide7/bakkslide7_win32.exe binaries/demoscene/bakkslide7/BAKKSLIDE7.EXE
+```
+
+**Please the Cookie Thing (PTCT)** — Aardbei's OpenGL 64K intro from Mekka &
+Symposium 2000. The launcher accepts the intro's default resolution chooser
+and runs its Win9x-era fixed-function OpenGL path.
+
+- Source: `https://archive.scene.org/pub/demos/groups/aardbei/aardbei_ptct.zip`
+- Archive size: 74,381 bytes
+- Archive SHA-256: `da7e6749087d134784339227f622a0f0ba9750fbc436a68c83235d96e7176602`
+- `PTCT.exe` size: 74,752 bytes
+- `PTCT.exe` SHA-256: `89028685eb2968dcc9a9dd6b7941e4fad47a70e505820dc1be350a0d30526cc4`
+- Destination: `demoscene/ptct/PTCT.exe`
+
+```bash
+curl -fL -o /tmp/aardbei_ptct.zip \
+  https://archive.scene.org/pub/demos/groups/aardbei/aardbei_ptct.zip
+unzip -j /tmp/aardbei_ptct.zip PTCT.exe -d binaries/demoscene/ptct
+```

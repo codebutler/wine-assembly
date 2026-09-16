@@ -8,9 +8,40 @@
   ;; a file named 09c-help.wat, which the CLAUDE.md file table had to apologize for.
   ;; ============================================================
 
-  ;; Address of window record N: WND_RECORDS + slot * 24
+  ;; The per-window record. 256 of these live in $WND_RECORDS (0x7000..0x8800),
+  ;; one per slot; $wnd_record_addr below is the only thing that computes one's
+  ;; address, so this declaration is the single statement of where its fields
+  ;; are. See docs/watx-layout-migration-design.md §5.2.
+  ;;
+  ;; MEANINGS, which a layout cannot carry:
+  ;;   hwnd       0 means the slot is EMPTY. It is also the publication word:
+  ;;              $wnd_table_set builds the record while it is still invisible
+  ;;              and stores hwnd last, and readers scan it with i32.atomic.load,
+  ;;              which is why the offset-0 accesses are not all load.field.
+  ;;   userdata   GWL_USERDATA.
+  ;;   state_ptr  heap pointer to the per-class WndState, 0 if the class has none.
+  ;;
+  ;; Most per-window state is NOT here: it lives in ~20 PARALLEL per-slot tables
+  ;; ($WND_Z_ORDER_TABLE, $WND_HINSTANCE_TABLE, $MENU_DATA_TABLE, ...), each with
+  ;; its own stride and its own reset. A layout does not describe that shape and
+  ;; making it would be a redesign, not a migration — deliberately out of scope.
+  (layout WndRecord
+    (field hwnd      i32)     ;; +0
+    (field wndproc   i32)     ;; +4
+    (field parent    i32)     ;; +8
+    (field userdata  i32)     ;; +12
+    (field style     i32)     ;; +16
+    (field state_ptr i32))    ;; +20, record ends at +24
+
+  ;; Address of window record N: WND_RECORDS + slot * size-of WndRecord
   (func $wnd_record_addr (param $slot i32) (result i32)
-    (i32.add (global.get $WND_RECORDS) (i32.mul (local.get $slot) (i32.const 24))))
+    (i32.add (global.get $WND_RECORDS) (i32.mul (local.get $slot) (size-of WndRecord))))
+
+  (func $wnd_thread_addr (param $slot i32) (result i32)
+    (i32.add (global.get $WND_THREAD_TABLE) (i32.mul (local.get $slot) (i32.const 4))))
+
+  (func $wnd_thread_reset_slot (param $slot i32)
+    (i32.store (call $wnd_thread_addr (local.get $slot)) (i32.const 0)))
 
   (func $wnd_z_addr_for_slot (param $slot i32) (result i32)
     (i32.add (global.get $WND_Z_ORDER_TABLE)
@@ -19,11 +50,41 @@
   (func $wnd_z_reset_slot (param $slot i32)
     (i32.store (call $wnd_z_addr_for_slot (local.get $slot)) (i32.const 0)))
 
-  (func $wnd_z_init_slot (param $slot i32)
-    (global.set $wnd_z_next
-      (i32.add (global.get $wnd_z_next) (i32.const 1024)))
+  ;; Put this slot above every window that currently has a rank.
+  ;;
+  ;; The rank sequence used to be a mutable global, $wnd_z_next — that is ONE
+  ;; PRIVATE COPY PER WASM INSTANCE, and every guest thread in --threads (and in
+  ;; the browser's Worker backend) is its own instance over this one shared
+  ;; memory. Both copies start at zero, so the first window a worker registers
+  ;; was handed rank 1024, which the main instance had already given to one of
+  ;; its own. $wnd_z_is_above_sibling compares with a strict i32.gt_s, so a tie
+  ;; reads as "not above": a popup, dialog or child created or raised on a
+  ;; secondary thread composites UNDER the sibling it is supposed to cover, and
+  ;; nothing anywhere reports it. Same bug shape as $heap_ptr, $num_thunks and
+  ;; $com_aux_next (docs/design-real-threads.md §3.1b).
+  ;;
+  ;; The table it writes into is already shared, so the sequence is derived from
+  ;; the table instead of replicated beside it — no new shared cell, and no way
+  ;; for two instances to disagree. The scan and the store are one critical
+  ;; section under $LOCK_WND (recursive, so the callers that already hold it are
+  ;; fine, and it is pure table arithmetic with no host import — rule 1). 256
+  ;; slots, walked only when a window is created or raised.
+  (func $wnd_z_assign_top (param $slot i32)
+    (local $i i32) (local $rank i32) (local $max i32)
+    (call $lock_wnd_acquire)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (local.set $rank (i32.load (call $wnd_z_addr_for_slot (local.get $i))))
+      (if (i32.gt_s (local.get $rank) (local.get $max))
+        (then (local.set $max (local.get $rank))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
     (i32.store (call $wnd_z_addr_for_slot (local.get $slot))
-      (global.get $wnd_z_next)))
+      (i32.add (local.get $max) (i32.const 1024)))
+    (call $lock_wnd_release))
+
+  (func $wnd_z_init_slot (param $slot i32)
+    (call $wnd_z_assign_top (local.get $slot)))
 
   (func $wnd_z_get (param $hwnd i32) (result i32)
     (local $slot i32)
@@ -36,10 +97,7 @@
     (local $slot i32)
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return)))
-    (global.set $wnd_z_next
-      (i32.add (global.get $wnd_z_next) (i32.const 1024)))
-    (i32.store (call $wnd_z_addr_for_slot (local.get $slot))
-      (global.get $wnd_z_next)))
+    (call $wnd_z_assign_top (local.get $slot)))
 
   (func $wnd_z_is_above_sibling (param $hwnd i32) (param $sibling i32) (result i32)
     (i32.and
@@ -186,6 +244,7 @@
     (call $richedit_format_reset_slot (local.get $slot))
     (call $wnd_owner_reset_slot (local.get $slot))
     (call $wnd_own_dc_reset_slot (local.get $slot))
+    (call $wnd_thread_reset_slot (local.get $slot))
     (call $wnd_hinstance_reset_slot (local.get $slot))
     (call $menu_data_reset_slot (local.get $slot))
     (call $dialog_state_reset_slot (local.get $slot))
@@ -198,16 +257,30 @@
     (call $zero_memory (call $update_rect_addr_for_slot (local.get $slot)) (i32.const 16))
     (i32.store8 (call $update_flag_addr_for_slot (local.get $slot)) (i32.const 0)))
 
+  ;; Locked, because this is a scan-then-claim over a table every guest thread's
+  ;; instance shares: two threads creating a window at the same instant can both
+  ;; settle on the same empty slot, and the second overwrites the first. The
+  ;; loser's window is then a handle nothing can resolve — no error, no trace,
+  ;; just a window that stops existing. Measured with the lock removed: two OS
+  ;; threads claiming 100 windows each lost windows in 12 of 40 rounds, worst
+  ;; round 138 of 200 (test/test-wat-window-tables.js).
+  ;;
+  ;; The whole body is table arithmetic and the per-slot resets, none of which
+  ;; calls a host import, so a spinlock is safe here (rule 1 on $lock_acquire).
   (func $wnd_table_set (param $hwnd i32) (param $wndproc i32)
     (local $i i32) (local $ptr i32) (local $empty i32)
     (local.set $empty (i32.const -1))
     (local.set $i (i32.const 0))
+    (call $lock_wnd_acquire)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (if (i32.eq (i32.load (local.get $ptr)) (local.get $hwnd))
-        (then (i32.store offset=4 (local.get $ptr) (local.get $wndproc)) (return)))
-      (if (i32.and (i32.eqz (i32.load (local.get $ptr)))
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
+        (then
+          (store.field.memarg WndRecord wndproc (local.get $ptr) (local.get $wndproc))
+          (call $lock_wnd_release)
+          (return)))
+      (if (i32.and (i32.eqz (i32.atomic.load (local.get $ptr)))
                    (i32.eq (local.get $empty) (i32.const -1)))
         (then (local.set $empty (local.get $i))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -217,14 +290,32 @@
         (local.set $ptr (call $wnd_record_addr (local.get $empty)))
         ;; Zero the entire 24-byte record so a recycled slot does not inherit
         ;; stale parent/userdata/style/state_ptr from a previous window.
-        (i32.store         (local.get $ptr) (local.get $hwnd))
-        (i32.store offset=4  (local.get $ptr) (local.get $wndproc))
-        (i32.store offset=8  (local.get $ptr) (i32.const 0))
-        (i32.store offset=12 (local.get $ptr) (i32.const 0))
-        (i32.store offset=16 (local.get $ptr) (i32.const 0))
-        (i32.store offset=20 (local.get $ptr) (i32.const 0))
+        ;; Build the record while it is still invisible.  Readers use hwnd as
+        ;; the publication word, so it must be stored last.
+        (store.field.memarg WndRecord wndproc (local.get $ptr) (local.get $wndproc))
+        (store.field.memarg WndRecord parent (local.get $ptr) (i32.const 0))
+        (store.field.memarg WndRecord userdata (local.get $ptr) (i32.const 0))
+        (store.field.memarg WndRecord style (local.get $ptr) (i32.const 0))
+        (store.field.memarg WndRecord state_ptr (local.get $ptr) (i32.const 0))
         (call $wnd_slot_reset (local.get $empty))
-        (call $wnd_z_init_slot (local.get $empty))))
+        (call $wnd_z_init_slot (local.get $empty))
+        (i32.store (call $wnd_thread_addr (local.get $empty))
+          (global.get $current_thread_id))
+        (i32.atomic.store (local.get $ptr) (local.get $hwnd))))
+    (call $lock_wnd_release)
+  )
+
+  ;; True when the HWND allocator could have issued this handle. Every window
+  ;; we create takes its handle from $next_hwnd, so anything below the base or
+  ;; at/above the high-water mark was never a window -- a plug-in reading a
+  ;; stale local as an HWND, or a caller that guessed. Say nothing about
+  ;; whether the window is still alive: a destroyed handle stays "issued", and
+  ;; the callers that care check the window table itself.
+  ;; HWND_BROADCAST (0xFFFF) is a real target and is not covered here.
+  (func $wnd_hwnd_was_issued (param $hwnd i32) (result i32)
+    (i32.and
+      (i32.ge_u (local.get $hwnd) (i32.const 0x10001))
+      (i32.lt_u (local.get $hwnd) (global.get $next_hwnd)))
   )
 
   ;; Look up wndproc for hwnd; returns 0 if not found
@@ -234,27 +325,47 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (if (i32.eq (i32.load (local.get $ptr)) (local.get $hwnd))
-        (then (return (i32.load offset=4 (local.get $ptr)))))
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
+        (then (return (load.field.memarg WndRecord wndproc (local.get $ptr)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const 0)
   )
 
+  ;; Owning Win32 thread for HWND, or 0 for an unknown/destroyed handle.
+  (func $wnd_get_thread (param $hwnd i32) (result i32)
+    (local $i i32) (local $ptr i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (local.set $ptr (call $wnd_record_addr (local.get $i)))
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
+        (then (return (i32.load (call $wnd_thread_addr (local.get $i))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   ;; Remove hwnd from window table — zeroes the whole record.
+  ;;
+  ;; The teardown itself CANNOT hold $LOCK_WND: it releases the window's GDI
+  ;; surface, which is a host import, and a spinlock held across one of those
+  ;; deadlocks worker mode — the import blocks in Atomics.wait for the main
+  ;; thread, which may be spinning for this very lock (rule 1 on $lock_acquire).
+  ;; So only the final zeroing is locked, which is what publishes the slot as
+  ;; free; the record keeps its hwnd through the teardown, exactly as before,
+  ;; and a concurrent claim cannot take a slot that is not empty yet.
   (func $wnd_table_remove (param $hwnd i32)
     (local $i i32) (local $ptr i32) (local $state i32)
     (local.set $i (i32.const 0))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (if (i32.eq (i32.load (local.get $ptr)) (local.get $hwnd))
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
         (then
           ;; A top-level window owns its canonical software-GDI presentation.
           ;; Child removal is a no-op because child DCs resolve to that owner.
           (call $gdi_window_surface_release (local.get $hwnd))
           ;; Free control state if any
-          (local.set $state (i32.load offset=20 (local.get $ptr)))
+          (local.set $state (load.field.memarg WndRecord state_ptr (local.get $ptr)))
           (if (local.get $state) (then (call $heap_free (local.get $state))))
           ;; Drop parallel-table state tied to this slot.
           (call $wnd_bg_brush_reset_slot (local.get $i))
@@ -272,13 +383,25 @@
           (call $wnd_unicode_reset_slot (local.get $i))
           (call $wnd_extra_reset_slot (local.get $i))
           (call $wnd_z_reset_slot (local.get $i))
-          ;; Clear the whole 24-byte record
-          (i32.store         (local.get $ptr) (i32.const 0))
-          (i32.store offset=4  (local.get $ptr) (i32.const 0))
-          (i32.store offset=8  (local.get $ptr) (i32.const 0))
-          (i32.store offset=12 (local.get $ptr) (i32.const 0))
-          (i32.store offset=16 (local.get $ptr) (i32.const 0))
-          (i32.store offset=20 (local.get $ptr) (i32.const 0))
+          ;; Clear the whole 24-byte record, under the lock: zeroing the hwnd
+          ;; is what publishes the slot as free, and a claim that read it
+          ;; half-cleared would inherit this window's parent and style.
+          (call $lock_wnd_acquire)
+          ;; Unpublish first while holding the writer lock.  A reader can no
+          ;; longer match this slot before any metadata becomes reusable.
+          (i32.atomic.store (local.get $ptr) (i32.const 0))
+          (store.field.memarg WndRecord wndproc (local.get $ptr) (i32.const 0))
+          (store.field.memarg WndRecord parent (local.get $ptr) (i32.const 0))
+          (store.field.memarg WndRecord userdata (local.get $ptr) (i32.const 0))
+          (store.field.memarg WndRecord style (local.get $ptr) (i32.const 0))
+          (store.field.memarg WndRecord state_ptr (local.get $ptr) (i32.const 0))
+          (call $wnd_thread_reset_slot (local.get $i))
+          (call $lock_wnd_release)
+          ;; A producer which resolved this HWND immediately before the first
+          ;; teardown purge could enqueue before unpublication. The enqueue
+          ;; path now rechecks while holding this same lock; one final purge
+          ;; after hwnd=0 therefore closes both sides of that race.
+          (call $shared_post_queue_purge_hwnd (local.get $hwnd))
           (return)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -296,9 +419,9 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (local.set $other (i32.load (local.get $ptr)))
+      (local.set $other (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $other) (i32.const 0))
-                   (i32.eq (i32.load offset=8 (local.get $ptr)) (local.get $hwnd)))
+                   (i32.eq (load.field.memarg WndRecord parent (local.get $ptr)) (local.get $hwnd)))
         (then (call $wnd_destroy_recursive (local.get $other))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -320,6 +443,8 @@
     ;; (WordPad File>New + Cancel, mfc42 6.00).
     (if (i32.eq (global.get $focus_hwnd) (local.get $hwnd))
       (then (global.set $focus_hwnd (i32.const 0))))
+    (if (i32.eq (global.get $active_hwnd) (local.get $hwnd))
+      (then (global.set $active_hwnd (i32.const 0))))
     (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
       (then (global.set $capture_hwnd (i32.const 0))))
     (call $post_queue_purge_hwnd (local.get $hwnd))
@@ -329,15 +454,60 @@
     (call $wnd_table_remove (local.get $hwnd))
   )
 
+  ;; The two slots this instance resolved most recently, or -1. This lookup is
+  ;; on the GDI blit path -- every DC bound to a window resolves its clip
+  ;; through here -- and the scan below is 256 iterations with a call in each
+  ;; one, so an unaided miss-shaped hit is expensive out of all proportion to
+  ;; what it computes. Measured in Chrome on Diablo's Choose Class screen (a
+  ;; screen that is 90% GDI rasterization), $wnd_table_find alone was **25.4%
+  ;; of all CPU time**, ahead of every rasterizer function and 15x the x86
+  ;; interpreter's $next.
+  ;;
+  ;; Two entries rather than one because the painting pattern alternates: a
+  ;; control's clip resolves the child and then its parent, and a single hint
+  ;; thrashes between them and never hits.
+  ;;
+  ;; A stale hint is harmless -- the hwnd stored in the slot is compared before
+  ;; the slot is returned, so a recycled or destroyed slot simply misses and
+  ;; falls through to the scan. That is what makes this safe without any
+  ;; invalidation hook in $wnd_table_set / $wnd_table_remove.
+  (global $wnd_find_hint0 (mut i32) (i32.const -1))
+  (global $wnd_find_hint1 (mut i32) (i32.const -1))
+
   ;; Find window table slot index for hwnd; returns -1 if not found
   (func $wnd_table_find (param $hwnd i32) (result i32)
-    (local $i i32) (local $ptr i32)
+    (local $i i32) (local $ptr i32) (local $hint i32)
+    ;; hwnd 0 keeps the original exhaustive semantics. A caller passing it is
+    ;; asking for the first *empty* slot, which is a position in the table and
+    ;; not a window, so it must never be answered from a hint.
+    (if (local.get $hwnd) (then
+      (local.set $hint (global.get $wnd_find_hint0))
+      (if (i32.ge_s (local.get $hint) (i32.const 0)) (then
+        (if (i32.eq (load.field WndRecord hwnd (call $wnd_record_addr (local.get $hint))) (local.get $hwnd))
+          (then (return (local.get $hint))))))
+      (local.set $hint (global.get $wnd_find_hint1))
+      (if (i32.ge_s (local.get $hint) (i32.const 0)) (then
+        (if (i32.eq (load.field WndRecord hwnd (call $wnd_record_addr (local.get $hint))) (local.get $hwnd))
+          (then
+            ;; Promote: the two windows swap roles as painting moves between a
+            ;; parent and its children, and the hot one should stay in hint0.
+            (global.set $wnd_find_hint1 (global.get $wnd_find_hint0))
+            (global.set $wnd_find_hint0 (local.get $hint))
+            (return (local.get $hint))))))))
     (local.set $i (i32.const 0))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (if (i32.eq (i32.load (local.get $ptr)) (local.get $hwnd))
-        (then (return (local.get $i))))
+      ;; Atomic load (threads branch) + main's find-hint cache. The load stays
+      ;; atomic because another instance can be publishing this slot's hwnd
+      ;; while we scan; the hints are per-instance globals and only ever steer
+      ;; the next scan's starting guess, so they need no synchronization.
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hwnd))
+        (then
+          (if (local.get $hwnd) (then
+            (global.set $wnd_find_hint1 (global.get $wnd_find_hint0))
+            (global.set $wnd_find_hint0 (local.get $i))))
+          (return (local.get $i))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const -1)
@@ -349,7 +519,7 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
-    (i32.load offset=12 (call $wnd_record_addr (local.get $idx)))
+    (load.field.memarg WndRecord userdata (call $wnd_record_addr (local.get $idx)))
   )
 
   ;; Set per-window userdata; returns old value
@@ -359,8 +529,8 @@
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
     (local.set $ptr (call $wnd_record_addr (local.get $idx)))
-    (local.set $old (i32.load offset=12 (local.get $ptr)))
-    (i32.store offset=12 (local.get $ptr) (local.get $value))
+    (local.set $old (load.field.memarg WndRecord userdata (local.get $ptr)))
+    (store.field.memarg WndRecord userdata (local.get $ptr) (local.get $value))
     (local.get $old)
   )
 
@@ -496,7 +666,7 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
-    (i32.load offset=8 (call $wnd_record_addr (local.get $idx)))
+    (load.field.memarg WndRecord parent (call $wnd_record_addr (local.get $idx)))
   )
 
   ;; Return the host-assigned Win32 process ID. Standalone embedders that do
@@ -510,11 +680,23 @@
 
   ;; Set parent hwnd for a window
   (func $wnd_set_parent (param $hwnd i32) (param $parent i32)
-    (local $idx i32)
+    (local $idx i32) (local $cur i32) (local $depth i32)
+    ;; A cycle makes coordinate conversion recurse WAT -> host -> WAT forever.
+    ;; Reject both a direct self-parent and a parent already below this window.
+    (local.set $cur (local.get $parent))
+    (block $valid (loop $walk
+      (br_if $valid (i32.eqz (local.get $cur)))
+      (if (i32.or
+            (i32.eq (local.get $cur) (local.get $hwnd))
+            (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+        (then (return)))
+      (local.set $cur (call $wnd_get_parent (local.get $cur)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.ne (local.get $idx) (i32.const -1))
       (then
-        (i32.store offset=8 (call $wnd_record_addr (local.get $idx)) (local.get $parent))))
+        (store.field.memarg WndRecord parent (call $wnd_record_addr (local.get $idx)) (local.get $parent))))
   )
 
   ;; Per-window copy of WNDCLASS.hbrBackground. Win98 stores class metadata in
@@ -712,7 +894,7 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (if (i32.and
-            (i32.ne (i32.load (call $wnd_record_addr (local.get $i))) (i32.const 0))
+            (i32.ne (load.field WndRecord hwnd (call $wnd_record_addr (local.get $i))) (i32.const 0))
             (i32.eq (i32.load8_u (i32.add (global.get $WND_CLASS_SLOT_TABLE) (local.get $i)))
                     (local.get $slot)))
         (then
@@ -863,11 +1045,10 @@
   ;; and RichEdit20W are the Riched20/RichEdit 2.0+ classes. Return 0 for a
   ;; non-RichEdit name, 1 for 1.0, and 2 for 2.0+. Comparisons are ASCII
   ;; case-insensitive because USER class lookup is case-insensitive.
-  (func $richedit_class_version (param $class_name i32) (result i32)
-    (local $name_w i32) (local $tail i32)
-    (if (i32.lt_u (local.get $class_name) (i32.const 0x10000))
+  (func $richedit_class_version_key (param $name_w i32) (result i32)
+    (local $tail i32)
+    (if (i32.lt_u (local.get $name_w) (i32.const 0x10000))
       (then (return (i32.const 0))))
-    (local.set $name_w (call $g2w (local.get $class_name)))
     (if (i32.ne
           (i32.or (i32.load (local.get $name_w)) (i32.const 0x20202020))
           (i32.const 0x68636972)) ;; "rich"
@@ -893,6 +1074,14 @@
     ;; but bound them to the conservative 1.0 message contract.
     (i32.const 1))
 
+  ;; Public callers hold a guest pointer; class-table/system-class callers
+  ;; already hold the translated byte-string key. Keep one comparison body so
+  ;; ANSI and narrowed-Unicode GetClassInfo queries identify the same class.
+  (func $richedit_class_version (param $class_name i32) (result i32)
+    (if (i32.lt_u (local.get $class_name) (i32.const 0x10000))
+      (then (return (i32.const 0))))
+    (call $richedit_class_version_key (call $g2w (local.get $class_name))))
+
   ;; First child of $parent in slot order (z-order proxy). 0 if none.
   ;; parent=0 means "find first top-level window".
   (func $wnd_find_first_child (param $parent i32) (result i32)
@@ -901,9 +1090,9 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (local.set $h (i32.load (local.get $ptr)))
+      (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
-                   (i32.eq (i32.load offset=8 (local.get $ptr)) (local.get $parent)))
+                   (i32.eq (load.field.memarg WndRecord parent (local.get $ptr)) (local.get $parent)))
         (then (return (local.get $h))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -918,9 +1107,9 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (local.set $h (i32.load (local.get $ptr)))
+      (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
-                   (i32.eq (i32.load offset=8 (local.get $ptr)) (local.get $parent)))
+                   (i32.eq (load.field.memarg WndRecord parent (local.get $ptr)) (local.get $parent)))
         (then (local.set $last (local.get $h))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -932,14 +1121,14 @@
     (local $idx i32) (local $parent i32) (local $i i32) (local $ptr i32) (local $h i32)
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1)) (then (return (i32.const 0))))
-    (local.set $parent (i32.load offset=8 (call $wnd_record_addr (local.get $idx))))
+    (local.set $parent (load.field.memarg WndRecord parent (call $wnd_record_addr (local.get $idx))))
     (local.set $i (i32.add (local.get $idx) (i32.const 1)))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (local.set $h (i32.load (local.get $ptr)))
+      (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
-                   (i32.eq (i32.load offset=8 (local.get $ptr)) (local.get $parent)))
+                   (i32.eq (load.field.memarg WndRecord parent (local.get $ptr)) (local.get $parent)))
         (then (return (local.get $h))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -952,13 +1141,13 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1)) (then (return (i32.const 0))))
     (if (i32.eqz (local.get $idx)) (then (return (i32.const 0))))
-    (local.set $parent (i32.load offset=8 (call $wnd_record_addr (local.get $idx))))
+    (local.set $parent (load.field.memarg WndRecord parent (call $wnd_record_addr (local.get $idx))))
     (local.set $i (i32.sub (local.get $idx) (i32.const 1)))
     (block $done (loop $scan
       (local.set $ptr (call $wnd_record_addr (local.get $i)))
-      (local.set $h (i32.load (local.get $ptr)))
+      (local.set $h (i32.atomic.load (local.get $ptr)))
       (if (i32.and (i32.ne (local.get $h) (i32.const 0))
-                   (i32.eq (i32.load offset=8 (local.get $ptr)) (local.get $parent)))
+                   (i32.eq (load.field.memarg WndRecord parent (local.get $ptr)) (local.get $parent)))
         (then (return (local.get $h))))
       (br_if $done (i32.eqz (local.get $i)))
       (local.set $i (i32.sub (local.get $i) (i32.const 1)))
@@ -972,7 +1161,7 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
-    (i32.load offset=16 (call $wnd_record_addr (local.get $idx)))
+    (load.field.memarg WndRecord style (call $wnd_record_addr (local.get $idx)))
   )
 
   ;; Set window style; returns old value
@@ -982,8 +1171,8 @@
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
     (local.set $ptr (call $wnd_record_addr (local.get $idx)))
-    (local.set $old (i32.load offset=16 (local.get $ptr)))
-    (i32.store offset=16 (local.get $ptr) (local.get $style))
+    (local.set $old (load.field.memarg WndRecord style (local.get $ptr)))
+    (store.field.memarg WndRecord style (local.get $ptr) (local.get $style))
     (if (i32.ne
           (i32.and (local.get $old) (i32.const 0x10000000))
           (i32.and (local.get $style) (i32.const 0x10000000)))
@@ -998,7 +1187,7 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1))
       (then (return (i32.const 0))))
-    (i32.load offset=20 (call $wnd_record_addr (local.get $idx)))
+    (load.field.memarg WndRecord state_ptr (call $wnd_record_addr (local.get $idx)))
   )
 
   ;; Set per-window state pointer
@@ -1007,7 +1196,7 @@
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.ne (local.get $idx) (i32.const -1))
       (then
-        (i32.store offset=20 (call $wnd_record_addr (local.get $idx)) (local.get $value))))
+        (store.field.memarg WndRecord state_ptr (call $wnd_record_addr (local.get $idx)) (local.get $value))))
   )
 
   ;; ---- Class table helpers ----
@@ -1142,8 +1331,7 @@
     (if (i32.eq (local.get $atom) (i32.const 0x0085)) (then (return (i32.const 5))))   ;; ComboBox
     (i32.const 0))
 
-  ;; The classes comctl32 and riched register. Unlike USER's six these have no
-  ;; predefined atom -- an app can only name them -- so they are matched as
+  ;; The classes comctl32 and riched register have no predefined USER atom, so they are matched as
   ;; strings, on the lowercased LE dwords the rest of this file uses.
   ;;
   ;; Matching is by prefix, deliberately and unchanged from when these lived
@@ -1154,6 +1342,19 @@
     (local $d0 i32) (local $d1 i32)
     (local.set $d0 (i32.or (i32.load (local.get $wa)) (i32.const 0x20202020)))
     (local.set $d1 (i32.or (i32.load offset=4 (local.get $wa)) (i32.const 0x20202020)))
+    ;; "mdic" + "lien" + "t\0" -> USER's preregistered MDICLIENT class.
+    ;; It is not a common control, but it belongs in this named-system-class
+    ;; resolver because unlike Button/Edit it has no MAKEINTATOM spelling.
+    (if (i32.and
+          (i32.eq (local.get $d0) (i32.const 0x6369646d))
+          (i32.and
+            (i32.eq (local.get $d1) (i32.const 0x6e65696c))
+            (i32.and
+              (i32.eq
+                (i32.or (i32.load8_u offset=8 (local.get $wa)) (i32.const 0x20))
+                (i32.const 0x74))
+              (i32.eqz (i32.load8_u offset=9 (local.get $wa))))))
+      (then (return (i32.const 33))))
     ;; "syst"+"reev" -> TreeView
     (if (i32.and (i32.eq (local.get $d0) (i32.const 0x74737973))
                  (i32.eq (local.get $d1) (i32.const 0x76656572)))
@@ -1188,6 +1389,7 @@
                    (i32.eq (i32.or (i32.load16_u offset=4 (local.get $wa)) (i32.const 0x2020))
                            (i32.const 0x7265))))
       (then (return (i32.const 19))))
+    (if (i32.and (i32.eq (local.get $d0) (i32.const 0x7463736d)) (i32.eq (local.get $d1) (i32.const 0x707f736c))) (then (return (i32.const 17)))) ;; msctls_progress32
     ;; "comb"+"olbo"+"x\0" -> the popup list a combobox drops down, which some
     ;; apps create directly. Same control as a ListBox.
     (if (i32.and (i32.eq (local.get $d0) (i32.const 0x626d6f63))
@@ -1250,22 +1452,37 @@
   (func $class_wndclass_addr (param $slot i32) (result i32)
     (i32.add (call $class_record_addr (local.get $slot)) (i32.const 8)))
 
-  ;; Allocate or find a class slot for $name_wa. Returns the class atom.
-  ;; The caller is responsible for memcpy'ing the WNDCLASSA into
-  ;; $class_wndclass_addr(slot) immediately afterwards.
-  (func $class_table_register (param $name_wa i32) (result i32)
-    (local $hash i32) (local $i i32) (local $ptr i32) (local $empty i32)
+  ;; Allocate or replace a class slot for $name_wa. Returns the class atom.
+  ;; Locked: the scan and the claim have to be one step, or two threads
+  ;; registering different classes at the same moment both take the slot the
+  ;; other just took. The atom comes from a shared counter for the same reason —
+  ;; as a mutable global it was a private copy per instance, so two threads
+  ;; registering two DIFFERENT classes both got 0xC001, and CreateWindowA by
+  ;; atom would then build the wrong class's window. Nothing on this path calls
+  ;; a host import, which is what makes a spinlock safe here.
+  (func $class_table_register_data (param $name_wa i32) (param $wndclass_wa i32) (result i32)
+    (local $hash i32) (local $i i32) (local $ptr i32) (local $empty i32) (local $atom i32)
     (local.set $hash (call $class_name_hash (local.get $name_wa)))
     (local.set $empty (i32.const -1))
     (local.set $i (i32.const 0))
+    (call $lock_wnd_acquire)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_CLASSES)))
       (local.set $ptr (call $class_record_addr (local.get $i)))
       ;; Existing class — return its atom (caller will overwrite WNDCLASSA via memcpy)
-      (if (i32.eq (i32.load (local.get $ptr)) (local.get $hash))
-        (then (return (i32.load offset=4 (local.get $ptr)))))
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hash))
+        (then
+          (local.set $atom (i32.load offset=4 (local.get $ptr)))
+          (i32.atomic.store (local.get $ptr) (i32.const 0))
+          (if (local.get $wndclass_wa)
+            (then (call $memcpy (i32.add (local.get $ptr) (i32.const 8))
+              (local.get $wndclass_wa) (i32.const 40)))
+            (else (call $zero_memory (i32.add (local.get $ptr) (i32.const 8)) (i32.const 40))))
+          (i32.atomic.store (local.get $ptr) (local.get $hash))
+          (call $lock_wnd_release)
+          (return (local.get $atom))))
       ;; Track first empty
-      (if (i32.and (i32.eqz (i32.load (local.get $ptr)))
+      (if (i32.and (i32.eqz (i32.atomic.load (local.get $ptr)))
                    (i32.eq (local.get $empty) (i32.const -1)))
         (then (local.set $empty (local.get $i))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -1274,12 +1491,24 @@
     (if (i32.ne (local.get $empty) (i32.const -1))
       (then
         (local.set $ptr (call $class_record_addr (local.get $empty)))
-        (i32.store (local.get $ptr) (local.get $hash))
-        (global.set $class_atom_counter (i32.add (global.get $class_atom_counter) (i32.const 1)))
-        (i32.store offset=4 (local.get $ptr) (global.get $class_atom_counter))
-        (return (global.get $class_atom_counter))))
+        (local.set $atom (i32.add (global.get $CLASS_ATOM_BASE)
+          (i32.add (i32.atomic.rmw.add (global.get $SHARED_COUNTERS) (i32.const 1))
+                   (i32.const 1))))
+        (i32.store offset=4 (local.get $ptr) (local.get $atom))
+        (if (local.get $wndclass_wa)
+          (then (call $memcpy (i32.add (local.get $ptr) (i32.const 8))
+            (local.get $wndclass_wa) (i32.const 40)))
+          (else (call $zero_memory (i32.add (local.get $ptr) (i32.const 8)) (i32.const 40))))
+        ;; name_hash is the publication word and is written last.
+        (i32.atomic.store (local.get $ptr) (local.get $hash))
+        (call $lock_wnd_release)
+        (return (local.get $atom))))
+    (call $lock_wnd_release)
     (i32.const 0)
   )
+
+  (func $class_table_register (param $name_wa i32) (result i32)
+    (call $class_table_register_data (local.get $name_wa) (i32.const 0)))
 
   ;; Find class slot index by name hash; returns slot or -1
   (func $class_find_slot (param $name_wa i32) (result i32)
@@ -1289,7 +1518,7 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_CLASSES)))
       (local.set $ptr (call $class_record_addr (local.get $i)))
-      (if (i32.eq (i32.load (local.get $ptr)) (local.get $hash))
+      (if (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hash))
         (then (return (local.get $i))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -1309,13 +1538,78 @@
         (block $adone (loop $ascan
           (br_if $adone (i32.ge_u (local.get $i) (global.get $MAX_CLASSES)))
           (local.set $ptr (call $class_record_addr (local.get $i)))
-          (if (i32.and (i32.ne (i32.load (local.get $ptr)) (i32.const 0))
+          (if (i32.and (i32.ne (i32.atomic.load (local.get $ptr)) (i32.const 0))
                        (i32.eq (i32.load offset=4 (local.get $ptr))
                                (local.get $name_wa)))
             (then (return (local.get $i))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $ascan)))))
     (i32.const -1))
+
+  ;; Remove an application-registered class. Returns ERROR_SUCCESS, or the
+  ;; documented USER error that explains why the class remains registered.
+  ;;
+  ;; The class and window tables share $LOCK_WND, so the live-window scan and
+  ;; removal are one transaction with respect to window/class writers. The
+  ;; hash is the class record's publication word and is cleared first; readers
+  ;; can no longer discover the record while the remaining fields are reset.
+  (func $class_table_unregister (param $name_wa i32) (param $hinstance i32) (result i32)
+    (local $hash i32) (local $slot i32) (local $i i32)
+    (local $ptr i32) (local $wnd_ptr i32)
+    ;; USER's built-in control classes belong to the system, not the caller.
+    (if (call $builtin_ctrl_class_id_key (local.get $name_wa))
+      (then (return (i32.const 1411)))) ;; ERROR_CLASS_DOES_NOT_EXIST
+    (local.set $hash (call $class_name_hash (local.get $name_wa)))
+    (local.set $slot (i32.const -1))
+    (call $lock_wnd_acquire)
+    (block $class_done (loop $class_scan
+      (br_if $class_done (i32.ge_u (local.get $i) (global.get $MAX_CLASSES)))
+      (local.set $ptr (call $class_record_addr (local.get $i)))
+      (if (i32.or
+            (i32.eq (i32.atomic.load (local.get $ptr)) (local.get $hash))
+            (i32.and
+              (i32.lt_u (local.get $name_wa) (i32.const 0x10000))
+              (i32.and
+                (i32.ne (i32.atomic.load (local.get $ptr)) (i32.const 0))
+                (i32.eq (i32.load offset=4 (local.get $ptr))
+                        (local.get $name_wa)))))
+        (then
+          (local.set $slot (local.get $i))
+          (br $class_done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $class_scan)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0))
+      (then
+        (call $lock_wnd_release)
+        (return (i32.const 1411)))) ;; ERROR_CLASS_DOES_NOT_EXIST
+    (local.set $ptr (call $class_record_addr (local.get $slot)))
+    ;; WNDCLASS.hInstance is +16 in the embedded record at +8.
+    (if (i32.ne (i32.load offset=24 (local.get $ptr)) (local.get $hinstance))
+      (then
+        (call $lock_wnd_release)
+        (return (i32.const 1411)))) ;; ERROR_CLASS_DOES_NOT_EXIST
+    (local.set $i (i32.const 0))
+    (block $window_done (loop $window_scan
+      (br_if $window_done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (local.set $wnd_ptr (call $wnd_record_addr (local.get $i)))
+      (if (i32.and
+            (i32.ne (i32.atomic.load (local.get $wnd_ptr)) (i32.const 0))
+            (i32.eq
+              (i32.load8_u (i32.add (global.get $WND_CLASS_SLOT_TABLE) (local.get $i)))
+              (local.get $slot)))
+        (then
+          (call $lock_wnd_release)
+          (return (i32.const 1412)))) ;; ERROR_CLASS_HAS_WINDOWS
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $window_scan)))
+    (i32.atomic.store (local.get $ptr) (i32.const 0))
+    (call $zero_memory (i32.add (local.get $ptr) (i32.const 4)) (i32.const 44))
+    (call $zero_memory
+      (i32.add (global.get $CLASS_EXTRA_TABLE)
+        (i32.mul (local.get $slot) (global.get $CLASS_EXTRA_STRIDE)))
+      (global.get $CLASS_EXTRA_STRIDE))
+    (call $lock_wnd_release)
+    (i32.const 0))
 
   ;; Look up wndproc by class name (WASM addr); returns 0 if not found.
   ;; Reads WNDCLASSA.lpfnWndProc which lives at record + 12.
@@ -1337,6 +1631,12 @@
     (if (i32.eq (local.get $wp) (global.get $WNDPROC_CTRL_NATIVE))
       (then
         (local.set $ret (call $control_wndproc_dispatch (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
+        ;; Built-in controls use DefWindowProc for the legacy geometry-message
+        ;; epilog after their own WM_WINDOWPOSCHANGED handling.
+        (if (i32.eq (local.get $msg) (i32.const 0x0047))
+          (then
+            (call $windowpos_defproc_geometry
+              (local.get $hwnd) (local.get $lParam))))
         ;; WM_SETCURSOR: zero means the control did not claim the cursor, which
         ;; in Win32 is the caller's cue to fall through to DefWindowProc. Only
         ;; the edit control's HTCLIENT branch sets one, so without this its
@@ -1357,9 +1657,19 @@
           (then (call $defwndproc_do_ncpaint (local.get $hwnd)) (return (i32.const 0))))
         (if (i32.eq (local.get $msg) (i32.const 0x0083))
           (then (call $defwndproc_do_nccalcsize (local.get $hwnd)) (return (i32.const 0))))
+        (if (i32.eq (local.get $msg) (i32.const 0x0047))
+          (then
+            (call $windowpos_defproc_geometry
+              (local.get $hwnd) (local.get $lParam))
+            (return (i32.const 0))))
         (return (call $console_wndproc (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
     ;; WM_NCPAINT / WM_NCCALCSIZE default chrome for WAT-native top-levels.
     ;; Help wndproc never overrides these so we take the default directly.
+    (if (i32.eq (local.get $msg) (i32.const 0x0047))
+      (then
+        (call $windowpos_defproc_geometry
+          (local.get $hwnd) (local.get $lParam))
+        (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0085))
       (then (call $defwndproc_do_ncpaint (local.get $hwnd)) (return (i32.const 0))))
     (if (i32.eq (local.get $msg) (i32.const 0x0083))
@@ -1443,8 +1753,83 @@
     (i32.add (call $scroll_aux_addr (local.get $slot))
              (select (i32.const 8) (i32.const 0) (local.get $vert))))
 
+  ;; EnableScrollBar state is packed into one byte per window. $vert selects
+  ;; the high or low two-bit ESB_* field; the stored values intentionally use
+  ;; the public constants so testing one arrow is just testing bit 0 or bit 1.
+  (func $scroll_arrow_mask_slot (param $slot i32) (param $vert i32) (result i32)
+    (i32.and
+      (i32.shr_u
+        (i32.load8_u (i32.add (global.get $SCROLL_ARROW_TABLE) (local.get $slot)))
+        (select (i32.const 2) (i32.const 0) (local.get $vert)))
+      (i32.const 3)))
+
+  (func $scroll_arrow_mask (param $hwnd i32) (param $vert i32) (result i32)
+    (local $slot i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0))
+      (then (return (i32.const 0))))
+    (call $scroll_arrow_mask_slot (local.get $slot) (local.get $vert)))
+
+  ;; Store one ESB_* field without disturbing the perpendicular bar. Returns
+  ;; TRUE only when the state changed, matching EnableScrollBar's contract.
+  (func $scroll_arrow_set_slot (param $slot i32) (param $vert i32)
+      (param $arrows i32) (result i32)
+    (local $addr i32) (local $old_byte i32) (local $shift i32)
+    (local $field_mask i32) (local $new_byte i32)
+    (local.set $addr (i32.add (global.get $SCROLL_ARROW_TABLE) (local.get $slot)))
+    (local.set $old_byte (i32.load8_u (local.get $addr)))
+    (local.set $shift (select (i32.const 2) (i32.const 0) (local.get $vert)))
+    (local.set $field_mask (i32.shl (i32.const 3) (local.get $shift)))
+    (local.set $new_byte
+      (i32.or
+        (i32.and (local.get $old_byte) (i32.xor (local.get $field_mask) (i32.const -1)))
+        (i32.shl (i32.and (local.get $arrows) (i32.const 3)) (local.get $shift))))
+    (if (i32.eq (local.get $new_byte) (local.get $old_byte))
+      (then (return (i32.const 0))))
+    (i32.store8 (local.get $addr) (local.get $new_byte))
+    (i32.const 1))
+
+  ;; Turn a geometric scrollbar hit into no hit when EnableScrollBar disabled
+  ;; that arrow. Track/page/thumb input remains available, as on USER32.
+  (func $scroll_arrow_filter_hit (param $hwnd i32) (param $vert i32)
+      (param $part i32) (result i32)
+    (local $mask i32)
+    (local.set $mask (call $scroll_arrow_mask (local.get $hwnd) (local.get $vert)))
+    (if (i32.and
+          (i32.eq (local.get $part) (i32.const 1))
+          (i32.ne (i32.and (local.get $mask) (i32.const 1)) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (if (i32.and
+          (i32.eq (local.get $part) (i32.const 2))
+          (i32.ne (i32.and (local.get $mask) (i32.const 2)) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (local.get $part))
+
+  ;; Project a control-owned vertical viewport into the standard Win32
+  ;; scrollbar APIs. This is deliberately one-way: SetScrollPos changes the
+  ;; scroll box but does not scroll a window's contents, so a common control's
+  ;; content position remains private and may temporarily differ. The control
+  ;; calls this helper after it actually scrolls to resynchronize the chrome.
+  (func $scroll_publish_vertical_info (param $hwnd i32) (param $pos i32)
+      (param $total i32) (param $visible i32)
+    (local $slot i32) (local $base i32) (local $aux i32)
+    (local.set $slot (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return)))
+    (if (i32.lt_s (local.get $total) (i32.const 1))
+      (then (local.set $total (i32.const 1))))
+    (if (i32.lt_s (local.get $visible) (i32.const 1))
+      (then (local.set $visible (i32.const 1))))
+    (local.set $base (call $scroll_bar_addr (local.get $slot) (i32.const 1)))
+    (local.set $aux (call $scroll_aux_bar_addr (local.get $slot) (i32.const 1)))
+    (i32.store          (local.get $base) (local.get $pos))
+    (i32.store offset=4 (local.get $base) (i32.const 0))
+    (i32.store offset=8 (local.get $base) (i32.sub (local.get $total) (i32.const 1)))
+    (i32.store          (local.get $aux) (local.get $visible))
+    (i32.store offset=4 (local.get $aux) (local.get $pos)))
+
   ;; Zero one slot's scroll state. Called from the slot-reset path so a reused
   ;; hwnd does not inherit the previous window's scroll range.
   (func $scroll_reset_slot (param $slot i32)
     (call $zero_memory (call $scroll_record_addr (local.get $slot)) (i32.const 24))
-    (call $zero_memory (call $scroll_aux_addr (local.get $slot)) (i32.const 16)))
+    (call $zero_memory (call $scroll_aux_addr (local.get $slot)) (i32.const 16))
+    (i32.store8 (i32.add (global.get $SCROLL_ARROW_TABLE) (local.get $slot)) (i32.const 0)))

@@ -4,7 +4,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { createHostImports } = require('../lib/host-imports');
 
 const extraWat = String.raw`
@@ -12,18 +12,6 @@ const extraWat = String.raw`
     (call $virtual_map_commit (local.get $guest) (local.get $size)))
   (func (export "test_g2w") (param $guest i32) (result i32)
     (call $g2w (local.get $guest)))
-  (func (export "test_g2w_cache_base") (result i32)
-    (global.get $g2w_sparse_base))
-  (func (export "test_g2w_cache_size") (result i32)
-    (global.get $g2w_sparse_size))
-  (func (export "test_g2w_cache_backing") (result i32)
-    (global.get $g2w_sparse_backing))
-  (func (export "test_g2w_cache_base1") (result i32)
-    (global.get $g2w_sparse_base1))
-  (func (export "test_g2w_cache_size1") (result i32)
-    (global.get $g2w_sparse_size1))
-  (func (export "test_g2w_gl8_page") (result i32)
-    (global.get $g2w_gl8_page))
   (func (export "test_gl16") (param $guest i32) (result i32)
     (call $gl16 (local.get $guest)))
   (func (export "test_gl32") (param $guest i32) (result i32)
@@ -41,11 +29,10 @@ const extraWat = String.raw`
 async function main() {
   const root = path.join(__dirname, '..');
   const srcDir = path.join(root, 'src');
-  const bytes = await compileWat(async filename => {
-    const source = await fs.promises.readFile(path.join(srcDir, filename), 'utf8');
-    if (filename !== '13-exports.wat') return source;
-    return source.replace(/\n\)\s*$/, `\n${extraWat}\n)\n`);
-  });
+  // Plain append: src fragments are self-balanced now, so there is no trailing
+  // `)` to splice before — the old regex matched nothing and dropped extraWat.
+  const bytes = compileSrcWasm((filename, source) =>
+    filename === '13-exports.wat' ? `${source}\n${extraWat}\n` : source);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const context = { exports: null, getMemory: () => memory.buffer };
   const imports = createHostImports(context);
@@ -55,6 +42,7 @@ async function main() {
   imports.host.log_i32 = () => {};
   imports.host.crash_unimplemented = () => {};
   imports.host.wait_multiple = () => 0;
+  imports.host.terminate_thread = () => 0;
   imports.host.shell_execute = () => 33;
   const { instance } = await WebAssembly.instantiate(bytes, imports);
   const e = instance.exports;
@@ -75,31 +63,16 @@ async function main() {
     (e.test_g2w(page1 + 0xfff) + 1) >>> 0,
     e.test_g2w(page2) >>> 0,
     'fixture must use non-contiguous WASM backing');
-  assert.strictEqual(e.test_g2w_cache_base() >>> 0, page2,
-    'the last successful sparse translation caches its guest base');
-  assert.strictEqual(e.test_g2w_cache_size() >>> 0, 0x1000,
-    'the sparse translation cache retains the mapped range size');
-  assert.strictEqual(
-    e.test_g2w(page2 + 0x321) >>> 0,
-    (e.test_g2w_cache_backing() + 0x321) >>> 0,
-    'another address in the cached range translates from the cached backing');
-  assert.strictEqual(e.test_g2w_cache_base1() >>> 0, page1,
-    'the previous sparse mapping remains in the multi-range cache');
-  assert.strictEqual(e.test_g2w_cache_size1() >>> 0, 0x1000,
-    'the previous sparse mapping retains its complete range');
-  const page2CacheBase = e.test_g2w_cache_base() >>> 0;
+  assert.notStrictEqual(e.test_g2w(page2 + 0x321) >>> 0, 0xf0,
+    'another address in the mapped page must translate through its PTE');
   assert.notStrictEqual(e.test_g2w(page1 + 0x234) >>> 0, 0xf0,
-    'an older cached range translates without falling back to the null sentinel');
-  assert.strictEqual(e.test_g2w_cache_base() >>> 0, page2CacheBase,
-    'a hit in an older slot does not evict the hottest sparse range');
+    'an older mapping must remain independently addressable');
 
   const read8 = address => e.guest_read8(address) & 0xff;
   const write8 = (address, value) => e.guest_write8(address, value);
   write8(page1 + 0x345, 0x7b);
   assert.strictEqual(read8(page1 + 0x345), 0x7b,
-    'byte read through the page TLB must retain sparse backing semantics');
-  assert.strictEqual(e.test_g2w_gl8_page() >>> 0, page1,
-    'a valid sparse byte read caches its 4KB guest page');
+    'byte reads must retain sparse backing semantics');
   const seed = [0x10, 0x21, 0x32, 0x43, 0x54, 0x65, 0x76, 0x87];
   const seedBase = page1 + 0xffc;
   for (let i = 0; i < seed.length; i++) write8(seedBase + i, seed[i]);

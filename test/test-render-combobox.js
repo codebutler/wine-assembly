@@ -11,6 +11,8 @@
 //   - canvas has many colors after repaint (proves WM_PAINT reached the
 //     combobox and listbox wndprocs and painted real GDI primitives)
 const { runRenderTest } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 runRenderTest('combobox', async (h, check) => {
   const e = h.exports;
@@ -18,7 +20,7 @@ runRenderTest('combobox', async (h, check) => {
 
   const writeStr = (s) => {
     const g = e.guest_alloc(s.length + 1);
-    const wa = g - e.get_image_base() + 0x12000;
+    const wa = RegionMap.g2w(g, e.get_image_base());
     const u8 = new Uint8Array(memory.buffer);
     for (let i = 0; i < s.length; i++) u8[wa + i] = s.charCodeAt(i);
     u8[wa + s.length] = 0;
@@ -31,6 +33,9 @@ runRenderTest('combobox', async (h, check) => {
   // Combobox at (40, 40), 200 wide, 120 tall (room for the dropdown).
   const cb = e.test_create_combobox(40, 40, 200, 120, CBS_DROPDOWNLIST);
   check('combobox hwnd allocated', cb !== 0, 'hwnd=0x' + cb.toString(16));
+  const parent = e.wnd_get_parent(cb) >>> 0;
+  e.wnd_set_style_export(parent,
+    (e.wnd_get_style_export(parent) | 0x10000000) >>> 0);
 
   const lb = e.combobox_get_lb_hwnd(cb);
   check('inner listbox exposed', lb !== 0, 'lb=0x' + lb.toString(16));

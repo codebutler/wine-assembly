@@ -7,15 +7,15 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_map_view_of_file_ex") (param $base i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     ;; Sixth stdcall argument lives beyond the five dispatcher locals.
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $base))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $base))
     (call $handle_MapViewOfFileEx
       (i32.const 0xfb000002) (i32.const 2) (i32.const 3)
       (i32.const 4) (i32.const 0x16c) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 `;
 
 (async () => {

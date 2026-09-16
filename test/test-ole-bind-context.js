@@ -8,19 +8,22 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const apiTable = require('../src/api_table.json');
+// $THUNK_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 
 async function main() {
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(ROOT, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const imports = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   imports.host.memory = memory;
   Object.assign(imports.host, {
     create_thread: () => 0,
     exit_thread: () => 0,
+    terminate_thread: () => 0,
     create_event: () => 0,
     set_event: () => 0,
     reset_event: () => 0,
@@ -89,7 +92,7 @@ async function main() {
     const api = apiTable.find(entry => entry.name === name);
     assert(api, `${name} must exist in api_table.json`);
     assert(args.length <= 4, `${name} exceeds call_func argument bridge`);
-    const thunkWa = 0x07112000;
+    const thunkWa = RegionMap.BASE.THUNK_BASE;
     const thunkGuest = (thunkWa - guestBase + imageBase) >>> 0;
     const savedName = dv.getUint32(thunkWa, true);
     const savedId = dv.getUint32(thunkWa + 4, true);

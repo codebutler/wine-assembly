@@ -236,16 +236,31 @@
     },
     {
       "id": "nethack-win32",
-      "name": "NetHack Win32 console",
+      "name": "NetHack for Windows",
       "kind": "game",
-      "version": "3.3.1",
+      "version": "3.4.3",
       "executables": [
-        "nethack.exe"
+        "installed/NetHackW.exe",
+        "installed/NetHack.exe"
       ],
-      "sourcePage": "https://ww2.nethack.org/v331/ports/download-nt.html",
+      "sourcePage": "https://www.nethack.org/v343/ports/download-win.html",
       "license": "NetHack General Public License",
-      "packages": [],
-      "manual": "Acquire the official nh331NTi.zip Win32 package. Do not use Archive item nh331rm2; it contains DOS MZ binaries."
+      "packages": [
+        {
+          "url": "https://www.nethack.org/download/3.4.3/nethack-343-win.zip",
+          "sha1": "5b8e4717fb18d7888678f54b47aafd0060bf576b",
+          "type": "archive",
+          "into": "installed"
+        }
+      ],
+      "browser": {
+        "fileRoot": "installed",
+        "exe": "installed/NetHackW.exe"
+      },
+      "cli": {
+        "maxBatches": 45,
+        "batchSize": 25000
+      }
     },
     {
       "id": "jazz-jackrabbit-2-demo-installer",
@@ -263,6 +278,122 @@
           "sha1": "5dd6c6eabe0d8f809b47dd986fc20fe06d3f4125",
           "type": "file",
           "destination": "J2swc123.exe"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "quake-2-demo-installer",
+      "name": "Quake II Demo",
+      "kind": "installer",
+      "version": "3.14 Win32 demo",
+      "executables": [
+        "q2-314-demo-x86.exe"
+      ],
+      "sourcePage": "https://github.com/Jason2Brownlee/Quake2OfficialArchive",
+      "license": "commercial demo; keep as a local candidate fixture and review bundled terms before public deployment",
+      "packages": [
+        {
+          "url": "https://raw.githubusercontent.com/Jason2Brownlee/Quake2OfficialArchive/main/bin/q2-314-demo-x86.exe",
+          "sha1": "5b4dedc59ceee306956a3e48a8bdf6dd33bc91ed",
+          "type": "file",
+          "destination": "q2-314-demo-x86.exe"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "heroes-3-demo-installer",
+      "name": "Heroes of Might and Magic III demo",
+      "kind": "installer",
+      "version": "1999 Restoration of Erathia demo",
+      "executables": [
+        "h3demo.exe"
+      ],
+      "sourcePage": "https://archive.org/details/HeroesOfMightAndMagicIiiTheRestorationOfErathia",
+      "license": "commercial demo; keep as a local candidate fixture and review bundled terms before public deployment",
+      "packages": [
+        {
+          "url": "https://archive.org/download/HeroesOfMightAndMagicIiiTheRestorationOfErathia/h3demo.exe",
+          "sha1": "8d44f794a3fe80bea524f90b38fed3325ca3d1cb",
+          "type": "file",
+          "destination": "h3demo.exe"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "diablo-2-demo-installer",
+      "name": "Diablo II Demo",
+      "kind": "installer",
+      "version": "2000 Barbarian demo",
+      "executables": [
+        "DiabloIIDemo.exe"
+      ],
+      "sourcePage": "https://archive.org/details/DiabloIiDemo",
+      "license": "commercial shareware demo; local fixture only unless the bundled license is reviewed for deployment",
+      "packages": [
+        {
+          "url": "https://archive.org/download/DiabloIiDemo/DiabloIIDemo.exe",
+          "sha1": "f7aa7f76b9f4c7584d4980cb32a7de97394a3f05",
+          "type": "file",
+          "destination": "DiabloIIDemo.exe"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gta2-demo",
+      "name": "Grand Theft Auto 2 demo",
+      "kind": "installer",
+      "version": "1999 Wild Demo",
+      "executables": [
+        "gta2demo.exe"
+      ],
+      "sourcePage": "https://archive.org/details/gta2-1999",
+      "license": "commercial demo; the package grants use but not public redistribution, so keep it as an ignored local fixture",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/gta2-1999/Files/Demo/gta2demo.exe",
+          "sha1": "0566061b695ce975f78ef56da22fd527034ff918",
+          "type": "file",
+          "destination": "gta2demo.exe"
+        }
+      ],
+      "cli": {
+        "maxBatches": 1300,
+        "batchSize": 100000
+      }
+    },
+    {
+      "id": "half-life-uplink-installer",
+      "name": "Half-Life: Uplink",
+      "kind": "installer",
+      "version": "1999 standalone demo",
+      "executables": [
+        "hluplink.exe"
+      ],
+      "sourcePage": "https://archive.org/details/Half-lifeUplink",
+      "license": "commercial demo; keep as a local candidate fixture and review bundled terms before public deployment",
+      "packages": [
+        {
+          "url": "https://archive.org/download/Half-lifeUplink/hluplink.exe",
+          "sha1": "605e110670ca3d55b2093b7750d1d0138cbf1f4c",
+          "type": "file",
+          "destination": "hluplink.exe"
         }
       ],
       "cli": {
@@ -372,6 +503,33 @@
       }
     },
     {
+      "id": "elasto-mania",
+      "name": "Elasto Mania",
+      "kind": "game",
+      "version": "1.0 registered",
+      "executables": [
+        "Elma/Elma.exe"
+      ],
+      "sourcePage": "https://archive.org/details/elmav10",
+      "license": "proprietary registered release; no redistribution permission found, so keep as a local ignored candidate fixture",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/elmav10/Elmav10.zip",
+          "sha1": "11e0703f51268caf7e4d99ddf014fb12f95246e7",
+          "type": "archive"
+        }
+      ],
+      "browser": {
+        "fileRoot": "Elma",
+        "exe": "Elma/Elma.exe"
+      },
+      "cli": {
+        "maxBatches": 1150,
+        "batchSize": 200000
+      }
+    },
+    {
       "id": "jardinains",
       "name": "Jardinains!",
       "kind": "game",
@@ -380,13 +538,14 @@
         "jardinains_1_2.exe",
         "jardinains.exe"
       ],
-      "sourcePage": "https://archive.org/details/Jardinains1",
-      "license": "freeware; verify original package terms before public deployment",
+      "sourcePage": "https://jardinains2.com/otherDownloads.html",
+      "license": "shareware/free personal use; original installer license explicitly forbids redistribution without written consent",
       "packages": [
         {
-          "url": "https://archive.org/download/Jardinains1/Jardinains.rar",
-          "sha1": "177d42a0c18559320117671d30e6511f0e757550",
-          "type": "archive"
+          "url": "https://jardinains2.com/download.php?download=1",
+          "sha1": "805d7639f3ffbc0e771800c580c4799546d86bd7",
+          "type": "file",
+          "destination": "jardinains_1_2.exe"
         }
       ],
       "cli": {
@@ -395,21 +554,54 @@
       }
     },
     {
+      "id": "worms-2-demo",
+      "name": "Worms 2 Demo",
+      "kind": "game",
+      "version": "October 9, 1997 multiplayer demo 1.1",
+      "executables": [
+        "installer-10oct/SETUP.EXE"
+      ],
+      "sourcePage": "http://www.classicdosgames.com/game/Worms_2.html",
+      "license": "playable demo; bundled README explicitly permits redistribution while the original files remain intact and unchanged",
+      "packages": [
+        {
+          "url": "http://www.classicdosgames.com/files/games/team17/Worms2Demo10Oct.zip",
+          "sha1": "30d3c4858cc99c412a21085e1740bd7ca9123a8a",
+          "type": "archive",
+          "into": "installer-10oct"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 25000,
+        "vfsInclude": [
+          "*"
+        ]
+      }
+    },
+    {
       "id": "snood",
       "name": "Snood",
       "kind": "game",
       "version": "Windows shareware release",
       "executables": [
+        "SnoodWin22Install.exe",
         "Snood.exe",
         "snood.exe"
       ],
-      "sourcePage": "https://archive.org/details/Snood_20180218",
-      "license": "shareware; verify original package terms before public deployment",
-      "packages": [],
-      "manual": "The linked Archive item is the DOS/DJGPP build; acquire and hash a verified PE32 Windows shareware release manually",
+      "sourcePage": "https://discmaster.textfiles.com/browse/40163/PCH_1200.iso/program/spel/snood/SnoodWin22Install.exe",
+      "license": "commercial shareware demonstration; the installed readme allows a 30-day trial but contains no public redistribution grant, so keep the package and installed payload local",
+      "packages": [
+        {
+          "url": "https://discmaster.textfiles.com/file/40163/PCH_1200.iso/program/spel/snood/SnoodWin22Install.exe",
+          "sha1": "82f03c667de5db46b17106745973b8c54c390d7e",
+          "type": "file",
+          "destination": "SnoodWin22Install.exe"
+        }
+      ],
       "cli": {
-        "maxBatches": 80,
-        "batchSize": 25000
+        "maxBatches": 300,
+        "batchSize": 100000
       }
     },
     {
@@ -568,6 +760,660 @@
       "cli": {
         "maxBatches": 3000,
         "batchSize": 25000
+      }
+    },
+    {
+      "id": "gog-free-beneath-a-steel-sky",
+      "name": "Beneath a Steel Sky GOG installer",
+      "kind": "installer",
+      "version": "1.0 (GOG build 20270)",
+      "executables": [
+        "setup_beneath_a_steel_sky_1.0_(20270).exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/beneath_a_steel_sky",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/beneath.a.steel.sky.rar",
+          "sha1": "dee0ca140e5d8cea0738c7f0f9bba2b970ad8f44",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gog-free-flight-of-the-amazon-queen",
+      "name": "Flight of the Amazon Queen GOG installer",
+      "kind": "installer",
+      "version": "1.0 (GOG build 20270)",
+      "executables": [
+        "setup_flight_of_the_amazon_queen_1.0_(20270).exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/flight_of_the_amazon_queen",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/flight.of.the.amazon.queen.rar",
+          "sha1": "5381b63e357f91ef78050a5880c6020d2bc2d630",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gog-free-lure-of-the-temptress",
+      "name": "Lure of the Temptress GOG installer",
+      "kind": "installer",
+      "version": "1.0 (GOG build 20270)",
+      "executables": [
+        "setup_lure_of_the_temptress_1.0_(20270).exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/lure_of_the_temptress",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/lure.of.the.temptress.rar",
+          "sha1": "8a0ff33dbd94ebfbf8d4edd979c5fee7c3985b2f",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gog-free-shadow-warrior-classic",
+      "name": "Shadow Warrior Classic Complete GOG installer",
+      "kind": "installer",
+      "version": "2.0.0.7",
+      "executables": [
+        "setup_shadow_warrior_complete_2.0.0.7.exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/shadow_warrior_complete",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/shadow.warrior.rar",
+          "sha1": "92f1c925d235c3176ab4c21b6f1f0461b1b602c8",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gog-free-elder-scrolls-arena",
+      "name": "The Elder Scrolls: Arena GOG installer",
+      "kind": "installer",
+      "version": "1.07 (GOG build 28043)",
+      "executables": [
+        "setup_the_elder_scrolls_arena_1.07_(28043).exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/the_elder_scrolls_arena",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/the.elder.scrolls.1.arena.rar",
+          "sha1": "aa8f357433ea5c07a9ebda4c6dd062b53348f57b",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gog-free-elder-scrolls-daggerfall",
+      "name": "The Elder Scrolls II: Daggerfall GOG installer",
+      "kind": "installer",
+      "version": "1.07 (GOG build 28043)",
+      "executables": [
+        "setup_the_elder_scrolls_ii_daggerfall_1.07_(28043).exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/the_elder_scrolls_chapter_ii_daggerfall",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/the.elder.scrolls.2.daggerfall.rar",
+          "sha1": "05276866d94746987a56617b708fa6eb4653359b",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "gog-free-ultima-iv",
+      "name": "Ultima IV: Quest of the Avatar GOG installer",
+      "kind": "installer",
+      "version": "1.0 CS (GOG build 28045)",
+      "executables": [
+        "setup_ultima_iv_-_quest_of_the_avatar_1.0_cs_(28045).exe"
+      ],
+      "sourcePage": "https://www.gog.com/en/game/ultima_iv_quest_of_the_avatar",
+      "license": "proprietary; listed by GOG at USD 0.00 on 2026-08-25, which does not establish redistribution permission",
+      "packages": [
+        {
+          "url": "https://archive.org/download/gog_collection/ultima.4.quest.of.the.avatar.rar",
+          "sha1": "a75b5a57226650c47fe8f8cdb0872c8289da1cf7",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 100,
+        "batchSize": 10000
+      }
+    },
+    {
+      "id": "deus-ex-demo",
+      "name": "Deus Ex demo",
+      "kind": "game",
+      "version": "1.002f demo",
+      "executables": [
+        "installed/system/deusex.exe"
+      ],
+      "sourcePage": "https://archive.org/details/DeusExDemo",
+      "license": "proprietary commercial demo; private/domestic use only and no redistribution grant; local ignored testing only",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/DeusExDemo/DeusExDemo.exe",
+          "sha1": "750fbda4f77977e5d03d931cd68c273e9968e914",
+          "type": "file",
+          "destination": "DeusExDemo.exe"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "installDeusExDemo",
+          "installer": "DeusExDemo.exe",
+          "into": "installed"
+        },
+        {
+          "type": "replaceText",
+          "file": "installed/system/deusex.ini",
+          "replacements": [
+            {
+              "from": "FirstRun=0\r",
+              "to": "FirstRun=1002"
+            },
+            {
+              "from": "GameRenderDevice=GlideDrv.GlideRenderDevice\r",
+              "to": "GameRenderDevice=SoftDrv.SoftwareRenderDevice"
+            },
+            {
+              "from": "RenderDevice=GlideDrv.GlideRenderDevice\r",
+              "to": "RenderDevice=SoftDrv.SoftwareRenderDevice"
+            },
+            {
+              "from": "StartupFullscreen=True\r",
+              "to": "StartupFullscreen=False"
+            }
+          ]
+        },
+        {
+          "type": "replaceText",
+          "file": "installed/system/default.ini",
+          "replacements": [
+            {
+              "from": "FirstRun=0\r",
+              "to": "FirstRun=1002"
+            },
+            {
+              "from": "GameRenderDevice=GlideDrv.GlideRenderDevice\r",
+              "to": "GameRenderDevice=SoftDrv.SoftwareRenderDevice"
+            },
+            {
+              "from": "RenderDevice=GlideDrv.GlideRenderDevice\r",
+              "to": "RenderDevice=SoftDrv.SoftwareRenderDevice"
+            },
+            {
+              "from": "StartupFullscreen=True\r",
+              "to": "StartupFullscreen=False"
+            }
+          ]
+        }
+      ],
+      "cli": {
+        "maxBatches": 575,
+        "batchSize": 200000,
+        "args": "-windowed"
+      }
+    },
+    {
+      "id": "icewind-dale-demo",
+      "name": "Icewind Dale demo",
+      "kind": "game",
+      "version": "English demo",
+      "executables": [
+        "installed-extracted/Recommended_compressed/IDDemo.exe"
+      ],
+      "sourcePage": "https://archive.org/details/icewind_dale_eng_demo",
+      "license": "proprietary commercial demo; bundled README prohibits copying or electronic distribution; local ignored testing only",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/icewind_dale_eng_demo/icewind_dale_eng_demo.zip",
+          "sha1": "cc6345ae7decb43341bde25bb1302f422a42666c",
+          "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "unshield",
+          "cab": "icewind_dale_eng_demo/data1.cab",
+          "into": "installed-extracted",
+          "group": "Recommended compressed"
+        },
+        {
+          "type": "copyTree",
+          "from": "icewind_dale_eng_demo/CD2/Data",
+          "into": "installed-extracted/Recommended_compressed/Data"
+        },
+        {
+          "type": "prepareInfinityFullInstall",
+          "key": "installed-extracted/Recommended_compressed/CHITIN.KEY",
+          "data": "installed-extracted/Recommended_compressed/Data",
+          "into": "installed-extracted/Recommended_compressed/Full/Data",
+          "outputKey": "installed-extracted/Recommended_compressed/CHITIN-full.KEY"
+        },
+        {
+          "type": "replaceText",
+          "file": "installed-extracted/Recommended_compressed/icewind.ini",
+          "replacements": [
+            {
+              "from": "HD0:=.\\",
+              "to": "HD0:=C:\\"
+            },
+            {
+              "from": "CD1:=.\\",
+              "to": "CD1:=D:\\"
+            },
+            {
+              "from": "CD2:=.\\",
+              "to": "CD2:=D:\\"
+            }
+          ]
+        }
+      ],
+      "cli": {
+        "maxBatches": 650,
+        "batchSize": 50000
+      }
+    },
+    {
+      "id": "baldurs-gate-noninteractive-demo",
+      "name": "Baldur's Gate non-interactive demo",
+      "kind": "game-demo-presentation",
+      "version": "1998 preview",
+      "executables": [
+        "Baldur.exe"
+      ],
+      "sourcePage": "https://archive.org/details/BALDUR",
+      "license": "proprietary promotional demo; bundled README permits personal noncommercial copies shared at no cost but not commercial or bundled distribution; local ignored testing only",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/BALDUR/BALDUR.EXE",
+          "sha1": "e7caae4255e8ed570cef3a29642432c8d28ecdb9",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 500,
+        "batchSize": 50000,
+        "vfsInclude": [
+          "**/*"
+        ]
+      }
+    },
+    {
+      "id": "baldurs-gate-interactive-demo",
+      "name": "Baldur's Gate interactive demo",
+      "kind": "game",
+      "version": "1.0.0",
+      "executables": [
+        "installed-extracted/MinimumData/BGDemo.exe"
+      ],
+      "sourcePage": "https://archive.org/details/bg-demo",
+      "license": "proprietary playable demo; bundled license prohibits copying or electronic distribution; local ignored testing only",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/bg-demo/BG%20Demo.iso",
+          "sha1": "3796defce51a3e867aa216bc27f0be0689fdadf0",
+          "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "unshield",
+          "cab": "data1.cab",
+          "into": "installed-extracted",
+          "group": "MinimumData"
+        },
+        {
+          "type": "copyFile",
+          "from": "BGDemo.exe",
+          "into": "installed-extracted/MinimumData/BGDemo.exe"
+        },
+        {
+          "type": "copyTree",
+          "from": "CD1",
+          "into": "installed-extracted/MinimumData/CD1"
+        },
+        {
+          "type": "copyTree",
+          "from": "override",
+          "into": "installed-extracted/MinimumData/override"
+        },
+        {
+          "type": "replaceText",
+          "file": "installed-extracted/MinimumData/Baldur.ini",
+          "replacements": [
+            {
+              "from": "HD0:=.\\",
+              "to": "HD0:=C:\\"
+            },
+            {
+              "from": "CD1:=.\\",
+              "to": "CD1:=C:\\CD1\\"
+            },
+            {
+              "from": "CD2:=.\\",
+              "to": "CD2:=C:\\CD1\\"
+            },
+            {
+              "from": "CD3:=.\\",
+              "to": "CD3:=C:\\CD1\\"
+            },
+            {
+              "from": "CD4:=.\\",
+              "to": "CD4:=C:\\CD1\\"
+            },
+            {
+              "from": "CD5:=.\\",
+              "to": "CD5:=C:\\CD1\\"
+            }
+          ]
+        }
+      ],
+      "cli": {
+        "maxBatches": 800,
+        "batchSize": 50000,
+        "vfsInclude": [
+          "**/*"
+        ]
+      }
+    },
+    {
+      "id": "baldurs-gate-chapters-1-2-demo",
+      "name": "Baldur's Gate Chapters I & II",
+      "kind": "game",
+      "version": "1.1.0003 commercial preview",
+      "executables": [
+        "installed-extracted/MinimumData/BGMain.exe"
+      ],
+      "sourcePage": "https://archive.org/details/20230723_20230723_0858",
+      "license": "proprietary commercial preview CD-ROM; bundled license prohibits copying or electronic distribution; local ignored testing only",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/20230723_20230723_0858/Baldur%27s%20Gate%20-%20Chapters%20I%20%26%20II%20%28USA%29%20%28Demo%29.zip",
+          "sha1": "2e5256bc8c418aec51ea39ef1a5bf8640dd3317a",
+          "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "extractRawMode1Cd",
+          "image": "Baldur's Gate - Chapters I & II (USA) (Demo).bin",
+          "into": "cd"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/data1.cab",
+          "into": "installed-extracted",
+          "group": "MinimumData"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/data1.cab",
+          "into": "installed-extracted",
+          "group": "English"
+        },
+        {
+          "type": "copyTree",
+          "from": "installed-extracted/English",
+          "into": "installed-extracted/MinimumData"
+        },
+        {
+          "type": "copyTree",
+          "from": "cd/cd1",
+          "into": "installed-extracted/MinimumData/cd1"
+        },
+        {
+          "type": "copyTree",
+          "from": "cd/Override",
+          "into": "installed-extracted/MinimumData/Override"
+        },
+        {
+          "type": "copyFile",
+          "from": "cd/Keymap.ini",
+          "into": "installed-extracted/MinimumData/Keymap.ini"
+        },
+        {
+          "type": "writeText",
+          "file": "installed-extracted/MinimumData/Baldur.ini",
+          "text": "[Alias]\nHD0:=C:\\\nCD1:=C:\\cd1\\\nCD2:=C:\\cd1\\\nCD3:=C:\\cd1\\\nCD4:=C:\\cd1\\\nCD5:=C:\\cd1\\\n[Program Options]\nSoftSrcKeyBltFast=0\nSoftBltFast=0\nSoftSrcKeyBlt=0\nSoftBlt=0\nSoftMirrorBlt=0\n[GameSpy]\nRegion=0\n"
+        }
+      ],
+      "cli": {
+        "maxBatches": 900,
+        "batchSize": 50000,
+        "vfsInclude": [
+          "**/*"
+        ]
+      }
+    },
+    {
+      "id": "civilization-2-win16",
+      "name": "Sid Meier's Civilization II",
+      "kind": "game",
+      "version": "1.0 original multilingual retail CD-ROM (Win16)",
+      "executables": [
+        "cd/CIV2/CIV2.EXE"
+      ],
+      "sourcePage": "https://archive.org/details/20240816_20240816_0053",
+      "license": "proprietary commercial retail CD-ROM; local ignored compatibility testing only; do not redistribute or deploy",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/20240816_20240816_0053/Sid%20Meier%27s%20Civilization%20II%20%28USA%29%20%28En%2CFr%2CDe%29.zip",
+          "sha1": "fb525316c09bb41034dc4368f0b6bd4ca4caa42e",
+          "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "extractRawMode1Cd",
+          "image": "Sid Meier's Civilization II (USA) (En,Fr,De) (Track 01).bin",
+          "into": "cd"
+        },
+        {
+          "type": "expandSzdd",
+          "from": "cd/WING/WING.DL_",
+          "into": "cd/CIV2/WING.DLL"
+        }
+      ],
+      "browser": {
+        "exe": "cd/CIV2/CIV2.EXE",
+        "fileRoot": "cd/CIV2",
+        "cue": "Sid Meier's Civilization II (USA) (En,Fr,De).cue"
+      },
+      "cli": {
+        "maxBatches": 160,
+        "batchSize": 5000,
+        "cue": "Sid Meier's Civilization II (USA) (En,Fr,De).cue",
+        "vfsInclude": [
+          "**/*"
+        ]
+      }
+    },
+    {
+      "id": "civilization-2-mge-win32",
+      "name": "Civilization II: Multiplayer Gold Edition",
+      "kind": "game",
+      "version": "1.0 USA retail CD-ROM (Win32)",
+      "executables": [
+        "installed/civ2.exe"
+      ],
+      "sourcePage": "https://archive.org/details/20240816_20240816_0053",
+      "license": "proprietary commercial retail CD-ROM; local ignored compatibility testing only; do not redistribute or deploy",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://archive.org/download/20240816_20240816_0053/Civilization%20II%20-%20Multiplayer%20Gold%20Edition%20%28USA%29.zip",
+          "sha1": "093426898e4fcd5397985079b0cf4b1aa77f6340",
+          "type": "archive"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "extractRawMode1Cd",
+          "image": "Civilization II - Multiplayer Gold Edition (USA) (Track 01).bin",
+          "into": "cd"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/data1.cab",
+          "into": "installed-extracted",
+          "group": "Program Executable Files"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/data1.cab",
+          "into": "installed-extracted",
+          "group": "Sound Files"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/data1.cab",
+          "into": "installed-extracted",
+          "group": "Support Files - English"
+        },
+        {
+          "type": "unshield",
+          "cab": "cd/data1.cab",
+          "into": "installed-extracted",
+          "group": "Program Support Files"
+        },
+        {
+          "type": "copyTree",
+          "from": "installed-extracted/Program_Executable_Files",
+          "into": "installed"
+        },
+        {
+          "type": "copyTree",
+          "from": "installed-extracted/Sound_Files",
+          "into": "installed"
+        },
+        {
+          "type": "copyTree",
+          "from": "installed-extracted/Support_Files_-_English",
+          "into": "installed"
+        },
+        {
+          "type": "copyTree",
+          "from": "installed-extracted/Program_Support_Files",
+          "into": "installed"
+        }
+      ],
+      "browser": {
+        "exe": "installed/civ2.exe",
+        "fileRoot": "installed",
+        "cue": "Civilization II - Multiplayer Gold Edition (USA).cue"
+      },
+      "cli": {
+        "maxBatches": 800,
+        "batchSize": 50000,
+        "cue": "Civilization II - Multiplayer Gold Edition (USA).cue",
+        "dlls": [
+          "installed/XDaemon.dll"
+        ],
+        "vfsInclude": [
+          "**/*"
+        ]
+      }
+    },
+    {
+      "id": "far-manager-170",
+      "name": "Far Manager",
+      "kind": "console application",
+      "version": "1.70",
+      "executables": [
+        "FarManager170/Far.exe"
+      ],
+      "sourcePage": "https://ftp.zx.net.nz/pub/archive/ftp.rarlab.com/rar/obsolete/",
+      "license": "try-before-you-buy; original trial package permits unmodified redistribution but forbids bundling, so keep as a local ignored candidate fixture",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://ftp.zx.net.nz/pub/archive/ftp.rarlab.com/rar/obsolete/FarManager170.rar",
+          "sha1": "0cb9f553a4c5b7afd3fe5ae0fa64e18735fa1063",
+          "type": "archive"
+        }
+      ],
+      "cli": {
+        "maxBatches": 400,
+        "batchSize": 50000,
+        "vfsInclude": [
+          "*.lng",
+          "*.hlf"
+        ]
+      }
+    },
+    {
+      "id": "winrar-310",
+      "name": "WinRAR",
+      "kind": "GUI application",
+      "version": "3.10 installer",
+      "executables": [
+        "wrar310.exe"
+      ],
+      "sourcePage": "https://ftp.zx.net.nz/pub/mirror/ftp.rarlab.com/rar/",
+      "license": "try-before-you-buy; redistribution is limited to the original unmodified installation file, so keep this intact installer as a local ignored candidate fixture",
+      "localOnly": true,
+      "packages": [
+        {
+          "url": "https://ftp.zx.net.nz/pub/mirror/ftp.rarlab.com/rar/wrar310.exe",
+          "sha1": "e7fbcc871245ef9eaf73f8c0dfb00f4b63456a91",
+          "type": "file",
+          "destination": "wrar310.exe"
+        }
+      ],
+      "postExtract": [
+        {
+          "type": "extractArchive",
+          "archive": "wrar310.exe",
+          "into": "installed"
+        }
+      ],
+      "cli": {
+        "maxBatches": 120,
+        "batchSize": 50000
       }
     }
   ]

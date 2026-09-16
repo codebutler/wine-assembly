@@ -4,7 +4,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { createHostImports } = require('../lib/host-imports');
 
 const extraWat = String.raw`
@@ -18,31 +18,49 @@ const extraWat = String.raw`
     (i32.and
       (i32.ge_u (local.get $guest) (global.get $VIRTUAL_ALLOC_MIN))
       (i32.lt_u (local.get $guest) (global.get $VIRTUAL_ALLOC_TOP_INIT))))
+  ;; $page_probe, not the old $cache_lookup: the hash block cache is gone and the
+  ;; per-page byte index is the only record that an address is compiled
+  ;; (docs/page-compile-design.md section 4).
   (func (export "test_sparse_cache_lookup") (param $guest i32) (result i32)
-    (call $cache_lookup (local.get $guest)))
+    (call $page_probe (local.get $guest)))
+  (func (export "test_sparse_guest_to_wasm") (param $guest i32) (result i32)
+    (call $g2w (local.get $guest)))
+  (func (export "test_sparse_last_error") (result i32)
+    (global.get $last_error))
+  (func (export "test_call_FlushInstructionCache")
+      (param $process i32) (param $base i32) (param $size i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $handle_FlushInstructionCache
+      (local.get $process) (local.get $base) (local.get $size)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {
   const root = path.join(__dirname, '..');
-  const bytes = await compileWat(async filename => {
-    const source = await fs.promises.readFile(path.join(root, 'src', filename), 'utf8');
-    if (filename !== '13-exports.wat') return source;
-    return source.replace(/\n\)\s*$/, `\n${extraWat}\n)\n`);
-  });
+  // Plain append: src fragments are self-balanced now, so there is no trailing
+  // `)` to splice before — the old regex matched nothing and dropped extraWat.
+  const bytes = compileSrcWasm((filename, source) =>
+    filename === '13-exports.wat' ? `${source}\n${extraWat}\n` : source);
 
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
-  const context = { exports: null, getMemory: () => memory.buffer };
-  const imports = createHostImports(context);
-  imports.host.memory = memory;
-  imports.host.exit = () => {};
-  imports.host.log = () => {};
-  imports.host.log_i32 = () => {};
-  imports.host.crash_unimplemented = () => {};
-  imports.host.wait_multiple = () => 0;
-  imports.host.shell_execute = () => 33;
-  const { instance } = await WebAssembly.instantiate(bytes, imports);
+  const instantiate = async () => {
+    const context = { exports: null, getMemory: () => memory.buffer };
+    const imports = createHostImports(context);
+    imports.host.memory = memory;
+    imports.host.exit = () => {};
+    imports.host.log = () => {};
+    imports.host.log_i32 = () => {};
+    imports.host.crash_unimplemented = () => {};
+    imports.host.wait_multiple = () => 0;
+    imports.host.terminate_thread = () => 0;
+    imports.host.shell_execute = () => 33;
+    const { instance } = await WebAssembly.instantiate(bytes, imports);
+    context.exports = instance.exports;
+    return instance;
+  };
+  const instance = await instantiate();
   const e = instance.exports;
-  context.exports = e;
 
   const exe = fs.readFileSync(path.join(__dirname, 'binaries', 'notepad.exe'));
   new Uint8Array(memory.buffer).set(exe, e.get_staging());
@@ -81,7 +99,149 @@ async function main() {
   assert.strictEqual(execute(), 0x55667788,
     'rewriting sparse generated code must invalidate its decoded block');
 
-  console.log('PASS  sparse generated-code writes invalidate decoded blocks');
+  // A branch may enter generated code one byte after an already-decoded entry.
+  // Both decodes then cover the same immediate and terminator. The page index
+  // has only one owner per byte, so publishing the interior entry must retire
+  // the older overlapping block instead of hiding it behind the newer cover
+  // marks. Otherwise patching the shared immediate retires only the new block
+  // and the old entry keeps executing stale threaded code. Retail Diablo's
+  // Storm SCode copier uses overlapping count-dependent entries in this shape.
+  const overlapCode = 0x4ff61000;
+  assert.strictEqual(e.test_sparse_map_for_code(overlapCode, 0x1000) >>> 0, overlapCode);
+  const installOverlap = value => {
+    const machineCode = [0x90, 0xb8, ...le32(value), 0xc3]; // nop; mov eax,value; ret
+    machineCode.forEach((byte, index) => e.guest_write8(overlapCode + index, byte));
+  };
+  const executeOverlap = entry => {
+    e.set_esp(stack);
+    e.guest_write32(stack, 0);
+    e.set_eip(entry);
+    e.run(1000);
+    assert.strictEqual(e.get_eip() >>> 0, 0);
+    return e.get_eax() >>> 0;
+  };
+  installOverlap(0x31415926);
+  assert.strictEqual(executeOverlap(overlapCode), 0x31415926,
+    'outer generated entry should execute');
+  assert.strictEqual(executeOverlap(overlapCode + 1), 0x31415926,
+    'interior generated entry should execute');
+  for (let i = 0; i < 4; i++) {
+    assert.strictEqual(executeOverlap(overlapCode), 0x31415926);
+    assert.strictEqual(e.test_sparse_cache_lookup(overlapCode), 1,
+      'outer entry remains cached after executing it');
+    assert.strictEqual(e.test_sparse_cache_lookup(overlapCode + 1), 1,
+      'decoding the outer prefix must preserve the cached interior entry');
+    assert.strictEqual(executeOverlap(overlapCode + 1), 0x31415926);
+    assert.strictEqual(e.test_sparse_cache_lookup(overlapCode), 1,
+      'alternating entry points must not evict each other');
+  }
+  le32(0x27182818).forEach((byte, index) => e.guest_write8(overlapCode + 2 + index, byte));
+  assert.strictEqual(executeOverlap(overlapCode), 0x27182818,
+    'patching bytes shared by overlapping entries must retire the older entry');
+
+  // A decoded block is retired by the page it STARTS on, so a block that
+  // begins near the end of one page and runs into the next used to survive a
+  // rewrite of its own tail. Storm's byte copier is exactly that shape: a long
+  // run of unrolled `mov al,[esi]/inc esi/mov [edi],al/inc edi` entered at
+  // end-8*count and terminated by a `jmp` it patches per call, so a copy of
+  // more than ~500 bytes starts a page below the jump it rewrites.
+  const spanCode = 0x4ff70ff0;
+  assert.strictEqual(e.test_sparse_map_for_code(0x4ff70000, 0x2000) >>> 0, 0x4ff70000);
+
+  function installSpanning(value) {
+    // 16 nops carry the block across the page boundary; the payload the test
+    // rewrites sits on the second page.
+    const machineCode = [...new Array(16).fill(0x90), 0xb8, ...le32(value), 0xc3];
+    machineCode.forEach((byte, index) => e.guest_write8(spanCode + index, byte));
+  }
+
+  function executeSpanning() {
+    e.set_esp(stack);
+    e.guest_write32(stack, 0);
+    e.set_eip(spanCode);
+    e.run(1000);
+    assert.strictEqual(e.get_eip() >>> 0, 0, 'spanning probe should return to the sentinel');
+    return e.get_eax() >>> 0;
+  }
+
+  // The rewrite has to touch ONLY the second page: writing the whole probe
+  // again would invalidate the start page too and the test would pass either
+  // way.
+  function patchSpanning(value) {
+    le32(value).forEach((byte, index) => e.guest_write8(spanCode + 17 + index, byte));
+  }
+
+  installSpanning(0x0a0b0c0d);
+  assert.strictEqual(executeSpanning(), 0x0a0b0c0d,
+    'page-spanning sparse block should execute');
+  patchSpanning(0x1a1b1c1d);
+  assert.strictEqual(executeSpanning(), 0x1a1b1c1d,
+    'rewriting the tail of a page-spanning block must invalidate it');
+
+  // FlushInstructionCache is process-wide on Win98. Our real Worker backend
+  // has one decoded-code cache per WASM instance over the same guest bytes, so
+  // this uses two instances to catch the deceptively easy local-only fix.
+  const worker = await instantiate();
+  const w = worker.exports;
+  w.init_thread(1, e.get_image_base(), e.get_code_start(), e.get_code_end(),
+    e.get_thunk_base(), e.get_thunk_end(), e.get_num_thunks(), e.get_rsrc_rva());
+  const sharedCode = 0x4ff80000;
+  assert.strictEqual(e.test_sparse_map_for_code(sharedCode, 0x1000) >>> 0, sharedCode);
+  assert.strictEqual(w.test_sparse_map_for_code(sharedCode, 0x1000) >>> 0, sharedCode);
+  const sharedWa = e.test_sparse_guest_to_wasm(sharedCode) >>> 0;
+  const sharedBytes = new Uint8Array(memory.buffer);
+  const workerStack = (stack - 0x1000) >>> 0;
+  const codeFor = value => Uint8Array.from([0xb8, ...le32(value), 0xc3]);
+  const executeShared = (wat, valueStack) => {
+    wat.set_esp(valueStack);
+    wat.guest_write32(valueStack, 0);
+    wat.set_eip(sharedCode);
+    wat.run(1000);
+    assert.strictEqual(wat.get_eip() >>> 0, 0);
+    return wat.get_eax() >>> 0;
+  };
+
+  sharedBytes.set(codeFor(0x10203040), sharedWa);
+  assert.strictEqual(executeShared(e, stack), 0x10203040);
+  assert.strictEqual(executeShared(w, workerStack), 0x10203040);
+  assert.notStrictEqual(e.test_sparse_cache_lookup(sharedCode) >>> 0, 0);
+  assert.notStrictEqual(w.test_sparse_cache_lookup(sharedCode) >>> 0, 0);
+
+  // Patch through the shared backing store, deliberately bypassing every x86
+  // store helper. An invalid process handle must neither claim success nor
+  // publish an invalidation; the second instance therefore still runs its old
+  // decoded immediate until the valid flush below.
+  sharedBytes.set(codeFor(0x50607080), sharedWa);
+  assert.strictEqual(e.test_call_FlushInstructionCache(0x1234, sharedCode, 5), 0);
+  assert.strictEqual(e.test_sparse_last_error(), 6);
+  assert.strictEqual(executeShared(w, workerStack), 0x10203040,
+    'invalid process handles do not flush another instance');
+
+  const workerClears = w.get_cache_clears();
+  assert.strictEqual(e.test_call_FlushInstructionCache(-1, sharedCode + 1, 4), 1);
+  assert.strictEqual(e.test_sparse_cache_lookup(sharedCode) >>> 0, 0,
+    'the calling instance retires the exact decoded range immediately');
+  assert.strictEqual(executeShared(e, stack), 0x50607080);
+  assert.strictEqual(executeShared(w, workerStack), 0x50607080,
+    'a sibling Worker observes the process flush before its next slice');
+  assert.strictEqual(w.get_cache_clears(), workerClears + 1,
+    'a sibling Worker drops its complete instance-local cache');
+
+  // NULL requests the whole cache. It is deferred to the next safe block
+  // boundary in the caller and broadcast to every sibling instance.
+  const mainClears = e.get_cache_clears();
+  const workerFullClears = w.get_cache_clears();
+  assert.strictEqual(e.test_call_FlushInstructionCache(-1, 0, 0), 1);
+  assert.strictEqual(executeShared(e, stack), 0x50607080);
+  assert.strictEqual(executeShared(w, workerStack), 0x50607080);
+  assert.strictEqual(e.get_cache_clears(), mainClears + 1);
+  assert.strictEqual(w.get_cache_clears(), workerFullClears + 1);
+
+  const processHandle = (0x000e2000 | (e.get_process_id() & 0xfff)) >>> 0;
+  assert.strictEqual(e.test_call_FlushInstructionCache(processHandle, sharedCode, 0), 1,
+    'OpenProcess handles accept a successful empty range');
+
+  console.log('PASS  sparse writes and process-wide FlushInstructionCache invalidate decoded blocks');
 }
 
 main().catch(error => {

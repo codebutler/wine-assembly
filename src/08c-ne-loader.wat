@@ -122,18 +122,18 @@
     (if (call $win16_pstr_eq (local.get $pstr) (global.get $WIN16_NAME_NDDEAPI))  (then (return (i32.const 11))))
     (if (call $win16_pstr_eq (local.get $pstr) (global.get $WIN16_NAME_WIN87EM))  (then (return (i32.const 12))))
     ;; Then the ones this task brought with it. A Win16 game is routinely three
-    ;; or four NE files -- Tetris alone imports ABOUTTET for its about box, and
+    ;; several NE files -- Tetris alone imports ABOUTTET for its about box, and
     ;; the Entertainment Pack ships IWLIB and WEPUTIL beside the games -- and
     ;; none of those can be a name in this list, because the list is compiled
     ;; and they are whatever the app happens to be made of. The host stages
-    ;; them and writes their names here; ids run from 12.
+    ;; them and writes their names here; ids run from 13.
     (call $win16_dynamic_module_id (local.get $pstr)))
 
-  ;; Up to four app-local modules, each a Pascal string in its own 16-byte
-  ;; slot. Four because a staging slot is 256KB and the space between
-  ;; WIN16_DLL_STAGING and DLL_TABLE holds sixteen of them, twelve of which are
-  ;; spoken for by the system modules and the emulated ones.
-  (global $WIN16_DYNAMIC_MODULES i32 (i32.const 4))
+  ;; App-local module names are cheap records, not staging allocations. The
+  ;; six-megabyte staging image is reused after each NE has copied its segments
+  ;; and metadata into the selector arena, so keep enough names for games such
+  ;; as Civilization II whose artwork is split across ten resource DLLs.
+  (global $WIN16_DYNAMIC_MODULES i32 (i32.const 24))
   ;; The first id an app-local module can take. Everything below it is a module
   ;; this emulator answers for itself, so the host neither stages nor loads it.
   (global $WIN16_DYNAMIC_BASE i32 (i32.const 13))
@@ -144,6 +144,44 @@
                                  (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
              (i32.add (i32.const 0x8400) (i32.mul (local.get $i) (i32.const 16)))))
 
+  ;; TOOLHELP is a documented Windows 3.1 service DLL, but it is imported like
+  ;; any other app-local NE module and therefore receives a dynamic id. Match
+  ;; the Pascal module name in its slot so the API dispatcher can provide the
+  ;; small documented subset an app needs without bundling Microsoft's DLL.
+  (func $win16_dynamic_module_is_toolhelp (param $module_id i32) (result i32)
+    (local $slot i32)
+    (if (i32.or (i32.lt_u (local.get $module_id) (global.get $WIN16_DYNAMIC_BASE))
+                (i32.ge_u (local.get $module_id)
+                  (i32.add (global.get $WIN16_DYNAMIC_BASE)
+                           (global.get $WIN16_DYNAMIC_MODULES))))
+      (then (return (i32.const 0))))
+    (local.set $slot (call $win16_dynamic_module_slot
+      (i32.sub (local.get $module_id) (global.get $WIN16_DYNAMIC_BASE))))
+    (i32.and (i32.eq (i32.load8_u (local.get $slot)) (i32.const 8))
+      (i64.eq (i64.load offset=1 (local.get $slot))
+              (i64.const 0x504C45484C4F4F54))))
+
+  ;; True only for Visual Basic 1 programs whose runtime is currently loaded.
+  ;; That lets USER/GDI keep VB PictureBox compatibility paths away from other
+  ;; Win16 games that also use custom child windows and same-sized work bitmaps.
+  (func $win16_vbrun100_loaded (result i32)
+    (local $i i32) (local $slot i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $WIN16_DYNAMIC_MODULES)))
+      (local.set $slot (call $win16_dynamic_module_slot (local.get $i)))
+      (if (i32.and
+            (i32.eq (i32.load8_u (local.get $slot)) (i32.const 8))
+            (i32.and
+              (i64.eq (i64.load offset=1 (local.get $slot))
+                      (i64.const 0x3030314E55524256))
+              (i32.ne (call $win16_dll_loaded
+                (i32.add (global.get $WIN16_DYNAMIC_BASE) (local.get $i)))
+                (i32.const 0))))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   ;; An app-local name gets its id the first time anything asks about it, which
   ;; is while the task's own fixups are being applied — long before the host
   ;; has had a chance to stage the file. Assigning it here rather than waiting
@@ -152,7 +190,7 @@
   ;; and never revisit. Tetris imports win87em that way, and every call into it
   ;; arrived at the dispatcher as module 0 with no name left to identify it.
   (func $win16_dynamic_module_id (param $pstr i32) (result i32)
-    (local $i i32) (local $slot i32) (local $n i32) (local $j i32)
+    (local $i i32) (local $slot i32) (local $n i32)
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $WIN16_DYNAMIC_MODULES)))
       (local.set $slot (call $win16_dynamic_module_slot (local.get $i)))
@@ -161,11 +199,10 @@
           ;; First free slot: claim it for this name.
           (local.set $n (i32.load8_u (local.get $pstr)))
           (if (i32.eqz (local.get $n)) (then (return (i32.const 0))))
-          (block $copied (loop $copy
-            (i32.store8 (i32.add (local.get $slot) (local.get $j))
-              (i32.load8_u (i32.add (local.get $pstr) (local.get $j))))
-            (local.set $j (i32.add (local.get $j) (i32.const 1)))
-            (br_if $copy (i32.le_u (local.get $j) (local.get $n)))))
+          ;; Pascal string: the length byte plus its $n characters, so $n+1
+          ;; bytes, and the slot is a separate record from the source.
+          (memory.copy (local.get $slot) (local.get $pstr)
+            (i32.add (local.get $n) (i32.const 1)))
           (return (i32.add (local.get $i) (global.get $WIN16_DYNAMIC_BASE)))))
       (if (call $win16_pstr_eq_pstr (local.get $pstr) (local.get $slot))
         (then (return (i32.add (local.get $i) (global.get $WIN16_DYNAMIC_BASE)))))
@@ -324,6 +361,7 @@
     (local $addr_type i32) (local $rel_type i32) (local $additive i32)
     (local $site i32) (local $a i32) (local $c i32)
     (local $tgt_sel i32) (local $tgt_off i32) (local $next i32) (local $seg_out i32)
+    (local $module i32) (local $constant i32)
     (local.set $p (local.get $rec_wa))
     (local.set $count (i32.load16_u (local.get $p)))
     (local.set $p (i32.add (local.get $p) (i32.const 2)))
@@ -375,10 +413,22 @@
               ;; IMPORTORDINAL. `a` indexes the module-reference table, whose
               ;; entries are offsets into the imported-name table, where the
               ;; module's Pascal-string name lives.
-              (local.set $tgt_sel (global.get $WIN16_THUNK_SEL))
-              (local.set $tgt_off (call $win16_thunk_for
-                (call $win16_module_id (call $win16_module_name (local.get $ne_off) (local.get $a)))
-                (local.get $c) (i32.const 0))))
+              (local.set $module
+                (call $win16_module_id
+                  (call $win16_module_name (local.get $ne_off) (local.get $a))))
+              (local.set $constant
+                (call $win16_import_constant (local.get $module) (local.get $c)))
+              (if (i32.and
+                    (i32.ge_s (local.get $constant) (i32.const 0))
+                    (i32.or (i32.eqz (local.get $addr_type))
+                            (i32.eq (local.get $addr_type) (i32.const 5))))
+                (then
+                  (local.set $tgt_sel (i32.const 0))
+                  (local.set $tgt_off (local.get $constant)))
+                (else
+                  (local.set $tgt_sel (global.get $WIN16_THUNK_SEL))
+                  (local.set $tgt_off (call $win16_thunk_for
+                    (local.get $module) (local.get $c) (i32.const 0))))))
             (else
               ;; IMPORTNAME (2) names the entry point instead of numbering it,
               ;; with `c` an offset into the imported-name table. The module is
@@ -442,7 +492,7 @@
 
     (if (i32.ne (i32.load16_u (global.get $PE_STAGING)) (i32.const 0x5A4D))
       (then (return (i32.const -1))))
-    (local.set $ne_off (i32.load (i32.add (global.get $PE_STAGING) (i32.const 0x3C))))
+    (local.set $ne_off (i32.load (region.addr $PE_STAGING 0x3C)))
     (if (i32.ne (i32.load16_u (i32.add (global.get $PE_STAGING) (local.get $ne_off)))
                 (i32.const 0x454E))
       (then (return (i32.const -2))))
@@ -619,8 +669,7 @@
     (local.set $rt (local.get $p))
     (local.set $p (i32.add (local.get $p) (i32.const 2)))
     (local.set $end (i32.add (local.get $img)
-      (select (global.get $win16_file_size) (global.get $WIN16_DLL_STAGING_STRIDE)
-              (i32.eq (local.get $img) (global.get $PE_STAGING)))))
+      (call $win16_res_image_size (global.get $win16_res_module_id) (local.get $img))))
     (block $done (loop $types
       (br_if $done (i32.ge_u (i32.add (local.get $p) (i32.const 8)) (local.get $end)))
       (local.set $type (i32.load16_u (local.get $p)))
@@ -686,8 +735,7 @@
     ;; The table lives inside the staged file; refuse to walk past it rather
     ;; than read whatever follows as if it were another TYPEINFO.
     (local.set $end (i32.add (local.get $img)
-      (select (global.get $win16_file_size) (global.get $WIN16_DLL_STAGING_STRIDE)
-              (i32.eq (local.get $img) (global.get $PE_STAGING)))))
+      (call $win16_res_image_size (global.get $win16_res_module_id) (local.get $img))))
 
     (block $done (loop $types
       (br_if $done (i32.ge_u (i32.add (local.get $p) (i32.const 8)) (local.get $end)))
@@ -837,10 +885,12 @@
   ;; of the segment", which after the growth above is the whole DGROUP.
   (func $win16_start_task (param $ne_off i32)
     (local $ss_index i32) (local $sp i32) (local $ds_index i32) (local $limit i32)
+    (local $reserved_start i32)
 
     ;; The 16-bit handle map belongs to the task, not to the image: a second
     ;; load in the same instance must not inherit the first task's indices.
     (call $win16_handle_reset)
+    (global.set $win16_scratch_seg (i32.const 0))
 
     (local.set $ds_index (global.get $win16_auto_data))
     (local.set $ss_index (i32.load16_u (i32.add (local.get $ne_off) (i32.const 0x1A))))
@@ -854,25 +904,19 @@
         ;; The heap goes immediately above the static data and below the stack,
         ;; which is what makes a local handle a near pointer — see
         ;; $win16_LocalAlloc. Two bytes of slack keep a zero handle out of it.
-        ;; The message scratch sits below the heap rather than inside it: the
-        ;; heap is the app's to fill and this has to stay put for the life of
-        ;; the task. DGROUP is grown by exactly as much, so the app's own heap
-        ;; is not the smaller for it.
-        ;; Never below the sixteen bytes of instance data at the start of
-        ;; DGROUP. A Visual Basic image declares no static data at all, so its
-        ;; DGROUP starts life zero bytes long and everything this places went
-        ;; on top of the task's own description of its stack — VB read its
-        ;; stack floor out of the middle of the font scratch.
-        (global.set $win16_msg_scratch
+        ;; Retain the historical heap/stack spacing, but do not write USER
+        ;; scratch here. VB declares an empty DGROUP and its runtime lays out
+        ;; private data over this space. Message/font copies use a separate
+        ;; lazy selector instead (win16_scratch_segment).
+        (local.set $reserved_start
           (i32.add
             (select (call $win16_seg_limit (local.get $ds_index)) (i32.const 16)
               (i32.gt_u (call $win16_seg_limit (local.get $ds_index)) (i32.const 16)))
             (i32.const 2)))
         (global.set $win16_msg_slot (i32.const 0))
-        (global.set $win16_font_scratch
-          (i32.add (global.get $win16_msg_scratch) (global.get $WIN16_MSG_SCRATCH_SIZE)))
         (global.set $win16_lheap_ptr
-          (i32.add (global.get $win16_font_scratch) (global.get $WIN16_FONT_SCRATCH_SIZE)))
+          (i32.add (local.get $reserved_start)
+            (i32.add (global.get $WIN16_MSG_SCRATCH_SIZE) (global.get $WIN16_FONT_SCRATCH_SIZE))))
         (global.set $win16_lheap_base (global.get $win16_lheap_ptr))
         (global.set $win16_lheap_end
           (i32.add (global.get $win16_lheap_ptr) (global.get $win16_heap_size)))
@@ -982,6 +1026,14 @@
                                  (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
              (i32.add (i32.const 0x8000) (i32.mul (local.get $module_id) (i32.const 16)))))
 
+  ;; The private image length is parallel to the fixed 16-byte module record.
+  ;; Keeping it separate preserves that record's long-standing layout while
+  ;; allowing dynamically staged DLL resources beyond the first 64KB.
+  (func $win16_dll_image_size_ptr (param $module_id i32) (result i32)
+    (i32.add (call $g2w (i32.add (global.get $WIN16_ARENA)
+                                 (i32.mul (global.get $WIN16_SEG_MAX) (i32.const 0x10000))))
+             (i32.add (i32.const 0x8800) (i32.shl (local.get $module_id) (i32.const 2)))))
+
   ;; A record's segment count doubles as its loaded flag: an NE with no
   ;; segments is not something that can be loaded.
   (func $win16_dll_loaded (param $module_id i32) (result i32)
@@ -991,7 +1043,8 @@
   ;; they were placed — nothing here moves or discards them — but the id stops
   ;; naming a loaded module, so the slot can describe a different one.
   (func $win16_dll_unload (param $module_id i32)
-    (i32.store offset=12 (call $win16_dll_rec (local.get $module_id)) (i32.const 0)))
+    (i32.store offset=12 (call $win16_dll_rec (local.get $module_id)) (i32.const 0))
+    (i32.store (call $win16_dll_image_size_ptr (local.get $module_id)) (i32.const 0)))
 
   ;; Which image owns the code currently running, as (ne_off, staging base).
   ;; Resource lookups follow this rather than the hInstance the caller passed:
@@ -1042,12 +1095,28 @@
                                          (i32.and (local.get $module) (i32.const 0xFFFF)))))))
     (call $win16_image_base_addr))
 
+  ;; Bytes of retained metadata the resource-table walkers may inspect.
+  ;; Dynamic DLLs keep a private 64KB header/table image after their shared
+  ;; staging buffer is reused; fixed system DLLs keep their 256KB slot, and
+  ;; the task itself keeps its complete PE staging image.
+  (func $win16_res_image_size (param $module i32) (param $img i32) (result i32)
+    (if (i32.eq (local.get $img) (global.get $PE_STAGING))
+      (then (return (global.get $win16_file_size))))
+    (if (i32.and (local.get $module) (i32.const 0x10000))
+      (then
+        (if (i32.ge_u (i32.and (local.get $module) (i32.const 0xFFFF))
+                      (global.get $WIN16_DYNAMIC_BASE))
+          (then (return (i32.load (call $win16_dll_image_size_ptr
+            (i32.and (local.get $module) (i32.const 0xFFFF)))))))))
+    (global.get $WIN16_DLL_STAGING_STRIDE))
+
   (func $win16_image_ne_off (result i32)
     (local $index i32) (local $id i32) (local $rec i32) (local $n i32) (local $base i32)
     (local.set $index (call $win16_sel_to_index (global.get $sreg_cs)))
     (local.set $id (i32.const 1))
     (block $done (loop $scan
-      (br_if $done (i32.gt_u (local.get $id) (i32.const 15)))
+      (br_if $done (i32.ge_u (local.get $id)
+        (i32.add (global.get $WIN16_DYNAMIC_BASE) (global.get $WIN16_DYNAMIC_MODULES))))
       (local.set $rec (call $win16_dll_rec (local.get $id)))
       (local.set $n (i32.load offset=12 (local.get $rec)))
       (local.set $base (i32.load offset=4 (local.get $rec)))
@@ -1065,7 +1134,8 @@
     (local.set $index (call $win16_sel_to_index (global.get $sreg_cs)))
     (local.set $id (i32.const 1))
     (block $done (loop $scan
-      (br_if $done (i32.gt_u (local.get $id) (i32.const 15)))
+      (br_if $done (i32.ge_u (local.get $id)
+        (i32.add (global.get $WIN16_DYNAMIC_BASE) (global.get $WIN16_DYNAMIC_MODULES))))
       (local.set $rec (call $win16_dll_rec (local.get $id)))
       (local.set $n (i32.load offset=12 (local.get $rec)))
       (local.set $base (i32.load offset=4 (local.get $rec)))
@@ -1096,7 +1166,8 @@
       (call $win16_sel_to_index (i32.shr_u (local.get $proc) (i32.const 16))))
     (local.set $id (i32.const 1))
     (block $task (loop $scan
-      (br_if $task (i32.gt_u (local.get $id) (i32.const 15)))
+      (br_if $task (i32.ge_u (local.get $id)
+        (i32.add (global.get $WIN16_DYNAMIC_BASE) (global.get $WIN16_DYNAMIC_MODULES))))
       (local.set $rec (call $win16_dll_rec (local.get $id)))
       (local.set $n (i32.load offset=12 (local.get $rec)))
       (local.set $base (i32.load offset=4 (local.get $rec)))
@@ -1119,27 +1190,34 @@
 
   ;; The staging area for module `id`, which is where JS puts the file bytes.
   ;;
-  ;; The app-local ones (12 and up) stage somewhere else, with a megabyte each.
+  ;; App-local modules share one six-megabyte image. load_ne_dll copies their
+  ;; executable segments and a private metadata page before this is reused.
   ;; A system module is small and there are twelve id slots in front of them,
   ;; but what an application brings with it can be anything: the Visual Basic 1
   ;; runtime is 265KB and five Entertainment Pack games are written in it, so
   ;; app-local staging slots must remain larger than 256KB.
   (func $win16_dll_staging (export "win16_dll_staging") (param $module_id i32) (result i32)
     (if (i32.ge_u (local.get $module_id) (global.get $WIN16_DYNAMIC_BASE))
-      (then (return (i32.add (global.get $WIN16_APP_DLL_STAGING)
-        (i32.mul (i32.sub (local.get $module_id) (global.get $WIN16_DYNAMIC_BASE))
-                 (global.get $WIN16_APP_DLL_STRIDE))))))
+      (then (return (global.get $WIN16_APP_DLL_STAGING))))
     (i32.add (global.get $WIN16_DLL_STAGING)
              (i32.mul (local.get $module_id) (global.get $WIN16_DLL_STAGING_STRIDE))))
 
+  (func (export "win16_app_dll_staging_size") (result i32)
+    (global.get $WIN16_APP_DLL_STAGING_SIZE))
+
   ;; Load the NE already staged for `module_id`. Returns 1 on success.
-  (func $load_ne_dll (export "load_ne_dll") (param $module_id i32) (result i32)
+  (func $load_ne_dll_sized (export "load_ne_dll_sized")
+        (param $module_id i32) (param $staged_size i32) (result i32)
     (local $base i32) (local $ne_off i32) (local $seg_tab i32) (local $seg_count i32)
     (local $shift i32) (local $i i32) (local $e i32) (local $index i32)
     (local $file_pos i32) (local $len i32) (local $flags i32) (local $alloc i32)
-    (local $seg_index_base i32) (local $rec i32)
+    (local $seg_index_base i32) (local $rec i32) (local $seg_base i32) (local $seg_wa i32)
+    (local $stage i32) (local $meta i32) (local $meta_size i32)
+    (local $meta_pages i32) (local $meta_i i32) (local $ne_delta i32)
+    (local $nonres_off i32) (local $nonres_len i32)
 
     (local.set $base (call $win16_dll_staging (local.get $module_id)))
+    (local.set $stage (local.get $base))
     (if (i32.ne (i32.load16_u (local.get $base)) (i32.const 0x5A4D))
       (then (return (i32.const 0))))
     (local.set $ne_off (i32.add (local.get $base)
@@ -1168,8 +1246,9 @@
         (then (local.set $len (i32.const 0x10000))))
       (if (i32.eqz (local.get $alloc)) (then (local.set $alloc (i32.const 0x10000))))
       (local.set $index (call $win16_alloc_segment))
+      (local.set $seg_base (call $win16_seg_base (local.get $index)))
       (call $win16_seg_set (local.get $index)
-        (call $win16_seg_base (local.get $index)) (local.get $alloc)
+        (local.get $seg_base) (local.get $alloc)
         (local.get $flags) (i32.add (local.get $i) (i32.const 1)))
       ;; Clear the slot first, exactly as the task's own segments are cleared.
       ;; A segment's allocation is usually larger than what the file holds and
@@ -1179,10 +1258,10 @@
       ;; copies into the task's DGROUP, so the list of a custom control's
       ;; properties had no terminator and Visual Basic walked it off the end
       ;; into a far pointer whose selector named no segment.
-      (call $zero_memory (call $g2w (call $win16_seg_base (local.get $index)))
-        (i32.const 0x10000))
+      (local.set $seg_wa (call $g2w (local.get $seg_base)))
+      (call $zero_memory (local.get $seg_wa) (i32.const 0x10000))
       (if (local.get $file_pos)
-        (then (call $memcpy (call $g2w (call $win16_seg_base (local.get $index)))
+        (then (call $memcpy (local.get $seg_wa)
                 (i32.add (local.get $base) (local.get $file_pos)) (local.get $len))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $place)))
@@ -1212,12 +1291,58 @@
 
     (call $win16_patch_dll_prologues (local.get $ne_off) (local.get $seg_index_base))
 
+    ;; The app-local staging image is shared. Keep the header, entry/import and
+    ;; resource tables in a private selector before a later LoadLibrary
+    ;; overwrites it. The non-resident name table is normally at EOF, so copy
+    ;; its small contents into the metadata page and retarget the NE header.
+    (if (i32.ge_u (local.get $module_id) (global.get $WIN16_DYNAMIC_BASE))
+      (then
+        (local.set $meta_size (local.get $staged_size))
+        (if (i32.eqz (local.get $meta_size))
+          (then (local.set $meta_size (i32.const 0x10000))))
+        (if (i32.gt_u (local.get $meta_size) (global.get $WIN16_APP_DLL_STAGING_SIZE))
+          (then (return (i32.const 0))))
+        (local.set $meta_pages (i32.shr_u
+          (i32.add (local.get $meta_size) (i32.const 0xFFFF)) (i32.const 16)))
+        (if (i32.ge_u (i32.add (global.get $win16_next_seg) (local.get $meta_pages))
+                       (global.get $WIN16_SEG_MAX))
+          (then (return (i32.const 0))))
+        (local.set $ne_delta (i32.sub (local.get $ne_off) (local.get $stage)))
+        (local.set $meta (call $g2w (call $win16_seg_base (call $win16_alloc_segment))))
+        (local.set $meta_i (i32.const 1))
+        (block $meta_done (loop $meta_alloc
+          (br_if $meta_done (i32.ge_u (local.get $meta_i) (local.get $meta_pages)))
+          (drop (call $win16_alloc_segment))
+          (local.set $meta_i (i32.add (local.get $meta_i) (i32.const 1)))
+          (br $meta_alloc)))
+        (call $memcpy (local.get $meta) (local.get $stage) (local.get $meta_size))
+        (local.set $ne_off (i32.add (local.get $meta) (local.get $ne_delta)))
+        (local.set $nonres_off (i32.load (i32.add (local.get $ne_off) (i32.const 0x2C))))
+        (local.set $nonres_len (i32.load16_u (i32.add (local.get $ne_off) (i32.const 0x20))))
+        (if (i32.and (i32.ne (local.get $nonres_len) (i32.const 0))
+              (i32.and (i32.le_u (local.get $nonres_len) (i32.const 0x2000))
+                       (i32.le_u (i32.add (local.get $nonres_off) (local.get $nonres_len))
+                                 (global.get $WIN16_APP_DLL_STAGING_SIZE))))
+          (then
+            (call $memcpy (i32.add (local.get $meta) (i32.const 0xE000))
+              (i32.add (local.get $stage) (local.get $nonres_off)) (local.get $nonres_len))
+            (i32.store (i32.add (local.get $ne_off) (i32.const 0x2C)) (i32.const 0xE000))))
+        (local.set $base (local.get $meta))))
+
     (local.set $rec (call $win16_dll_rec (local.get $module_id)))
     (i32.store          (local.get $rec) (local.get $ne_off))
     (i32.store offset=4 (local.get $rec) (local.get $seg_index_base))
     (i32.store offset=8 (local.get $rec) (local.get $base))
     (i32.store offset=12 (local.get $rec) (local.get $seg_count))
+    (i32.store (call $win16_dll_image_size_ptr (local.get $module_id))
+      (select (local.get $meta_size) (global.get $WIN16_DLL_STAGING_STRIDE)
+        (i32.ge_u (local.get $module_id) (global.get $WIN16_DYNAMIC_BASE))))
     (i32.const 1))
+
+  ;; Pre-staged modules retain the historical one-argument ABI. Runtime
+  ;; LoadLibrary knows the exact VFS byte length and uses the sized entry.
+  (func $load_ne_dll (export "load_ne_dll") (param $module_id i32) (result i32)
+    (call $load_ne_dll_sized (local.get $module_id) (i32.const 0)))
 
   ;; Point every exported entry at the DLL's OWN data segment.
   ;;
@@ -1384,6 +1509,56 @@
               (i32.add (i32.load offset=4 (local.get $rec)) (i32.load (local.get $seg))))
             (i32.const 16))
             (local.get $off)))
+
+  ;; The loader entry described by the NE header, plus the two values Windows
+  ;; supplies in registers when it calls that entry.  This is deliberately
+  ;; separate from the exported-entry table above: LibEntry is not an export,
+  ;; and its CS:IP and automatic data/heap sizes live directly in the header.
+  (func $win16_dll_init_entry (param $module_id i32) (result i32)
+    (local $rec i32) (local $ne_off i32) (local $seg i32)
+    (local.set $rec (call $win16_dll_rec (local.get $module_id)))
+    (local.set $ne_off (i32.load (local.get $rec)))
+    (if (i32.eqz (local.get $ne_off)) (then (return (i32.const 0))))
+    (local.set $seg (i32.load16_u (i32.add (local.get $ne_off) (i32.const 0x16))))
+    (if (i32.eqz (local.get $seg)) (then (return (i32.const 0))))
+    (i32.or
+      (i32.shl (call $win16_index_to_sel
+        (i32.add (i32.load offset=4 (local.get $rec)) (local.get $seg)))
+        (i32.const 16))
+      (i32.load16_u (i32.add (local.get $ne_off) (i32.const 0x14)))))
+
+  (func $win16_dll_data_sel (param $module_id i32) (result i32)
+    (local $rec i32) (local $ne_off i32) (local $seg i32)
+    (local.set $rec (call $win16_dll_rec (local.get $module_id)))
+    (local.set $ne_off (i32.load (local.get $rec)))
+    (if (i32.eqz (local.get $ne_off)) (then (return (i32.const 0))))
+    (local.set $seg (i32.load16_u (i32.add (local.get $ne_off) (i32.const 0x0E))))
+    (if (i32.eqz (local.get $seg)) (then (return (i32.const 0))))
+    (call $win16_index_to_sel
+      (i32.add (i32.load offset=4 (local.get $rec)) (local.get $seg))))
+
+  (func $win16_dll_heap_size (param $module_id i32) (result i32)
+    (local $ne_off i32)
+    (local.set $ne_off (i32.load (call $win16_dll_rec (local.get $module_id))))
+    (if (result i32) (local.get $ne_off)
+      (then (i32.load16_u (i32.add (local.get $ne_off) (i32.const 0x10))))
+      (else (i32.const 0))))
+
+  ;; KERNEL's __AHSHIFT and __AHINCR exports are absolute constants, not
+  ;; callable entry points. 16-bit compilers import them through OFFSET
+  ;; fixups to normalize huge pointers: selector += carry << __AHSHIFT.
+  ;; Sending those fixups through the thunk allocator substitutes the thunk
+  ;; offsets (currently 0x20/0x28) for 3/8 and sends every access after the
+  ;; first 64KB into the wrong selector.
+  (func $win16_import_constant (export "win16_import_constant")
+        (param $module i32) (param $ordinal i32) (result i32)
+    (if (i32.eq (local.get $module) (i32.const 1)) ;; KERNEL
+      (then
+        (if (i32.eq (local.get $ordinal) (i32.const 113))
+          (then (return (i32.const 3))))  ;; __AHSHIFT
+        (if (i32.eq (local.get $ordinal) (i32.const 114))
+          (then (return (i32.const 8)))))) ;; __AHINCR
+    (i32.const -1))
 
   ;; ---- Inspection exports (used by test/test-ne-loader.js) ----
   (func (export "win16_seg_count") (result i32) (global.get $win16_seg_count))

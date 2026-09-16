@@ -6,24 +6,36 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $GDI_REGION_BANDS, from the map declared in src/00-regions.wat. The two
+// scratch cells below are left as literals on purpose: they sit inside the
+// span declared as $CONSOLE_TEXT and this test names them for a different
+// use, so spelling them from the map would assert a sharing the declarations
+// do not state.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
-const RECT_SCRATCH = 0x07E09000;
-const POINT_SCRATCH = 0x07E0A000;
-const GDI_REGION_BANDS = 0x07E1C000;
+// $TEST_SCRATCH, from the map declared in src/00-regions.wat. These two used to
+// be 0x07E09000 and 0x07E0A000, which are not scratch at all: that is
+// $CONSOLE_TEXT, the console screen buffer. Nothing noticed because no console
+// runs in this test — until the allocator moves $CONSOLE_TEXT, at which point
+// the addresses stop being coincidentally free.
+const RECT_SCRATCH = RegionMap.BASE.TEST_SCRATCH + 0x20;   // one RECT
+const POINT_SCRATCH = RegionMap.BASE.TEST_SCRATCH + 0x40;  // up to 24 POINTs
+const GDI_REGION_BANDS = RegionMap.BASE.GDI_REGION_BANDS;
 const GDI_REGION_MAX_RECTS = 208;
 const GDI_REGION_RECT_STRIDE = GDI_REGION_MAX_RECTS * 16;
 
 async function main() {
-  const wasmBytes = await compileWat(file => fs.promises.readFile(path.join(SRC, file), 'utf8'));
+  const wasmBytes = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const base = createHostImports(ctx);
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -107,6 +119,9 @@ async function main() {
     const record = recordFor(handle);
     const mirror = dv.getUint32(record + 24, true);
     assert.strictEqual(mirror, handle);
+    assert.strictEqual(base.gdi.regionPresentations[mirror], undefined,
+      'a canonical WAT region should not allocate a JS mirror before presentation');
+    assert.strictEqual(wat.gdi_rgn_mirror_ensure(handle), 1);
     assert.deepStrictEqual(base.gdi.regionPresentations[mirror].bbox, { l: 1, t: 2, r: 7, b: 8 });
 
     assert.strictEqual(wat.test_gdi_rgn_set_rect(handle, -4, -3, 5, 6), 1);
@@ -141,6 +156,7 @@ async function main() {
       assert.deepStrictEqual(bands(dst), rects, `mode ${mode}`);
       assert.strictEqual(dv.getUint32(recordFor(dst), true), rects.length === 1 ? 1 : 2);
       const mirror = dv.getUint32(recordFor(dst) + 24, true);
+      assert.strictEqual(wat.gdi_rgn_mirror_ensure(dst), 1);
       assert.deepStrictEqual(base.gdi.regionPresentations[mirror].rects,
         rects.map(([l, t, r, btm]) => ({ x: l, y: t, w: r - l, h: btm - t })));
     }
@@ -248,6 +264,7 @@ async function main() {
 
   check('delete invalidates stale generations before reusing a slot', () => {
     const oldHandle = wat.test_gdi_rgn_alloc_rect(1, 1, 2, 2);
+    assert.strictEqual(wat.gdi_rgn_mirror_ensure(oldHandle), 1);
     assert(base.gdi.regionPresentations[oldHandle]);
     assert.strictEqual(wat.test_gdi_rgn_delete(oldHandle), 1);
     assert.strictEqual(base.gdi.regionPresentations[oldHandle], undefined);

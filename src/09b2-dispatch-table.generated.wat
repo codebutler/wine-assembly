@@ -1,3 +1,1638 @@
+  ;; Named API ids consumed by hand-written dispatch fast paths.
+  ;; Generated from api_table.json; never replace these with array indexes.
+  (global $API_ID_MsgWaitForMultipleObjects i32 (i32.const 470))
+  (global $API_ID_PeekMessageA i32 (i32.const 490))
+  (global $API_ID_PeekMessageW i32 (i32.const 491))
+  (global $API_ID_IDirectDraw_BASE i32 (i32.const 978))
+  (global $API_ID_IAMMultiMediaStream_BASE i32 (i32.const 3219))
+  (global $API_ID_IShellLinkA_BASE i32 (i32.const 3265))
+  (global $API_ID_IPersistFile_BASE i32 (i32.const 3286))
+  (global $API_ID_IDirect3DShader9_BASE i32 (i32.const 3323))
+  (global $API_ID_IDirect3DBuffer9_BASE i32 (i32.const 3329))
+  (global $API_ID_IDirect3DVertexDeclaration9_BASE i32 (i32.const 3343))
+  (global $API_ID_IDirect3DStateBlock9_BASE i32 (i32.const 3348))
+  (global $API_ID_IDirect3DQuery9_BASE i32 (i32.const 3357))
+  (global $API_ID_IDirect3DCubeTexture9_BASE i32 (i32.const 3369))
+  (global $API_ID_IDirect3DTexture8_BASE i32 (i32.const 3560))
+
+  ;; ============================================================
+  ;; CONSTANT API STUBS — GENERATED, do not edit
+  ;; Opted in with stub:{pop,ret} in api_table.json.
+  ;; ============================================================
+  ;; SetMessageQueue: pop 8, return 1
+  (func $handle_SetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; StgIsStorageFile: pop 8, return 0x800300fb
+  (func $handle_StgIsStorageFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x800300fb))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; ILockBytes_Flush: pop 8, return 0
+  (func $handle_ILockBytes_Flush (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; ILockBytes_LockRegion: pop 28, return 0
+  (func $handle_ILockBytes_LockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+
+  ;; ILockBytes_UnlockRegion: pop 28, return 0
+  (func $handle_ILockBytes_UnlockRegion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+
+  ;; IStorage_SetElementTimes: pop 24, return 0
+  (func $handle_IStorage_SetElementTimes (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+
+  ;; IDataObject_DUnadvise: pop 12, return 0x80040004
+  (func $handle_IDataObject_DUnadvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040004))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; IOleObject_SetMoniker: pop 16, return 0x80004001
+  (func $handle_IOleObject_SetMoniker (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+
+  ;; IOleObject_DoVerb: pop 32, return 0x80040100
+  (func $handle_IOleObject_DoVerb (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040100))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
+
+  ;; IOleObject_Update: pop 8, return 0
+  (func $handle_IOleObject_Update (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; IOleObject_IsUpToDate: pop 8, return 0
+  (func $handle_IOleObject_IsUpToDate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; IOleObject_SetColorScheme: pop 12, return 0
+  (func $handle_IOleObject_SetColorScheme (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; IOleCache_InitCache: pop 12, return 0
+  (func $handle_IOleCache_InitCache (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; IViewObject_Unfreeze: pop 12, return 0
+  (func $handle_IViewObject_Unfreeze (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; IViewObject_SetAdvise: pop 20, return 0
+  (func $handle_IViewObject_SetAdvise (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+
+  ;; OleUIUpdateLinksA: pop 20, return 1
+  (func $handle_OleUIUpdateLinksA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+
+  ;; IMoniker_IsDirty: pop 8, return 1
+  (func $handle_IMoniker_IsDirty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+
+  ;; IFont_SetRatio: pop 16, return 0
+  (func $handle_IFont_SetRatio (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+
+  ;; IFont_AddRefHfont: pop 12, return 0
+  (func $handle_IFont_AddRefHfont (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; IFont_ReleaseHfont: pop 12, return 0
+  (func $handle_IFont_ReleaseHfont (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; IFont_SetHdc: pop 12, return 0
+  (func $handle_IFont_SetHdc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+
+  ;; ============================================================
+  ;; TEST-CALL EXPORTS — GENERATED, do not edit
+  ;; Opted in with test_call:true in api_table.json.
+  ;; ============================================================
+  (func (export "test_call_AbortDoc") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AbortDoc
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CloseMetaFile") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CloseMetaFile
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateBitmap") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateBitmap
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateCompatibleBitmap") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateCompatibleBitmap
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateCompatibleDC") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateCompatibleDC
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateDIBPatternBrushPt") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateDIBPatternBrushPt
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateHalftonePalette") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateHalftonePalette
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateHatchBrush") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateHatchBrush
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreatePalette") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreatePalette
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreatePatternBrush") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreatePatternBrush
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreatePen") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreatePen
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateRectRgn") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateRectRgn
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateSolidBrush") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateSolidBrush
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DeleteDC") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DeleteDC
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DeleteMetaFile") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DeleteMetaFile
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DeleteObject") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DeleteObject
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DestroyMenu") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DestroyMenu
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DrawEdge") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DrawEdge
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DrawFocusRect") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DrawFocusRect
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DrawTextA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DrawTextA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DrawTextW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DrawTextW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_Ellipse") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_Ellipse
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_EndDoc") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EndDoc
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_EndPage") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EndPage
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ExtCreatePen") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ExtCreatePen
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ExtFloodFill") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ExtFloodFill
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_FillRect") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_FillRect
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_FrameRect") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_FrameRect
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetCommandLineW") (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetCommandLineW
+      (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetDC") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetDC
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetDCOrgEx") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetDCOrgEx
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetDiskFreeSpaceA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetDiskFreeSpaceA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetDriveTypeA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetDriveTypeA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetDriveTypeW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetDriveTypeW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetLastError") (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetLastError
+      (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetLogicalDrives") (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetLogicalDrives
+      (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetModuleFileNameA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetModuleFileNameA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetModuleHandleA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetModuleHandleA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetModuleHandleW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetModuleHandleW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetNearestPaletteIndex") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetNearestPaletteIndex
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetObjectA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetObjectA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetObjectType") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetObjectType
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetObjectW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetObjectW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetPaletteEntries") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetPaletteEntries
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetPixel") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetPixel
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetSystemMetrics") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetSystemMetrics
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTabbedTextExtentA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTabbedTextExtentA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTabbedTextExtentW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTabbedTextExtentW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextExtentPoint32A") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextExtentPoint32A
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextFaceW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextFaceW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextMetricsA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextMetricsA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetWindowDC") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetWindowDC
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalAddAtomA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalAddAtomA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalAddAtomW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalAddAtomW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalDeleteAtom") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalDeleteAtom
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalFindAtomW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalFindAtomW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalGetAtomNameW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalGetAtomNameW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_LineTo") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_LineTo
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_LoadBitmapA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_LoadBitmapA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_LoadBitmapW") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_LoadBitmapW
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PlayMetaFile") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PlayMetaFile
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PolyBezier") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PolyBezier
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PolyBezierTo") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PolyBezierTo
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PolyDraw") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PolyDraw
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_Polygon") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_Polygon
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_Polyline") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_Polyline
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PolylineTo") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PolylineTo
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_RealizePalette") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RealizePalette
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_Rectangle") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_Rectangle
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_RegisterClassA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RegisterClassA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_RegisterClassExW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RegisterClassExW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_RegisterClassW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RegisterClassW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ReleaseDC") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ReleaseDC
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ResizePalette") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ResizePalette
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_RestoreDC") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RestoreDC
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SaveDC") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SaveDC
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SelectClipPath") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SelectClipPath
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SelectObject") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SelectObject
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetArcDirection") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetArcDirection
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetBrushOrgEx") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetBrushOrgEx
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetColorAdjustment") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetColorAdjustment
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetDIBColorTable") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetDIBColorTable
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetMapMode") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetMapMode
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetMapperFlags") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetMapperFlags
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetPaletteEntries") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetPaletteEntries
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetPixel") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetPixel
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetSystemPaletteUse") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetSystemPaletteUse
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetTextCharacterExtra") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetTextCharacterExtra
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetTextJustification") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetTextJustification
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_StartPage") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_StartPage
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_TextOutA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_TextOutA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetCurrentObject") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetCurrentObject
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetWindowRgn") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetWindowRgn
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetWindowRgn") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetWindowRgn
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_WSAStartup") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_WSAStartup
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateBrushIndirect") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateBrushIndirect
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_AppendMenuA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AppendMenuA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_InsertMenuA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_InsertMenuA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreatePopupMenu") (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreatePopupMenu
+      (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_joyGetNumDevs") (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_joyGetNumDevs
+      (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetFileVersionInfoSizeA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetFileVersionInfoSizeA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetFileVersionInfoA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetFileVersionInfoA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_VerQueryValueA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_VerQueryValueA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetLogicalDriveStringsA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetLogicalDriveStringsA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextCharacterExtra") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextCharacterExtra
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetMessageQueue") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetMessageQueue
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetDeviceGammaRamp") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetDeviceGammaRamp
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextFaceA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextFaceA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetCharWidthA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetCharWidthA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_FindAtomA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_FindAtomA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_FindAtomW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_FindAtomW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_AddAtomA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AddAtomA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DeleteAtom") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DeleteAtom
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateMetaFileA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateMetaFileA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetColorAdjustment") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetColorAdjustment
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateBitmapIndirect") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateBitmapIndirect
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreatePolyPolygonRgn") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreatePolyPolygonRgn
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetBitmapBits") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetBitmapBits
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetBitmapDimensionEx") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetBitmapDimensionEx
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetBrushOrgEx") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetBrushOrgEx
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetRegionData") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetRegionData
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PtInRegion") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PtInRegion
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetBitmapBits") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetBitmapBits
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_AnimatePalette") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AnimatePalette
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ChoosePixelFormat") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ChoosePixelFormat
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DescribePixelFormat") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DescribePixelFormat
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GdiSetBatchLimit") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GdiSetBatchLimit
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetGraphicsMode") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetGraphicsMode
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetPixelFormat") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetPixelFormat
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetSystemPaletteUse") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetSystemPaletteUse
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetDeviceGammaRamp") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetDeviceGammaRamp
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetGraphicsMode") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetGraphicsMode
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetPixelFormat") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetPixelFormat
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SwapBuffers") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SwapBuffers
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_AddFontResourceA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AddFontResourceA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetCharABCWidthsA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetCharABCWidthsA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetFontData") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetFontData
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_RemoveFontResourceA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_RemoveFontResourceA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CopyEnhMetaFileA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CopyEnhMetaFileA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_DeleteEnhMetaFile") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_DeleteEnhMetaFile
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetEnhMetaFileBits") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetEnhMetaFileBits
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetEnhMetaFileHeader") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetEnhMetaFileHeader
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetEnhMetaFilePaletteEntries") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetEnhMetaFilePaletteEntries
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetICMProfileA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetICMProfileA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetMetaFileBitsEx") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetMetaFileBitsEx
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetWinMetaFileBits") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetWinMetaFileBits
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PlayEnhMetaFile") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PlayEnhMetaFile
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ResetDCA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ResetDCA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetEnhMetaFileBits") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetEnhMetaFileBits
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetMetaFileBitsEx") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetMetaFileBitsEx
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetWinMetaFileBits") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetWinMetaFileBits
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_EnumThreadWindows") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EnumThreadWindows
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_joyGetDevCapsA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_joyGetDevCapsA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_joySetCapture") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_joySetCapture
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_joyReleaseCapture") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_joyReleaseCapture
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetProcessWorkingSetSize") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetProcessWorkingSetSize
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PolyPolyline") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PolyPolyline
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_AbortPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AbortPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_BeginPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_BeginPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CloseFigure") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CloseFigure
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_EndPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EndPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetPath") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetPath
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_PathToRegion") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_PathToRegion
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_FlattenPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_FlattenPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_FillPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_FillPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_StrokePath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_StrokePath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_StrokeAndFillPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_StrokeAndFillPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_WidenPath") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_WidenPath
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalFindAtomA") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalFindAtomA
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GlobalGetAtomNameA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GlobalGetAtomNameA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_AddAtomW") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_AddAtomW
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetAtomNameA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetAtomNameA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetAtomNameW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetAtomNameW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_InsertMenuItemA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_InsertMenuItemA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CloseEnhMetaFile") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CloseEnhMetaFile
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ColorMatchToTarget") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ColorMatchToTarget
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateEllipticRgnIndirect") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateEllipticRgnIndirect
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateEnhMetaFileA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateEnhMetaFileA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_EqualRgn") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_EqualRgn
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_ExtCreateRegion") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_ExtCreateRegion
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetICMMode") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetICMMode
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_SetICMProfileA") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_SetICMProfileA
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetFileVersionInfoSizeW") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetFileVersionInfoSizeW
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetFileVersionInfoW") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetFileVersionInfoW
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetLogicalDriveStringsW") (param $arg0 i32) (param $arg1 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetLogicalDriveStringsW
+      (local.get $arg0) (local.get $arg1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CreateScalableFontResourceA") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateScalableFontResourceA
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_mmioSetBuffer") (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_mmioSetBuffer
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_Direct3DCreate8") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_Direct3DCreate8
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+
   ;; ============================================================
   ;; API BR_TABLE DISPATCH — GENERATED, do not edit
   ;; Generated by tools/gen_dispatch.js from api_table.json
@@ -50,9 +1685,21 @@
       (then
         (call $dispatch_api_table_page_10 (i32.sub (local.get $api_id) (i32.const 2560)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
-    (if (i32.lt_u (local.get $api_id) (i32.const 2866))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3072))
       (then
         (call $dispatch_api_table_page_11 (i32.sub (local.get $api_id) (i32.const 2816)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+        (return)))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3328))
+      (then
+        (call $dispatch_api_table_page_12 (i32.sub (local.get $api_id) (i32.const 3072)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+        (return)))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3584))
+      (then
+        (call $dispatch_api_table_page_13 (i32.sub (local.get $api_id) (i32.const 3328)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+        (return)))
+    (if (i32.lt_u (local.get $api_id) (i32.const 3653))
+      (then
+        (call $dispatch_api_table_page_14 (i32.sub (local.get $api_id) (i32.const 3584)) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
         (return)))
     (call $handle_fallback (local.get $name_ptr) (local.get $api_id))
   )
@@ -4047,10 +5694,10 @@
       (call $handle_IDirectDraw_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 979: IDirectDraw_AddRef
-      (call $handle_IDirectDraw_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 980: IDirectDraw_Release
-      (call $handle_IDirectDraw_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 981: IDirectDraw_Compact
       (call $handle_IDirectDraw_Compact (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4116,7 +5763,7 @@
       (call $handle_IDirectDrawSurface_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1002: IDirectDrawSurface_AddRef
-      (call $handle_IDirectDrawSurface_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1003: IDirectDrawSurface_Release
       (call $handle_IDirectDrawSurface_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4488,7 +6135,7 @@
       (call $handle_IDirectDrawPalette_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1038: IDirectDrawPalette_AddRef
-      (call $handle_IDirectDrawPalette_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1039: IDirectDrawPalette_Release
       (call $handle_IDirectDrawPalette_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4509,10 +6156,10 @@
       (call $handle_IDirectSound_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1045: IDirectSound_AddRef
-      (call $handle_IDirectSound_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1046: IDirectSound_Release
-      (call $handle_IDirectSound_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1047: IDirectSound_CreateSoundBuffer
       (call $handle_IDirectSound_CreateSoundBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4542,7 +6189,7 @@
       (call $handle_IDirectSoundBuffer_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1056: IDirectSoundBuffer_AddRef
-      (call $handle_IDirectSoundBuffer_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1057: IDirectSoundBuffer_Release
       (call $handle_IDirectSoundBuffer_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4605,10 +6252,10 @@
       (call $handle_IDirectInput_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1077: IDirectInput_AddRef
-      (call $handle_IDirectInput_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1078: IDirectInput_Release
-      (call $handle_IDirectInput_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1079: IDirectInput_CreateDevice
       (call $handle_IDirectInput_CreateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4629,10 +6276,10 @@
       (call $handle_IDirectInputDevice_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1085: IDirectInputDevice_AddRef
-      (call $handle_IDirectInputDevice_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1086: IDirectInputDevice_Release
-      (call $handle_IDirectInputDevice_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1087: IDirectInputDevice_GetCapabilities
       (call $handle_IDirectInputDevice_GetCapabilities (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4797,7 +6444,7 @@
       (call $handle_IDirectDrawFactory_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1141: IDirectDrawFactory_AddRef
-      (call $handle_IDirectDrawFactory_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1142: IDirectDrawFactory_Release
       (call $handle_IDirectDrawFactory_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4815,7 +6462,7 @@
       (call $handle_IDirect3DDevice3_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1147: IDirect3DDevice3_AddRef
-      (call $handle_IDirect3DDevice3_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1148: IDirect3DDevice3_Release
       (call $handle_IDirect3DDevice3_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -4941,7 +6588,7 @@
       (call $handle_IDirect3DViewport3_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1189: IDirect3DViewport3_AddRef
-      (call $handle_IDirect3DViewport3_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1190: IDirect3DViewport3_Release
       (call $handle_IDirect3DViewport3_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5004,7 +6651,7 @@
       (call $handle_IDirect3DLight_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1210: IDirect3DLight_AddRef
-      (call $handle_IDirect3DLight_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1211: IDirect3DLight_Release
       (call $handle_IDirect3DLight_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5022,10 +6669,10 @@
       (call $handle_IDirect3DMaterial3_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1216: IDirect3DMaterial3_AddRef
-      (call $handle_IDirect3DMaterial3_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1217: IDirect3DMaterial3_Release
-      (call $handle_IDirect3DMaterial3_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1218: IDirect3DMaterial3_SetMaterial
       (call $handle_IDirect3DMaterial3_SetMaterial (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5142,7 +6789,7 @@
       (call $handle_IDirectDrawClipper_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1256: IDirectDrawClipper_AddRef
-      (call $handle_IDirectDrawClipper_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1257: IDirectDrawClipper_Release
       (call $handle_IDirectDrawClipper_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5202,10 +6849,10 @@
       (call $handle_IDirect3D2_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1276: IDirect3D2_AddRef
-      (call $handle_IDirect3D2_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1277: IDirect3D2_Release
-      (call $handle_IDirect3D2_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1278: IDirect3D2_EnumDevices
       (call $handle_IDirect3D2_EnumDevices (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5493,10 +7140,10 @@
       (call $handle_IDirect3D7_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1285: IDirect3D7_AddRef
-      (call $handle_IDirect3D7_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1286: IDirect3D7_Release
-      (call $handle_IDirect3D7_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1287: IDirect3D7_EnumDevices
       (call $handle_IDirect3D7_EnumDevices (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5517,7 +7164,7 @@
       (call $handle_IDirect3DDevice_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1293: IDirect3DDevice_AddRef
-      (call $handle_IDirect3DDevice_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1294: IDirect3DDevice_Release
       (call $handle_IDirect3DDevice_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5583,7 +7230,7 @@
       (call $handle_IDirect3DDevice2_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1315: IDirect3DDevice2_AddRef
-      (call $handle_IDirect3DDevice2_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1316: IDirect3DDevice2_Release
       (call $handle_IDirect3DDevice2_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5682,7 +7329,7 @@
       (call $handle_IDirect3DDevice7_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1348: IDirect3DDevice7_AddRef
-      (call $handle_IDirect3DDevice7_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1349: IDirect3DDevice7_Release
       (call $handle_IDirect3DDevice7_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5712,7 +7359,7 @@
       (call $handle_IDirect3DDevice7_Clear (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1358: IDirect3DDevice7_SetTransform
-      (call $handle_IDirect3DDevice7_SetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice2_SetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1359: IDirect3DDevice7_GetTransform
       (call $handle_IDirect3DDevice7_GetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5781,13 +7428,13 @@
       (call $handle_IDirect3DDevice7_SetTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1381: IDirect3DDevice7_GetTextureStageState
-      (call $handle_IDirect3DDevice7_GetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice3_GetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1382: IDirect3DDevice7_SetTextureStageState
-      (call $handle_IDirect3DDevice7_SetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice3_SetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1383: IDirect3DDevice7_ValidateDevice
-      (call $handle_IDirect3DDevice7_ValidateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DDevice3_ValidateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1384: IDirect3DDevice7_ApplyStateBlock
       (call $handle_IDirect3DDevice7_ApplyStateBlock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5829,7 +7476,7 @@
       (call $handle_IDirect3DViewport_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1397: IDirect3DViewport_AddRef
-      (call $handle_IDirect3DViewport_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1398: IDirect3DViewport_Release
       (call $handle_IDirect3DViewport_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5877,7 +7524,7 @@
       (call $handle_IDirect3DViewport2_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1413: IDirect3DViewport2_AddRef
-      (call $handle_IDirect3DViewport2_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1414: IDirect3DViewport2_Release
       (call $handle_IDirect3DViewport2_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5931,10 +7578,10 @@
       (call $handle_IDirect3DMaterial_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1431: IDirect3DMaterial_AddRef
-      (call $handle_IDirect3DMaterial_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1432: IDirect3DMaterial_Release
-      (call $handle_IDirect3DMaterial_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1433: IDirect3DMaterial_Initialize
       (call $handle_IDirect3DMaterial_Initialize (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5958,10 +7605,10 @@
       (call $handle_IDirect3DMaterial2_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1440: IDirect3DMaterial2_AddRef
-      (call $handle_IDirect3DMaterial2_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1441: IDirect3DMaterial2_Release
-      (call $handle_IDirect3DMaterial2_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1442: IDirect3DMaterial2_SetMaterial
       (call $handle_IDirect3DMaterial2_SetMaterial (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -5976,7 +7623,7 @@
       (call $handle_IDirect3DExecuteBuffer_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1446: IDirect3DExecuteBuffer_AddRef
-      (call $handle_IDirect3DExecuteBuffer_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1447: IDirect3DExecuteBuffer_Release
       (call $handle_IDirect3DExecuteBuffer_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -6006,7 +7653,7 @@
       (call $handle_IDirect3DVertexBuffer_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1456: IDirect3DVertexBuffer_AddRef
-      (call $handle_IDirect3DVertexBuffer_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1457: IDirect3DVertexBuffer_Release
       (call $handle_IDirect3DVertexBuffer_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -6030,7 +7677,7 @@
       (call $handle_IDirect3DVertexBuffer7_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1464: IDirect3DVertexBuffer7_AddRef
-      (call $handle_IDirect3DVertexBuffer7_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1465: IDirect3DVertexBuffer7_Release
       (call $handle_IDirect3DVertexBuffer7_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -6057,7 +7704,7 @@
       (call $handle_IDirect3DTexture_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1473: IDirect3DTexture_AddRef
-      (call $handle_IDirect3DTexture_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1474: IDirect3DTexture_Release
       (call $handle_IDirect3DTexture_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -6081,13 +7728,13 @@
       (call $handle_IDirect3DTexture2_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1481: IDirect3DTexture2_AddRef
-      (call $handle_IDirect3DTexture2_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1482: IDirect3DTexture2_Release
       (call $handle_IDirect3DTexture2_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1483: IDirect3DTexture2_GetHandle
-      (call $handle_IDirect3DTexture2_GetHandle (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_IDirect3DTexture_GetHandle (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1484: IDirect3DTexture2_PaletteChanged
       (call $handle_IDirect3DTexture2_PaletteChanged (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -6204,7 +7851,7 @@
       (call $handle_ImageList_AddMasked (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1522: mmioSeek
-      (call $handle_mmioSeek (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle__llseek (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 1523: mbstowcs
       (call $handle_mbstowcs (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8289,7 +9936,7 @@
       (call $handle_FindAtomW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2041: GetStringTypeExA
-      (call $handle_GetStringTypeExA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_GetStringTypeA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2042: FrameRgn
       (call $handle_FrameRgn (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8610,10 +10257,10 @@
       (call $handle_IRunningObjectTable_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2060: IRunningObjectTable_AddRef
-      (call $handle_IRunningObjectTable_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2061: IRunningObjectTable_Release
-      (call $handle_IRunningObjectTable_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2062: IRunningObjectTable_Register
       (call $handle_IRunningObjectTable_Register (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8709,10 +10356,10 @@
       (call $handle_ILockBytes_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2093: ILockBytes_AddRef
-      (call $handle_ILockBytes_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2094: ILockBytes_Release
-      (call $handle_ILockBytes_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2095: ILockBytes_ReadAt
       (call $handle_ILockBytes_ReadAt (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8739,10 +10386,10 @@
       (call $handle_IStream_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2103: IStream_AddRef
-      (call $handle_IStream_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2104: IStream_Release
-      (call $handle_IStream_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2105: IStream_Read
       (call $handle_IStream_Read (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8781,10 +10428,10 @@
       (call $handle_IStorage_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2117: IStorage_AddRef
-      (call $handle_IStorage_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2118: IStorage_Release
-      (call $handle_IStorage_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2119: IStorage_CreateStream
       (call $handle_IStorage_CreateStream (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8847,7 +10494,7 @@
       (call $handle_IDataObject_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2139: IDataObject_AddRef
-      (call $handle_IDataObject_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2140: IDataObject_Release
       (call $handle_IDataObject_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8883,7 +10530,7 @@
       (call $handle_IEnumFORMATETC_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2151: IEnumFORMATETC_AddRef
-      (call $handle_IEnumFORMATETC_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2152: IEnumFORMATETC_Release
       (call $handle_IEnumFORMATETC_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8892,10 +10539,10 @@
       (call $handle_IEnumFORMATETC_Next (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2154: IEnumFORMATETC_Skip
-      (call $handle_IEnumFORMATETC_Skip (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_enum_skip (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2155: IEnumFORMATETC_Reset
-      (call $handle_IEnumFORMATETC_Reset (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_enum_reset (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2156: IEnumFORMATETC_Clone
       (call $handle_IEnumFORMATETC_Clone (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -8919,7 +10566,7 @@
       (call $handle_IOleObject_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2163: IOleObject_AddRef
-      (call $handle_IOleObject_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2164: IOleObject_Release
       (call $handle_IOleObject_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -9096,10 +10743,10 @@
       (call $handle_IEnumSTATSTG_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2222: IEnumSTATSTG_AddRef
-      (call $handle_IEnumSTATSTG_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2223: IEnumSTATSTG_Release
-      (call $handle_IEnumSTATSTG_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2224: IEnumSTATSTG_Next
       (call $handle_IEnumSTATSTG_Next (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -9264,10 +10911,10 @@
       (call $handle_IMoniker_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2278: IMoniker_AddRef
-      (call $handle_IMoniker_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2279: IMoniker_Release
-      (call $handle_IMoniker_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2280: IMoniker_GetClassID
       (call $handle_IMoniker_GetClassID (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -9333,7 +10980,7 @@
       (call $handle_IBindCtx_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2301: IBindCtx_AddRef
-      (call $handle_IBindCtx_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2302: IBindCtx_Release
       (call $handle_IBindCtx_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -9636,19 +11283,19 @@
       (call $handle_IEnumString_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2314: IEnumString_AddRef
-      (call $handle_IEnumString_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2315: IEnumString_Release
-      (call $handle_IEnumString_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2316: IEnumString_Next
       (call $handle_IEnumString_Next (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2317: IEnumString_Skip
-      (call $handle_IEnumString_Skip (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_enum_skip (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2318: IEnumString_Reset
-      (call $handle_IEnumString_Reset (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_enum_reset (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2319: IEnumString_Clone
       (call $handle_IEnumString_Clone (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -9657,19 +11304,19 @@
       (call $handle_IEnumMoniker_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2321: IEnumMoniker_AddRef
-      (call $handle_IEnumMoniker_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2322: IEnumMoniker_Release
-      (call $handle_IEnumMoniker_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2323: IEnumMoniker_Next
       (call $handle_IEnumMoniker_Next (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2324: IEnumMoniker_Skip
-      (call $handle_IEnumMoniker_Skip (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_enum_skip (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2325: IEnumMoniker_Reset
-      (call $handle_IEnumMoniker_Reset (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_enum_reset (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2326: IEnumMoniker_Clone
       (call $handle_IEnumMoniker_Clone (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -9963,10 +11610,10 @@
       (call $handle_IFont_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2423: IFont_AddRef
-      (call $handle_IFont_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2424: IFont_Release
-      (call $handle_IFont_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_ole_obj_release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2425: IFont_get_Name
       (call $handle_IFont_get_Name (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -10275,10 +11922,10 @@
       (call $handle_IDirectX7_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2527: IDirectX7_AddRef
-      (call $handle_IDirectX7_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2528: IDirectX7_Release
-      (call $handle_IDirectX7_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2529: IDirectX7_DirectSlot003
       (call $handle_IDirectX7_DirectSlot003 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -10299,10 +11946,10 @@
       (call $handle_IVBDirectDraw7_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2535: IVBDirectDraw7_AddRef
-      (call $handle_IVBDirectDraw7_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2536: IVBDirectDraw7_Release
-      (call $handle_IVBDirectDraw7_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2537: IVBDirectDraw7_DirectSlot003
       (call $handle_IVBDirectDraw7_DirectSlot (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -10653,7 +12300,7 @@
       (call $handle_IVBDirectDrawClipper_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2565: IVBDirectDrawClipper_AddRef
-      (call $handle_IVBDirectDrawClipper_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2566: IVBDirectDrawClipper_Release
       (call $handle_IVBDirectDrawClipper_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -10683,10 +12330,10 @@
       (call $handle_IVBDirectSound_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2575: IVBDirectSound_AddRef
-      (call $handle_IVBDirectSound_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2576: IVBDirectSound_Release
-      (call $handle_IVBDirectSound_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2577: IVBDirectSound_DirectSlot003
       (call $handle_IVBDirectSound_DirectSlot (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -10989,10 +12636,10 @@
       (call $handle_IDirect3D9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2677: IDirect3D9_AddRef
-      (call $handle_IDirect3D9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2678: IDirect3D9_Release
-      (call $handle_IDirect3D9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2679: IDirect3D9_RegisterSoftwareDevice
       (call $handle_IDirect3D9_RegisterSoftwareDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -11040,7 +12687,7 @@
       (call $handle_IDirect3DDevice9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2694: IDirect3DDevice9_AddRef
-      (call $handle_IDirect3DDevice9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
     ) ;; 2695: IDirect3DDevice9_Release
       (call $handle_IDirect3DDevice9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
@@ -11410,8 +13057,214 @@
   )
 
   (func $dispatch_api_table_page_11 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; api ids 2816..2865
+    ;; api ids 2816..3071
     (block $fallback
+    (block $api_255
+    (block $api_254
+    (block $api_253
+    (block $api_252
+    (block $api_251
+    (block $api_250
+    (block $api_249
+    (block $api_248
+    (block $api_247
+    (block $api_246
+    (block $api_245
+    (block $api_244
+    (block $api_243
+    (block $api_242
+    (block $api_241
+    (block $api_240
+    (block $api_239
+    (block $api_238
+    (block $api_237
+    (block $api_236
+    (block $api_235
+    (block $api_234
+    (block $api_233
+    (block $api_232
+    (block $api_231
+    (block $api_230
+    (block $api_229
+    (block $api_228
+    (block $api_227
+    (block $api_226
+    (block $api_225
+    (block $api_224
+    (block $api_223
+    (block $api_222
+    (block $api_221
+    (block $api_220
+    (block $api_219
+    (block $api_218
+    (block $api_217
+    (block $api_216
+    (block $api_215
+    (block $api_214
+    (block $api_213
+    (block $api_212
+    (block $api_211
+    (block $api_210
+    (block $api_209
+    (block $api_208
+    (block $api_207
+    (block $api_206
+    (block $api_205
+    (block $api_204
+    (block $api_203
+    (block $api_202
+    (block $api_201
+    (block $api_200
+    (block $api_199
+    (block $api_198
+    (block $api_197
+    (block $api_196
+    (block $api_195
+    (block $api_194
+    (block $api_193
+    (block $api_192
+    (block $api_191
+    (block $api_190
+    (block $api_189
+    (block $api_188
+    (block $api_187
+    (block $api_186
+    (block $api_185
+    (block $api_184
+    (block $api_183
+    (block $api_182
+    (block $api_181
+    (block $api_180
+    (block $api_179
+    (block $api_178
+    (block $api_177
+    (block $api_176
+    (block $api_175
+    (block $api_174
+    (block $api_173
+    (block $api_172
+    (block $api_171
+    (block $api_170
+    (block $api_169
+    (block $api_168
+    (block $api_167
+    (block $api_166
+    (block $api_165
+    (block $api_164
+    (block $api_163
+    (block $api_162
+    (block $api_161
+    (block $api_160
+    (block $api_159
+    (block $api_158
+    (block $api_157
+    (block $api_156
+    (block $api_155
+    (block $api_154
+    (block $api_153
+    (block $api_152
+    (block $api_151
+    (block $api_150
+    (block $api_149
+    (block $api_148
+    (block $api_147
+    (block $api_146
+    (block $api_145
+    (block $api_144
+    (block $api_143
+    (block $api_142
+    (block $api_141
+    (block $api_140
+    (block $api_139
+    (block $api_138
+    (block $api_137
+    (block $api_136
+    (block $api_135
+    (block $api_134
+    (block $api_133
+    (block $api_132
+    (block $api_131
+    (block $api_130
+    (block $api_129
+    (block $api_128
+    (block $api_127
+    (block $api_126
+    (block $api_125
+    (block $api_124
+    (block $api_123
+    (block $api_122
+    (block $api_121
+    (block $api_120
+    (block $api_119
+    (block $api_118
+    (block $api_117
+    (block $api_116
+    (block $api_115
+    (block $api_114
+    (block $api_113
+    (block $api_112
+    (block $api_111
+    (block $api_110
+    (block $api_109
+    (block $api_108
+    (block $api_107
+    (block $api_106
+    (block $api_105
+    (block $api_104
+    (block $api_103
+    (block $api_102
+    (block $api_101
+    (block $api_100
+    (block $api_99
+    (block $api_98
+    (block $api_97
+    (block $api_96
+    (block $api_95
+    (block $api_94
+    (block $api_93
+    (block $api_92
+    (block $api_91
+    (block $api_90
+    (block $api_89
+    (block $api_88
+    (block $api_87
+    (block $api_86
+    (block $api_85
+    (block $api_84
+    (block $api_83
+    (block $api_82
+    (block $api_81
+    (block $api_80
+    (block $api_79
+    (block $api_78
+    (block $api_77
+    (block $api_76
+    (block $api_75
+    (block $api_74
+    (block $api_73
+    (block $api_72
+    (block $api_71
+    (block $api_70
+    (block $api_69
+    (block $api_68
+    (block $api_67
+    (block $api_66
+    (block $api_65
+    (block $api_64
+    (block $api_63
+    (block $api_62
+    (block $api_61
+    (block $api_60
+    (block $api_59
+    (block $api_58
+    (block $api_57
+    (block $api_56
+    (block $api_55
+    (block $api_54
+    (block $api_53
+    (block $api_52
+    (block $api_51
+    (block $api_50
     (block $api_49
     (block $api_48
     (block $api_47
@@ -11462,7 +13315,7 @@
     (block $api_2
     (block $api_1
     (block $api_0
-      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $fallback (local.get $api_id))
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $api_76 $api_77 $api_78 $api_79 $api_80 $api_81 $api_82 $api_83 $api_84 $api_85 $api_86 $api_87 $api_88 $api_89 $api_90 $api_91 $api_92 $api_93 $api_94 $api_95 $api_96 $api_97 $api_98 $api_99 $api_100 $api_101 $api_102 $api_103 $api_104 $api_105 $api_106 $api_107 $api_108 $api_109 $api_110 $api_111 $api_112 $api_113 $api_114 $api_115 $api_116 $api_117 $api_118 $api_119 $api_120 $api_121 $api_122 $api_123 $api_124 $api_125 $api_126 $api_127 $api_128 $api_129 $api_130 $api_131 $api_132 $api_133 $api_134 $api_135 $api_136 $api_137 $api_138 $api_139 $api_140 $api_141 $api_142 $api_143 $api_144 $api_145 $api_146 $api_147 $api_148 $api_149 $api_150 $api_151 $api_152 $api_153 $api_154 $api_155 $api_156 $api_157 $api_158 $api_159 $api_160 $api_161 $api_162 $api_163 $api_164 $api_165 $api_166 $api_167 $api_168 $api_169 $api_170 $api_171 $api_172 $api_173 $api_174 $api_175 $api_176 $api_177 $api_178 $api_179 $api_180 $api_181 $api_182 $api_183 $api_184 $api_185 $api_186 $api_187 $api_188 $api_189 $api_190 $api_191 $api_192 $api_193 $api_194 $api_195 $api_196 $api_197 $api_198 $api_199 $api_200 $api_201 $api_202 $api_203 $api_204 $api_205 $api_206 $api_207 $api_208 $api_209 $api_210 $api_211 $api_212 $api_213 $api_214 $api_215 $api_216 $api_217 $api_218 $api_219 $api_220 $api_221 $api_222 $api_223 $api_224 $api_225 $api_226 $api_227 $api_228 $api_229 $api_230 $api_231 $api_232 $api_233 $api_234 $api_235 $api_236 $api_237 $api_238 $api_239 $api_240 $api_241 $api_242 $api_243 $api_244 $api_245 $api_246 $api_247 $api_248 $api_249 $api_250 $api_251 $api_252 $api_253 $api_254 $api_255 $fallback (local.get $api_id))
     ) ;; 2816: IDirect3DTexture9_SetPrivateData
       (call $handle_IDirect3DTexture9_SetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
@@ -11613,8 +13466,2974 @@
     ) ;; 2865: IDirectInputDevice2_SendDeviceData
       (call $handle_IDirectInputDevice2_SendDeviceData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
       (return)
+    ) ;; 2866: mmioGetInfo
+      (call $handle_mmioGetInfo (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2867: mmioAdvance
+      (call $handle_mmioAdvance (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2868: mmioSetInfo
+      (call $handle_mmioSetInfo (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2869: SendMessageTimeoutA
+      (call $handle_SendMessageTimeoutA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2870: RegQueryValueW
+      (call $handle_RegQueryValueW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2871: _MyGetFreeSystemResources32@4
+      (call $handle__MyGetFreeSystemResources32@4 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2872: FlushViewOfFile
+      (call $handle_FlushViewOfFile (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2873: RegFlushKey
+      (call $handle_RegFlushKey (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2874: OemToCharBuffA
+      (call $handle_OemToCharBuffA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2875: DialogBoxIndirectParamA
+      (call $handle_DialogBoxIndirectParamA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2876: GetWindowWord
+      (call $handle_GetWindowWord (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2877: VerFindFileA
+      (call $handle_VerFindFileA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2878: VerInstallFileA
+      (call $handle_VerInstallFileA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2879: _vsnprintf
+      (call $handle__vsnprintf (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2880: ImageList_ReplaceIcon
+      (call $handle_ImageList_ReplaceIcon (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2881: ImageList_GetIcon
+      (call $handle_ImageList_GetIcon (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2882: mciGetDeviceIDA
+      (call $handle_mciGetDeviceIDA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2883: waveOutGetID
+      (call $handle_waveOutGetID (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2884: strncmp
+      (call $handle_strncmp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2885: _strnicmp
+      (call $handle__strnicmp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2886: glAlphaFunc
+      (call $handle_gpu_api (i32.const 0) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2887: glBlendFunc
+      (call $handle_gpu_api (i32.const 1) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2888: glClear
+      (call $handle_gpu_api (i32.const 2) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2889: glClearColor
+      (call $handle_gpu_api (i32.const 3) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2890: glCullFace
+      (call $handle_gpu_api (i32.const 4) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2891: glDepthFunc
+      (call $handle_gpu_api (i32.const 5) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2892: glDepthMask
+      (call $handle_gpu_api (i32.const 6) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2893: glDepthRange
+      (call $handle_gpu_api (i32.const 7) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2894: glDisable
+      (call $handle_gpu_api (i32.const 8) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2895: glDrawBuffer
+      (call $handle_gpu_api (i32.const 9) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2896: glEnable
+      (call $handle_gpu_api (i32.const 10) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2897: glFinish
+      (call $handle_gpu_api (i32.const 11) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2898: glGetError
+      (call $handle_gpu_api (i32.const 12) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2899: glGetFloatv
+      (call $handle_gpu_api (i32.const 13) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2900: glGetString
+      (call $handle_gpu_api (i32.const 14) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2901: glPointSize
+      (call $handle_gpu_api (i32.const 15) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2902: glPolygonMode
+      (call $handle_gpu_api (i32.const 16) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2903: glReadPixels
+      (call $handle_gpu_api (i32.const 17) (i32.const 7) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2904: glScissor
+      (call $handle_gpu_api (i32.const 18) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2905: glShadeModel
+      (call $handle_gpu_api (i32.const 19) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2906: glViewport
+      (call $handle_gpu_api (i32.const 20) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2907: glBegin
+      (call $handle_gpu_api (i32.const 21) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2908: glEnd
+      (call $handle_gpu_api (i32.const 22) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2909: glColor3f
+      (call $handle_gpu_api (i32.const 23) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2910: glColor3fv
+      (call $handle_gpu_api (i32.const 24) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2911: glColor4f
+      (call $handle_gpu_api (i32.const 25) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2912: glColor4fv
+      (call $handle_gpu_api (i32.const 26) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2913: glColor4ubv
+      (call $handle_gpu_api (i32.const 27) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2914: glTexCoord2f
+      (call $handle_gpu_api (i32.const 28) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2915: glVertex2f
+      (call $handle_gpu_api (i32.const 29) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2916: glVertex3f
+      (call $handle_gpu_api (i32.const 30) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2917: glVertex3fv
+      (call $handle_gpu_api (i32.const 31) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2918: glFrustum
+      (call $handle_gpu_api (i32.const 32) (i32.const 12) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2919: glLoadIdentity
+      (call $handle_gpu_api (i32.const 33) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2920: glLoadMatrixf
+      (call $handle_gpu_api (i32.const 34) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2921: glMatrixMode
+      (call $handle_gpu_api (i32.const 35) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2922: glOrtho
+      (call $handle_gpu_api (i32.const 36) (i32.const 12) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2923: glPopMatrix
+      (call $handle_gpu_api (i32.const 37) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2924: glPushMatrix
+      (call $handle_gpu_api (i32.const 38) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2925: glRotatef
+      (call $handle_gpu_api (i32.const 39) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2926: glScalef
+      (call $handle_gpu_api (i32.const 40) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2927: glTranslatef
+      (call $handle_gpu_api (i32.const 41) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2928: glBindTexture
+      (call $handle_gpu_api (i32.const 42) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2929: glDeleteTextures
+      (call $handle_gpu_api (i32.const 43) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2930: glTexEnvf
+      (call $handle_gpu_api (i32.const 44) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2931: glTexImage2D
+      (call $handle_gpu_api (i32.const 45) (i32.const 9) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2932: glTexParameterf
+      (call $handle_gpu_api (i32.const 46) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2933: glTexSubImage2D
+      (call $handle_gpu_api (i32.const 47) (i32.const 9) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2934: wglCreateContext
+      (call $handle_gpu_api (i32.const 48) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2935: wglDeleteContext
+      (call $handle_gpu_api (i32.const 49) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2936: wglGetProcAddress
+      (call $handle_gpu_api (i32.const 50) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2937: wglMakeCurrent
+      (call $handle_gpu_api (i32.const 51) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2938: wglChoosePixelFormat
+      (call $handle_gpu_api (i32.const 52) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2939: wglDescribePixelFormat
+      (call $handle_gpu_api (i32.const 53) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2940: wglSetPixelFormat
+      (call $handle_gpu_api (i32.const 54) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2941: GetSystemDirectoryW
+      (call $handle_GetSystemDirectoryW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2942: LoadLibraryExW
+      (call $handle_LoadLibraryExW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2943: GetEnvironmentVariableW
+      (call $handle_GetEnvironmentVariableW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2944: CharLowerW
+      (call $handle_CharLowerW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2945: wglSwapBuffers
+      (call $handle_gpu_api (i32.const 55) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2946: FreeConsole
+      (call $handle_FreeConsole (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2947: IDirectDrawSurface3_SetSurfaceDesc
+      (call $handle_IDirectDrawSurface3_SetSurfaceDesc (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2948: GetCursor
+      (call $handle_GetCursor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2949: AllocConsole
+      (call $handle_AllocConsole (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2950: SetConsoleTitleA
+      (call $handle_SetConsoleTitleA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2951: WriteConsoleOutputA
+      (call $handle_WriteConsoleOutputA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2952: ImmIsIME
+      (call $handle_ImmIsIME (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2953: SendNotifyMessageW
+      (call $handle_SendNotifyMessageW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2954: EnumFontsW
+      (call $handle_EnumFontsW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2955: GetFileVersionInfoSizeW
+      (call $handle_GetFileVersionInfoSizeW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2956: GetFileVersionInfoW
+      (call $handle_GetFileVersionInfoW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2957: VerQueryValueW
+      (call $handle_VerQueryValueW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2958: OpenThreadToken
+      (call $handle_OpenThreadToken (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2959: OpenProcessToken
+      (call $handle_OpenProcessToken (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2960: GetTokenInformation
+      (call $handle_GetTokenInformation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2961: GetWindowsDirectoryW
+      (call $handle_GetWindowsDirectoryW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2962: GetLogicalDriveStringsW
+      (call $handle_GetLogicalDriveStringsW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2963: MsiQueryProductStateW
+      (call $handle_MsiQueryProductStateW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2964: ShellExecuteExW
+      (call $handle_ShellExecuteExW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2965: SendMessageTimeoutW
+      (call $handle_SendMessageTimeoutW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2966: GetAncestor
+      (call $handle_GetAncestor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2967: CharLowerBuffW
+      (call $handle_CharLowerBuffW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2968: OpenMutexW
+      (call $handle_OpenMutexW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2969: InitializeCriticalSectionAndSpinCount
+      (call $handle_InitializeCriticalSectionAndSpinCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2970: LookupAccountSidW
+      (call $handle_LookupAccountSidW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2971: GetLengthSid
+      (call $handle_GetLengthSid (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2972: InitializeAcl
+      (call $handle_InitializeAcl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2973: AddAccessAllowedAce
+      (call $handle_AddAccessAllowedAce (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2974: GetAce
+      (call $handle_GetAce (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2975: SetSecurityDescriptorDacl
+      (call $handle_SetSecurityDescriptorDacl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2976: SetFileSecurityW
+      (call $handle_SetFileSecurityW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2977: GdiplusStartup
+      (call $handle_GdiplusStartup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2978: GdiplusShutdown
+      (call $handle_GdiplusShutdown (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2979: GdipLoadImageFromFile
+      (call $handle_GdipLoadImageFromFile (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2980: GdipDrawImageRect
+      (call $handle_GdipDrawImageRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2981: GdipGetImageWidth
+      (call $handle_GdipGetImageWidth (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2982: GdipGetImageHeight
+      (call $handle_GdipGetImageHeight (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2983: GdipDisposeImage
+      (call $handle_GdipDisposeImage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2984: GdipCreateFromHDC
+      (call $handle_GdipCreateFromHDC (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2985: GdipDeleteGraphics
+      (call $handle_GdipDeleteGraphics (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2986: GdipGetImageGraphicsContext
+      (call $handle_GdipGetImageGraphicsContext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2987: GdipSetSmoothingMode
+      (call $handle_GdipSetSmoothingMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2988: GdipSetInterpolationMode
+      (call $handle_GdipSetInterpolationMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2989: GdipCreateBitmapFromGraphics
+      (call $handle_GdipCreateBitmapFromGraphics (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2990: GdipCreateFromHWND
+      (call $handle_GdipCreateFromHWND (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2991: GdipGraphicsClear
+      (call $handle_GdipGraphicsClear (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2992: GdipCreateBitmapFromHBITMAP
+      (call $handle_GdipCreateBitmapFromHBITMAP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2993: GdipDrawImageRectRectI
+      (call $handle_GdipDrawImageRectRectI (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2994: GdipCreateImageAttributes
+      (call $handle_GdipCreateImageAttributes (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2995: GdipSetImageAttributesColorMatrix
+      (call $handle_GdipSetImageAttributesColorMatrix (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2996: GdipDisposeImageAttributes
+      (call $handle_GdipDisposeImageAttributes (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2997: SHGetFolderPathW
+      (call $handle_SHGetFolderPathW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2998: GetComputerNameW
+      (call $handle_GetComputerNameW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 2999: GetUserNameW
+      (call $handle_GetUserNameW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3000: AddVectoredExceptionHandler
+      (call $handle_AddVectoredExceptionHandler (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3001: RemoveVectoredExceptionHandler
+      (call $handle_RemoveVectoredExceptionHandler (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3002: TryEnterCriticalSection
+      (call $handle_TryEnterCriticalSection (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3003: ExtractIconExW
+      (call $handle_ExtractIconExW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3004: EnumDisplayDevicesW
+      (call $handle_EnumDisplayDevicesW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3005: EnumDisplaySettingsW
+      (call $handle_EnumDisplaySettingsW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3006: ToUnicode
+      (call $handle_ToUnicode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3007: win_sparkle_check_update_with_ui
+      (call $handle_win_sparkle_check_update_with_ui (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3008: win_sparkle_get_last_check_time
+      (call $handle_win_sparkle_get_last_check_time (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3009: win_sparkle_get_update_check_interval
+      (call $handle_win_sparkle_get_update_check_interval (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3010: win_sparkle_set_update_check_interval
+      (call $handle_win_sparkle_set_update_check_interval (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3011: win_sparkle_get_automatic_check_for_updates
+      (call $handle_win_sparkle_get_automatic_check_for_updates (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3012: win_sparkle_set_automatic_check_for_updates
+      (call $handle_win_sparkle_set_automatic_check_for_updates (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3013: win_sparkle_set_appcast_url
+      (call $handle_win_sparkle_set_appcast_url (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3014: win_sparkle_cleanup
+      (call $handle_win_sparkle_cleanup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3015: win_sparkle_init
+      (call $handle_win_sparkle_init (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3016: waveInGetDevCapsA
+      (call $handle_waveInGetDevCapsA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3017: waveInGetDevCapsW
+      (call $handle_waveInGetDevCapsW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3018: GetClipboardSequenceNumber
+      (call $handle_GetClipboardSequenceNumber (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3019: IDirect3DSwapChain9_QueryInterface
+      (call $handle_IDirect3DSwapChain9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3020: IDirect3DSwapChain9_AddRef
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3021: IDirect3DSwapChain9_Release
+      (call $handle_IDirect3DDevice9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3022: IDirect3DSwapChain9_Present
+      (call $handle_IDirect3DSwapChain9_Present (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3023: IDirect3DSwapChain9_GetFrontBufferData
+      (call $handle_IDirect3DSwapChain9_GetFrontBufferData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3024: IDirect3DSwapChain9_GetBackBuffer
+      (call $handle_IDirect3DSwapChain9_GetBackBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3025: IDirect3DSwapChain9_GetRasterStatus
+      (call $handle_IDirect3DSwapChain9_GetRasterStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3026: IDirect3DSwapChain9_GetDisplayMode
+      (call $handle_IDirect3DSwapChain9_GetDisplayMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3027: IDirect3DSwapChain9_GetDevice
+      (call $handle_IDirect3DSwapChain9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3028: IDirect3DSwapChain9_GetPresentParameters
+      (call $handle_IDirect3DSwapChain9_GetPresentParameters (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3029: EnumResourceNamesA
+      (call $handle_EnumResourceNamesA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3030: GetUserDefaultUILanguage
+      (call $handle_GetUserDefaultUILanguage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3031: midiOutLongMsg
+      (call $handle_midiOutLongMsg (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3032: VirtualQueryEx
+      (call $handle_VirtualQueryEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3033: ToAscii
+      (call $handle_ToAscii (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3034: GetProcessWorkingSetSize
+      (call $handle_GetProcessWorkingSetSize (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3035: CompareFileTime
+      (call $handle_CompareFileTime (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3036: IDirectSound3DListener_QueryInterface
+      (call $handle_IDirectSound3DListener_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3037: IDirectSound3DListener_AddRef
+      (call $handle_IDirectSound3DListener_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3038: IDirectSound3DListener_Release
+      (call $handle_IDirectSound3DListener_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3039: IDirectSound3DListener_GetAllParameters
+      (call $handle_IDirectSound3DListener_GetAllParameters (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3040: IDirectSound3DListener_GetDistanceFactor
+      (call $handle_IDirectSound3DListener_GetDistanceFactor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3041: IDirectSound3DListener_GetDopplerFactor
+      (call $handle_IDirectSound3DListener_GetDopplerFactor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3042: IDirectSound3DListener_GetOrientation
+      (call $handle_IDirectSound3DListener_GetOrientation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3043: IDirectSound3DListener_GetPosition
+      (call $handle_IDirectSound3DListener_GetPosition (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3044: IDirectSound3DListener_GetRolloffFactor
+      (call $handle_IDirectSound3DListener_GetRolloffFactor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3045: IDirectSound3DListener_GetVelocity
+      (call $handle_IDirectSound3DListener_GetVelocity (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3046: IDirectSound3DListener_SetAllParameters
+      (call $handle_IDirectSound3DListener_SetAllParameters (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3047: IDirectSound3DListener_SetDistanceFactor
+      (call $handle_IDirectSound3DListener_SetDistanceFactor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3048: IDirectSound3DListener_SetDopplerFactor
+      (call $handle_IDirectSound3DListener_SetDopplerFactor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3049: IDirectSound3DListener_SetOrientation
+      (call $handle_IDirectSound3DListener_SetOrientation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3050: IDirectSound3DListener_SetPosition
+      (call $handle_IDirectSound3DListener_SetPosition (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3051: IDirectSound3DListener_SetRolloffFactor
+      (call $handle_IDirectSound3DListener_SetRolloffFactor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3052: IDirectSound3DListener_SetVelocity
+      (call $handle_IDirectSound3DListener_SetVelocity (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3053: IDirectSound3DListener_CommitDeferredSettings
+      (call $handle_IDirectSound3DListener_CommitDeferredSettings (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3054: glColor4ub
+      (call $handle_gpu_api (i32.const 56) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3055: IsCharAlphaNumericA
+      (call $handle_IsCharAlphaNumericA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3056: glPolygonOffset
+      (call $handle_gpu_api (i32.const 57) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3057: glColor3ubv
+      (call $handle_gpu_api (i32.const 58) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3058: CharToOemA
+      (call $handle_CharToOemA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3059: CharToOemBuffA
+      (call $handle_CharToOemBuffA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3060: IsCharUpperA
+      (call $handle_IsCharUpperA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3061: IsCharLowerA
+      (call $handle_IsCharLowerA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3062: VkKeyScanExA
+      (call $handle_VkKeyScanExA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3063: WaitForInputIdle
+      (call $handle_WaitForInputIdle (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3064: GetConsoleTitleA
+      (call $handle_GetConsoleTitleA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3065: GetConsoleTitleW
+      (call $handle_GetConsoleTitleW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3066: SetFileApisToOEM
+      (call $handle_SetFileApisToOEM (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3067: SetFileApisToANSI
+      (call $handle_SetFileApisToANSI (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3068: AreFileApisANSI
+      (call $handle_AreFileApisANSI (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3069: ReadConsoleOutputA
+      (call $handle_ReadConsoleOutputA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3070: FlushConsoleInputBuffer
+      (call $handle_FlushConsoleInputBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3071: FindCloseChangeNotification
+      (call $handle_FindCloseChangeNotification (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
     ) ;; fallback
     (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 2816)))
+  )
+
+  (func $dispatch_api_table_page_12 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; api ids 3072..3327
+    (block $fallback
+    (block $api_255
+    (block $api_254
+    (block $api_253
+    (block $api_252
+    (block $api_251
+    (block $api_250
+    (block $api_249
+    (block $api_248
+    (block $api_247
+    (block $api_246
+    (block $api_245
+    (block $api_244
+    (block $api_243
+    (block $api_242
+    (block $api_241
+    (block $api_240
+    (block $api_239
+    (block $api_238
+    (block $api_237
+    (block $api_236
+    (block $api_235
+    (block $api_234
+    (block $api_233
+    (block $api_232
+    (block $api_231
+    (block $api_230
+    (block $api_229
+    (block $api_228
+    (block $api_227
+    (block $api_226
+    (block $api_225
+    (block $api_224
+    (block $api_223
+    (block $api_222
+    (block $api_221
+    (block $api_220
+    (block $api_219
+    (block $api_218
+    (block $api_217
+    (block $api_216
+    (block $api_215
+    (block $api_214
+    (block $api_213
+    (block $api_212
+    (block $api_211
+    (block $api_210
+    (block $api_209
+    (block $api_208
+    (block $api_207
+    (block $api_206
+    (block $api_205
+    (block $api_204
+    (block $api_203
+    (block $api_202
+    (block $api_201
+    (block $api_200
+    (block $api_199
+    (block $api_198
+    (block $api_197
+    (block $api_196
+    (block $api_195
+    (block $api_194
+    (block $api_193
+    (block $api_192
+    (block $api_191
+    (block $api_190
+    (block $api_189
+    (block $api_188
+    (block $api_187
+    (block $api_186
+    (block $api_185
+    (block $api_184
+    (block $api_183
+    (block $api_182
+    (block $api_181
+    (block $api_180
+    (block $api_179
+    (block $api_178
+    (block $api_177
+    (block $api_176
+    (block $api_175
+    (block $api_174
+    (block $api_173
+    (block $api_172
+    (block $api_171
+    (block $api_170
+    (block $api_169
+    (block $api_168
+    (block $api_167
+    (block $api_166
+    (block $api_165
+    (block $api_164
+    (block $api_163
+    (block $api_162
+    (block $api_161
+    (block $api_160
+    (block $api_159
+    (block $api_158
+    (block $api_157
+    (block $api_156
+    (block $api_155
+    (block $api_154
+    (block $api_153
+    (block $api_152
+    (block $api_151
+    (block $api_150
+    (block $api_149
+    (block $api_148
+    (block $api_147
+    (block $api_146
+    (block $api_145
+    (block $api_144
+    (block $api_143
+    (block $api_142
+    (block $api_141
+    (block $api_140
+    (block $api_139
+    (block $api_138
+    (block $api_137
+    (block $api_136
+    (block $api_135
+    (block $api_134
+    (block $api_133
+    (block $api_132
+    (block $api_131
+    (block $api_130
+    (block $api_129
+    (block $api_128
+    (block $api_127
+    (block $api_126
+    (block $api_125
+    (block $api_124
+    (block $api_123
+    (block $api_122
+    (block $api_121
+    (block $api_120
+    (block $api_119
+    (block $api_118
+    (block $api_117
+    (block $api_116
+    (block $api_115
+    (block $api_114
+    (block $api_113
+    (block $api_112
+    (block $api_111
+    (block $api_110
+    (block $api_109
+    (block $api_108
+    (block $api_107
+    (block $api_106
+    (block $api_105
+    (block $api_104
+    (block $api_103
+    (block $api_102
+    (block $api_101
+    (block $api_100
+    (block $api_99
+    (block $api_98
+    (block $api_97
+    (block $api_96
+    (block $api_95
+    (block $api_94
+    (block $api_93
+    (block $api_92
+    (block $api_91
+    (block $api_90
+    (block $api_89
+    (block $api_88
+    (block $api_87
+    (block $api_86
+    (block $api_85
+    (block $api_84
+    (block $api_83
+    (block $api_82
+    (block $api_81
+    (block $api_80
+    (block $api_79
+    (block $api_78
+    (block $api_77
+    (block $api_76
+    (block $api_75
+    (block $api_74
+    (block $api_73
+    (block $api_72
+    (block $api_71
+    (block $api_70
+    (block $api_69
+    (block $api_68
+    (block $api_67
+    (block $api_66
+    (block $api_65
+    (block $api_64
+    (block $api_63
+    (block $api_62
+    (block $api_61
+    (block $api_60
+    (block $api_59
+    (block $api_58
+    (block $api_57
+    (block $api_56
+    (block $api_55
+    (block $api_54
+    (block $api_53
+    (block $api_52
+    (block $api_51
+    (block $api_50
+    (block $api_49
+    (block $api_48
+    (block $api_47
+    (block $api_46
+    (block $api_45
+    (block $api_44
+    (block $api_43
+    (block $api_42
+    (block $api_41
+    (block $api_40
+    (block $api_39
+    (block $api_38
+    (block $api_37
+    (block $api_36
+    (block $api_35
+    (block $api_34
+    (block $api_33
+    (block $api_32
+    (block $api_31
+    (block $api_30
+    (block $api_29
+    (block $api_28
+    (block $api_27
+    (block $api_26
+    (block $api_25
+    (block $api_24
+    (block $api_23
+    (block $api_22
+    (block $api_21
+    (block $api_20
+    (block $api_19
+    (block $api_18
+    (block $api_17
+    (block $api_16
+    (block $api_15
+    (block $api_14
+    (block $api_13
+    (block $api_12
+    (block $api_11
+    (block $api_10
+    (block $api_9
+    (block $api_8
+    (block $api_7
+    (block $api_6
+    (block $api_5
+    (block $api_4
+    (block $api_3
+    (block $api_2
+    (block $api_1
+    (block $api_0
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $api_76 $api_77 $api_78 $api_79 $api_80 $api_81 $api_82 $api_83 $api_84 $api_85 $api_86 $api_87 $api_88 $api_89 $api_90 $api_91 $api_92 $api_93 $api_94 $api_95 $api_96 $api_97 $api_98 $api_99 $api_100 $api_101 $api_102 $api_103 $api_104 $api_105 $api_106 $api_107 $api_108 $api_109 $api_110 $api_111 $api_112 $api_113 $api_114 $api_115 $api_116 $api_117 $api_118 $api_119 $api_120 $api_121 $api_122 $api_123 $api_124 $api_125 $api_126 $api_127 $api_128 $api_129 $api_130 $api_131 $api_132 $api_133 $api_134 $api_135 $api_136 $api_137 $api_138 $api_139 $api_140 $api_141 $api_142 $api_143 $api_144 $api_145 $api_146 $api_147 $api_148 $api_149 $api_150 $api_151 $api_152 $api_153 $api_154 $api_155 $api_156 $api_157 $api_158 $api_159 $api_160 $api_161 $api_162 $api_163 $api_164 $api_165 $api_166 $api_167 $api_168 $api_169 $api_170 $api_171 $api_172 $api_173 $api_174 $api_175 $api_176 $api_177 $api_178 $api_179 $api_180 $api_181 $api_182 $api_183 $api_184 $api_185 $api_186 $api_187 $api_188 $api_189 $api_190 $api_191 $api_192 $api_193 $api_194 $api_195 $api_196 $api_197 $api_198 $api_199 $api_200 $api_201 $api_202 $api_203 $api_204 $api_205 $api_206 $api_207 $api_208 $api_209 $api_210 $api_211 $api_212 $api_213 $api_214 $api_215 $api_216 $api_217 $api_218 $api_219 $api_220 $api_221 $api_222 $api_223 $api_224 $api_225 $api_226 $api_227 $api_228 $api_229 $api_230 $api_231 $api_232 $api_233 $api_234 $api_235 $api_236 $api_237 $api_238 $api_239 $api_240 $api_241 $api_242 $api_243 $api_244 $api_245 $api_246 $api_247 $api_248 $api_249 $api_250 $api_251 $api_252 $api_253 $api_254 $api_255 $fallback (local.get $api_id))
+    ) ;; 3072: FindFirstChangeNotificationA
+      (call $handle_FindFirstChangeNotificationA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3073: FindFirstChangeNotificationW
+      (call $handle_FindFirstChangeNotificationW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3074: FindNextChangeNotification
+      (call $handle_FindNextChangeNotification (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3075: LZCopy
+      (call $handle_LZCopy (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3076: IDirectMusic_QueryInterface
+      (call $handle_IDirectMusic_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3077: IDirectMusic_AddRef
+      (call $handle_IDirectMusic_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3078: IDirectMusic_Release
+      (call $handle_IDirectMusic_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3079: IDirectDrawGammaControl_QueryInterface
+      (call $handle_IDirectDrawGammaControl_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3080: IDirectDrawGammaControl_AddRef
+      (call $handle_IDirectDrawGammaControl_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3081: IDirectDrawGammaControl_Release
+      (call $handle_IDirectDrawGammaControl_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3082: IDirectDrawGammaControl_GetGammaRamp
+      (call $handle_IDirectDrawGammaControl_GetGammaRamp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3083: IDirectDrawGammaControl_SetGammaRamp
+      (call $handle_IDirectDrawGammaControl_SetGammaRamp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3084: IDirectDraw4_GetSurfaceFromDC
+      (call $handle_IDirectDraw4_GetSurfaceFromDC (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3085: IDirectDraw4_RestoreAllSurfaces
+      (call $handle_IDirectDraw4_RestoreAllSurfaces (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3086: IDirectDraw4_TestCooperativeLevel
+      (call $handle_IDirectDraw4_TestCooperativeLevel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3087: IDirectDraw4_GetDeviceIdentifier
+      (call $handle_IDirectDraw4_GetDeviceIdentifier (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3088: IDirectDraw7_StartModeTest
+      (call $handle_IDirectDraw7_StartModeTest (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3089: IDirectDraw7_EvaluateMode
+      (call $handle_IDirectDraw7_EvaluateMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3090: RegEnumKeyExA
+      (call $handle_RegEnumKeyExA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3091: PathRemoveFileSpecA
+      (call $handle_PathRemoveFileSpecA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3092: PathRemoveFileSpecW
+      (call $handle_PathRemoveFileSpecW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3093: SHGetFolderPathA
+      (call $handle_SHGetFolderPathA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3094: TerminateThread
+      (call $handle_TerminateThread (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3095: fopen
+      (call $handle_fopen (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3096: fclose
+      (call $handle_fclose (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3097: fflush
+      (call $handle_fflush (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3098: fputs
+      (call $handle_fputs (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3099: fwrite
+      (call $handle_fwrite (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3100: fprintf
+      (call $handle_fprintf (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3101: _errno
+      (call $handle__errno (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3102: _findfirst
+      (call $handle__findfirst (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3103: _findnext
+      (call $handle__findnext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3104: _findclose
+      (call $handle__findclose (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3105: getenv
+      (call $handle_getenv (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3106: _stat
+      (call $handle__stat (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3107: _beginthread
+      (call $handle__beginthread (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3108: _open
+      (call $handle__open (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3109: _close
+      (call $handle__close (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3110: _read
+      (call $handle__read (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3111: _lseek
+      (call $handle__lseek (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3112: _filelength
+      (call $handle__filelength (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3113: WaitForSingleObjectEx
+      (call $handle_WaitForSingleObjectEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3114: freopen
+      (call $handle_freopen (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3115: _lock
+      (call $handle__lock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3116: _unlock
+      (call $handle__unlock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3117: __lconv_init
+      (call $handle___lconv_init (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3118: _access
+      (call $handle__access (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3119: _beginthreadex
+      (call $handle__beginthreadex (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3120: tolower
+      (call $handle_tolower (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3121: towlower
+      (call $handle_towlower (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3122: towupper
+      (call $handle_towupper (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3123: isalnum
+      (call $handle_isalnum (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3124: isalpha
+      (call $handle_isalpha (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3125: iscntrl
+      (call $handle_iscntrl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3126: isdigit
+      (call $handle_isdigit (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3127: islower
+      (call $handle_islower (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3128: isprint
+      (call $handle_isprint (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3129: ispunct
+      (call $handle_ispunct (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3130: isspace
+      (call $handle_isspace (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3131: isupper
+      (call $handle_isupper (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3132: iswctype
+      (call $handle_iswctype (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3133: isxdigit
+      (call $handle_isxdigit (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3134: signal
+      (call $handle_signal (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3135: localtime
+      (call $handle_localtime (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3136: printf
+      (call $handle_printf (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3137: strtol
+      (call $handle_strtol (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3138: strtoul
+      (call $handle_strtoul (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3139: log10
+      (call $handle_log10 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3140: _endthreadex
+      (call $handle__endthreadex (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3141: feof
+      (call $handle_feof (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3142: ferror
+      (call $handle_ferror (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3143: fread
+      (call $handle_fread (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3144: fseek
+      (call $handle_fseek (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3145: ftell
+      (call $handle_ftell (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3146: memcmp
+      (call $handle_memcmp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3147: _setjmp3
+      (call $handle__setjmp3 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3148: HeapSetInformation
+      (call $handle_HeapSetInformation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3149: BASS_Init
+      (call $handle_BASS_Init (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3150: BASS_PluginLoad
+      (call $handle_BASS_PluginLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3151: BASS_Start
+      (call $handle_BASS_Start (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3152: BASS_SetConfig
+      (call $handle_BASS_SetConfig (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3153: BASS_SampleLoad
+      (call $handle_BASS_SampleLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3154: BASS_SampleGetChannel
+      (call $handle_BASS_SampleGetChannel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3155: BASS_SampleFree
+      (call $handle_BASS_SampleFree (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3156: BASS_StreamCreateFile
+      (call $handle_BASS_StreamCreateFile (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3157: BASS_StreamFree
+      (call $handle_BASS_StreamFree (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3158: BASS_MusicLoad
+      (call $handle_BASS_MusicLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3159: BASS_MusicFree
+      (call $handle_BASS_MusicFree (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3160: BASS_ChannelPlay
+      (call $handle_BASS_ChannelPlay (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3161: BASS_ChannelStop
+      (call $handle_BASS_ChannelStop (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3162: BASS_ChannelSetAttribute
+      (call $handle_BASS_ChannelSetAttribute (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3163: BASS_ChannelSetPosition
+      (call $handle_BASS_ChannelSetPosition (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3164: BASS_ErrorGetCode
+      (call $handle_BASS_ErrorGetCode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3165: BASS_Free
+      (call $handle_BASS_Free (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3166: SleepEx
+      (call $handle_SleepEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3167: BASS_ChannelPause
+      (call $handle_BASS_ChannelPause (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3168: PulseEvent
+      (call $handle_PulseEvent (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3169: __mb_cur_max
+      (call $handle___mb_cur_max (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3170: __p__environ
+      (call $handle___p__environ (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3171: _cexit
+      (call $handle__cexit (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3172: _getdrive
+      (call $handle__getdrive (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3173: _iob
+      (call $handle__iob (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3174: _isctype
+      (call $handle__isctype (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3175: _pctype
+      (call $handle__pctype (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3176: _setmode
+      (call $handle__setmode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3177: abort
+      (call $handle_abort (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3178: acos
+      (call $handle_acos (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3179: asin
+      (call $handle_asin (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3180: atan
+      (call $handle_atan (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3181: atan2
+      (call $handle_atan2 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3182: cos
+      (call $handle_cos (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3183: exp
+      (call $handle_exp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3184: fabs
+      (call $handle_fabs (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3185: floor
+      (call $handle_floor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3186: fmod
+      (call $handle_fmod (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3187: log
+      (call $handle_log (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3188: tan
+      (call $handle_tan (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3189: atof
+      (call $handle_atof (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3190: clock
+      (call $handle_clock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3191: fgets
+      (call $handle_fgets (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3192: frexp
+      (call $handle_frexp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3193: ldexp
+      (call $handle_ldexp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3194: memchr
+      (call $handle_memchr (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3195: strerror
+      (call $handle_strerror (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3196: strtod
+      (call $handle_strtod (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3197: tmpnam
+      (call $handle_tmpnam (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3198: vfprintf
+      (call $handle_vfprintf (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3199: vsprintf
+      (call $handle_vsprintf (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3200: _chdir
+      (call $handle__chdir (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3201: _dup
+      (call $handle__dup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3202: _unlink
+      (call $handle__unlink (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3203: _write
+      (call $handle__write (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3204: keybd_event
+      (call $handle_keybd_event (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3205: joyGetPosEx
+      (call $handle_joyGetPosEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3206: __p___initenv
+      (call $handle___p___initenv (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3207: ExitWindowsEx
+      (call $handle_ExitWindowsEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3208: DrawDibOpen
+      (call $handle_DrawDibOpen (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3209: DrawDibClose
+      (call $handle_DrawDibClose (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3210: DrawDibDraw
+      (call $handle_DrawDibDraw (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3211: gluPerspective
+      (call $handle_gpu_api (i32.const 59) (i32.const 8) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3212: gluLookAt
+      (call $handle_gpu_api (i32.const 60) (i32.const 18) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3213: gluBuild2DMipmaps
+      (call $handle_gpu_api (i32.const 61) (i32.const 7) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3214: gluOrtho2D
+      (call $handle_gpu_api (i32.const 62) (i32.const 8) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3215: VirtualLock
+      (call $handle_VirtualLock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3216: VirtualUnlock
+      (call $handle_VirtualUnlock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3217: _except_handler3
+      (call $handle__except_handler3 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3218: _CIfmod
+      (call $handle__CIfmod (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3219: IAMMultiMediaStream_QueryInterface
+      (call $handle_IAMMultiMediaStream_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3220: IAMMultiMediaStream_AddRef
+      (call $handle_IAMMultiMediaStream_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3221: IAMMultiMediaStream_Release
+      (call $handle_IAMMultiMediaStream_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3222: IAMMultiMediaStream_GetInformation
+      (call $handle_IAMMultiMediaStream_GetInformation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3223: IAMMultiMediaStream_GetMediaStream
+      (call $handle_IAMMultiMediaStream_GetMediaStream (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3224: IAMMultiMediaStream_EnumMediaStreams
+      (call $handle_IAMMultiMediaStream_EnumMediaStreams (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3225: IAMMultiMediaStream_GetState
+      (call $handle_IAMMultiMediaStream_GetState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3226: IAMMultiMediaStream_SetState
+      (call $handle_IAMMultiMediaStream_SetState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3227: IAMMultiMediaStream_GetTime
+      (call $handle_IAMMultiMediaStream_GetTime (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3228: IAMMultiMediaStream_GetDuration
+      (call $handle_IAMMultiMediaStream_GetDuration (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3229: IAMMultiMediaStream_Seek
+      (call $handle_IAMMultiMediaStream_Seek (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3230: IAMMultiMediaStream_GetEndOfStreamEventHandle
+      (call $handle_IAMMultiMediaStream_GetEndOfStreamEventHandle (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3231: IAMMultiMediaStream_Initialize
+      (call $handle_IAMMultiMediaStream_Initialize (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3232: IAMMultiMediaStream_GetFilterGraph
+      (call $handle_IAMMultiMediaStream_GetFilterGraph (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3233: IAMMultiMediaStream_GetFilter
+      (call $handle_IAMMultiMediaStream_GetFilter (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3234: IAMMultiMediaStream_AddMediaStream
+      (call $handle_IAMMultiMediaStream_AddMediaStream (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3235: IAMMultiMediaStream_OpenFile
+      (call $handle_IAMMultiMediaStream_OpenFile (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3236: IAMMultiMediaStream_OpenMoniker
+      (call $handle_IAMMultiMediaStream_OpenMoniker (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3237: IAMMultiMediaStream_Render
+      (call $handle_IAMMultiMediaStream_Render (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3238: LoadCursorFromFileA
+      (call $handle_LoadCursorFromFileA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3239: CreateAcceleratorTableW
+      (call $handle_CreateAcceleratorTableW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3240: CopyAcceleratorTableA
+      (call $handle_CopyAcceleratorTableA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3241: glNormal3f
+      (call $handle_gpu_api (i32.const 63) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3242: glNormal3fv
+      (call $handle_gpu_api (i32.const 64) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3243: glIsEnabled
+      (call $handle_gpu_api (i32.const 65) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3244: glColorMaterial
+      (call $handle_gpu_api (i32.const 66) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3245: glLightfv
+      (call $handle_gpu_api (i32.const 67) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3246: glMaterialfv
+      (call $handle_gpu_api (i32.const 68) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3247: glLightModelfv
+      (call $handle_gpu_api (i32.const 69) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3248: glLightModeli
+      (call $handle_gpu_api (i32.const 70) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3249: glMaterialf
+      (call $handle_gpu_api (i32.const 71) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3250: glLightf
+      (call $handle_gpu_api (i32.const 72) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3251: glPixelStorei
+      (call $handle_gpu_api (i32.const 73) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3252: glGenTextures
+      (call $handle_gpu_api (i32.const 74) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3253: glHint
+      (call $handle_gpu_api (i32.const 75) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3254: glPushAttrib
+      (call $handle_gpu_api (i32.const 76) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3255: glPopAttrib
+      (call $handle_gpu_api (i32.const 77) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3256: glFogfv
+      (call $handle_gpu_api (i32.const 78) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3257: glFogf
+      (call $handle_gpu_api (i32.const 79) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3258: glFogi
+      (call $handle_gpu_api (i32.const 80) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3259: glFrontFace
+      (call $handle_gpu_api (i32.const 81) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3260: glTexEnvi
+      (call $handle_gpu_api (i32.const 82) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3261: glTexGeni
+      (call $handle_gpu_api (i32.const 83) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3262: glTexGenf
+      (call $handle_gpu_api (i32.const 84) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3263: glTexGenfv
+      (call $handle_gpu_api (i32.const 85) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3264: GetClipCursor
+      (call $handle_GetClipCursor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3265: IShellLinkA_QueryInterface
+      (call $handle_IShellLinkA_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3266: IShellLinkA_AddRef
+      (call $handle_IShellLinkA_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3267: IShellLinkA_Release
+      (call $handle_IShellLinkA_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3268: IShellLinkA_GetPath
+      (call $handle_IShellLinkA_GetPath (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3269: IShellLinkA_GetIDList
+      (call $handle_IShellLinkA_GetIDList (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3270: IShellLinkA_SetIDList
+      (call $handle_IShellLinkA_SetIDList (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3271: IShellLinkA_GetDescription
+      (call $handle_IShellLinkA_GetDescription (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3272: IShellLinkA_SetDescription
+      (call $handle_IShellLinkA_SetDescription (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3273: IShellLinkA_GetWorkingDirectory
+      (call $handle_IShellLinkA_GetWorkingDirectory (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3274: IShellLinkA_SetWorkingDirectory
+      (call $handle_IShellLinkA_SetWorkingDirectory (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3275: IShellLinkA_GetArguments
+      (call $handle_IShellLinkA_GetArguments (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3276: IShellLinkA_SetArguments
+      (call $handle_IShellLinkA_SetArguments (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3277: IShellLinkA_GetHotkey
+      (call $handle_IShellLinkA_GetHotkey (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3278: IShellLinkA_SetHotkey
+      (call $handle_IShellLinkA_SetHotkey (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3279: IShellLinkA_GetShowCmd
+      (call $handle_IShellLinkA_GetShowCmd (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3280: IShellLinkA_SetShowCmd
+      (call $handle_IShellLinkA_SetShowCmd (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3281: IShellLinkA_GetIconLocation
+      (call $handle_IShellLinkA_GetIconLocation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3282: IShellLinkA_SetIconLocation
+      (call $handle_IShellLinkA_SetIconLocation (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3283: IShellLinkA_SetRelativePath
+      (call $handle_IShellLinkA_SetRelativePath (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3284: IShellLinkA_Resolve
+      (call $handle_IShellLinkA_Resolve (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3285: IShellLinkA_SetPath
+      (call $handle_IShellLinkA_SetPath (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3286: IPersistFile_QueryInterface
+      (call $handle_IPersistFile_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3287: IPersistFile_AddRef
+      (call $handle_IPersistFile_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3288: IPersistFile_Release
+      (call $handle_IPersistFile_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3289: IPersistFile_GetClassID
+      (call $handle_IPersistFile_GetClassID (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3290: IPersistFile_IsDirty
+      (call $handle_IPersistFile_IsDirty (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3291: IPersistFile_Load
+      (call $handle_IPersistFile_Load (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3292: IPersistFile_Save
+      (call $handle_IPersistFile_Save (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3293: IPersistFile_SaveCompleted
+      (call $handle_IPersistFile_SaveCompleted (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3294: IPersistFile_GetCurFile
+      (call $handle_IPersistFile_GetCurFile (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3295: ImageList_Remove
+      (call $handle_ImageList_Remove (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3296: GetFileSecurityW
+      (call $handle_GetFileSecurityW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3297: SetFileSecurityA
+      (call $handle_SetFileSecurityA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3298: CreateScalableFontResourceA
+      (call $handle_CreateScalableFontResourceA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3299: mmioSetBuffer
+      (call $handle_mmioSetBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3300: SHAppBarMessage
+      (call $handle_SHAppBarMessage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3301: mmioStringToFOURCCA
+      (call $handle_mmioStringToFOURCCA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3302: MkParseDisplayName
+      (call $handle_MkParseDisplayName (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3303: NdrDllRegisterProxy
+      (call $handle_NdrDllRegisterProxy (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3304: CoLoadLibrary
+      (call $handle_CoLoadLibrary (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3305: UuidCreate
+      (call $handle_UuidCreate (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3306: GetPrivateProfileSectionA
+      (call $handle_GetPrivateProfileSectionA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3307: CoMarshalInterThreadInterfaceInStream
+      (call $handle_CoMarshalInterThreadInterfaceInStream (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3308: CoGetInterfaceAndReleaseStream
+      (call $handle_CoGetInterfaceAndReleaseStream (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3309: GetVersionEx
+      (call $handle_GetVersionEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3310: GetSystemWindowsDirectoryA
+      (call $handle_GetSystemWindowsDirectoryA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3311: GetSystemDefaultUILanguage
+      (call $handle_GetSystemDefaultUILanguage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3312: lstrlen
+      (call $handle_lstrlen (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3313: DllRegisterServer
+      (call $handle_DllRegisterServer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3314: NdrDllUnregisterProxy
+      (call $handle_NdrDllUnregisterProxy (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3315: SysAllocStringByteLen
+      (call $handle_SysAllocStringByteLen (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3316: SysStringByteLen
+      (call $handle_SysStringByteLen (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3317: LoadRegTypeLib
+      (call $handle_LoadRegTypeLib (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3318: QueryPathOfRegTypeLib
+      (call $handle_QueryPathOfRegTypeLib (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3319: RegisterTypeLib
+      (call $handle_RegisterTypeLib (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3320: DispGetIDsOfNames
+      (call $handle_DispGetIDsOfNames (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3321: GetSystemPowerStatus
+      (call $handle_GetSystemPowerStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3322: GlobalMemoryStatusEx
+      (call $handle_GlobalMemoryStatusEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3323: IDirect3DShader9_QueryInterface
+      (call $handle_IDirect3DShader9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3324: IDirect3DShader9_AddRef
+      (call $handle_IDirect3DShader9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3325: IDirect3DShader9_Release
+      (call $handle_IDirect3DShader9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3326: IDirect3DShader9_GetDevice
+      (call $handle_IDirect3DShader9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3327: IDirect3DShader9_GetFunction
+      (call $handle_IDirect3DShader9_GetFunction (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; fallback
+    (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3072)))
+  )
+
+  (func $dispatch_api_table_page_13 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; api ids 3328..3583
+    (block $fallback
+    (block $api_255
+    (block $api_254
+    (block $api_253
+    (block $api_252
+    (block $api_251
+    (block $api_250
+    (block $api_249
+    (block $api_248
+    (block $api_247
+    (block $api_246
+    (block $api_245
+    (block $api_244
+    (block $api_243
+    (block $api_242
+    (block $api_241
+    (block $api_240
+    (block $api_239
+    (block $api_238
+    (block $api_237
+    (block $api_236
+    (block $api_235
+    (block $api_234
+    (block $api_233
+    (block $api_232
+    (block $api_231
+    (block $api_230
+    (block $api_229
+    (block $api_228
+    (block $api_227
+    (block $api_226
+    (block $api_225
+    (block $api_224
+    (block $api_223
+    (block $api_222
+    (block $api_221
+    (block $api_220
+    (block $api_219
+    (block $api_218
+    (block $api_217
+    (block $api_216
+    (block $api_215
+    (block $api_214
+    (block $api_213
+    (block $api_212
+    (block $api_211
+    (block $api_210
+    (block $api_209
+    (block $api_208
+    (block $api_207
+    (block $api_206
+    (block $api_205
+    (block $api_204
+    (block $api_203
+    (block $api_202
+    (block $api_201
+    (block $api_200
+    (block $api_199
+    (block $api_198
+    (block $api_197
+    (block $api_196
+    (block $api_195
+    (block $api_194
+    (block $api_193
+    (block $api_192
+    (block $api_191
+    (block $api_190
+    (block $api_189
+    (block $api_188
+    (block $api_187
+    (block $api_186
+    (block $api_185
+    (block $api_184
+    (block $api_183
+    (block $api_182
+    (block $api_181
+    (block $api_180
+    (block $api_179
+    (block $api_178
+    (block $api_177
+    (block $api_176
+    (block $api_175
+    (block $api_174
+    (block $api_173
+    (block $api_172
+    (block $api_171
+    (block $api_170
+    (block $api_169
+    (block $api_168
+    (block $api_167
+    (block $api_166
+    (block $api_165
+    (block $api_164
+    (block $api_163
+    (block $api_162
+    (block $api_161
+    (block $api_160
+    (block $api_159
+    (block $api_158
+    (block $api_157
+    (block $api_156
+    (block $api_155
+    (block $api_154
+    (block $api_153
+    (block $api_152
+    (block $api_151
+    (block $api_150
+    (block $api_149
+    (block $api_148
+    (block $api_147
+    (block $api_146
+    (block $api_145
+    (block $api_144
+    (block $api_143
+    (block $api_142
+    (block $api_141
+    (block $api_140
+    (block $api_139
+    (block $api_138
+    (block $api_137
+    (block $api_136
+    (block $api_135
+    (block $api_134
+    (block $api_133
+    (block $api_132
+    (block $api_131
+    (block $api_130
+    (block $api_129
+    (block $api_128
+    (block $api_127
+    (block $api_126
+    (block $api_125
+    (block $api_124
+    (block $api_123
+    (block $api_122
+    (block $api_121
+    (block $api_120
+    (block $api_119
+    (block $api_118
+    (block $api_117
+    (block $api_116
+    (block $api_115
+    (block $api_114
+    (block $api_113
+    (block $api_112
+    (block $api_111
+    (block $api_110
+    (block $api_109
+    (block $api_108
+    (block $api_107
+    (block $api_106
+    (block $api_105
+    (block $api_104
+    (block $api_103
+    (block $api_102
+    (block $api_101
+    (block $api_100
+    (block $api_99
+    (block $api_98
+    (block $api_97
+    (block $api_96
+    (block $api_95
+    (block $api_94
+    (block $api_93
+    (block $api_92
+    (block $api_91
+    (block $api_90
+    (block $api_89
+    (block $api_88
+    (block $api_87
+    (block $api_86
+    (block $api_85
+    (block $api_84
+    (block $api_83
+    (block $api_82
+    (block $api_81
+    (block $api_80
+    (block $api_79
+    (block $api_78
+    (block $api_77
+    (block $api_76
+    (block $api_75
+    (block $api_74
+    (block $api_73
+    (block $api_72
+    (block $api_71
+    (block $api_70
+    (block $api_69
+    (block $api_68
+    (block $api_67
+    (block $api_66
+    (block $api_65
+    (block $api_64
+    (block $api_63
+    (block $api_62
+    (block $api_61
+    (block $api_60
+    (block $api_59
+    (block $api_58
+    (block $api_57
+    (block $api_56
+    (block $api_55
+    (block $api_54
+    (block $api_53
+    (block $api_52
+    (block $api_51
+    (block $api_50
+    (block $api_49
+    (block $api_48
+    (block $api_47
+    (block $api_46
+    (block $api_45
+    (block $api_44
+    (block $api_43
+    (block $api_42
+    (block $api_41
+    (block $api_40
+    (block $api_39
+    (block $api_38
+    (block $api_37
+    (block $api_36
+    (block $api_35
+    (block $api_34
+    (block $api_33
+    (block $api_32
+    (block $api_31
+    (block $api_30
+    (block $api_29
+    (block $api_28
+    (block $api_27
+    (block $api_26
+    (block $api_25
+    (block $api_24
+    (block $api_23
+    (block $api_22
+    (block $api_21
+    (block $api_20
+    (block $api_19
+    (block $api_18
+    (block $api_17
+    (block $api_16
+    (block $api_15
+    (block $api_14
+    (block $api_13
+    (block $api_12
+    (block $api_11
+    (block $api_10
+    (block $api_9
+    (block $api_8
+    (block $api_7
+    (block $api_6
+    (block $api_5
+    (block $api_4
+    (block $api_3
+    (block $api_2
+    (block $api_1
+    (block $api_0
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $api_69 $api_70 $api_71 $api_72 $api_73 $api_74 $api_75 $api_76 $api_77 $api_78 $api_79 $api_80 $api_81 $api_82 $api_83 $api_84 $api_85 $api_86 $api_87 $api_88 $api_89 $api_90 $api_91 $api_92 $api_93 $api_94 $api_95 $api_96 $api_97 $api_98 $api_99 $api_100 $api_101 $api_102 $api_103 $api_104 $api_105 $api_106 $api_107 $api_108 $api_109 $api_110 $api_111 $api_112 $api_113 $api_114 $api_115 $api_116 $api_117 $api_118 $api_119 $api_120 $api_121 $api_122 $api_123 $api_124 $api_125 $api_126 $api_127 $api_128 $api_129 $api_130 $api_131 $api_132 $api_133 $api_134 $api_135 $api_136 $api_137 $api_138 $api_139 $api_140 $api_141 $api_142 $api_143 $api_144 $api_145 $api_146 $api_147 $api_148 $api_149 $api_150 $api_151 $api_152 $api_153 $api_154 $api_155 $api_156 $api_157 $api_158 $api_159 $api_160 $api_161 $api_162 $api_163 $api_164 $api_165 $api_166 $api_167 $api_168 $api_169 $api_170 $api_171 $api_172 $api_173 $api_174 $api_175 $api_176 $api_177 $api_178 $api_179 $api_180 $api_181 $api_182 $api_183 $api_184 $api_185 $api_186 $api_187 $api_188 $api_189 $api_190 $api_191 $api_192 $api_193 $api_194 $api_195 $api_196 $api_197 $api_198 $api_199 $api_200 $api_201 $api_202 $api_203 $api_204 $api_205 $api_206 $api_207 $api_208 $api_209 $api_210 $api_211 $api_212 $api_213 $api_214 $api_215 $api_216 $api_217 $api_218 $api_219 $api_220 $api_221 $api_222 $api_223 $api_224 $api_225 $api_226 $api_227 $api_228 $api_229 $api_230 $api_231 $api_232 $api_233 $api_234 $api_235 $api_236 $api_237 $api_238 $api_239 $api_240 $api_241 $api_242 $api_243 $api_244 $api_245 $api_246 $api_247 $api_248 $api_249 $api_250 $api_251 $api_252 $api_253 $api_254 $api_255 $fallback (local.get $api_id))
+    ) ;; 3328: DirectXSetup
+      (call $handle_DirectXSetup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3329: IDirect3DBuffer9_QueryInterface
+      (call $handle_IDirect3DBuffer9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3330: IDirect3DBuffer9_AddRef
+      (call $handle_IDirect3DBuffer9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3331: IDirect3DBuffer9_Release
+      (call $handle_IDirect3DBuffer9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3332: IDirect3DBuffer9_GetDevice
+      (call $handle_IDirect3DBuffer9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3333: IDirect3DBuffer9_SetPrivateData
+      (call $handle_IDirect3DBuffer9_SetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3334: IDirect3DBuffer9_GetPrivateData
+      (call $handle_IDirect3DBuffer9_GetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3335: IDirect3DBuffer9_FreePrivateData
+      (call $handle_IDirect3DBuffer9_FreePrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3336: IDirect3DBuffer9_SetPriority
+      (call $handle_IDirect3DBuffer9_SetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3337: IDirect3DBuffer9_GetPriority
+      (call $handle_IDirect3DBuffer9_GetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3338: IDirect3DBuffer9_PreLoad
+      (call $handle_IDirect3DBuffer9_PreLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3339: IDirect3DBuffer9_GetType
+      (call $handle_IDirect3DBuffer9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3340: IDirect3DBuffer9_Lock
+      (call $handle_IDirect3DBuffer9_Lock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3341: IDirect3DBuffer9_Unlock
+      (call $handle_IDirect3DBuffer9_Unlock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3342: IDirect3DBuffer9_GetDesc
+      (call $handle_IDirect3DBuffer9_GetDesc (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3343: IDirect3DVertexDeclaration9_QueryInterface
+      (call $handle_IDirect3DVertexDeclaration9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3344: IDirect3DVertexDeclaration9_AddRef
+      (call $handle_IDirect3DVertexDeclaration9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3345: IDirect3DVertexDeclaration9_Release
+      (call $handle_IDirect3DVertexDeclaration9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3346: IDirect3DVertexDeclaration9_GetDevice
+      (call $handle_IDirect3DVertexDeclaration9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3347: IDirect3DVertexDeclaration9_GetDeclaration
+      (call $handle_IDirect3DVertexDeclaration9_GetDeclaration (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3348: IDirect3DStateBlock9_QueryInterface
+      (call $handle_IDirect3DStateBlock9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3349: IDirect3DStateBlock9_AddRef
+      (call $handle_IDirect3DStateBlock9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3350: IDirect3DStateBlock9_Release
+      (call $handle_IDirect3DStateBlock9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3351: IDirect3DStateBlock9_GetDevice
+      (call $handle_IDirect3DStateBlock9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3352: IDirect3DStateBlock9_Capture
+      (call $handle_IDirect3DStateBlock9_Capture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3353: IDirect3DStateBlock9_Apply
+      (call $handle_IDirect3DStateBlock9_Apply (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3354: ReadFileEx
+      (call $handle_ReadFileEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3355: ConvertDefaultLocale
+      (call $handle_ConvertDefaultLocale (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3356: GetFontLanguageInfo
+      (call $handle_GetFontLanguageInfo (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3357: IDirect3DQuery9_QueryInterface
+      (call $handle_IDirect3DQuery9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3358: IDirect3DQuery9_AddRef
+      (call $handle_IDirect3DQuery9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3359: IDirect3DQuery9_Release
+      (call $handle_IDirect3DQuery9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3360: IDirect3DQuery9_GetDevice
+      (call $handle_IDirect3DQuery9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3361: IDirect3DQuery9_GetType
+      (call $handle_IDirect3DQuery9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3362: IDirect3DQuery9_GetDataSize
+      (call $handle_IDirect3DQuery9_GetDataSize (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3363: IDirect3DQuery9_Issue
+      (call $handle_IDirect3DQuery9_Issue (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3364: IDirect3DQuery9_GetData
+      (call $handle_IDirect3DQuery9_GetData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3365: AddFontMemResourceEx
+      (call $handle_AddFontMemResourceEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3366: RemoveFontMemResourceEx
+      (call $handle_RemoveFontMemResourceEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3367: CoFileTimeToDosDateTime
+      (call $handle_CoFileTimeToDosDateTime (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3368: GetKeyNameTextW
+      (call $handle_GetKeyNameTextW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3369: IDirect3DCubeTexture9_QueryInterface
+      (call $handle_IDirect3DCubeTexture9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3370: IDirect3DCubeTexture9_AddRef
+      (call $handle_IDirect3DCubeTexture9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3371: IDirect3DCubeTexture9_Release
+      (call $handle_IDirect3DCubeTexture9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3372: IDirect3DCubeTexture9_GetDevice
+      (call $handle_IDirect3DCubeTexture9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3373: IDirect3DCubeTexture9_SetPrivateData
+      (call $handle_IDirect3DCubeTexture9_SetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3374: IDirect3DCubeTexture9_GetPrivateData
+      (call $handle_IDirect3DCubeTexture9_GetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3375: IDirect3DCubeTexture9_FreePrivateData
+      (call $handle_IDirect3DCubeTexture9_FreePrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3376: IDirect3DCubeTexture9_SetPriority
+      (call $handle_IDirect3DCubeTexture9_SetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3377: IDirect3DCubeTexture9_GetPriority
+      (call $handle_IDirect3DCubeTexture9_GetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3378: IDirect3DCubeTexture9_PreLoad
+      (call $handle_IDirect3DCubeTexture9_PreLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3379: IDirect3DCubeTexture9_GetType
+      (call $handle_IDirect3DCubeTexture9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3380: IDirect3DCubeTexture9_SetLOD
+      (call $handle_IDirect3DCubeTexture9_SetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3381: IDirect3DCubeTexture9_GetLOD
+      (call $handle_IDirect3DCubeTexture9_GetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3382: IDirect3DCubeTexture9_GetLevelCount
+      (call $handle_IDirect3DCubeTexture9_GetLevelCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3383: IDirect3DCubeTexture9_SetAutoGenFilterType
+      (call $handle_IDirect3DCubeTexture9_SetAutoGenFilterType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3384: IDirect3DCubeTexture9_GetAutoGenFilterType
+      (call $handle_IDirect3DCubeTexture9_GetAutoGenFilterType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3385: IDirect3DCubeTexture9_GenerateMipSubLevels
+      (call $handle_IDirect3DCubeTexture9_GenerateMipSubLevels (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3386: IDirect3DCubeTexture9_GetLevelDesc
+      (call $handle_IDirect3DCubeTexture9_GetLevelDesc (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3387: IDirect3DCubeTexture9_GetCubeMapSurface
+      (call $handle_IDirect3DCubeTexture9_GetCubeMapSurface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3388: IDirect3DCubeTexture9_LockRect
+      (call $handle_IDirect3DCubeTexture9_LockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3389: IDirect3DCubeTexture9_UnlockRect
+      (call $handle_IDirect3DCubeTexture9_UnlockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3390: IDirect3DCubeTexture9_AddDirtyRect
+      (call $handle_IDirect3DCubeTexture9_AddDirtyRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3391: DestroyPropertySheetPage
+      (call $handle_DestroyPropertySheetPage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3392: WritePrivateProfileSectionA
+      (call $handle_WritePrivateProfileSectionA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3393: WritePrivateProfileSectionW
+      (call $handle_WritePrivateProfileSectionW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3394: IDirectPlay4_GetGroupOwner
+      (call $handle_IDirectPlay4_GetGroupOwner (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3395: IDirectPlay4_SetGroupOwner
+      (call $handle_IDirectPlay4_SetGroupOwner (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3396: IDirectPlay4_SendEx
+      (call $handle_IDirectPlay4_SendEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3397: IDirectPlay4_GetMessageQueue
+      (call $handle_IDirectPlay4_GetMessageQueue (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3398: IDirectPlay4_CancelMessage
+      (call $handle_IDirectPlay4_CancelMessage (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3399: IDirectPlay4_CancelPriority
+      (call $handle_IDirectPlay4_CancelPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3400: IDirectPlayLobby3_ConnectEx
+      (call $handle_IDirectPlayLobby3_ConnectEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3401: IDirectPlayLobby3_RegisterApplication
+      (call $handle_dplobby3_application_unsupported (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3402: IDirectPlayLobby3_UnregisterApplication
+      (call $handle_dplobby3_application_unsupported (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3403: IDirectPlayLobby3_WaitForConnectionSettings
+      (call $handle_IDirectPlayLobby3_WaitForConnectionSettings (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3404: glEnableClientState
+      (call $handle_gpu_api (i32.const 86) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3405: glArrayElement
+      (call $handle_gpu_api (i32.const 87) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3406: glVertexPointer
+      (call $handle_gpu_api (i32.const 88) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3407: glNormalPointer
+      (call $handle_gpu_api (i32.const 89) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3408: glRotated
+      (call $handle_gpu_api (i32.const 90) (i32.const 8) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3409: glVertex2fv
+      (call $handle_gpu_api (i32.const 91) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3410: glMateriali
+      (call $handle_gpu_api (i32.const 92) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3411: glFlush
+      (call $handle_gpu_api (i32.const 93) (i32.const 0) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3412: glLineWidth
+      (call $handle_gpu_api (i32.const 94) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3413: glTexCoord2fv
+      (call $handle_gpu_api (i32.const 95) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3414: glTexParameteri
+      (call $handle_gpu_api (i32.const 96) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3415: glVertex2i
+      (call $handle_gpu_api (i32.const 97) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3416: gluBuild1DMipmaps
+      (call $handle_gpu_api (i32.const 98) (i32.const 6) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3417: PathGetCharTypeA
+      (call $handle_PathGetCharTypeA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3418: PathGetCharTypeW
+      (call $handle_PathGetCharTypeW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3419: EnumDisplayDevicesA
+      (call $handle_EnumDisplayDevicesA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3420: ChangeDisplaySettingsExA
+      (call $handle_ChangeDisplaySettingsExA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3421: wglSwapLayerBuffers
+      (call $handle_wglSwapLayerBuffers (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3422: CreateIoCompletionPort
+      (call $handle_CreateIoCompletionPort (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3423: PostQueuedCompletionStatus
+      (call $handle_PostQueuedCompletionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3424: GetQueuedCompletionStatus
+      (call $handle_GetQueuedCompletionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3425: glDisableClientState
+      (call $handle_gpu_api (i32.const 99) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3426: glTexCoordPointer
+      (call $handle_gpu_api (i32.const 100) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3427: glColorPointer
+      (call $handle_gpu_api (i32.const 101) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3428: glDrawElements
+      (call $handle_gpu_api (i32.const 102) (i32.const 4) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3429: glGetIntegerv
+      (call $handle_gpu_api (i32.const 103) (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3430: glReadBuffer
+      (call $handle_gpu_api (i32.const 104) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3431: ImmGetOpenStatus
+      (call $handle_ImmGetOpenStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3432: ImmSetOpenStatus
+      (call $handle_ImmSetOpenStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3433: ImmGetConversionStatus
+      (call $handle_ImmGetConversionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3434: ImmSetConversionStatus
+      (call $handle_ImmSetConversionStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3435: ImmGetCompositionStringA
+      (call $handle_ImmGetCompositionStringA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3436: ImmGetCandidateListA
+      (call $handle_ImmGetCandidateListA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3437: glActiveTextureARB
+      (call $handle_gpu_api (i32.const 105) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3438: glClientActiveTextureARB
+      (call $handle_gpu_api (i32.const 106) (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3439: glMultiTexCoord2fARB
+      (call $handle_gpu_api (i32.const 107) (i32.const 3) (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3440: Direct3DCreate8
+      (call $handle_Direct3DCreate8 (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3441: IDirect3D8_QueryInterface
+      (call $handle_IDirect3D8_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3442: IDirect3D8_AddRef
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3443: IDirect3D8_Release
+      (call $handle_dx_com_release_basic (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3444: IDirect3D8_RegisterSoftwareDevice
+      (call $handle_IDirect3D8_RegisterSoftwareDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3445: IDirect3D8_GetAdapterCount
+      (call $handle_IDirect3D8_GetAdapterCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3446: IDirect3D8_GetAdapterIdentifier
+      (call $handle_IDirect3D8_GetAdapterIdentifier (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3447: IDirect3D8_GetAdapterModeCount
+      (call $handle_IDirect3D8_GetAdapterModeCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3448: IDirect3D8_EnumAdapterModes
+      (call $handle_IDirect3D8_EnumAdapterModes (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3449: IDirect3D8_GetAdapterDisplayMode
+      (call $handle_IDirect3D8_GetAdapterDisplayMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3450: IDirect3D8_CheckDeviceType
+      (call $handle_IDirect3D8_CheckDeviceType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3451: IDirect3D8_CheckDeviceFormat
+      (call $handle_IDirect3D8_CheckDeviceFormat (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3452: IDirect3D8_CheckDeviceMultiSampleType
+      (call $handle_IDirect3D8_CheckDeviceMultiSampleType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3453: IDirect3D8_CheckDepthStencilMatch
+      (call $handle_IDirect3D8_CheckDeviceType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3454: IDirect3D8_GetDeviceCaps
+      (call $handle_IDirect3D8_GetDeviceCaps (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3455: IDirect3D8_GetAdapterMonitor
+      (call $handle_IDirect3D8_GetAdapterMonitor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3456: IDirect3D8_CreateDevice
+      (call $handle_IDirect3D8_CreateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3457: ReadConsoleOutputCharacterA
+      (call $handle_ReadConsoleOutputCharacterA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3458: ReadConsoleOutputCharacterW
+      (call $handle_ReadConsoleOutputCharacterW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3459: IDirect3DDevice8_QueryInterface
+      (call $handle_IDirect3DDevice8_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3460: IDirect3DDevice8_AddRef
+      (call $handle_dx_com_addref (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3461: IDirect3DDevice8_Release
+      (call $handle_IDirect3DDevice9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3462: IDirect3DDevice8_TestCooperativeLevel
+      (call $handle_IDirect3DDevice9_TestCooperativeLevel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3463: IDirect3DDevice8_GetAvailableTextureMem
+      (call $handle_IDirect3DDevice9_GetAvailableTextureMem (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3464: IDirect3DDevice8_ResourceManagerDiscardBytes
+      (call $handle_IDirect3DDevice8_ResourceManagerDiscardBytes (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3465: IDirect3DDevice8_GetDirect3D
+      (call $handle_IDirect3DDevice9_GetDirect3D (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3466: IDirect3DDevice8_GetDeviceCaps
+      (call $handle_IDirect3DDevice8_GetDeviceCaps (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3467: IDirect3DDevice8_GetDisplayMode
+      (call $handle_IDirect3DDevice8_GetDisplayMode (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3468: IDirect3DDevice8_GetCreationParameters
+      (call $handle_IDirect3DDevice9_GetCreationParameters (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3469: IDirect3DDevice8_SetCursorProperties
+      (call $handle_IDirect3DDevice9_SetCursorProperties (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3470: IDirect3DDevice8_SetCursorPosition
+      (call $handle_IDirect3DDevice9_SetCursorPosition (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3471: IDirect3DDevice8_ShowCursor
+      (call $handle_IDirect3DDevice9_ShowCursor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3472: IDirect3DDevice8_CreateAdditionalSwapChain
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3473: IDirect3DDevice8_Reset
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3474: IDirect3DDevice8_Present
+      (call $handle_IDirect3DDevice9_Present (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3475: IDirect3DDevice8_GetBackBuffer
+      (call $handle_IDirect3DDevice8_GetBackBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3476: IDirect3DDevice8_GetRasterStatus
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3477: IDirect3DDevice8_SetGammaRamp
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3478: IDirect3DDevice8_GetGammaRamp
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3479: IDirect3DDevice8_CreateTexture
+      (call $handle_IDirect3DDevice8_CreateTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3480: IDirect3DDevice8_CreateVolumeTexture
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3481: IDirect3DDevice8_CreateCubeTexture
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3482: IDirect3DDevice8_CreateVertexBuffer
+      (call $handle_IDirect3DDevice8_CreateVertexBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3483: IDirect3DDevice8_CreateIndexBuffer
+      (call $handle_IDirect3DDevice8_CreateIndexBuffer (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3484: IDirect3DDevice8_CreateRenderTarget
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3485: IDirect3DDevice8_CreateDepthStencilSurface
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3486: IDirect3DDevice8_CreateImageSurface
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3487: IDirect3DDevice8_CopyRects
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3488: IDirect3DDevice8_UpdateTexture
+      (call $handle_IDirect3DDevice9_UpdateTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3489: IDirect3DDevice8_GetFrontBuffer
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3490: IDirect3DDevice8_SetRenderTarget
+      (call $handle_IDirect3DDevice8_SetRenderTarget (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3491: IDirect3DDevice8_GetRenderTarget
+      (call $handle_IDirect3DDevice8_GetRenderTarget (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3492: IDirect3DDevice8_GetDepthStencilSurface
+      (call $handle_IDirect3DDevice9_GetDepthStencilSurface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3493: IDirect3DDevice8_BeginScene
+      (call $handle_IDirect3DDevice9_BeginScene (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3494: IDirect3DDevice8_EndScene
+      (call $handle_IDirect3DDevice9_EndScene (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3495: IDirect3DDevice8_Clear
+      (call $handle_IDirect3DDevice9_Clear (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3496: IDirect3DDevice8_SetTransform
+      (call $handle_IDirect3DDevice9_SetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3497: IDirect3DDevice8_GetTransform
+      (call $handle_IDirect3DDevice9_GetTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3498: IDirect3DDevice8_MultiplyTransform
+      (call $handle_IDirect3DDevice9_MultiplyTransform (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3499: IDirect3DDevice8_SetViewport
+      (call $handle_IDirect3DDevice9_SetViewport (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3500: IDirect3DDevice8_GetViewport
+      (call $handle_IDirect3DDevice9_GetViewport (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3501: IDirect3DDevice8_SetMaterial
+      (call $handle_IDirect3DDevice9_SetMaterial (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3502: IDirect3DDevice8_GetMaterial
+      (call $handle_IDirect3DDevice9_GetMaterial (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3503: IDirect3DDevice8_SetLight
+      (call $handle_IDirect3DDevice9_SetLight (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3504: IDirect3DDevice8_GetLight
+      (call $handle_IDirect3DDevice9_GetLight (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3505: IDirect3DDevice8_LightEnable
+      (call $handle_IDirect3DDevice9_LightEnable (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3506: IDirect3DDevice8_GetLightEnable
+      (call $handle_IDirect3DDevice9_GetLightEnable (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3507: IDirect3DDevice8_SetClipPlane
+      (call $handle_IDirect3DDevice9_SetClipPlane (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3508: IDirect3DDevice8_GetClipPlane
+      (call $handle_IDirect3DDevice9_GetClipPlane (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3509: IDirect3DDevice8_SetRenderState
+      (call $handle_IDirect3DDevice9_SetRenderState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3510: IDirect3DDevice8_GetRenderState
+      (call $handle_IDirect3DDevice9_GetRenderState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3511: IDirect3DDevice8_BeginStateBlock
+      (call $handle_IDirect3DDevice9_BeginStateBlock (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3512: IDirect3DDevice8_EndStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3513: IDirect3DDevice8_ApplyStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3514: IDirect3DDevice8_CaptureStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3515: IDirect3DDevice8_DeleteStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3516: IDirect3DDevice8_CreateStateBlock
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3517: IDirect3DDevice8_SetClipStatus
+      (call $handle_IDirect3DDevice9_SetClipStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3518: IDirect3DDevice8_GetClipStatus
+      (call $handle_IDirect3DDevice9_GetClipStatus (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3519: IDirect3DDevice8_GetTexture
+      (call $handle_IDirect3DDevice9_GetTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3520: IDirect3DDevice8_SetTexture
+      (call $handle_IDirect3DDevice9_SetTexture (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3521: IDirect3DDevice8_GetTextureStageState
+      (call $handle_IDirect3DDevice8_GetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3522: IDirect3DDevice8_SetTextureStageState
+      (call $handle_IDirect3DDevice8_SetTextureStageState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3523: IDirect3DDevice8_ValidateDevice
+      (call $handle_IDirect3DDevice9_ValidateDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3524: IDirect3DDevice8_GetInfo
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3525: IDirect3DDevice8_SetPaletteEntries
+      (call $handle_IDirect3DDevice9_SetPaletteEntries (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3526: IDirect3DDevice8_GetPaletteEntries
+      (call $handle_IDirect3DDevice9_GetPaletteEntries (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3527: IDirect3DDevice8_SetCurrentTexturePalette
+      (call $handle_IDirect3DDevice9_SetCurrentTexturePalette (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3528: IDirect3DDevice8_GetCurrentTexturePalette
+      (call $handle_IDirect3DDevice9_GetCurrentTexturePalette (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3529: IDirect3DDevice8_DrawPrimitive
+      (call $handle_IDirect3DDevice9_DrawPrimitive (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3530: IDirect3DDevice8_DrawIndexedPrimitive
+      (call $handle_IDirect3DDevice8_DrawIndexedPrimitive (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3531: IDirect3DDevice8_DrawPrimitiveUP
+      (call $handle_IDirect3DDevice9_DrawPrimitiveUP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3532: IDirect3DDevice8_DrawIndexedPrimitiveUP
+      (call $handle_IDirect3DDevice9_DrawIndexedPrimitiveUP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3533: IDirect3DDevice8_ProcessVertices
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3534: IDirect3DDevice8_CreateVertexShader
+      (call $handle_IDirect3DDevice8_CreateVertexShader (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3535: IDirect3DDevice8_SetVertexShader
+      (call $handle_IDirect3DDevice8_SetVertexShader (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3536: IDirect3DDevice8_GetVertexShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3537: IDirect3DDevice8_DeleteVertexShader
+      (call $handle_IDirect3DDevice8_DeleteVertexShader (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3538: IDirect3DDevice8_SetVertexShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3539: IDirect3DDevice8_GetVertexShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3540: IDirect3DDevice8_GetVertexShaderDeclaration
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3541: IDirect3DDevice8_GetVertexShaderFunction
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3542: IDirect3DDevice8_SetStreamSource
+      (call $handle_IDirect3DDevice8_SetStreamSource (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3543: IDirect3DDevice8_GetStreamSource
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3544: IDirect3DDevice8_SetIndices
+      (call $handle_IDirect3DDevice8_SetIndices (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3545: IDirect3DDevice8_GetIndices
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3546: IDirect3DDevice8_CreatePixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3547: IDirect3DDevice8_SetPixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3548: IDirect3DDevice8_GetPixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3549: IDirect3DDevice8_DeletePixelShader
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3550: IDirect3DDevice8_SetPixelShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3551: IDirect3DDevice8_GetPixelShaderConstant
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3552: IDirect3DDevice8_GetPixelShaderFunction
+      (call $handle_d3d8_unimplemented (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3553: IDirect3DDevice8_DrawRectPatch
+      (call $handle_IDirect3DDevice9_DrawRectPatch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3554: IDirect3DDevice8_DrawTriPatch
+      (call $handle_IDirect3DDevice9_DrawTriPatch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3555: IDirect3DDevice8_DeletePatch
+      (call $handle_IDirect3DDevice9_DeletePatch (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3556: SetKeyboardState
+      (call $handle_SetKeyboardState (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3557: AttachThreadInput
+      (call $handle_AttachThreadInput (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3558: ImmCreateContext
+      (call $handle_ImmCreateContext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3559: ImmDestroyContext
+      (call $handle_ImmDestroyContext (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3560: IDirect3DTexture8_QueryInterface
+      (call $handle_IDirect3DTexture9_QueryInterface (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3561: IDirect3DTexture8_AddRef
+      (call $handle_IDirect3DTexture9_AddRef (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3562: IDirect3DTexture8_Release
+      (call $handle_IDirect3DTexture9_Release (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3563: IDirect3DTexture8_GetDevice
+      (call $handle_IDirect3DTexture9_GetDevice (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3564: IDirect3DTexture8_SetPrivateData
+      (call $handle_IDirect3DTexture9_SetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3565: IDirect3DTexture8_GetPrivateData
+      (call $handle_IDirect3DTexture9_GetPrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3566: IDirect3DTexture8_FreePrivateData
+      (call $handle_IDirect3DTexture9_FreePrivateData (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3567: IDirect3DTexture8_SetPriority
+      (call $handle_IDirect3DTexture9_SetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3568: IDirect3DTexture8_GetPriority
+      (call $handle_IDirect3DTexture9_GetPriority (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3569: IDirect3DTexture8_PreLoad
+      (call $handle_IDirect3DTexture9_PreLoad (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3570: IDirect3DTexture8_GetType
+      (call $handle_IDirect3DTexture9_GetType (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3571: IDirect3DTexture8_SetLOD
+      (call $handle_IDirect3DTexture9_SetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3572: IDirect3DTexture8_GetLOD
+      (call $handle_IDirect3DTexture9_GetLOD (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3573: IDirect3DTexture8_GetLevelCount
+      (call $handle_IDirect3DTexture9_GetLevelCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3574: IDirect3DTexture8_GetLevelDesc
+      (call $handle_IDirect3DTexture9_GetLevelDesc (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3575: IDirect3DTexture8_GetSurfaceLevel
+      (call $handle_IDirect3DTexture9_GetSurfaceLevel (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3576: IDirect3DTexture8_LockRect
+      (call $handle_IDirect3DTexture9_LockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3577: IDirect3DTexture8_UnlockRect
+      (call $handle_IDirect3DTexture9_UnlockRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3578: IDirect3DTexture8_AddDirtyRect
+      (call $handle_IDirect3DTexture9_AddDirtyRect (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3579: SHCreateDirectoryExA
+      (call $handle_SHCreateDirectoryExA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3580: sendto
+      (call $handle_sendto (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3581: recvfrom
+      (call $handle_recvfrom (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3582: getsockopt
+      (call $handle_getsockopt (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3583: getsockname
+      (call $handle_getsockname (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; fallback
+    (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3328)))
+  )
+
+  (func $dispatch_api_table_page_14 (param $api_id i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; api ids 3584..3652
+    (block $fallback
+    (block $api_68
+    (block $api_67
+    (block $api_66
+    (block $api_65
+    (block $api_64
+    (block $api_63
+    (block $api_62
+    (block $api_61
+    (block $api_60
+    (block $api_59
+    (block $api_58
+    (block $api_57
+    (block $api_56
+    (block $api_55
+    (block $api_54
+    (block $api_53
+    (block $api_52
+    (block $api_51
+    (block $api_50
+    (block $api_49
+    (block $api_48
+    (block $api_47
+    (block $api_46
+    (block $api_45
+    (block $api_44
+    (block $api_43
+    (block $api_42
+    (block $api_41
+    (block $api_40
+    (block $api_39
+    (block $api_38
+    (block $api_37
+    (block $api_36
+    (block $api_35
+    (block $api_34
+    (block $api_33
+    (block $api_32
+    (block $api_31
+    (block $api_30
+    (block $api_29
+    (block $api_28
+    (block $api_27
+    (block $api_26
+    (block $api_25
+    (block $api_24
+    (block $api_23
+    (block $api_22
+    (block $api_21
+    (block $api_20
+    (block $api_19
+    (block $api_18
+    (block $api_17
+    (block $api_16
+    (block $api_15
+    (block $api_14
+    (block $api_13
+    (block $api_12
+    (block $api_11
+    (block $api_10
+    (block $api_9
+    (block $api_8
+    (block $api_7
+    (block $api_6
+    (block $api_5
+    (block $api_4
+    (block $api_3
+    (block $api_2
+    (block $api_1
+    (block $api_0
+      (br_table $api_0 $api_1 $api_2 $api_3 $api_4 $api_5 $api_6 $api_7 $api_8 $api_9 $api_10 $api_11 $api_12 $api_13 $api_14 $api_15 $api_16 $api_17 $api_18 $api_19 $api_20 $api_21 $api_22 $api_23 $api_24 $api_25 $api_26 $api_27 $api_28 $api_29 $api_30 $api_31 $api_32 $api_33 $api_34 $api_35 $api_36 $api_37 $api_38 $api_39 $api_40 $api_41 $api_42 $api_43 $api_44 $api_45 $api_46 $api_47 $api_48 $api_49 $api_50 $api_51 $api_52 $api_53 $api_54 $api_55 $api_56 $api_57 $api_58 $api_59 $api_60 $api_61 $api_62 $api_63 $api_64 $api_65 $api_66 $api_67 $api_68 $fallback (local.get $api_id))
+    ) ;; 3584: SetConsoleCP
+      (call $handle_SetConsoleCP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3585: SetConsoleOutputCP
+      (call $handle_SetConsoleOutputCP (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3586: SetConsoleTextAttribute
+      (call $handle_SetConsoleTextAttribute (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3587: PeekConsoleInputW
+      (call $handle_PeekConsoleInputW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3588: WriteConsoleInputA
+      (call $handle_WriteConsoleInputA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3589: FindExecutableA
+      (call $handle_FindExecutableA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3590: IsCharAlphaW
+      (call $handle_IsCharAlphaW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3591: IsCharUpperW
+      (call $handle_IsCharUpperW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3592: GetSecurityDescriptorControl
+      (call $handle_GetSecurityDescriptorControl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3593: GetSecurityDescriptorDacl
+      (call $handle_GetSecurityDescriptorDacl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3594: GetSecurityDescriptorGroup
+      (call $handle_GetSecurityDescriptorGroup (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3595: GetSecurityDescriptorLength
+      (call $handle_GetSecurityDescriptorLength (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3596: GetSecurityDescriptorOwner
+      (call $handle_GetSecurityDescriptorOwner (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3597: GetSecurityDescriptorSacl
+      (call $handle_GetSecurityDescriptorSacl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3598: IsValidAcl
+      (call $handle_IsValidAcl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3599: IsValidSecurityDescriptor
+      (call $handle_IsValidSecurityDescriptor (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3600: IsValidSid
+      (call $handle_IsValidSid (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3601: CreatePropertySheetPageW
+      (call $handle_CreatePropertySheetPageW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3602: PropertySheetW
+      (call $handle_PropertySheetW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3603: BackupRead
+      (call $handle_BackupRead (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3604: BackupWrite
+      (call $handle_BackupWrite (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3605: BackupSeek
+      (call $handle_BackupSeek (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3606: LookupPrivilegeValueA
+      (call $handle_LookupPrivilegeValueA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3607: AdjustTokenPrivileges
+      (call $handle_AdjustTokenPrivileges (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3608: ImageList_GetImageCount
+      (call $handle_ImageList_GetImageCount (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3609: GetMenuItemInfoW
+      (call $handle_GetMenuItemInfoW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3610: SetMenuItemInfoW
+      (call $handle_SetMenuItemInfoW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3611: ChildWindowFromPointEx
+      (call $handle_ChildWindowFromPointEx (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3612: GetCompressedFileSizeA
+      (call $handle_GetCompressedFileSizeA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3613: GetCompressedFileSizeW
+      (call $handle_GetCompressedFileSizeW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3614: GetKernelObjectSecurity
+      (call $handle_GetKernelObjectSecurity (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3615: SetKernelObjectSecurity
+      (call $handle_SetKernelObjectSecurity (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3616: wcsncmp
+      (call $handle_wcsncmp (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3617: EnumClipboardFormats
+      (call $handle_EnumClipboardFormats (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3618: QueryDosDeviceA
+      (call $handle_QueryDosDeviceA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3619: DefineDosDeviceA
+      (call $handle_DefineDosDeviceA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3620: WNetAddConnection2W
+      (call $handle_WNetAddConnection2W (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3621: WNetOpenEnumA
+      (call $handle_WNetOpenEnumA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3622: WNetOpenEnumW
+      (call $handle_WNetOpenEnumW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3623: WNetCloseEnum
+      (call $handle_WNetCloseEnum (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3624: WNetEnumResourceA
+      (call $handle_WNetEnumResourceA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3625: WNetEnumResourceW
+      (call $handle_WNetEnumResourceW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3626: WNetGetResourceParentA
+      (call $handle_WNetGetResourceParentA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3627: WNetGetResourceParentW
+      (call $handle_WNetGetResourceParentW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3628: WNetGetResourceInformationA
+      (call $handle_WNetGetResourceInformationA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3629: WNetGetResourceInformationW
+      (call $handle_WNetGetResourceInformationW (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3630: WNetAddConnection2A
+      (call $handle_WNetAddConnection2A (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3631: WNetCancelConnection2A
+      (call $handle_WNetCancelConnection2A (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3632: WNetGetConnectionA
+      (call $handle_WNetGetConnectionA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3633: WNetGetUniversalNameA
+      (call $handle_WNetGetUniversalNameA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3634: DeviceIoControl
+      (call $handle_DeviceIoControl (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3635: SetVolumeLabelA
+      (call $handle_SetVolumeLabelA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3636: ShowWindowAsync
+      (call $handle_ShowWindowAsync (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3637: CopySid
+      (call $handle_CopySid (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3638: LookupAccountSidA
+      (call $handle_LookupAccountSidA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3639: ClosePrinter
+      (call $handle_ClosePrinter (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3640: EndDocPrinter
+      (call $handle_EndDocPrinter (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3641: WritePrinter
+      (call $handle_WritePrinter (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3642: StartDocPrinterA
+      (call $handle_StartDocPrinterA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3643: OpenPrinterA
+      (call $handle_OpenPrinterA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3644: EnumPrintersA
+      (call $handle_EnumPrintersA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3645: DoDragDrop
+      (call $handle_DoDragDrop (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3646: BASS_SampleStop
+      (call $handle_BASS_SampleStop (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3647: BASS_Stop
+      (call $handle_BASS_Stop (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3648: BASS_Pause
+      (call $handle_BASS_Pause (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3649: DefFrameProcA
+      (call $handle_DefFrameProcA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3650: DefMDIChildProcA
+      (call $handle_DefMDIChildProcA (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3651: AVIFileInit
+      (call $handle_AVIFileInit (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; 3652: AVIFileExit
+      (call $handle_AVIFileExit (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+      (return)
+    ) ;; fallback
+    (call $handle_fallback (local.get $name_ptr) (i32.add (local.get $api_id) (i32.const 3584)))
   )
 
   ;; ============================================================
@@ -11713,6 +16532,35 @@
     (global.set $DX_VTBL_D3DDEV2 (call $init_com_vtable (i32.const 1314) (i32.const 33)))
     ;; IDirect3DDevice7: 49 methods starting at api_id 1347
     (global.set $DX_VTBL_D3DDEV7 (call $init_com_vtable (i32.const 1347) (i32.const 49)))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 20) (i32.const 1394))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 21) (i32.const 1395))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 22) (i32.const 1367))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 23) (i32.const 1368))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 24) (i32.const 1369))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 25) (i32.const 1370))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 26) (i32.const 1371))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 27) (i32.const 1372))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 28) (i32.const 1373))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 29) (i32.const 1374))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 30) (i32.const 1375))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 31) (i32.const 1376))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 32) (i32.const 1377))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 33) (i32.const 1378))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 34) (i32.const 1379))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 35) (i32.const 1380))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 36) (i32.const 1381))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 37) (i32.const 1382))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 38) (i32.const 1383))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 39) (i32.const 1384))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 40) (i32.const 1385))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 41) (i32.const 1386))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 42) (i32.const 1387))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 43) (i32.const 1388))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 44) (i32.const 1389))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 45) (i32.const 1390))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 46) (i32.const 1391))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 47) (i32.const 1392))
+    (call $set_com_vtable_slot_api_id (global.get $DX_VTBL_D3DDEV7) (i32.const 48) (i32.const 1393))
     ;; IDirect3DViewport: 16 methods starting at api_id 1396
     (global.set $DX_VTBL_D3DVP1 (call $init_com_vtable (i32.const 1396) (i32.const 16)))
     ;; IDirect3DViewport2: 18 methods starting at api_id 1412
@@ -11749,4 +16597,21 @@
     ;; IDirectInputDevice2: extends IDirectInputDevice (18) + 9 extra = 27 total, extra at api_id 2857
     (global.set $DX_VTBL_DIDEV2 (call $extend_com_vtable
       (global.get $DX_VTBL_DIDEV) (i32.const 18) (i32.const 2857) (i32.const 27)))
+    ;; IDirectDrawSurface3: extends IDirectDrawSurface2 (39) + 1 extra = 40 total, extra at api_id 2947
+    (global.set $DX_VTBL_DDSURF3 (call $extend_com_vtable
+      (global.get $DX_VTBL_DDSURF2) (i32.const 39) (i32.const 2947) (i32.const 40)))
+    ;; IDirect3DSwapChain9: 10 methods starting at api_id 3019
+    (global.set $DX_VTBL_D3DSWAP9 (call $init_com_vtable (i32.const 3019) (i32.const 10)))
+    ;; IDirectSound3DListener: 18 methods starting at api_id 3036
+    (global.set $DX_VTBL_DS3DLISTENER (call $init_com_vtable (i32.const 3036) (i32.const 18)))
+    ;; IDirectPlay4: extends IDirectPlay3 (47) + 6 extra = 53 total, extra at api_id 3394
+    (global.set $DX_VTBL_DPLAY4 (call $extend_com_vtable
+      (global.get $DX_VTBL_DPLAY3) (i32.const 47) (i32.const 3394) (i32.const 53)))
+    ;; IDirectPlayLobby3: extends IDirectPlayLobby2 (15) + 4 extra = 19 total, extra at api_id 3400
+    (global.set $DX_VTBL_DPLAYLOBBY3 (call $extend_com_vtable
+      (global.get $DX_VTBL_DPLAYLOBBY2) (i32.const 15) (i32.const 3400) (i32.const 19)))
+    ;; IDirect3D8: 16 methods starting at api_id 3441
+    (global.set $DX_VTBL_D3D8 (call $init_com_vtable (i32.const 3441) (i32.const 16)))
+    ;; IDirect3DDevice8: 97 methods starting at api_id 3459
+    (global.set $DX_VTBL_D3DDEV8 (call $init_com_vtable (i32.const 3459) (i32.const 97)))
   )

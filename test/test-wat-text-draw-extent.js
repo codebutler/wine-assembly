@@ -39,8 +39,10 @@ const TEXT = 'The quick brown fox jumps over the lazy dog';
   const { exports: wat, memory, hostCtx } = await bootRenderHarness();
   const mem = () => new Uint8Array(memory.buffer);
   const view = () => new DataView(memory.buffer);
-  const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  // The module's own $g2w, not image-relative arithmetic: font loading can
+  // exhaust the low heap window ($GUEST_HEAP_BASE), after which $heap_alloc
+  // spills to the sparse high arena, whose pointers only $g2w can resolve.
+  const wa = guest => wat.guest_to_wasm(guest) >>> 0;
 
   const manifest = JSON.parse(fs.readFileSync(
     path.join(REPO, 'fonts', 'substitutions.json'), 'utf8'));

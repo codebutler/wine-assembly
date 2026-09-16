@@ -14,6 +14,7 @@ const {
   FSR_EASU_FRAGMENT_SHADER,
   POST_FRAGMENT_SHADER,
 } = require('../lib/presentation-filter');
+const { hasPageScript } = require('./browser-runtime-scripts');
 
 const root = path.join(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
@@ -33,16 +34,12 @@ assert(html.includes('id="presentation-dedither-select"'));
 assert(html.includes('<option value="off" selected>Off</option>'));
 assert(html.includes('<option value="mdapt">MDAPT</option>'));
 assert(html.includes('<option value="jinc2">Jinc2</option>'));
-assert(html.includes("localStorage.setItem(PRESENTATION_DEDITHER_KEY, normalized)"),
-  'dedither selection should persist independently from scaling and CRT');
-assert(html.includes('renderer.setPresentationDeditherMode(normalized)'));
 assert(html.includes('id="crt-scanlines-toggle"'));
 assert(html.includes('id="crt-mask-toggle"'));
 assert(html.includes('id="crt-glow-toggle"'));
-assert(html.includes("localStorage.setItem(PRESENTATION_CRT_KEY, JSON.stringify(effects))"),
-  'CRT choices should persist independently from the scaling mode');
-assert(html.includes('renderer.setPresentationEffects(effects)'));
-assert(html.includes('lib/presentation-filter.js?v=5'));
+assert(hasPageScript('lib/page-settings.js'),
+  'page settings should be loaded before presentation is configured');
+assert(hasPageScript('lib/presentation-filter.js'));
 
 const draws = [];
 const context = {

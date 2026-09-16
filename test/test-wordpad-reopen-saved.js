@@ -34,7 +34,7 @@ seq.push(`160:open-dlg-pick:${SAVE_NAME}`);
 seq.push('230:slot-count:save-after');
 seq.push('250:dump-focus-text:after-save');
 seq.push('270:0x111:57600');
-seq.push('300:dlg-cmd:1');
+seq.push('300:dlg-post-cmd:1');
 seq.push('360:dump-focus-text:after-new');
 seq.push('390:0x111:57601');
 seq.push('440:slot-count:open-opened');
@@ -113,7 +113,7 @@ function escapeRe(s) {
 
 function savedSize() {
   const save = escapeRe(SAVE_NAME);
-  const re = new RegExp(`FindFirstFile\\("\\\\?C:\\\\windows\\\\${save}"\\) → "${save}" size=(\\d+)`, 'i');
+  const re = new RegExp(`FindFirstFile\\("\\\\?C:\\\\${save}"\\) → "${save}" size=(\\d+)`, 'i');
   const m = out.match(re);
   return m ? parseInt(m[1], 10) : 0;
 }
@@ -136,7 +136,7 @@ check('Save As filename accepted', savePicks >= 1);
 check('Save As dialog closed', before !== null && saveAfter === before);
 check('GetSaveFileNameA was called', /GetSaveFileNameA/.test(out));
 check('wvsprintfA was used while streaming saved RTF', /wvsprintfA\(/.test(out));
-check('CreateFileA created picked file', new RegExp(`CreateFileA\\(path="${escapeRe(SAVE_NAME)}"`).test(out));
+check('CreateFileA created picked file', new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('WriteFile wrote non-empty saved document bytes', /WriteFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0*[1-9a-f][0-9a-f]*,/i.test(out));
 check('saved file is visible in VFS', size > 0);
 check('focus returned to native RichEdit with text intact', /dump-focus-text after-save: hwnd=0x10002 .* text="save me"/.test(out));
@@ -145,7 +145,7 @@ check('Open dialog opened after New', before !== null && openOpened !== null && 
 check('Open saved filename accepted', savePicks >= 2);
 check('Open dialog closed', before !== null && openAfter === before);
 check('GetOpenFileNameA was called', /GetOpenFileNameA/.test(out));
-check('CreateFileA reopened saved document', new RegExp(`CreateFileA\\(path="C:\\\\windows\\\\${escapeRe(SAVE_NAME)}"`).test(out));
+check('CreateFileA reopened saved document', new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('ReadFile streamed saved document bytes', /ReadFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0*[1-9a-f][0-9a-f]*,/i.test(out));
 check('saved document reopened as plain editor text', /len=7 text="save me"/.test(reopened));
 check('saved RTF was not exposed as raw corrupted text', !/\(null\)|text="\{\\/.test(reopened));

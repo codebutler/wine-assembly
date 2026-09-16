@@ -152,6 +152,26 @@ function readBody(req, limitBytes) {
   });
 }
 
+// The frame stream is JPEG bytes in a binary container, not text; decoding it
+// as utf8 first would corrupt every byte above 0x7f.
+function readBodyBuffer(req, limitBytes) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', chunk => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(Object.assign(new Error('payload too large'), { status: 413 }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
 function parseCookies(header) {
   const out = {};
   for (const part of String(header || '').split(';')) {
@@ -196,7 +216,18 @@ function resolveStatic(urlPath) {
   return full;
 }
 
-function serveStatic(req, res, urlPath) {
+// Appended to the emulator page when this server serves it (localhost binds
+// only): the page connects itself to the agent hub, so "drive my session" is
+// copying the link from the browser — no console paste. A bind beyond
+// localhost must NOT inject, because the page would need the agent token and
+// serving the token to every page viewer is serving control of every session.
+const AGENT_INJECT = '\n<script type="module">\n'
+  + '// injected by tools/dev-server.js — agent hub auto-connect\n'
+  + '// (docs/design-agent-control.md; --no-agent-inject turns this off)\n'
+  + "import('/lib/agent-remote.js').then(m => m.connect()).catch(() => {});\n"
+  + '</script>\n';
+
+function serveStatic(req, res, urlPath, agentInject) {
   const full = resolveStatic(urlPath);
   if (!full) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
@@ -221,11 +252,39 @@ function serveStatic(req, res, urlPath) {
     } : null;
     // The build output and the WAT sources change on every rebuild, and a
     // cached copy of either produces a confusing "my fix did nothing".
-    res.writeHead(200, Object.assign({
-      'Content-Type': type,
-      'Content-Length': st.size,
-      'Cache-Control': 'no-cache',
-    }, isolationHeaders || {}));
+    // no-store, not no-cache: no-cache still allows a stored copy and asks the
+    // browser to revalidate, and this server sends no ETag or Last-Modified to
+    // revalidate against. Nothing served here is worth caching.
+    // The emulator page gets the auto-connect script appended (a trailing
+    // module script is parsed and run like any other), so its body is built
+    // in memory first — the Content-Length must describe what is actually
+    // sent, not the on-disk size. Everything else streams untouched.
+    const inject = agentInject && full === path.join(ROOT, 'index.html');
+    const sendHeaders = (length) => {
+      res.writeHead(200, Object.assign({
+        'Content-Type': type,
+        'Content-Length': length,
+        'Cache-Control': 'no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        // A cross-origin page (the deployed build, or localhost vs 127.0.0.1 —
+        // browsers treat those as different origins) can only import() the
+        // agent-remote module if the module response says so; without this the
+        // pasted connect line fails with an opaque CORS error.
+        'Access-Control-Allow-Origin': '*',
+      }, isolationHeaders || {}));
+    };
+    if (inject) {
+      fs.readFile(full, (err2, data) => {
+        if (err2) { res.writeHead(500); res.end(); return; }
+        const body = Buffer.concat([data, Buffer.from(AGENT_INJECT)]);
+        sendHeaders(body.length);
+        if (req.method === 'HEAD') { res.end(); return; }
+        res.end(body);
+      });
+      return;
+    }
+    sendHeaders(st.size);
     if (req.method === 'HEAD') { res.end(); return; }
     fs.createReadStream(full).pipe(res)
       .on('error', () => res.destroy());
@@ -380,16 +439,402 @@ async function handlePerf(req, res, opts) {
     return Math.round((sum / all) * 100);
   };
   const t = new Date().toISOString().slice(11, 19);
-  const warn = guestFps > 0 && guestFps < 20 ? ' LAGGY' : '';
+  const warn = guestFps > 0 && guestFps < 20 ? ' LOW PRESENT RATE' : '';
+  // Only while the pointer is actually moving. A mouse-driven game can feel
+  // laggy with a spotless step histogram: what the hand notices is how often
+  // the guest samples the pointer and how stale each sample is by then.
+  const inp = snap.input && snap.input.movesPerSec > 0
+    ? `  mouse ${snap.input.movesPerSec.toFixed(0)}/s in ${snap.input.takenPerSec.toFixed(0)}/s taken`
+      + ` age p50 ${snap.input.ageMs.p50.toFixed(1)} p99 ${snap.input.ageMs.p99.toFixed(1)}ms`
+    : '';
   console.log(
     `${t} ${String(batch.session || '?').slice(0, 6)} `
-    + `game ${String(guestFps).padStart(3)}fps  page ${String(Math.round(snap.fps || 0)).padStart(2)}  `
-    + `steps ${((snap.stepsPerSec || 0) / 1e6).toFixed(1)}M/s  `
+    + `present ${String(guestFps).padStart(3)}/s  page ${String(Math.round(snap.fps || 0)).padStart(2)}  `
+    + `blocks ${((snap.blocksPerSec || 0) / 1e6).toFixed(1)}M/s  `
     + `step p50 ${pct(totals, 50).toFixed(1)} p99 ${pct(totals, 99).toFixed(1)}ms  `
     + `guest ${share(1)}% thr ${share(2)}% paint ${share(3)}%  `
     + `throttled ${Math.round((throttled / Math.max(1, steps.length)) * 100)}%  `
-    + `${sparkline(steps.map(s => s[0]), 16.7)}${warn}`,
+    + `${sparkline(steps.map(s => s[0]), 16.7)}${inp}${warn}`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Frozen session recording sink  (POST /api/record/*)
+// ---------------------------------------------------------------------------
+//
+// See docs/design-frozen-recording.md. host.js's frozenRecorder posts frames
+// and guest PCM here while an agent steps a frozen session; the timeline is
+// the GUEST clock, so what lands on disk is a continuous realtime session with
+// every second of agent deliberation already absent. tools/frozen-video.js
+// turns a session directory into an mp4.
+//
+// One directory per recording, the way --perf-log is one file per session:
+//
+//   recordings/<session>/meta.json     what start/stop said
+//                       /frames.ndjson one {stepIndex,guestMs,tickMs,file} line
+//                       /frames/*.jpg
+//                       /audio.ndjson  one {guestStartMs,sampleRate,...,pcm} line
+//                       /events.ndjson optional input markers
+
+const MAX_RECORD_FRAME_BYTES = 64 * 1024 * 1024;
+const MAX_RECORD_JSON_BYTES = 32 * 1024 * 1024;
+const recordSessions = new Map(); // session -> { dir, frames, audioChunks }
+
+function recordDirRoot(opts) {
+  return path.resolve((opts && opts.recordDir) || path.join(ROOT, 'recordings'));
+}
+
+function recordSlug(name) {
+  const base = String(name || '').replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return base.slice(0, 64) || 'session';
+}
+
+function recordSessionDir(session, opts) {
+  const known = recordSessions.get(session);
+  if (known) return known;
+  const dir = path.join(recordDirRoot(opts), recordSlug(session));
+  fs.mkdirSync(path.join(dir, 'frames'), { recursive: true });
+  const state = { dir, frames: 0, audioChunks: 0, events: 0 };
+  recordSessions.set(session, state);
+  return state;
+}
+
+async function handleRecord(req, res, url, opts) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  if (req.method !== 'POST') return sendJson(res, 405, { error: 'method not allowed' });
+  const route = url.pathname.slice('/api/record/'.length);
+
+  if (route === 'frames') {
+    const session = String(url.searchParams.get('s') || '');
+    if (!session) return sendJson(res, 400, { ok: false, error: 'frames need ?s=SESSION' });
+    let body;
+    try { body = await readBodyBuffer(req, MAX_RECORD_FRAME_BYTES); }
+    catch (error) { return sendJson(res, error.status || 400, { ok: false, error: error.message }); }
+    if (body.length < 4 || body.toString('latin1', 0, 4) !== 'WAF1') {
+      return sendJson(res, 400, { ok: false, error: 'frame batch must start with the WAF1 magic' });
+    }
+    const state = recordSessionDir(session, opts);
+    const lines = [];
+    let at = 4;
+    let written = 0;
+    while (at + 4 <= body.length) {
+      const headerLen = body.readUInt32LE(at); at += 4;
+      if (at + headerLen + 4 > body.length) break;
+      let header;
+      try { header = JSON.parse(body.toString('utf8', at, at + headerLen)); }
+      catch (_) { break; }
+      at += headerLen;
+      const jpegLen = body.readUInt32LE(at); at += 4;
+      if (at + jpegLen > body.length) break;
+      const name = String(state.frames).padStart(6, '0') + '.jpg';
+      fs.writeFileSync(path.join(state.dir, 'frames', name), body.subarray(at, at + jpegLen));
+      at += jpegLen;
+      state.frames++;
+      written++;
+      lines.push(JSON.stringify(Object.assign({}, header, { file: `frames/${name}`, bytes: jpegLen })));
+    }
+    if (lines.length) fs.appendFileSync(path.join(state.dir, 'frames.ndjson'), lines.join('\n') + '\n');
+    return sendJson(res, 200, { ok: true, wrote: written, frames: state.frames });
+  }
+
+  let payload;
+  try { payload = JSON.parse(await readBodyBuffer(req, MAX_RECORD_JSON_BYTES)); }
+  catch (error) { return sendJson(res, error.status || 400, { ok: false, error: String(error.message || error) }); }
+
+  if (route === 'start') {
+    // The page names a recording or the clock does; either way the answer is
+    // the session id every later post carries.
+    const session = recordSlug(payload.name || new Date().toISOString().replace(/[:.]/g, '-'));
+    recordSessions.delete(session);
+    const state = recordSessionDir(session, opts);
+    fs.writeFileSync(path.join(state.dir, 'meta.json'),
+      JSON.stringify(Object.assign({ session }, payload), null, 2) + '\n');
+    for (const f of ['frames.ndjson', 'audio.ndjson', 'events.ndjson']) {
+      try { fs.writeFileSync(path.join(state.dir, f), ''); } catch (_) {}
+    }
+    if (!opts.quiet) console.log(`[record] ${session} -> ${state.dir}  (every ${payload.everyNSteps} steps, ${payload.tickMs}ms/step)`);
+    return sendJson(res, 200, { ok: true, session, dir: state.dir });
+  }
+
+  const session = recordSlug(payload.session || '');
+  if (!recordSessions.has(session)) {
+    return sendJson(res, 410, { ok: false, error: `no recording ${JSON.stringify(session)} — POST /api/record/start first` });
+  }
+  const state = recordSessions.get(session);
+
+  if (route === 'audio') {
+    const chunks = Array.isArray(payload.chunks) ? payload.chunks : [];
+    if (chunks.length) {
+      fs.appendFileSync(path.join(state.dir, 'audio.ndjson'),
+        chunks.map(c => JSON.stringify(c)).join('\n') + '\n');
+      state.audioChunks += chunks.length;
+    }
+    return sendJson(res, 200, { ok: true, chunks: state.audioChunks });
+  }
+  if (route === 'events') {
+    const events = Array.isArray(payload.events) ? payload.events : [];
+    if (events.length) {
+      fs.appendFileSync(path.join(state.dir, 'events.ndjson'),
+        events.map(e => JSON.stringify(e)).join('\n') + '\n');
+      state.events += events.length;
+    }
+    return sendJson(res, 200, { ok: true, events: state.events });
+  }
+  if (route === 'stop') {
+    let meta = {};
+    try { meta = JSON.parse(fs.readFileSync(path.join(state.dir, 'meta.json'), 'utf8')); } catch (_) {}
+    Object.assign(meta, payload, {
+      framesOnDisk: state.frames, audioChunksOnDisk: state.audioChunks,
+      stoppedAt: new Date().toISOString(),
+    });
+    fs.writeFileSync(path.join(state.dir, 'meta.json'), JSON.stringify(meta, null, 2) + '\n');
+    if (!opts.quiet) {
+      console.log(`[record] ${session} stopped: ${state.frames} frames, ${state.audioChunks} audio chunks`);
+      console.log(`[record] assemble: node tools/frozen-video.js ${state.dir}`);
+    }
+    return sendJson(res, 200, { ok: true, session, dir: state.dir, frames: state.frames, audioChunks: state.audioChunks });
+  }
+  return sendJson(res, 404, { ok: false, error: 'record routes: start, frames, audio, events, stop' });
+}
+
+// ---------------------------------------------------------------------------
+// Agent control hub  (/api/agent/*, docs/design-agent-control.md)
+// ---------------------------------------------------------------------------
+//
+// A browser page cannot accept connections, so it polls for work — the shape
+// tools/ios-selftest-server.js proved for the ios lab, made session-aware:
+// lib/agent-remote.js registers with hello, long-polls /poll, executes each
+// command in the page and posts /result; tools/ctl.js (or curl) posts into
+// /ctl and its response is HELD OPEN until the page's result comes back, so
+// the shell command prints the answer itself.
+//
+// The command set includes eval, so when the server is bound beyond
+// localhost every agent route requires the token printed at startup
+// (?token=...); on a pure-localhost bind the exposure is nil and the token
+// is not asked for, to keep the connect snippet short.
+
+const AGENT_POLL_HOLD_MS = 25000;   // how long /poll parks before answering []
+const AGENT_CTL_TIMEOUT_MS = 20000; // how long /ctl waits for the page
+// A `step` is the one command whose duration the caller chose: `step 200000`
+// on a frozen session is minutes of guest work, and answering "no answer from
+// the page in 20s" to a request that is executing exactly as asked would be a
+// lie. Everything else stays on the short timeout, where a silent page really
+// does mean a closed tab.
+const AGENT_STEP_TIMEOUT_MS = 600000;
+const AGENT_SESSION_TTL_MS = 60000; // no poll for this long = session gone
+const MAX_AGENT_BYTES = 8 * 1024 * 1024; // a PNG data URL rides /result
+
+const agentSessions = new Map(); // id -> session
+let agentCommandId = 1;
+
+function agentPrune() {
+  const now = Date.now();
+  for (const [id, s] of agentSessions) {
+    if (now - s.lastSeen > AGENT_SESSION_TTL_MS) {
+      for (const group of new Set(s.waiting.values())) {
+        clearTimeout(group.timer);
+        sendJson(group.res, 502, { ok: false, error: 'session went away' });
+      }
+      agentSessions.delete(id);
+    }
+  }
+}
+
+function agentFlushPoll(session) {
+  if (!session.pollRes || !session.queue.length) return;
+  const res = session.pollRes;
+  clearTimeout(session.pollTimer);
+  session.pollRes = null;
+  session.pollTimer = null;
+  const batch = session.queue.splice(0, session.queue.length);
+  sendJson(res, 200, batch);
+}
+
+async function handleAgent(req, res, url, opts) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  const route = url.pathname.slice('/api/agent/'.length);
+
+  // The connection URL explains itself: GET the hub root and you get the
+  // whole protocol as plain text, so a handoff need carry only the link.
+  // Deliberately before the token gate — these are instructions, not data.
+  if (route === '' && req.method === 'GET') {
+    const base = `http://${req.headers.host || '127.0.0.1:8080'}`;
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    return res.end([
+      'wine-assembly agent control hub (docs/design-agent-control.md)',
+      '',
+      'Relays commands to live emulator sessions. Pages served by this',
+      'dev-server connect automatically; a session is identified by its id',
+      'or simply by its tab URL.',
+      '',
+      'With the repo checked out:',
+      '  node tools/ctl.js sessions',
+      "  node tools/ctl.js -s '<tab URL or ID>' snapshot",
+      "  node tools/ctl.js -s '<tab URL or ID>' png /tmp/frame.png",
+      "  node tools/ctl.js -s '<tab URL or ID>' click 120,88",
+      '  verbs: snapshot ping apps launch APPID click dblclick rclick',
+      '    mousedown mouseup mousemove drag key VK type TEXT png FILE',
+      '    eval CODE cmd RAW user-input on|off frozen on|off step N [MS]',
+      '    record on|off|status pipe',
+      '  the page blocks the human at the keyboard from reaching the guest as',
+      '  soon as you send input; `user-input on` hands it back to them',
+      '',
+      'FROZEN (agent-stepped) sessions — the browser twin of the headless CLI:',
+      "  node tools/ctl.js -s ID frozen on     # nothing runs until you say so",
+      '  node tools/ctl.js -s ID step 400      # 400 steps of guest work, then stop',
+      '  node tools/ctl.js -s ID png a.png     # byte-stable: it cannot change',
+      '  node tools/ctl.js -s ID click 231,110 # queued; consumed by the next step',
+      '  While frozen the guest CLOCK is driven by steps too (default 16ms of',
+      '  guest time per step, `step N MS` changes it) — the browser twin of',
+      "  run.js's --tick-ms-per-batch. A page loaded with ?frozen starts that",
+      '  way; the ?debug toolbar has the same switch as a checkbox.',
+      '',
+      'RECORDING A FROZEN SESSION AS REALTIME VIDEO:',
+      '  node tools/ctl.js -s ID record on     # arm the frame + guest-PCM taps',
+      '  ...drive it: click / step / click / step, for as long as you like...',
+      '  node tools/ctl.js -s ID record off    # prints the session directory',
+      '  node tools/frozen-video.js recordings/<session> --out=clip.mp4',
+      '  Frames are sampled every 2nd step and stamped with GUEST time, and all',
+      '  audio is tapped at the guest PCM submit, so the mp4 plays as one',
+      '  continuous realtime session: the agent thinking between steps takes up',
+      '  no time in it at all. (docs/design-frozen-recording.md)',
+      '',
+      'MANY GAMES AT ONCE:',
+      `  ${base}/dashboard  boots one emulator per tile, each its own session`,
+      '  (?apps=sol,winmine to preload tiles, &frozen to boot them stepped).',
+      '  Every tile answers ctl.js on its own session id — list them with',
+      '  `node tools/ctl.js sessions`.',
+      '',
+      'Raw protocol (any HTTP client):',
+      `  GET  ${base}/api/agent/sessions`,
+      `  POST ${base}/api/agent/ctl?s=ID   body {"action":"ping"} or an array`,
+      '       reply is held open until the page executed the command(s)',
+      '  actions: ping snapshot eval {code} png apps launch {app}',
+      '           user-input {mode:"on"|"off"} frozen {mode:"on"|"off"}',
+      '           step {n,ms}  — held open until the guest is back at rest',
+      '           record {mode:"on"|"off"|"status", everyNSteps, name}',
+      '  cmd entries (run.js --input syntax): click:X:Y dblclick:X:Y',
+      '    rclick:X:Y mousedown:X:Y mouseup:X:Y mousemove:X:Y wheel:X:Y:D',
+      '    keydown:VK keyup:VK keypress:CHARCODE',
+      '  each command answers {ok:true,value:...} or {ok:false,error:"..."}',
+      '',
+      'Headless CLI VMs listen directly instead of via this hub:',
+      '  node test/run.js --app=ID --control    # POST the same shapes to',
+      '  http://127.0.0.1:8123/ctl              # or drive with ctl.js',
+      '',
+      'Bound beyond localhost? Every /api/agent request then needs the',
+      '?token= printed at server startup.',
+      '',
+    ].join('\n'));
+  }
+
+  const token = opts && opts.agentToken;
+  if (token && url.searchParams.get('token') !== token) {
+    return sendJson(res, 403, { ok: false, error: 'this hub is bound beyond localhost; pass ?token= (printed at server startup)' });
+  }
+  agentPrune();
+
+  if (route === 'hello' && req.method === 'POST') {
+    let info = {};
+    try { info = JSON.parse(await readBody(req, 64 * 1024)) || {}; } catch (_) {}
+    const id = crypto.randomBytes(4).toString('hex');
+    agentSessions.set(id, {
+      id, kind: 'browser', app: info.app || null, href: info.href || '', ua: info.ua || '',
+      created: Date.now(), lastSeen: Date.now(),
+      queue: [], pollRes: null, pollTimer: null,
+      waiting: new Map(), // command id -> {res, timer, expect, results, single}
+    });
+    console.log(`${new Date().toISOString().slice(11, 19)}  AGENT session ${id} connected`
+      + ` app=${info.app || '?'} ${String(info.href || '').slice(0, 80)}`);
+    return sendJson(res, 200, { sessionId: id });
+  }
+
+  if (route === 'sessions' && req.method === 'GET') {
+    const now = Date.now();
+    return sendJson(res, 200, {
+      sessions: [...agentSessions.values()].map(s => ({
+        id: s.id, kind: s.kind, app: s.app, href: s.href,
+        ageSec: Math.round((now - s.created) / 1000),
+        lastSeenSec: Math.round((now - s.lastSeen) / 1000),
+      })),
+    });
+  }
+
+  const session = agentSessions.get(url.searchParams.get('s') || '');
+
+  if (route === 'poll' && req.method === 'GET') {
+    if (!session) return sendJson(res, 410, { error: 'no such session — say hello again' });
+    session.lastSeen = Date.now();
+    // One poll per session: a second one (a reloaded tab, a duplicated
+    // request) replaces the first rather than splitting the queue.
+    if (session.pollRes) {
+      clearTimeout(session.pollTimer);
+      sendJson(session.pollRes, 200, []);
+    }
+    session.pollRes = res;
+    session.pollTimer = setTimeout(() => {
+      if (session.pollRes !== res) return;
+      session.pollRes = null;
+      session.pollTimer = null;
+      sendJson(res, 200, []);
+    }, AGENT_POLL_HOLD_MS);
+    req.on('close', () => { if (session.pollRes === res) { session.pollRes = null; clearTimeout(session.pollTimer); } });
+    agentFlushPoll(session);
+    return;
+  }
+
+  if (route === 'result' && req.method === 'POST') {
+    if (!session) return sendJson(res, 410, { error: 'no such session' });
+    session.lastSeen = Date.now();
+    let body;
+    try { body = JSON.parse(await readBody(req, MAX_AGENT_BYTES)); }
+    catch (error) { return sendJson(res, 400, { error: String(error.message || error) }); }
+    const results = Array.isArray(body.results) ? body.results : [body];
+    for (const result of results) {
+      const group = session.waiting.get(result.id);
+      if (!group) continue;
+      session.waiting.delete(result.id);
+      group.results[group.slots.get(result.id)] = { ok: !!result.ok, value: result.value, error: result.error };
+      if (--group.expect === 0) {
+        clearTimeout(group.timer);
+        sendJson(group.res, 200, group.single ? group.results[0] : group.results);
+      }
+    }
+    return sendJson(res, 200, { ok: true });
+  }
+
+  if (route === 'ctl' && req.method === 'POST') {
+    if (!session) return sendJson(res, 410, { ok: false, error: 'no such session — check ctl.js sessions' });
+    let parsed;
+    try { parsed = JSON.parse(await readBody(req, 1024 * 1024)); }
+    catch (error) { return sendJson(res, 400, { ok: false, error: String(error.message || error) }); }
+    const commands = Array.isArray(parsed) ? parsed : [parsed];
+    const isStep = c => c && (c.action === 'step'
+      || /^step(:|$)/.test(String(c.cmd || '').trim()));
+    const holdMs = commands.some(isStep) ? AGENT_STEP_TIMEOUT_MS : AGENT_CTL_TIMEOUT_MS;
+    const group = {
+      res, expect: commands.length, results: new Array(commands.length),
+      single: !Array.isArray(parsed), slots: new Map(),
+      timer: setTimeout(() => {
+        for (const [cid] of group.slots) session.waiting.delete(cid);
+        sendJson(res, 504, { ok: false, error: `no answer from the page in ${Math.round(holdMs / 1000)}s — is the tab still open?` });
+      }, holdMs),
+    };
+    commands.forEach((cmd, slot) => {
+      const cid = agentCommandId++;
+      group.slots.set(cid, slot);
+      session.waiting.set(cid, group);
+      session.queue.push(Object.assign({}, typeof cmd === 'string' ? { cmd } : cmd, { id: cid }));
+    });
+    agentFlushPoll(session);
+    return;
+  }
+
+  return sendJson(res, 404, { error: 'agent routes: hello, poll, result, ctl, sessions' });
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +846,19 @@ function createServer(opts) {
   // signaling calls, so they are off unless asked for.
   const verbose = !!(opts && opts.verbose);
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+    // Treat every request target as an origin-form path. A browser can retain
+    // a doubled leading slash while resolving `//?debug`; passing that string
+    // straight to URL interprets it as a protocol-relative URL with an empty
+    // host and throws, taking down the entire development server. Collapse
+    // only the leading slash run, then reject any other malformed target on
+    // this request instead of crashing every open emulator tab.
+    const target = String(req.url || '/').replace(/^\/{2,}/, '/');
+    let url;
+    try {
+      url = new URL(target, 'http://localhost');
+    } catch (_) {
+      return sendJson(res, 400, { error: 'malformed request target' });
+    }
 
     // Perf batches arrive ~1/sec and would bury the signaling log, so they
     // are routed before it and print their own one-line summary instead.
@@ -412,6 +869,23 @@ function createServer(opts) {
       return;
     }
 
+    // Recording frames arrive many per second and carry megabytes of JPEG;
+    // like /api/perf they get their own route above the signaling log.
+    if (url.pathname.startsWith('/api/record/')) {
+      handleRecord(req, res, url, { quiet, recordDir: opts && opts.recordDir }).catch(err => {
+        if (!res.headersSent) sendJson(res, 500, { error: String(err && err.message || err) });
+      });
+      return;
+    }
+
+    // Agent hub traffic is long-polls and held responses; route it before
+    // the generic API logging, which would print one line per idle poll.
+    if (url.pathname.startsWith('/api/agent/') || url.pathname === '/api/agent') {
+      handleAgent(req, res, url, { agentToken: opts && opts.agentToken }).catch(err => {
+        if (!res.headersSent) sendJson(res, 500, { error: String(err && err.message || err) });
+      });
+      return;
+    }
     if (url.pathname.startsWith('/api/')) {
       // Log who is asking, not just what. Two browsers failing to see each
       // other is nearly always one of two things — they are the same user, or
@@ -432,7 +906,17 @@ function createServer(opts) {
       return sendJson(res, 405, { error: 'method not allowed' });
     }
     if (!quiet && verbose) console.log(`${req.method} ${url.pathname}`);
-    serveStatic(req, res, url.pathname === '/' ? '/index.html' : url.pathname);
+    // Auto-connect injection only on a localhost bind: with a wider bind the
+    // page would need the agent token, and serving the token to every viewer
+    // is serving control of every session.
+    const agentInject = !(opts && opts.agentToken) && !(opts && opts.noAgentInject);
+    // /dashboard is the multi-session grid (dashboard.html). Aliased because
+    // the URL a human is handed should not carry a file extension, and because
+    // the page's own tile links are written against this path.
+    let pathname = url.pathname;
+    if (pathname === '/') pathname = '/index.html';
+    else if (pathname === '/dashboard') pathname = '/dashboard.html';
+    serveStatic(req, res, pathname, agentInject);
   });
   server.store = store;
   return server;
@@ -446,10 +930,17 @@ function main() {
   const port = parseInt(arg('port', '8080'), 10);
   const host = arg('host', '127.0.0.1');
   const perfLog = arg('perf-log', '');
+  const recordDir = arg('record-dir', '');
+  // The agent hub carries eval into any connected page, so a bind beyond
+  // localhost requires the token on every agent route.
+  const agentToken = host === '127.0.0.1' ? null : crypto.randomBytes(8).toString('hex');
   const server = createServer({
     quiet: process.argv.includes('--quiet'),
     verbose: process.argv.includes('--verbose'),
     perfLog,
+    recordDir,
+    agentToken,
+    noAgentInject: process.argv.includes('--no-agent-inject'),
   });
   server.listen(port, host, () => {
     console.log(`wine-assembly dev server: http://${host}:${port}`);
@@ -459,6 +950,24 @@ function main() {
     console.log(`  threads probe: http://${host}:${port}/threads-probe.html`
       + (ISOLATE ? '  (COOP/COEP served: isolated)' : '  (no COOP/COEP; use --isolate or the page\'s service-worker button)'));
     if (perfLog) console.log(`  perf batches appended as NDJSON to ${perfLog}`);
+    console.log(`  frozen-session recordings at /api/record -> ${recordDir || 'recordings/'}`
+      + '  (ctl.js -s ID record on, then node tools/frozen-video.js <dir>)');
+    const tokenQuery = agentToken ? `?token=${agentToken}` : '';
+    const injecting = !agentToken && !process.argv.includes('--no-agent-inject');
+    if (injecting) {
+      console.log('  agent hub at /api/agent — the emulator page auto-connects when served');
+      console.log('  from here: copy the tab URL and drive it, e.g.');
+      console.log(`    node tools/ctl.js -s 'http://${host}:${port}/?debug' png out.png`);
+      console.log('  pages served elsewhere connect by console paste:');
+    } else {
+      console.log('  agent hub at /api/agent — connect a page by pasting into its console:');
+    }
+    console.log(`    import('http://${host === '0.0.0.0' ? '<lan-ip>' : host}:${port}/lib/agent-remote.js${tokenQuery}')`
+      + `.then(m => m.connect())`);
+    console.log(`  then drive it: node tools/ctl.js sessions | node tools/ctl.js -s <ID> png out.png`);
+    console.log(`  many games at once: http://${host}:${port}/dashboard`
+      + '  (one emulator per tile, each its own agent session)');
+    if (agentToken) console.log(`  agent token (bound beyond localhost): ${agentToken}`);
     if (host === '0.0.0.0') {
       console.log('  NOTE: bound to all interfaces and unauthenticated — trusted networks only');
     }

@@ -6,14 +6,14 @@
     (local $section_off i32) (local $i i32) (local $vaddr i32) (local $vsize i32)
     (local $raw_off i32) (local $raw_size i32) (local $import_rva i32)
     (local $tls_rva i32) (local $tls_dir i32) (local $tls_start i32) (local $tls_end i32)
-    (local $tls_index_addr i32) (local $tls_index i32) (local $tls_data i32)
+    (local $tls_index_addr i32) (local $tls_index i32) (local $tls_data i32) (local $tls_data_wa i32)
     (local $tls_raw_size i32) (local $tls_zero_size i32)
     (local $src i32) (local $dst i32) (local $characteristics i32)
     (local $mapped_size i32) (local $copy_size i32) (local $initialized_size i32)
 
     (if (i32.ne (i32.load16_u (global.get $PE_STAGING)) (i32.const 0x5A4D)) (then (return (i32.const -1))))
     (local.set $pe_off (i32.add (global.get $PE_STAGING)
-      (i32.load (i32.add (global.get $PE_STAGING) (i32.const 0x3C)))))
+      (i32.load (region.addr $PE_STAGING 0x3C))))
     ;; A 16-bit image has an 'NE' header where a PE has 'PE\0\0'. It shares
     ;; nothing else with this loader, so hand it over whole.
     (if (i32.eq (i32.load16_u (local.get $pe_off)) (i32.const 0x454E))
@@ -35,23 +35,22 @@
 
     ;; Store SizeOfImage for DLL loader
     (global.set $exe_size_of_image (i32.load (i32.add (local.get $pe_off) (i32.const 80))))
-    ;; Set heap to be above the image
-    (global.set $heap_base (i32.add (global.get $image_base) (global.get $exe_size_of_image)))
-    (global.set $heap_ptr (global.get $heap_base))
+    ;; Set heap to be above the image. Publishes to HEAP_SHARED so guest threads,
+    ;; which are separate instances and get their own copy of every global, start
+    ;; from the same process heap instead of a private replica of this cursor.
+    (call $heap_init
+      (i32.add (global.get $image_base) (global.get $exe_size_of_image)))
     (global.set $heap_sparse_ptr (i32.const 0))
     (global.set $heap_sparse_end (i32.const 0))
-    (global.set $g2w_sparse_size (i32.const 0))
-    (global.set $g2w_sparse_size1 (i32.const 0))
-    (global.set $g2w_sparse_size2 (i32.const 0))
-    (global.set $g2w_sparse_size3 (i32.const 0))
-    (global.set $g2w_gl8_page (i32.const -1))
     ;; VirtualAlloc(NULL, MEM_RESERVE) uses sparse high guest addresses. Commits
     ;; get backing memory through $virtual_map_commit instead of consuming the
     ;; low HeapAlloc arena.
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT))
     (call $zero_memory (global.get $VIRTUAL_MAP_STATE)
       (i32.add (global.get $VIRTUAL_MAP_STATE_SIZE) (global.get $VIRTUAL_MAP_TABLE_SIZE)))
-    (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
+    (call $zero_memory (global.get $GUEST_PAGE_TABLE)
+      (global.get $GUEST_PAGE_TABLE_SIZE))
+    (i32.store (region.addr $VIRTUAL_MAP_STATE 4)
       (global.get $VIRTUAL_BACKING_BASE))
 
     ;; Copy DOS+PE headers into guest memory (CRT startup reads MZ signature from image base)
@@ -68,20 +67,15 @@
       (local.set $raw_off (i32.load (i32.add (local.get $section_off) (i32.const 20))))
       (local.set $characteristics (i32.load (i32.add (local.get $section_off) (i32.const 36))))
       ;; Watcom PE images use VirtualSize=0 and put the committed extent in
-      ;; SizeOfRawData, including for IMAGE_SCN_CNT_UNINITIALIZED_DATA sections
-      ;; whose PointerToRawData is zero. Map the larger declared span, but never
-      ;; copy file bytes into an uninitialized section.
+      ;; SizeOfRawData. A zero PointerToRawData is BSS, regardless of flags.
+      ;; Packers also emit combined CODE/IDATA/UDATA characteristics on a single
+      ;; section with real raw bytes; the UDATA bit does not discard those bytes.
       (local.set $mapped_size
         (if (result i32) (i32.gt_u (local.get $vsize) (local.get $raw_size))
           (then (local.get $vsize))
           (else (local.get $raw_size))))
       (local.set $copy_size
-        (if (result i32)
-            (i32.or
-              (i32.ne
-                (i32.and (local.get $characteristics) (i32.const 0x80))
-                (i32.const 0))
-              (i32.eqz (local.get $raw_off)))
+        (if (result i32) (i32.eqz (local.get $raw_off))
           (then (i32.const 0))
           (else (local.get $raw_size))))
       (local.set $initialized_size (local.get $copy_size))
@@ -116,12 +110,13 @@
       (then (call $process_imports (local.get $import_rva))))
 
     (global.set $eip (global.get $entry_point))
-    ;; ESP must be a guest address. GUEST_STACK is the WASM-space stack base;
-    ;; ESP starts at the top of the 1MB stack region.
+    ;; ESP is a guest address; reserve a zero return word below StackBase so a
+    ;; returning self-extractor entry point stops instead of executing garbage.
     (i32.store offset=16 (global.get $reg_base) (i32.add
       (i32.sub (i32.add (global.get $GUEST_STACK) (global.get $GUEST_STACK_SIZE))
                (global.get $GUEST_BASE))
-      (global.get $image_base)))
+      (i32.sub (global.get $image_base) (i32.const 4))))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=4 (global.get $reg_base) (i32.const 0))
     (i32.store offset=8 (global.get $reg_base) (i32.const 0)) (i32.store offset=12 (global.get $reg_base) (i32.const 0))
     (i32.store offset=20 (global.get $reg_base) (i32.const 0)) (i32.store offset=24 (global.get $reg_base) (i32.const 0))
@@ -134,9 +129,11 @@
     ;; TIB+0x18: Self-pointer (linear address of TIB)
     (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x18)) (global.get $fs_base))
     ;; TIB+0x04: Stack top
-    (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x04)) (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x04))
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     ;; TIB+0x08: Stack bottom
-    (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x08)) (i32.sub (i32.load offset=16 (global.get $reg_base)) (global.get $GUEST_STACK_SIZE)))
+    (call $gs32 (i32.add (global.get $fs_base) (i32.const 0x08))
+      (i32.sub (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (global.get $GUEST_STACK_SIZE)))
     ;; TIB+0x2c: ThreadLocalStoragePointer — point at our TLS slot array so that
     ;; apps doing direct FS:[0x2c][index*4] reads (bypassing TlsGetValue) see the
     ;; same values our TlsSetValue writes. Eagerly allocate the slot array.
@@ -156,30 +153,29 @@
         (local.set $tls_index_addr (call $gl32 (i32.add (local.get $tls_dir) (i32.const 8))))
         (local.set $tls_raw_size (i32.sub (local.get $tls_end) (local.get $tls_start)))
         (local.set $tls_zero_size (call $gl32 (i32.add (local.get $tls_dir) (i32.const 16))))
-        (if (i32.and
-              (i32.lt_u (global.get $tls_next_index) (i32.const 64))
-              (i32.ne
-                (i32.or (local.get $tls_raw_size) (local.get $tls_zero_size))
-                (i32.const 0)))
+        (if (i32.ne
+              (i32.or (local.get $tls_raw_size) (local.get $tls_zero_size))
+              (i32.const 0))
           (then
-            (local.set $tls_index (global.get $tls_next_index))
-            (global.set $tls_next_index (i32.add (global.get $tls_next_index) (i32.const 1)))
-            (if (local.get $tls_index_addr)
-              (then (call $gs32 (local.get $tls_index_addr) (local.get $tls_index))))
-            (local.set $tls_data
-              (call $heap_alloc (i32.add (local.get $tls_raw_size) (local.get $tls_zero_size))))
-            (if (local.get $tls_data)
+            (local.set $tls_index (call $tls_reserve))
+            (if (i32.ne (local.get $tls_index) (i32.const -1))
               (then
-                (call $memcpy
-                  (call $g2w (local.get $tls_data))
-                  (call $g2w (local.get $tls_start))
-                  (local.get $tls_raw_size))
-                (call $zero_memory
-                  (i32.add (call $g2w (local.get $tls_data)) (local.get $tls_raw_size))
-                  (local.get $tls_zero_size))
-                (call $gs32
-                  (i32.add (global.get $tls_slots) (i32.shl (local.get $tls_index) (i32.const 2)))
-                  (local.get $tls_data))))))))
+                (if (local.get $tls_index_addr)
+                  (then (call $gs32 (local.get $tls_index_addr) (local.get $tls_index))))
+                (local.set $tls_data
+                  (call $heap_alloc (i32.add (local.get $tls_raw_size) (local.get $tls_zero_size))))
+                (if (local.get $tls_data)
+                  (then
+                    (local.set $tls_data_wa (call $g2w (local.get $tls_data))) (call $memcpy
+                      (local.get $tls_data_wa)
+                      (call $g2w (local.get $tls_start))
+                      (local.get $tls_raw_size))
+                    (call $zero_memory
+                      (i32.add (local.get $tls_data_wa) (local.get $tls_raw_size))
+                      (local.get $tls_zero_size))
+                    (call $gs32
+                      (i32.add (global.get $tls_slots) (i32.shl (local.get $tls_index) (i32.const 2)))
+                      (local.get $tls_data))))))))))
     (global.get $entry_point))
 
   ;; ============================================================
@@ -188,7 +184,7 @@
   (func $process_imports (param $import_rva i32)
     (local $desc_ptr i32) (local $ilt_rva i32) (local $iat_rva i32)
     (local $ilt_ptr i32) (local $iat_ptr i32) (local $entry i32) (local $thunk_addr i32)
-    (local $api_id i32)
+    (local $api_id i32) (local $data_addr i32)
     (local.set $desc_ptr (i32.add (global.get $GUEST_BASE) (local.get $import_rva)))
     (block $id (loop $dl
       (local.set $ilt_rva (i32.load (local.get $desc_ptr)))
@@ -214,39 +210,47 @@
         (i32.store (local.get $iat_ptr) (local.get $thunk_addr))
         (if (i32.eqz (i32.and (local.get $entry) (i32.const 0x80000000)))
           (then
-            (local.set $api_id (call $import_hint_override_api_id
-              (i32.add (global.get $image_base)
-                (i32.load (i32.add (local.get $desc_ptr) (i32.const 12))))
-              (i32.add (global.get $GUEST_BASE) (local.get $entry))))
-            (if (i32.ne (local.get $api_id) (i32.const -1))
+            (local.set $data_addr
+              (call $resolve_msvcrt_data_import_a
+                (i32.add (global.get $GUEST_BASE)
+                  (i32.add (local.get $entry) (i32.const 2)))))
+            (if (local.get $data_addr)
               (then
-                ;; Treat hint-corrected imports like resolved ordinals for
-                ;; logging, so traces show the canonical API name from api_id.
-                (i32.store
-                  (i32.add (global.get $THUNK_BASE)
-                    (i32.mul (global.get $num_thunks) (i32.const 8)))
-                  (i32.or (i32.const 0x80000000)
-                    (i32.load16_u (i32.add (global.get $GUEST_BASE) (local.get $entry)))))
-                (i32.store
-                  (i32.add
-                    (i32.add (global.get $THUNK_BASE)
-                      (i32.mul (global.get $num_thunks) (i32.const 8)))
-                    (i32.const 4))
-                  (local.get $api_id)))
+                (i32.store (local.get $iat_ptr) (local.get $data_addr)))
               (else
-                (i32.store
-                  (i32.add (global.get $THUNK_BASE)
-                    (i32.mul (global.get $num_thunks) (i32.const 8)))
-                  (local.get $entry))
-                ;; Lookup and store API ID in thunk+4
-                (i32.store
-                  (i32.add
-                    (i32.add (global.get $THUNK_BASE)
-                      (i32.mul (global.get $num_thunks) (i32.const 8)))
-                    (i32.const 4))
-                  (call $lookup_api_id
-                    (i32.add (global.get $GUEST_BASE)
-                      (i32.add (local.get $entry) (i32.const 2))))))))
+                (local.set $api_id (call $import_hint_override_api_id
+                  (i32.add (global.get $image_base)
+                    (i32.load (i32.add (local.get $desc_ptr) (i32.const 12))))
+                  (i32.add (global.get $GUEST_BASE) (local.get $entry))))
+                (if (i32.ne (local.get $api_id) (i32.const -1))
+                  (then
+                    ;; Treat hint-corrected imports like resolved ordinals for
+                    ;; logging, so traces show the canonical API name from api_id.
+                    (i32.store
+                      (i32.add (global.get $THUNK_BASE)
+                        (i32.mul (global.get $num_thunks) (i32.const 8)))
+                      (i32.or (i32.const 0x80000000)
+                        (i32.load16_u (i32.add (global.get $GUEST_BASE) (local.get $entry)))))
+                    (i32.store
+                      (i32.add
+                        (i32.add (global.get $THUNK_BASE)
+                          (i32.mul (global.get $num_thunks) (i32.const 8)))
+                        (i32.const 4))
+                      (local.get $api_id)))
+                  (else
+                    (i32.store
+                      (i32.add (global.get $THUNK_BASE)
+                        (i32.mul (global.get $num_thunks) (i32.const 8)))
+                      (local.get $entry))
+                    ;; Lookup and store API ID in thunk+4
+                    (i32.store
+                      (i32.add
+                        (i32.add (global.get $THUNK_BASE)
+                          (i32.mul (global.get $num_thunks) (i32.const 8)))
+                        (i32.const 4))
+                      (call $lookup_api_id
+                        (i32.add (global.get $GUEST_BASE)
+                          (i32.add (local.get $entry) (i32.const 2))))))))))
           (else
             ;; Ordinal import: bit 31 set, low 16 bits = ordinal number
             ;; Store ordinal as name RVA marker, resolve API ID via host
@@ -359,8 +363,8 @@
       (i32.const 0xCACA0002))
     (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
 
-    ;; Allocate first-ShowWindow activation chain thunks (0xCACA0022..0xCACA0023)
-    ;; Chain: ShowWindow → CACA0022 (WM_ACTIVATE) → CACA0023 (WM_SETFOCUS) → CACA0001 (done)
+    ;; Allocate first-ShowWindow activation chain thunks.
+    ;; Chain: ShowWindow -> ACTIVATE -> SETFOCUS -> MOVE -> SIZE -> done.
     (global.set $createwnd_activate_thunk (i32.add
       (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
                (global.get $GUEST_BASE))
@@ -377,12 +381,20 @@
       (i32.const 0xCACA0023))
     (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
 
-    (global.set $createwnd_size_thunk (i32.add
+    (global.set $createwnd_move_thunk (i32.add
       (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
                (global.get $GUEST_BASE))
       (global.get $image_base)))
     (i32.store (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
       (i32.const 0xCACA0024))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+
+    (global.set $createwnd_size_thunk (i32.add
+      (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
+               (global.get $GUEST_BASE))
+      (global.get $image_base)))
+    (i32.store (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
+      (i32.const 0xCACA0031))
     (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
 
     ;; Child-CreateWindow CBT hook continuation (marker 0xCACA0026)
@@ -521,6 +533,17 @@
       (global.get $image_base)))
     (i32.store (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
       (i32.const 0xCACA002B))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+
+    ;; Allocate EnumResourceNamesA callback continuation thunk (marker
+    ;; 0xCACA0030). Unlike the one-shot font thunk, this resumes a PE resource
+    ;; directory walk after each guest callback.
+    (global.set $enum_rsrc_thunk (i32.add
+      (i32.sub (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
+               (global.get $GUEST_BASE))
+      (global.get $image_base)))
+    (i32.store (i32.add (global.get $THUNK_BASE) (i32.mul (global.get $num_thunks) (i32.const 8)))
+      (i32.const 0xCACA0030))
     (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
 
     ;; Allocate LineDDA point callback return thunk (marker CACA0012).

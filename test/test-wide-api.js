@@ -4,25 +4,75 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 
+const dynamicModuleTestExports = String.raw`
+  (func (export "test_call_LoadLibraryA") (param $name i32) (result i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_LoadLibraryA (local.get $name)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetProcAddress")
+        (param $module i32) (param $name i32) (result i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetProcAddress (local.get $module) (local.get $name)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_mciSendStringA")
+        (param $command i32) (param $result i32) (param $chars i32) (result i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_mciSendStringA (local.get $command) (local.get $result)
+      (local.get $chars) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_mciSendStringW")
+        (param $command i32) (param $result i32) (param $chars i32) (result i32)
+    (local $sp i32)
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_mciSendStringW (local.get $command) (local.get $result)
+      (local.get $chars) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+`;
+
 async function main() {
-  const wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC, f), 'utf-8'));
+  const wasmBytes = compileSrcWasm((file, source) =>
+    file === '13-exports.wat' ? `${source}\n${dynamicModuleTestExports}\n` : source);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const base = createHostImports(ctx);
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
   base.host.wait_single = () => 0;
   base.host.wait_multiple = () => 0;
   base.host.com_create_instance = () => 0x80004002;
+  const mciCalls = [];
+  base.host.mci_string = (command, result, chars) => {
+    let text = '';
+    if (command) {
+      for (let i = command; u8[i]; i++) text += String.fromCharCode(u8[i]);
+    }
+    mciCalls.push({ text, result, chars });
+    if (result && chars) {
+      const answer = Buffer.from('playing\0', 'ascii');
+      u8.set(answer.subarray(0, chars), result);
+      u8[result + chars - 1] = 0;
+    }
+    return 0;
+  };
 
   const { instance } = await WebAssembly.instantiate(wasmBytes, base);
   const e = instance.exports;
@@ -69,6 +119,13 @@ async function main() {
     return out;
   }
 
+  function readAscii(g, max = 256) {
+    const p = wa(g);
+    let out = '';
+    for (let i = 0; i < max && u8[p + i]; i++) out += String.fromCharCode(u8[p + i]);
+    return out;
+  }
+
   function writeDwords(values) {
     const g = e.guest_alloc(values.length * 4);
     const p = wa(g);
@@ -78,24 +135,76 @@ async function main() {
 
   const exe = writeAscii('demo.exe');
   e.set_exe_name(wa(exe), 'demo.exe'.length);
+  const extraArgs = '--probe=' + 'a'.repeat(128);
+  const extra = writeAscii(extraArgs);
+  e.set_extra_cmdline(wa(extra), extraArgs.length);
+  check('extra command-line staging preserves low static strings',
+    Buffer.from(u8.slice(0x36d, 0x379)).toString('ascii') === 'uxtheme.dll\0',
+    Buffer.from(u8.slice(0x36d, 0x379)).toString('hex'));
   const cmd = e.test_call_GetCommandLineW();
-  check('GetCommandLineW returns full UTF-16 fake path', readWide(cmd) === 'C:\\demo.exe', readWide(cmd));
+  check('GetCommandLineW returns full UTF-16 fake path and arguments',
+    readWide(cmd) === `C:\\demo.exe ${extraArgs}`, readWide(cmd));
 
   const expDir = e.guest_alloc(32);
   const dllNameA = writeAscii('KERNEL32.dll');
   const queryA = writeAscii('C:\\Windows\\System\\kernel32.dll');
   const queryW = writeWide('kernel32.dll');
   const loadAddr = expDir - 0x1000;
+  e.test_set_dll_count(0);
+  check('GetModuleHandleA recognizes statically dispatched KERNEL32',
+    (e.test_call_GetModuleHandleA(queryA) >>> 0) === (e.get_image_base() >>> 0));
+  check('GetModuleHandleW recognizes statically dispatched KERNEL32',
+    (e.test_call_GetModuleHandleW(queryW) >>> 0) === (e.get_image_base() >>> 0));
   e.guest_write32(expDir + 12, dllNameA - loadAddr);
   dv.setUint32(e.get_dll_table(), loadAddr >>> 0, true);
   dv.setUint32(e.get_dll_table() + 8, 0x1000, true);
   e.test_set_dll_count(1);
   check('GetModuleHandleA finds DLL table entry by basename',
     (e.test_call_GetModuleHandleA(queryA) >>> 0) === (loadAddr >>> 0));
+  const extensionlessQueryA = writeAscii('C:\\KERNEL32');
+  check('GetModuleHandleA finds a mapped DLL from an extensionless path',
+    (e.test_call_GetModuleHandleA(extensionlessQueryA) >>> 0) === (loadAddr >>> 0));
   const ole32A = writeAscii('oLe32.DlL');
   const notOle32A = writeAscii('OLE32X');
+  // A module we dispatch statically has no image, so it answers with a
+  // pseudo-handle: $STATIC_SYS_DLL_HANDLE_BASE plus its position in the name
+  // list, ole32 being first. It has to be distinct from the EXE's own handle,
+  // or GetModuleFileName can't tell the two apart. See
+  // $guest_name_is_static_system_dll in src/09a-handlers.wat.
+  const STATIC_SYS_DLL_HANDLE_BASE = 0x5D110000;
   check('GetModuleHandleA recognizes statically dispatched OLE32',
-    (e.test_call_GetModuleHandleA(ole32A) >>> 0) === (e.get_image_base() >>> 0));
+    (e.test_call_GetModuleHandleA(ole32A) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE);
+  check('GetModuleHandleA recognizes statically dispatched USER32',
+    (e.test_call_GetModuleHandleA(writeAscii('USER32.DLL')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 1);
+  check('GetModuleHandleA recognizes statically dispatched COMCTL32',
+    (e.test_call_GetModuleHandleA(writeAscii('comctl32.dll')) >>> 0) === STATIC_SYS_DLL_HANDLE_BASE + 2);
+  const dsound = writeAscii('C:\\WINDOWS\\SYSTEM\\DSOUND.DLL');
+  const dsoundHandle = e.test_call_LoadLibraryA(dsound) >>> 0;
+  check('LoadLibraryA preserves statically dispatched DSOUND identity',
+    dsoundHandle === STATIC_SYS_DLL_HANDLE_BASE + 5,
+    `handle=0x${dsoundHandle.toString(16)}`);
+  const directSoundCreate = e.test_call_GetProcAddress(dsoundHandle, 1) >>> 0;
+  const directSoundCreateWa = wa(directSoundCreate);
+  const directSoundCreateId = require('../src/api_table.json')
+    .find(entry => entry.name === 'DirectSoundCreate').id;
+  check('GetProcAddress resolves DSOUND ordinal 1 from its pseudo-handle',
+    directSoundCreate !== 0 &&
+      dv.getUint32(directSoundCreateWa, true) === 0x80000001 &&
+      dv.getUint32(directSoundCreateWa + 4, true) === directSoundCreateId,
+    `thunk=0x${directSoundCreate.toString(16)}`);
+  check('GetProcAddress leaves unsupported DSOUND ordinals unresolved',
+    e.test_call_GetProcAddress(dsoundHandle, 3) === 0);
+  const msvfwHandle = e.test_call_LoadLibraryA(writeAscii('MSVFW32.DLL')) >>> 0;
+  const drawDibOpen = e.test_call_GetProcAddress(
+    msvfwHandle, writeAscii('DrawDibOpen')) >>> 0;
+  const drawDibDraw = e.test_call_GetProcAddress(
+    msvfwHandle, writeAscii('DrawDibDraw')) >>> 0;
+  const drawDibClose = e.test_call_GetProcAddress(
+    msvfwHandle, writeAscii('DrawDibClose')) >>> 0;
+  check('GetProcAddress exposes Video-for-Windows DrawDib APIs for a probed module',
+    drawDibOpen !== 0 && drawDibDraw !== 0 && drawDibClose !== 0,
+    `handle=0x${msvfwHandle.toString(16)} open=0x${drawDibOpen.toString(16)} ` +
+      `draw=0x${drawDibDraw.toString(16)} close=0x${drawDibClose.toString(16)}`);
   const oleExpDir = e.guest_alloc(32);
   const oleDllName = writeAscii('OLE32.DLL');
   const oleLoadAddr = oleExpDir - 0x1800;
@@ -174,10 +283,27 @@ async function main() {
     e.test_wsprintf_w(ansiOut, ansiFmt, writeDwords([ansi])) === 23 &&
       readWide(ansiOut) === 'missing mciSendCommandW', readWide(ansiOut));
 
+  const mciAnsiOut = e.guest_alloc(5);
+  check('mciSendStringA forwards ANSI commands and bounds its character result',
+    e.test_call_mciSendStringA(writeAscii('status song mode'), mciAnsiOut, 5) === 0 &&
+      readAscii(mciAnsiOut) === 'play' &&
+      mciCalls.at(-1).text === 'status song mode' && mciCalls.at(-1).chars === 5,
+    `${readAscii(mciAnsiOut)} ${JSON.stringify(mciCalls.at(-1))}`);
+  const mciWideOut = e.guest_alloc(10);
+  check('mciSendStringW shares the parser and treats cchReturn as wide characters',
+    e.test_call_mciSendStringW(writeWide('status song mode'), mciWideOut, 5) === 0 &&
+      readWide(mciWideOut) === 'play' &&
+      mciCalls.at(-1).text === 'status song mode' && mciCalls.at(-1).chars === 5,
+    `${readWide(mciWideOut)} ${JSON.stringify(mciCalls.at(-1))}`);
+  check('zero-capacity MCI results do not translate or touch the caller buffer',
+    e.test_call_mciSendStringW(writeWide('status song mode'), 0xdeadbeef, 0) === 0 &&
+      mciCalls.at(-1).result === 0 && mciCalls.at(-1).chars === 0,
+    JSON.stringify(mciCalls.at(-1)));
+
   const fileInfo = e.guest_alloc(692);
   const fullPath = writeWide('C:\\MEDIA\\PINBALL.MID');
-  check('SHGetFileInfoW returns a display-name basename',
-    e.test_call_SHGetFileInfoW(fullPath, fileInfo, 692, 0x200) !== 0 &&
+  check('SHGetFileInfoW returns a display-name basename for an attributed synthetic path',
+    e.test_call_SHGetFileInfoW(fullPath, fileInfo, 692, 0x210) !== 0 &&
       readWide(fileInfo + 12) === 'PINBALL.MID', readWide(fileInfo + 12));
 
   console.log(`--- wide-api: ${pass} passed, ${fail} failed`);

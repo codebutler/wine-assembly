@@ -149,10 +149,6 @@
     (select (local.get $a) (local.get $b)
       (i32.lt_s (local.get $a) (local.get $b))))
 
-  (func $tth_abs (param $a i32) (result i32)
-    (select (i32.sub (i32.const 0) (local.get $a)) (local.get $a)
-      (i32.lt_s (local.get $a) (i32.const 0))))
-
   (func $tth_clamp_declared (param $value i32) (param $hard i32) (result i32)
     (if (i32.le_s (local.get $value) (i32.const 0))
       (then (return (i32.const 0))))
@@ -355,6 +351,25 @@
         (i32.shl (local.get $index) (i32.const 2)))) (local.get $value))
     (i32.const 1))
 
+  ;; The hinted-point record, declared where it is addressed. size-of is 28,
+  ;; which is $TTH_POINT_STRIDE — the stride $tth_point multiplies by, three
+  ;; lines down. Every field access reached through $tth_point goes through
+  ;; (load.field.memarg TthPoint …) / (store.field.memarg …), so these seven
+  ;; offsets exist in exactly one place; tools/build.sh gates that with
+  ;; layout-migrate.js --gate.
+  ;;
+  ;; The `high` pair is the 26.6 original coordinate at higher precision, kept
+  ;; alongside the rounded one because IUP interpolates against the original
+  ;; outline and rounding it twice visibly shifts stems.
+  (layout TthPoint
+    (field current_x       i32)   ;; +0   26.6, moved by the hinting program
+    (field current_y       i32)   ;; +4
+    (field original_x      i32)   ;; +8   26.6, the unhinted outline
+    (field original_y      i32)   ;; +12
+    (field flags           i32)   ;; +16  $TTH_P_ON_CURVE | _END | _TOUCH_X | _TOUCH_Y
+    (field original_high_x i32)   ;; +20  higher-precision original, for IUP
+    (field original_high_y i32))  ;; +24  ends at +28 == $TTH_POINT_STRIDE
+
   ;; zone=0 addresses the size-owned twilight array; zone=1 the current
   ;; glyph, including four phantom points after the real outline.
   (func $tth_point (param $zone i32) (param $index i32) (result i32)
@@ -385,37 +400,37 @@
     (local $p i32)
     (local.set $p (call $tth_point (local.get $zone) (local.get $index)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (i32.load (local.get $p)))
+    (load.field TthPoint current_x (local.get $p)))
 
   (func $tth_point_current_y (param $zone i32) (param $index i32) (result i32)
     (local $p i32)
     (local.set $p (call $tth_point (local.get $zone) (local.get $index)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (i32.load offset=4 (local.get $p)))
+    (load.field.memarg TthPoint current_y (local.get $p)))
 
   (func $tth_point_original_x (param $zone i32) (param $index i32) (result i32)
     (local $p i32)
     (local.set $p (call $tth_point (local.get $zone) (local.get $index)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (i32.load offset=8 (local.get $p)))
+    (load.field.memarg TthPoint original_x (local.get $p)))
 
   (func $tth_point_original_high_x (param $zone i32) (param $index i32) (result i32)
     (local $p i32)
     (local.set $p (call $tth_point (local.get $zone) (local.get $index)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (i32.load offset=20 (local.get $p)))
+    (load.field.memarg TthPoint original_high_x (local.get $p)))
 
   (func $tth_point_original_y (param $zone i32) (param $index i32) (result i32)
     (local $p i32)
     (local.set $p (call $tth_point (local.get $zone) (local.get $index)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (i32.load offset=12 (local.get $p)))
+    (load.field.memarg TthPoint original_y (local.get $p)))
 
   (func $tth_point_original_high_y (param $zone i32) (param $index i32) (result i32)
     (local $p i32)
     (local.set $p (call $tth_point (local.get $zone) (local.get $index)))
     (if (i32.eqz (local.get $p)) (then (return (i32.const 0))))
-    (i32.load offset=24 (local.get $p)))
+    (load.field.memarg TthPoint original_high_y (local.get $p)))
 
   ;; ---- vector and rounding arithmetic ---------------------------------
 
@@ -539,7 +554,7 @@
       (then (return (local.get $value))))
     (local.set $sign (select (i32.const -1) (i32.const 1)
       (i32.lt_s (local.get $value) (i32.const 0))))
-    (local.set $v (call $tth_abs (local.get $value)))
+    (local.set $v (call $tt_abs (local.get $value)))
     (local.set $phase (global.get $tth_round_phase))
     (local.set $threshold (global.get $tth_round_threshold))
     (local.set $result (i32.add (local.get $phase)
@@ -637,9 +652,9 @@
     (if (global.get $tth_error) (then (return (i32.const 0))))
     ;; The top stack point is p1/zp2 and the next is p2/zp1. The vector points
     ;; from p1 toward p2, so its delta is b-a (including the dual outline).
-    (local.set $x (i32.sub (i32.load (local.get $b)) (i32.load (local.get $a))))
-    (local.set $y (i32.sub (i32.load offset=4 (local.get $b))
-      (i32.load offset=4 (local.get $a))))
+    (local.set $x (i32.sub (load.field TthPoint current_x (local.get $b)) (load.field TthPoint current_x (local.get $a))))
+    (local.set $y (i32.sub (load.field.memarg TthPoint current_y (local.get $b))
+      (load.field.memarg TthPoint current_y (local.get $a))))
     (if (i32.and (i32.eqz (local.get $x)) (i32.eqz (local.get $y)))
       (then
         ;; The Win98 rasterizer treats a coincident-point line as a no-op.
@@ -671,10 +686,10 @@
         (global.set $tth_pvy (local.get $y))
         (if (local.get $dual)
           (then
-            (local.set $x (i32.sub (i32.load offset=8 (local.get $b))
-              (i32.load offset=8 (local.get $a))))
-            (local.set $y (i32.sub (i32.load offset=12 (local.get $b))
-              (i32.load offset=12 (local.get $a))))
+            (local.set $x (i32.sub (load.field.memarg TthPoint original_x (local.get $b))
+              (load.field.memarg TthPoint original_x (local.get $a))))
+            (local.set $y (i32.sub (load.field.memarg TthPoint original_y (local.get $b))
+              (load.field.memarg TthPoint original_y (local.get $a))))
             (if (local.get $perpendicular)
               (then
                 (local.set $tmp (local.get $x))
@@ -1175,7 +1190,7 @@
     (local.set $a (call $tth_pop))
     (if (global.get $tth_error) (then (return (i32.const 0))))
     (if (i32.eq (local.get $op) (i32.const 0x64))
-      (then (return (call $tth_push (call $tth_abs (local.get $a))))))
+      (then (return (call $tth_push (call $tt_abs (local.get $a))))))
     (if (i32.eq (local.get $op) (i32.const 0x65))
       (then (return (call $tth_push (i32.sub (i32.const 0) (local.get $a))))))
     (if (i32.eq (local.get $op) (i32.const 0x66))
@@ -1203,7 +1218,7 @@
     (local.set $sign (select (i32.const -1) (i32.const 1)
       (i32.lt_s (local.get $distance) (i32.const 0))))
     (if (i32.lt_s
-          (call $tth_abs (i32.sub (call $tth_abs (local.get $distance))
+          (call $tt_abs (i32.sub (call $tt_abs (local.get $distance))
             (global.get $tth_sw_value)))
           (global.get $tth_sw_cut))
       (then (return (i32.mul (local.get $sign) (global.get $tth_sw_value)))))
@@ -1217,7 +1232,7 @@
     (local $direction i32)
     (local.set $direction (select (local.get $original) (local.get $distance)
       (i32.ne (local.get $original) (i32.const 0))))
-    (if (i32.lt_s (call $tth_abs (local.get $distance))
+    (if (i32.lt_s (call $tt_abs (local.get $distance))
           (global.get $tth_min_dist))
       (then (return (select
         (i32.sub (i32.const 0) (global.get $tth_min_dist))
@@ -1266,7 +1281,7 @@
             (i32.sub (i32.const 0) (local.get $distance)))))
         (if (i32.and (local.get $op) (i32.const 0x04))
           (then
-            (if (i32.gt_s (call $tth_abs
+            (if (i32.gt_s (call $tt_abs
                   (i32.sub (local.get $distance) (local.get $original)))
                   (global.get $tth_cvt_cut))
               (then (local.set $distance (local.get $original)))))))
@@ -1313,12 +1328,12 @@
         (local.set $point (call $tth_point (global.get $tth_zp0)
           (local.get $point_index)))
         (if (global.get $tth_error) (then (return (i32.const 0))))
-        (local.set $value (i32.load offset=16 (local.get $point)))
+        (local.set $value (load.field.memarg TthPoint flags (local.get $point)))
         (if (i32.ne (global.get $tth_fvx) (i32.const 0))
           (then (local.set $value (i32.and (local.get $value) (i32.const -5)))))
         (if (i32.ne (global.get $tth_fvy) (i32.const 0))
           (then (local.set $value (i32.and (local.get $value) (i32.const -9)))))
-        (i32.store offset=16 (local.get $point) (local.get $value))
+        (store.field.memarg TthPoint flags (local.get $point) (local.get $value))
         (return (i32.const 1))))
     ;; MDAP[0/1].
     (if (i32.or (i32.eq (local.get $op) (i32.const 0x2E))
@@ -1361,19 +1376,15 @@
             (if (i32.eqz (call $tth_move_projection (local.get $point)
                   (local.get $value)))
               (then (return (i32.const 0))))
-            (i32.store offset=8 (local.get $point)
-              (i32.load (local.get $point)))
-            (i32.store offset=12 (local.get $point)
-              (i32.load offset=4 (local.get $point)))
-            (i32.store offset=20 (local.get $point)
-              (i32.shl (i32.load (local.get $point)) (i32.const 10)))
-            (i32.store offset=24 (local.get $point)
-              (i32.shl (i32.load offset=4 (local.get $point)) (i32.const 10)))
+            (store.field.memarg TthPoint original_x (local.get $point) (load.field TthPoint current_x (local.get $point)))
+            (store.field.memarg TthPoint original_y (local.get $point) (load.field.memarg TthPoint current_y (local.get $point)))
+            (store.field.memarg TthPoint original_high_x (local.get $point) (i32.shl (load.field TthPoint current_x (local.get $point)) (i32.const 10)))
+            (store.field.memarg TthPoint original_high_y (local.get $point) (i32.shl (load.field.memarg TthPoint current_y (local.get $point)) (i32.const 10)))
             (if (i32.and (local.get $op) (i32.const 1))
               (then
                 (local.set $current (call $tth_dot
-                  (i32.load (local.get $point))
-                  (i32.load offset=4 (local.get $point))
+                  (load.field TthPoint current_x (local.get $point))
+                  (load.field.memarg TthPoint current_y (local.get $point))
                   (global.get $tth_pvx) (global.get $tth_pvy)))
                 (local.set $value (call $tth_round (local.get $value)))
                 (if (i32.eqz (call $tth_move_projection (local.get $point)
@@ -1388,7 +1399,7 @@
           (global.get $tth_dvx) (global.get $tth_dvy)))
         (if (i32.and (local.get $op) (i32.const 1))
           (then
-            (if (i32.gt_s (call $tth_abs
+            (if (i32.gt_s (call $tt_abs
                   (i32.sub (local.get $value) (local.get $current)))
                   (global.get $tth_cvt_cut))
               (then (local.set $value (local.get $current))))
@@ -1517,7 +1528,7 @@
     (local.set $start (i32.const 0))
     (block $found (loop $seek
       (br_if $found (i32.ge_u (local.get $index) (global.get $tth_real_count)))
-      (if (i32.and (i32.load offset=16 (call $tth_point (i32.const 1)
+      (if (i32.and (load.field.memarg TthPoint flags (call $tth_point (i32.const 1)
               (local.get $index))) (global.get $TTH_P_END))
         (then
           (if (i32.eqz (local.get $contour))
@@ -1621,7 +1632,7 @@
         (then (local.set $index (call $tth_pop)))
         (else (local.set $index (local.get $lo))))
       (local.set $point (call $tth_point (global.get $tth_zp0) (local.get $index)))
-      (local.set $flags (i32.load offset=16 (local.get $point)))
+      (local.set $flags (load.field.memarg TthPoint flags (local.get $point)))
       (if (i32.eq (local.get $op) (i32.const 0x81))
         (then (local.set $flags (i32.or (local.get $flags)
           (global.get $TTH_P_ON_CURVE))))
@@ -1629,7 +1640,7 @@
           (then (local.set $flags (i32.and (local.get $flags) (i32.const -2))))
           (else (local.set $flags (i32.xor (local.get $flags)
             (global.get $TTH_P_ON_CURVE)))))))
-      (i32.store offset=16 (local.get $point) (local.get $flags))
+      (store.field.memarg TthPoint flags (local.get $point) (local.get $flags))
       (local.set $lo (i32.add (local.get $lo) (i32.const 1)))
       (local.set $count (i32.sub (local.get $count) (i32.const 1)))
       (br $flip)))
@@ -1745,7 +1756,7 @@
       (local.set $end (local.get $start))
       (block $end_found (loop $find_end
         (local.set $p (call $tth_point (i32.const 1) (local.get $end)))
-        (br_if $end_found (i32.and (i32.load offset=16 (local.get $p))
+        (br_if $end_found (i32.and (load.field.memarg TthPoint flags (local.get $p))
           (global.get $TTH_P_END)))
         (local.set $end (i32.add (local.get $end) (i32.const 1)))
         (br_if $find_end (i32.lt_u (local.get $end) (global.get $tth_real_count)))))
@@ -1823,14 +1834,14 @@
     (local.set $pb1 (call $tth_point (global.get $tth_zp0) (local.get $b1)))
     (local.set $pt (call $tth_point (global.get $tth_zp2) (local.get $target)))
     (if (global.get $tth_error) (then (return (i32.const 0))))
-    (local.set $dax (i32.sub (i32.load (local.get $pa1))
-      (i32.load (local.get $pa0))))
-    (local.set $day (i32.sub (i32.load offset=4 (local.get $pa1))
-      (i32.load offset=4 (local.get $pa0))))
-    (local.set $dbx (i32.sub (i32.load (local.get $pb1))
-      (i32.load (local.get $pb0))))
-    (local.set $dby (i32.sub (i32.load offset=4 (local.get $pb1))
-      (i32.load offset=4 (local.get $pb0))))
+    (local.set $dax (i32.sub (load.field TthPoint current_x (local.get $pa1))
+      (load.field TthPoint current_x (local.get $pa0))))
+    (local.set $day (i32.sub (load.field.memarg TthPoint current_y (local.get $pa1))
+      (load.field.memarg TthPoint current_y (local.get $pa0))))
+    (local.set $dbx (i32.sub (load.field TthPoint current_x (local.get $pb1))
+      (load.field TthPoint current_x (local.get $pb0))))
+    (local.set $dby (i32.sub (load.field.memarg TthPoint current_y (local.get $pb1))
+      (load.field.memarg TthPoint current_y (local.get $pb0))))
     (local.set $den (i64.sub
       (i64.mul (i64.extend_i32_s (local.get $dax))
         (i64.extend_i32_s (local.get $dby)))
@@ -1838,29 +1849,29 @@
         (i64.extend_i32_s (local.get $dbx)))))
     (if (i64.eqz (local.get $den))
       (then
-        (local.set $x (i32.shr_s (i32.add (i32.add (i32.load (local.get $pa0))
-          (i32.load (local.get $pa1))) (i32.add (i32.load (local.get $pb0))
-          (i32.load (local.get $pb1)))) (i32.const 2)))
+        (local.set $x (i32.shr_s (i32.add (i32.add (load.field TthPoint current_x (local.get $pa0))
+          (load.field TthPoint current_x (local.get $pa1))) (i32.add (load.field TthPoint current_x (local.get $pb0))
+          (load.field TthPoint current_x (local.get $pb1)))) (i32.const 2)))
         (local.set $y (i32.shr_s (i32.add (i32.add
-          (i32.load offset=4 (local.get $pa0)) (i32.load offset=4 (local.get $pa1)))
-          (i32.add (i32.load offset=4 (local.get $pb0))
-            (i32.load offset=4 (local.get $pb1)))) (i32.const 2))))
+          (load.field.memarg TthPoint current_y (local.get $pa0)) (load.field.memarg TthPoint current_y (local.get $pa1)))
+          (i32.add (load.field.memarg TthPoint current_y (local.get $pb0))
+            (load.field.memarg TthPoint current_y (local.get $pb1)))) (i32.const 2))))
       (else
         (local.set $num (i64.sub
-          (i64.mul (i64.extend_i32_s (i32.sub (i32.load (local.get $pb0))
-              (i32.load (local.get $pa0)))) (i64.extend_i32_s (local.get $dby)))
-          (i64.mul (i64.extend_i32_s (i32.sub (i32.load offset=4 (local.get $pb0))
-              (i32.load offset=4 (local.get $pa0)))) (i64.extend_i32_s (local.get $dbx)))))
-        (local.set $x (i32.add (i32.load (local.get $pa0))
+          (i64.mul (i64.extend_i32_s (i32.sub (load.field TthPoint current_x (local.get $pb0))
+              (load.field TthPoint current_x (local.get $pa0)))) (i64.extend_i32_s (local.get $dby)))
+          (i64.mul (i64.extend_i32_s (i32.sub (load.field.memarg TthPoint current_y (local.get $pb0))
+              (load.field.memarg TthPoint current_y (local.get $pa0)))) (i64.extend_i32_s (local.get $dbx)))))
+        (local.set $x (i32.add (load.field TthPoint current_x (local.get $pa0))
           (call $gdi_round_ratio (i64.mul (i64.extend_i32_s (local.get $dax))
             (local.get $num)) (local.get $den))))
-        (local.set $y (i32.add (i32.load offset=4 (local.get $pa0))
+        (local.set $y (i32.add (load.field.memarg TthPoint current_y (local.get $pa0))
           (call $gdi_round_ratio (i64.mul (i64.extend_i32_s (local.get $day))
             (local.get $num)) (local.get $den))))))
-    (i32.store (local.get $pt) (local.get $x))
-    (i32.store offset=4 (local.get $pt) (local.get $y))
-    (i32.store offset=16 (local.get $pt) (i32.or
-      (i32.load offset=16 (local.get $pt)) (i32.const 12)))
+    (store.field TthPoint current_x (local.get $pt) (local.get $x))
+    (store.field.memarg TthPoint current_y (local.get $pt) (local.get $y))
+    (store.field.memarg TthPoint flags (local.get $pt) (i32.or
+      (load.field.memarg TthPoint flags (local.get $pt)) (i32.const 12)))
     (i32.const 1))
 
   ;; ---- definitions, calls, and control flow --------------------------
@@ -2514,13 +2525,13 @@
           (call $tt_point_on_curve (local.get $compact) (local.get $index)))
         (select (global.get $TTH_P_END) (i32.const 0)
           (call $tt_point_ends_contour (local.get $compact) (local.get $index)))))
-      (i32.store offset=0 (local.get $point) (local.get $x))
-      (i32.store offset=4 (local.get $point) (local.get $y))
-      (i32.store offset=8 (local.get $point) (local.get $x))
-      (i32.store offset=12 (local.get $point) (local.get $y))
-      (i32.store offset=16 (local.get $point) (local.get $flags))
-      (i32.store offset=20 (local.get $point) (local.get $high_x))
-      (i32.store offset=24 (local.get $point) (local.get $high_y))
+      (store.field.memarg TthPoint current_x (local.get $point) (local.get $x))
+      (store.field.memarg TthPoint current_y (local.get $point) (local.get $y))
+      (store.field.memarg TthPoint original_x (local.get $point) (local.get $x))
+      (store.field.memarg TthPoint original_y (local.get $point) (local.get $y))
+      (store.field.memarg TthPoint flags (local.get $point) (local.get $flags))
+      (store.field.memarg TthPoint original_high_x (local.get $point) (local.get $high_x))
+      (store.field.memarg TthPoint original_high_y (local.get $point) (local.get $high_y))
       (local.set $index (i32.add (local.get $index) (i32.const 1)))
       (br $points)))
     (local.set $left (call $tt_fu_to_26_6
@@ -2560,14 +2571,13 @@
         (i32.eq (local.get $index) (i32.add (local.get $count) (i32.const 1)))))
       (if (i32.ge_u (local.get $index) (i32.add (local.get $count) (i32.const 2)))
         (then (local.set $x (i32.const 0))))
-      (i32.store offset=0 (local.get $point) (local.get $x))
-      (i32.store offset=4 (local.get $point) (i32.const 0))
-      (i32.store offset=8 (local.get $point) (local.get $x))
-      (i32.store offset=12 (local.get $point) (i32.const 0))
-      (i32.store offset=16 (local.get $point) (i32.const 0))
-      (i32.store offset=20 (local.get $point)
-        (i32.shl (local.get $x) (i32.const 10)))
-      (i32.store offset=24 (local.get $point) (i32.const 0))
+      (store.field.memarg TthPoint current_x (local.get $point) (local.get $x))
+      (store.field.memarg TthPoint current_y (local.get $point) (i32.const 0))
+      (store.field.memarg TthPoint original_x (local.get $point) (local.get $x))
+      (store.field.memarg TthPoint original_y (local.get $point) (i32.const 0))
+      (store.field.memarg TthPoint flags (local.get $point) (i32.const 0))
+      (store.field.memarg TthPoint original_high_x (local.get $point) (i32.shl (local.get $x) (i32.const 10)))
+      (store.field.memarg TthPoint original_high_y (local.get $point) (i32.const 0))
       (local.set $index (i32.add (local.get $index) (i32.const 1)))
       (br $phantom)))
     (global.set $tth_glyph_advance (local.get $advance))
@@ -2700,7 +2710,9 @@
                 (local.get $ppem) (global.get $tth_upem)))
               (local.set $dy (call $tt_fu_to_26_6 (local.get $arg2)
                 (local.get $ppem) (global.get $tth_upem)))
-              (if (i32.and (i32.and (local.get $flags) (i32.const 0x0800))
+              (if (i32.and
+                    (i32.ne (i32.and (local.get $flags) (i32.const 0x0800))
+                            (i32.const 0))
                     (i32.eqz (i32.and (local.get $flags) (i32.const 0x1000))))
                 (then
                   (local.set $x (local.get $dx))

@@ -8,10 +8,12 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { createCanvas } = require('../lib/canvas-compat');
 const { Win98Renderer } = require('../lib/renderer');
 const { mountBundledFonts } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC_DIR = path.join(ROOT, 'src');
@@ -71,8 +73,13 @@ const LVIF_STATE = 0x0008;
 const LVFI_PARAM = 0x0001;
 const LVFI_STRING = 0x0002;
 const LVFI_PARTIAL = 0x0008;
+const LVIS_FOCUSED = 0x0001;
 const LVIS_SELECTED = 0x0002;
+const LVIS_CUT = 0x0004;
+const LVIS_STATEIMAGEMASK = 0xF000;
+const LVNI_FOCUSED = 0x0001;
 const LVNI_SELECTED = 0x0002;
+const LVS_SINGLESEL = 0x0004;
 const LVIR_BOUNDS = 0x0000;
 const LVIR_LABEL = 0x0002;
 const LVCF_WIDTH = 0x0002;
@@ -101,8 +108,19 @@ const CUSTOM_TEXT = 0x000020A0;
 const CUSTOM_TEXT_BK = 0x0000D0F0;
 const IMAGE_MASK = 0x00C0C0C0;
 
+const extraWat = String.raw`
+  (func (export "test_set_scroll_pos")
+      (param $hwnd i32) (param $bar i32) (param $pos i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
+    (call $handle_SetScrollPos
+      (local.get $hwnd) (local.get $bar) (local.get $pos) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
+`;
+
 async function main() {
-  const wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC_DIR, f), 'utf-8'));
+  const wasmBytes = compileSrcWasm((filename, source) =>
+    filename === '13-exports.wat' ? `${source}\n${extraWat}\n` : source);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   // The control's own painting is checked by reading the pixels it produces,
   // and a surface needs a renderer to hang off.
@@ -117,6 +135,7 @@ async function main() {
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -189,7 +208,7 @@ async function main() {
   const e = instance.exports;
   const u8 = new Uint8Array(memory.buffer);
   const dv = new DataView(memory.buffer);
-  const wa = g => g - e.get_image_base() + 0x12000;
+  const wa = g => RegionMap.g2w(g, e.get_image_base());
 
   const checks = [];
   function check(name, pass, info = '') {
@@ -368,7 +387,7 @@ async function main() {
       storedItem: dv.getInt32(p + 12, true),
     };
   }
-  function insertItem(idx, text, image = 0, lParam = 0) {
+  function insertItem(idx, text, image = 0, lParam = 0, target = lv) {
     const g = e.guest_alloc(40);
     const p = wa(g);
     u8.fill(0, p, p + 40);
@@ -378,7 +397,7 @@ async function main() {
     dv.setUint32(p + 20, writeStr(text), true);
     dv.setInt32(p + 28, image, true);
     dv.setUint32(p + 32, lParam >>> 0, true);
-    return e.send_message(lv, LVM_INSERTITEMA, 0, g);
+    return e.send_message(target, LVM_INSERTITEMA, 0, g);
   }
   function setSubitem(item, sub, text) {
     const g = e.guest_alloc(40);
@@ -409,12 +428,13 @@ async function main() {
     dv.setUint32(p + 32, lParam >>> 0, true);
     return e.send_message(lv, LVM_SETITEMA, 0, g);
   }
-  function getItemMeta(item) {
+  function getItemMeta(item, stateMask = 0xFFFFFFFF) {
     const g = e.guest_alloc(40);
     const p = wa(g);
     u8.fill(0, p, p + 40);
     dv.setUint32(p + 0, LVIF_IMAGE | LVIF_PARAM | LVIF_STATE, true);
     dv.setInt32(p + 4, item, true);
+    dv.setUint32(p + 16, stateMask >>> 0, true);
     const len = e.send_message(lv, LVM_GETITEMA, 0, g);
     return {
       len,
@@ -422,6 +442,15 @@ async function main() {
       lParam: dv.getUint32(p + 32, true),
       state: dv.getUint32(p + 12, true),
     };
+  }
+  function setItemState(target, item, state, stateMask) {
+    const g = e.guest_alloc(40);
+    const p = wa(g);
+    u8.fill(0, p, p + 40);
+    dv.setUint32(p + 0, LVIF_STATE, true);
+    dv.setUint32(p + 12, state >>> 0, true);
+    dv.setUint32(p + 16, stateMask >>> 0, true);
+    return e.send_message(target, LVM_SETITEMSTATE, item, g);
   }
   function findItem(start, flags, text = '', lParam = 0) {
     const g = e.guest_alloc(24);
@@ -462,6 +491,9 @@ async function main() {
   const baselineSlots = e.wnd_count_used();
   check('SysListView32 resolves to the native ListView control', e.test_class_name_to_ctrl_id(writeStr('SysListView32')) === 18);
   const lv = e.test_create_listview(0, 0, 220, 82, 1, 0x200);
+  const lvParent = e.wnd_get_parent(lv) >>> 0;
+  e.wnd_set_style_export(lvParent,
+    (e.wnd_get_style_export(lvParent) | 0x10000000) >>> 0);
   check('listview hwnd allocated', lv !== 0, 'hwnd=0x' + lv.toString(16));
   check('create added 2 slots (parent + listview)', e.wnd_count_used() === baselineSlots + 2);
   check('initial LVM_GETIMAGELIST is empty', e.send_message(lv, LVM_GETIMAGELIST, 1, 0) === 0);
@@ -543,13 +575,28 @@ async function main() {
   const row5Type = getItemText(5, 1);
   check('LVM_GETITEMTEXTA subitem text value', row5Type.text === 'REG_DWORD', row5Type.text);
   const row5Meta = getItemMeta(5);
-  check('LVM_GETITEMA returns inserted image/lParam', row5Meta.image === 15 && row5Meta.lParam === 0xCAFE0005, JSON.stringify(row5Meta));
+  check('LVM_GETITEMA returns BOOL plus inserted image/lParam', row5Meta.len === 1 && row5Meta.image === 15 && row5Meta.lParam === 0xCAFE0005, JSON.stringify(row5Meta));
   check('LVM_SETITEMA updates image/lParam', setItemMeta(5, 77, 0x1234ABCD) === 1);
   const row5MetaUpdated = getItemMeta(5);
   check('LVM_GETITEMA returns updated image/lParam', row5MetaUpdated.image === 77 && row5MetaUpdated.lParam === 0x1234ABCD, JSON.stringify(row5MetaUpdated));
   check('LVM_SETITEMA updates a visible row to in-range image', setItemMeta(0, 1, 0xCAFE0000) === 1);
   const row0MetaUpdated = getItemMeta(0);
   check('LVM_GETITEMA returns in-range image metadata', row0MetaUpdated.image === 1 && row0MetaUpdated.lParam === 0xCAFE0000, JSON.stringify(row0MetaUpdated));
+
+  const invalidItemG = e.guest_alloc(40);
+  const invalidItemP = wa(invalidItemG);
+  u8.fill(0, invalidItemP, invalidItemP + 40);
+  dv.setUint32(invalidItemP + 0, LVIF_IMAGE | LVIF_PARAM | LVIF_STATE, true);
+  dv.setInt32(invalidItemP + 4, 99, true);
+  dv.setUint32(invalidItemP + 12, 0x11223344, true);
+  dv.setUint32(invalidItemP + 16, 0xFFFFFFFF, true);
+  dv.setUint32(invalidItemP + 28, 0x55667788, true);
+  dv.setUint32(invalidItemP + 32, 0x99AABBCC, true);
+  check('LVM_GETITEMA rejects an invalid row before touching outputs',
+    e.send_message(lv, LVM_GETITEMA, 0, invalidItemG) === 0 &&
+      dv.getUint32(invalidItemP + 12, true) === 0x11223344 &&
+      dv.getUint32(invalidItemP + 28, true) === 0x55667788 &&
+      dv.getUint32(invalidItemP + 32, true) === 0x99AABBCC);
 
   const exportBuf = e.guest_alloc(64);
   const exportLen = e.listview_get_item_text(lv, 4, 1, exportBuf, 64);
@@ -622,6 +669,26 @@ async function main() {
   e.send_message(lv, WM_MOUSEWHEEL, (-120 << 16), 0);
   check('mouse wheel scrolls down 3 rows', e.listview_get_top_index(lv) === 3);
   check('LVM_GETTOPINDEX follows wheel scroll', e.send_message(lv, LVM_GETTOPINDEX, 0, 0) === 3);
+  check('standard scrollbar state follows the ListView viewport',
+    e.standard_scroll_pos(lv, 1) === 3 &&
+      e.standard_scroll_min(lv, 1) === 0 &&
+      e.standard_scroll_max(lv, 1) === 11 &&
+      e.standard_scroll_page(lv, 1) === 4);
+  check('SetScrollPos returns the prior ListView thumb position',
+    e.test_set_scroll_pos(lv, 1, 7) === 3);
+  check('SetScrollPos moves only the ListView scrollbar thumb',
+    e.standard_scroll_pos(lv, 1) === 7);
+  check('SetScrollPos does not scroll ListView content',
+    e.send_message(lv, LVM_GETTOPINDEX, 0, 0) === 3 &&
+      e.listview_get_top_index(lv) === 3);
+  check('a real ListView scroll resynchronizes content and thumb',
+    e.send_message(lv, LVM_SCROLL, 0, 16) === 1 &&
+      e.send_message(lv, LVM_GETTOPINDEX, 0, 0) === 4 &&
+      e.standard_scroll_pos(lv, 1) === 4);
+  check('ListView scrolling back keeps content and thumb synchronized',
+    e.send_message(lv, LVM_SCROLL, 0, -16) === 1 &&
+      e.send_message(lv, LVM_GETTOPINDEX, 0, 0) === 3 &&
+      e.standard_scroll_pos(lv, 1) === 3);
   const pos5 = getPoint(LVM_GETITEMPOSITION, 5);
   check('LVM_GETITEMPOSITION returns scrolled report y', pos5.ok === 1 && pos5.x === 0 && pos5.y === 50, JSON.stringify(pos5));
   check('LVM_SETITEMPOSITION is accepted as report no-op', e.send_message(lv, LVM_SETITEMPOSITION, 5, makeLParam(33, 44)) === 1);
@@ -665,20 +732,81 @@ async function main() {
   check('LVM_GETNEXTITEM finds selected row', e.send_message(lv, LVM_GETNEXTITEM, 0xFFFFFFFF, LVNI_SELECTED) === 4);
   check('LVM_GETITEMSTATE reports selected bit', e.send_message(lv, LVM_GETITEMSTATE, 4, LVIS_SELECTED) === LVIS_SELECTED);
 
-  const stateG = e.guest_alloc(40);
-  const stateP = wa(stateG);
-  u8.fill(0, stateP, stateP + 40);
-  dv.setUint32(stateP + 0, LVIF_STATE, true);
-  dv.setUint32(stateP + 12, LVIS_SELECTED, true);
-  dv.setUint32(stateP + 16, LVIS_SELECTED, true);
   const notifyBeforeState = e.listview_get_debug_notify_count();
-  check('LVM_SETITEMSTATE can move selection', e.send_message(lv, LVM_SETITEMSTATE, 2, stateG) === 1);
-  check('selection export follows LVM_SETITEMSTATE', e.listview_get_selected_index(lv) === 2);
-  check('LVM_SETITEMSTATE sends selected-item LVN_ITEMCHANGED', e.listview_get_debug_notify_count() >= notifyBeforeState + 3 &&
+  check('LVM_SETITEMSTATE adds a second selection', setItemState(lv, 2, LVIS_SELECTED, LVIS_SELECTED) === 1);
+  check('selection mark follows the latest LVM_SETITEMSTATE', e.listview_get_selected_index(lv) === 2);
+  check('normal ListView retains both programmatic selections',
+    e.send_message(lv, LVM_GETSELECTEDCOUNT, 0, 0) === 2 &&
+      e.send_message(lv, LVM_GETITEMSTATE, 2, LVIS_SELECTED) === LVIS_SELECTED &&
+      e.send_message(lv, LVM_GETITEMSTATE, 4, LVIS_SELECTED) === LVIS_SELECTED);
+  check('LVM_GETNEXTITEM scans each selected row',
+    e.send_message(lv, LVM_GETNEXTITEM, 0xFFFFFFFF, LVNI_SELECTED) === 2 &&
+      e.send_message(lv, LVM_GETNEXTITEM, 2, LVNI_SELECTED) === 4 &&
+      e.send_message(lv, LVM_GETNEXTITEM, 4, LVNI_SELECTED) === -1);
+  check('LVM_SETITEMSTATE sends selected-item LVN_ITEMCHANGED', e.listview_get_debug_notify_count() >= notifyBeforeState + 2 &&
     e.listview_get_debug_notify_code() === LVN_ITEMCHANGED &&
     e.listview_get_debug_notify_item() === 2 &&
     e.listview_get_debug_notify_old_state() === 0 &&
     e.listview_get_debug_notify_new_state() === LVIS_SELECTED);
+
+  check('LVM_SETITEMSTATE -1 broadcasts state image and cut state',
+    setItemState(lv, -1, 0x2000 | LVIS_CUT, LVIS_STATEIMAGEMASK | LVIS_CUT) === 1);
+  check('broadcast state reaches every row without losing selection',
+    [0, 1, 2, 3, 4, 11].every(i =>
+      e.send_message(lv, LVM_GETITEMSTATE, i, LVIS_STATEIMAGEMASK | LVIS_CUT) === (0x2000 | LVIS_CUT)) &&
+      e.send_message(lv, LVM_GETSELECTEDCOUNT, 0, 0) === 2);
+  const maskedState = getItemMeta(2, LVIS_CUT);
+  check('LVM_GETITEMA honors LVITEM.stateMask', maskedState.len === 1 && maskedState.state === LVIS_CUT, JSON.stringify(maskedState));
+
+  check('normal ListView accepts broadcast select',
+    setItemState(lv, -1, LVIS_SELECTED, LVIS_SELECTED) === 1 &&
+      e.send_message(lv, LVM_GETSELECTEDCOUNT, 0, 0) === 12);
+  check('normal ListView accepts broadcast selection clear',
+    setItemState(lv, -1, 0, LVIS_SELECTED) === 1 &&
+      e.send_message(lv, LVM_GETSELECTEDCOUNT, 0, 0) === 0 &&
+      e.send_message(lv, LVM_GETNEXTITEM, 0xFFFFFFFF, LVNI_SELECTED) === -1);
+
+  check('focused item state moves uniquely',
+    setItemState(lv, 0, LVIS_FOCUSED, LVIS_FOCUSED) === 1 &&
+      setItemState(lv, 2, LVIS_FOCUSED, LVIS_FOCUSED) === 1 &&
+      e.send_message(lv, LVM_GETITEMSTATE, 0, LVIS_FOCUSED) === 0 &&
+      e.send_message(lv, LVM_GETITEMSTATE, 2, LVIS_FOCUSED) === LVIS_FOCUSED &&
+      e.send_message(lv, LVM_GETNEXTITEM, 0xFFFFFFFF, LVNI_FOCUSED) === 2);
+  check('broadcast focus fails atomically',
+    setItemState(lv, -1, LVIS_FOCUSED, LVIS_FOCUSED) === 0 &&
+      e.send_message(lv, LVM_GETITEMSTATE, 2, LVIS_FOCUSED) === LVIS_FOCUSED);
+
+  const singleLv = e.test_create_listview(0, 0, 160, 80, 1 | LVS_SINGLESEL, 0);
+  insertItem(0, 'Single 0', 0, 0, singleLv);
+  insertItem(1, 'Single 1', 0, 0, singleLv);
+  insertItem(2, 'Single 2', 0, 0, singleLv);
+  const singleSet0 = setItemState(singleLv, 0, LVIS_SELECTED, LVIS_SELECTED);
+  const singleSet2 = setItemState(singleLv, 2, LVIS_SELECTED, LVIS_SELECTED);
+  const singleAfterTwo = {
+    set0: singleSet0,
+    set2: singleSet2,
+    count: e.send_message(singleLv, LVM_GETSELECTEDCOUNT, 0, 0),
+    state0: e.send_message(singleLv, LVM_GETITEMSTATE, 0, LVIS_SELECTED),
+    state2: e.send_message(singleLv, LVM_GETITEMSTATE, 2, LVIS_SELECTED),
+  };
+  check('LVS_SINGLESEL replaces the prior programmatic selection',
+    singleAfterTwo.set0 === 1 && singleAfterTwo.set2 === 1 &&
+      singleAfterTwo.count === 1 && singleAfterTwo.state0 === 0 &&
+      singleAfterTwo.state2 === LVIS_SELECTED, JSON.stringify(singleAfterTwo));
+  const singleBroadcastSet = setItemState(singleLv, -1, LVIS_SELECTED, LVIS_SELECTED);
+  check('LVS_SINGLESEL rejects broadcast select atomically',
+    singleBroadcastSet === 0 &&
+      e.send_message(singleLv, LVM_GETSELECTEDCOUNT, 0, 0) === 1 &&
+      e.send_message(singleLv, LVM_GETITEMSTATE, 2, LVIS_SELECTED) === LVIS_SELECTED,
+    `ret=${singleBroadcastSet} count=${e.send_message(singleLv, LVM_GETSELECTEDCOUNT, 0, 0)}`);
+  const singleBroadcastClear = setItemState(singleLv, -1, 0, LVIS_SELECTED);
+  check('LVS_SINGLESEL accepts broadcast selection clear',
+    singleBroadcastClear === 1 && e.send_message(singleLv, LVM_GETSELECTEDCOUNT, 0, 0) === 0,
+    `ret=${singleBroadcastClear} count=${e.send_message(singleLv, LVM_GETSELECTEDCOUNT, 0, 0)}`);
+  if (e.wnd_destroy_tree) e.wnd_destroy_tree(singleLv - 1);
+
+  check('restore one selected row for deletion coverage',
+    setItemState(lv, 2, LVIS_SELECTED, LVIS_SELECTED) === 1);
 
   e.send_message(lv, WM_LBUTTONDOWN, 1, makeLParam(212, 76));
   e.send_message(lv, WM_LBUTTONUP, 0, makeLParam(212, 76));
@@ -690,6 +818,8 @@ async function main() {
 
   e.send_message(lv, WM_VSCROLL, (6 << 16) | SB_THUMBTRACK, 0);
   check('WM_VSCROLL thumb track sets top index', e.listview_get_top_index(lv) === 6);
+  check('standard scrollbar position follows ListView thumb track',
+    e.standard_scroll_pos(lv, 1) === 6);
 
   e.send_message(lv, WM_LBUTTONDOWN, 1, makeLParam(212, 45));
   e.send_message(lv, WM_MOUSEMOVE, 1, makeLParam(212, 65));
@@ -716,6 +846,55 @@ async function main() {
   check('LVM_DELETEALLITEMS succeeds', e.send_message(lv, LVM_DELETEALLITEMS, 0, 0) === 1);
   check('LVM_DELETEALLITEMS clears count', e.listview_get_count(lv) === 0);
   check('LVM_DELETEALLITEMS clears selection', e.listview_get_selected_index(lv) === -1);
+
+  // ---- Inserting and deleting in the MIDDLE. Every column/item check above
+  // this point appends, or removes the last entry, and both of those move
+  // nothing: the column shift and the item-record shift would pass all of
+  // them with their bodies deleted outright. These are the checks that read
+  // the shifted run back, so a wrong direction or an off-by-one length shows
+  // up as reordered or duplicated text rather than as a silent pass.
+  check('LVM_DELETECOLUMN empties the column list', e.send_message(lv, LVM_DELETECOLUMN, 0, 0) === 1);
+  check('column list is empty before the shift checks', e.listview_get_column_count(lv) === 0);
+  insertColumn(0, 'C0', 40);
+  insertColumn(1, 'C1', 50);
+  insertColumn(2, 'C2', 60);
+  insertColumn(3, 'C3', 70);
+  check('LVM_INSERTCOLUMNA in the middle returns its index', insertColumn(1, 'MID', 55) === 1);
+  check('middle column insert grows the count', e.listview_get_column_count(lv) === 5);
+  const colsIns = [0, 1, 2, 3, 4].map(getColumn);
+  check('middle column insert keeps column text in order',
+    colsIns.map(c => c.text).join(',') === 'C0,MID,C1,C2,C3',
+    colsIns.map(c => c.text).join(','));
+  check('middle column insert keeps each width with its own column',
+    colsIns.map(c => c.width).join(',') === '40,55,50,60,70',
+    colsIns.map(c => c.width).join(','));
+
+  check('LVM_DELETECOLUMN in the middle succeeds', e.send_message(lv, LVM_DELETECOLUMN, 1, 0) === 1);
+  check('middle column delete shrinks the count', e.listview_get_column_count(lv) === 4);
+  const colsDel = [0, 1, 2, 3].map(getColumn);
+  check('middle column delete closes the hole in text order',
+    colsDel.map(c => c.text).join(',') === 'C0,C1,C2,C3',
+    colsDel.map(c => c.text).join(','));
+  check('middle column delete closes the hole in widths',
+    colsDel.map(c => c.width).join(',') === '40,50,60,70',
+    colsDel.map(c => c.width).join(','));
+
+  insertItem(0, 'R0');
+  insertItem(1, 'R1');
+  insertItem(2, 'R2');
+  setSubitem(0, 1, 'S0');
+  setSubitem(1, 1, 'S1');
+  setSubitem(2, 1, 'S2');
+  check('LVM_INSERTITEMA in the middle returns its index', insertItem(1, 'MIDROW') === 1);
+  setSubitem(1, 1, 'SMID');
+  check('middle item insert grows the count', e.listview_get_count(lv) === 4);
+  const rowText = [0, 1, 2, 3].map(i => getItemText(i, 0).text).join(',');
+  check('middle item insert keeps row text in order', rowText === 'R0,MIDROW,R1,R2', rowText);
+  // The whole 44-byte record moves, not just column 0, so the subitem text
+  // pointers have to land on the same rows their labels did.
+  const subText = [0, 1, 2, 3].map(i => getItemText(i, 1).text).join(',');
+  check('middle item insert carries subitem text with its row', subText === 'S0,SMID,S1,S2', subText);
+  check('LVM_DELETEALLITEMS clears the shift fixture', e.send_message(lv, LVM_DELETEALLITEMS, 0, 0) === 1);
 
   if (e.wnd_destroy_tree) e.wnd_destroy_tree(lv - 1);
   check('slot count returns to baseline after destroy', e.wnd_count_used() === baselineSlots);

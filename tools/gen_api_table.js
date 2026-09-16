@@ -131,6 +131,8 @@ const extra = [
   { name: 'EnumDateFormatsA', nargs: 3 },
   { name: 'EnumTimeFormatsA', nargs: 3 },
   { name: 'EnumResourceLanguagesW', nargs: 5 },
+  { name: 'EnumResourceNamesA', nargs: 4 },
+  { name: 'GetUserDefaultUILanguage', nargs: 0 },
   { name: 'CreateDialogIndirectParamA', nargs: 5 },
   { name: 'SetViewportExtEx', nargs: 4 },
   { name: 'lstrcmpiA', nargs: 2 },
@@ -140,6 +142,7 @@ const extra = [
   { name: 'GetTextExtentPoint32A', nargs: 4 },
   { name: 'EnumFontFamiliesExA', nargs: 5 },
   { name: 'EnumFontFamiliesA', nargs: 4 },
+  { name: 'EnumFontsW', nargs: 4 },
   { name: 'wsprintfA', nargs: -1, convention: 'cdecl', args: [
     { name: 'buffer', type: 'LPSTR' },
     { name: 'format', type: 'LPCSTR' },
@@ -153,17 +156,31 @@ const extra = [
   { name: 'CharLowerA', nargs: 1 },
   { name: 'CharLowerBuffA', nargs: 2 },
   { name: 'ImmAssociateContext', nargs: 2 },
+  { name: 'ImmCreateContext', nargs: 0 },
+  { name: 'ImmDestroyContext', nargs: 1 },
   { name: 'ImmNotifyIME', nargs: 4 },
   { name: 'ImmGetContext', nargs: 1 },
+  { name: 'ImmIsIME', nargs: 1 },
   { name: 'ImmReleaseContext', nargs: 2 },
+  { name: 'OpenThreadToken', nargs: 4 },
+  { name: 'OpenProcessToken', nargs: 3 },
+  { name: 'GetTokenInformation', nargs: 5 },
+  { name: 'MsiQueryProductStateW', nargs: 1 },
+  { name: 'SendNotifyMessageW', nargs: 4 },
   { name: 'VkKeyScanW', nargs: 1 },
   { name: 'MapVirtualKeyW', nargs: 2 },
   { name: 'MapVirtualKeyExA', nargs: 3 },
   { name: 'GetKeyboardState', nargs: 1 },
+  { name: 'SetKeyboardState', nargs: 1 },
+  { name: 'AttachThreadInput', nargs: 3 },
   { name: 'ToAsciiEx', nargs: 6 },
-  { name: 'GetStringTypeExA', nargs: 5 },
+  { name: 'keybd_event', nargs: 4 },
+  { name: 'GetStringTypeExA', nargs: 5, handler: 'GetStringTypeA' },
   { name: 'VirtualQuery', nargs: 3 },
+  { name: 'WaitForSingleObjectEx', nargs: 3 },
+  { name: 'SleepEx', nargs: 2 },
   // Wide-char CRT APIs
+  { name: '__getmainargs', nargs: 5, convention: 'cdecl' },
   { name: '__wgetmainargs', nargs: 5 },
   { name: '__p__wcmdln', nargs: 0 },
   { name: '__p__acmdln', nargs: 0 },
@@ -187,13 +204,95 @@ const extra = [
   { name: 'wcslen', nargs: 1 },
   { name: 'mbstowcs', nargs: 3, convention: 'cdecl' },
   { name: 'wcstombs', nargs: 3, convention: 'cdecl' },
+  { name: 'acos', nargs: 1, convention: 'cdecl' },
+  { name: 'asin', nargs: 1, convention: 'cdecl' },
+  { name: 'atan', nargs: 1, convention: 'cdecl' },
+  { name: 'atan2', nargs: 2, convention: 'cdecl' },
   { name: 'ceil', nargs: 1, convention: 'cdecl' },
+  { name: 'cos', nargs: 1, convention: 'cdecl' },
+  { name: 'exp', nargs: 1, convention: 'cdecl' },
+  { name: 'fabs', nargs: 1, convention: 'cdecl' },
+  { name: 'floor', nargs: 1, convention: 'cdecl' },
+  { name: 'fmod', nargs: 2, convention: 'cdecl' },
+  { name: 'frexp', nargs: 2, convention: 'cdecl' },
+  { name: 'ldexp', nargs: 2, convention: 'cdecl' },
+  { name: 'log', nargs: 1, convention: 'cdecl' },
   { name: 'sqrt', nargs: 1, convention: 'cdecl' },
   { name: 'sin', nargs: 1, convention: 'cdecl' },
+  { name: 'tan', nargs: 1, convention: 'cdecl' },
+  { name: 'log10', nargs: 1, convention: 'cdecl' },
   { name: 'pow', nargs: 2, convention: 'cdecl' },
   { name: '_CIpow', nargs: 0, convention: 'cdecl' },
+  { name: 'fopen', nargs: 2, convention: 'cdecl' },
+  { name: 'freopen', nargs: 3, convention: 'cdecl' },
+  { name: 'fclose', nargs: 1, convention: 'cdecl' },
+  { name: '_open', nargs: 3, convention: 'cdecl' },
+  { name: '_close', nargs: 1, convention: 'cdecl' },
+  { name: '_dup', nargs: 1, convention: 'cdecl' },
+  { name: '_unlink', nargs: 1, convention: 'cdecl' },
+  { name: '_read', nargs: 3, convention: 'cdecl' },
+  { name: '_write', nargs: 3, convention: 'cdecl' },
+  { name: '_lseek', nargs: 3, convention: 'cdecl' },
+  { name: '_filelength', nargs: 1, convention: 'cdecl' },
+  { name: 'fflush', nargs: 1, convention: 'cdecl' },
+  { name: 'fputs', nargs: 2, convention: 'cdecl' },
+  { name: 'fwrite', nargs: 4, convention: 'cdecl' },
+  { name: 'fprintf', nargs: -1, convention: 'cdecl' },
+  { name: 'vfprintf', nargs: 3, convention: 'cdecl' },
+  { name: 'vsprintf', nargs: 3, convention: 'cdecl' },
+  { name: '_errno', nargs: 0, convention: 'cdecl' },
+  { name: '_lock', nargs: 1, convention: 'cdecl' },
+  { name: '_unlock', nargs: 1, convention: 'cdecl' },
+  { name: '__lconv_init', nargs: 0, convention: 'cdecl' },
+  { name: '_findfirst', nargs: 2, convention: 'cdecl' },
+  { name: '_findnext', nargs: 2, convention: 'cdecl' },
+  { name: '_findclose', nargs: 1, convention: 'cdecl' },
+  { name: 'getenv', nargs: 1, convention: 'cdecl' },
+  { name: '_stat', nargs: 2, convention: 'cdecl' },
+  { name: '_access', nargs: 2, convention: 'cdecl' },
+  { name: '_beginthread', nargs: 3, convention: 'cdecl' },
+  { name: '_beginthreadex', nargs: 6, convention: 'cdecl' },
+  { name: '_endthreadex', nargs: 1, convention: 'cdecl' },
+  { name: '_chdir', nargs: 1, convention: 'cdecl' },
+  { name: 'feof', nargs: 1, convention: 'cdecl' },
+  { name: 'ferror', nargs: 1, convention: 'cdecl' },
+  { name: 'fgets', nargs: 3, convention: 'cdecl' },
+  { name: 'fread', nargs: 4, convention: 'cdecl' },
+  { name: 'fseek', nargs: 3, convention: 'cdecl' },
+  { name: 'ftell', nargs: 1, convention: 'cdecl' },
+  { name: 'tolower', nargs: 1, convention: 'cdecl' },
+  { name: 'toupper', nargs: 1, convention: 'cdecl' },
+  { name: 'towlower', nargs: 1, convention: 'cdecl' },
+  { name: 'towupper', nargs: 1, convention: 'cdecl' },
+  { name: 'isalnum', nargs: 1, convention: 'cdecl' },
+  { name: 'isalpha', nargs: 1, convention: 'cdecl' },
+  { name: 'iscntrl', nargs: 1, convention: 'cdecl' },
+  { name: 'isdigit', nargs: 1, convention: 'cdecl' },
+  { name: 'islower', nargs: 1, convention: 'cdecl' },
+  { name: 'isprint', nargs: 1, convention: 'cdecl' },
+  { name: 'ispunct', nargs: 1, convention: 'cdecl' },
+  { name: 'isspace', nargs: 1, convention: 'cdecl' },
+  { name: 'isupper', nargs: 1, convention: 'cdecl' },
+  { name: '_isctype', nargs: 2, convention: 'cdecl' },
+  { name: '_pctype', nargs: 0, convention: 'cdecl' },
+  { name: '_setmode', nargs: 2, convention: 'cdecl' },
+  { name: 'iswctype', nargs: 2, convention: 'cdecl' },
+  { name: 'isxdigit', nargs: 1, convention: 'cdecl' },
+  { name: 'signal', nargs: 2, convention: 'cdecl' },
+  { name: 'localtime', nargs: 1, convention: 'cdecl' },
+  { name: 'printf', nargs: -1, convention: 'cdecl' },
+  { name: 'strtod', nargs: 2, convention: 'cdecl' },
+  { name: 'strtol', nargs: 3, convention: 'cdecl' },
+  { name: 'strtoul', nargs: 3, convention: 'cdecl' },
+  { name: 'strerror', nargs: 1, convention: 'cdecl' },
+  { name: 'tmpnam', nargs: 1, convention: 'cdecl' },
+  { name: 'abort', nargs: 0, convention: 'cdecl' },
+  { name: 'atof', nargs: 1, convention: 'cdecl' },
+  { name: 'clock', nargs: 0, convention: 'cdecl' },
   { name: 'memset', nargs: 3 },
   { name: 'memcpy', nargs: 3 },
+  { name: 'memchr', nargs: 3, convention: 'cdecl' },
+  { name: 'memcmp', nargs: 3, convention: 'cdecl' },
   { name: '_strupr', nargs: 1, convention: 'cdecl' },
   { name: '_fullpath', nargs: 3, convention: 'cdecl' },
   { name: 'qsort', nargs: 4, convention: 'cdecl' },
@@ -201,6 +300,7 @@ const extra = [
   { name: '__CxxFrameHandler', nargs: 4 },
   { name: '_global_unwind2', nargs: 1 },
   { name: '_getdcwd', nargs: 3 },
+  { name: '_setjmp3', nargs: -1, convention: 'cdecl' },
   // W-suffix Win32 APIs
   { name: 'GetModuleHandleW', nargs: 1 },
   { name: 'GetModuleFileNameW', nargs: 3 },
@@ -434,17 +534,45 @@ const extra = [
   // Heap
   { name: 'HeapCreate', nargs: 3 },
   { name: 'HeapDestroy', nargs: 1 },
+  { name: 'HeapSetInformation', nargs: 4 },
+  // BASS audio library entry points used by shareware games. The emulator
+  // provides no BASS mixer yet, but no-audio lifecycle stubs let callers fall
+  // through to gameplay.
+  { name: 'BASS_Init', nargs: 5 },
+  { name: 'BASS_PluginLoad', nargs: 2 },
+  { name: 'BASS_Start', nargs: 0 },
+  { name: 'BASS_SetConfig', nargs: 2 },
+  { name: 'BASS_SampleLoad', nargs: 7 },
+  { name: 'BASS_SampleGetChannel', nargs: 2 },
+  { name: 'BASS_SampleFree', nargs: 1 },
+  { name: 'BASS_StreamCreateFile', nargs: 7 },
+  { name: 'BASS_StreamFree', nargs: 1 },
+  { name: 'BASS_MusicLoad', nargs: 7 },
+  { name: 'BASS_MusicFree', nargs: 1 },
+  { name: 'BASS_ChannelPlay', nargs: 2 },
+  { name: 'BASS_ChannelPause', nargs: 1 },
+  { name: 'BASS_ChannelStop', nargs: 1 },
+  { name: 'BASS_ChannelSetAttribute', nargs: 3 },
+  { name: 'BASS_ChannelSetPosition', nargs: 4 },
+  { name: 'BASS_ErrorGetCode', nargs: 0 },
+  { name: 'BASS_Free', nargs: 0 },
   // Misc KERNEL32 used by msvcrt
   { name: 'GetCurrentThread', nargs: 0 },
   { name: 'GetCurrentProcess', nargs: 0 },
   { name: 'GetProcessHeap', nargs: 0 },
+  { name: 'AllocConsole', nargs: 0 },
+  { name: 'SetConsoleTitleA', nargs: 1 },
+  { name: 'WriteConsoleOutputA', nargs: 5 },
   { name: 'SetHandleCount', nargs: 1 },
   { name: 'GetStdHandle', nargs: 1 },
   { name: 'GetFileType', nargs: 1 },
   { name: 'SetStdHandle', nargs: 2 },
   { name: 'FlushFileBuffers', nargs: 1 },
   { name: 'WriteFile', nargs: 5 },
-  { name: 'WinExec', nargs: 2 },
+  { name: 'WinExec', nargs: 2, args: [
+    { name: 'lpCmdLine', type: 'LPCSTR' },
+    { name: 'uCmdShow', type: 'UINT' },
+  ], ret: 'UINT' },
   { name: 'GetACP', nargs: 0 },
   { name: 'GetOEMCP', nargs: 0 },
   { name: 'GetCPInfo', nargs: 2 },
@@ -644,6 +772,7 @@ const extra = [
   { name: 'midiOutOpen', nargs: 5 },
   { name: 'midiOutClose', nargs: 1 },
   { name: 'midiOutShortMsg', nargs: 2 },
+  { name: 'midiOutLongMsg', nargs: 3 },
   { name: 'midiOutReset', nargs: 1 },
   { name: 'midiOutGetVolume', nargs: 2 },
   { name: 'midiOutSetVolume', nargs: 2 },
@@ -658,7 +787,15 @@ const extra = [
   { name: 'OpenMutexA', nargs: 3 },
   { name: 'CreateMutexA', nargs: 3 },
   { name: 'OpenSemaphoreA', nargs: 3 },
+  { name: 'PulseEvent', nargs: 1 },
+  { name: '__mb_cur_max', nargs: 0, convention: 'cdecl' },
+  { name: '__p__environ', nargs: 0, convention: 'cdecl' },
+  { name: '__p___initenv', nargs: 0, convention: 'cdecl' },
+  { name: '_cexit', nargs: 0, convention: 'cdecl' },
+  { name: '_getdrive', nargs: 0, convention: 'cdecl' },
+  { name: '_iob', nargs: 0, convention: 'cdecl' },
   { name: 'joyGetPos', nargs: 2 },
+  { name: 'joyGetPosEx', nargs: 2 },
   { name: 'joyGetNumDevs', nargs: 0 },
   { name: 'CoInitializeEx', nargs: 2 },
   { name: 'joyGetDevCapsA', nargs: 3 },
@@ -670,6 +807,10 @@ const extra = [
   { name: 'GetFileVersionInfoSizeA', nargs: 2 },
   { name: 'GetFileVersionInfoA', nargs: 4 },
   { name: 'VerQueryValueA', nargs: 4 },
+  { name: 'GetFileVersionInfoSizeW', nargs: 2 },
+  { name: 'GetFileVersionInfoW', nargs: 4 },
+  { name: 'VerQueryValueW', nargs: 4 },
+  { name: 'GetWindowsDirectoryW', nargs: 2 },
   // DirectDraw enumeration
   { name: 'DirectDrawEnumerateA', nargs: 2 },
   { name: 'EnumWindows', nargs: 2 },
@@ -864,6 +1005,7 @@ const extra = [
   { name: 'timeGetDevCaps', nargs: 2 },
   // KERNEL32 — drive enumeration
   { name: 'GetLogicalDriveStringsA', nargs: 2 },
+  { name: 'GetLogicalDriveStringsW', nargs: 2 },
   // KERNEL32 — locale persistence stub
   { name: 'SetLocaleInfoA', nargs: 3 },
   // USER32 — keyboard identification (trivial stub: enhanced 101/102-key)
@@ -876,8 +1018,27 @@ const extra = [
   { name: 'GetSystemDefaultLCID', nargs: 0 },
   // ADVAPI32 — returns a constant "user" string
   { name: 'GetUserNameA', nargs: 2 },
+  { name: 'GetUserNameW', nargs: 2 },
   // KERNEL32 — returns a constant "PC" string
   { name: 'GetComputerNameA', nargs: 2 },
+  { name: 'GetComputerNameW', nargs: 2 },
+  // KERNEL32 — process-global vectored exception crash-handler registration.
+  { name: 'AddVectoredExceptionHandler', nargs: 2 },
+  { name: 'RemoveVectoredExceptionHandler', nargs: 1 },
+  { name: 'TryEnterCriticalSection', nargs: 1 },
+  { name: 'ExtractIconExW', nargs: 5 },
+  { name: 'EnumDisplayDevicesW', nargs: 4 },
+  { name: 'EnumDisplaySettingsW', nargs: 3 },
+  { name: 'ToUnicode', nargs: 6 },
+  { name: 'win_sparkle_check_update_with_ui', nargs: 0, convention: 'cdecl' },
+  { name: 'win_sparkle_get_last_check_time', nargs: 0, convention: 'cdecl' },
+  { name: 'win_sparkle_get_update_check_interval', nargs: 0, convention: 'cdecl' },
+  { name: 'win_sparkle_set_update_check_interval', nargs: 1, convention: 'cdecl' },
+  { name: 'win_sparkle_get_automatic_check_for_updates', nargs: 0, convention: 'cdecl' },
+  { name: 'win_sparkle_set_automatic_check_for_updates', nargs: 1, convention: 'cdecl' },
+  { name: 'win_sparkle_set_appcast_url', nargs: 1, convention: 'cdecl' },
+  { name: 'win_sparkle_cleanup', nargs: 0, convention: 'cdecl' },
+  { name: 'win_sparkle_init', nargs: 0, convention: 'cdecl' },
   // DPLAYX — all return DPERR_UNAVAILABLE (0x80004005 E_FAIL); apps fall back to single-player.
   { name: 'DirectPlayCreate', nargs: 3 },
   { name: 'DirectPlayEnumerate', nargs: 2 },
@@ -972,6 +1133,9 @@ const extra = [
   { name: 'mixerOpen', nargs: 5 },
   { name: 'mixerSetControlDetails', nargs: 3 },
   { name: 'waveOutGetDevCapsW', nargs: 3 },
+  { name: 'waveInGetDevCapsA', nargs: 3 },
+  { name: 'waveInGetDevCapsW', nargs: 3 },
+  { name: 'GetClipboardSequenceNumber', nargs: 0 },
   // SETUPAPI / USER32 device notification probes used by XP sndvol32.
   { name: 'SetupDiCreateDeviceInfoList', nargs: 2 },
   { name: 'SetupDiDestroyDeviceInfoList', nargs: 1 },
@@ -993,6 +1157,8 @@ const extra = [
   { name: 'DeleteAtom', nargs: 1 },
   // USER32 — cosmetic selection animation used by Win98 RegEdit.
   { name: 'DrawAnimatedRects', nargs: 4 },
+  // COMCTL32 — owned property-sheet page handles (ordinal 24 on Win98).
+  { name: 'DestroyPropertySheetPage', nargs: 1 },
   { name: 'RegEnumValueA', nargs: 8 },
   { name: 'RegEnumValueW', nargs: 8 },
   { name: 'RegQueryInfoKeyA', nargs: 12 },
@@ -1070,9 +1236,29 @@ const extra = [
   { name: 'LZOpenFileA', nargs: 3 },
   { name: 'LZRead', nargs: 3 },
   { name: 'LZSeek', nargs: 3 },
+  { name: 'LZCopy', nargs: 2 },
+  // DirectMusic availability probe used by the GTA2 demo and its installer.
+  // They only create, query, and release the root IDirectMusic interface.
+  { name: 'IDirectMusic_QueryInterface', nargs: 3 },
+  { name: 'IDirectMusic_AddRef', nargs: 1 },
+  { name: 'IDirectMusic_Release', nargs: 1 },
+  { name: 'IDirectDrawGammaControl_QueryInterface', nargs: 3 },
+  { name: 'IDirectDrawGammaControl_AddRef', nargs: 1 },
+  { name: 'IDirectDrawGammaControl_Release', nargs: 1 },
+  { name: 'IDirectDrawGammaControl_GetGammaRamp', nargs: 3 },
+  { name: 'IDirectDrawGammaControl_SetGammaRamp', nargs: 3 },
+  // IDirectDraw4/7 append these slots after IDirectDraw2. Keep the two
+  // interface blocks contiguous: the lazy compatibility vtables in 09a8
+  // extend the existing IDirectDraw2 table with these exact API ranges.
+  { name: 'IDirectDraw4_GetSurfaceFromDC', nargs: 3 },
+  { name: 'IDirectDraw4_RestoreAllSurfaces', nargs: 1 },
+  { name: 'IDirectDraw4_TestCooperativeLevel', nargs: 1 },
+  { name: 'IDirectDraw4_GetDeviceIdentifier', nargs: 3 },
+  { name: 'IDirectDraw7_StartModeTest', nargs: 4 },
+  { name: 'IDirectDraw7_EvaluateMode', nargs: 3 },
   { name: 'LZClose', nargs: 1 },
   // WINMM — RIFF file seek used by RCT after the 16-bit POP decoder fix.
-  { name: 'mmioSeek', nargs: 3 },
+  { name: 'mmioSeek', nargs: 3, handler: '_llseek' },
   // KERNEL32/USER32 — the halves of the atom API that had no entry at all.
   // Delphi's VCL calls GlobalFindAtomA on every window activation, so a
   // missing entry resolved to api_id 0xFFFF and trapped (Tetravex).
@@ -1113,27 +1299,170 @@ const extra = [
   // never load, which falls back to a name-keyed Win32 thunk — so an entry
   // here is all it takes for Direct3DCreate9 to resolve.
   { name: 'Direct3DCreate9', nargs: 1 },
+  // UE2 executables probe D3D8 before honoring an OpenGL renderer choice.
+  { name: 'Direct3DCreate8', nargs: 1, test_call: true },
   // dinput.dll's GetProcAddress-only entry point (v5/v7 apps).
   { name: 'DirectInputCreateEx', nargs: 5 },
+  // SHELL32 — Unicode Inno installers resolve this dynamically.
+  { name: 'ShellExecuteExW', nargs: 1 },
+  // USER32 — same encoding-neutral message contract as the A spelling.
+  { name: 'SendMessageTimeoutW', nargs: 7 },
+  { name: 'GetAncestor', nargs: 2 },
+  { name: 'CharLowerBuffW', nargs: 2 },
+  { name: 'OpenMutexW', nargs: 3 },
+  { name: 'InitializeCriticalSectionAndSpinCount', nargs: 2 },
+  { name: 'LookupAccountSidW', nargs: 7 },
+  { name: 'GetLengthSid', nargs: 1 },
+  { name: 'InitializeAcl', nargs: 3 },
+  { name: 'AddAccessAllowedAce', nargs: 4 },
+  { name: 'GetAce', nargs: 3 },
+  { name: 'SetSecurityDescriptorDacl', nargs: 4 },
+  { name: 'SetFileSecurityW', nargs: 3 },
+  { name: 'GdiplusStartup', nargs: 3 },
+  { name: 'GdiplusShutdown', nargs: 1 },
+  { name: 'GdipLoadImageFromFile', nargs: 2 },
+  { name: 'GdipDrawImageRect', nargs: 6 },
+  { name: 'GdipGetImageWidth', nargs: 2 },
+  { name: 'GdipGetImageHeight', nargs: 2 },
+  { name: 'GdipDisposeImage', nargs: 1 },
+  { name: 'GdipCreateFromHDC', nargs: 2 },
+  { name: 'GdipDeleteGraphics', nargs: 1 },
+  { name: 'GdipGetImageGraphicsContext', nargs: 2 },
+  { name: 'GdipSetSmoothingMode', nargs: 2 },
+  { name: 'GdipSetInterpolationMode', nargs: 2 },
+  { name: 'GdipCreateBitmapFromGraphics', nargs: 4 },
+  { name: 'GdipCreateFromHWND', nargs: 2 },
+  { name: 'GdipGraphicsClear', nargs: 2 },
+  { name: 'GdipCreateBitmapFromHBITMAP', nargs: 3 },
+  { name: 'GdipDrawImageRectRectI', nargs: 14 },
+  { name: 'GdipCreateImageAttributes', nargs: 1 },
+  { name: 'GdipSetImageAttributesColorMatrix', nargs: 6 },
+  { name: 'GdipDisposeImageAttributes', nargs: 1 },
+  { name: 'SHGetFolderPathA', nargs: 5, args: [
+    { name: 'hwndOwner', type: 'HWND' },
+    { name: 'nFolder', type: 'DWORD' },
+    { name: 'hToken', type: 'HANDLE' },
+    { name: 'dwFlags', type: 'DWORD' },
+    { name: 'pszPath', type: 'LPSTR', out: true },
+  ], ret: 'HRESULT' },
+  { name: 'SHGetFolderPathW', nargs: 5, args: [
+    { name: 'hwndOwner', type: 'HWND' },
+    { name: 'nFolder', type: 'DWORD' },
+    { name: 'hToken', type: 'HANDLE' },
+    { name: 'dwFlags', type: 'DWORD' },
+    { name: 'pszPath', type: 'LPWSTR', out: true },
+  ], ret: 'HRESULT' },
+  // Quake II's 1998 ref_gl resolves this non-standard legacy spelling with
+  // GetProcAddress and calls it from EndFrame. Keep it name-resolvable even
+  // though modern Win32 applications normally use GDI32!SwapBuffers.
+  { name: 'wglSwapBuffers', nargs: 1 },
   // IDirectInput7 = the v1 vtable + these two. Keep them adjacent: the
   // vtable is built from a contiguous api-id run.
   { name: 'CreateAcceleratorTableA', nargs: 2 },
   { name: 'DestroyAcceleratorTable', nargs: 1 },
   { name: 'IDirectInput7_FindDevice', nargs: 5 },
   { name: 'IDirectInput7_CreateDeviceEx', nargs: 5 },
+  // KERNEL32 — GoldSrc compares filesystem timestamps while loading a map.
+  { name: 'CompareFileTime', nargs: 2 },
+  // KERNEL32 — WinRAR closes its optional directory-watch handle during
+  // startup cleanup even when creation left INVALID_HANDLE_VALUE behind.
+  { name: 'FindCloseChangeNotification', nargs: 1, args: [
+    { name: 'hChangeHandle', type: 'HANDLE' },
+  ], ret: 'BOOL' },
+  { name: 'FindFirstChangeNotificationA', nargs: 3, args: [
+    { name: 'lpPathName', type: 'LPCSTR' },
+    { name: 'bWatchSubtree', type: 'BOOL' },
+    { name: 'dwNotifyFilter', type: 'DWORD' },
+  ], ret: 'HANDLE' },
+  { name: 'FindFirstChangeNotificationW', nargs: 3, args: [
+    { name: 'lpPathName', type: 'LPCWSTR' },
+    { name: 'bWatchSubtree', type: 'BOOL' },
+    { name: 'dwNotifyFilter', type: 'DWORD' },
+  ], ret: 'HANDLE' },
+  { name: 'FindNextChangeNotification', nargs: 1, args: [
+    { name: 'hChangeHandle', type: 'HANDLE' },
+  ], ret: 'BOOL' },
+  // SHLWAPI — Cave Story resolves this dynamically during startup.
+  { name: 'PathRemoveFileSpecA', nargs: 1 },
+  { name: 'PathRemoveFileSpecW', nargs: 1 },
+  // DirectShow AMMultiMediaStream. Darkstone uses this legacy DirectX Media
+  // object for optional full-motion-video playback during startup.
+  { name: 'IAMMultiMediaStream_QueryInterface', nargs: 3 },
+  { name: 'IAMMultiMediaStream_AddRef', nargs: 1 },
+  { name: 'IAMMultiMediaStream_Release', nargs: 1 },
+  { name: 'IAMMultiMediaStream_GetInformation', nargs: 3 },
+  { name: 'IAMMultiMediaStream_GetMediaStream', nargs: 3 },
+  { name: 'IAMMultiMediaStream_EnumMediaStreams', nargs: 3 },
+  { name: 'IAMMultiMediaStream_GetState', nargs: 2 },
+  { name: 'IAMMultiMediaStream_SetState', nargs: 2 },
+  { name: 'IAMMultiMediaStream_GetTime', nargs: 2 },
+  { name: 'IAMMultiMediaStream_GetDuration', nargs: 2 },
+  { name: 'IAMMultiMediaStream_Seek', nargs: 2 },
+  { name: 'IAMMultiMediaStream_GetEndOfStreamEventHandle', nargs: 2 },
+  { name: 'IAMMultiMediaStream_Initialize', nargs: 4 },
+  { name: 'IAMMultiMediaStream_GetFilterGraph', nargs: 2 },
+  { name: 'IAMMultiMediaStream_GetFilter', nargs: 2 },
+  { name: 'IAMMultiMediaStream_AddMediaStream', nargs: 5 },
+  { name: 'IAMMultiMediaStream_OpenFile', nargs: 3 },
+  { name: 'IAMMultiMediaStream_OpenMoniker', nargs: 4 },
+  { name: 'IAMMultiMediaStream_Render', nargs: 2 },
+  { name: 'LoadCursorFromFileA', nargs: 1 },
+  // Win98 shell-link COM class. Keep each interface contiguous because
+  // CoCreateInstance builds their vtables directly from these API IDs.
+  { name: 'IShellLinkA_QueryInterface', nargs: 3 },
+  { name: 'IShellLinkA_AddRef', nargs: 1 },
+  { name: 'IShellLinkA_Release', nargs: 1 },
+  { name: 'IShellLinkA_GetPath', nargs: 5 },
+  { name: 'IShellLinkA_GetIDList', nargs: 2 },
+  { name: 'IShellLinkA_SetIDList', nargs: 2 },
+  { name: 'IShellLinkA_GetDescription', nargs: 3 },
+  { name: 'IShellLinkA_SetDescription', nargs: 2 },
+  { name: 'IShellLinkA_GetWorkingDirectory', nargs: 3 },
+  { name: 'IShellLinkA_SetWorkingDirectory', nargs: 2 },
+  { name: 'IShellLinkA_GetArguments', nargs: 3 },
+  { name: 'IShellLinkA_SetArguments', nargs: 2 },
+  { name: 'IShellLinkA_GetHotkey', nargs: 2 },
+  { name: 'IShellLinkA_SetHotkey', nargs: 2 },
+  { name: 'IShellLinkA_GetShowCmd', nargs: 2 },
+  { name: 'IShellLinkA_SetShowCmd', nargs: 2 },
+  { name: 'IShellLinkA_GetIconLocation', nargs: 4 },
+  { name: 'IShellLinkA_SetIconLocation', nargs: 3 },
+  { name: 'IShellLinkA_SetRelativePath', nargs: 3 },
+  { name: 'IShellLinkA_Resolve', nargs: 3 },
+  { name: 'IShellLinkA_SetPath', nargs: 2 },
+  { name: 'IPersistFile_QueryInterface', nargs: 3 },
+  { name: 'IPersistFile_AddRef', nargs: 1 },
+  { name: 'IPersistFile_Release', nargs: 1 },
+  { name: 'IPersistFile_GetClassID', nargs: 2 },
+  { name: 'IPersistFile_IsDirty', nargs: 1 },
+  { name: 'IPersistFile_Load', nargs: 3 },
+  { name: 'IPersistFile_Save', nargs: 3 },
+  { name: 'IPersistFile_SaveCompleted', nargs: 2 },
+  { name: 'IPersistFile_GetCurFile', nargs: 2 },
 ];
 for (const api of extra) {
+  const ownsHandler = Object.prototype.hasOwnProperty.call(api, 'handler');
   if (!seen.has(api.name)) {
     existing.push({ id: existing.length, ...api, convention: api.convention || 'stdcall', hash: 0 });
     seen.add(api.name);
-  } else if (api.nargs !== undefined || api.args || api.ret || api.convention) {
+  } else if (api.nargs !== undefined || api.args || api.ret || api.convention || ownsHandler) {
     const current = existing.find(entry => entry.name === api.name);
     if (api.nargs !== undefined) current.nargs = api.nargs;
     if (api.args) current.args = api.args;
     if (api.ret) current.ret = api.ret;
     if (api.convention) current.convention = api.convention;
+    if (ownsHandler) {
+      if (api.handler) current.handler = api.handler;
+      else delete current.handler;
+    }
   }
 }
+
+// Direct3DCreate8 used to be a generated constant-NULL stub.  The real
+// capability facade has a named WAT handler, so do not preserve that retired
+// row metadata across regeneration.
+const d3d8Factory = existing.find(api => api.name === 'Direct3DCreate8');
+if (d3d8Factory) delete d3d8Factory.stub;
 
 // The Microsoft C runtime exports below use cdecl on x86: handlers pop only
 // the return address and callers remove arguments. Keep this explicit because
@@ -1143,17 +1472,20 @@ const cdeclCrtApis = new Set([
   '?terminate@@YAXXZ',
   '??2@YAPAXI@Z', '??3@YAXPAX@Z', '??_U@YAPAXI@Z', '??_V@YAXPAX@Z',
   '_XcptFilter', '__CxxFrameHandler', '__GetMainArgs', '__dllonexit',
-  '__getmainargs', '__p__acmdln', '__p__commode', '__p__fmode', '__p__wcmdln',
+  '__getmainargs', '__p__acmdln', '__p__commode', '__p__environ', '__p__fmode', '__p__wcmdln',
+  '__mb_cur_max',
   '__set_app_type', '__setusermatherr', '__wgetmainargs', '_adjust_fdiv',
-  '_controlfp', '_exit', '_ftol', '_fullpath', '_getcwd', '_getdcwd', '_global_unwind2', '_initterm',
-  '_itoa', '_itow', '_ltoa', '_mbschr', '_mbsinc', '_mbsnbcmp', '_mbsrchr', '_onexit',
-  '_purecall', '_splitpath', '_strdup', '_stricmp', '_strlwr', '_strrev',
-  '_wcsicmp', '_wtoi',
-  'atoi', 'atol', 'bsearch', 'calloc', 'exit', 'free', 'malloc', 'memcpy',
+  '_cexit', '_chdir', '_close', '_controlfp', '_dup', '_exit', '_ftol', '_fullpath', '_getcwd', '_getdcwd', '_getdrive', '_global_unwind2', '_initterm',
+  '_iob',
+  '_itoa', '_itow', '_ltoa', '_mbschr', '_mbsinc', '_mbsnbcmp', '_mbsrchr', '_onexit', '_unlink',
+  '_isctype', '_pctype', '_purecall', '_setmode', '_splitpath', '_strdup', '_stricmp', '_strlwr', '_strrev',
+  '_wcsicmp', '_write', '_wtoi',
+  'abort', 'atof', 'atoi', 'atol', 'bsearch', 'calloc', 'clock', 'exit', 'feof', 'ferror', 'fgets', 'fread', 'free', 'fseek', 'ftell', 'malloc', 'memchr', 'memcmp', 'memcpy',
   'memmove', 'memset', 'rand', 'realloc', 'sprintf', 'sscanf', 'srand', 'strcat',
-  'strchr', 'strcmp', 'strcpy', 'strlen', 'strncpy', 'strrchr', 'time', 'qsort',
-  'toupper', 'wcscmp', 'wcslen', 'wcsncpy', 'wcsrchr', 'mbstowcs', 'wcstombs',
-  'ceil', 'sqrt', 'sin', 'pow', '_CIpow',
+  'strchr', 'strcmp', 'strcpy', 'strerror', 'strlen', 'strncat', 'strncpy', 'strrchr', 'strtod', 'time', 'tmpnam', 'qsort',
+  'toupper', 'vfprintf', 'vsprintf', 'wcscmp', 'wcslen', 'wcsncpy', 'wcsrchr', 'mbstowcs', 'wcstombs',
+  'acos', 'asin', 'atan', 'atan2', 'ceil', 'cos', 'exp', 'fabs', 'floor', 'fmod',
+  'frexp', 'ldexp', 'log', 'sqrt', 'sin', 'tan', 'pow', '_CIpow', 'log10',
 ]);
 for (const api of existing) {
   if (cdeclCrtApis.has(api.name)) api.convention = 'cdecl';
@@ -1164,10 +1496,18 @@ const { interfaces: d3dimIfaces } = require('./d3dim-methods');
 for (const iface of d3dimIfaces) {
   for (const m of iface.methods) {
     const fullName = iface.prefix + '_' + m.name;
-    if (!seen.has(fullName)) {
+    const current = existing.find(api => api.name === fullName);
+    if (current) {
+      // The shared D3DIM description is authoritative for dispatch aliases so
+      // regenerating the table cannot resurrect a removed named wrapper.
+      if (m.handler) current.handler = m.handler;
+      else delete current.handler;
+    } else {
       // Use 5 here to match the existing IDirect3D{,3,Device3,Viewport3,...}
       // convention — handlers are wired with 5-arg + name_ptr signature.
-      existing.push({ id: existing.length, name: fullName, nargs: 5, convention: 'stdcall', hash: 0 });
+      const api = { id: existing.length, name: fullName, nargs: 5, convention: 'stdcall', hash: 0 };
+      if (m.handler) api.handler = m.handler;
+      existing.push(api);
       seen.add(fullName);
     }
   }
@@ -1178,24 +1518,58 @@ const { interfaces: d3d9Ifaces } = require('./d3d9-methods');
 for (const iface of d3d9Ifaces) {
   for (const m of iface.methods) {
     const fullName = iface.prefix + '_' + m.name;
-    if (!seen.has(fullName)) {
-      existing.push({ id: existing.length, name: fullName, nargs: 5, convention: 'stdcall', hash: 0 });
+    const current = existing.find(api => api.name === fullName);
+    if (current) {
+      current.nargs = m.nargs;
+      if (m.handler) current.handler = m.handler;
+      else delete current.handler;
+    } else {
+      const api = { id: existing.length, name: fullName, nargs: m.nargs, convention: 'stdcall', hash: 0 };
+      if (m.handler) api.handler = m.handler;
+      existing.push(api);
       seen.add(fullName);
     }
   }
 }
 
-// Reassign IDs and recompute hashes; preserve args/ret/any other metadata.
+// Pull the D3D8 factory interface from its ABI-order spec.  Device creation is
+// deliberately unavailable; this block exists for capability-only probes.
+const { interfaces: d3d8Ifaces } = require('./d3d8-methods');
+for (const iface of d3d8Ifaces) {
+  for (const m of iface.methods) {
+    const fullName = iface.prefix + '_' + m.name;
+    const current = existing.find(api => api.name === fullName);
+    if (current) {
+      current.nargs = m.nargs;
+      if (m.handler) current.handler = m.handler;
+      else delete current.handler;
+    } else {
+      const api = { id: existing.length, name: fullName, nargs: m.nargs, convention: 'stdcall', hash: 0 };
+      if (m.handler) api.handler = m.handler;
+      existing.push(api);
+      seen.add(fullName);
+    }
+  }
+}
+
+// Reassign IDs and recompute hashes; preserve dispatch/testing metadata that
+// belongs to the API row rather than the name/hash generator.
 const table = existing.map((api, id) => {
   const out = {
     id,
     name: api.name,
     nargs: api.nargs,
-    convention: api.convention || 'stdcall',
-    hash: fnv1a(api.name),
   };
+  // Keep opt-in generated metadata ahead of the ordinary ABI fields. Besides
+  // making regeneration idempotent, this is the canonical ordering used by
+  // the append-only table's existing rows.
+  if (api.test_call === true) out.test_call = true;
+  if (api.stub) out.stub = api.stub;
+  out.convention = api.convention || 'stdcall';
+  out.hash = fnv1a(api.name);
   if (api.args) out.args = api.args;
   if (api.ret) out.ret = api.ret;
+  if (api.handler) out.handler = api.handler;
   return out;
 });
 
@@ -1209,21 +1583,35 @@ for (const entry of table) {
   hashMap.set(entry.hash, entry.name);
 }
 
-const HASH_TABLE_ADDR = 0x07E00000; // must match $API_HASH_TABLE in 01-header.wat
-const HASH_TABLE_SIZE = 0x00008000; // must match $API_HASH_TABLE_SIZE
+// The map, read from the declaration rather than retyped
+// (docs/watx-region-safety-design.md §5 pattern 11). The emitted segment is
+// byte-identical to the hand-copied 0x07E00000/0x00008000 it replaces; what
+// changes is that this generator can no longer disagree with
+// src/00-regions.wat about where $API_HASH_TABLE is or how big it is.
+const { REGIONS } = require('../lib/region-map.generated.js');
+const HASH_TABLE_ADDR = REGIONS.API_HASH_TABLE.base;
+const HASH_TABLE_SIZE = REGIONS.API_HASH_TABLE.size;
 if (table.length * 8 > HASH_TABLE_SIZE) {
   console.error(`API hash table needs ${table.length * 8} bytes, exceeds ${HASH_TABLE_SIZE}-byte region`);
   process.exit(1);
 }
 
-// Write api_table.json
-fs.writeFileSync(jsonPath, JSON.stringify(table, null, 2) + '\n');
+// Write api_table.json. Constant stubs are deliberately one-line metadata in
+// the canonical table; retain that compact shape so a generator run does not
+// mechanically rewrite every migrated row.
+const tableJson = JSON.stringify(table, null, 2).replace(
+  /"stub": \{\n\s+"pop": ([^,\n]+),\n\s+"ret": ([^\n]+)\n\s+\}/g,
+  '"stub": { "pop": $1, "ret": $2 }');
+fs.writeFileSync(jsonPath, tableJson + '\n');
 console.log(`Generated ${jsonPath} with ${table.length} APIs`);
 
 // Generate WAT data segment
-let watData = `  ;; Static API hash table: ${table.length} entries at 0x${HASH_TABLE_ADDR.toString(16).padStart(8,'0')}\n`;
+let watData = `  ;; Static API hash table: ${table.length} entries in $API_HASH_TABLE\n`;
 watData += `  ;; Generated by tools/gen_api_table.js — do not edit by hand\n`;
-watData += `  (data (i32.const 0x${HASH_TABLE_ADDR.toString(16).padStart(8,'0')})\n`;
+// Anchored to the region, not to its current address: an allocated region
+// moves, and a literal here would silently write the table wherever the old
+// number now points (docs/watx-region-safety-design.md §6).
+watData += `  (data (region.addr $API_HASH_TABLE 0)\n`;
 for (const entry of table) {
   const hBytes = Buffer.alloc(4); hBytes.writeUInt32LE(entry.hash);
   const iBytes = Buffer.alloc(4); iBytes.writeUInt32LE(entry.id);

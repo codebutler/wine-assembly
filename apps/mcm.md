@@ -5,6 +5,119 @@
 **Entry point:** (TBD)
 **Run:** `node test/run.js --exe=test/binaries/shareware/mcm/mcm_ex/MCM.EXE --max-batches=500 --trace-api`
 
+## Status (2026-08-29) — first-start video-memory prompt resumes in Worker mode
+
+MCM's first launch intentionally displays a WAT-built MessageBox before its
+video-memory benchmark. In browser Worker mode the guest Worker owned the
+parked `MessageBoxA` call, while the main-thread renderer shadow instance
+hit-tested and dispatched the OK button. The dialog was visible and the button
+painted as pressed, but its completion lived only in the shadow instance's
+private WebAssembly globals, so the owning Worker remained parked forever.
+
+Common-modal hwnd, result, and completion state now live in shared linear
+memory. The renderer shadow only signals the result; the owning guest instance
+performs dialog writeback, teardown, focus restoration, and x86 stack resume on
+its next modal-pump turn. A two-instance shared-memory regression covers OK and
+renderer-side cancellation. Exact fresh browser launches now dismiss the
+prompt in both Worker and cooperative modes: `modal_dialog_hwnd` changes from
+`0x10002` to zero and MCM's `0x10001` main window remains alive.
+
+The first successful resume exposed a second startup failure. MCM sets its
+mouse device's `DIPROP_BUFFERSIZE` to 16, peeks the pending record count, then
+reads that many records into a 16-entry stack array. `SetProperty` had been a
+no-op and `GetDeviceData` reported every mouse event accumulated while the
+prompt was open; the read overwrote MCM's saved return address with a later
+record's `dwOfs=4`, matching the observed `EIP=0x00000004`. DirectInput now
+retains `DIPROP_BUFFERSIZE` and bounds count-only peeks and reads to it. The
+focused regression queues more records than the configured capacity and pins
+the canary immediately after the destination array.
+
+## Status (2026-08-29) — post-Start Direct3D/DirectSound crashes fixed
+
+Two independent ABI mismatches caused the Loading screen to terminate before
+the quarry could be constructed. `IDirect3DDevice2::EnumTextureFormats` used
+the Device3/7 callback contract and passed a bare 32-byte `DDPIXELFORMAT`.
+MCM's Device2 callback copies the legacy `DDSURFACEDESC.ddpfPixelFormat` at
+offset `+72`; it therefore recorded heap bytes, rejected every texture format,
+and later called through a null overlay-surface pointer at `0x004249ac`.
+Device2 now receives the complete descriptor it requires.
+
+After that fix, MCM requested `IID_IDirectSound3DListener` from its primary
+sound buffer. The emulator returned the ordinary `IDirectSoundBuffer` wrapper,
+so listener vtable slot 11 (`SetDistanceFactor`) dispatched as buffer slot 11
+(`Lock`). `Lock` popped 36 bytes instead of the listener call's 16 and destroyed
+the return frame. Primary buffers now expose a distinct 18-slot listener
+wrapper. Listener position, orientation, distance, rolloff and Doppler state
+round-trip through the existing audio bridge and update Web Audio's listener
+and live PannerNodes.
+
+The deterministic CLI route now survives both former failures and remains in
+MCM's main loop while populating the quarry: a 300-second bounded run created
+205 live DirectDraw surfaces, including populated 128x128 and 256x256 terrain
+textures, with no null call or stack loss. Its composited screen was still the
+Loading artwork at the shorter 120-second capture, so this is not yet claimed
+as a gameplay screenshot.
+
+## Status (2026-08-28) — software cursor owns browser capture
+
+### CLI selector root cause — preserve the two filesystem roots
+
+The black Stunt Quarry preview and inert Next button were not an input or D3D
+failure. A CLI register trace of MCM's list merge at `0x00449842` showed one
+candidate before duplicate removal and zero afterward: the manifest mounted
+every asset as `C:\\<basename>`, so VFS basename fallback made
+`Quarry01.scn` appear in both MCM's installed-scene search and its
+`C:\\teraform\\quarries` media search. MCM subtracts the duplicate and has no
+selected event for Next to advance.
+
+MCM files now carry explicit paths. The two `.SCN` descriptors live only under
+`C:\\Program Files\\Microsoft Games\\Motocross Madness Trial\\TERAFORM`, while
+the CD media preserves its `C:\\AUDIO`, `C:\\SBIKE`, `C:\\TERAFORM` and `C:\\UI`
+hierarchy. With that split, the CLI renders the `T-rific` quarry thumbnail and
+Next reaches Select Rider/Bike. The hierarchy also exposes the rider and bike
+art that was previously inaccessible through directory-qualified opens.
+
+The deterministic CLI route now accepts Start and renders the full Loading
+screen. It reads `quarry01.trn`, the rider/bike CMP/TEX sets, and the audio
+payload successfully. Gameplay is not reached yet: after roughly 146 million
+post-Start blocks, the guest reaches a null indirect call from `0x004249ac`.
+The stack return is `0x004249af`; the call is the loading-overlay object's
+surface-vtable slot `+0x44`, reached through `[object+0x30]+0x18`. That surface
+pointer is null. This is a separate late DirectDraw/D3DRM ownership or creation
+problem, not an input or filesystem-selector failure.
+
+A browser API trace at the profile-name screen shows the input contract MCM
+expects: `ShowCursor(TRUE)` once followed by `ShowCursor(FALSE)` twice (display
+count `-1`), two DirectInput devices acquired with cooperative flags `0x6`
+(`DISCL_FOREGROUND | DISCL_NONEXCLUSIVE`), `ClipCursor`, then continuous
+`GetCursorPos` polling. The browser Pointer Lock request already succeeded and
+produced no transition `movementX/Y` in Chrome; the apparent click-time jump
+was the visible absolute browser arrow competing with MCM's own relative
+software cursor.
+
+The renderer now exposes the signed `ShowCursor` count. While it is negative,
+the canvas hides the host cursor with an `!important` class (so asynchronous
+`SetCursor` cannot reveal it), and an exclusive presentation accepts that
+software-cursor signal as a generic relative-capture heuristic. `ClipCursor`
+remains the fallback. This is deliberately capability-based rather than an
+MCM/app-name exception; DirectInput exclusivity cannot be required because
+MCM explicitly requests nonexclusive mode.
+
+The same trace found the post-capture click mismatch: relative motion moved
+MCM's cursor from `(220,235)` to `(445,45)`, while Pointer Lock left DOM
+`clientX/Y` frozen and the next `mousedown` was still dispatched at
+`(220,235)`. Locked button-down now uses the guest virtual cursor, matching the
+existing button-up path and the position MCM actually draws/tests.
+
+A later user trace showed a smaller jump during the click that acquires
+Pointer Lock. Browsers may emit a synthetic locked `movementX/Y` while capture
+is changing; forwarding it moves MCM's software-cursor hotspot after DOWN but
+before UP. Relative deltas are now suppressed only for that acquisition click
+and resume as soon as its button is released. A browser-DOM regression covers
+both halves of that boundary. The same end-to-end trace reaches Event Options,
+finds `teraform\\quarries\\Quarry01.scn`, and stays running, so the three input
+cycles in the runtime log are not themselves an application exit path.
+
 ## Status (2026-06-14) — first-run dialog accepted; splash smoke promoted
 
 MCM is no longer marked known-bad in the all-EXE smoke list. The harness now accepts the first-run video-memory-test dialog and waits long enough for the post-dialog render loop:
@@ -649,3 +762,53 @@ Installation check at `RegOpenKeyExA(HKLM, 0x03fffb00, ...)` (API #927) fails (r
 - `LockResource`: HRSRC is just a data-entry offset; caller loses track of which module owns it. Fine as long as `FindResource` → `LoadResource` → `LockResource` chains stay within the main EXE, which is the only path exercised today.
 - `GetFileVersionInfoSizeA`/`A`: always read from main EXE (`lpFilename` ignored). Matches current semantics.
 - The line 110 note about `0x468130` calling RegQueryValueExA — wrong, it's RegEnumKeyA.
+
+## 2026-08-27 — profile OK click: application `WM_NCHITTEST` ordering
+
+The profile form's visible OK center is guest `(221,236)`. Browser input maps
+that point correctly, sends both button transitions to focused HWND `0x10001`,
+and MCM's `PtInRect` accepts it inside the button rectangle
+`(169,225)-(274,247)`. DirectInput also reports the expected left-button
+edges, so this was not a canvas/guest-coordinate offset.
+
+MCM uses an unusual owner-drawn control convention: its main wndproc handles
+`WM_NCHITTEST` (`0x0084`) to change the OK control from idle state 0 to hover
+state 1. Its subsequent `WM_LBUTTONDOWN` handler ignores the button unless
+that state transition already happened. The renderer's `hittest_sync` called
+only the WAT `DefWindowProc` helper and then queued `WM_SETCURSOR` and the mouse
+message; MCM's application wndproc therefore never saw the prerequisite
+`WM_NCHITTEST`.
+
+`lib/renderer-input.js` now queues application `WM_NCHITTEST`, using packed
+screen coordinates, before `WM_SETCURSOR`/`WM_MOUSEMOVE` and before a direct
+button-down. With the fix, the same browser path changes OK from state 0 to 1
+before down; the down/up sequence closes and detaches the name-entry owner
+(`a6b05c+0x30`: `0xa93df4 -> 0`). Focused renderer tests cover the exact
+message order, screen coordinates, deepest-child target, and direct-down
+path. The separately documented DirectDraw backing/cursor work controls how
+quickly stale profile pixels disappear; it is not the click hit-test.
+
+The main menu exposed a second ordering bug. Browser motion accumulated in
+separate X/Y words while button edges used their own FIFO; `GetDeviceData`
+served the button FIFO first. A quick diagonal move and click could therefore
+deliver `DIMOFS_BUTTON0` while MCM still had the cursor's previous Y position,
+making the visible Single Player button inert. `DI_MOUSE_INPUT_STATE` now uses
+one eight-record FIFO for packed X, Y, and button events, while retaining the
+independent X/Y accumulators used by `GetDeviceState`. The no-pause browser
+acceptance path now advances from Single Player Event to the event-type menu.
+
+## 2026-08-28 — profile OK reliability: motion bursts cannot discard clicks
+
+The first ordered DirectInput queue fixed a short synthetic move-and-click,
+but it held only eight records. Each ordinary diagonal browser move contributes
+separate X and Y records, so four unconsumed DOM moves filled the ring. A real
+pointer sweep toward OK could therefore leave only old motion in the queue;
+the following press and release were silently rejected. MCM replayed those old
+deltas as a visible cursor jump and never received the click.
+
+The process-shared mouse state now has a 64-record ring with four slots
+reserved for the final X/Y catch-up plus press/release. Motion beyond the ring
+budget accumulates in ordered overflow words. DirectInput drains overflow after
+older ring entries, or the renderer materializes it immediately before a
+button edge, preserving both the final pointer position and the click. A
+100-move regression verifies the complete delta and both button transitions.

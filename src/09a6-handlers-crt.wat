@@ -2,6 +2,60 @@
   ;; C RUNTIME / STRING FUNCTION HANDLERS
   ;; ============================================================
 
+  (global $msvcrt_errno_ptr (mut i32) (i32.const 0))
+  (global $msvcrt_signal_table (mut i32) (i32.const 0))
+  (global $msvcrt_tm_ptr (mut i32) (i32.const 0))
+  (global $msvcrt_getdrive_ptr (mut i32) (i32.const 0))
+
+  ;; __mb_cur_max() — cdecl. Win9x ANSI DBCS pages use at most two bytes per
+  ;; multibyte character; Western/OEM single-byte pages use one.
+  (func $handle___mb_cur_max (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (select
+        (i32.const 2)
+        (i32.const 1)
+        (call $is_dbcs_code_page (global.get $ansi_code_page))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; _getdrive() — cdecl, returns 1 for A:, 2 for B:, 3 for C:, etc.
+  (func $handle__getdrive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $len i32) (local $letter i32)
+    ;; The CRT uses an internal current-directory buffer too. Retain one per
+    ;; process instance so this cold query does not churn the guest free list.
+    (if (i32.eqz (global.get $msvcrt_getdrive_ptr))
+      (then
+        (global.set $msvcrt_getdrive_ptr (call $heap_alloc (i32.const 260)))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (global.get $msvcrt_getdrive_ptr)
+      (then
+        (local.set $len (call $host_fs_get_current_directory
+          (i32.const 260) (global.get $msvcrt_getdrive_ptr) (i32.const 0)))
+        (if (i32.and
+              (i32.and (i32.gt_u (local.get $len) (i32.const 1))
+                       (i32.lt_u (local.get $len) (i32.const 260)))
+              (i32.eq
+                (call $gl8 (i32.add (global.get $msvcrt_getdrive_ptr) (i32.const 1)))
+                (i32.const 0x3a)))
+          (then
+            (local.set $letter
+              (i32.and (call $gl8 (global.get $msvcrt_getdrive_ptr)) (i32.const 0xdf)))
+            (if (i32.and (i32.ge_u (local.get $letter) (i32.const 0x41))
+                         (i32.le_u (local.get $letter) (i32.const 0x5a)))
+              (then
+                (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $letter) (i32.const 0x40)))))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; _iob() — cdecl, returns the CRT stdin/stdout/stderr FILE table.
+  (func $handle__iob (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (global.get $msvcrt_iob_ptr))
+      (then
+        (global.set $msvcrt_iob_ptr (call $heap_alloc (i32.const 96)))
+        (call $zero_memory (call $g2w (global.get $msvcrt_iob_ptr)) (i32.const 96))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_iob_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
   ;; _mbschr(str, ch) — cdecl, find first occurrence of byte in MBCS string
   (func $handle__mbschr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32) (local $ch i32) (local $cur i32)
@@ -11,7 +65,7 @@
       (local.set $cur (i32.load8_u (local.get $wa)))
       (if (i32.eq (local.get $cur) (local.get $ch))
         (then
-          (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $wa) (i32.const 0x12000)) (global.get $image_base)))
+          (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $wa) (region.addr $GUEST_BASE 0)) (global.get $image_base)))
           (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
           (return)))
       (br_if $d (i32.eqz (local.get $cur)))
@@ -50,41 +104,70 @@
       (br $l)))
     ;; Convert WASM addr back to guest addr, or 0 if not found
     (if (local.get $last)
-      (then (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $last) (i32.const 0x12000)) (global.get $image_base))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $last) (region.addr $GUEST_BASE 0)) (global.get $image_base))))
       (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  ;; 781: _mbsnbcmp(s1, s2, n) — cdecl, compare n bytes (ASCII memcmp)
-  (func $handle__mbsnbcmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $wa1 i32) (local $wa2 i32) (local $n i32) (local $b1 i32) (local $b2 i32)
-    (local.set $wa1 (call $g2w (local.get $arg0)))
-    (local.set $wa2 (call $g2w (local.get $arg1)))
-    (local.set $n (local.get $arg2))
+  ;; Compare at most n unsigned bytes. _mbsnbcmp counts bytes rather than
+  ;; characters, so unlike memcmp it stops after the shared terminating NUL.
+  (func $crt_compare_bytes
+      (param $s1 i32) (param $s2 i32) (param $n i32)
+      (param $stop_at_nul i32) (result i32)
+    (local $wa1 i32) (local $wa2 i32) (local $b1 i32) (local $b2 i32)
+    (local.set $wa1 (call $g2w (local.get $s1)))
+    (local.set $wa2 (call $g2w (local.get $s2)))
     (block $done (loop $cmp
       (br_if $done (i32.eqz (local.get $n)))
       (local.set $b1 (i32.load8_u (local.get $wa1)))
       (local.set $b2 (i32.load8_u (local.get $wa2)))
       (if (i32.ne (local.get $b1) (local.get $b2))
-        (then
-          (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $b1) (local.get $b2)))
-          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-          (return)))
+        (then (return (i32.sub (local.get $b1) (local.get $b2)))))
+      (if (i32.and (local.get $stop_at_nul) (i32.eqz (local.get $b1)))
+        (then (return (i32.const 0))))
       (local.set $wa1 (i32.add (local.get $wa1) (i32.const 1)))
       (local.set $wa2 (i32.add (local.get $wa2) (i32.const 1)))
       (local.set $n (i32.sub (local.get $n) (i32.const 1)))
       (br $cmp)))
+    (i32.const 0))
+
+  ;; 781: _mbsnbcmp(s1, s2, n) — cdecl, current single-byte locale.
+  (func $handle__mbsnbcmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_compare_bytes
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; memcmp(s1, s2, n) — cdecl, compare raw bytes as unsigned chars.
+  (func $handle_memcmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_compare_bytes
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; memchr(buf, ch, n) — cdecl, return a guest pointer to the first byte match.
+  (func $handle_memchr (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $wa i32) (local $i i32) (local $ch i32)
+    (local.set $wa (call $g2w (local.get $arg0)))
+    (local.set $ch (i32.and (local.get $arg1) (i32.const 0xFF)))
     (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $arg2)))
+      (if (i32.eq (i32.load8_u (i32.add (local.get $wa) (local.get $i))) (local.get $ch))
+        (then
+          (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $arg0) (local.get $i)))
+          (br $done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 783: SHGetFileInfoA(pszPath, dwFileAttributes, psfi, cbFileInfo, uFlags) — 5 args stdcall
-  ;; This returned 0 — "the shell knows nothing about that file" — while the W
-  ;; spelling filled in szDisplayName, so an ANSI app that titles its window
-  ;; with the display name got an empty caption. Same core, ANSI struct.
+  ;; Share the bounded shell-field and system-image-list implementation with W.
   (func $handle_SHGetFileInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $sh_file_info_display_name
-      (local.get $arg0) (local.get $arg2) (local.get $arg3) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $sh_get_file_info
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (i32.const 0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
@@ -96,16 +179,7 @@
 
   ;; 722: _strdup(str) — cdecl, allocate copy of string
   (func $handle__strdup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $wa i32) (local $len i32)
-    (local.set $wa (call $g2w (local.get $arg0)))
-    ;; strlen
-    (local.set $len (i32.const 0))
-    (block $d (loop $l
-      (br_if $d (i32.eqz (i32.load8_u (i32.add (local.get $wa) (local.get $len)))))
-      (local.set $len (i32.add (local.get $len) (i32.const 1))) (br $l)))
-    (local.set $len (i32.add (local.get $len) (i32.const 1))) ;; include NUL
-    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $len)))
-    (memory.copy (call $g2w (i32.load offset=0 (global.get $reg_base))) (local.get $wa) (local.get $len))
+    (i32.store offset=0 (global.get $reg_base) (call $guest_strdup (local.get $arg0)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
@@ -128,6 +202,37 @@
       (local.set $wa2 (i32.add (local.get $wa2) (i32.const 1)))
       (br $l)))
     (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $c1) (local.get $c2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; _strnicmp(s1, s2, count) — cdecl, ASCII case-insensitive bounded compare.
+  (func $handle__strnicmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $wa1 i32) (local $wa2 i32) (local $i i32)
+    (local $c1 i32) (local $c2 i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $wa1 (call $g2w (local.get $arg0)))
+    (local.set $wa2 (call $g2w (local.get $arg1)))
+    (block $done (loop $compare
+      (local.set $c1 (i32.load8_u (i32.add (local.get $wa1) (local.get $i))))
+      (local.set $c2 (i32.load8_u (i32.add (local.get $wa2) (local.get $i))))
+      (if (i32.and (i32.ge_u (local.get $c1) (i32.const 0x41))
+                   (i32.le_u (local.get $c1) (i32.const 0x5a)))
+        (then (local.set $c1 (i32.or (local.get $c1) (i32.const 0x20)))))
+      (if (i32.and (i32.ge_u (local.get $c2) (i32.const 0x41))
+                   (i32.le_u (local.get $c2) (i32.const 0x5a)))
+        (then (local.set $c2 (i32.or (local.get $c2) (i32.const 0x20)))))
+      (if (i32.ne (local.get $c1) (local.get $c2))
+        (then
+          (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $c1) (local.get $c2)))
+          (br $done)))
+      (br_if $done (i32.eqz (local.get $c1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $compare (i32.lt_u (local.get $i) (local.get $arg2)))))
+    ;; cdecl: the caller removes all three arguments.
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
@@ -198,7 +303,7 @@
       (local.set $wa (i32.add (local.get $wa) (i32.const 1)))
       (br $l)))
     (if (local.get $last)
-      (then (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $last) (i32.const 0x12000)) (global.get $image_base))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.add (i32.sub (local.get $last) (region.addr $GUEST_BASE 0)) (global.get $image_base))))
       (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
@@ -282,6 +387,60 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; strncmp(s1, s2, count) — cdecl. Compare bytes as unsigned characters,
+  ;; stopping at the first difference, a shared NUL, or count bytes.
+  (func $handle_strncmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $wa1 i32) (local $wa2 i32) (local $i i32)
+    (local $c1 i32) (local $c2 i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.eqz (local.get $arg2))
+      (then
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $wa1 (call $g2w (local.get $arg0)))
+    (local.set $wa2 (call $g2w (local.get $arg1)))
+    (block $done (loop $compare
+      (local.set $c1 (i32.load8_u (i32.add (local.get $wa1) (local.get $i))))
+      (local.set $c2 (i32.load8_u (i32.add (local.get $wa2) (local.get $i))))
+      (if (i32.ne (local.get $c1) (local.get $c2))
+        (then
+          (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $c1) (local.get $c2)))
+          (br $done)))
+      (br_if $done (i32.eqz (local.get $c1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $compare (i32.lt_u (local.get $i) (local.get $arg2)))))
+    ;; cdecl: the caller removes all three arguments.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; wcsncmp(s1, s2, count) — cdecl. Compare at most count unsigned UTF-16
+  ;; code units, stopping at the first difference or a shared NUL. Keep guest
+  ;; addresses intact so each load may cross a translated-page boundary.
+  (func $handle_wcsncmp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32) (local $c1 i32) (local $c2 i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (block $done
+      ;; A zero count compares no characters and must not dereference either
+      ;; pointer. wcsncmp itself performs no invalid-parameter validation.
+      (br_if $done (i32.eqz (local.get $arg2)))
+      (loop $compare
+        (local.set $c1 (call $gl16
+          (i32.add (local.get $arg0)
+            (i32.shl (local.get $i) (i32.const 1)))))
+        (local.set $c2 (call $gl16
+          (i32.add (local.get $arg1)
+            (i32.shl (local.get $i) (i32.const 1)))))
+        (if (i32.ne (local.get $c1) (local.get $c2))
+          (then
+            (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $c1) (local.get $c2)))
+            (br $done)))
+        (br_if $done (i32.eqz (local.get $c1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br_if $compare (i32.lt_u (local.get $i) (local.get $arg2)))))
+    ;; cdecl: the caller removes all three arguments.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
   ;; 727: strcpy(dest, src) — cdecl
   (func $handle_strcpy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dst i32) (local $src i32) (local $ch i32) (local $i i32)
@@ -312,11 +471,10 @@
       (i32.store8 (i32.add (local.get $dst) (local.get $i)) (local.get $ch))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br_if $l (local.get $ch))
-      ;; pad with zeros
-      (block $d2 (loop $l2
-        (br_if $d2 (i32.ge_u (local.get $i) (local.get $arg2)))
-        (i32.store8 (i32.add (local.get $dst) (local.get $i)) (i32.const 0))
-        (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l2)))))
+      ;; pad with zeros -- the NUL is already stored, $i is past it, and every
+      ;; remaining byte up to $arg2 gets the same value.
+      (memory.fill (i32.add (local.get $dst) (local.get $i)) (i32.const 0)
+        (i32.sub (local.get $arg2) (local.get $i)))))
     (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
@@ -349,6 +507,35 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; strncat(dest, src, count) — cdecl
+  (func $handle_strncat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dst i32) (local $src i32) (local $ch i32) (local $i i32)
+    (local.set $dst (call $g2w (local.get $arg0)))
+    (block $d (loop $l
+      (br_if $d (i32.ge_u (local.get $i) (i32.const 65536)))
+      (br_if $d (i32.eqz (i32.load8_u (local.get $dst))))
+      (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (local.set $src (call $g2w (local.get $arg1)))
+    (local.set $i (i32.const 0))
+    (if (local.get $arg2)
+      (then
+        (block $d2 (loop $l2
+          (br_if $d2 (i32.ge_u (local.get $i) (local.get $arg2)))
+          (br_if $d2 (i32.ge_u (local.get $i) (i32.const 65536)))
+          (local.set $ch (i32.load8_u (local.get $src)))
+          (br_if $d2 (i32.eqz (local.get $ch)))
+          (i32.store8 (local.get $dst) (local.get $ch))
+          (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
+          (local.set $src (i32.add (local.get $src) (i32.const 1)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $l2)))
+        (i32.store8 (local.get $dst) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
   ;; 730: atoi(str) — cdecl
   (func $handle_atoi (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32) (local $val i32) (local $neg i32) (local $ch i32)
@@ -376,6 +563,158 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  (func $crt_digit_value (param $ch i32) (result i32)
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x30)) (i32.le_u (local.get $ch) (i32.const 0x39)))
+      (then (return (i32.sub (local.get $ch) (i32.const 0x30)))))
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x41)) (i32.le_u (local.get $ch) (i32.const 0x5a)))
+      (then (return (i32.add (i32.sub (local.get $ch) (i32.const 0x41)) (i32.const 10)))))
+    (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x61)) (i32.le_u (local.get $ch) (i32.const 0x7a)))
+      (then (return (i32.add (i32.sub (local.get $ch) (i32.const 0x61)) (i32.const 10)))))
+    (i32.const -1))
+
+  (func $crt_strto32 (param $nptr i32) (param $endptr i32) (param $base_arg i32) (result i32)
+    (local $start_wa i32) (local $wa i32) (local $digits_start i32)
+    (local $base i32) (local $ch i32) (local $digit i32)
+    (local $neg i32) (local $any i32) (local $value i32)
+    (local.set $start_wa (call $g2w (local.get $nptr)))
+    (local.set $wa (local.get $start_wa))
+    (block $space_done (loop $skip_space
+      (local.set $ch (i32.load8_u (local.get $wa)))
+      (br_if $space_done (i32.eqz (call $crt_is_space (local.get $ch))))
+      (local.set $wa (i32.add (local.get $wa) (i32.const 1)))
+      (br $skip_space)))
+    (local.set $ch (i32.load8_u (local.get $wa)))
+    (if (i32.eq (local.get $ch) (i32.const 0x2d))
+      (then
+        (local.set $neg (i32.const 1))
+        (local.set $wa (i32.add (local.get $wa) (i32.const 1))))
+      (else
+        (if (i32.eq (local.get $ch) (i32.const 0x2b))
+          (then (local.set $wa (i32.add (local.get $wa) (i32.const 1)))))))
+    (local.set $base (local.get $base_arg))
+    (if (i32.and
+          (i32.or (i32.eq (local.get $base) (i32.const 0)) (i32.eq (local.get $base) (i32.const 16)))
+          (i32.and
+            (i32.eq (i32.load8_u (local.get $wa)) (i32.const 0x30))
+            (i32.or
+              (i32.eq (i32.load8_u (i32.add (local.get $wa) (i32.const 1))) (i32.const 0x78))
+              (i32.eq (i32.load8_u (i32.add (local.get $wa) (i32.const 1))) (i32.const 0x58)))))
+      (then
+        (local.set $base (i32.const 16))
+        (local.set $wa (i32.add (local.get $wa) (i32.const 2)))))
+    (if (i32.eqz (local.get $base))
+      (then
+        (local.set $base (i32.const 10))
+        (if (i32.eq (i32.load8_u (local.get $wa)) (i32.const 0x30))
+          (then (local.set $base (i32.const 8))))))
+    (local.set $digits_start (local.get $wa))
+    (block $done (loop $digits
+      (local.set $digit (call $crt_digit_value (i32.load8_u (local.get $wa))))
+      (br_if $done (i32.lt_s (local.get $digit) (i32.const 0)))
+      (br_if $done (i32.ge_u (local.get $digit) (local.get $base)))
+      (local.set $value (i32.add (i32.mul (local.get $value) (local.get $base)) (local.get $digit)))
+      (local.set $any (i32.const 1))
+      (local.set $wa (i32.add (local.get $wa) (i32.const 1)))
+      (br $digits)))
+    (if (i32.eqz (local.get $any)) (then (local.set $wa (local.get $digits_start))))
+    (if (local.get $endptr)
+      (then (call $gs32 (local.get $endptr)
+        (i32.add (local.get $nptr) (i32.sub (local.get $wa) (local.get $start_wa))))))
+    (if (local.get $neg)
+      (then (local.set $value (i32.sub (i32.const 0) (local.get $value)))))
+    (local.get $value))
+
+  (func $handle_strtol (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_strto32 (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_strtoul (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_strto32 (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $crt_strtod_simple (param $nptr i32) (result f64)
+    (local $s i32) (local $ch i32) (local $val i32)
+    (local $neg i32) (local $digits i32) (local $exp_neg i32) (local $exp i32)
+    (local $fval f64) (local $frac f64)
+    (local.set $s (call $g2w (local.get $nptr)))
+    (block $space_done (loop $skip_space
+      (local.set $ch (i32.load8_u (local.get $s)))
+      (br_if $space_done (i32.eqz (call $crt_is_space (local.get $ch))))
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (br $skip_space)))
+    (local.set $ch (i32.load8_u (local.get $s)))
+    (if (i32.or (i32.eq (local.get $ch) (i32.const 0x2D)) (i32.eq (local.get $ch) (i32.const 0x2B)))
+      (then
+        (local.set $neg (i32.eq (local.get $ch) (i32.const 0x2D)))
+        (local.set $s (i32.add (local.get $s) (i32.const 1)))))
+    (local.set $fval (f64.const 0))
+    (block $ip_done (loop $ip
+      (local.set $val (call $crt_digit_value (i32.load8_u (local.get $s))))
+      (br_if $ip_done (i32.or (i32.lt_s (local.get $val) (i32.const 0)) (i32.gt_u (local.get $val) (i32.const 9))))
+      (local.set $fval (f64.add (f64.mul (local.get $fval) (f64.const 10))
+                                (f64.convert_i32_s (local.get $val))))
+      (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+      (local.set $s (i32.add (local.get $s) (i32.const 1)))
+      (br $ip)))
+    (if (i32.eq (i32.load8_u (local.get $s)) (i32.const 0x2E))
+      (then
+        (local.set $s (i32.add (local.get $s) (i32.const 1)))
+        (local.set $frac (f64.const 1))
+        (block $fp_done (loop $fp
+          (local.set $val (call $crt_digit_value (i32.load8_u (local.get $s))))
+          (br_if $fp_done (i32.or (i32.lt_s (local.get $val) (i32.const 0)) (i32.gt_u (local.get $val) (i32.const 9))))
+          (local.set $frac (f64.div (local.get $frac) (f64.const 10)))
+          (local.set $fval (f64.add (local.get $fval)
+            (f64.mul (f64.convert_i32_s (local.get $val)) (local.get $frac))))
+          (local.set $digits (i32.add (local.get $digits) (i32.const 1)))
+          (local.set $s (i32.add (local.get $s) (i32.const 1)))
+          (br $fp)))))
+    (if (local.get $digits)
+      (then
+        (local.set $ch (i32.load8_u (local.get $s)))
+        (if (i32.or (i32.eq (local.get $ch) (i32.const 0x65)) (i32.eq (local.get $ch) (i32.const 0x45)))
+          (then
+            (local.set $s (i32.add (local.get $s) (i32.const 1)))
+            (local.set $ch (i32.load8_u (local.get $s)))
+            (if (i32.or (i32.eq (local.get $ch) (i32.const 0x2D)) (i32.eq (local.get $ch) (i32.const 0x2B)))
+              (then
+                (local.set $exp_neg (i32.eq (local.get $ch) (i32.const 0x2D)))
+                (local.set $s (i32.add (local.get $s) (i32.const 1)))))
+            (block $ex_done (loop $ex
+              (local.set $val (call $crt_digit_value (i32.load8_u (local.get $s))))
+              (br_if $ex_done (i32.or (i32.lt_s (local.get $val) (i32.const 0)) (i32.gt_u (local.get $val) (i32.const 9))))
+              (local.set $exp (i32.add (i32.mul (local.get $exp) (i32.const 10)) (local.get $val)))
+              (local.set $s (i32.add (local.get $s) (i32.const 1)))
+              (br $ex)))
+            (block $scale_done (loop $scale
+              (br_if $scale_done (i32.eqz (local.get $exp)))
+              (if (local.get $exp_neg)
+                (then (local.set $fval (f64.div (local.get $fval) (f64.const 10))))
+                (else (local.set $fval (f64.mul (local.get $fval) (f64.const 10)))))
+              (local.set $exp (i32.sub (local.get $exp) (i32.const 1)))
+              (br $scale)))))))
+    (if (local.get $neg) (then (return (f64.neg (local.get $fval)))))
+    (local.get $fval))
+
+  (func $handle_atof (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push (call $crt_strtod_simple (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_strtod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push (call $crt_strtod_simple (local.get $arg0)))
+    (if (local.get $arg1)
+      (then (call $gs32 (local.get $arg1) (local.get $arg0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_clock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $host_get_ticks))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
   ;; MSVCRT double math returns through x87 ST(0). These are cdecl, so the
   ;; callee only pops the return address; the caller removes stack arguments.
   (func $handle_ceil (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -390,6 +729,138 @@
 
   (func $handle_sin (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $fpu_push (call $host_math_sin (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_cos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push (call $host_math_cos (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_tan (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push (call $host_math_tan (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_atan2 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push
+      (call $host_math_atan2
+        (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_atan (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push
+      (call $host_math_atan2
+        (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (f64.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_asin (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $x f64) (local $root f64)
+    (local.set $x (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+    (local.set $root (f64.sub (f64.const 1) (f64.mul (local.get $x) (local.get $x))))
+    (if (f64.lt (local.get $root) (f64.const 0))
+      (then (local.set $root (f64.const nan))))
+    (call $fpu_push
+      (call $host_math_atan2
+        (local.get $x)
+        (f64.sqrt (local.get $root))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_acos (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $x f64) (local $root f64)
+    (local.set $x (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+    (local.set $root (f64.sub (f64.const 1) (f64.mul (local.get $x) (local.get $x))))
+    (if (f64.lt (local.get $root) (f64.const 0))
+      (then (local.set $root (f64.const nan))))
+    (call $fpu_push
+      (call $host_math_atan2
+        (f64.sqrt (local.get $root))
+        (local.get $x)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_floor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push (f64.floor (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fabs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push (f64.abs (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_log (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push
+      (f64.mul
+        (call $host_math_log2 (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+        (f64.const 0.69314718055994530942)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_exp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push
+      (call $host_math_pow2
+        (f64.div
+          (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+          (f64.const 0.69314718055994530942))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fmod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $x f64) (local $y f64)
+    (local.set $x (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+    (local.set $y (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))))
+    (call $fpu_push
+      (f64.sub
+        (local.get $x)
+        (f64.mul
+          (f64.trunc (f64.div (local.get $x) (local.get $y)))
+          (local.get $y))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_frexp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $x f64) (local $absx f64) (local $exp i32)
+    (local.set $x (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+    (local.set $absx (f64.abs (local.get $x)))
+    (if (f64.eq (local.get $x) (f64.const 0))
+      (then
+        (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
+        (call $fpu_push (f64.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $exp
+      (i32.add
+        (i32.trunc_f64_s
+          (f64.floor (call $host_math_log2 (local.get $absx))))
+        (i32.const 1)))
+    (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (local.get $exp))))
+    (call $fpu_push
+      (f64.div
+        (local.get $x)
+        (call $host_math_pow2 (f64.convert_i32_s (local.get $exp)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_ldexp (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push
+      (f64.mul
+        (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (call $host_math_pow2
+          (f64.convert_i32_s (i32.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_log10 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $fpu_push
+      (f64.div
+        (call $host_math_log2 (f64.load (call $g2w (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+        (f64.const 3.32192809488736234787)))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
@@ -410,19 +881,976 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  ;; 731: _ftol — cdecl, convert float on FPU stack to i32 (special: no stack args, reads ST(0))
-  (func $handle__ftol (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    ;; Pop ST(0) and truncate to i32
-    (i32.store offset=0 (global.get $reg_base) (i32.trunc_sat_f64_s (call $fpu_pop)))
+  ;; _CIfmod is the corresponding MSVC x87-stack remainder helper:
+  ;; ST(1)=dividend, ST(0)=divisor, with one result left in ST(0).
+  (func $handle__CIfmod (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $divisor f64) (local $dividend f64)
+    (local.set $divisor (call $fpu_pop))
+    (local.set $dividend (call $fpu_pop))
+    (call $fpu_push
+      (f64.sub
+        (local.get $dividend)
+        (f64.mul
+          (f64.trunc (f64.div (local.get $dividend) (local.get $divisor)))
+          (local.get $divisor))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
-  ;; 732: sprintf(buf, fmt, ...) — cdecl, same as wsprintfA
+  ;; 759: _ftol — cdecl MSVC helper, ST(0) -> signed i64 in EDX:EAX.
+  ;;
+  ;; Win98 MSVCRT saves the caller's control word, temporarily selects truncate
+  ;; rounding, executes FISTP qword, restores the control word, then returns the
+  ;; two halves.  Keep those observable semantics here; callers commonly use
+  ;; only EAX, but returning a 32-bit value and leaving stale EDX is not the ABI.
+  (func $handle__ftol (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $saved_cw i32) (local $value i64)
+    (local.set $saved_cw (global.get $fpu_cw))
+    (global.set $fpu_cw (i32.or (local.get $saved_cw) (i32.const 0x0C00)))
+    (local.set $value (call $fpu_to_i64 (call $fpu_pop)))
+    (global.set $fpu_cw (local.get $saved_cw))
+    (i32.store offset=0 (global.get $reg_base) (i32.wrap_i64 (local.get $value)))
+    (i32.store offset=8 (global.get $reg_base) (i32.wrap_i64 (i64.shr_u (local.get $value) (i64.const 32))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; 732: sprintf(buf, fmt, ...) — cdecl. It shares the currently-supported
+  ;; conversion engine with wsprintfA, but keeps a distinct policy wrapper:
+  ;; User32 documents a 1024-byte buffer contract while sprintf has no size
+  ;; argument. Do not turn the public front doors into aliases.
   (func $handle_sprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $wsprintf_impl
+    (i32.store offset=0 (global.get $reg_base) (call $sprintf_impl
       (local.get $arg0) (local.get $arg1) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
     ;; cdecl: only pop return address
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; CRTDLL _vsnprintf(buffer, count, format, argptr) — cdecl.
+  ;;
+  ;; The shared formatter writes an unbounded temporary result. Copy at most
+  ;; count bytes into the caller's buffer and preserve the Win9x CRT behavior:
+  ;; a truncated result is not NUL-terminated and returns -1.
+  (func $handle__vsnprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scratch i32) (local $written i32) (local $copy_len i32)
+    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg2)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    ;; Installer-era CRT log messages are small; 64 KiB gives the existing
+    ;; unbounded formatter ample headroom before the bounded copy below.
+    (local.set $scratch (call $heap_alloc (i32.const 65536)))
+    (if (i32.eqz (local.get $scratch))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $written
+      (call $sprintf_impl (local.get $scratch) (local.get $arg2) (local.get $arg3)))
+    (local.set $copy_len
+      (select (local.get $arg1) (local.get $written)
+        (i32.gt_u (local.get $written) (local.get $arg1))))
+    (if (local.get $copy_len)
+      (then
+        (call $memcpy (call $g2w (local.get $arg0))
+          (call $g2w (local.get $scratch)) (local.get $copy_len))))
+    (if (i32.lt_u (local.get $written) (local.get $arg1))
+      (then
+        (call $gs8 (i32.add (local.get $arg0) (local.get $written)) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (local.get $written)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const -1))))
+    (call $heap_free (local.get $scratch))
+    ;; cdecl: the caller removes all four arguments.
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; Minimal MSVCRT FILE* stream support. We use the VFS handle itself as the
+  ;; stream pointer, which is sufficient for old games that only log and load
+  ;; byte streams through their matching CRT imports.
+  (func $handle_fopen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $mode i32) (local $access i32) (local $creation i32) (local $handle i32)
+    (local.set $mode (if (result i32) (local.get $arg1)
+      (then (call $gl8 (local.get $arg1))) (else (i32.const 0))))
+    (local.set $access (i32.const 0xC0000000)) ;; GENERIC_READ | GENERIC_WRITE
+    (local.set $creation (i32.const 3))        ;; OPEN_EXISTING
+    (if (i32.eq (local.get $mode) (i32.const 0x77)) ;; w
+      (then (local.set $creation (i32.const 2))))   ;; CREATE_ALWAYS
+    (if (i32.eq (local.get $mode) (i32.const 0x61)) ;; a
+      (then (local.set $creation (i32.const 4))))   ;; OPEN_ALWAYS
+    (local.set $handle (call $host_fs_create_file
+      (call $g2w (local.get $arg0))
+      (local.get $access)
+      (local.get $creation)
+      (i32.const 0x80)
+      (i32.const 0)))
+    (if (i32.eq (local.get $handle) (i32.const -1))
+      (then (local.set $handle (i32.const 0)))
+      (else
+        (if (i32.eq (local.get $mode) (i32.const 0x61))
+          (then (drop (call $host_fs_set_file_pointer
+            (local.get $handle) (i32.const 0) (i32.const 2)))))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handle))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_freopen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $mode i32) (local $access i32) (local $creation i32) (local $handle i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg2))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $mode (if (result i32) (local.get $arg1)
+      (then (call $gl8 (local.get $arg1))) (else (i32.const 0))))
+    (local.set $access (i32.const 0xC0000000)) ;; GENERIC_READ | GENERIC_WRITE
+    (local.set $creation (i32.const 3))        ;; OPEN_EXISTING
+    (if (i32.eq (local.get $mode) (i32.const 0x77))
+      (then (local.set $creation (i32.const 2))))
+    (if (i32.eq (local.get $mode) (i32.const 0x61))
+      (then (local.set $creation (i32.const 4))))
+    (local.set $handle (call $host_fs_create_file
+      (call $g2w (local.get $arg0))
+      (local.get $access)
+      (local.get $creation)
+      (i32.const 0x80)
+      (i32.const 0)))
+    (if (i32.eq (local.get $handle) (i32.const -1))
+      (then
+        ;; Console pseudo-files (CONOUT$/CONIN$) are not VFS files. Keep the
+        ;; caller's stream alive so console redirection remains harmless.
+        (local.set $handle (local.get $arg2)))
+      (else
+        (if (i32.eq (local.get $mode) (i32.const 0x61))
+          (then (drop (call $host_fs_set_file_pointer
+            (local.get $handle) (i32.const 0) (i32.const 2)))))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handle))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $crt_stream_write (param $stream i32) (param $buf i32) (param $len i32) (result i32)
+    (local $bytes_ga i32) (local $bytes_wa i32)
+    (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
+    (i32.store (local.get $bytes_wa) (i32.const 0))
+    (if (i32.or (i32.eqz (local.get $stream)) (i32.eqz (local.get $buf)))
+      (then (return (i32.const -1))))
+    (if (call $host_fs_write_file
+          (local.get $stream) (local.get $buf) (local.get $len)
+          (local.get $bytes_ga))
+      (then (return (i32.load (local.get $bytes_wa)))))
+    (i32.const -1)
+  )
+
+  ;; fclose(FILE*) and _close(fd) are distinct CRT contracts: a real FILE*
+  ;; owns stream buffering while a descriptor does not. This minimal CRT has
+  ;; no stream buffer or descriptor table -- fopen/_open both expose the same
+  ;; raw VFS handle -- so only their final close/result translation is shared.
+  ;; Keep the public handlers separate so richer FILE/descriptor state can be
+  ;; added later without making one ABI front door an alias of the other.
+  (func $crt_close_unbuffered_handle (param $handle i32) (result i32)
+    (if (result i32) (call $host_fs_close_handle (local.get $handle))
+      (then (i32.const 0))
+      (else (i32.const -1)))
+  )
+
+  (func $handle_fclose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_close_unbuffered_handle (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_feof (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $tmp_ga i32) (local $bytes_ga i32) (local $bytes_wa i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $tmp_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
+    (i32.store (local.get $bytes_wa) (i32.const 0))
+    (if (call $host_fs_read_file
+          (local.get $arg0) (local.get $tmp_ga) (i32.const 1)
+          (local.get $bytes_ga))
+      (then
+        (if (i32.load (local.get $bytes_wa))
+          (then
+            (drop (call $host_fs_set_file_pointer
+              (local.get $arg0) (i32.const -1) (i32.const 1)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+          (else (i32.store offset=0 (global.get $reg_base) (i32.const 1)))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_ferror (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (local.get $arg0)
+        (then (i32.const 0))
+        (else (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fgets (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $count i32) (local $bytes_ga i32) (local $bytes_wa i32) (local $ch i32)
+    (if (i32.or
+          (i32.or (i32.eqz (local.get $arg0)) (i32.le_s (local.get $arg1) (i32.const 0)))
+          (i32.eqz (local.get $arg2)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
+    (block $done (loop $read
+      (br_if $done (i32.ge_u (local.get $count) (i32.sub (local.get $arg1) (i32.const 1))))
+      (i32.store (local.get $bytes_wa) (i32.const 0))
+      (if (i32.eqz (call $host_fs_read_file
+            (local.get $arg2)
+            (i32.add (local.get $arg0) (local.get $count))
+            (i32.const 1)
+            (local.get $bytes_ga)))
+        (then (br $done)))
+      (br_if $done (i32.eqz (i32.load (local.get $bytes_wa))))
+      (local.set $ch (call $gl8 (i32.add (local.get $arg0) (local.get $count))))
+      (local.set $count (i32.add (local.get $count) (i32.const 1)))
+      (br_if $done (i32.eq (local.get $ch) (i32.const 0x0a)))
+      (br $read)))
+    (if (local.get $count)
+      (then
+        (call $gs8 (i32.add (local.get $arg0) (local.get $count)) (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $total i32) (local $bytes_ga i32) (local $bytes_wa i32) (local $read i32)
+    (if (i32.or
+          (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
+          (i32.or (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3))))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $total (i32.mul (local.get $arg1) (local.get $arg2)))
+    (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
+    (i32.store (local.get $bytes_wa) (i32.const 0))
+    (if (call $host_fs_read_file
+          (local.get $arg3) (local.get $arg0) (local.get $total)
+          (local.get $bytes_ga))
+      (then (local.set $read (i32.load (local.get $bytes_wa))))
+      (else (local.set $read (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (i32.div_u (local.get $read) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_ftell (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (local.get $arg0)
+        (then (call $host_fs_set_file_pointer
+          (local.get $arg0) (i32.const 0) (i32.const 1)))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fseek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and
+            (local.get $arg0)
+            (i32.ne
+              (call $host_fs_set_file_pointer
+                (local.get $arg0) (local.get $arg1) (local.get $arg2))
+              (i32.const -1)))
+        (then (i32.const 0))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $crt_open_access (param $flags i32) (result i32)
+    (if (result i32) (i32.and (local.get $flags) (i32.const 2)) ;; _O_RDWR
+      (then (i32.const 0xC0000000)) ;; GENERIC_READ | GENERIC_WRITE
+      (else
+        (if (result i32) (i32.and (local.get $flags) (i32.const 1)) ;; _O_WRONLY
+          (then (i32.const 0x40000000)) ;; GENERIC_WRITE
+          (else (i32.const 0x80000000)))))) ;; GENERIC_READ
+
+  (func $crt_open_creation (param $flags i32) (result i32)
+    (if (result i32) (i32.and (local.get $flags) (i32.const 0x100)) ;; _O_CREAT
+      (then
+        (if (result i32) (i32.and (local.get $flags) (i32.const 0x400)) ;; _O_EXCL
+          (then (i32.const 1)) ;; CREATE_NEW
+          (else
+            (if (result i32) (i32.and (local.get $flags) (i32.const 0x200)) ;; _O_TRUNC
+              (then (i32.const 2)) ;; CREATE_ALWAYS
+              (else (i32.const 4)))))) ;; OPEN_ALWAYS
+      (else
+        (if (result i32) (i32.and (local.get $flags) (i32.const 0x200)) ;; _O_TRUNC
+          (then (i32.const 5)) ;; TRUNCATE_EXISTING
+          (else (i32.const 3)))))) ;; OPEN_EXISTING
+
+  (func $handle__open (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $handle i32)
+    (local.set $handle (call $host_fs_create_file
+      (call $g2w (local.get $arg0))
+      (call $crt_open_access (local.get $arg1))
+      (call $crt_open_creation (local.get $arg1))
+      (i32.const 0x80)
+      (i32.const 0)))
+    (if (i32.eq (local.get $handle) (i32.const -1))
+      (then (local.set $handle (i32.const -1)))
+      (else
+        (if (i32.and (local.get $arg1) (i32.const 8)) ;; _O_APPEND
+          (then (drop (call $host_fs_set_file_pointer
+            (local.get $handle) (i32.const 0) (i32.const 2)))))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handle))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__close (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_close_unbuffered_handle (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__dup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.ge_s (local.get $arg0) (i32.const 0))
+        (then (local.get $arg0))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__unlink (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $host_fs_delete_file (call $g2w (local.get $arg0)) (i32.const 0))
+        (then (i32.const 0))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__read (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $bytes_ga i32) (local $bytes_wa i32)
+    (local.set $bytes_ga (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (local.set $bytes_wa (call $g2w (local.get $bytes_ga)))
+    (i32.store (local.get $bytes_wa) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $host_fs_read_file
+            (local.get $arg0) (local.get $arg1) (local.get $arg2)
+            (local.get $bytes_ga))
+        (then (i32.load (local.get $bytes_wa)))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__write (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $crt_stream_write
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__lseek (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $host_fs_set_file_pointer
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__filelength (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $pos i32) (local $end i32)
+    (local.set $pos (call $host_fs_set_file_pointer
+      (local.get $arg0) (i32.const 0) (i32.const 1)))
+    (local.set $end (call $host_fs_set_file_pointer
+      (local.get $arg0) (i32.const 0) (i32.const 2)))
+    (if (i32.ne (local.get $pos) (i32.const -1))
+      (then (drop (call $host_fs_set_file_pointer
+        (local.get $arg0) (local.get $pos) (i32.const 0)))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $end))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fflush (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg0)
+      (then
+        (i32.store offset=0 (global.get $reg_base) (select
+            (i32.const 0)
+            (i32.const -1)
+            (i32.ne
+              (call $host_fs_set_file_pointer
+                (local.get $arg0) (i32.const 0) (i32.const 1))
+              (i32.const -1)))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fputs (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $len i32) (local $written i32)
+    (local.set $len (if (result i32) (local.get $arg0)
+      (then (call $guest_strlen (local.get $arg0))) (else (i32.const 0))))
+    (local.set $written (call $crt_stream_write
+      (local.get $arg1) (local.get $arg0) (local.get $len)))
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const -1) (i32.ge_s (local.get $written) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fwrite (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $total i32) (local $written i32)
+    (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $total (i32.mul (local.get $arg1) (local.get $arg2)))
+    (local.set $written (call $crt_stream_write
+      (local.get $arg3) (local.get $arg0) (local.get $total)))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.lt_s (local.get $written) (i32.const 0))
+        (then (i32.const 0))
+        (else (i32.div_u (local.get $written) (local.get $arg1)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_fprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scratch i32) (local $written i32)
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $scratch (call $heap_alloc (i32.const 65536)))
+    (if (i32.eqz (local.get $scratch))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $written
+      (call $sprintf_impl (local.get $scratch) (local.get $arg1)
+        (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (if (i32.ge_s (local.get $written) (i32.const 0))
+      (then (local.set $written (call $crt_stream_write
+        (local.get $arg0) (local.get $scratch) (local.get $written)))))
+    (call $heap_free (local.get $scratch))
+    (i32.store offset=0 (global.get $reg_base) (local.get $written))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_printf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scratch i32) (local $written i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $scratch (call $heap_alloc (i32.const 65536)))
+    (if (i32.eqz (local.get $scratch))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $written
+      (call $sprintf_impl (local.get $scratch) (local.get $arg0)
+        (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+    (call $heap_free (local.get $scratch))
+    (i32.store offset=0 (global.get $reg_base) (local.get $written))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_vfprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scratch i32) (local $written i32)
+    (if (i32.eqz (local.get $arg1))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $scratch (call $heap_alloc (i32.const 65536)))
+    (if (i32.eqz (local.get $scratch))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $written
+      (call $sprintf_impl (local.get $scratch) (local.get $arg1) (local.get $arg2)))
+    (local.set $written
+      (if (result i32) (i32.lt_s (call $crt_stream_write
+            (local.get $arg0) (local.get $scratch) (local.get $written)) (i32.const 0))
+        (then (i32.const -1))
+        (else (local.get $written))))
+    (call $heap_free (local.get $scratch))
+    (i32.store offset=0 (global.get $reg_base) (local.get $written))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_vsprintf (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $sprintf_impl (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__errno (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (global.get $msvcrt_errno_ptr))
+      (then
+        (global.set $msvcrt_errno_ptr (call $heap_alloc (i32.const 4)))
+        (call $gs32 (global.get $msvcrt_errno_ptr) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_errno_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_strerror (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (i32.eqz (global.get $msvcrt_strerror_ptr))
+      (then
+        (global.set $msvcrt_strerror_ptr (call $heap_alloc (i32.const 14)))
+        (call $gs8 (global.get $msvcrt_strerror_ptr) (i32.const 0x55))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 1)) (i32.const 0x6e))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 2)) (i32.const 0x6b))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 3)) (i32.const 0x6e))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 4)) (i32.const 0x6f))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 5)) (i32.const 0x77))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 6)) (i32.const 0x6e))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 7)) (i32.const 0x20))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 8)) (i32.const 0x65))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 9)) (i32.const 0x72))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 10)) (i32.const 0x72))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 11)) (i32.const 0x6f))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 12)) (i32.const 0x72))
+        (call $gs8 (i32.add (global.get $msvcrt_strerror_ptr) (i32.const 13)) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_strerror_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $crt_write_tmpnam (param $dst i32)
+    (call $gs8 (local.get $dst) (i32.const 0x43)) ;; C
+    (call $gs8 (i32.add (local.get $dst) (i32.const 1)) (i32.const 0x3a)) ;; :
+    (call $gs8 (i32.add (local.get $dst) (i32.const 2)) (i32.const 0x5c)) ;; backslash
+    (call $gs8 (i32.add (local.get $dst) (i32.const 3)) (i32.const 0x54)) ;; T
+    (call $gs8 (i32.add (local.get $dst) (i32.const 4)) (i32.const 0x45)) ;; E
+    (call $gs8 (i32.add (local.get $dst) (i32.const 5)) (i32.const 0x4d)) ;; M
+    (call $gs8 (i32.add (local.get $dst) (i32.const 6)) (i32.const 0x50)) ;; P
+    (call $gs8 (i32.add (local.get $dst) (i32.const 7)) (i32.const 0x5c))
+    (call $gs8 (i32.add (local.get $dst) (i32.const 8)) (i32.const 0x57)) ;; W
+    (call $gs8 (i32.add (local.get $dst) (i32.const 9)) (i32.const 0x41)) ;; A
+    (call $gs8 (i32.add (local.get $dst) (i32.const 10)) (i32.const 0x30)) ;; 0
+    (call $gs8 (i32.add (local.get $dst) (i32.const 11)) (i32.const 0x30))
+    (call $gs8 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0x30))
+    (call $gs8 (i32.add (local.get $dst) (i32.const 13)) (i32.const 0x30))
+    (call $gs8 (i32.add (local.get $dst) (i32.const 14)) (i32.const 0x30))
+    (call $gs8 (i32.add (local.get $dst) (i32.const 15)) (i32.const 0x30))
+    (call $gs8 (i32.add (local.get $dst) (i32.const 16)) (i32.const 0x2e)) ;; .
+    (call $gs8 (i32.add (local.get $dst) (i32.const 17)) (i32.const 0x54)) ;; T
+    (call $gs8 (i32.add (local.get $dst) (i32.const 18)) (i32.const 0x4d)) ;; M
+    (call $gs8 (i32.add (local.get $dst) (i32.const 19)) (i32.const 0x50)) ;; P
+    (call $gs8 (i32.add (local.get $dst) (i32.const 20)) (i32.const 0)))
+
+  (func $handle_tmpnam (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $dst i32)
+    (local.set $dst (local.get $arg0))
+    (if (i32.eqz (local.get $dst))
+      (then
+        (if (i32.eqz (global.get $msvcrt_tmpnam_ptr))
+          (then (global.set $msvcrt_tmpnam_ptr (call $heap_alloc (i32.const 21)))))
+        (local.set $dst (global.get $msvcrt_tmpnam_ptr))))
+    (call $crt_write_tmpnam (local.get $dst))
+    (i32.store offset=0 (global.get $reg_base) (local.get $dst))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; _lock/_unlock guard MSVCRT's process-local tables. The startup paths that
+  ;; import them run on one guest thread here, so the lock index is only a
+  ;; compatibility token.
+  (func $handle__lock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__unlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; __lconv_init initializes MSVCRT's locale-conversion cache. The emulator's
+  ;; locale APIs already provide the C/en-US data SDL2 expects, so this reports
+  ;; success without allocating a separate lconv object.
+  (func $handle___lconv_init (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_tolower (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (if (i32.and
+          (i32.ge_s (local.get $arg0) (i32.const 0x41))
+          (i32.le_s (local.get $arg0) (i32.const 0x5a)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $arg0) (i32.const 0x20)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_toupper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+    (if (i32.and
+          (i32.ge_s (local.get $arg0) (i32.const 0x61))
+          (i32.le_s (local.get $arg0) (i32.const 0x7a)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.sub (local.get $arg0) (i32.const 0x20)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_towlower (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_tolower (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  (func $handle_towupper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $handle_toupper (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+
+  (func $crt_is_alpha (param $ch i32) (result i32)
+    (i32.or
+      (i32.and (i32.ge_u (local.get $ch) (i32.const 0x41)) (i32.le_u (local.get $ch) (i32.const 0x5a)))
+      (i32.and (i32.ge_u (local.get $ch) (i32.const 0x61)) (i32.le_u (local.get $ch) (i32.const 0x7a)))))
+
+  (func $crt_is_digit (param $ch i32) (result i32)
+    (i32.and (i32.ge_u (local.get $ch) (i32.const 0x30)) (i32.le_u (local.get $ch) (i32.const 0x39))))
+
+  (func $crt_is_space (param $ch i32) (result i32)
+    (i32.or (i32.eq (local.get $ch) (i32.const 0x20))
+      (i32.and (i32.ge_u (local.get $ch) (i32.const 0x09)) (i32.le_u (local.get $ch) (i32.const 0x0d)))))
+
+  (func $crt_ctype_return (param $value i32)
+    (i32.store offset=0 (global.get $reg_base) (local.get $value)))
+
+  (func $handle_isalpha (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return (call $crt_is_alpha (i32.and (local.get $arg0) (i32.const 0xff))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_isdigit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return (call $crt_is_digit (i32.and (local.get $arg0) (i32.const 0xff))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_isalnum (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return
+      (i32.or
+        (call $crt_is_alpha (i32.and (local.get $arg0) (i32.const 0xff)))
+        (call $crt_is_digit (i32.and (local.get $arg0) (i32.const 0xff)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_isupper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return
+      (i32.and
+        (i32.ge_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x41))
+        (i32.le_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x5a))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_islower (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return
+      (i32.and
+        (i32.ge_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x61))
+        (i32.le_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x7a))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_isspace (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return (call $crt_is_space (i32.and (local.get $arg0) (i32.const 0xff))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_iscntrl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return
+      (i32.or
+        (i32.lt_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x20))
+        (i32.eq (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x7f))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_isprint (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return
+      (i32.and
+        (i32.ge_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x20))
+        (i32.le_u (i32.and (local.get $arg0) (i32.const 0xff)) (i32.const 0x7e))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_ispunct (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ch i32)
+    (local.set $ch (i32.and (local.get $arg0) (i32.const 0xff)))
+    (call $crt_ctype_return
+      (i32.and
+        (i32.and
+          (i32.ge_u (local.get $ch) (i32.const 0x21))
+          (i32.le_u (local.get $ch) (i32.const 0x7e)))
+          (i32.eqz
+            (i32.or
+              (i32.or (call $crt_is_alpha (local.get $ch)) (call $crt_is_digit (local.get $ch)))
+              (call $crt_is_space (local.get $ch))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_isxdigit (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ch i32)
+    (local.set $ch (i32.and (local.get $arg0) (i32.const 0xff)))
+    (call $crt_ctype_return
+      (i32.or
+        (call $crt_is_digit (local.get $ch))
+        (i32.or
+          (i32.and (i32.ge_u (local.get $ch) (i32.const 0x41)) (i32.le_u (local.get $ch) (i32.const 0x46)))
+          (i32.and (i32.ge_u (local.get $ch) (i32.const 0x61)) (i32.le_u (local.get $ch) (i32.const 0x66))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle__isctype (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $ch i32) (local $flags i32)
+    (local.set $ch (i32.and (local.get $arg0) (i32.const 0xff)))
+    (local.set $flags (call $ctype1_ascii_flags (local.get $ch)))
+    (if (i32.eq (local.get $ch) (i32.const 0x20))
+      (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x40)))))
+    (if (i32.or
+          (call $crt_is_digit (local.get $ch))
+          (i32.or
+            (i32.and (i32.ge_u (local.get $ch) (i32.const 0x41)) (i32.le_u (local.get $ch) (i32.const 0x46)))
+            (i32.and (i32.ge_u (local.get $ch) (i32.const 0x61)) (i32.le_u (local.get $ch) (i32.const 0x66)))))
+      (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x80)))))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $flags) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $msvcrt_ctype_flags (param $ch i32) (result i32)
+    (local $flags i32)
+    (local.set $flags (call $ctype1_ascii_flags (i32.and (local.get $ch) (i32.const 0xff))))
+    (if (i32.eq (i32.and (local.get $ch) (i32.const 0xff)) (i32.const 0x20))
+      (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x40)))))
+    (if (i32.or
+          (call $crt_is_digit (i32.and (local.get $ch) (i32.const 0xff)))
+          (i32.or
+            (i32.and
+              (i32.ge_u (i32.and (local.get $ch) (i32.const 0xff)) (i32.const 0x41))
+              (i32.le_u (i32.and (local.get $ch) (i32.const 0xff)) (i32.const 0x46)))
+            (i32.and
+              (i32.ge_u (i32.and (local.get $ch) (i32.const 0xff)) (i32.const 0x61))
+              (i32.le_u (i32.and (local.get $ch) (i32.const 0xff)) (i32.const 0x66)))))
+      (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x80)))))
+    (local.get $flags))
+
+  ;; _pctype() — cdecl, returns the CRT ctype table. Entry zero is EOF; byte
+  ;; values are indexed at table[ch + 1].
+  (func $handle__pctype (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $i i32)
+    (if (i32.eqz (global.get $msvcrt_pctype_ptr))
+      (then
+        (global.set $msvcrt_pctype_ptr (call $heap_alloc (i32.const 514)))
+        (call $zero_memory (call $g2w (global.get $msvcrt_pctype_ptr)) (i32.const 514))
+        (local.set $i (i32.const 0))
+        (block $done (loop $fill
+          (br_if $done (i32.ge_u (local.get $i) (i32.const 256)))
+          (call $gs16
+            (i32.add (global.get $msvcrt_pctype_ptr)
+              (i32.shl (i32.add (local.get $i) (i32.const 1)) (i32.const 1)))
+            (call $msvcrt_ctype_flags (local.get $i)))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $fill)))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_pctype_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  ;; _setmode(fd, mode) — cdecl. The emulator does not distinguish text and
+  ;; binary stdio streams; return the previous text mode.
+  (func $handle__setmode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x4000))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+
+  (func $handle_abort (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $host_exit (i32.const 3))
+    (global.set $eip (i32.const 0))
+    (global.set $yield_flag (i32.const 1))
+    (global.set $steps (i32.const 0)))
+
+  (func $handle_iswctype (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $crt_ctype_return (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_signal (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $slot i32)
+    ;; Keep handlers for the usual small MSVCRT signal numbers. Invalid signal
+    ;; ids return SIG_ERR (-1); valid registrations return the previous handler.
+    (if (i32.or (i32.lt_s (local.get $arg0) (i32.const 0)) (i32.ge_s (local.get $arg0) (i32.const 32)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (if (i32.eqz (global.get $msvcrt_signal_table))
+      (then
+        (global.set $msvcrt_signal_table (call $heap_alloc (i32.const 128)))
+        (memory.fill (call $g2w (global.get $msvcrt_signal_table)) (i32.const 0) (i32.const 128))))
+    (local.set $slot
+      (i32.add (global.get $msvcrt_signal_table) (i32.shl (local.get $arg0) (i32.const 2))))
+    (i32.store offset=0 (global.get $reg_base) (call $gl32 (local.get $slot)))
+    (call $gs32 (local.get $slot) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_localtime (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    ;; Return a stable static struct tm:
+    ;; sec, min, hour, mday, mon, year-since-1900, wday, yday, isdst.
+    (if (i32.eqz (global.get $msvcrt_tm_ptr))
+      (then
+        (global.set $msvcrt_tm_ptr (call $heap_alloc (i32.const 36)))
+        (call $gs32 (global.get $msvcrt_tm_ptr) (i32.const 0))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 4)) (i32.const 0))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 8)) (i32.const 0))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 12)) (i32.const 1))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 16)) (i32.const 0))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 20)) (i32.const 100))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 24)) (i32.const 6))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 28)) (i32.const 0))
+        (call $gs32 (i32.add (global.get $msvcrt_tm_ptr) (i32.const 32)) (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_tm_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $crt_copy_finddata_a (param $dst i32) (param $src i32)
+    (local $i i32) (local $ch i32)
+    (if (i32.or (i32.eqz (local.get $dst)) (i32.eqz (local.get $src)))
+      (then (return)))
+    ;; struct _finddata_t: attrib, time_create/access/write, size, name[260].
+    ;; WIN32_FIND_DATAA: attrs at +0, size high/low at +28/+32, cFileName at +44.
+    (call $gs32 (local.get $dst) (call $gl32 (local.get $src)))
+    (call $gs32 (i32.add (local.get $dst) (i32.const 4)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $dst) (i32.const 8)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $dst) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (local.get $dst) (i32.const 16))
+      (call $gl32 (i32.add (local.get $src) (i32.const 32))))
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (i32.const 260)))
+      (local.set $ch (call $gl8
+        (i32.add (i32.add (local.get $src) (i32.const 44)) (local.get $i))))
+      (call $gs8
+        (i32.add (i32.add (local.get $dst) (i32.const 20)) (local.get $i))
+        (local.get $ch))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $copy (local.get $ch))))
+  )
+
+  (func $handle__findfirst (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scratch i32) (local $handle i32)
+    (local.set $scratch (call $heap_alloc (i32.const 320)))
+    (if (i32.eqz (local.get $scratch))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $handle (call $host_fs_find_first_file
+      (call $g2w (local.get $arg0)) (local.get $scratch) (i32.const 0)))
+    (if (i32.eq (local.get $handle) (i32.const -1))
+      (then
+        (call $heap_free (local.get $scratch))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (call $crt_copy_finddata_a (local.get $arg1) (local.get $scratch))
+    (call $heap_free (local.get $scratch))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handle))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__findnext (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $scratch i32) (local $ok i32)
+    (local.set $scratch (call $heap_alloc (i32.const 320)))
+    (if (i32.eqz (local.get $scratch))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $ok (call $host_fs_find_next_file
+      (local.get $arg0) (local.get $scratch) (i32.const 0)))
+    (if (local.get $ok)
+      (then
+        (call $crt_copy_finddata_a (local.get $arg1) (local.get $scratch))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const -1))))
+    (call $heap_free (local.get $scratch))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__findclose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $host_fs_find_close (local.get $arg0))
+        (then (i32.const 0))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle_getenv (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $entry i32)
+    (local.set $entry (call $env_find (local.get $arg0) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (local.get $entry)
+        (then (i32.add (i32.add (local.get $entry)
+          (call $env_name_len (local.get $entry))) (i32.const 1)))
+        (else (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__stat (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $attrs i32) (local $scratch i32) (local $find i32) (local $path_wa i32)
+    (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $path_wa (call $g2w (local.get $arg0)))
+    (local.set $attrs (call $host_fs_get_file_attributes
+      (local.get $path_wa) (i32.const 0)))
+    (if (i32.eq (local.get $attrs) (i32.const -1))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (memory.fill (call $g2w (local.get $arg1)) (i32.const 0) (i32.const 64))
+    ;; _stat: st_mode at +6, st_size at +20, times at +24/+28/+32.
+    (call $gs16 (i32.add (local.get $arg1) (i32.const 6))
+      (if (result i32) (i32.and (local.get $attrs) (i32.const 0x10))
+        (then (i32.const 0x41ff)) ;; _S_IFDIR | broad rwx perms
+        (else (i32.const 0x81b6)))) ;; _S_IFREG | 0666
+    (local.set $scratch (call $heap_alloc (i32.const 320)))
+    (if (local.get $scratch)
+      (then
+        (local.set $find (call $host_fs_find_first_file
+          (local.get $path_wa) (local.get $scratch) (i32.const 0)))
+        (if (i32.ne (local.get $find) (i32.const -1))
+          (then
+            (call $gs32 (i32.add (local.get $arg1) (i32.const 20))
+              (call $gl32 (i32.add (local.get $scratch) (i32.const 32))))
+            (drop (call $host_fs_find_close (local.get $find)))))
+        (call $heap_free (local.get $scratch))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__access (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $attrs i32)
+    (if (i32.eqz (local.get $arg0))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (local.set $attrs (call $host_fs_get_file_attributes
+      (call $g2w (local.get $arg0)) (i32.const 0)))
+    (if (i32.eq (local.get $attrs) (i32.const -1))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (if (i32.and
+          (i32.and (local.get $arg1) (i32.const 0x02))
+          (i32.and (local.get $attrs) (i32.const 0x01)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (return)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__beginthread (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $host_create_thread
+      (local.get $arg0) (local.get $arg2) (local.get $arg1)
+      (i32.const 0) (i32.const 0) (global.get $current_thread_id)))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__beginthreadex (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (local $thread_id_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (call $host_create_thread
+      (local.get $arg2) (local.get $arg3) (local.get $arg1)
+      (local.get $arg4) (i32.const 0) (global.get $current_thread_id)))
+    (local.set $thread_id_ptr (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (if (local.get $thread_id_ptr)
+      (then (call $gs32 (local.get $thread_id_ptr) (i32.load offset=0 (global.get $reg_base)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  (func $handle__endthreadex (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (call $host_exit_thread (local.get $arg0))
+    (global.set $yield_reason (i32.const 2))
+    (global.set $eip (i32.const 0))
+    (global.set $steps (i32.const 0))
   )
 
   ;; _itoa / _itow(value, buffer, radix) — cdecl, returns the buffer.
@@ -516,6 +1944,14 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  (func $handle__chdir (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $host_fs_set_current_directory
+            (call $g2w (local.get $arg0)) (i32.const 0))
+        (then (i32.const 0))
+        (else (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
   ;; _fullpath(absPath, relPath, maxLength) — cdecl. The VFS owns DOS drive,
   ;; root-relative, current-directory, and dot-component normalization, so use
   ;; the same resolver as GetFullPathNameA. A NULL destination asks the CRT to
@@ -550,9 +1986,12 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
+  ;; Microsoft CRT int and long are both signed 32-bit values, and the two
+  ;; routines otherwise have the same buffer/radix/result contract.
   (func $handle__ltoa (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (i32.store offset=0 (global.get $reg_base) (call $crt_itoa (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $handle__itoa
+      (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
   ;; ============================================================
@@ -939,7 +2378,7 @@
         (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (return)))
     ;; Read old block size from header (ptr-4 in guest space)
-    (local.set $old_size (call $gl32 (i32.sub (local.get $arg0) (i32.const 4))))
+    (local.set $old_size (call $heap_block_size_unchecked (local.get $arg0)))
     (local.set $new_ptr (call $heap_alloc (local.get $arg1)))
     ;; Copy min(old_size, new_size) bytes
     (if (i32.gt_u (local.get $old_size) (local.get $arg1))
@@ -1124,7 +2563,9 @@
     (if (i32.eq (local.get $arg0) (local.get $arg1))
       (then (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
       (else
-        (if (i32.and (local.get $arg0) (local.get $arg1))
+        (if (i32.and
+              (i32.ne (local.get $arg0) (i32.const 0))
+              (i32.ne (local.get $arg1) (i32.const 0)))
           (then
             (local.set $wa0 (call $g2w (local.get $arg0)))
             (local.set $wa1 (call $g2w (local.get $arg1)))
@@ -1254,6 +2695,16 @@
                 (br $compare)))
               (local.set $hay (i32.add (local.get $hay) (i32.const 1)))
               (br $candidate))))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+  )
+
+  ;; _setjmp3(jmp_buf, ...) — cdecl. First return from setjmp is zero; the
+  ;; caller retains varargs cleanup. Store a conservative zeroed frame so code
+  ;; that inspects the buffer does not see stale heap/stack bytes.
+  (func $handle__setjmp3 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (if (local.get $arg0)
+      (then (call $zero_memory (call $g2w (local.get $arg0)) (i32.const 64))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 

@@ -16,15 +16,15 @@ const extraWat = String.raw`
   (func (export "test_sparse_map") (param $guest i32) (param $size i32) (result i32)
     (call $virtual_map_commit (local.get $guest) (local.get $size)))
   (func (export "test_starcraft_strupr") (param $string i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle__strupr (local.get $string) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_starcraft_fullpath") (param $dst i32) (param $src i32) (param $cap i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle__fullpath (local.get $dst) (local.get $src) (local.get $cap)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

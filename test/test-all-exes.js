@@ -236,7 +236,7 @@ const TEST_CASES = [
   { exe: 'test/binaries/installers/winamp295.exe', name: 'Winamp 2.95 Installer',
     extraArgs: ['--args=/S'], maxBatches: 8000, batchSize: 5000, timeoutMs: 180000,
     expectOutput: '[API] CreateProcessA', noPng: true },
-  { exe: 'test/binaries/installers/mirc59.exe', name: 'mIRC Installer', expectedCrash: 'not a current-stage target' },
+  { exe: 'test/binaries/installers/mirc59.exe', name: 'mIRC Installer' },
   // WEP community 32-bit remakes (archive.org/details/wep-32bit)
   { exe: 'test/binaries/wep32-community/Bricks/bricks.exe', name: 'Bricks (Klotski)' },
   { exe: 'test/binaries/wep32-community/EmPipe/EMPIPE.EXE', name: 'EmPipe (PipeDream)' },
@@ -271,12 +271,18 @@ const TEST_CASES = [
     extraArgs: ['--no-close', '--quiet-blocks', '--stuck-after=5000'] },
   { exe: 'test/binaries/wep32-community/TWorld/tworld.exe', name: 'TWorld (SDL, expected fail)' },
   { exe: 'test/binaries/wep32-community/Jigssawme/JigSawedME.exe', name: 'JigSawedME (VB6, expected fail)', expectedCrash: 'VB6 runtime not a current-stage target' },
-  { exe: 'test/binaries/wep32-community/Rodent2000/Rodent2000.exe', name: 'Rodent2000 (VB6, expected fail)', expectedCrash: 'VB6 runtime not a current-stage target' },
+  { exe: 'test/binaries/wep32-community/Rodent2000/Rodent2000.exe', app: 'rodent2000',
+    name: 'Rodent2000 (VB6)', maxBatches: 4100, batchSize: 2000,
+    extraArgs: ['--quiet-api', '--quiet-blocks',
+      '--input=2500:mousedown:155:38,2501:mouseup:155:38,2700:mousedown:165:58,2701:mouseup:165:58'],
+    captureBatch: 4000, captureStopBatch: 4100, timeoutMs: 60000,
+    contentRegion: { x: 130, y: 90, width: 380, height: 380 },
+    minRegionNonBlackPixels: 100000 },
   // Plus! 98
   { exe: 'test/binaries/plus98/SPIDER.EXE', name: 'Spider (Plus!98)' },
   { exe: 'test/binaries/plus98/MARBLES.EXE', name: 'LoseYourMarbles (DX)' },
   // Shareware / demos — DirectX titles
-  { exe: 'test/binaries/shareware/abe/ex/AbeDemo.exe', name: 'Abe Oddysee demo (DX)',
+  { exe: 'test/binaries/shareware/abe/installed/abedemo.exe', name: 'Abe Oddysee demo (DX)',
     // Needs enough timer/load-loop budget for the title/copyright pixels to
     // appear on the 1024x512 offscreen DDraw surface.
     maxBatches: 1000, extraArgs: ['--quiet-blocks'], timeoutMs: 30000 },

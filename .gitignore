@@ -23,6 +23,11 @@ binaries
 !icons/*.png
 !icons/apps/
 !icons/apps/*.png
+!screenshots/readme/
+!screenshots/readme/*.png
+!screenshots/apps/
+!screenshots/apps/*.png
+screenshots/apps/*.log
 *.dll
 *.DLL
 *.wav
@@ -30,6 +35,8 @@ binaries
 *.mid
 *.MID
 messageboard.txt
+*.orig
+stdout.txt
 *.DAT
 *.bmp
 *.mp3
@@ -41,3 +48,20 @@ test/binaries/wep32-community/
 test/binaries/dlls/
 !test/binaries/dlls/SOURCES.md
 !test/binaries/SOURCES.md
+test/corpus/
+build-info.js
+recordings/
+tmp/
+
+# Static site pages rendered by tools/gen-site-pages.js at deploy time
+# (story.html is the one committed output so a local http.server has it).
+apps/*.html
+articles/*.html
+design/*.html
+docs/*.html
+docs/re-notes/*.html
+sitemap.xml
+
+# The DOS corpus report is generated into docs/dos-corpus and is
+# committed; the blanket *.png above would otherwise drop its screenshots.
+!docs/dos-corpus/shots/*.png

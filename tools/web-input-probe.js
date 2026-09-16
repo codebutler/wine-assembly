@@ -18,14 +18,25 @@
 // Steps (semicolon separated, left to right):
 //   move:X,Y      move the pointer to guest pixel X,Y
 //   click:X,Y     move, then press and release the left button
+//   tap:X,Y       a touchscreen tap (needs --touch); drives the touch bridge,
+//                 which `click` never reaches
 //   down:X,Y      / up:X,Y   — the halves of a drag
 //   key:Name      keyboard press (puppeteer key name, e.g. Enter, KeyA)
+//   type:TEXT     type literal text through browser key events
 //   wait:MS       idle, letting the guest run
 //   eval:EXPR     evaluate EXPR in the page and print its result
+//   evalfile:PATH evaluate the contents of PATH in the page (no ';' escaping)
 //   shot:PATH     screenshot to PATH
+//
+// `--eval=@PATH` reads the final readout expression from a file too. Reach for
+// the file forms for anything longer than one expression: steps split on ';',
+// so an inline `eval:` has to escape every semicolon and one slip costs a whole
+// launch to discover.
 //
 // After every step the CSS cursor of the canvas is printed, since that is the
 // pixel-visible answer to "what does the user see under the pointer".
+// A `viewport:667x375` step rotates the emulated device mid-run, which is the
+// only way to reach the state a few rotations on a real phone leave behind.
 // --viewport=WxH[@DPR] and --touch emulate a device; a phone-sized viewport
 // puts index.html into single-app mode (add `single-app=1` to --query to force
 // it regardless of the emulated screen size).
@@ -40,6 +51,14 @@
 //
 // --cpu=N applies Chrome's CPU throttling while preserving real browser audio
 // timing, which is useful for scheduler-sensitive game/audio failures.
+//
+// --threads opts into the isolated guest-Worker backend before page scripts
+// run. Point --url at `tools/dev-server.js --isolate` (or another COOP/COEP
+// origin); otherwise the page correctly falls back to cooperative execution.
+//
+// --lan=solo|local|cancel answers the virtual-LAN lobby a `lan:` app puts up
+// before it boots (default solo). Without it the launch waits on a button
+// nobody is there to click and the probe times out.
 
 const fs = require('fs');
 const http = require('http');
@@ -59,14 +78,35 @@ const APP = opt('app', 'mspaint98');
 // This is a diagnostic driver, so default to the debug shell that exposes the
 // Program selector and trusted Launch button.
 const QUERY = opt('query', '?debug');
-const STEPS = (opt('steps', '') || '').split(';').map(s => s.trim()).filter(Boolean);
+// Steps are semicolon-separated, but an `eval:` step is JavaScript and wants
+// semicolons of its own. `\;` escapes one so real statements can be written
+// without contorting them into comma expressions.
+const STEPS = (opt('steps', '') || '')
+  .split(/(?<!\\);/)
+  .map(s => s.trim().replace(/\\;/g, ';'))
+  .filter(Boolean);
 const READY_MS = Number(opt('ready', 6000));
+const LAUNCH_MS = Number(opt('launch', 90000));
+const PROTOCOL_TIMEOUT_MS = Number(opt('protocol-timeout', 600000));
 const CPU_RATE = Number(opt('cpu', 1));
+const THREADS = argv.includes('--threads');
+const PRESENTATION_SCALE = opt('scale', '');
+// A LAN-capable app (lib/apps.js `lan:`) shows the vlan lobby before it boots
+// and the launch blocks on a button nobody clicks in a headless run, so the
+// probe used to time out waiting for runningApps. Answer it the way a person
+// would: solo | local ("Both players here") | cancel.
+const LAN_ANSWER = opt('lan', 'solo');
 // Headless Chrome runs with --disable-gpu by default, which sends presentation
 // down the 2D canvas paths. A real phone browser has WebGL and takes the GPU
 // paths instead, so bugs that only exist there (a viewport crop the shaders
 // ignore) are invisible without --gpu, which swaps in SwiftShader.
 const GPU = argv.includes('--gpu');
+// iPhone Safari exposes NO element Fullscreen API -- not requestFullscreen,
+// not the webkit spelling, on anything that is not a <video>. Chrome always
+// has it, so the only way to drive the fallback the page uses there is to take
+// the API away before any page script runs. --touch alone does not do this:
+// an emulated phone in Chrome still reports full fullscreen support.
+const NO_FULLSCREEN_API = argv.includes('--no-fullscreen-api');
 // Base origin to drive. Empty = serve this working tree over a temp server.
 const URL_BASE = (opt('url', '') || '').replace(/\/+$/, '');
 // A phone is a different page, not a smaller one: single-app mode, no taskbar,
@@ -83,7 +123,25 @@ const VIEWPORT = (() => {
     isMobile: argv.includes('--touch'),
   };
 })();
-const FINAL_EVAL = opt('eval', '');
+// `--eval=@path` reads the expression from a file, so a readout with
+// semicolons in it does not have to be escaped past the shell and the step
+// splitter both.
+const FINAL_EVAL_RAW = opt('eval', '');
+const FINAL_EVAL = FINAL_EVAL_RAW.startsWith('@')
+  ? require('fs').readFileSync(FINAL_EVAL_RAW.slice(1), 'utf8')
+  : FINAL_EVAL_RAW;
+// --trace=dx,gdi turns on the same trace categories test/run.js exposes as
+// --trace-dx / --trace-gdi, inside the page. host.js hands
+// window.__waTraceCategories to lib/host-imports.js as ctx.trace, so the
+// browser prints the identical [dx]/[gdi] lines. --console-out=FILE captures
+// every console line the page emits (a traced run is far too chatty for the
+// terminal).
+const TRACE = (opt('trace', '') || '').split(',').map(s => s.trim()).filter(Boolean);
+const CONSOLE_OUT = opt('console-out', '');
+// --trace-api=Name1,Name2 is the page's --trace-api=NAMES: host.js already
+// reads window.__waTraceApiNames, this just fills it before the app launches.
+const TRACE_API = (opt('trace-api', '') || '').split(',').map(s => s.trim()).filter(Boolean);
+const BEFORE_LAUNCH = opt('before-launch', '');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 
 function mimeType(file) {
@@ -107,7 +165,13 @@ function startStaticServer() {
     if (file !== root && !file.startsWith(root + path.sep)) { res.writeHead(403); res.end('forbidden'); return; }
     fs.readFile(file, (error, data) => {
       if (error) { res.writeHead(error.code === 'ENOENT' ? 404 : 500); res.end(error.code || 'read error'); return; }
-      res.writeHead(200, { 'Content-Type': mimeType(file), 'Cache-Control': 'no-store' });
+      const isolationHeaders = THREADS ? {
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+      } : {};
+      res.writeHead(200, Object.assign({
+        'Content-Type': mimeType(file), 'Cache-Control': 'no-store',
+      }, isolationHeaders));
       res.end(data);
     });
   });
@@ -119,10 +183,15 @@ function startStaticServer() {
 
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
+// The on-screen desktop canvas. NOT `querySelector('canvas')`: #screen-present
+// (the GPU presentation target) comes first in the DOM and is display:none, so
+// its bounding rect is all zeroes -- mapping through it silently collapsed
+// every guest pixel to page (0,0) and the clicks landed on BODY.
 // Guest canvas pixel -> page coordinate, through the live bounding rect.
 async function toPage(page, gx, gy) {
   return page.evaluate(([x, y]) => {
-    const c = document.querySelector('canvas');
+    const c = document.getElementById('screen') ||
+      [...document.querySelectorAll('canvas')].find(el => el.getBoundingClientRect().width > 0);
     const r = c.getBoundingClientRect();
     // Exclusive fullscreen and single-app mode present a crop of the desktop
     // canvas scaled to the display, so guest pixels are not canvas pixels.
@@ -143,7 +212,8 @@ async function toPage(page, gx, gy) {
 }
 
 const readCursor = page => page.evaluate(() => {
-  const c = document.querySelector('canvas');
+  const c = document.getElementById('screen') ||
+    [...document.querySelectorAll('canvas')].find(el => el.getBoundingClientRect().width > 0);
   const inline = c.style.cursor;
   const computed = getComputedStyle(c).cursor;
   // A custom cursor is a long data: URL; name it rather than printing 30KB.
@@ -164,6 +234,14 @@ async function main() {
     headless: true,
     executablePath: CHROME,
     userDataDir: profile,
+    // Every CDP call this tool makes lands on a page whose main thread is
+    // running an x86 interpreter, and the guest slice is not preemptible. A
+    // heavy app (Winamp, StarCraft, Heroes II, RollerCoaster Tycoon) on a
+    // loaded box starves the polling evaluate behind waitForFunction past
+    // puppeteer's 180s default, and it surfaces as
+    // "Runtime.callFunctionOn timed out" -- which reads exactly like the app
+    // failing to launch, and is not. Raise it well past any wait we ask for.
+    protocolTimeout: PROTOCOL_TIMEOUT_MS,
     args: ['--no-sandbox', '--no-first-run', '--no-default-browser-check'].concat(
       GPU
         ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
@@ -177,15 +255,64 @@ async function main() {
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_RATE });
     }
     await page.setViewport(VIEWPORT);
-    page.on('pageerror', e => problems.push(String(e)));
+    // Stack, not just the message: a bare "Cannot read properties of null"
+    // names neither the file nor the caller, which is most of what you need.
+    page.on('pageerror', e => problems.push((e && e.stack) || String(e)));
+    const consoleLines = [];
+    // Chrome's own console line for a failed fetch is "Failed to load resource:
+    // the server responded with a status of 404 (Not Found)" and names NOTHING
+    // -- not the URL, not the initiator. A run with 47 of those says only that
+    // something is missing. The response event has the URL, so record it.
+    page.on('response', r => {
+      if (r.status() >= 400 && CONSOLE_OUT) {
+        consoleLines.push(`[http ${r.status()}] ${r.url()}`);
+      }
+    });
     page.on('console', m => {
       const t = m.text();
+      if (CONSOLE_OUT) consoleLines.push(t);
       if (/UNIMPLEMENTED API:|RuntimeError|LinkError|crashed|FATAL:/i.test(t)) problems.push(t);
     });
+    if (CONSOLE_OUT) {
+      const flush = () => fs.writeFileSync(CONSOLE_OUT, consoleLines.join('\n') + '\n');
+      setInterval(flush, 2000).unref();
+      process.on('exit', flush);
+    }
+    if (TRACE.length || TRACE_API.length) {
+      await page.evaluateOnNewDocument((cats, apis) => {
+        if (cats.length) window.__waTraceCategories = new Set(cats);
+        if (apis.length) window.__waTraceApiNames = new Set(apis);
+      }, TRACE, TRACE_API);
+    }
+    if (NO_FULLSCREEN_API) {
+      await page.evaluateOnNewDocument(() => {
+        for (const name of ['requestFullscreen', 'webkitRequestFullscreen',
+                            'mozRequestFullScreen', 'msRequestFullscreen']) {
+          delete Element.prototype[name];
+        }
+      });
+    }
+    if (THREADS || PRESENTATION_SCALE) {
+      await page.evaluateOnNewDocument((threads, scale) => {
+        if (threads) localStorage.setItem('wine-assembly.threads', '1');
+        if (scale) localStorage.setItem('wine-assembly:2d-scale', scale);
+      }, THREADS, PRESENTATION_SCALE);
+    }
     await page.goto(`${base}/index.html${QUERY}`, { waitUntil: 'load', timeout: 60000 });
+    // Start from an empty profile, then RELOAD. lib/storage.js seeds its
+    // default registry (RCT's install Path, Plus!98 MediaDirectory, ...) once
+    // at script load, so clearing localStorage after the page is up deletes
+    // seeds nothing puts back: RCT then reads an empty install path, writes
+    // its scenario index to the drive root and dies in its own GSK Error
+    // Trapper -- a failure no real visitor can reach.
+    await page.evaluate(() => { try { localStorage.clear(); } catch (_) {} });
+    await page.reload({ waitUntil: 'load', timeout: 60000 });
     await page.waitForFunction('typeof launchApp === "function"', { timeout: 60000 });
 
     console.log(`launching ${APP} ...`);
+    if (BEFORE_LAUNCH) {
+      await page.evaluate(js => (0, eval)(js), BEFORE_LAUNCH);
+    }
     await page.evaluate(app => {
       const sel = document.getElementById('app-select');
       if (typeof apps === 'undefined' || !apps[app]) throw new Error(`index.html has no app named ${app}`);
@@ -194,7 +321,6 @@ async function main() {
         o.value = app; o.textContent = app; sel.appendChild(o);
       }
       stopAllApps();
-      localStorage.clear();
       sel.value = app;
     }, APP);
     // Use a trusted browser gesture for launch. AudioContext.resume() is
@@ -217,8 +343,21 @@ async function main() {
       const button = [...document.querySelectorAll('button[onclick="launchApp()"]')].find(visible);
       if (button) return { ...centre(button), icon: false };
       const icon = document.querySelector(`.desktop-icon[data-app="${app}"]`);
-      if (visible(icon)) return { ...centre(icon), icon: true };
-      throw new Error(`no visible Launch button and no desktop icon for ${app}`);
+      if (!visible(icon)) throw new Error(`no visible Launch button and no desktop icon for ${app}`);
+      // On a phone the icon grid is a scroller with every app in it, so an
+      // icon near the end of the list has a real size and a real position --
+      // several screens below the viewport. Clicking its centre then clicks
+      // nothing at all, and the run dies 90s later in the wait for
+      // runningApps with an empty #status and no boot ever started, which
+      // reads exactly like the app failing to launch. Winamp, StarCraft,
+      // Heroes II and RollerCoaster Tycoon are all down there.
+      icon.scrollIntoView({ block: 'center' });
+      const point = centre(icon);
+      if (point.x < 0 || point.y < 0 || point.x > innerWidth || point.y > innerHeight) {
+        throw new Error(`desktop icon for ${app} is off-screen at ` +
+          `${Math.round(point.x)},${Math.round(point.y)} in ${innerWidth}x${innerHeight}`);
+      }
+      return { ...point, icon: true };
     }, APP);
     await page.mouse.click(launchPoint.x, launchPoint.y);
     // Icons launch on the second click of a double-click.
@@ -226,9 +365,52 @@ async function main() {
       await wait(80);
       await page.mouse.click(launchPoint.x, launchPoint.y);
     }
-    await page.waitForFunction(
-      'typeof runningApps !== "undefined" && runningApps.length > 0 && typeof sharedRenderer !== "undefined" && sharedRenderer',
-      { timeout: 90000 });
+    // The lobby appears asynchronously (it is awaited inside launchApp), so
+    // poll for it rather than assuming it is up on the next tick.
+    for (let i = 0; i < 60; i++) {
+      const answered = await page.evaluate(answer => {
+        const overlay = document.querySelector('.vln-lobby');
+        if (!overlay) return null;
+        const buttons = [...overlay.querySelectorAll('button')];
+        const want = { solo: /play solo/i, local: /both players/i, cancel: /cancel/i }[answer];
+        const button = want && buttons.find(b => want.test(b.textContent || ''));
+        if (!button) return `no ${answer} button (saw: ${buttons.map(b => b.textContent).join(', ')})`;
+        button.click();
+        return `clicked "${button.textContent}"`;
+      }, LAN_ANSWER);
+      if (answered) { console.log(`lan lobby: ${answered}`); break; }
+      await wait(250);
+    }
+
+    // How long the app gets to exist at all. 90s covers everything in the
+    // corpus on an idle box, but this machine regularly sits at load 40+ with
+    // several agents sweeping, and the heavy apps (Winamp's DLL graph,
+    // StarCraft, Heroes II, RollerCoaster Tycoon's 76 data files) then time
+    // out here and report as a launch failure they are not. --launch= raises
+    // it rather than making every run wait longer.
+    try {
+      await page.waitForFunction(
+        'typeof runningApps !== "undefined" && runningApps.length > 0 && typeof sharedRenderer !== "undefined" && sharedRenderer',
+        { timeout: LAUNCH_MS });
+    } catch (e) {
+      // A launch timeout on its own says nothing about WHY. The shell narrates
+      // its own boot into #status ("Loading PE...", "Loading DLLs...",
+      // "Loading data files... 14/76", "Failed to load"), so read that before
+      // giving up: a boot parked on one phase is a different bug from a boot
+      // that never started, and both look identical from out here.
+      const diag = await page.evaluate(() => {
+        const text = el => (el && el.textContent || '').trim().slice(0, 300);
+        return {
+          status: text(document.getElementById('status')),
+          running: typeof runningApps === 'undefined' ? 'undefined' : runningApps.length,
+          renderer: typeof sharedRenderer !== 'undefined' && !!sharedRenderer,
+          body: document.body.className,
+          dialogs: [...document.querySelectorAll('.modal, .dialog, .vln-lobby')].map(text),
+        };
+      }).catch(err => ({ diagFailed: err.message }));
+      console.log(`launch diag ${JSON.stringify(diag)}`);
+      throw e;
+    }
     await wait(READY_MS);
     console.log(`ready  cursor=${JSON.stringify(await readCursor(page))}`);
 
@@ -239,22 +421,67 @@ async function main() {
       if (kind === 'wait') {
         await wait(Number(rest) || 0);
       } else if (kind === 'eval') {
-        const v = await page.evaluate(expr => {
-          try { return JSON.stringify(eval(expr)); } catch (e) { return 'ERROR: ' + e.message; }
+        const v = await page.evaluate(async expr => {
+          try { return JSON.stringify(await eval(expr)); } catch (e) { return 'ERROR: ' + e.message; }
         }, rest);
         console.log(`eval ${rest} => ${v}`);
         continue;
+      } else if (kind === 'evalfile') {
+        // Steps split on ';', so an `eval:` step has to escape every semicolon
+        // it contains and any real instrumentation becomes unreadable — and a
+        // mis-escape shows up as "Invalid or unexpected token" after the whole
+        // launch has already been paid for. Read the script from a file
+        // instead; its last expression is the value, same as `eval:`.
+        const source = require('fs').readFileSync(rest, 'utf8');
+        const v = await page.evaluate(async expr => {
+          try { return JSON.stringify(await eval(expr)); } catch (e) { return 'ERROR: ' + e.message; }
+        }, source);
+        console.log(`evalfile ${rest} => ${v}`);
+        continue;
+      } else if (kind === 'viewport') {
+        // Rotation, mid-run. A phone bug can need several of these: the page
+        // re-sizes the guest desktop on every one, and what that does to a
+        // window depends on the state the previous rotation left behind.
+        const vm = /^(\d+)x(\d+)(?:@([\d.]+))?$/.exec(rest);
+        if (!vm) throw new Error(`viewport step must look like 667x375: "${step}"`);
+        await page.setViewport({
+          ...VIEWPORT,
+          width: Number(vm[1]),
+          height: Number(vm[2]),
+          deviceScaleFactor: vm[3] ? Number(vm[3]) : VIEWPORT.deviceScaleFactor,
+        });
+        console.log(`viewport ${rest}`);
       } else if (kind === 'shot') {
         await page.screenshot({ path: rest });
         console.log(`shot ${rest}`);
         continue;
       } else if (kind === 'key') {
         await page.keyboard.press(rest);
-      } else if (kind === 'move' || kind === 'click' || kind === 'down' || kind === 'up') {
+      } else if (kind === 'type') {
+        await page.keyboard.type(rest);
+      } else if (kind === 'tap') {
+        // A real finger, not a mouse: `click` drives page.mouse and therefore
+        // exercises none of the touchstart/touchend bridge, which is where the
+        // phone-only input bugs live. Needs --touch (an emulated device
+        // without a touchscreen has nothing to dispatch to).
+        const [gx, gy] = rest.split(',').map(Number);
+        const p = await toPage(page, gx, gy);
+        await page.touchscreen.tap(p.x, p.y);
+      } else if (kind === 'move' || kind === 'click' || kind === 'dbl'
+                 || kind === 'down' || kind === 'up') {
         const [gx, gy] = rest.split(',').map(Number);
         const p = await toPage(page, gx, gy);
         await page.mouse.move(p.x, p.y);
         if (kind === 'click') { await page.mouse.down(); await wait(60); await page.mouse.up(); }
+        // A double-click has to happen inside one step: every step is followed
+        // by a settle wait, so two `click` steps are always further apart than
+        // any guest's double-click time. Diablo's Choose Class screen confirms
+        // on a double-click and looked unresponsive until this existed.
+        else if (kind === 'dbl') {
+          await page.mouse.click(p.x, p.y, { clickCount: 1 });
+          await wait(40);
+          await page.mouse.click(p.x, p.y, { clickCount: 2 });
+        }
         else if (kind === 'down') await page.mouse.down();
         else if (kind === 'up') await page.mouse.up();
       } else {
@@ -267,8 +494,8 @@ async function main() {
     }
 
     if (FINAL_EVAL) {
-      const v = await page.evaluate(expr => {
-        try { return JSON.stringify(eval(expr)); } catch (e) { return 'ERROR: ' + e.message; }
+      const v = await page.evaluate(async expr => {
+        try { return JSON.stringify(await eval(expr)); } catch (e) { return 'ERROR: ' + e.message; }
       }, FINAL_EVAL);
       console.log(`eval => ${v}`);
     }

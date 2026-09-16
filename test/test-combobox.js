@@ -15,9 +15,11 @@ const fs = require('fs');
 const path = require('path');
 const { createCanvas } = require('../lib/canvas-compat');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { Win98Renderer } = require('../lib/renderer');
 const { mountBundledFonts } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC_DIR = path.join(ROOT, 'src');
@@ -33,7 +35,7 @@ const FIELD_H = 21;
 const CBS_DROPDOWN = 2, CBS_DROPDOWNLIST = 3;
 
 async function main() {
-  const wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC_DIR, f), 'utf-8'));
+  const wasmBytes = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const renderer = new Win98Renderer(createCanvas(640, 480));
 
@@ -53,6 +55,7 @@ async function main() {
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread   = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event  = () => 0;
   base.host.set_event     = () => 0;
   base.host.reset_event   = () => 0;
@@ -74,14 +77,14 @@ async function main() {
 
   const writeStr = (s) => {
     const g = e.guest_alloc(s.length + 1);
-    const wa = g - e.get_image_base() + 0x12000;
+    const wa = RegionMap.g2w(g, e.get_image_base());
     const u8 = new Uint8Array(memory.buffer);
     for (let i = 0; i < s.length; i++) u8[wa + i] = s.charCodeAt(i);
     u8[wa + s.length] = 0;
     return g;
   };
   const readStr = (g, max = 256) => {
-    const wa = g - e.get_image_base() + 0x12000;
+    const wa = RegionMap.g2w(g, e.get_image_base());
     const u8 = new Uint8Array(memory.buffer);
     let s = '';
     for (let i = 0; i < max && u8[wa + i]; i++) s += String.fromCharCode(u8[wa + i]);
@@ -112,6 +115,24 @@ async function main() {
 
   const baselineSlots = e.wnd_count_used();
 
+  // Destroying a dropdown before its first open used to leak two halves of
+  // its popup hierarchy: the listbox remained as a live WAT child of the
+  // popup, while the popup's WAT slot was removed without telling the host
+  // renderer. Common dialogs commonly create and destroy filter combos
+  // without opening them, so exercise that exact lifetime before the larger
+  // interaction test reparents the listbox on close.
+  const unopened = e.test_create_combobox(0, 0, 200, 100, CBS_DROPDOWNLIST);
+  const unopenedPopup = e.combobox_get_popup_hwnd(unopened);
+  check('never-opened dropdown creates its renderer popup',
+    unopenedPopup !== 0 && !!renderer.windows[unopenedPopup],
+    `popup=0x${unopenedPopup.toString(16)}`);
+  if (e.wnd_destroy_tree) e.wnd_destroy_tree(unopened - 1);
+  check('never-opened dropdown destroys its complete WAT subtree',
+    e.wnd_count_used() === baselineSlots,
+    `${e.wnd_count_used()} vs ${baselineSlots}`);
+  check('never-opened dropdown removes its renderer popup',
+    !renderer.windows[unopenedPopup]);
+
   // 200x100 combobox, CBS_DROPDOWNLIST. cy budgets the dropped area;
   // closed face is FIELD_H = 21 px.
   const cb = e.test_create_combobox(0, 0, 200, 100, CBS_DROPDOWNLIST);
@@ -125,6 +146,13 @@ async function main() {
 
   const lb = e.combobox_get_lb_hwnd(cb);
   check('inner listbox hwnd exposed', lb !== 0, 'lb=0x' + lb.toString(16));
+  const popup = e.combobox_get_popup_hwnd(cb);
+  check('dropdown shell is an owned popup, not a child',
+    popup !== 0 && e.wnd_get_parent(popup) === 0 && e.wnd_get_owner(popup) === cb,
+    `popup=0x${popup.toString(16)} parent=0x${e.wnd_get_parent(popup).toString(16)} owner=0x${e.wnd_get_owner(popup).toString(16)}`);
+  check('inner listbox belongs to the popup from creation',
+    e.wnd_get_parent(lb) === popup,
+    `list parent=0x${e.wnd_get_parent(lb).toString(16)} popup=0x${popup.toString(16)}`);
 
   // ---------------- Item storage (forwarded to listbox) ----------------
   const items = ['Up', 'Down', 'Left', 'Right', 'Fire'];
@@ -317,6 +345,7 @@ async function main() {
   // CBS_DROPDOWN (variant=2): editable field via inner edit child
   // ===================================================================
   const WM_SETTEXT = 0x000C, WM_GETTEXTLENGTH = 0x000E, WM_PAINT = 0x000F;
+  const WM_CHAR = 0x0102;
   const CB_LIMITTEXT = 0x0141, CB_GETEDITSEL = 0x0140, CB_SETEDITSEL = 0x0142;
   const EM_GETLIMITTEXT = 0x00D5;
 
@@ -368,8 +397,12 @@ async function main() {
   e.send_message(cb2, WM_PAINT, 0, 0);
   const emptyEditPixels = snapshotWindow(cb2 - 1);
 
-  // WM_SETTEXT routed to edit
+  // Programmatic combo text changes synchronize the inner edit without
+  // masquerading as user CBN_EDITUPDATE/CBN_EDITCHANGE notifications.
+  e.set_post_queue_count(0);
   e.send_message(cb2, WM_SETTEXT, 0, writeStr('hello'));
+  check('programmatic combo text suppresses user-edit notifications',
+    e.post_queue_depth() === 0, `depth=${e.post_queue_depth()}`);
   const dest = e.guest_alloc(64);
   const n = e.send_message(cb2, WM_GETTEXT, 64, dest);
   check('WM_SETTEXT/GETTEXT routes through edit',
@@ -381,6 +414,22 @@ async function main() {
   check('CBS_DROPDOWN paint uses the inner edit text',
     changedBytes(emptyEditPixels, editPixels) > 0,
     `changedBytes=${changedBytes(emptyEditPixels, editPixels)} bytes=${editPixels?.length || 0}`);
+
+  // A real WM_CHAR changes the inner edit as user input. Relay both combo
+  // notifications asynchronously so an x86 parent callback owns the pump.
+  e.send_message(ed, WM_CHAR, '!'.charCodeAt(0), 0);
+  check('editable combo posts both user-edit notifications',
+    e.post_queue_depth() === 2 &&
+      e.post_queue_peek(0, 0) === cb2 - 1 &&
+      e.post_queue_peek(0, 1) === WM_COMMAND &&
+      e.post_queue_peek(0, 2) === ((6 << 16) | 100) &&
+      e.post_queue_peek(0, 3) === cb2 &&
+      e.post_queue_peek(1, 0) === cb2 - 1 &&
+      e.post_queue_peek(1, 1) === WM_COMMAND &&
+      e.post_queue_peek(1, 2) === ((5 << 16) | 100) &&
+      e.post_queue_peek(1, 3) === cb2,
+    `depth=${e.post_queue_depth()}`);
+  e.set_post_queue_count(0);
 
   // CB_LIMITTEXT → EM_SETLIMITTEXT round-trip via EM_GETLIMITTEXT
   e.send_message(cb2, CB_LIMITTEXT, 32, 0);

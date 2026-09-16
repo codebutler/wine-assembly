@@ -4,6 +4,9 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const {
+  hasPageScript, pageScripts,
+} = require('./browser-runtime-scripts');
 
 const ROOT = path.join(__dirname, '..');
 // The app registry, the launcher and the canvas input bridge used to live
@@ -31,9 +34,22 @@ const rendererJs = fs.readFileSync(path.join(ROOT, 'lib', 'renderer.js'), 'utf8'
 const rendererInputJs = fs.readFileSync(path.join(ROOT, 'lib', 'renderer-input.js'), 'utf8');
 const recorderJs = fs.readFileSync(path.join(ROOT, 'lib', 'recorder.js'), 'utf8');
 const deployJs = fs.readFileSync(path.join(ROOT, 'tools', 'deploy-berrry.js'), 'utf8');
+const sourcesHtml = fs.readFileSync(path.join(ROOT, 'sources.html'), 'utf8');
 const sourcesMd = fs.readFileSync(path.join(ROOT, 'test', 'binaries', 'SOURCES.md'), 'utf8');
 const exportsWat = fs.readFileSync(path.join(ROOT, 'src', '13-exports.wat'), 'utf8');
 const windowHandlersWat = fs.readFileSync(path.join(ROOT, 'src', '09a5-handlers-window.wat'), 'utf8');
+const { APPS, DESKTOP_APPS, LOCAL_CANDIDATE_APPS, DEBUG_ONLY_APPS,
+  appFileUrl, resolveRunSlice } =
+  require('../lib/apps');
+const { DLL_PATHS } = require('../lib/dll-registry');
+const deployAssets = new Set(Object.values(DLL_PATHS));
+for (const [id] of [...DESKTOP_APPS, ...LOCAL_CANDIDATE_APPS, ...DEBUG_ONLY_APPS]) {
+  const app = APPS[id];
+  if (!app) continue;
+  deployAssets.add(app.exe);
+  for (const dll of app.dlls || []) if (dll.includes('/')) deployAssets.add(dll);
+  for (const file of app.files || []) deployAssets.add(appFileUrl(file));
+}
 
 function assertBundled(rel) {
   assert(webApp.includes(`'${rel}'`), `index.html app manifest should include ${rel}`);
@@ -43,7 +59,7 @@ function assertBundled(rel) {
 }
 
 function assertDeployFile(rel) {
-  assert(deployJs.includes(`'${rel}'`), `deploy should include ${rel}`);
+  assert(deployAssets.has(rel), `deploy registry traversal should include ${rel}`);
   const full = path.join(ROOT, rel);
   assert(fs.existsSync(full), `${rel} should exist for web fetch/deploy`);
   assert(fs.statSync(full).size > 0, `${rel} should not be empty`);
@@ -69,21 +85,32 @@ assert(/LARGE_OK_PATHS\s*=\s*new Set\([^)]*'binaries\/pinball\/PINBALL\.DAT'/s.t
 assert(/LARGE_OK_PATHS\s*=\s*new Set\([^)]*'binaries\/pinball-plus95\/PINBALL\.DAT'/s.test(deployJs), 'deploy should include large Plus! 95 pinball DAT');
 assert(/LARGE_OK_PATHS\s*=\s*new Set\([^)]*'binaries\/wep32-community\/QBlackjack\/QuickBlackjack\.exe'/s.test(deployJs), 'deploy should allow large QuickBlackjack binary');
 assert(/LARGE_OK_PATHS\s*=\s*new Set\([^)]*'binaries\/plus98\/DIALOG\.BMP'/s.test(deployJs), 'deploy should allow large Marbles dialog art');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/entertainment-pack\/tictac\.exe'/s.test(deployJs), 'deploy should include desktop TicTactics binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/entertainment-pack\/winmine\.exe'/s.test(deployJs), 'deploy should include desktop Minesweeper binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/plus98\/SPIDER\.EXE'/s.test(deployJs), 'deploy should include desktop Spider binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/plus98\/SPIDER\.CHM'/s.test(deployJs), 'deploy should include Spider help file');
+for (const pageImage of [
+  'screenshots/apps/heroes2_demo.png',
+  'screenshots/apps/rct.png',
+  'screenshots/og/heroes2_demo.png',
+  'screenshots/og/rct.png',
+]) {
+  assert(deployJs.includes(`'${pageImage}'`),
+    `deploy should include generated-page image ${pageImage} above the generic size cutoff`);
+}
+assertDeployFile('binaries/entertainment-pack/tictac.exe');
+assertDeployFile('binaries/entertainment-pack/winmine.exe');
+assertDeployFile('binaries/plus98/SPIDER.EXE');
+assertDeployFile('binaries/plus98/SPIDER.CHM');
 assert(/'comctl32\.dll':\s*'binaries\/dlls\/comctl32\.dll'/.test(webApp), 'web DLL auto-loader should map comctl32.dll');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/dlls\/comctl32\.dll'/s.test(deployJs), 'deploy should include comctl32.dll for Pinball');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/winamp\.exe'/s.test(deployJs), 'deploy should include desktop Winamp binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/demo\.mp3'/s.test(deployJs), 'deploy should include Winamp demo MP3');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/whatsnew\.txt'/s.test(deployJs), 'deploy should include Winamp version history text');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/wep32-community\/Bricks\/bricks\.exe'/s.test(deployJs), 'deploy should include desktop Bricks binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/wep32-community\/EmPipe\/EMPIPE\.EXE'/s.test(deployJs), 'deploy should include desktop EmPipe binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/wep32-community\/EmPipe\/EMPIPE\.EXE\.manifest'/s.test(deployJs), 'deploy should include desktop EmPipe manifest');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/wep32-community\/EmPipe\/EMPIPEE\.TXT'/s.test(deployJs), 'deploy should include desktop EmPipe text companion');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/wep32-community\/Funpack\/Funtris\.exe'/s.test(deployJs), 'deploy should include desktop Funtris binary');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/wep32-community\/Funpack\/Pyramid\.exe'/s.test(deployJs), 'deploy should include desktop Pyramid binary');
+for (const rel of [
+  'binaries/dlls/comctl32.dll',
+  'binaries/winamp.exe',
+  'binaries/demo.mp3',
+  'binaries/whatsnew.txt',
+  'binaries/wep32-community/Bricks/bricks.exe',
+  'binaries/wep32-community/EmPipe/EMPIPE.EXE',
+  'binaries/wep32-community/EmPipe/EMPIPE.EXE.manifest',
+  'binaries/wep32-community/EmPipe/EMPIPEE.TXT',
+  'binaries/wep32-community/Funpack/Funtris.exe',
+  'binaries/wep32-community/Funpack/Pyramid.exe',
+]) assertDeployFile(rel);
 for (const rel of [
   'binaries/wep32-community/Funpack/Peaks.exe',
   'binaries/wep32-community/Funpack/FourStones.exe',
@@ -95,9 +122,8 @@ for (const rel of [
 }
 assert(/LARGE_OK_PATHS\s*=\s*new Set\([^)]*'binaries\/winamp\.exe'/s.test(deployJs), 'deploy should allow large Winamp binary');
 assert(/LARGE_OK_PATHS\s*=\s*new Set\([^)]*'binaries\/wep32-community\/Funpack\/FunPack\.dll'/s.test(deployJs), 'deploy should allow large FunPack DLL');
-assert(/DESKTOP_BINARY_PREFIXES\s*=\s*\[[^\]]*'binaries\/pinball\/'/s.test(deployJs), 'deploy should include desktop Pinball asset directory');
-assert(/DESKTOP_BINARY_PREFIXES\s*=\s*\[[^\]]*'binaries\/pinball-plus95\/'/s.test(deployJs), 'deploy should include desktop Plus! 95 Pinball asset directory');
-assert(/DESKTOP_BINARY_FILES\s*=\s*new Set\([^)]*'binaries\/pinball-plus95\/pinball\.exe'/s.test(deployJs), 'deploy should include desktop Plus! 95 Pinball binary');
+assert([...deployAssets].some(rel => rel.startsWith('binaries/pinball/')),
+  'deploy registry traversal should include Pinball assets');
 assert(/function apiMultipart/.test(deployJs), 'deploy should support multipart uploads');
 assert(/new FormData\(\)/.test(deployJs), 'deploy should use FormData for multipart uploads');
 assert(/form\.append\('file',\s*new Blob\(\[raw\]\),\s*f\.name\)/s.test(deployJs), 'deploy multipart upload should preserve repo-relative filenames');
@@ -113,33 +139,53 @@ assert(/menu_prepare_overlay/.test(rendererJs) && /menu_paint_dropdown/.test(ren
 assert(!/menu_hittest_bar|\.menu_open\(/.test(rendererInputJs), 'renderer input should not fall back to JS-driven menu hit-test/open logic');
 assert(webApp.includes('id="midi-select"'), 'debug toolbar should expose a MIDI selector');
 assert(webApp.includes('<option value="dxball">DX-Ball 1.09</option>'),
-  'debug app selector should expose the local DX-Ball candidate');
-assert(/dxball:\s*\{[^}]*exe:\s*dxballCandidateRoot \+ 'dxball\.exe'[^}]*files:\s*dxballCandidateFiles[^}]*requiredFiles:\s*true/s.test(webApp),
-  'DX-Ball debug launch should require its prepared installed payload');
-assert(!/\[\s*'dxball'\s*,\s*'DX-Ball'/.test(webApp),
-  'normal desktop whitelist should not promote the local DX-Ball payload');
-assert(!deployJs.includes('test/binaries/candidates/dxball'),
-  'public deploy should exclude the local DX-Ball payload');
+  'app selector includes DX-Ball');
+assert(/dxball:\s*\{[^}]*exe:\s*dxballRoot \+ 'dxball\.exe'[^}]*files:\s*dxballFiles[^}]*requiredFiles:\s*true/s.test(webApp),
+  'DX-Ball public launch requires its complete game payload');
+assert(/\[\s*'dxball'\s*,\s*'DX-Ball'/.test(webApp),
+  'normal desktop promotes DX-Ball');
+assert(deployJs.includes("'packages/freeware/dxball/'"),
+  'public deploy includes the reviewed DX-Ball payload');
 assert(webApp.includes('<option value="blobby_volley">Blobby Volley</option>'),
-  'debug app selector should expose the local Blobby Volley candidate');
-assert(/const blobbyCandidateFiles = \[\s*'graph\.pak', 'sound\.pak', 'text\.pak',\s*\]/s.test(webApp),
-  'Blobby Volley debug launch should preload its three runtime PAK files');
-assert(/blobby_volley:\s*\{[^}]*exe:\s*blobbyCandidateRoot \+ 'volley\.exe'[^}]*files:\s*blobbyCandidateFiles[^}]*requiredFiles:\s*true/s.test(webApp),
-  'Blobby Volley debug launch should require its local runtime payload');
-assert(!/\[\s*'blobby_volley'\s*,\s*'Blobby Volley'/.test(webApp),
-  'normal desktop whitelist should not promote the local Blobby Volley payload');
-assert(!deployJs.includes('test/binaries/candidates/blobby-volley'),
-  'public deploy should exclude the local Blobby Volley payload');
+  'app selector includes Blobby Volley');
+assert(/const blobbyFiles = \[\s*'graph\.pak', 'sound\.pak', 'text\.pak', 'Instructions\.txt',\s*\]/s.test(webApp),
+  'Blobby Volley public launch preloads its PAKs and author notice');
+assert(/blobby_volley:\s*\{[^}]*exe:\s*blobbyRoot \+ 'volley\.exe'[^}]*files:\s*blobbyFiles[^}]*requiredFiles:\s*true/s.test(webApp),
+  'Blobby Volley public launch requires its complete runtime payload');
+assert(/\[\s*'blobby_volley'\s*,\s*'Blobby Volley'/.test(webApp),
+  'normal desktop promotes Blobby Volley');
+assert(deployJs.includes("'packages/freeware/blobby-volley/'"),
+  'public deploy includes the reviewed Blobby Volley payload');
+assert(/\[\s*'starcraft_shareware'\s*,\s*'StarCraft Demo'/.test(webApp),
+  'normal desktop promotes the official StarCraft demo');
+assert(deployJs.includes("'test/binaries/candidates/starcraft-demo-official/'"),
+  'public deploy includes the intact official StarCraft demo distribution');
+assert(webApp.includes("window.open('sources.html', 'wine-assembly-sources')"),
+  'desktop includes the Sources miniapp link');
+for (const link of [
+  'https://archive.org/download/DX-Ball_game/dxball.zip',
+  'https://archive.org/details/DX-Ball_game',
+  'https://archive.org/download/volley/volley.zip',
+  'https://archive.org/details/volley',
+  'https://archive.org/download/elmav10/Elmav10.zip',
+  'https://archive.org/details/elmav10',
+]) {
+  assert(sourcesHtml.includes(link), `Sources miniapp links ${link}`);
+}
+assert(sourcesHtml.includes('37e3d984366cdd683c3ad509d4df298521ab303b') &&
+  sourcesHtml.includes('8d22d8918960dec5cda1abc3b5e97eb83aca982d') &&
+  sourcesHtml.includes('11e0703f51268caf7e4d99ddf014fb12f95246e7'),
+  'Sources miniapp pins all original archive hashes');
 assert(webApp.includes('<option value="diablo_demo">Diablo (pre-release demo)</option>'),
   'debug app selector should expose the local Diablo demo candidate');
 assert(/DEBUG_ONLY_APPS\s*=\s*\[[\s\S]*\[\s*'diablo_demo'\s*,\s*'Diablo Demo'/s.test(webApp),
   'Diablo should remain debug-only rather than becoming a desktop app');
 assert(/diablo_demo:\s*\{[\s\S]*?exe:\s*diabloCandidateRoot \+ 'DIABDEMO\.EXE'[\s\S]*?dlls:\s*\[diabloCandidateRoot \+ 'STORM\.DLL'\][\s\S]*?persistFiles:\s*\['c:\\\\save\\\\\*\.sav'\][\s\S]*?vfsPaths:\s*\['c:\\\\diablo\.exe', 'z:\\\\diablo\.exe'\][\s\S]*?requiredFiles:\s*true[\s\S]*?\n\s*\},\n\s*funtris:/s.test(webApp),
   'Diablo debug launch should load the extracted game, Storm, and its MPQ package on C: and Z:');
-assert(pageHtml.includes('lib/vfs-persistence.js?v=1'),
-  'web host should load bounded per-app VFS persistence');
-assert(pageHtml.includes('lib/browser-shell.js?v=3'),
-  'web host should cache-bust save-file restoration in the launcher');
+assert(hasPageScript('lib/vfs-persistence.js'),
+  'web host should centrally version bounded per-app VFS persistence');
+assert(hasPageScript('lib/browser-shell.js'),
+  'web host should centrally version the current launcher');
 assert(!deployJs.includes('test/binaries/candidates/diablo'),
   'public deploy should exclude the local Diablo demo payload');
 assert(webApp.includes('playDebugMidi()'), 'debug toolbar should expose direct MIDI playback');
@@ -159,7 +205,7 @@ assert(recorderJs.includes("document.getElementById('start-record-label')"), 're
 assert(/\[\s*'pinball'\s*,\s*'Pinball'/.test(webApp), 'default desktop whitelist should include Pinball');
 assert(/\[\s*'spider'\s*,\s*'Spider'/.test(webApp), 'default desktop whitelist should include Spider');
 assert(/\[\s*'bricks'\s*,\s*'Bricks'/.test(webApp), 'default desktop whitelist should include Bricks');
-assert(/bricks:\s*\{[^}]*files:\s*\['binaries\/wep32-community\/Bricks\/brk1\.dll'\]/s.test(webApp), 'Bricks should expose brk1.dll as a runtime VFS file');
+assert(/bricks:\s*\{[^}]*files:\s*\[[^\]]*'binaries\/wep32-community\/Bricks\/brk1\.dll'/s.test(webApp), 'Bricks should expose brk1.dll as a runtime VFS file');
 assert(!/bricks:\s*\{[^}]*dlls:\s*\['binaries\/wep32-community\/Bricks\/brk1\.dll'\]/s.test(webApp), 'Bricks should not preload brk1.dll as an import DLL');
 assert(/\[\s*'empipe'\s*,\s*'EmPipe'/.test(webApp), 'default desktop whitelist should include EmPipe');
 assert(/empipe:\s*\{[^}]*requiredFiles:\s*true/s.test(webApp), 'EmPipe web launch should fail fast if companion assets are missing');
@@ -177,7 +223,7 @@ for (const rel of [
   'binaries/wep32-community/EmPipe/EMPSTART.MID',
 ]) {
   assert(webApp.includes(`'${rel}'`), `index.html EmPipe manifest should include ${rel}`);
-  assert(deployJs.includes(`'${rel}'`), `deploy should include ${rel}`);
+  assert(deployAssets.has(rel), `deploy registry traversal should include ${rel}`);
   const full = path.join(ROOT, rel);
   assert(fs.existsSync(full), `${rel} should exist for web fetch/deploy`);
   assert(fs.statSync(full).size > 0, `${rel} should not be empty`);
@@ -247,7 +293,7 @@ for (const dll of [
   'out_wave.dll',
 ]) {
   assert(webApp.includes(`vfsPath: 'c:\\\\plugins\\\\${dll}'`), `Winamp web manifest should mount ${dll} under C:\\Plugins`);
-  assert(deployJs.includes(`'binaries/plugins/${dll}'`), `deploy should include ${dll}`);
+  assert(deployAssets.has(`binaries/plugins/${dll}`), `deploy should include ${dll}`);
   const full = path.join(ROOT, 'binaries', 'plugins', dll);
   assert(fs.existsSync(full), `${dll} should exist for web fetch/deploy`);
   assert(fs.statSync(full).size > 0, `${dll} should not be empty`);
@@ -255,7 +301,7 @@ for (const dll of [
 assert(webApp.includes(`vfsPath: 'c:\\\\plugins\\\\vis_w.dll'`), 'Winamp web manifest should mount wVis as a visualizer plugin');
 assert(webApp.includes(`'binaries/plugins/candidates/vis_w.dll'`), 'Winamp web manifest should load wVis from candidates');
 assert(/winamp:\s*\{[\s\S]*dlls:\s*\[[^\]]*'binaries\/plugins\/candidates\/vis_w\.dll'/s.test(webApp), 'Winamp web manifest should preload wVis before preferences enumerates plugins');
-assert(deployJs.includes(`'binaries/plugins/candidates/vis_w.dll'`), 'deploy should include wVis candidate');
+assert(deployAssets.has('binaries/plugins/candidates/vis_w.dll'), 'deploy should include wVis candidate');
 assert(fs.existsSync(path.join(ROOT, 'binaries', 'plugins', 'candidates', 'vis_w.dll')), 'wVis candidate should exist for web fetch/deploy');
 assert(sourcesMd.includes('vis_w.dll'), 'SOURCES.md should document how to recover vis_w.dll');
 for (const dll of [
@@ -271,8 +317,13 @@ for (const dll of [
   'out_wm.dll',
   'read_file.dll',
 ]) {
-  assert(!webApp.includes(`vfsPath: 'c:\\\\plugins\\\\${dll}'`), `Winamp web manifest should not mount ${dll} until arbitrary plugin LoadLibrary is supported`);
-  assert(!deployJs.includes(`'binaries/plugins/${dll}'`), `deploy should not include unmounted ${dll}`);
+  assert(!(APPS.winamp.files || []).some(file =>
+    typeof file === 'object' &&
+    file.vfsPath.toLowerCase() === `c:\\\\plugins\\\\${dll}`),
+  `normal Winamp manifest should not mount ${dll} until arbitrary plugin LoadLibrary is supported`);
+  if (dll !== 'in_mod.dll') {
+    assert(!deployAssets.has(`binaries/plugins/${dll}`), `deploy should not include unmounted ${dll}`);
+  }
   assert(sourcesMd.includes(dll), `SOURCES.md should document how to recover ${dll}`);
 }
 assert(/winamp:\s*\{[\s\S]*'binaries\/winamp\.ini'/s.test(webApp), 'Winamp web manifest should preload winamp.ini to keep the minibrowser closed');
@@ -281,26 +332,27 @@ assert(/\[WinampReg\][\s\S]*?NeedReg=0/.test(fs.readFileSync(path.join(ROOT, 'bi
 assert(fs.existsSync(path.join(ROOT, 'binaries', 'whatsnew.txt')), 'Winamp version history text should exist for web fetch/deploy');
 assert(fs.statSync(path.join(ROOT, 'binaries', 'whatsnew.txt')).size > 0, 'Winamp version history text should not be empty');
 assert(!webApp.includes('wine.waitForMainHwnd(() =>'), 'Winamp web launch should not auto-drive playback through IPC');
-assert(!webApp.includes('?v=55'), 'index.html should not keep stale cache-buster v55');
-assert(webApp.includes('lib/renderer-input.js?v=191'), 'web host should cache-bust renderer input after WM_MOUSEMOVE coalescing');
-assert(webApp.includes('lib/renderer.js?v=180'), 'web host should cache-bust renderer after dynamic Win16 menu installation');
-assert(webApp.includes('lib/pe.js?v=1'), 'web host should load the shared PE section reader');
-assert(webApp.includes('lib/process-boot.js?v=2'), 'web host should cache-bust oversized PE section hydration');
-assert(webApp.includes('lib/host-window.js?v=2'), 'web host should cache-bust dynamic Win16 menu serialization');
-assert(!hostJs.includes('?v=55'), 'host.js should not fetch stale WAT/API sources with v55');
-assert(webApp.includes('lib/storage.js?v=169'), 'web host should cache-bust storage after Media Player association changes');
-assert(webApp.includes('lib/gdi-surface.js?v=2'), 'web host should load the canonical GDI surface module');
-assert(webApp.indexOf('lib/gdi-surface.js?v=2') < webApp.indexOf('lib/host-imports.js?v=203'),
+for (const source of [
+  'lib/renderer-input.js', 'lib/browser-input.js', 'lib/renderer.js',
+  'lib/pe.js', 'lib/process-boot.js', 'lib/app-profiles.js',
+  'lib/host-window.js', 'lib/storage.js', 'lib/filesystem.js',
+  'lib/gdi-surface.js', 'lib/host-imports.js', 'lib/touch-cursor.js',
+  'lib/thread-manager.js', 'lib/compile-wat.js', 'lib/guest-rpc.js',
+  'lib/guest-thread-host.js', 'lib/dll-loader.js',
+  'lib/debug-thread-state.js', 'lib/host-audio.js', 'host.js',
+]) {
+  assert(hasPageScript(source), `${source} should be in the centrally versioned browser graph`);
+}
+assert(pageScripts.indexOf('lib/gdi-surface.js') < pageScripts.indexOf('lib/host-imports.js'),
   'web host should load the GDI surface module before host imports');
-assert(webApp.includes('lib/host-imports.js?v=203'), 'web host should cache-bust binary text rasterization');
-assert(webApp.includes('lib/thread-manager.js?v=174'), 'web host should cache-bust multi-object wait scheduling');
-assert(webApp.includes('lib/compile-wat.js?v=169'), 'web host should cache-bust the snapshot-capable WAT compiler');
-assert(webApp.includes('lib/debug-thread-state.js?v=5'), 'web host should cache-bust whole-list cycle diagnostics');
-assert(webApp.includes('host.js?v=217'), 'web host should cache-bust host.js after the current source update');
-assert(hostJs.includes("static SOURCE_VERSION = '217'"), 'web host should cache-bust WASM artifacts and WAT source compilation');
+assert(pageHtml.includes("window.WINE_SOURCE_VERSION = String(window.WINE_BUILD || 'dev')") &&
+  pageHtml.includes('window.wineLoadVersionedScripts(WINE_RUNTIME_SCRIPTS)'),
+  'the page should derive and apply one build-info version to its whole source graph');
+assert(hostJs.includes("static SOURCE_VERSION = String(globalThis.WINE_SOURCE_VERSION || 'dev')"),
+  'WASM artifacts and WAT source compilation should consume the page source version');
 assert(hostJs.includes("const fetchOptions = debugFetch ? { cache: 'no-store' } : undefined;"),
   'debug sessions should select a no-store fetch policy');
-assert(hostJs.includes('fetch(`${artifact}?v=${WineAssembly.SOURCE_VERSION}`, fetchOptions)'),
+assert(hostJs.includes('fetch(WineAssembly.versionedUrl(artifact), fetchOptions)'),
   'debug sessions should apply their cache policy when loading rebuilt WASM artifacts');
 assert(/constructor\(\)[\s\S]*has\('debug'\)[\s\S]*WineAssembly\._wasmModulePromise = null;/.test(hostJs),
   'new debug processes should discard the page-level compiled WASM module cache');
@@ -310,10 +362,16 @@ assert(webApp.includes("mplay32:  { exe: 'binaries/win98-apps/mplay32.exe' }"),
 assert(hostJs.includes("'build/wine-assembly.wasm'"), 'web startup should load the precompiled tail-call WASM artifact');
 assert(hostJs.includes("'build/wine-assembly.compat.wasm'"), 'web startup should load the precompiled compatibility WASM artifact');
 assert(hostJs.includes("has('compile-wat')"), 'web startup should retain an explicit source-compilation mode');
-assert(hostJs.includes('compileWatSnapshot('), 'host.js should retain WAT source compilation as a development/failure fallback');
+assert(hostJs.includes('window.watxLauncher'),
+  'host.js should retain WAT source compilation as a development/failure fallback, now via the WATX launcher');
+assert(hostJs.includes("workerUrl: WineAssembly.versionedUrl('lib/watx-compile-worker.js')"),
+  'the fallback compiler worker should inherit the central source version');
+assert(pageHtml.includes('lib/watx-launcher.js'),
+  'the page should load the WATX launcher that backs the source-compilation fallback');
 assert(hostJs.includes('Promise.all([fontsReady, wasmReady, apiTableReady])'), 'web startup should overlap independent font, WASM, and API-table loading');
 assert(hostJs.includes('Promise.all(dllPaths.map(async item =>'), 'web startup should fetch independent DLL payloads in parallel');
-assert(deployJs.includes("const BINARY_DIRS = ['binaries', 'icons', 'build']"), 'deploy should include precompiled browser WASM artifacts');
+assert(/const BINARY_DIRS = \[[^\]]*'build'/.test(deployJs),
+  'deploy should include precompiled browser WASM artifacts');
 assert(deployJs.includes("'build/wine-assembly.wasm'"), 'deploy should allow the tail-call browser WASM artifact above the general binary-size cap');
 assert(deployJs.includes("'build/wine-assembly.compat.wasm'"), 'deploy should allow the compatibility browser WASM artifact above the general binary-size cap');
 assert(deployJs.includes("'.wasm'"), 'deploy should encode WASM artifacts as binary');
@@ -346,14 +404,31 @@ assert(webApp.includes('Starting run slice=${runSlice}'), 'web launcher should l
 assert(!/function selectedRunSlice\(appKey\)\s*\{\s*return 100000;\s*\}/.test(webApp), 'slice dropdown should not be ignored');
 assert(webApp.includes("document.getElementById('slice-size-select')"), 'slice picker should drive the run-loop slice size');
 assert(webApp.includes('function hasWasmTailCalls()'), 'auto slice should detect no-tail-call browser dispatch');
-assert(webApp.includes('return compatDispatch ? 100 : 25000;'), 'auto slice should cap Spider/card games for no-tail-call browsers');
-assert(webApp.includes('return compatDispatch ? 500 : 100000;'), 'auto slice should cap default apps for no-tail-call browsers');
+assert.deepStrictEqual(APPS.jazz2_demo.runSlice,
+  { cooperative: 1000, worker: 100000 },
+  'Jazz 2 should own its cooperative and Worker scheduling policy');
+assert(webApp.includes('resolveRunSlice: window.wineApps.resolveRunSlice'),
+  'the page should inject the app-registry scheduler into the browser shell');
+assert(webApp.includes('selectedRunSlice(runSliceAppKey, !!wine.guestWorker)'),
+  'browser launch should choose the auto slice from the backend that actually started');
+assert(webApp.includes('app.runSliceAppKey || app.name, !!app.wine.guestWorker'),
+  'live auto-slice updates should preserve the Worker/cooperative distinction');
+assert.strictEqual(resolveRunSlice('spider', true), 100,
+  'auto slice should cap Spider/card games for no-tail-call browsers');
+assert.strictEqual(resolveRunSlice('notepad', true), 500,
+  'auto slice should cap default apps for no-tail-call browsers');
 assert(webApp.includes('return compatDispatch ? Math.min(selected, autoSlice) : selected;'), 'manual slice should be clamped in no-tail-call browsers');
-assert(!/case 'winamp':\s*return 1;/.test(webApp), 'Winamp auto slice should not rely on slice=1 startup masking');
+assert.strictEqual(resolveRunSlice('winamp', false), 100000,
+  'Winamp auto slice should not rely on slice=1 startup masking');
+assert(!/case ['"](?:jazz2_demo|spider|cue:speed-demons)['"]/.test(
+  fs.readFileSync(path.join(ROOT, 'lib', 'browser-shell.js'), 'utf8')),
+  'browser-shell should not carry app-specific scheduling identities');
 assert(webApp.includes('function unlockRunningAudio()'), 'web canvas input should explicitly unlock running app audio');
-assert(/unlockRunningAudio\(\);\s*const \{ x: cx, y: cy \} = eventPoint\(e\);/.test(webApp), 'mouse input should resume audio before guest dispatch');
+assert(/unlockRunningAudio\(\);[\s\S]{0,400}?const \{ x: cx, y: cy \} = mouseButtonPoint\(e, pointerLocked\(\)\);/.test(webApp), 'mouse input should resume audio before resolving locked guest coordinates');
 assert(/unlockRunningAudio\(\);\s*const \{ x: cx, y: cy \} = eventPointFromClient/.test(webApp), 'touch input should resume audio before guest dispatch');
-assert(/unlockRunningAudio\(\);\s*renderer\.handleKeyDown\(vk\);/.test(webApp), 'keyboard input should resume audio before guest dispatch');
+// handleKeyDown takes an options object now; the guarded property is that the
+// unlock still runs immediately before the dispatch, not the call's arity.
+assert(/unlockRunningAudio\(\);\s*renderer\.handleKeyDown\(vk[,)]/.test(webApp), 'keyboard input should resume audio before guest dispatch');
 assert(hostJs.includes('ecx=0x${hex32(ecx)}'), 'web runner should report runtime register heartbeat progress');
 for (const app of ['freecell', 'sol', 'cruel', 'golf']) {
   const re = new RegExp(`${app}:\\s*\\{[^}]*dlls:\\s*\\['binaries/entertainment-pack/cards\\.dll'\\]`, 's');
@@ -365,7 +440,7 @@ console.log('PASS  deploy filters include .mid/.wav/.inf/DAT and Pinball asset d
 console.log('PASS  Pinball sound uses bundled assets instead of a run-loop EIP hack');
 console.log('PASS  deploy uses multipart for binary uploads');
 console.log('PASS  debug mode exposes direct MIDI playback');
-console.log('PASS  debug-only selector exposes local DX-Ball without deploying it');
+console.log('PASS  desktop publishes DX-Ball, Blobby Volley, and StarCraft Demo with source links');
 console.log('PASS  Start menu exposes screen recording');
 console.log('PASS  web host loads TinySynth MIDI backend');
 console.log('PASS  default desktop whitelist includes Pinball');

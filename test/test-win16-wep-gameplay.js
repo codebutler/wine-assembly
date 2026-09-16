@@ -7,7 +7,7 @@
 
 const assert = require('assert');
 const fs = require('fs');
-const http = require('http');
+const { startStaticServer: startSharedStaticServer } = require('./static-server');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -47,7 +47,7 @@ function testPipeDream() {
       '--batch-size=20000', '--max-batches=130', '--quiet-api', '--quiet-blocks',
       `--input=40:mousedown:320:220,41:mouseup:320:220,70:png:${before},` +
         `80:mousedown:100:90,81:mouseup:100:90,100:png:${after},120:stop`,
-    ], { cwd: ROOT, encoding: 'utf8', timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+    ], { cwd: ROOT, encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 });   // whole test measures 3s
     assert.doesNotMatch(output, /\*\*\* CRASH|UNIMPLEMENTED API|RuntimeError/);
     assert(changedPixels(before, after, 74, 69, 124, 119) > 100,
       'the first board cell should visibly change after tile placement');
@@ -58,29 +58,7 @@ function testPipeDream() {
 }
 
 function startStaticServer() {
-  const root = fs.realpathSync(ROOT);
-  const server = http.createServer((request, response) => {
-    let pathname;
-    try { pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname); }
-    catch (_) { response.writeHead(400); response.end(); return; }
-    if (pathname === '/') pathname = '/index.html';
-    const file = path.normalize(path.join(root, pathname));
-    if (file !== root && !file.startsWith(root + path.sep)) {
-      response.writeHead(403); response.end(); return;
-    }
-    fs.readFile(file, (error, data) => {
-      if (error) { response.writeHead(error.code === 'ENOENT' ? 404 : 500); response.end(); return; }
-      const types = { '.css': 'text/css', '.html': 'text/html', '.js': 'text/javascript',
-        '.json': 'application/json', '.wasm': 'application/wasm' };
-      response.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream',
-        'Cache-Control': 'no-store' });
-      response.end(data);
-    });
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
+  return startSharedStaticServer({ root: ROOT });
 }
 
 async function testBlackjack() {

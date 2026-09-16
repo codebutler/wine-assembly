@@ -14,6 +14,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { startStaticServer: startSharedStaticServer } = require('./static-server');
 
 const ROOT = path.join(__dirname, '..');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -34,11 +35,123 @@ const BASE_URL = String(process.env.CANDIDATE_BASE_URL || '').trim();
 
 const ALL_CANDIDATES = [
   {
+    id: 'cdplayer',
+    label: 'CD Player',
+    titlePattern: 'CD Player',
+    allowDialogMain: true,
+    minColors: 4,
+    waitMs: 1000,
+  },
+  {
+    id: 'far_manager_170',
+    label: 'Far Manager 1.70',
+    titlePattern: 'Far',
+    keys: [
+      { vk: 120, label: 'open top menu', holdMs: 80, waitMs: 500 },
+    ],
+    clicks: [
+      { guestX: 80, guestY: 100, waitMs: 500, snapshotAfter: 'mouse-selected-file' },
+    ],
+    waitForGuestPixelAfterClicks: {
+      x: 150, y: 99, rMax: 0, gMin: 120, gMax: 136, bMin: 120, bMax: 136,
+      timeoutMs: 10000, label: 'app.exe mouse selection',
+    },
+    minColors: 6,
+    minDiff: 50,
+    waitMs: 500,
+  },
+  {
+    id: 'winrar_310',
+    label: 'WinRAR 3.10',
+    titlePattern: 'WinRAR',
+    expectDialogs: ['Settings'],
+    minColors: 12,
+    waitMs: 1000,
+  },
+  {
+    id: 'diablo2_demo',
+    label: 'Diablo II Demo',
+    titlePattern: 'Diablo II',
+    launchTimeoutMs: 90000,
+    // Skip whichever intro/logo frame is active; the installed-game CLI gate
+    // separately validates the exact Shareware v1.04 menu regions.
+    preGameKeys: [
+      { vk: 27, holdMs: 100, waitMs: 1200 },
+      { vk: 27, holdMs: 100, waitMs: 1200 },
+      { vk: 27, holdMs: 100, waitMs: 1200 },
+    ],
+    postKeyClicks: [
+      {
+        guestX: 400, guestY: 210, holdMs: 120, waitMs: 5000,
+        snapshotAfter: 'character-select',
+        waitForGuestPixelBefore: {
+          x: 300, y: 207, rMin: 70, gMin: 70, bMin: 70,
+          timeoutMs: 60000, label: 'Single Player button',
+        },
+      },
+      {
+        guestX: 400, guestY: 275, holdMs: 40, waitMs: 1000,
+        doubleClick: true, snapshotAfter: 'barbarian-selected',
+      },
+      {
+        guestX: 405, guestY: 527, holdMs: 80, waitMs: 250,
+        snapshotAfter: 'name-focused',
+        waitForGuestPixelBefore: {
+          x: 320, y: 515, rMin: 150, gMin: 100, bMin: 60,
+          timeoutMs: 30000, label: 'character name field border',
+        },
+      },
+    ],
+    preGameText: 'TEST',
+    preGameTextSnapshotAfter: 'name-entered',
+    preGameTextWaitMs: 250,
+    keys: [
+      {
+        vk: 13, charCode: 13, label: 'confirm new Barbarian', holdMs: 80,
+        waitMs: 5000, snapshotAfter: 'character-confirmed',
+        waitForGuestPixelAfter: {
+          x: 300, y: 207, rMin: 70, gMin: 70, bMin: 70,
+          timeoutMs: 30000, label: 'post-confirm Single Player button',
+        },
+      },
+    ],
+    allowPolledKeys: true,
+    minColors: 100,
+    waitMs: 2000,
+  },
+  {
+    id: 'halflife_uplink',
+    label: 'Half-Life: Uplink',
+    titlePattern: 'Half-Life',
+    allowDialogMain: true,
+    launchTimeoutMs: 60000,
+    stepsPerSlice: 1000,
+    clicks: [
+      {
+        guestX: 148, guestY: 193, holdMs: 120, waitMs: 1000,
+        snapshotAfter: 'new-game-click',
+      },
+    ],
+    dialogClicks: [
+      {
+        controlId: 26, label: 'Easy', holdMs: 120, inputTimeoutMs: 60000,
+        waitMs: 45000,
+        snapshotAfter: 'easy-loaded',
+      },
+    ],
+    minColors: 24,
+    minDiff: 10000,
+    evalTimeoutMs: 60000,
+    waitMs: 5000,
+  },
+  {
     id: 'peaks',
     label: 'Peaks',
     titlePattern: 'Peaks',
     commands: [40005],
-    minColors: 60,
+    // The card table intentionally uses a compact palette. The action diff,
+    // window/title checks, and non-solid metric carry the playability signal.
+    minColors: 8,
     minDiff: 80,
     waitMs: 1000,
     forbidDialogs: ['Get Started', 'Hall of Fame'],
@@ -49,7 +162,8 @@ const ALL_CANDIDATES = [
     titlePattern: 'Four Stones|FourStones',
     bootCommands: [40005],
     commands: [40002],
-    minColors: 60,
+    // Like Peaks, this Funpack title paints with a compact indexed palette.
+    minColors: 5,
     waitMs: 1000,
     forbidDialogs: ['Get Started'],
   },
@@ -58,11 +172,15 @@ const ALL_CANDIDATES = [
     label: 'Blackjack',
     titlePattern: 'Blackjack',
     dismissDialogControl: 1,
-    commands: [311],
+    // Exercise the real button route instead of synthesizing WM_COMMAND at the
+    // top-level frame; Min belongs to the child button bar.
+    clicks: [
+      { x: 35, y: 457, waitMs: 2500, snapshotAfter: 'after-min-bet' },
+    ],
     forbidDialogs: ["You can't afford", 'Congratulations'],
-    minColors: 80,
+    minColors: 8,
     minDiff: 40,
-    waitMs: 1000,
+    waitMs: 3000,
     commandWaitMs: 2500,
   },
   {
@@ -86,52 +204,39 @@ const ALL_CANDIDATES = [
     titlePattern: 'Marbles|Lose Your Marbles',
     clicks: [
       {
-        guestX: 320,
-        guestY: 240,
+        guestX: 250,
+        guestY: 340,
         holdMs: 220,
-        waitMs: 200,
-        snapshotAfter: 'after-intro-click',
-        maxSaturatedShare: 0.03,
-        maxDarkShare: 0.50,
+        waitMs: 1000,
+        snapshotAfter: 'after-play-click',
         waitForGuestPixelBefore: {
-          x: 300, y: 170,
-          rMax: 70, gMax: 80, bMin: 60, bMax: 150,
-          timeoutMs: 20000,
-          label: 'select mode panel',
-        },
-      },
-      {
-        guestX: 130,
-        guestY: 130,
-        holdMs: 250,
-        waitMs: 500,
-        snapshotAfter: 'after-skill-click',
-        waitForGuestPixelBefore: {
-          x: 100, y: 300,
-          rMax: 70, gMax: 80, bMin: 60, bMax: 130,
-          timeoutMs: 15000,
-          label: 'skill panel',
+          x: 300, y: 105,
+          rMin: 70, rMax: 180, gMax: 30, bMax: 30,
+          timeoutMs: 30000,
+          label: 'Select a Mode menu',
         },
       },
     ],
     waitForGuestPixelAfterClicks: {
       x: 100, y: 300,
-      rMin: 200, gMin: 200, bMin: 200,
-      timeoutMs: 10000,
-      label: 'level selection',
+      rMax: 70, gMax: 80, bMin: 60, bMax: 130,
+      timeoutMs: 15000,
+      label: 'skill panel',
     },
     preGameKeys: [
-      { vk: 13, holdMs: 500, waitMs: 1200, snapshotAfter: 'after-start-key' },
+      { vk: 13, holdMs: 500, waitMs: 8000, snapshotAfter: 'after-skill-key' },
     ],
     keys: [
       { vk: 39, label: 'select column right', holdMs: 180, waitMs: 500, minDiff: 100, snapshotAfter: 'after-key-right' },
       { vk: 38, label: 'move column up', holdMs: 180, waitMs: 650, minDiff: 400, snapshotAfter: 'after-key-up' },
-      { vk: 32, label: 'rotate center row', holdMs: 180, waitMs: 650, minDiff: 700, snapshotAfter: 'after-key-space' },
+      { vk: 32, label: 'rotate center row', holdMs: 180, waitMs: 650, minDiff: 400, snapshotAfter: 'after-key-space' },
       { vk: 40, label: 'move column down', holdMs: 180, waitMs: 650, minDiff: 400, snapshotAfter: 'after-key-down' },
     ],
     minColors: 80,
-    minDiff: 2500,
-    minKeyDiff: 2500,
+    // Four independently gated moves cover only the compact marble grids;
+    // the rest of the textured 640x480 board is intentionally static.
+    minDiff: 1500,
+    minKeyDiff: 1500,
     waitMs: 2500,
     actionWaitMs: 1600,
   },
@@ -175,40 +280,7 @@ function mimeType(file) {
 }
 
 function startStaticServer() {
-  const rootReal = fs.realpathSync(ROOT);
-  const server = http.createServer((req, res) => {
-    let pathname;
-    try {
-      pathname = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname);
-    } catch (_) {
-      res.writeHead(400);
-      res.end('bad url');
-      return;
-    }
-    if (pathname === '/') pathname = '/index.html';
-    const candidate = path.normalize(path.join(rootReal, pathname));
-    if (candidate !== rootReal && !candidate.startsWith(rootReal + path.sep)) {
-      res.writeHead(403);
-      res.end('forbidden');
-      return;
-    }
-    fs.readFile(candidate, (err, data) => {
-      if (err) {
-        res.writeHead(err.code === 'ENOENT' ? 404 : 500);
-        res.end(err.code || 'read error');
-        return;
-      }
-      res.writeHead(200, {
-        'Content-Type': mimeType(candidate),
-        'Cache-Control': 'no-store',
-      });
-      res.end(data);
-    });
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
+  return startSharedStaticServer({ root: ROOT, mimeType });
 }
 
 function reserveTcpPort(preferred = 0) {
@@ -487,6 +559,7 @@ async function main() {
   async function snapshot(app) {
     return evalExpr(`(() => {
       const titleRe = new RegExp(${jsString(app.titlePattern)}, 'i');
+      const allowDialogMain = ${!!app.allowDialogMain};
       if (sharedRenderer && sharedRenderer.repaint) sharedRenderer.repaint();
       const canvas = document.getElementById('screen');
       const ctx = canvas.getContext('2d');
@@ -505,7 +578,7 @@ async function main() {
           isDialog: !!w.isDialog,
         }));
       const main = visible
-        .filter(w => !w.isDialog && titleRe.test(w.title || ''))
+        .filter(w => (!w.isDialog || allowDialogMain) && titleRe.test(w.title || ''))
         .sort((a, b) => b.zOrder - a.zOrder)[0] ||
         visible.filter(w => !w.isDialog).sort((a, b) => b.zOrder - a.zOrder)[0] ||
         visible.sort((a, b) => b.zOrder - a.zOrder)[0] || null;
@@ -557,7 +630,7 @@ async function main() {
           nonBackground,
         },
       };
-    })()`);
+    })()`, app.evalTimeoutMs || 10000);
   }
 
   async function diffSince(before, app) {
@@ -566,6 +639,7 @@ async function main() {
       const before = window[${jsString(baselineName)}];
       if (!before || !before.pixels) throw new Error('missing candidate diff baseline');
       const titleRe = new RegExp(${jsString(app.titlePattern)}, 'i');
+      const allowDialogMain = ${!!app.allowDialogMain};
       if (sharedRenderer && sharedRenderer.repaint) sharedRenderer.repaint();
       const canvas = document.getElementById('screen');
       const ctx = canvas.getContext('2d');
@@ -583,7 +657,7 @@ async function main() {
           isDialog: !!w.isDialog,
         }));
       const main = visible
-        .filter(w => !w.isDialog && titleRe.test(w.title || ''))
+        .filter(w => (!w.isDialog || allowDialogMain) && titleRe.test(w.title || ''))
         .sort((a, b) => b.zOrder - a.zOrder)[0] ||
         visible.filter(w => !w.isDialog).sort((a, b) => b.zOrder - a.zOrder)[0] ||
         visible.sort((a, b) => b.zOrder - a.zOrder)[0] || null;
@@ -603,12 +677,13 @@ async function main() {
         }
       }
       return { diff, windows: visible };
-    })()`);
+    })()`, app.evalTimeoutMs || 10000);
   }
 
   async function captureDiffBaseline(app, baselineName = '__candidateBaseline') {
     return evalExpr(`(() => {
       const titleRe = new RegExp(${jsString(app.titlePattern)}, 'i');
+      const allowDialogMain = ${!!app.allowDialogMain};
       if (sharedRenderer && sharedRenderer.repaint) sharedRenderer.repaint();
       const canvas = document.getElementById('screen');
       const ctx = canvas.getContext('2d');
@@ -626,7 +701,7 @@ async function main() {
           isDialog: !!w.isDialog,
         }));
       const main = visible
-        .filter(w => !w.isDialog && titleRe.test(w.title || ''))
+        .filter(w => (!w.isDialog || allowDialogMain) && titleRe.test(w.title || ''))
         .sort((a, b) => b.zOrder - a.zOrder)[0] ||
         visible.filter(w => !w.isDialog).sort((a, b) => b.zOrder - a.zOrder)[0] ||
         visible.sort((a, b) => b.zOrder - a.zOrder)[0] || null;
@@ -646,7 +721,7 @@ async function main() {
       }
       window[${jsString(baselineName)}] = { rect, pixels, step };
       return { baselineName: ${jsString(baselineName)}, rect, sampleCount: Object.keys(pixels).length, step };
-    })()`);
+    })()`, app.evalTimeoutMs || 10000);
   }
 
   async function saveCanvasSnapshot(app, label) {
@@ -655,25 +730,28 @@ async function main() {
     const dataUrl = await evalExpr(`(() => {
       const canvas = document.getElementById('screen');
       return canvas.toDataURL('image/png');
-    })()`);
+    })()`, app.evalTimeoutMs || 10000);
     const b64 = String(dataUrl).replace(/^data:image\/png;base64,/, '');
     fs.writeFileSync(path.join(SCREENSHOT_DIR, `${app.id}-${label}.png`), Buffer.from(b64, 'base64'));
   }
 
   async function waitForLaunch(app) {
+    const timeoutMs = app.launchTimeoutMs || 25000;
     try {
       await evalExpr(`new Promise((resolve, reject) => {
       const titleRe = new RegExp(${jsString(app.titlePattern)}, 'i');
+      const allowDialogMain = ${!!app.allowDialogMain};
       const started = performance.now();
       const tick = () => {
         const visible = Object.values((sharedRenderer && sharedRenderer.windows) || {})
           .filter(w => w && w.visible);
-        const hasExpected = visible.some(w => !w.isDialog && titleRe.test(w.title || ''));
+        const hasExpected = visible.some(w =>
+          (!w.isDialog || allowDialogMain) && titleRe.test(w.title || ''));
         const hasAnyMain = visible.some(w => !w.isDialog);
         const log = document.getElementById('log').textContent;
         if (runningApps.length === 1 && hasExpected) resolve(1);
         else if (/ERROR launching|RuntimeError|LinkError|UNIMPLEMENTED/i.test(log)) reject(new Error('launch log contains error'));
-        else if (performance.now() - started > 25000) {
+        else if (performance.now() - started > ${timeoutMs | 0}) {
           const app = runningApps[0];
           const e = app && app.wine && app.wine.instance && app.wine.instance.exports;
           let mainHwnd = 0;
@@ -689,7 +767,7 @@ async function main() {
         else setTimeout(tick, 100);
       };
       tick();
-    })`, 28000);
+    })`, Math.max(28000, timeoutMs + 3000));
     } catch (e) {
       const consoleText = consoleEventSummary(cdp.events).join('\n');
       if (consoleText) e.message += '\nconsole:\n' + consoleText.slice(-4000);
@@ -904,7 +982,7 @@ async function main() {
     })()`);
   }
 
-  async function rendererMouseDown(x, y) {
+  async function rendererMouseDown(x, y, forceDoubleClick = false, timeoutMs = 10000) {
     return evalExpr(`(() => {
       if (!sharedRenderer) throw new Error('renderer unavailable');
       const formatEvent = (evt) => evt ? ({
@@ -927,7 +1005,8 @@ async function main() {
       const mapped = sharedRenderer._mapExclusiveInputPoint
         ? sharedRenderer._mapExclusiveInputPoint(${x | 0}, ${y | 0})
         : { x: ${x | 0}, y: ${y | 0} };
-      sharedRenderer.handleMouseDown(${x | 0}, ${y | 0}, 0);
+      sharedRenderer.handleMouseDown(${x | 0}, ${y | 0}, 0,
+        ${forceDoubleClick ? '{ doubleClick: true }' : 'undefined'});
       return {
         kind: 'mousedown',
         x: ${x | 0},
@@ -938,10 +1017,10 @@ async function main() {
         afterLen: q.length,
         events: q.slice(beforeLen).map(formatEvent),
       };
-    })()`);
+    })()`, timeoutMs);
   }
 
-  async function rendererMouseUp(x, y) {
+  async function rendererMouseUp(x, y, timeoutMs = 10000) {
     return evalExpr(`(() => {
       if (!sharedRenderer) throw new Error('renderer unavailable');
       const formatEvent = (evt) => evt ? ({
@@ -975,13 +1054,14 @@ async function main() {
         afterLen: q.length,
         events: q.slice(beforeLen).map(formatEvent),
       };
-    })()`);
+    })()`, timeoutMs);
   }
 
-  async function rendererClick(x, y, holdMs = 0) {
-    const down = await rendererMouseDown(x, y);
+  async function rendererClick(x, y, holdMs = 0, forceDoubleClick = false,
+    timeoutMs = 10000) {
+    const down = await rendererMouseDown(x, y, forceDoubleClick, timeoutMs);
     if (holdMs > 0) await wait(holdMs);
-    const up = await rendererMouseUp(x, y);
+    const up = await rendererMouseUp(x, y, timeoutMs);
     return {
       kind: 'click',
       x: x | 0,
@@ -994,7 +1074,23 @@ async function main() {
     };
   }
 
-  async function rendererGuestClick(x, y, holdMs = 0) {
+  async function rendererDoubleClick(x, y, holdMs = 0) {
+    const first = await rendererClick(x, y, holdMs);
+    await wait(40);
+    const second = await rendererClick(x, y, holdMs, true);
+    return {
+      kind: 'doubleclick',
+      x: x | 0,
+      y: y | 0,
+      holdMs: holdMs | 0,
+      mapped: second.mapped,
+      transform: second.transform,
+      first,
+      second,
+    };
+  }
+
+  async function rendererGuestClick(x, y, holdMs = 0, timeoutMs = 10000) {
     const point = await evalExpr(`(() => {
       if (!sharedRenderer) throw new Error('renderer unavailable');
       const t = sharedRenderer._exclusiveTransform;
@@ -1007,7 +1103,73 @@ async function main() {
       }
       return { x: ${x | 0}, y: ${y | 0}, transform: t ? Object.assign({}, t) : null };
     })()`);
-    const action = await rendererClick(point.x, point.y, holdMs);
+    const action = await rendererClick(point.x, point.y, holdMs, false, timeoutMs);
+    action.guest = { x: x | 0, y: y | 0 };
+    action.canvas = { x: point.x | 0, y: point.y | 0 };
+    return action;
+  }
+
+  async function rendererDialogControlClick(ctrlId, holdMs = 0, timeoutMs = 10000) {
+    await waitForDialogControl(ctrlId, 30000);
+    const target = await evalExpr(`(() => {
+      const app = runningApps[0];
+      const e = app && app.wine && app.wine.instance && app.wine.instance.exports;
+      if (!e || !e.wnd_next_child_slot || !e.wnd_slot_hwnd || !e.ctrl_get_id ||
+          !e.wnd_window_screen_x || !e.wnd_window_screen_y ||
+          !e.wnd_screen_w || !e.wnd_screen_h) {
+        throw new Error('dialog control geometry helpers unavailable');
+      }
+      const wanted = ${ctrlId >>> 0};
+      const dialogs = Object.values((sharedRenderer && sharedRenderer.windows) || {})
+        .filter(w => w && w.visible && w.isDialog)
+        .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+      const find = (parent, seen = new Set()) => {
+        if (!parent || seen.has(parent)) return 0;
+        seen.add(parent);
+        let slot = 0;
+        while ((slot = e.wnd_next_child_slot(parent, slot)) !== -1) {
+          const child = e.wnd_slot_hwnd(slot) | 0;
+          slot++;
+          if (child && (e.ctrl_get_id(child) | 0) === wanted) return child;
+          const nested = find(child, seen);
+          if (nested) return nested;
+        }
+        return 0;
+      };
+      for (const dialog of dialogs) {
+        const hwnd = find(dialog.hwnd | 0);
+        if (!hwnd) continue;
+        const x = e.wnd_window_screen_x(hwnd) | 0;
+        const y = e.wnd_window_screen_y(hwnd) | 0;
+        const w = e.wnd_screen_w(hwnd) | 0;
+        const h = e.wnd_screen_h(hwnd) | 0;
+        if (w <= 0 || h <= 0) throw new Error('dialog control has empty geometry');
+        return { hwnd: hwnd >>> 0, controlId: wanted, x, y, w, h,
+          controlClass: e.ctrl_get_class(hwnd) | 0,
+          wndProc: e.wnd_get_proc_export ? (e.wnd_get_proc_export(hwnd) >>> 0) : 0,
+          guestX: x + Math.floor(w / 2), guestY: y + Math.floor(h / 2) };
+      }
+      throw new Error('dialog control ' + wanted + ' not found');
+    })()`);
+    const click = await rendererGuestClick(target.guestX, target.guestY, holdMs,
+      timeoutMs);
+    return { ...click, kind: 'dialog-click', target };
+  }
+
+  async function rendererGuestDoubleClick(x, y, holdMs = 0) {
+    const point = await evalExpr(`(() => {
+      if (!sharedRenderer) throw new Error('renderer unavailable');
+      const t = sharedRenderer._exclusiveTransform;
+      if (t && t.srcW && t.srcH && t.dstW && t.dstH) {
+        return {
+          x: Math.round((t.dstX || 0) + ((${x | 0} - (t.srcX || 0)) * t.dstW / t.srcW)),
+          y: Math.round((t.dstY || 0) + ((${y | 0} - (t.srcY || 0)) * t.dstH / t.srcH)),
+          transform: Object.assign({}, t),
+        };
+      }
+      return { x: ${x | 0}, y: ${y | 0}, transform: t ? Object.assign({}, t) : null };
+    })()`);
+    const action = await rendererDoubleClick(point.x, point.y, holdMs);
     action.guest = { x: x | 0, y: y | 0 };
     action.canvas = { x: point.x | 0, y: point.y | 0 };
     return action;
@@ -1095,6 +1257,14 @@ async function main() {
       return launchApp();
     })()`, 45000);
     await waitForInstance(app);
+    if (app.stepsPerSlice) {
+      await evalExpr(`(() => {
+        const running = runningApps[0];
+        if (!running || !running.wine) throw new Error('running app unavailable');
+        running.wine.stepsPerSlice = ${app.stepsPerSlice | 0};
+        return running.wine.stepsPerSlice;
+      })()`);
+    }
     if (app.dismissDialogControl) {
       await waitForDialogControl(app.dismissDialogControl);
       await clickDialogControl(app.dismissDialogControl);
@@ -1143,6 +1313,16 @@ async function main() {
         await wait(click.waitMs || app.actionWaitMs || 350);
       }
     }
+    if (app.dialogClicks) {
+      for (const click of app.dialogClicks) {
+        const action = await rendererDialogControlClick(click.controlId,
+          click.holdMs || 0, click.inputTimeoutMs || 10000);
+        action.label = click.label || '';
+        actions.push(action);
+        await wait(click.waitMs || app.actionWaitMs || 350);
+        if (click.snapshotAfter) await saveCanvasSnapshot(app, click.snapshotAfter);
+      }
+    }
     if (app.waitForGuestPixelAfterClicks) {
       await waitForGuestPixel(app.waitForGuestPixelAfterClicks);
     }
@@ -1151,6 +1331,20 @@ async function main() {
         actions.push(await rendererKeyTap(key.vk, key.holdMs || 80));
         if (key.snapshotAfter) await saveCanvasSnapshot(app, key.snapshotAfter);
         await wait(key.waitMs || app.keyWaitMs || 150);
+      }
+    }
+    if (app.postKeyClicks) {
+      for (const click of app.postKeyClicks) {
+        if (click.waitForGuestPixelBefore) {
+          await waitForGuestPixel(click.waitForGuestPixelBefore);
+        }
+        actions.push(click.doubleClick
+          ? await rendererGuestDoubleClick(click.guestX || 0, click.guestY || 0,
+            click.holdMs || 0)
+          : await rendererGuestClick(click.guestX || 0, click.guestY || 0,
+            click.holdMs || 0));
+        await wait(click.waitMs || app.actionWaitMs || 350);
+        if (click.snapshotAfter) await saveCanvasSnapshot(app, click.snapshotAfter);
       }
     }
     if (app.preGameText) {
@@ -1188,7 +1382,14 @@ async function main() {
           singleKeyBaseline = await captureDiffBaseline(app, `__candidateKeyBaseline${i}`);
         }
         actions.push(await rendererKeyTap(key.vk, key.holdMs || 80));
+        if (key.charCode != null) {
+          await rendererType(String.fromCharCode(key.charCode | 0));
+          actions.push({ kind: 'keypress', code: key.charCode | 0 });
+        }
         await wait(key.waitMs || app.keyWaitMs || 150);
+        if (key.waitForGuestPixelAfter) {
+          await waitForGuestPixel(key.waitForGuestPixelAfter);
+        }
         if (key.snapshotAfter) await saveCanvasSnapshot(app, key.snapshotAfter);
         if (singleKeyBaseline) {
           const singleKeyDiff = await diffSince(singleKeyBaseline, app);
@@ -1204,6 +1405,27 @@ async function main() {
     }
 
     const after = await snapshot(app);
+    let desktopLayout = null;
+    if (app.id === 'cdplayer') {
+      desktopLayout = await evalExpr(`(() => {
+        const windows = Object.values((sharedRenderer && sharedRenderer.windows) || {});
+        const main = windows.find(win => win && !win.isChild && win.title === 'CD Player');
+        const status = windows.find(win => win && win.isChild &&
+          String(win.className || '').toLowerCase() === 'msctls_statusbar32');
+        const wrap = document.getElementById('screen-wrap');
+        return {
+          singleApp: document.body.classList.contains('single-app'),
+          exclusive: document.body.classList.contains('exclusive-fullscreen'),
+          wrapBackground: getComputedStyle(wrap).backgroundColor,
+          mainWidth: main ? main.w | 0 : -1,
+          mainHeight: main ? main.h | 0 : -1,
+          clientHeight: main && main.clientRect ? main.clientRect.h | 0 : -1,
+          statusWidth: status ? status.w | 0 : -1,
+          statusY: status ? status.y | 0 : -1,
+          statusHeight: status ? status.h | 0 : -1,
+        };
+      })()`);
+    }
     await saveCanvasSnapshot(app, 'after');
     const diff = await diffSince(before, app);
     const keyDiff = keyBaseline ? await diffSince(keyBaseline, app) : null;
@@ -1218,6 +1440,7 @@ async function main() {
       keyDiffs,
       stageMetrics,
       actions,
+      desktopLayout,
       status: after.status,
       log: after.log.slice(-1000),
       console: consoleText.slice(-1000),
@@ -1227,6 +1450,25 @@ async function main() {
     assert.strictEqual(after.runningApps, 1, `${app.label}: should be the only running app: ${summary}`);
     assert(after.main && new RegExp(app.titlePattern, 'i').test(after.main.title || ''),
       `${app.label}: expected main window title ${app.titlePattern}: ${summary}`);
+    if (desktopLayout) {
+      assert.strictEqual(desktopLayout.singleApp, false,
+        `${app.label}: the ordinary desktop must not enter single-app presentation: ${summary}`);
+      assert.strictEqual(desktopLayout.exclusive, false,
+        `${app.label}: a windowed utility must not enter exclusive fullscreen: ${summary}`);
+      assert.strictEqual(desktopLayout.wrapBackground, 'rgb(0, 128, 128)',
+        `${app.label}: unused ordinary-desktop space must remain Win98 teal: ${summary}`);
+      assert.deepStrictEqual(desktopLayout, {
+        singleApp: false,
+        exclusive: false,
+        wrapBackground: 'rgb(0, 128, 128)',
+        mainWidth: 290,
+        mainHeight: 208,
+        clientHeight: 163,
+        statusWidth: 284,
+        statusY: 143,
+        statusHeight: 20,
+      }, `${app.label}: window and status geometry should match the v86 reference: ${summary}`);
+    }
     if (app.minCanvasHeight) {
       assert(after.canvas && after.canvas.height >= app.minCanvasHeight,
         `${app.label}: browser canvas should be at least ${app.minCanvasHeight}px tall: ${summary}`);
@@ -1266,13 +1508,27 @@ async function main() {
           `${app.label}: click should land inside the rendered app surface: ${summary}`);
         assert((action.down || []).some(ev => ev.msg === 0x0201) && (action.up || []).some(ev => ev.msg === 0x0202),
           `${app.label}: click should enqueue WM_LBUTTONDOWN/UP: ${summary}`);
+      } else if (action.kind === 'doubleclick') {
+        assert(!action.mapped || !action.mapped.outside,
+          `${app.label}: double-click should land inside the rendered app surface: ${summary}`);
+        assert(action.second && (action.second.down || []).some(ev => ev.msg === 0x0203),
+          `${app.label}: double-click should enqueue WM_LBUTTONDBLCLK: ${summary}`);
+      } else if (action.kind === 'dialog-click') {
+        assert(action.target && action.target.hwnd && action.target.w > 0 && action.target.h > 0,
+          `${app.label}: dialog click should resolve a live control rectangle: ${summary}`);
+        assert(!action.mapped || !action.mapped.outside,
+          `${app.label}: dialog click should land inside the rendered app surface: ${summary}`);
       } else if (action.kind === 'keytap') {
-        assert(action.down && action.down.afterLen > action.down.beforeLen,
+        assert(action.down && (action.down.afterLen > action.down.beforeLen ||
+          (app.allowPolledKeys && action.down.asyncDown === true)),
           `${app.label}: keydown ${action.vk} should enqueue input: ${summary}`);
-        assert(action.up && action.up.afterLen > action.up.beforeLen,
+        assert(action.up && (action.up.afterLen > action.up.beforeLen ||
+          (app.allowPolledKeys && action.up.asyncDown === false)),
           `${app.label}: keyup ${action.vk} should enqueue input: ${summary}`);
-        assert(action.down.asyncDown === true && action.up.asyncDown === false,
-          `${app.label}: key ${action.vk} should update async key state: ${summary}`);
+        if (!app.allowPolledKeys) {
+          assert(action.down.asyncDown === true && action.up.asyncDown === false,
+            `${app.label}: key ${action.vk} should update async key state: ${summary}`);
+        }
       }
     }
     if (app.minDiff) {

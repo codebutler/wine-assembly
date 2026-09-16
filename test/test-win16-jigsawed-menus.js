@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const WEP2 = path.join(ROOT, 'test', 'binaries', 'wep16', 'WEP2');
@@ -81,20 +82,12 @@ function regionDigest(file, left = 0, top = 0, right = 640, bottom = 480) {
   return hash.digest('hex');
 }
 
-function pixelDifference(aFile, bFile, left = 0, top = 0, right = 640, bottom = 480) {
+function changedPixels(aFile, bFile, left = 0, top = 0, right = 640, bottom = 480) {
   const a = png(aFile);
   const b = png(bFile);
-  let different = 0;
-  for (let y = top; y < bottom; y++) {
-    for (let x = left; x < right; x++) {
-      const p = (y * a.width + x) * 4;
-      if (a.data[p] !== b.data[p] || a.data[p + 1] !== b.data[p + 1] ||
-          a.data[p + 2] !== b.data[p + 2] || a.data[p + 3] !== b.data[p + 3]) {
-        different++;
-      }
-    }
-  }
-  return different;
+  return diffPng(a, b, {
+    region: { x: left, y: top, w: right - left, h: bottom - top },
+  }).changed;
 }
 
 // Inventory the live menu tree, including both cascades. Separators have IDs
@@ -150,13 +143,13 @@ assert.match(game, /SetWindowText\] "JigSawed: c:\\bricks\.bmp"/,
 assert.strictEqual(regionDigest(gameBase, 4, 42, 636, 456),
   regionDigest(gamePaste, 4, 42, 636, 456),
   'empty Paste must leave the current puzzle intact');
-assert(pixelDifference(gamePaste, gameScramble, 4, 42, 636, 456) > 10000,
+assert(changedPixels(gamePaste, gameScramble, 4, 42, 636, 456) > 10000,
   'Scramble must visibly rearrange the picture');
-assert(pixelDifference(gameScramble, gameHint, 4, 42, 636, 456) > 1000,
+assert(changedPixels(gameScramble, gameHint, 4, 42, 636, 456) > 1000,
   'Hint must visibly move a puzzle piece');
-assert(pixelDifference(gameHint, gameSolve, 4, 42, 636, 456) > 10000,
+assert(changedPixels(gameHint, gameSolve, 4, 42, 636, 456) > 10000,
   'Solve must visibly change the board');
-assert(pixelDifference(gameSolve, gameFastSolve, 4, 42, 636, 456) > 10000,
+assert(changedPixels(gameSolve, gameFastSolve, 4, 42, 636, 456) > 10000,
   'Fast Solve must run after a fresh scramble');
 
 // Let both solvers finish in isolated runs. Their animation rates differ, but

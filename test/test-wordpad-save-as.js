@@ -17,7 +17,8 @@ const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
 const EXE = path.join(__dirname, 'binaries', 'win98-apps', 'wordpad.exe');
 const SAVE_NAME = 'wordpad-save-probe.txt';
-const OPEN_NAME = 'sources.md';
+const OPEN_NAME = 'wordpad-open-probe.txt';
+const OPEN_FIXTURE = path.join(ROOT, 'sources.md');
 
 if (!fs.existsSync(EXE)) {
   console.log('SKIP  wordpad.exe not found at', EXE);
@@ -41,7 +42,7 @@ seq.push('230:slot-count:save-after');
 seq.push('250:dump-focus-text:after-save');
 seq.push('270:0x111:57600');
 seq.push('300:dlg-dump:new');
-seq.push('310:dlg-cmd:1');
+seq.push('310:dlg-post-cmd:1');
 seq.push('360:dump-focus-text:after-new');
 seq.push('370:dlg-dump:after-new');
 seq.push('390:0x111:57601');
@@ -71,6 +72,7 @@ const traceApis = [
 const args = [
   RUN,
   `--exe=${EXE}`,
+  `--vfs-mount=${OPEN_FIXTURE}=c:\\${OPEN_NAME}`,
   `--input=${seq.join(',')}`,
   '--max-batches=640',
   '--batch-size=50000',
@@ -99,7 +101,7 @@ try {
 const interesting = out.split('\n').filter(l =>
   l.includes('dump-focus-text') ||
   l.includes('dlg-dump') ||
-  l.includes('dlg-cmd') ||
+  l.includes('dlg-post-cmd') ||
   l.includes('slot-count') ||
   l.includes('open-dlg-pick') ||
   l.includes('GetSaveFileNameA') ||
@@ -135,7 +137,7 @@ function escapeRe(s) {
 
 function savedSize() {
   const save = escapeRe(SAVE_NAME);
-  const re = new RegExp(`FindFirstFile\\("\\\\?C:\\\\windows\\\\${save}"\\) → "${save}" size=(\\d+)`, 'i');
+  const re = new RegExp(`FindFirstFile\\("\\\\?C:\\\\${save}"\\) → "${save}" size=(\\d+)`, 'i');
   const m = out.match(re);
   return m ? parseInt(m[1], 10) : 0;
 }
@@ -155,7 +157,7 @@ check('Save As dialog opened', before !== null && saveOpened !== null && saveOpe
 check('Save As filename accepted', new RegExp(`open-dlg-pick: ${escapeRe(SAVE_NAME)}`).test(out));
 check('Save As dialog closed', before !== null && saveAfter === before);
 check('GetSaveFileNameA was called', /GetSaveFileNameA/.test(out));
-check('CreateFileA created picked file', new RegExp(`CreateFileA\\(path="${escapeRe(SAVE_NAME)}"`).test(out));
+check('CreateFileA created picked file', new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(SAVE_NAME)}"`).test(out));
 check('GetFileTime compatibility handler was used', /GetFileTime\(0x[0-9a-f]+,/i.test(out));
 check('WriteFile wrote non-empty document bytes', /WriteFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0*[1-9a-f][0-9a-f]*,/i.test(out));
 check('CloseHandle closed saved file', /CloseHandle\(0x[0-9a-f]+\)/i.test(out));
@@ -167,19 +169,22 @@ check('ROT Release was called', /IRunningObjectTable_Release\(/.test(out));
 check('WordPad title updated to saved filename', new RegExp(`SetWindowText\\] "${escapeRe(SAVE_NAME)} - WordPad"`).test(out));
 check('focus returned to native RichEdit with text intact', /dump-focus-text after-save: hwnd=0x10002 .* text="save me"/.test(out));
 check('File New document-type dialog opened', /dlg-dump:new: .*text="New document type:".*text="OK".*text="Cancel"/.test(out));
-check('File New dialog accepted OK', /dlg-cmd: cmd=1 hwnd=0x[0-9a-f]+ at batch 310/.test(out));
+const newPost = out.search(/dlg-post-cmd: cmd=1 hwnd=0x[0-9a-f]+ queued=1 at batch 310/);
+const resetTitle = out.indexOf('SetWindowText] "Document - WordPad"', newPost);
+const clearedAfterNew = out.search(/dump-focus-text after-new: hwnd=0x10002 .* len=0 text=""/);
+check('File New dialog accepted through posted input', newPost >= 0);
 check('File New dialog closed', /dlg-dump:after-new: dlg=none/.test(out));
-check('File New reset title to Document', /SetWindowText\] "Document - WordPad"/.test(out));
-check('File New cleared native RichEdit text', /dump-focus-text after-new: hwnd=0x10002 .* len=0 text=""/.test(out));
+check('File New reset title after acceptance', resetTitle > newPost);
+check('File New cleared native RichEdit text after acceptance', clearedAfterNew > newPost);
 check('Open dialog opened after New', before !== null && openOpened !== null && openOpened > before);
 check('Open filename accepted', new RegExp(`open-dlg-pick: ${escapeRe(OPEN_NAME)}`).test(out));
 check('Open dialog closed', before !== null && openAfter === before);
 check('GetOpenFileNameA was called', /GetOpenFileNameA/.test(out));
-check('CreateFileA opened existing text file', new RegExp(`CreateFileA\\(path="C:\\\\windows\\\\${escapeRe(OPEN_NAME)}"`).test(out));
+check('CreateFileA opened explicitly mounted text file', new RegExp(`CreateFileA\\(path="C:\\\\${escapeRe(OPEN_NAME)}"`).test(out));
 check('ReadFile streamed opened text file', /ReadFile\(0x[0-9a-f]+, 0x[0-9a-f]+, 0x0*ffe,/i.test(out));
 check('GetFileTitleA was called for opened file', /GetFileTitleA/.test(out));
 check('WordPad title updated to opened filename', new RegExp(`SetWindowText\\] "${escapeRe(OPEN_NAME)} - WordPad"`).test(out));
-check('opened file populated native RichEdit text', /dump-focus-text after-open: hwnd=0x10002 .* text="# DLL Sources/.test(out));
+check('opened file populated native RichEdit text', /dump-focus-text after-open: hwnd=0x10002 .* text="# Candidate games and sources/.test(out));
 check('no UNIMPLEMENTED API crash', !/UNIMPLEMENTED API:/.test(out));
 check('no runtime crash', !/CRASH|Unreachable code|EIP=0x00000000/.test(out));
 

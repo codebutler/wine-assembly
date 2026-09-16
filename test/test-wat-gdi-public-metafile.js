@@ -6,6 +6,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 (async () => {
   const canvasTextCalls = { bind: 0, mask: 0 };
@@ -19,7 +21,7 @@ const { bootRenderHarness } = require('./render-helper');
         (param $hdc i32) (param $hmf i32) (param $callback i32)
         (param $data i32) (result i32)
     (local $start i32)
-    (local.set $start (global.get $esp))
+    (local.set $start (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (local.get $start) (i32.const 0))
     (call $handle_EnumMetaFile (local.get $hdc) (local.get $hmf)
       (local.get $callback) (local.get $data) (i32.const 0) (i32.const 0))
@@ -28,11 +30,11 @@ const { bootRenderHarness } = require('./render-helper');
         (param $hdc i32) (param $table i32) (param $record i32)
         (param $count i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_PlayMetaFileRecord (local.get $hdc) (local.get $table)
       (local.get $record) (local.get $count) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))`,
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))`,
   });
   const root = path.join(__dirname, '..');
   hostCtx.vfs.dirs.add('c:\\windows');
@@ -50,7 +52,7 @@ const { bootRenderHarness } = require('./render-helper');
   assert(wat.load_pe(exe.length), 'PE load must initialize callback continuation thunks');
   const bytes = new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  const wa = guest => RegionMap.g2w(guest, imageBase);
   let passed = 0;
 
   const check = (name, fn) => {

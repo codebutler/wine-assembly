@@ -38,8 +38,15 @@ const tag = text => ((text.charCodeAt(0) << 24) | (text.charCodeAt(1) << 16) |
   const lineVector = source.match(
     /\(func \$tth_set_line_vector([\s\S]*?)\n  ;; ---- stream/);
   assert.ok(lineVector, 'line-vector implementation must remain present');
+  // Spelled either way on purpose. The invariant is the OPERAND ORDER — $b
+  // before $a, so the vector runs from the first popped point toward the
+  // second — and that survives the WATX layout migration, which replaced the
+  // hand-spelled `(i32.load offset=4 (local.get $b))` with the equivalent
+  // `(load.field.memarg TthPoint current_y (local.get $b))`. Pinning the old
+  // idiom would have made a byte-identical conversion look like a regression.
+  const readsPoint = '(?:i32\\.load(?: offset=4)?|load\\.field(?:\\.memarg)? TthPoint current_[xy])';
   assert.match(lineVector[1],
-    /i32\.sub \(i32\.load(?: offset=4)? \(local\.get \$b\)\)[\s\S]*?\(i32\.load(?: offset=4)? \(local\.get \$a\)\)/,
+    new RegExp(`i32\\.sub \\(${readsPoint} \\(local\\.get \\$b\\)\\)[\\s\\S]*?\\(${readsPoint} \\(local\\.get \\$a\\)\\)`),
     'line vectors must point from the first popped point toward the second');
 
   const { exports: wat, memory, hostCtx } = await bootRenderHarness();
@@ -58,8 +65,10 @@ const tag = text => ((text.charCodeAt(0) << 24) | (text.charCodeAt(1) << 16) |
     wat.test_tth_md_uses_original(0x49),
     wat.test_tth_md_uses_original(0x4A),
   ], [0, 1], 'MD opcodes must select fitted then original outline distances');
-  const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  // The module's own $g2w, not image-relative arithmetic: loading whole fonts
+  // exhausts the low heap window ($GUEST_HEAP_BASE) and $heap_alloc then spills
+  // to the sparse high arena, whose pointers only $g2w can resolve.
+  const wa = guest => wat.guest_to_wasm(guest) >>> 0;
   const copyToGuest = bytes => {
     const guest = wat.guest_alloc(bytes.length) >>> 0;
     assert.ok(guest, `guest_alloc(${bytes.length}) failed`);

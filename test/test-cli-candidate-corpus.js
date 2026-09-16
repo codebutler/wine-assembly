@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
+const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { compileWatSnapshot } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -40,14 +41,18 @@ function walkFiles(directory, output = []) {
   return output;
 }
 
-function isPe32X86(filename) {
+function isRunnableX86(filename) {
   const descriptor = fs.openSync(filename, 'r');
   try {
     const dos = Buffer.alloc(64);
     if (fs.readSync(descriptor, dos, 0, dos.length, 0) !== dos.length) return false;
     if (dos[0] !== 0x4d || dos[1] !== 0x5a) return false;
     const peOffset = dos.readUInt32LE(0x3c);
-    if (peOffset < 64 || peOffset > fs.fstatSync(descriptor).size - 26) return false;
+    if (peOffset < 64 || peOffset > fs.fstatSync(descriptor).size - 2) return false;
+    const signature = Buffer.alloc(2);
+    if (fs.readSync(descriptor, signature, 0, signature.length, peOffset) !== signature.length) return false;
+    if (signature.toString('binary') === 'NE') return true;
+    if (peOffset > fs.fstatSync(descriptor).size - 26) return false;
     const pe = Buffer.alloc(26);
     if (fs.readSync(descriptor, pe, 0, pe.length, peOffset) !== pe.length) return false;
     return pe.toString('binary', 0, 4) === 'PE\0\0'
@@ -64,9 +69,9 @@ function resolveExecutable(candidate) {
   for (const requested of candidate.executables) {
     const normalized = requested.replace(/\\/g, '/').toLowerCase();
     const exact = files.find(filename => path.relative(fixtureRoot, filename).replace(/\\/g, '/').toLowerCase() === normalized);
-    if (exact && isPe32X86(exact)) return exact;
+    if (exact && isRunnableX86(exact)) return exact;
     const basename = path.basename(normalized);
-    const byName = files.find(filename => path.basename(filename).toLowerCase() === basename && isPe32X86(filename));
+    const byName = files.find(filename => path.basename(filename).toLowerCase() === basename && isRunnableX86(filename));
     if (byName) return byName;
   }
   return null;
@@ -103,6 +108,29 @@ function runCandidate(candidate, executable, wasmPath) {
     `--batch-size=${cli.batchSize || 10000}`,
   ];
   if (cli.args) args.push(`--args=${cli.args}`);
+  if (cli.cue) {
+    const cue = path.join(ASSET_ROOT, fixtureId(candidate), cli.cue);
+    if (!fs.existsSync(cue)) throw new Error(`${candidate.id}.cli.cue is missing: ${cue}`);
+    args.push(`--cue=${cue}`);
+  }
+  if (cli.dlls !== undefined) {
+    if (!Array.isArray(cli.dlls) || !cli.dlls.length ||
+        cli.dlls.some(filename => typeof filename !== 'string' || !filename.trim())) {
+      throw new Error(`${candidate.id}.cli.dlls must be a non-empty string array`);
+    }
+    for (const filename of cli.dlls) {
+      const dll = path.join(ASSET_ROOT, fixtureId(candidate), filename);
+      if (!fs.existsSync(dll)) throw new Error(`${candidate.id}.cli.dlls is missing: ${dll}`);
+      args.push(`--dll-seed=${dll}`);
+    }
+  }
+  if (cli.vfsInclude !== undefined) {
+    if (!Array.isArray(cli.vfsInclude) || !cli.vfsInclude.length ||
+        cli.vfsInclude.some(pattern => typeof pattern !== 'string' || !pattern.trim())) {
+      throw new Error(`${candidate.id}.cli.vfsInclude must be a non-empty string array`);
+    }
+    for (const pattern of cli.vfsInclude) args.push(`--vfs-include=${pattern}`);
+  }
   const result = spawnSync('node', args, {
     cwd: ROOT,
     encoding: 'utf8',
@@ -118,6 +146,51 @@ async function main() {
   if (manifest.schemaVersion !== 1 || !Array.isArray(manifest.candidates)) usage('unsupported candidate manifest');
   const ids = manifest.candidates.map(candidate => candidate.id);
   if (new Set(ids).size !== ids.length) usage('candidate IDs must be unique');
+  const baldursGateSources = new Map([
+    ['baldurs-gate-noninteractive-demo', [
+      'https://archive.org/download/BALDUR/BALDUR.EXE',
+      'e7caae4255e8ed570cef3a29642432c8d28ecdb9',
+    ]],
+    ['baldurs-gate-interactive-demo', [
+      'https://archive.org/download/bg-demo/BG%20Demo.iso',
+      '3796defce51a3e867aa216bc27f0be0689fdadf0',
+    ]],
+    ['baldurs-gate-chapters-1-2-demo', [
+      'https://archive.org/download/20230723_20230723_0858/Baldur%27s%20Gate%20-%20Chapters%20I%20%26%20II%20%28USA%29%20%28Demo%29.zip',
+      '2e5256bc8c418aec51ea39ef1a5bf8640dd3317a',
+    ]],
+  ]);
+  for (const [id, [url, sha1]] of baldursGateSources) {
+    const candidate = manifest.candidates.find(item => item.id === id);
+    assert(candidate && candidate.localOnly, `${id} remains an ignored local-only fixture`);
+    assert.deepStrictEqual(candidate.packages.map(pkg => [pkg.url, pkg.sha1]), [[url, sha1]],
+      `${id} keeps its exact Archive.org artifact and SHA-1`);
+    assert.deepStrictEqual(candidate.cli.vfsInclude, ['**/*'],
+      `${id} mounts the complete extracted companion-file tree`);
+  }
+  const chapters = manifest.candidates.find(candidate =>
+    candidate.id === 'baldurs-gate-chapters-1-2-demo');
+  assert(chapters.postExtract.some(step => step.type === 'extractRawMode1Cd'),
+    'Chapters I & II prepares its preserved MODE1/2352 BIN before InstallShield extraction');
+  const civWin16 = manifest.candidates.find(candidate => candidate.id === 'civilization-2-win16');
+  const civMge = manifest.candidates.find(candidate => candidate.id === 'civilization-2-mge-win32');
+  assert(civWin16 && civMge && civWin16.localOnly && civMge.localOnly,
+    'both Civilization II retail editions remain ignored local-only fixtures');
+  assert(civWin16.executables.includes('cd/CIV2/CIV2.EXE'),
+    'original Civilization II launches its Win16 NE executable from the extracted data track');
+  assert(civWin16.postExtract.some(step => step.type === 'expandSzdd' &&
+    step.from === 'cd/WING/WING.DL_' && step.into === 'cd/CIV2/WING.DLL'),
+  'original Civilization II expands the retail WinG runtime beside its executable');
+  assert(civMge.executables.includes('installed/civ2.exe'),
+    'MGE launches the installed Win32 executable rather than the incomplete CD copy');
+  assert.deepStrictEqual(civMge.cli.dlls, ['installed/XDaemon.dll'],
+    'MGE preloads the installer-supplied XDaemon DLL required by civ2.exe');
+  for (const candidate of [civWin16, civMge]) {
+    assert(candidate.postExtract.some(step => step.type === 'extractRawMode1Cd'),
+      `${candidate.id} prepares the MODE1/2352 data track`);
+    assert(candidate.cli.cue && candidate.cli.vfsInclude.includes('**/*'),
+      `${candidate.id} mounts its full local tree and mixed-mode CUE`);
+  }
   if (selectedIds) {
     const unknown = [...selectedIds].filter(id => !ids.includes(id));
     if (unknown.length) usage(`unknown candidate IDs: ${unknown.join(', ')}`);
@@ -136,7 +209,7 @@ async function main() {
   let wasmPath = null;
   if (!dryRun) {
     try {
-      const bytes = await compileWatSnapshot(file => fs.promises.readFile(path.join(ROOT, 'src', file), 'utf8'));
+      const bytes = compileSrcWasm();
       await WebAssembly.compile(bytes);
       wasmDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-candidate-wasm-'));
       wasmPath = path.join(wasmDirectory, 'candidate-corpus.wasm');

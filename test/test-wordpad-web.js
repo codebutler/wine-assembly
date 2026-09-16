@@ -13,6 +13,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const { startStaticServer } = require('./static-server');
 
 const ROOT = path.join(__dirname, '..');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -25,40 +26,6 @@ if (!fs.existsSync(CHROME)) {
 }
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-function mimeType(file) {
-  const ext = path.extname(file).toLowerCase();
-  if (ext === '.html') return 'text/html; charset=utf-8';
-  if (ext === '.js') return 'text/javascript; charset=utf-8';
-  if (ext === '.css') return 'text/css; charset=utf-8';
-  if (ext === '.wasm') return 'application/wasm';
-  if (ext === '.json') return 'application/json';
-  if (ext === '.png') return 'image/png';
-  return 'application/octet-stream';
-}
-
-function startStaticServer() {
-  const root = fs.realpathSync(ROOT);
-  const server = http.createServer((request, response) => {
-    let pathname;
-    try { pathname = decodeURIComponent(new URL(request.url, 'http://127.0.0.1').pathname); }
-    catch (_) { response.writeHead(400); response.end('bad url'); return; }
-    if (pathname === '/') pathname = '/index.html';
-    const file = path.normalize(path.join(root, pathname));
-    if (file !== root && !file.startsWith(root + path.sep)) {
-      response.writeHead(403); response.end('forbidden'); return;
-    }
-    fs.readFile(file, (error, data) => {
-      if (error) { response.writeHead(error.code === 'ENOENT' ? 404 : 500); response.end(); return; }
-      response.writeHead(200, { 'Content-Type': mimeType(file), 'Cache-Control': 'no-store' });
-      response.end(data);
-    });
-  });
-  return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server));
-  });
-}
 
 function reservePort() {
   return new Promise((resolve, reject) => {
@@ -185,7 +152,7 @@ function consoleSummary(events) {
 
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
-  const server = await startStaticServer();
+  const server = await startStaticServer({ root: ROOT });
   const port = server.address().port;
   const debugPort = await reservePort();
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'wine-assembly-wordpad-web-'));
@@ -242,6 +209,47 @@ async function main() {
   })`, 18000);
 
   await evaluate(`(() => {
+    // Install acceptance-only instrumentation before WineAssembly creates its
+    // imports. The production logger's entry latch is intentionally cheap and
+    // can be cleared by nested font/VFS logging; log_api_exit is the exact
+    // post-handler boundary and exposes the real guest EAX without changing
+    // the runtime source under test.
+    window.__waOutlineMetricCalls = [];
+    const originalGetImports = WineAssembly.prototype.getImports;
+    WineAssembly.prototype.getImports = function(...args) {
+      const owner = this;
+      const imports = originalGetImports.apply(owner, args);
+      const originalLog = imports.host.log;
+      const originalExit = imports.host.log_api_exit;
+      let pending = null;
+      imports.host.log = (ptr, len) => {
+        originalLog(ptr, len);
+        if (!owner.memory || !owner.instance) return;
+        const view = new Uint8Array(owner.memory.buffer, ptr, Math.min(len, 64));
+        const text = new TextDecoder().decode(new Uint8Array(view)).replace(/\0.*$/, '');
+        const match = text.match(/^GetOutlineTextMetrics([AW])$/);
+        if (!match) return;
+        const e = owner.instance.exports;
+        const esp = e.get_esp() >>> 0;
+        pending = {
+          variant: match[1],
+          hdc: e.guest_read32(esp + 4) >>> 0,
+          bytes: e.guest_read32(esp + 8) >>> 0,
+          out: e.guest_read32(esp + 12) >>> 0,
+        };
+      };
+      imports.host.log_api_exit = () => {
+        if (pending && owner.instance && owner.instance.exports.get_eax) {
+          window.__waOutlineMetricCalls.push({
+            ...pending, result: owner.instance.exports.get_eax() >>> 0,
+          });
+          pending = null;
+        }
+        return originalExit();
+      };
+      return imports;
+    };
+    window.__waTraceApiNames = new Set(['GetOutlineTextMetricsA', 'GetOutlineTextMetricsW']);
     document.getElementById('app-select').value = 'wordpad';
     return launchApp();
   })()`, 45000);
@@ -463,10 +471,16 @@ async function main() {
     const origin = sharedRenderer._windowOriginForComposite(main);
     const canvas = document.getElementById('screen');
     const pixels = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
-    const client = main.clientRect || { y: 0 };
-    const barTop = origin.y + (client.y || 0);
+    // The menu bar sits between the caption and the client area, and
+    // clientRect is already in screen coordinates -- adding origin.y to it
+    // walked the probe down into the ruler, where it counted nothing. Scan the
+    // whole strip above the client area instead: the caption is navy with
+    // white text, so nothing there passes the <100-on-every-channel ink test.
+    const client = main.clientRect || { y: origin.y + 40 };
+    const barTop = origin.y + 2;
+    const barBottom = Math.min(client.y | 0, canvas.height);
     let ink = 0;
-    for (let y = barTop; y < Math.min(barTop + 18, canvas.height); y++) {
+    for (let y = barTop; y < barBottom; y++) {
       for (let x = origin.x + 2; x < Math.min(origin.x + xs[count], canvas.width); x++) {
         const p = (y * canvas.width + x) * 4;
         if (pixels[p + 3] && pixels[p] < 100 && pixels[p + 1] < 100 && pixels[p + 2] < 100) ink++;
@@ -487,6 +501,22 @@ async function main() {
     const bytes = new Uint8Array(app.wine.memory.buffer);
     let guestText = '';
     for (let i = 0; i < 31 && bytes[wa + i]; i++) guestText += String.fromCharCode(bytes[wa + i]);
+    if (e.guest_free) e.guest_free(guest);
+    return { rendererText: win.title, guestText };
+  })()`);
+  const fontFaceState = await evaluate(`(() => {
+    const win = Object.values((sharedRenderer && sharedRenderer.windows) || {})
+      .find(item => item && item.wasm && item.wasm.exports.ctrl_get_id &&
+        (item.wasm.exports.ctrl_get_id(item.hwnd) | 0) === 165);
+    if (!win) return null;
+    const app = runningApps.find(item => item && item.wine && item.wine.instance === win.wasm);
+    const e = win.wasm.exports;
+    const guest = e.guest_alloc(64) >>> 0;
+    e.send_message(win.hwnd, 0x000D, 64, guest);
+    const wa = app.wine._guestToWasmAddress(guest);
+    const bytes = new Uint8Array(app.wine.memory.buffer);
+    let guestText = '';
+    for (let i = 0; i < 63 && bytes[wa + i]; i++) guestText += String.fromCharCode(bytes[wa + i]);
     if (e.guest_free) e.guest_free(guest);
     return { rendererText: win.title, guestText };
   })()`);
@@ -523,12 +553,27 @@ async function main() {
         if (a && r < 80 && g < 80 && b < 80) sizeTextDark++;
       }
     }
-    return {
-      buttonDetail, sizeWhite, sizeTextDark,
-      desktopPixel: color(canvas.width - 2, canvas.height - 2),
-    };
+    // Sample the desktop where no top-level window covers it. WordPad's frame
+    // grew to fill this canvas, so the bottom-right corner is its status bar
+    // now; scan inward for the first genuinely uncovered pixel instead and say
+    // so when the windows leave none.
+    const tops = windows.filter(w => w && w.visible && !w.isChild && w.w > 0 && w.h > 0)
+      .map(w => { const o = sharedRenderer._windowOriginForComposite(w); return { x: o.x, y: o.y, w: w.w, h: w.h }; });
+    const covered = (x, y) => tops.some(r => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h);
+    let desktopPixel = null;
+    for (let d = 2; d < Math.min(canvas.width, canvas.height) && !desktopPixel; d++) {
+      const x = canvas.width - d, y = canvas.height - d;
+      if (!covered(x, y)) desktopPixel = color(x, y);
+    }
+    return { buttonDetail, sizeWhite, sizeTextDark, desktopPixel };
   })()`);
-  const consoleText = consoleSummary(cdp.events).join('\n');
+  const consoleLines = consoleSummary(cdp.events);
+  const consoleText = consoleLines.join('\n');
+  const outlineCalls = await evaluate(`window.__waOutlineMetricCalls.slice()`);
+  const outlineSize = outlineCalls.find(call => call.variant === 'A' &&
+    call.bytes === 0 && call.out === 0);
+  const outlineBaseFill = outlineCalls.find(call => call.variant === 'A' &&
+    call.bytes === 0xd4 && call.out !== 0);
   assert.strictEqual(typed.text, 'hello world', `native RichEdit text mismatch: ${JSON.stringify(typed)}`);
   assert.strictEqual(longDate.selected, 1, `Date and Time should select the non-default long-date row: ${JSON.stringify(longDate)}`);
   assert(longDate.running && /hello worldMonday, January 1, 2001/.test(longDate.text),
@@ -540,14 +585,28 @@ async function main() {
     `browser should preload riched20.dll:\n${consoleText.slice(-5000)}`);
   assert(!/UNIMPLEMENTED API:|RuntimeError|LinkError|Thread \d+ crashed|FATAL:/i.test(consoleText),
     `WordPad browser run should not crash:\n${consoleText.slice(-5000)}`);
+  assert(outlineSize,
+    `authentic WordPad must execute the documented NULL sizing query: ${JSON.stringify(outlineCalls)}`);
+  assert(outlineSize.result > 0xd4,
+    `WordPad's NULL query must receive the full metric/string buffer size: ${JSON.stringify(outlineSize)}`);
+  assert(outlineBaseFill,
+    `authentic WordPad must also exercise its fixed 0xd4 compatibility probe: ${JSON.stringify(outlineCalls)}`);
+  assert.strictEqual(outlineBaseFill.result, 0,
+    `the fixed 0xd4 probe is too short for trailing strings and must fail: ${JSON.stringify(outlineBaseFill)}`);
   assert.deepStrictEqual(sizeState, { rendererText: '10', guestText: '10' },
     'WordPad browser toolbar should show the 10pt default in renderer and control state');
+  assert(fontFaceState && /^[A-Za-z][A-Za-z ]+$/.test(fontFaceState.guestText),
+  `WordPad browser font face must remain populated after outline-metric probes: ${JSON.stringify(fontFaceState)}`);
   assert(toolbarVisualState && toolbarVisualState.buttonDetail >= 900,
     `formatting toolbar buttons should be visibly painted: ${JSON.stringify(toolbarVisualState)}`);
   assert(toolbarVisualState.sizeWhite >= 350 && toolbarVisualState.sizeTextDark >= 5,
     `size combobox should visibly paint its 10pt text: ${JSON.stringify(toolbarVisualState)}`);
-  assert.deepStrictEqual(toolbarVisualState.desktopPixel, [0, 128, 128, 255],
-    `uncovered desktop should retain the Win98 teal background: ${JSON.stringify(toolbarVisualState)}`);
+  if (toolbarVisualState.desktopPixel) {
+    assert.deepStrictEqual(toolbarVisualState.desktopPixel, [0, 128, 128, 255],
+      `uncovered desktop should retain the Win98 teal background: ${JSON.stringify(toolbarVisualState)}`);
+  } else {
+    console.log('SKIP  desktop background check - WordPad covers the whole canvas at this size');
+  }
   assert(menuFontState.count >= 5 && menuFontState.xs.every((x, i) => i === 0 || x > menuFontState.xs[i - 1]),
     `WordPad menu bar should lay out its items left to right: ${JSON.stringify(menuFontState)}`);
   assert(new Set(menuFontState.widths).size > 1 && Math.min(...menuFontState.widths) > 8,
@@ -560,6 +619,9 @@ async function main() {
 
   console.log('PASS  WordPad stays running in the browser');
   console.log('PASS  browser preloads riched20.dll');
+  console.log('PASS  authentic WordPad observes GetOutlineTextMetricsA sizing/short-buffer returns:',
+    JSON.stringify({ size: outlineSize, base: outlineBaseFill }));
+  console.log('PASS  browser toolbar keeps a populated font face:', JSON.stringify(fontFaceState));
   console.log('PASS  native RichEdit accepts "hello world"');
   console.log('PASS  non-default long Date and Time format inserts without crashing');
   console.log('PASS  native RichEdit inserts a crash-safe CF_DIB object position:', JSON.stringify(dibPaste));

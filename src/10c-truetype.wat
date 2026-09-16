@@ -1573,8 +1573,12 @@
   ;; horizontal dropout rule chooses one of them; modes 1 and 5 exclude a
   ;; terminal stub by requiring both bounding contours to continue through
   ;; the neighbouring centre scan lines.
-  (func $tt_horizontal_edges_form_stub (param $edges i32) (param $first i32)
-        (param $second i32) (param $sample i32) (result i32)
+  ;; The horizontal and vertical dropout rules ask the same endpoint question;
+  ;; only the coordinate measured against the scan line changes. sample_y=1
+  ;; selects y for horizontal spans, while 0 selects x for vertical spans.
+  (func $tt_edges_form_stub (param $edges i32) (param $first i32)
+        (param $second i32) (param $sample i32) (param $sample_y i32)
+        (result i32)
     (local $a i32) (local $b i32) (local $ax i32) (local $ay i32)
     (local $bx i32) (local $by i32) (local $ae i32) (local $be i32)
     (local.set $a (i32.add (local.get $edges)
@@ -1598,7 +1602,10 @@
               (i32.and (i32.eq (local.get $ax) (local.get $bx))
                 (i32.eq (local.get $ay) (local.get $by)))
               (i32.lt_s (call $tt_abs
-                  (i32.sub (local.get $ay) (local.get $sample)))
+                  (i32.sub
+                    (select (local.get $ay) (local.get $ax)
+                      (local.get $sample_y))
+                    (local.get $sample)))
                 (i32.const 64)))
           (then (return (i32.const 1))))
         (local.set $be (i32.add (local.get $be) (i32.const 1)))
@@ -1640,9 +1647,9 @@
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 1))
           (i32.eq (local.get $scan_type) (i32.const 5)))
       (then
-        (if (call $tt_horizontal_edges_form_stub (local.get $edges)
+        (if (call $tt_edges_form_stub (local.get $edges)
               (local.get $start_edge) (local.get $end_edge)
-              (local.get $sample))
+              (local.get $sample) (i32.const 1))
           (then (return)))))
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 4))
           (i32.eq (local.get $scan_type) (i32.const 5)))
@@ -1672,40 +1679,6 @@
   ;; Rule 2b/3b is the vertical counterpart to tt_add_center_span's
   ;; horizontal dropout rule. The bitmap is column-major and top-down, so the
   ;; lower of two adjacent pixel centres has the larger row index.
-  (func $tt_vertical_edges_form_stub (param $edges i32) (param $first i32)
-        (param $second i32) (param $sample i32) (result i32)
-    (local $a i32) (local $b i32) (local $ax i32) (local $ay i32)
-    (local $bx i32) (local $by i32) (local $ae i32) (local $be i32)
-    (local.set $a (i32.add (local.get $edges)
-      (i32.mul (local.get $first) (i32.const 32))))
-    (local.set $b (i32.add (local.get $edges)
-      (i32.mul (local.get $second) (i32.const 32))))
-    (block $not_stub (loop $a_ends
-      (br_if $not_stub (i32.ge_s (local.get $ae) (i32.const 2)))
-      (local.set $ax (i32.load (i32.add (local.get $a)
-        (i32.mul (local.get $ae) (i32.const 8)))))
-      (local.set $ay (i32.load offset=4 (i32.add (local.get $a)
-        (i32.mul (local.get $ae) (i32.const 8)))))
-      (local.set $be (i32.const 0))
-      (block $next_a (loop $b_ends
-        (br_if $next_a (i32.ge_s (local.get $be) (i32.const 2)))
-        (local.set $bx (i32.load (i32.add (local.get $b)
-          (i32.mul (local.get $be) (i32.const 8)))))
-        (local.set $by (i32.load offset=4 (i32.add (local.get $b)
-          (i32.mul (local.get $be) (i32.const 8)))))
-        (if (i32.and
-              (i32.and (i32.eq (local.get $ax) (local.get $bx))
-                (i32.eq (local.get $ay) (local.get $by)))
-              (i32.lt_s (call $tt_abs
-                  (i32.sub (local.get $ax) (local.get $sample)))
-                (i32.const 64)))
-          (then (return (i32.const 1))))
-        (local.set $be (i32.add (local.get $be) (i32.const 1)))
-        (br $b_ends)))
-      (local.set $ae (i32.add (local.get $ae) (i32.const 1)))
-      (br $a_ends)))
-    (i32.const 0))
-
   (func $tt_add_vertical_dropout (param $bitmap i32) (param $height i32)
         (param $column i32) (param $bottom i32)
         (param $y_start i32) (param $y_end i32)
@@ -1755,9 +1728,9 @@
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 1))
           (i32.eq (local.get $scan_type) (i32.const 5)))
       (then
-        (if (call $tt_vertical_edges_form_stub (local.get $edges)
+        (if (call $tt_edges_form_stub (local.get $edges)
               (local.get $start_edge) (local.get $end_edge)
-              (local.get $sample))
+              (local.get $sample) (i32.const 0))
           (then (return)))))
     (if (i32.or (i32.eq (local.get $scan_type) (i32.const 4))
           (i32.eq (local.get $scan_type) (i32.const 5)))
@@ -2959,16 +2932,16 @@
 
   ;; Returns the WASM address of the face table, allocating it on first use.
   (func $tt_faces_ensure (result i32)
-    (local $guest i32) (local $bytes i32)
+    (local $guest i32) (local $wasm i32) (local $bytes i32)
     (if (global.get $tt_faces)
       (then (return (call $g2w (global.get $tt_faces)))))
     (local.set $bytes
       (i32.mul (global.get $TT_MAX_FACES) (global.get $TT_FACE_STRIDE)))
     (local.set $guest (call $heap_alloc (local.get $bytes)))
     (if (i32.eqz (local.get $guest)) (then (return (i32.const 0))))
-    (memory.fill (call $g2w (local.get $guest)) (i32.const 0) (local.get $bytes))
+    (local.set $wasm (call $g2w (local.get $guest))) (memory.fill (local.get $wasm) (i32.const 0) (local.get $bytes))
     (global.set $tt_faces (local.get $guest))
-    (call $g2w (local.get $guest)))
+    (local.get $wasm))
 
   (func $tt_face_record (param $face i32) (result i32)
     (local $table i32)
@@ -3002,7 +2975,7 @@
   (func $tt_face_open (param $path_guest i32) (result i32)
     (local $path i32) (local $hash i32) (local $table i32) (local $record i32)
     (local $index i32) (local $free i32) (local $handle i32) (local $size i32)
-    (local $data_guest i32) (local $data i32) (local $read i32)
+    (local $data_guest i32) (local $data i32) (local $read i32) (local $read_wa i32)
     (if (i32.eqz (local.get $path_guest)) (then (return (i32.const -1))))
     (local.set $path (call $g2w (local.get $path_guest)))
     (local.set $hash (call $tt_path_hash (local.get $path)))
@@ -3016,7 +2989,8 @@
         (i32.mul (local.get $index) (global.get $TT_FACE_STRIDE))))
       (if (i32.load offset=16 (local.get $record))
         (then
-          (if (i32.eq (i32.load (local.get $record)) (local.get $hash))
+          (if (i32.and (i32.eq (i32.load offset=16 (local.get $record)) (i32.const 1))
+                (i32.eq (i32.load (local.get $record)) (local.get $hash)))
             (then (return (local.get $index)))))
         (else (if (i32.eq (local.get $free) (i32.const -1))
           (then (local.set $free (local.get $index))))))
@@ -3050,7 +3024,7 @@
         (drop (call $host_fs_close_handle (local.get $handle)))
         (call $heap_free (local.get $data_guest))
         (return (i32.const -1))))
-    (i32.store (call $g2w (local.get $read)) (i32.const 0))
+    (local.set $read_wa (call $g2w (local.get $read))) (i32.store (local.get $read_wa) (i32.const 0))
     (if (i32.eqz (call $host_fs_read_file (local.get $handle)
           (local.get $data_guest) (local.get $size) (local.get $read)))
       (then
@@ -3059,7 +3033,7 @@
         (call $heap_free (local.get $read))
         (return (i32.const -1))))
     (drop (call $host_fs_close_handle (local.get $handle)))
-    (if (i32.ne (i32.load (call $g2w (local.get $read))) (local.get $size))
+    (if (i32.ne (i32.load (local.get $read_wa)) (local.get $size))
       (then
         (call $heap_free (local.get $data_guest))
         (call $heap_free (local.get $read))
@@ -3083,6 +3057,95 @@
     (i32.store offset=16 (local.get $record) (i32.const 1))
     (local.get $free))
 
+  ;; Memory resources share the face/raster cache, but never the enumerable
+  ;; path registry. Face state 2 is registered, 3 is removed but cached: keep
+  ;; bytes alive for already-realized fonts, just as file faces remain cached.
+  ;; The existing 32-face process cache bounds this retention. Slots are not
+  ;; recycled: glyph/hint caches use face indices as persistent identities.
+  ;; +20 owns a 64-byte family name, +24 weight, +28 italic. The resource handle
+  ;; is the face-record guest address; it is validated by scanning, not read
+  ;; through an untrusted incoming pointer. Only single-face glyf sfnt is in
+  ;; scope (TTC/CFF fail without claiming a registration).
+  (func $tt_mem_add (param $source i32) (param $size i32) (result i32)
+    (local $data i32) (local $table i32) (local $index i32) (local $record i32)
+    (local $name i32) (local $copy i32)
+    (if (i32.or (i32.eqz (local.get $source))
+          (i32.or (i32.lt_u (local.get $size) (i32.const 12))
+            (i32.gt_u (local.get $size) (global.get $TT_MAX_FONT_BYTES))))
+      (then (return (i32.const 0))))
+    (local.set $data (call $g2w_affine_span (local.get $source) (local.get $size)))
+    (if (i32.eq (local.get $data) (global.get $NULL_SENTINEL))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $tt_is_truetype (local.get $data) (local.get $size)))
+      (then (return (i32.const 0))))
+    (if (i32.or (i32.eqz (call $tt_units_per_em (local.get $data) (local.get $size)))
+          (i32.eqz (call $tt_table_entry (local.get $data) (local.get $size) (i32.const 0x676c7966))))
+      (then (return (i32.const 0))))
+    (local.set $table (call $tt_faces_ensure))
+    (if (i32.eqz (local.get $table)) (then (return (i32.const 0))))
+    (block $free (loop $scan
+      (if (i32.ge_u (local.get $index) (global.get $TT_MAX_FACES))
+        (then (return (i32.const 0))))
+      (local.set $record (call $tt_face_record (local.get $index)))
+      (br_if $free (i32.eqz (i32.load offset=16 (local.get $record))))
+      (local.set $index (i32.add (local.get $index) (i32.const 1))) (br $scan)))
+    (local.set $name (call $heap_alloc (i32.const 64)))
+    (if (i32.eqz (local.get $name)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $tt_family_name (local.get $data) (local.get $size)
+          (call $g2w (local.get $name)) (i32.const 64)))
+      (then (call $heap_free (local.get $name)) (return (i32.const 0))))
+    (local.set $copy (call $heap_alloc (local.get $size)))
+    (if (i32.eqz (local.get $copy))
+      (then (call $heap_free (local.get $name)) (return (i32.const 0))))
+    (memory.copy (call $g2w (local.get $copy)) (local.get $data) (local.get $size))
+    (i32.store offset=4 (local.get $record) (local.get $copy))
+    (i32.store offset=8 (local.get $record) (local.get $size))
+    (i32.store offset=12 (local.get $record)
+      (call $tt_units_per_em (local.get $data) (local.get $size)))
+    (i32.store offset=20 (local.get $record) (local.get $name))
+    (i32.store offset=24 (local.get $record)
+      (call $tt_tm_weight (local.get $data) (local.get $size)))
+    (i32.store offset=28 (local.get $record)
+      (call $tt_is_italic (local.get $data) (local.get $size)))
+    (i32.store offset=16 (local.get $record) (i32.const 2))
+    (call $w2g (local.get $record)))
+
+  (func $tt_mem_remove (param $handle i32) (result i32)
+    (local $index i32) (local $record i32)
+    (if (i32.eqz (global.get $tt_faces)) (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $index) (global.get $TT_MAX_FACES)))
+      (local.set $record (call $tt_face_record (local.get $index)))
+      (if (i32.and (i32.eq (call $w2g (local.get $record)) (local.get $handle))
+            (i32.eq (i32.load offset=16 (local.get $record)) (i32.const 2)))
+        (then (i32.store offset=16 (local.get $record) (i32.const 3))
+          (return (i32.const 1))))
+      (local.set $index (i32.add (local.get $index) (i32.const 1))) (br $scan)))
+    (i32.const 0))
+
+  (func $tt_mem_face (param $name i32) (param $weight i32) (param $italic i32) (result i32)
+    (local $index i32) (local $record i32) (local $score i32)
+    (local $best i32) (local $found i32)
+    (local.set $best (i32.const -1)) (local.set $found (i32.const -1))
+    (if (i32.or (i32.eqz (local.get $name)) (i32.eqz (global.get $tt_faces)))
+      (then (return (i32.const -1))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $index) (global.get $TT_MAX_FACES)))
+      (local.set $record (call $tt_face_record (local.get $index)))
+      (if (i32.eq (i32.load offset=16 (local.get $record)) (i32.const 2))
+        (then (if (call $tt_subst_name_equal (local.get $name)
+              (call $g2w (i32.load offset=20 (local.get $record))))
+          (then
+            (local.set $score (i32.add (i32.mul (i32.const 2)
+              (i32.eq (i32.ge_s (local.get $weight) (i32.const 700))
+                (i32.ge_s (i32.load offset=24 (local.get $record)) (i32.const 700))))
+              (i32.eq (i32.ne (local.get $italic) (i32.const 0))
+                (i32.ne (i32.load offset=28 (local.get $record)) (i32.const 0)))))
+            (if (i32.ge_s (local.get $score) (local.get $best))
+              (then (local.set $best (local.get $score)) (local.set $found (local.get $index))))))))
+      (local.set $index (i32.add (local.get $index) (i32.const 1))) (br $scan)))
+    (local.get $found))
+
   ;; ---- glyph cache ------------------------------------------------------
   ;;
   ;; Rasterization is once per glyph, face, and size - not once per TextOut.
@@ -3100,16 +3163,16 @@
   ;;   +20 left, +22 top   signed, in pixels, relative to the pen origin
 
   (func $tt_cache_ensure (result i32)
-    (local $guest i32) (local $bytes i32)
+    (local $guest i32) (local $wasm i32) (local $bytes i32)
     (if (global.get $tt_cache)
       (then (return (call $g2w (global.get $tt_cache)))))
     (local.set $bytes
       (i32.mul (global.get $TT_CACHE_SLOTS) (global.get $TT_CACHE_STRIDE)))
     (local.set $guest (call $heap_alloc (local.get $bytes)))
     (if (i32.eqz (local.get $guest)) (then (return (i32.const 0))))
-    (memory.fill (call $g2w (local.get $guest)) (i32.const 0) (local.get $bytes))
+    (local.set $wasm (call $g2w (local.get $guest))) (memory.fill (local.get $wasm) (i32.const 0) (local.get $bytes))
     (global.set $tt_cache (local.get $guest))
-    (call $g2w (local.get $guest)))
+    (local.get $wasm))
 
   ;; Free every cached bitmap and start over. A rehashing eviction policy
   ;; would be better under memory pressure; this one is correct, and the cache
@@ -3351,6 +3414,25 @@
       (call $tt_face_ansi_glyph (local.get $face) (local.get $byte))
       (local.get $ppem)))
 
+  ;; ETO_GLYPH_INDEX addresses the TrueType face directly, including glyphs
+  ;; absent from the ANSI cmap. Return packed face+1 / ppem for one text call.
+  (func $tt_gdi_index_face (param $hdc i32) (result i32)
+    (local $dc i32) (local $font i32) (local $face i32) (local $ppem i32)
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
+    (local.set $font (load.field.memarg GdiDcState font (local.get $dc)))
+    (if (i32.eqz (call $gdi_object_record (local.get $font))) (then (return (i32.const 0))))
+    (local.set $face (call $tt_face_for_logfont (call $gdi_font_face (local.get $font))
+      (call $gdi_font_weight (local.get $font)) (call $gdi_font_italic (local.get $font))))
+    (if (i32.lt_s (local.get $face) (i32.const 0)) (then (return (i32.const 0))))
+    (local.set $ppem (call $tt_face_ppem (local.get $face) (call $gdi_font_height (local.get $font))))
+    (if (i32.or (i32.le_s (local.get $ppem) (i32.const 0)) (i32.gt_u (local.get $ppem) (i32.const 255))) (then (return (i32.const 0))))
+    (i32.or (i32.add (local.get $face) (i32.const 1)) (i32.shl (local.get $ppem) (i32.const 16))))
+
+  (func $tt_gdi_index_width (param $face i32) (param $ppem i32) (param $gid i32) (result i32)
+    (call $tt_advance_px (call $tt_face_data (local.get $face))
+      (call $tt_face_size (local.get $face)) (local.get $gid) (local.get $ppem)))
+
   ;; ---- face substitution ------------------------------------------------
   ;;
   ;; A LOGFONT names a Win98 face. WAT turns that into the file real GDI would
@@ -3367,10 +3449,10 @@
   ;; pointers means inserting a face never renumbers an address, which is the
   ;; failure mode tools/data_offsets.js exists to catch.
 
-  (global $TT_SUBST_TABLE i32 (i32.const 0x07F0B400))
-  (global $TT_SUBST_TABLE_SIZE i32 (i32.const 0x00000800))
+  (global $TT_SUBST_TABLE i32 (region.addr $TT_SUBST_TABLE 0))
+  (global $TT_SUBST_TABLE_SIZE i32 (region.size $TT_SUBST_TABLE))
 
-  (data (i32.const 0x07F0B400)
+  (data (region.addr $TT_SUBST_TABLE 0)
     "Arial\00"
       "C:\\WINDOWS\\FONTS\\ARIAL.TTF\00"
       "C:\\WINDOWS\\FONTS\\ARIALBD.TTF\00"
@@ -3416,10 +3498,10 @@
   ;; Win98 machine without them installed did not list them either. It is also
   ;; not academic: TetriNET's Delphi runtime enumerates fonts at startup and
   ;; crashes later, mid-paint, when this list grows by even one entry.
-  (global $TT_SUBST_ALIAS_TABLE i32 (i32.const 0x07F0BC00))
-  (global $TT_SUBST_ALIAS_TABLE_SIZE i32 (i32.const 0x00000300))
+  (global $TT_SUBST_ALIAS_TABLE i32 (region.addr $TT_SUBST_ALIAS_TABLE 0))
+  (global $TT_SUBST_ALIAS_TABLE_SIZE i32 (region.size $TT_SUBST_ALIAS_TABLE))
 
-  (data (i32.const 0x07F0BC00)
+  (data (region.addr $TT_SUBST_ALIAS_TABLE 0)
     "Verdana\00"
       "C:\\WINDOWS\\FONTS\\VERDANA.TTF\00"
       "C:\\WINDOWS\\FONTS\\VERDANAB.TTF\00"
@@ -3449,14 +3531,14 @@
   ;; never left the text undrawn. One default is a cruder rule than that, but
   ;; it is the same shape of answer, and it is what lets this layer promise
   ;; that every face resolves to a file we ship.
-  (global $TT_SUBST_DEFAULT i32 (i32.const 0x07F0BF00))
-  (data (i32.const 0x07F0BF00) "Arial\00")
+  (global $TT_SUBST_DEFAULT i32 (region.addr $TT_FONT_STRING_STORAGE 0x00000000))
+  (data (region.addr $TT_FONT_STRING_STORAGE 0x00) "Arial\00")
   ;; Win 3.x compatibility alias used by applications written before the
   ;; TrueType family names settled. Keep it out of enumeration, but resolve
   ;; it to the same installed face as Times New Roman.
-  (global $TT_SUBST_TMS_RMN i32 (i32.const 0x07F0BF08))
-  (global $TT_SUBST_TIMES_NEW_ROMAN i32 (i32.const 0x07F0BF10))
-  (data (i32.const 0x07F0BF08) "Tms Rmn\00Times New Roman\00")
+  (global $TT_SUBST_TMS_RMN i32 (region.addr $TT_FONT_STRING_STORAGE 0x00000008))
+  (global $TT_SUBST_TIMES_NEW_ROMAN i32 (region.addr $TT_FONT_STRING_STORAGE 0x00000010))
+  (data (region.addr $TT_FONT_STRING_STORAGE 0x08) "Tms Rmn\00Times New Roman\00")
 
   ;; ---- fonts that are simply installed -----------------------------------
   ;;
@@ -3475,10 +3557,10 @@
   ;; opened: those are the vendored look-alikes mounted under Win98 filenames,
   ;; and registering one would put "Liberation Sans" in front of a guest that
   ;; asked what fonts exist, which is a face Windows 98 never had.
-  (global $TT_FONT_DIR_PATTERN i32 (i32.const 0x07F0BF20))
-  (data (i32.const 0x07F0BF20) "C:\\WINDOWS\\FONTS\\*.TTF\00")
-  (global $TT_FONT_DIR_PREFIX i32 (i32.const 0x07F0BF40))
-  (data (i32.const 0x07F0BF40) "C:\\WINDOWS\\FONTS\\\00")
+  (global $TT_FONT_DIR_PATTERN i32 (region.addr $TT_FONT_STRING_STORAGE 0x00000020))
+  (data (region.addr $TT_FONT_STRING_STORAGE 0x20) "C:\\WINDOWS\\FONTS\\*.TTF\00")
+  (global $TT_FONT_DIR_PREFIX i32 (region.addr $TT_FONT_STRING_STORAGE 0x00000040))
+  (data (region.addr $TT_FONT_STRING_STORAGE 0x40) "C:\\WINDOWS\\FONTS\\\00")
   (global $tt_font_dir_scanned (mut i32) (i32.const 0))
 
   (func $tt_subst_fold (param $byte i32) (result i32)
@@ -3739,16 +3821,16 @@
   (global $tt_reg (mut i32) (i32.const 0))
 
   (func $tt_reg_ensure (result i32)
-    (local $guest i32) (local $bytes i32)
+    (local $guest i32) (local $wasm i32) (local $bytes i32)
     (if (global.get $tt_reg)
       (then (return (call $g2w (global.get $tt_reg)))))
     (local.set $bytes
       (i32.mul (global.get $TT_REG_MAX) (global.get $TT_REG_STRIDE)))
     (local.set $guest (call $heap_alloc (local.get $bytes)))
     (if (i32.eqz (local.get $guest)) (then (return (i32.const 0))))
-    (memory.fill (call $g2w (local.get $guest)) (i32.const 0) (local.get $bytes))
+    (local.set $wasm (call $g2w (local.get $guest))) (memory.fill (local.get $wasm) (i32.const 0) (local.get $bytes))
     (global.set $tt_reg (local.get $guest))
-    (call $g2w (local.get $guest)))
+    (local.get $wasm))
 
   (func $tt_reg_record (param $table i32) (param $index i32) (result i32)
     (i32.add (local.get $table)
@@ -4029,7 +4111,9 @@
   ;; when the face has no substitute or the file is not in the VFS.
   (func $tt_face_for_logfont (param $name i32) (param $weight i32)
         (param $italic i32) (result i32)
-    (local $path i32)
+    (local $path i32) (local $face i32)
+    (local.set $face (call $tt_mem_face (local.get $name) (local.get $weight) (local.get $italic)))
+    (if (i32.ge_s (local.get $face) (i32.const 0)) (then (return (local.get $face))))
     (local.set $path (call $tt_subst_path (local.get $name) (local.get $weight)
       (local.get $italic)))
     (if (i32.eqz (local.get $path)) (then (return (i32.const -1))))
@@ -4153,8 +4237,10 @@
             (br_if $cols_done (i32.ge_u (local.get $gx) (local.get $gw)))
             (local.set $dx (i32.add (local.get $ox) (local.get $gx)))
             (if (i32.and (i32.lt_u (local.get $dx) (local.get $width))
-                  (call $tt_entry_pixel (local.get $entry) (local.get $gx)
-                    (local.get $gy)))
+                  (i32.ne
+                    (call $tt_entry_pixel (local.get $entry) (local.get $gx)
+                      (local.get $gy))
+                    (i32.const 0)))
               (then
                 (local.set $slot (i32.add (local.get $cell)
                   (i32.add (i32.mul (i32.shr_u (local.get $dx) (i32.const 3))
@@ -4228,16 +4314,10 @@
       (br $glyphs)))
 
     (local.set $face_off (local.get $data_off))
-    (local.set $code (i32.const 0))
-    (block $name_done (loop $copy
-      (br_if $name_done (i32.ge_u (local.get $code) (local.get $name_len)))
-      (local.set $ch (i32.load8_u
-        (i32.add (local.get $name) (local.get $code))))
-      (i32.store8 (i32.add (local.get $out)
-          (i32.add (local.get $face_off) (local.get $code)))
-        (local.get $ch))
-      (local.set $code (i32.add (local.get $code) (i32.const 1)))
-      (br $copy)))
+    (memory.copy
+      (i32.add (local.get $out) (local.get $face_off))
+      (local.get $name) (local.get $name_len))
+    (local.set $code (local.get $name_len))
 
     ;; FNT 3.00 header. Only the fields the strike parser reads are meaningful
     ;; here; the rest stay zero rather than carrying invented values.
@@ -4335,6 +4415,10 @@
 
     (local.set $hash (call $tt_strike_hash (local.get $name) (local.get $ppem)
       (local.get $weight) (local.get $italic)))
+    ;; A newly registered private face can replace the same named substitute.
+    ;; Its raster cache identity must include the resolved source face.
+    (local.set $hash (i32.xor (local.get $hash)
+      (i32.mul (i32.add (local.get $face) (i32.const 1)) (i32.const 0x9e3779b9))))
     (local.set $found (call $tt_strike_find (local.get $hash)))
     (if (local.get $found) (then (return (local.get $found))))
 
@@ -4635,6 +4719,56 @@
       (i32.shr_s (i32.sub (i32.const 0) (local.get $value)) (i32.const 16))))
 
   ;; Legacy Win98 kerning for the scalable face selected into a DC. Bitmap
+  ;; Language capabilities from the realized face, not the requested font name.
+  ;; Only legacy horizontal format-0 kerning is consumed by our placement path.
+  (func $tt_gdi_font_language_info (param $hdc i32) (result i32)
+    (local $dc i32) (local $strike i32) (local $handle i32) (local $face i32)
+    (local $data i32) (local $size i32) (local $off i32) (local $end i32)
+    (local $count i32) (local $length i32) (local $coverage i32) (local $pairs i32)
+    (local $flags i32) (local $codepages i32)
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const -1))))
+    (local.set $strike (call $gdi_bitmap_font_selected (local.get $hdc)))
+    (if (i32.eqz (local.get $strike)) (then (return (i32.const -1))))
+    (if (i32.ne (i32.load (local.get $strike)) (i32.const 2)) (then (return (i32.const 0))))
+    (local.set $handle (load.field.memarg GdiDcState font (local.get $dc)))
+    (local.set $face (call $tt_face_for_logfont (call $gdi_font_face (local.get $handle))
+      (call $gdi_font_weight (local.get $handle)) (call $gdi_font_italic (local.get $handle))))
+    (if (i32.lt_s (local.get $face) (i32.const 0)) (then (return (i32.const -1))))
+    (local.set $data (call $tt_face_data (local.get $face)))
+    (local.set $size (call $tt_face_size (local.get $face)))
+    (local.set $off (call $tt_table_off (local.get $data) (local.get $size) (i32.const 0x4f532f32)))
+    (if (i32.ge_u (call $tt_table_len (local.get $data) (local.get $size) (i32.const 0x4f532f32)) (i32.const 86)) (then
+      (local.set $codepages (call $tt_u32 (local.get $data) (local.get $size) (i32.add (local.get $off) (i32.const 78))))
+      (if (i32.and (local.get $codepages) (i32.const 0x003e0000)) (then (local.set $flags (i32.or (local.get $flags) (i32.const 1)))))
+      (if (i32.and (local.get $codepages) (i32.const 0x40)) (then (local.set $flags (i32.or (local.get $flags) (i32.const 0x10)))))
+      (if (i32.and (i32.ne (i32.and (local.get $codepages) (i32.const 0x60)) (i32.const 0))
+        (i32.ne (i32.and (load.field.memarg GdiDcState text_align (local.get $dc)) (i32.const 0x100)) (i32.const 0)))
+        (then (local.set $flags (i32.or (local.get $flags) (i32.const 2)))))))
+    (local.set $off (call $tt_table_off (local.get $data) (local.get $size) (i32.const 0x6b65726e)))
+    (local.set $length (call $tt_table_len (local.get $data) (local.get $size) (i32.const 0x6b65726e)))
+    (if (i32.lt_u (local.get $length) (i32.const 4)) (then (return (local.get $flags))))
+    (if (call $tt_u16 (local.get $data) (local.get $size) (local.get $off)) (then (return (local.get $flags))))
+    (local.set $end (i32.add (local.get $off) (local.get $length)))
+    (local.set $count (call $tt_u16 (local.get $data) (local.get $size) (i32.add (local.get $off) (i32.const 2))))
+    (local.set $off (i32.add (local.get $off) (i32.const 4)))
+    (block $done (loop $tables
+      (br_if $done (i32.eqz (local.get $count)))
+      (br_if $done (i32.lt_u (i32.sub (local.get $end) (local.get $off)) (i32.const 14)))
+      (local.set $length (call $tt_u16 (local.get $data) (local.get $size) (i32.add (local.get $off) (i32.const 2))))
+      (br_if $done (i32.or (i32.lt_u (local.get $length) (i32.const 14))
+        (i32.gt_u (local.get $length) (i32.sub (local.get $end) (local.get $off)))))
+      (local.set $coverage (call $tt_u16 (local.get $data) (local.get $size) (i32.add (local.get $off) (i32.const 4))))
+      (local.set $pairs (call $tt_u16 (local.get $data) (local.get $size) (i32.add (local.get $off) (i32.const 6))))
+      (if (i32.and (i32.eq (i32.and (local.get $coverage) (i32.const 0xff03)) (i32.const 1))
+        (i32.and (i32.ne (local.get $pairs) (i32.const 0))
+          (i32.le_u (local.get $pairs) (i32.div_u (i32.sub (local.get $length) (i32.const 14)) (i32.const 6)))))
+        (then (return (i32.or (local.get $flags) (i32.const 8)))))
+      (local.set $off (i32.add (local.get $off) (local.get $length)))
+      (local.set $count (i32.sub (local.get $count) (i32.const 1))) (br $tables)))
+    (local.get $flags))
+
+  ;; Legacy Win98 kerning for the scalable face selected into a DC. Bitmap
   ;; strikes and faces without a classic `kern` format-0 table adjust by zero.
   ;; OpenType GPOS is intentionally not consulted: Win98 GDI did not shape it.
   (func $tt_gdi_kern_pair_w (param $hdc i32) (param $left i32)
@@ -4647,7 +4781,7 @@
       (then (return (i32.const 0))))
     (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
     (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
-    (local.set $handle (i32.load offset=88 (local.get $dc)))
+    (local.set $handle (load.field.memarg GdiDcState font (local.get $dc)))
     (local.set $face (call $tt_face_for_logfont
       (call $gdi_font_face (local.get $handle))
       (call $gdi_font_weight (local.get $handle))
@@ -4709,7 +4843,7 @@
 
     (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
     (if (i32.eqz (local.get $dc)) (then (return (i32.const -1))))
-    (local.set $handle (i32.load offset=88 (local.get $dc)))
+    (local.set $handle (load.field.memarg GdiDcState font (local.get $dc)))
     (local.set $object (call $gdi_object_record (local.get $handle)))
     (if (i32.eqz (local.get $object)) (then (return (i32.const -1))))
     (local.set $face (call $tt_face_for_logfont

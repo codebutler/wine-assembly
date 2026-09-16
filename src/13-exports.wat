@@ -6,14 +6,80 @@
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   (func $run (export "run") (param $max_blocks i32)
-    (local $thread i32) (local $blocks i32)
-    (local $hc_i i32) (local $hc_slot i32)
+    (local $thread i32)
+    (local $hc_i i32) (local $hc_slot i32) (local $hc_fp i32)
     (local $prev_eip i32) (local $prev_esp i32)
-    (local.set $blocks (local.get $max_blocks))
+    (local $saved_budget i32) (local $shared_cache_generation i32)
+    ;; A global rather than a local because $branch_end spends it too — see the
+    ;; comment on $block_budget in 01-header.wat. Saved and restored because
+    ;; run() is re-entrant: a COM class-factory callback is driven by calling
+    ;; run() again from inside the API thunk the outer run() is still executing
+    ;; (lib/storage.js _runComCallback). A plain global would hand the outer
+    ;; loop whatever the nested one left behind, and it would halt early.
+    (local.set $saved_budget (global.get $block_budget))
+    (global.set $block_budget (local.get $max_blocks))
+    ;; FlushInstructionCache broadcasts through shared memory because decoded
+    ;; blocks are instance-local. Check once per host/Worker slice, not once per
+    ;; x86 block; the API is rare and a slice boundary is the first point at
+    ;; which another Worker can observe the caller's memory writes anyway.
+    (local.set $shared_cache_generation
+      (i32.atomic.load offset=4 (global.get $SHARED_COUNTERS)))
+    (if (i32.ne (local.get $shared_cache_generation)
+                (global.get $code_cache_generation_seen))
+      (then
+        (global.set $code_cache_generation_seen
+          (local.get $shared_cache_generation))
+        (global.set $thread_flush_pending (i32.const 1))))
     (block $halt (loop $main
-      (br_if $halt (i32.le_s (local.get $blocks) (i32.const 0)))
-      (br_if $halt (i32.eqz (global.get $eip)))
-      (local.set $blocks (i32.sub (local.get $blocks) (i32.const 1)))
+      (if (i32.eqz (global.get $eip))
+        (then (global.set $last_run_halt (i32.const 2)) (br $halt)))
+      ;; A block whose quantum expired part-way through. Give it a fresh one and
+      ;; carry on from the op $next declined to run — looking $eip up again would
+      ;; restart the block and re-run everything before that op. Finish it even
+      ;; when the block budget has just expired: resume_ip is a pointer into the
+      ;; decoded stream, not architectural x86 state, and must never escape this
+      ;; run() call. The host may inject a cooperative timer/wave callback between
+      ;; calls by replacing EIP/ESP; a leftover resume_ip would take precedence
+      ;; over that callback EIP and continue the interrupted block on its callback
+      ;; stack. No block is spent from the budget: this is the same block, still
+      ;; in progress, and its terminator will return here before another starts.
+      ;; Consumed: we are back at the top of the loop with the handler's $eip in
+      ;; place, which is exactly what the flag was protecting.
+      (global.set $eip_redirected (i32.const 0))
+      (if (global.get $resume_ip)
+        (then
+          (global.set $ip (global.get $resume_ip))
+          (global.set $resume_ip (i32.const 0))
+          (global.set $steps (i32.const 1000))
+          (call $next)
+          (if (global.get $page_chunk_deferred)
+            (then (call $page_chunk_reclaim_deferred)))
+          (br $main)))
+      ;; A complete cache flush can only recycle its arena between decoded
+      ;; blocks. This also services an arena-pressure flush promptly instead of
+      ;; waiting until a later cache miss happens to call $decode_block.
+      (if (global.get $thread_flush_pending)
+        (then (drop (call $thread_arena_flush_if_safe))))
+      ;; Browser input can arrive while slot 0 is part-way through a long real-
+      ;; Worker slice. Repaint publication is intentionally held until a slice
+      ;; boundary so WM_PAINT erase/text sequences cannot flicker, but waiting
+      ;; for the remaining 100k-block budget makes typed edit text visibly lag.
+      ;; The host pulses this process-shared word when it queues input. Consume
+      ;; it once on the guest main thread and return at the next complete x86
+      ;; block; the following slice processes the input normally. Guest-created
+      ;; threads must not consume slot 0's wake.
+      (if (i32.eq (global.get $current_thread_id) (i32.const 1))
+        (then
+          (if (i32.ne
+                (i32.atomic.rmw.xchg offset=36
+                  (global.get $THREAD_RPC) (i32.const 0))
+                (i32.const 0))
+            (then
+              (global.set $last_run_halt (i32.const 3))
+              (br $halt)))))
+      (if (i32.le_s (global.get $block_budget) (i32.const 0))
+        (then (global.set $last_run_halt (i32.const 1)) (br $halt)))
+      (global.set $block_budget (i32.sub (global.get $block_budget) (i32.const 1)))
       ;; Reset thread buffer if approaching cache region (leave 4KB margin)
       (if (i32.ge_u (global.get $thread_alloc) (i32.sub (global.get $THREAD_END) (i32.const 4096)))
         (then
@@ -23,6 +89,7 @@
       (if (global.get $yield_flag)
         (then
           (global.set $yield_flag (i32.const 0))
+          (global.set $last_run_halt (i32.const 3))
           (br $halt)))
       ;; Everything below to the end of this block is a debug facility, and all
       ;; of them are off in a normal run. $dbg_any is the OR of the six arming
@@ -34,6 +101,7 @@
           (if (i32.ne (call $watch_load (global.get $watch_addr)) (global.get $watch_val))
             (then
               (global.set $watch_val (call $watch_load (global.get $watch_addr)))
+              (global.set $last_run_halt (i32.const 5))
               (br $halt)))))
       ;; EIP breakpoint. On halt we set $bp_skip_once so re-entry (same $eip)
       ;; dispatches the block once before the bp can fire again — without this,
@@ -48,7 +116,9 @@
             (then (global.set $bp_first_caller (global.get $dbg_prev_eip))))
           (if (global.get $bp_skip_once)
             (then (global.set $bp_skip_once (i32.const 0)))
-            (else (global.set $bp_skip_once (i32.const 1)) (br $halt)))))
+            (else (global.set $bp_skip_once (i32.const 1))
+                  (global.set $last_run_halt (i32.const 5))
+                  (br $halt)))))
       ;; EIP hit counters (passive): increment count for any slot whose addr==eip.
       ;; Early-out via $hit_count_n (0 when no --count= flags active).
       (if (global.get $hit_count_n)
@@ -61,7 +131,21 @@
             (if (i32.eq (i32.load (local.get $hc_slot)) (global.get $eip))
               (then
                 (i32.store offset=4 (local.get $hc_slot)
-                  (i32.add (i32.load offset=4 (local.get $hc_slot)) (i32.const 1)))))
+                  (i32.add (i32.load offset=4 (local.get $hc_slot)) (i32.const 1)))
+                (if (i32.eqz (local.get $hc_i))
+                  (then
+                    (if (i32.eqz (global.get $hit0_first_caller))
+                      (then (global.set $hit0_first_caller (global.get $dbg_prev_eip))))
+                    (global.set $hit0_last_caller (global.get $dbg_prev_eip))
+                    (global.set $hit0_last_ebp (i32.load offset=20 (global.get $reg_base)))
+                    (local.set $hc_fp (i32.load offset=20 (global.get $reg_base)))
+                    (global.set $hit0_f1 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))
+                    (local.set $hc_fp (call $gl32 (local.get $hc_fp)))
+                    (global.set $hit0_f2 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))
+                    (local.set $hc_fp (call $gl32 (local.get $hc_fp)))
+                    (global.set $hit0_f3 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))
+                    (local.set $hc_fp (call $gl32 (local.get $hc_fp)))
+                    (global.set $hit0_f4 (call $gl32 (i32.add (local.get $hc_fp) (i32.const 4))))))))
             (local.set $hc_i (i32.add (local.get $hc_i) (i32.const 1)))
             (br $hc_loop))))
         )
@@ -89,7 +173,11 @@
               (unreachable)))))
 
       ;; Exit if a blocking API yielded. JS owns resuming these waits.
-      (br_if $halt (i32.or
+      ;; 16 = render_wait: immutable command already submitted; retry consumes
+      ;; its broker token only after the host has observed actual completion.
+      (if (i32.eq (global.get $yield_reason) (i32.const 16))
+        (then (global.set $last_run_halt (i32.const 4)) (br $halt)))
+      (if (i32.or
         (i32.eq (global.get $yield_reason) (i32.const 1))
         (i32.or
           (i32.eq (global.get $yield_reason) (i32.const 5))
@@ -97,7 +185,32 @@
             (i32.eq (global.get $yield_reason) (i32.const 7))
             (i32.or
               (i32.eq (global.get $yield_reason) (i32.const 8))
-              (i32.eq (global.get $yield_reason) (i32.const 9)))))))
+              (i32.or
+                (i32.eq (global.get $yield_reason) (i32.const 9))
+                (i32.or
+                  (i32.eq (global.get $yield_reason) (i32.const 10))
+                  ;; 12 = io_wait: a lazily mounted file needs a chunk the host
+                  ;; has not read yet. Same contract as 8/9 — EIP is parked on
+                  ;; the thunk, so clearing the yield re-enters the call.
+                  (i32.or
+                    (i32.eq (global.get $yield_reason) (i32.const 12))
+                    ;; 13 = vblank_wait: a DirectDraw call is waiting for the
+                    ;; display. Same contract again — the host clears the
+                    ;; yield on the next refresh and the call re-tests.
+                    (i32.or
+                      (i32.eq (global.get $yield_reason) (i32.const 13))
+                      ;; 14/15 = a clock or message-queue spin the detectors in
+                      ;; src/09a-handlers.wat caught. Same contract once more:
+                      ;; the frame is intact and EIP is on the thunk, so the
+                      ;; host sleeps to the deadline and the call re-runs. They
+                      ;; belong on THIS list rather than the plain yield_flag
+                      ;; path so --batch-stats attributes them to "blocking
+                      ;; wait" — the batch stopped because the guest is
+                      ;; waiting, not because it ran out of budget.
+                      (i32.or
+                        (i32.eq (global.get $yield_reason) (i32.const 14))
+                        (i32.eq (global.get $yield_reason) (i32.const 15)))))))))))
+        (then (global.set $last_run_halt (i32.const 4)) (br $halt)))
       ;; The 16-bit twin of the thunk-zone check below. A far call or return
       ;; into the thunk segment is caught at the transfer, but EIP can also be
       ;; *parked* there — a modal message box owns the task until it is
@@ -169,16 +282,50 @@
         (then
           (if (call $fast_msvc_sbh_scan)
             (then (br $main)))))
-      (local.set $thread (call $cache_lookup (global.get $eip)))
+      ;; The page index is the only lookup there is now: it is exact, so a miss
+      ;; here really does mean nothing is compiled at this address. The hash
+      ;; cache that used to sit between these two rungs is gone --
+      ;; docs/page-compile-design.md section 4.
+      (local.set $thread (call $page_resolve (global.get $eip)))
       (if (i32.eqz (local.get $thread))
-        (then (local.set $thread (call $decode_block (global.get $eip)))))
+        (then (local.set $thread (call $decode_run (global.get $eip)))))
       (global.set $ip (local.get $thread))
       (if (global.get $handler_hist_enabled)
         (then (global.set $handler_hist_last (i32.const -1))))
       ;; Set steps high enough to always complete a block
       (global.set $steps (i32.const 1000))
       (call $next)
-      (br $main))))
+      (if (global.get $page_chunk_deferred)
+        (then (call $page_chunk_reclaim_deferred)))
+      (br $main)))
+    ;; What this call actually got through. $block_budget can end up negative --
+    ;; a fold retires k blocks in one go and subtracts all k -- so this can read
+    ;; slightly above the budget it was given; that is honest, not a wrap.
+    (global.set $last_run_blocks
+      (i32.sub (local.get $max_blocks) (global.get $block_budget)))
+    (global.set $block_budget (local.get $saved_budget)))
+
+  ;; Blocks the last run() call retired, and the halt reason behind it (see the
+  ;; $last_run_halt comment in 01-header.wat for the codes).
+  (func (export "get_last_run_blocks") (result i32) (global.get $last_run_blocks))
+  (func (export "get_last_run_halt")   (result i32) (global.get $last_run_halt))
+  (func (export "get_block_budget")    (result i32) (global.get $block_budget))
+
+  ;; Diagnostic switch, see $virtual_leak_small_releases in 01-header.wat. The
+  ;; argument is the largest release, in bytes, to turn into a no-op; 0 restores
+  ;; normal behaviour. Nothing in the product calls this.
+  (func (export "set_virtual_leak_small_releases") (param $bytes i32)
+    (global.set $virtual_leak_small_releases (local.get $bytes)))
+  (func (export "get_virtual_leak_small_releases") (result i32)
+    (global.get $virtual_leak_small_releases))
+  ;; Same diagnostic narrowed to one guest call site: the runtime return address
+  ;; of the VirtualFree caller whose MEM_RELEASE should be ignored. 0 disarms.
+  (func (export "set_virtual_leak_release_caller") (param $ret i32)
+    (global.set $virtual_leak_release_caller (local.get $ret)))
+  (func (export "get_virtual_leak_release_caller") (result i32)
+    (global.get $virtual_leak_release_caller))
+  (func (export "get_virtual_leak_hits") (result i32)
+    (global.get $virtual_leak_hits))
 
   ;; Hook for test/test-shift-equivalence.js, which checks the unified
   ;; $do_shift against an independent model of the x86 semantics over every
@@ -203,6 +350,10 @@
   ;; ============================================================
   (func (export "get_eip") (result i32) (global.get $eip))
   (func (export "get_dbg_prev_eip") (result i32) (global.get $dbg_prev_eip))
+  ;; The block before that one. When a thread jumps into blank memory, prev_eip
+  ;; is already inside the blank memory — the useful address is the block that
+  ;; jumped, which is one further back.
+  (func (export "get_dbg_prev2_eip") (result i32) (global.get $dbg_prev2_eip))
   (func (export "get_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
   (func (export "get_eax") (result i32) (i32.load offset=0 (global.get $reg_base)))
   (func (export "get_ecx") (result i32) (i32.load offset=4 (global.get $reg_base)))
@@ -223,42 +374,162 @@
   (func (export "get_staging_size") (result i32) (global.get $PE_STAGING_SIZE))
   (func (export "get_fs_base") (result i32) (global.get $fs_base))
   (func (export "set_fs_base") (param i32) (global.set $fs_base (local.get 0)))
+  ;; Turn the CPUID MMX advertisement off to force guests down their scalar
+  ;; fallbacks. The MMX handlers stay in the build either way, so this is an
+  ;; A/B of the code the guest chooses, which is the only comparison that means
+  ;; anything -- a Pentium-MMX-era app does not have a "use MMX" switch, it has
+  ;; a CPUID check.
+  (func (export "set_cpu_mmx") (param i32) (global.set $cpu_mmx_enable (local.get 0)))
+  (func (export "get_cpu_mmx") (result i32) (global.get $cpu_mmx_enable))
+  (func (export "set_cpu_sse") (param i32) (global.set $cpu_sse_enable (local.get 0)))
+  (func (export "get_cpu_sse") (result i32) (global.get $cpu_sse_enable))
+  (func (export "get_mmx_exec_count") (result i32) (global.get $mmx_exec_count))
+  ;; Test seam for tools/mmx-check.js. $mmx_binop is pure -- two 64-bit inputs
+  ;; and a subop id in, one 64-bit result out -- so it can be checked against a
+  ;; reference model exhaustively without booting a guest, which is the only
+  ;; way to be sure about lane order in the shuffles and pack instructions.
+  (func (export "mmx_binop") (param $a i64) (param $b i64) (param $sub i32) (result i64)
+    (call $mmx_binop (local.get $a) (local.get $b) (local.get $sub)))
   (func (export "get_current_thread_id") (result i32) (global.get $current_thread_id))
+  ;; Sections this thread took from a holder that never released one. Nonzero
+  ;; means a real bug happened and was worked around, so runs report it.
+  (func (export "get_cs_steals") (result i32) (global.get $cs_steals))
+  ;; How many times this thread parked on a held section. Cheap contention
+  ;; meter: a run whose thread count went up and whose throughput went down
+  ;; should be read here first.
+  (func (export "get_cs_waits") (result i32) (global.get $cs_waits))
+  ;; LeaveCriticalSection calls from a thread that did not own the section.
+  (func (export "get_cs_bad_leaves") (result i32) (global.get $cs_bad_leaves))
+  ;; Sections entered while already held, because a nested synchronous wndproc
+  ;; was running and could not be parked. Exclusion was not honoured for these.
+  (func (export "get_cs_barges") (result i32) (global.get $cs_barges))
+  ;; Parked EnterCriticalSection calls the guest never returned to, where it
+  ;; went instead, and any ESP movement across a park that did come back.
+  ;; For test/test-wat-critical-section.js: a unit test calls the handler
+  ;; directly, so nothing has recorded which thunk the guest is inside. Setting
+  ;; it lets the test assert the property that actually broke — that a park
+  ;; sends EIP back to the CALL, not to wherever the block began.
+  (func (export "set_current_thunk_eip") (param i32)
+    (global.set $current_thunk_eip (local.get 0)))
+  (func (export "get_cs_park_eip") (result i32) (global.get $cs_park_eip))
+  (func (export "get_cs_abandoned") (result i32) (global.get $cs_abandoned))
+  (func (export "get_cs_abandoned_eip") (result i32) (global.get $cs_abandoned_eip))
+  (func (export "get_cs_resume_esp_delta") (result i32) (global.get $cs_resume_esp_delta))
+  (func (export "get_cs_bad_leave_addr") (result i32) (global.get $cs_bad_leave_addr))
+  (func (export "get_cs_bad_leave_owner") (result i32) (global.get $cs_bad_leave_owner))
+  (func (export "get_cs_wait_addr") (result i32) (global.get $cs_wait_addr))
+  (func (export "get_cs_wait_owner") (result i32) (global.get $cs_wait_owner))
+  (func (export "set_cs_steal_after") (param i32) (global.set $cs_steal_after (local.get 0)))
+  ;; The registry itself, so a run can print WHICH sections are held and by whom
+  ;; at exit rather than only that somebody is waiting. It lives in shared memory
+  ;; and holds WASM addresses, so any instance — or the host, reading directly —
+  ;; sees the same table.
+  (func (export "get_cs_table") (result i32) (global.get $CS_TABLE))
+  (func (export "get_cs_table_entries") (result i32) (global.get $CS_TABLE_ENTRIES))
+  ;; Release every critical section still owned by a thread that has ended, and
+  ;; say how many. The argument is that thread's $current_thread_id (main is 1, a
+  ;; spawned thread is tid+1), NOT its tid — the guest field holds the former,
+  ;; because GetCurrentThreadId does. Safe to call from any instance: the registry
+  ;; holds WASM addresses, so no image-base translation is involved.
+  (func (export "release_cs_owned_by") (param i32) (result i32)
+    (call $cs_release_owned (local.get 0)))
   (func (export "get_process_id") (result i32) (call $current_process_id))
   (func (export "set_process_id") (param $pid i32)
     ;; PID zero is reserved by Win32 and means "use the compatibility default"
     ;; internally, so hosts should always assign a positive value.
     (i32.store (global.get $SHARED_PROCESS_ID) (local.get $pid)))
-  (func (export "test_call_GetLogicalDrives") (result i32)
+  ;; CRITICAL_SECTION handlers, callable without a guest stack, so the semantics
+  ;; can be asserted directly instead of inferred from an app that hangs. The
+  ;; handlers pop a stdcall frame that is not there, hence the ESP save/restore;
+  ;; a park also sets the yield state, which these clear and report as 1 so a
+  ;; test can assert "this Enter blocked" without unwinding an interpreter run.
+  ;; See test/test-wat-critical-section.js.
+  (func (export "test_cs_init") (param $cs i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetLogicalDrives
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+    (call $handle_InitializeCriticalSection
+      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
+  (func (export "test_cs_init_spin") (param $cs i32) (param $spin i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_InitializeCriticalSectionAndSpinCount
+      (local.get $cs) (local.get $spin) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetLogicalDriveStringsA") (param $length i32) (param $buffer i32) (result i32)
-    (local $saved_esp i32)
+  (func (export "test_cs_enter") (param $cs i32) (result i32)
+    (local $saved_esp i32) (local $bits i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetLogicalDriveStringsA
-      (local.get $length) (local.get $buffer) (i32.const 0) (i32.const 0)
+    (call $handle_EnterCriticalSection
+      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
+    (if (i32.eq (global.get $yield_reason) (i32.const 9))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
+    (if (global.get $handler_set_eip)
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetDriveTypeA") (param $root i32) (result i32)
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $handler_set_eip (i32.const 0))
+    (local.get $bits))
+  (func (export "test_cs_delete") (param $cs i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetDriveTypeA
-      (local.get $root) (i32.const 0) (i32.const 0) (i32.const 0)
+    (call $handle_DeleteCriticalSection
+      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetDriveTypeW") (param $root i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
+  (func (export "test_cs_leave") (param $cs i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetDriveTypeW
-      (local.get $root) (i32.const 0) (i32.const 0) (i32.const 0)
+    (call $handle_LeaveCriticalSection
+      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
+  ;; The window and class table claims, callable without a guest at all, so two
+  ;; OS threads can race them directly. See test/test-wat-window-tables.js.
+  (func (export "test_wnd_table_set") (param $hwnd i32) (param $wndproc i32)
+    (call $wnd_table_set (local.get $hwnd) (local.get $wndproc)))
+  (func (export "test_class_register") (param $name_wa i32) (result i32)
+    (call $class_table_register (local.get $name_wa)))
+  (func (export "test_class_register_data") (param $name_wa i32) (param $wndclass_wa i32) (result i32)
+    (call $class_table_register_data (local.get $name_wa) (local.get $wndclass_wa)))
+  (func (export "test_class_lookup") (param $name_wa i32) (result i32)
+    (call $class_table_lookup (local.get $name_wa)))
+  (func (export "test_shared_post")
+    (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32) (result i32)
+    (call $shared_post_queue_enqueue
+      (local.get $hwnd) (local.get $msg) (local.get $wparam) (local.get $lparam)))
+  (func (export "test_shared_post_read") (param $msg_ptr i32) (param $remove i32) (result i32)
+    (call $shared_post_queue_read (local.get $msg_ptr) (local.get $remove)))
+  (func (export "reset_thread_message_queue") (param $tid i32)
+    (call $shared_post_queue_reset_tid (local.get $tid)))
+  (func (export "test_timer_set")
+    (param $hwnd i32) (param $id i32) (param $interval i32) (param $callback i32)
+    (call $timer_set (local.get $hwnd) (local.get $id) (local.get $interval) (local.get $callback)))
+  (func (export "test_timer_check") (param $msg_ptr i32) (param $consume i32) (result i32)
+    (call $timer_check_due (local.get $msg_ptr) (local.get $consume)))
+  (func (export "test_timer_kill") (param $hwnd i32) (param $id i32) (result i32)
+    (call $timer_kill (local.get $hwnd) (local.get $id)))
+  (func (export "test_timer_next_auto_id") (result i32) (call $timer_next_auto_id))
+
+  ;; GetVolumeInformationA reads its last three arguments straight off the
+  ;; guest stack, so a caller here supplies the stack pointer to read them
+  ;; from: $stack must address 32 zeroed guest bytes.
+
+  (func (export "test_call_GetVolumeInformationA")
+        (param $root i32) (param $name_buf i32) (param $name_size i32)
+        (param $stack i32) (param $serial i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (call $handle_GetVolumeInformationA
+      (local.get $root) (local.get $name_buf) (local.get $name_size)
+      (local.get $serial) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
 
@@ -304,25 +575,78 @@
       (else (i32.const -1))))
   (func (export "get_help_view_back_count") (result i32) (global.get $help_back_count))
   (func (export "test_help_view_go_back") (call $help_go_back))
-  (func (export "test_call_EnumThreadWindows") (param $thread i32) (param $callback i32) (param $lparam i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_EnumThreadWindows
-      (local.get $thread) (local.get $callback) (local.get $lparam)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+
+  (func (export "test_call_TlsGetValue") (param $index i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $handle_TlsGetValue (local.get $index)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_TlsSetValue") (param $index i32) (param $value i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $handle_TlsSetValue (local.get $index) (local.get $value)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_TlsFree") (param $index i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $handle_TlsFree (local.get $index)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "get_sync_msg_depth") (result i32) (global.get $sync_msg_depth))
+  (func (export "get_window_thread") (param $hwnd i32) (result i32)
+    (call $wnd_get_thread (local.get $hwnd)))
   (func (export "set_current_thread_id") (param i32) (global.set $current_thread_id (local.get 0)))
+  (func (export "set_host_shadow") (param i32)
+    (global.set $host_shadow (i32.ne (local.get 0) (i32.const 0))))
   (func (export "get_image_base") (result i32) (global.get $image_base))
+  ;; Read-only host bridge for guest pointers embedded in GPU command
+  ;; arguments. Unlike image-relative arithmetic, $g2w also resolves sparse
+  ;; VirtualAlloc and the high CreateDIBSection arena.
+  (func (export "guest_to_wasm") (param $guest i32) (result i32)
+    (call $g2w (local.get $guest)))
   (func (export "get_rsrc_rva") (result i32) (global.get $rsrc_rva))
   (func (export "get_thread_alloc") (result i32) (global.get $thread_alloc))
+  (func (export "get_cache_clears") (result i32) (global.get $cache_clears))
+  (func (export "get_cache_stores") (result i32) (global.get $cache_stores))
+  (func (export "get_cache_evicts") (result i32) (global.get $cache_evicts))
+  (func (export "get_cache_invals") (result i32) (global.get $cache_invals))
+  (func (export "get_cache_inval_hits") (result i32) (global.get $cache_inval_hits))
+  (func (export "get_cache_inval_page") (result i32) (global.get $cache_inval_page))
   (func (export "get_wndproc") (result i32) (global.get $wndproc_addr))
   (func (export "get_thunk_base") (result i32) (global.get $thunk_guest_base))
   (func (export "get_thunk_end") (result i32) (global.get $thunk_guest_end))
   (func (export "get_num_thunks") (result i32) (global.get $num_thunks))
   ;; Update thunk end to match current allocation count
+  ;; Raise the process-wide thunk cursor to at least this instance's count.
+  ;; Load-time allocation (the PE loader, before any thread exists) bumps the
+  ;; local global directly and reaches the shared cell only through here.
+  (func $thunk_publish
+    (local $cur i32)
+    (block $done (loop $retry
+      (local.set $cur (i32.atomic.load (global.get $THUNK_NEXT_SHARED)))
+      (br_if $done (i32.ge_u (local.get $cur) (global.get $num_thunks)))
+      (br_if $done (i32.eq (local.get $cur)
+        (i32.atomic.rmw.cmpxchg (global.get $THUNK_NEXT_SHARED)
+          (local.get $cur) (global.get $num_thunks))))
+      (br $retry))))
+
+  ;; Reserve one thunk index for this instance, exclusively. Callers set
+  ;; $num_thunks to the returned index, write the thunk at it, and then bump the
+  ;; local global as they always did — which lands back on the value the shared
+  ;; cursor already holds.
+  (func $thunk_reserve (result i32)
+    (call $thunk_publish)
+    (i32.atomic.rmw.add (global.get $THUNK_NEXT_SHARED) (i32.const 1)))
+
+  ;; Publish this instance's count, adopt the process-wide one, and derive the
+  ;; guest-visible end from it. Adopting matters as much as publishing: a thunk
+  ;; another instance allocated is inside the zone but PAST a local count, and
+  ;; $run bounds-checks EIP against $thunk_guest_end before dispatching it.
   (func $update_thunk_end (export "seal_thunks")
+    (local $shared i32)
+    (call $thunk_publish)
+    (local.set $shared (i32.atomic.load (global.get $THUNK_NEXT_SHARED)))
+    (if (i32.gt_u (local.get $shared) (global.get $num_thunks))
+      (then (global.set $num_thunks (local.get $shared))))
     (global.set $thunk_guest_end
       (i32.add (global.get $thunk_guest_base)
         (i32.mul (global.get $num_thunks) (i32.const 8)))))
@@ -338,32 +662,232 @@
   (func (export "get_flag_b") (result i32) (global.get $flag_b))
   (func (export "get_flag_sign_shift") (result i32) (global.get $flag_sign_shift))
 
+  ;; Read-only: these bound one instance's private arena. There are deliberately
+  ;; no setters — JS used to marshal them between instances around every slice to
+  ;; fake shared state, and that is exactly what $heap_low_reserve replaces.
   (func (export "get_heap_ptr") (result i32) (global.get $heap_ptr))
-  (func (export "set_heap_ptr") (param i32) (global.set $heap_ptr (local.get 0)))
   (func (export "get_free_list") (result i32) (global.get $free_list))
-  (func (export "set_free_list") (param i32) (global.set $free_list (local.get 0)))
+  (func (export "get_heap_end") (result i32) (global.get $heap_end))
   (func (export "get_heap_sparse_ptr") (result i32) (global.get $heap_sparse_ptr))
-  (func (export "set_heap_sparse_ptr") (param i32) (global.set $heap_sparse_ptr (local.get 0)))
   (func (export "get_heap_sparse_end") (result i32) (global.get $heap_sparse_end))
-  (func (export "set_heap_sparse_end") (param i32) (global.set $heap_sparse_end (local.get 0)))
+  ;; Publish the process heap base + chunk cursor. The PE loader calls the same
+  ;; function; exported so a harness can set a heap up without a real image.
+  (func (export "heap_init") (param i32) (call $heap_init (local.get 0)))
   (func (export "get_virtual_alloc_top") (result i32) (global.get $virtual_alloc_top))
   (func (export "set_virtual_alloc_top") (param i32) (global.set $virtual_alloc_top (local.get 0)))
   (func (export "get_heap_base") (result i32) (global.get $heap_base))
-  (func (export "get_tls_next_index") (result i32) (global.get $tls_next_index))
-  (func (export "set_tls_next_index") (param i32) (global.set $tls_next_index (local.get 0)))
+  ;; Reserve one of the 64 dword slots in each thread's TLS vector. The cursor
+  ;; is process-wide shared memory, so concurrent WASM instances cannot hand
+  ;; out the same index. Once full it stays full and returns TLS_OUT_OF_INDEXES.
+  (func $tls_reserve (result i32)
+    (local $cur i32)
+    (block $full
+      (loop $retry
+        (local.set $cur (i32.atomic.load (global.get $TLS_NEXT_INDEX_SHARED)))
+        (br_if $full (i32.ge_u (local.get $cur) (i32.const 64)))
+        (if (i32.eq (local.get $cur)
+              (i32.atomic.rmw.cmpxchg (global.get $TLS_NEXT_INDEX_SHARED)
+                (local.get $cur) (i32.add (local.get $cur) (i32.const 1))))
+          (then (return (local.get $cur))))
+        (br $retry)))
+    (i32.const -1))
+
+  ;; Spawn metadata may lag a concurrent TlsAlloc. Adopt it monotonically so
+  ;; a worker can never move the shared cursor backwards.
+  (func $tls_publish_minimum (param $minimum i32)
+    (local $cur i32)
+    (block $done
+      (loop $retry
+        (local.set $cur (i32.atomic.load (global.get $TLS_NEXT_INDEX_SHARED)))
+        (br_if $done (i32.ge_u (local.get $cur) (local.get $minimum)))
+        (br_if $done (i32.eq (local.get $cur)
+          (i32.atomic.rmw.cmpxchg (global.get $TLS_NEXT_INDEX_SHARED)
+            (local.get $cur) (local.get $minimum))))
+        (br $retry))))
+
+  (func (export "get_tls_next_index") (result i32)
+    (i32.atomic.load (global.get $TLS_NEXT_INDEX_SHARED)))
+  (func (export "set_tls_next_index") (param i32)
+    (call $tls_publish_minimum (local.get 0)))
+  (func (export "test_reserve_tls_index") (result i32) (call $tls_reserve))
   (func (export "get_tls_slots") (result i32) (global.get $tls_slots))
   (func (export "set_tls_slots") (param i32) (global.set $tls_slots (local.get 0)))
   ;; Post queue exports for IPC injection
   (func (export "get_main_hwnd") (result i32) (global.get $main_hwnd))
-  (func (export "get_dx_primary_pal_wa") (result i32) (global.get $dx_primary_pal_wa))
+  (func (export "get_dx_primary_pal_wa") (result i32) (call $dx_primary_pal_get))
+  ;; The window DirectDraw currently owns the whole screen through, or 0.
+  ;; A DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN app's primary surface *is* the display,
+  ;; so its window shows no caption, border or menu bar however it was styled
+  ;; -- the DX SDK's own samples keep WS_CAPTION and a menu and rely on that.
+  ;; The compositor cannot infer this from the style bits alone.
+  (func (export "get_dx_exclusive_hwnd") (result i32)
+    (if (result i32) (call $dx_exclusive_get)
+      (then (call $dx_target_hwnd))
+      (else (i32.const 0))))
+  ;; 1 while the guest holds a ChangeDisplaySettings(CDS_FULLSCREEN) mode.
+  ;; This is the explicit signal from an app that does not use DirectDraw:
+  ;; without it the compositor would have to guess a fullscreen takeover from
+  ;; window geometry, which a maximized ordinary app matches.
+  ;; Process state, not a per-instance global -- see $dx_display_fullscreen_get.
+  ;; The renderer calls this on whatever instance it has a handle to, which in
+  ;; the browser's worker backend is NOT the instance the guest ran on.
+  (func (export "get_display_fullscreen") (result i32)
+    (call $dx_display_fullscreen_get))
+  ;; The display mode the guest asked for with ChangeDisplaySettings, or 0
+  ;; when it never asked. This is the LOGICAL DESKTOP the app laid itself out
+  ;; for -- GetSystemMetrics(SM_CXSCREEN) already answers from here -- so the
+  ;; presentation layer sizes the screen canvas to it and scales that to the
+  ;; viewport, which is what real hardware does with a mode change. Without
+  ;; it the canvas keeps its viewport-derived size and the app draws an
+  ;; 800x600 frame into a surface that is some other shape.
+  ;; 0 when no mode is in effect; callers must check before using w/h.
+  (func (export "get_display_mode_active") (result i32)
+    (call $dx_display_mode_get))
+  (func (export "get_display_mode_w") (result i32)
+    (call $dx_display_w_get))
+  (func (export "get_display_mode_h") (result i32)
+    (call $dx_display_h_get))
+  ;; The device window of a windowed Direct3D9 device, or 0. Tells the
+  ;; compositor that the surface it is presenting is that window's client
+  ;; area at (0,0) rather than a screen-coordinate DirectDraw primary.
+  (func (export "get_d3d9_windowed_hwnd") (result i32)
+    (global.get $d3d9_windowed_hwnd))
+
+  ;; Vertex declarations $d3d9_declaration_create refused. It refuses by
+  ;; returning D3DERR_INVALIDCALL with *out left at 0, which a guest that does
+  ;; not check HRESULTs turns into a NULL declaration and, much later, a draw
+  ;; dropped for having neither a declaration nor an FVF. Without these there
+  ;; is nothing to read: the count says whether it happens at all, the mask
+  ;; says which of the renderer's rules refused (the 0x001..0x4000 bits set in
+  ;; 09ae-d3d9-resources.wat), and the two element words are the first
+  ;; offending D3DVERTEXELEMENT9, which tools/d3d9-decl-decode.js reads.
+  (func (export "get_d3d9_decl_reject_count") (result i32)
+    (global.get $d3d9_decl_reject_count))
+  (func (export "get_d3d9_decl_reject_mask") (result i32)
+    (global.get $d3d9_decl_reject_mask))
+  (func (export "get_d3d9_decl_reject_element") (result i32)
+    (global.get $d3d9_decl_reject_element))
+  (func (export "get_d3d9_decl_reject_element_hi") (result i32)
+    (global.get $d3d9_decl_reject_element_hi))
+  ;; The second slot holds the first refusal whose rule differs from the first
+  ;; one's, with its own reason beside it. B&W2 needs both: it trips stream!=0
+  ;; in its menus and type>4 as the land loads, and one slot reported the
+  ;; second rule as a bare bit with no element to decode.
+  (func (export "get_d3d9_decl_reject_reason") (result i32)
+    (global.get $d3d9_decl_reject_reason))
+  (func (export "get_d3d9_decl_reject_element2") (result i32)
+    (global.get $d3d9_decl_reject_element2))
+  (func (export "get_d3d9_decl_reject_element2_hi") (result i32)
+    (global.get $d3d9_decl_reject_element2_hi))
+  (func (export "get_d3d9_decl_reject_reason2") (result i32)
+    (global.get $d3d9_decl_reject_reason2))
+  ;; Shader creation, counted the same way and for the same reason: a refused
+  ;; CreateVertexShader hands the game NULL, the game binds nothing, and the
+  ;; draw silently falls back to fixed-function vertex processing over a
+  ;; declaration that was written for a shader. The two version words are the
+  ;; first refused first-dword per stage, so they name the profile the game was
+  ;; compiled for (0xfffe0200 = vs_2_0, 0xffff0200 = ps_2_0, and so on).
+  (func (export "get_d3d9_shader_made") (result i32)
+    (global.get $d3d9_shader_made))
+  (func (export "get_d3d9_shader_refused") (result i32)
+    (global.get $d3d9_shader_refused))
+  (func (export "get_d3d9_shader_refused_vs") (result i32)
+    (global.get $d3d9_shader_refused_vs))
+  (func (export "get_d3d9_shader_refused_ps") (result i32)
+    (global.get $d3d9_shader_refused_ps))
+  ;; Zero means the version gate refused the profile outright; anything else is
+  ;; $d3d_ir_error from the validator, with _at the dword offset it stopped at.
+  (func (export "get_d3d9_shader_error_vs") (result i32)
+    (global.get $d3d9_shader_error_vs))
+  (func (export "get_d3d9_shader_error_ps") (result i32)
+    (global.get $d3d9_shader_error_ps))
+  (func (export "get_d3d9_shader_error_at") (result i32)
+    (global.get $d3d9_shader_error_at))
+  ;; The token stream dword the validator stopped on. "519 dwords in" names no
+  ;; instruction; this word's opcode field does.
+  (func (export "get_d3d9_shader_error_token") (result i32)
+    (global.get $d3d9_shader_error_token))
+  ;; The refused vertex shader's whole token stream: a WASM address and a dword
+  ;; count, so a host can read it back and disassemble it. Zero until a vertex
+  ;; shader has actually been refused.
+  (func (export "get_d3d9_shader_error_copy") (result i32)
+    (global.get $d3d9_shader_error_copy))
+  (func (export "get_d3d9_shader_error_copy_words") (result i32)
+    (global.get $d3d9_shader_error_copy_words))
+  ;; Refusals split by requested profile, so the total can be attributed.
+  (func (export "get_d3d9_shader_refused_vs11") (result i32)
+    (global.get $d3d9_shader_refused_vs11))
+  (func (export "get_d3d9_shader_refused_vs20") (result i32)
+    (global.get $d3d9_shader_refused_vs20))
+  (func (export "get_d3d9_shader_refused_ps1x") (result i32)
+    (global.get $d3d9_shader_refused_ps1x))
+  (func (export "get_d3d9_shader_refused_ps20") (result i32)
+    (global.get $d3d9_shader_refused_ps20))
+  (func (export "get_d3d9_shader_refused_other") (result i32)
+    (global.get $d3d9_shader_refused_other))
+  ;; ...and the first validator error in each 1.x bucket. Those are the
+  ;; profiles the front end implements, so a refusal there names a gap inside
+  ;; a compiler we have, not a profile we lack.
+  (func (export "get_d3d9_shader_err_vs11") (result i32)
+    (global.get $d3d9_shader_err_vs11))
+  (func (export "get_d3d9_shader_err_vs11_at") (result i32)
+    (global.get $d3d9_shader_err_vs11_at))
+  (func (export "get_d3d9_shader_err_ps1x") (result i32)
+    (global.get $d3d9_shader_err_ps1x))
+  (func (export "get_d3d9_shader_err_ps1x_at") (result i32)
+    (global.get $d3d9_shader_err_ps1x_at))
+  ;; The window a DirectDraw/Direct3D frame should be presented into.
+  ;;
+  ;; Normally that is $main_hwnd, but $main_hwnd is a *per-instance* mutable
+  ;; global and a worker thread is a separate WASM instance sharing only the
+  ;; linear memory. Liquid War (Allegro) creates its window on T1, so the main
+  ;; instance -- the one the compositor asks -- reports $main_hwnd == 0 and
+  ;; every finished frame was dropped before it reached a window surface:
+  ;; --trace-dx showed 17 `Present` lines and zero `Upload` lines.
+  ;;
+  ;; WND_RECORDS *is* shared memory, so when this instance has no main window
+  ;; of its own, fall back to the topmost visible top-level window recorded
+  ;; there. The process-wide cooperative HWND may name a hidden helper, so the
+  ;; visible-window scan remains the compositor's correct fallback.
+  (func (export "get_dx_present_hwnd") (result i32)
+    (local $i i32) (local $hwnd i32) (local $best i32) (local $best_z i32)
+    (local $z i32)
+    (if (global.get $main_hwnd)
+      (then (return (global.get $main_hwnd))))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $MAX_WINDOWS)))
+      (local.set $hwnd (call $wnd_slot_hwnd (local.get $i)))
+      (if (i32.and
+            (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
+                     (i32.eqz (call $wnd_get_parent (local.get $hwnd))))
+            (i32.ne (i32.and (call $wnd_get_style (local.get $hwnd))
+                             (i32.const 0x10000000))          ;; WS_VISIBLE
+                    (i32.const 0)))
+        (then
+          (local.set $z (call $wnd_z_get (local.get $hwnd)))
+          (if (i32.or (i32.eqz (local.get $best))
+                      (i32.gt_s (local.get $z) (local.get $best_z)))
+            (then (local.set $best (local.get $hwnd))
+                  (local.set $best_z (local.get $z))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $best))
   (func (export "get_flash_state") (param $hwnd i32) (result i32)
     (local $slot i32)
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (result i32) (i32.eq (local.get $slot) (i32.const -1))
       (then (i32.const 0))
       (else (i32.load8_u (i32.add (global.get $FLASH_TABLE) (local.get $slot))))))
-  (func (export "get_post_queue_count") (result i32) (global.get $post_queue_count))
-  (func (export "set_post_queue_count") (param i32) (global.set $post_queue_count (local.get 0)))
+  (func (export "get_post_queue_count") (result i32)
+    (i32.add (call $post_queue_total_count)
+      (call $shared_post_queue_total_count)))
+  (func (export "set_post_queue_count") (param i32)
+    (if (i32.eqz (local.get 0))
+      (then
+        (call $post_queue_reset)
+        (call $shared_post_queue_reset_tid (global.get $current_thread_id)))
+      (else (global.set $post_queue_count (local.get 0)))))
   (func (export "wnd_table_set") (param i32) (param i32) (call $wnd_table_set (local.get 0) (local.get 1)))
   (func (export "wnd_get_proc_export") (param $hwnd i32) (result i32)
     (call $wnd_table_get (local.get $hwnd)))
@@ -375,6 +899,75 @@
     (call $wnd_region_set (local.get $hwnd) (local.get $val)))
   (func (export "wnd_region_get_export") (param $hwnd i32) (result i32)
     (call $wnd_region_get (local.get $hwnd)))
+
+  ;; Cross-instance locking probes (docs/design-real-threads.md §3.1b). Two
+  ;; guest threads are two WASM instances over one memory, so the tables they
+  ;; share can only be tested by driving them from two real OS threads at once —
+  ;; which is what test/test-wat-locks.js does with these.
+  (func (export "test_lock_addr") (param $which i32) (result i32)
+    (if (i32.eq (local.get $which) (i32.const 1))
+      (then (return (global.get $LOCK_DX))))
+    (if (i32.eq (local.get $which) (i32.const 2))
+      (then (return (global.get $LOCK_SOCKET))))
+    (global.get $LOCK_VIRTUAL_MAP))
+  ;; A read-modify-write with a deliberate gap between the read and the write.
+  ;; Unlocked, two instances lose updates; locked, they must not. The gap is what
+  ;; makes the test fail reliably instead of once in a million runs.
+  (func (export "test_lock_bump") (param $lock i32) (param $cell i32) (param $iters i32)
+    (local $i i32) (local $v i32) (local $spin i32)
+    (block $done (loop $again
+      (br_if $done (i32.ge_u (local.get $i) (local.get $iters)))
+      (call $lock_acquire (local.get $lock))
+      (local.set $v (i32.load (local.get $cell)))
+      (local.set $spin (i32.const 0))
+      (block $paused (loop $pause
+        (br_if $paused (i32.ge_u (local.get $spin) (i32.const 40)))
+        (local.set $spin (i32.add (local.get $spin) (i32.const 1)))
+        (br $pause)))
+      (i32.store (local.get $cell) (i32.add (local.get $v) (i32.const 1)))
+      (call $lock_release (local.get $lock))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $again))))
+  ;; The same loop with no lock at all. It exists so the locked test above has a
+  ;; negative control that lives in the tree rather than in someone's memory of
+  ;; having tried it once: if this one ever stops losing updates, the platform
+  ;; stopped running the two instances concurrently and every other check in
+  ;; test/test-wat-locks.js has quietly become vacuous.
+  (func (export "test_bump_unlocked") (param $cell i32) (param $iters i32)
+    (local $i i32) (local $v i32) (local $spin i32)
+    (block $done (loop $again
+      (br_if $done (i32.ge_u (local.get $i) (local.get $iters)))
+      (local.set $v (i32.load (local.get $cell)))
+      (local.set $spin (i32.const 0))
+      (block $paused (loop $pause
+        (br_if $paused (i32.ge_u (local.get $spin) (i32.const 40)))
+        (local.set $spin (i32.add (local.get $spin) (i32.const 1)))
+        (br $pause)))
+      (i32.store (local.get $cell) (i32.add (local.get $v) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $again))))
+  ;; Recursion must not deadlock: a critical section that reaches a function
+  ;; taking the same lock is a bug we would rather survive than hang on.
+  (func (export "test_lock_reentrant") (param $lock i32) (result i32)
+    (call $lock_acquire (local.get $lock))
+    (call $lock_acquire (local.get $lock))
+    (call $lock_release (local.get $lock))
+    ;; Still held by us after the inner release, or the nesting is not counted.
+    (if (i32.ne (i32.atomic.load (local.get $lock)) (call $lock_owner_id))
+      (then (call $lock_release (local.get $lock)) (return (i32.const 0))))
+    (call $lock_release (local.get $lock))
+    ;; Released means "not ours any more", not "zero": another thread may have
+    ;; taken it between the release and this load, and asserting zero here made
+    ;; the check fail for whichever thread happened to lose that footrace.
+    (i32.ne (i32.atomic.load (local.get $lock)) (call $lock_owner_id)))
+  (func (export "test_dx_alloc") (param $type i32) (result i32)
+    (call $dx_alloc (local.get $type)))
+  (func (export "test_vsock_alloc") (result i32) (call $vsock_alloc))
+  (func (export "test_vsock_alloc_port") (result i32) (call $vsock_alloc_port))
+  (func (export "test_virtual_map_commit") (param $guest i32) (param $size i32) (result i32)
+    (call $virtual_map_commit (local.get $guest) (local.get $size)))
+  (func (export "test_virtual_reserve_down") (param $size i32) (result i32)
+    (call $virtual_reserve_down (local.get $size)))
 
   ;; Software-GDI migration probes. Production API handlers call the same
   ;; WAT-owned region registry; these exports keep its ownership testable
@@ -411,144 +1004,6 @@
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (local.get 5) (local.get 6) (local.get 7) (i32.const 0)))
   (func (export "get_gdi_region_table") (result i32) (global.get $GDI_REGION_TABLE))
-  (func (export "test_call_CreateRectRgn")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_CreateRectRgn
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateEllipticRgnIndirect") (param i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreateEllipticRgnIndirect (local.get 0)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_EqualRgn") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_EqualRgn (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ExtCreateRegion") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_ExtCreateRegion (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SelectClipPath") (param i32) (param i32) (result i32)
-    (call $handle_SelectClipPath
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_BeginPath") (param i32) (result i32)
-    (call $handle_BeginPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_EndPath") (param i32) (result i32)
-    (call $handle_EndPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_AbortPath") (param i32) (result i32)
-    (call $handle_AbortPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CloseFigure") (param i32) (result i32)
-    (call $handle_CloseFigure
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetPath")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GetPath
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PathToRegion") (param i32) (result i32)
-    (call $handle_PathToRegion
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_FlattenPath") (param i32) (result i32)
-    (call $handle_FlattenPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_WidenPath") (param i32) (result i32)
-    (call $handle_WidenPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_FillPath") (param i32) (result i32)
-    (call $handle_FillPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_StrokePath") (param i32) (result i32)
-    (call $handle_StrokePath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_StrokeAndFillPath") (param i32) (result i32)
-    (call $handle_StrokeAndFillPath
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetObjectType") (param i32) (result i32)
-    (call $handle_GetObjectType
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreatePen")
-        (param i32) (param i32) (param i32) (result i32)
-    (call $handle_CreatePen
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateSolidBrush") (param i32) (result i32)
-    (call $handle_CreateSolidBrush
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetSystemMetrics") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetSystemMetrics
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateHatchBrush") (param i32) (param i32) (result i32)
-    (call $handle_CreateHatchBrush
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreatePatternBrush") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreatePatternBrush
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateDIBPatternBrushPt") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreateDIBPatternBrushPt
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateBrushIndirect") (param i32) (result i32)
-    (call $handle_CreateBrushIndirect
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ExtCreatePen")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_ExtCreatePen
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_CreateFontW")
         (param i32) (param i32) (param i32) (param i32) (result i32)
     (local $saved_esp i32)
@@ -564,24 +1019,6 @@
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 56)) (local.get 3))
     (call $handle_CreateFontW
       (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetTextFaceA")
-        (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTextFaceA
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetTextFaceW")
-        (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTextFaceW
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
       (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
@@ -609,73 +1046,18 @@
       (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_StartPage") (param i32) (result i32)
+  ;; LoadImageA reads its sixth argument (fuLoad) off the guest stack, so the
+  ;; test entry has to place it there the way a real stdcall frame would.
+  (func (export "test_call_LoadImageA")
+        (param i32) (param i32) (param i32) (param i32) (param i32) (param i32)
+        (result i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_StartPage
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get 5))
+    (call $handle_LoadImageA
+      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+      (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_EndPage") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_EndPage
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_EndDoc") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_EndDoc
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_AbortDoc") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_AbortDoc
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateCompatibleDC") (param i32) (result i32)
-    (call $handle_CreateCompatibleDC
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SaveDC") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SaveDC
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_RestoreDC") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_RestoreDC
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SelectObject") (param i32) (param i32) (result i32)
-    (call $handle_SelectObject
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetCurrentObject") (param i32) (param i32) (result i32)
-    (call $handle_GetCurrentObject
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DeleteDC") (param i32) (result i32)
-    (call $handle_DeleteDC
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_CreateDIBSection")
         (param i32) (param i32) (param i32) (result i32)
@@ -692,130 +1074,10 @@
       (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreatePalette") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreatePalette
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_SelectPalette") (param i32) (param i32) (result i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SelectPalette
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_RealizePalette") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_RealizePalette
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetPaletteEntries")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetPaletteEntries
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetPaletteEntries")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetPaletteEntries
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ResizePalette") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_ResizePalette
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetNearestPaletteIndex")
-        (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetNearestPaletteIndex
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateHalftonePalette") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreateHalftonePalette
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetDIBColorTable")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetDIBColorTable
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateCompatibleBitmap")
-        (param i32) (param i32) (param i32) (result i32)
-    (call $handle_CreateCompatibleBitmap
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateBitmap")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_CreateBitmap
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateBitmapIndirect") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreateBitmapIndirect
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetBitmapBits") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetBitmapBits
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetBitmapBits") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetBitmapBits
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetBitmapDimensionEx") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetBitmapDimensionEx
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetBrushOrgEx") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetBrushOrgEx
       (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
@@ -828,31 +1090,6 @@
     (call $handle_CreateRoundRectRgn
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreatePolyPolygonRgn")
-        (param i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreatePolyPolygonRgn
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PtInRegion") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PtInRegion
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetRegionData") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetRegionData
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_MaskBlt")
@@ -871,139 +1108,9 @@
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_AnimatePalette") (param i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_AnimatePalette
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetGraphicsMode") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetGraphicsMode
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetGraphicsMode") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetGraphicsMode
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetSystemPaletteUse") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetSystemPaletteUse
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetSystemPaletteUse") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetSystemPaletteUse
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GdiSetBatchLimit") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GdiSetBatchLimit
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetDeviceGammaRamp") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetDeviceGammaRamp
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetDeviceGammaRamp") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetDeviceGammaRamp
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ChoosePixelFormat") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_ChoosePixelFormat
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DescribePixelFormat") (param i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_DescribePixelFormat
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetPixelFormat") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetPixelFormat
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetPixelFormat") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetPixelFormat
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SwapBuffers") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SwapBuffers
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   ;; The three calls an application uses to lay text out, exported so the
   ;; pinned Windows 98 metric reference can be compared without an emulated
   ;; application in the way.
-  (func (export "test_call_GetTextMetricsA") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTextMetricsA
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetCharWidthA")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetCharWidthA
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetTextExtentPoint32A")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTextExtentPoint32A
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_GetTextExtentExPointA")
         (param i32 i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
@@ -1026,14 +1133,6 @@
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetCharABCWidthsA") (param i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetCharABCWidthsA
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_GetGlyphOutlineA")
         (param i32 i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
@@ -1045,150 +1144,20 @@
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetFontData")
-        (param i32 i32 i32 i32 i32) (result i32)
+  (func (export "test_call_mmioGetInfo") (param i32 i32) (result i32)
     (local $saved_esp i32)
     (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetFontData
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
+    (call $handle_mmioGetInfo
+      (local.get 0) (local.get 1) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_AddFontResourceA") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_AddFontResourceA
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_RemoveFontResourceA") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_RemoveFontResourceA
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetMetaFileBitsEx") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetMetaFileBitsEx (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetMetaFileBitsEx") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetMetaFileBitsEx (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetEnhMetaFileBits") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetEnhMetaFileBits (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetEnhMetaFileBits") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetEnhMetaFileBits (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CopyEnhMetaFileA") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CopyEnhMetaFileA (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DeleteEnhMetaFile") (param i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_DeleteEnhMetaFile (local.get 0)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetEnhMetaFileHeader") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetEnhMetaFileHeader (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetEnhMetaFilePaletteEntries") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetEnhMetaFilePaletteEntries (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PlayEnhMetaFile") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PlayEnhMetaFile (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetWinMetaFileBits")
-        (param i32 i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetWinMetaFileBits
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetWinMetaFileBits") (param i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetWinMetaFileBits
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetICMProfileA") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetICMProfileA (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_GetCharacterPlacementA")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
     (call $handle_GetCharacterPlacementA
       (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetICMMode") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetICMMode (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetICMProfileA") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetICMProfileA (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ColorMatchToTarget") (param i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_ColorMatchToTarget (local.get 0) (local.get 1) (local.get 2)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ResetDCA") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_ResetDCA (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateMetaFileA") (param i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreateMetaFileA (local.get 0)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CreateEnhMetaFileA") (param i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CreateEnhMetaFileA (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CloseEnhMetaFile") (param i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CloseEnhMetaFile (local.get 0)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_CloseMetaFile") (param i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_CloseMetaFile (local.get 0)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DeleteMetaFile") (param i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_DeleteMetaFile (local.get 0)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PlayMetaFile") (param i32 i32) (result i32)
-    (local $saved_esp i32) (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PlayMetaFile (local.get 0) (local.get 1)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_CreateDIBitmap")
         (param i32) (param i32) (param i32) (param i32) (param i32) (param i32)
@@ -1197,28 +1166,6 @@
     (call $handle_CreateDIBitmap
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_LoadBitmapA") (param i32) (param i32) (result i32)
-    (call $handle_LoadBitmapA
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_LoadBitmapW") (param i32) (param i32) (result i32)
-    (call $handle_LoadBitmapW
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetObjectA")
-        (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GetObjectA
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetObjectW")
-        (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GetObjectW
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_gdi_bitmap_storage") (param i32) (result i32)
     (call $gdi_bitmap_storage (local.get 0)))
@@ -1247,6 +1194,17 @@
         (param i32) (param i32) (param i32) (param i32) (result i32)
     (call $gdi_brush_sample
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)))
+  ;; The row filler, exported beside the per-pixel sampler it is an
+  ;; optimization of. $gdi_brush_fill_span samples one period of the brush and
+  ;; repeats it, so it and $gdi_brush_sample are two statements of the same
+  ;; function and can drift; test-wat-gdi-brush-period.js holds them together
+  ;; by filling a row here and comparing it against the sampler pixel by pixel.
+  (func (export "test_gdi_brush_fill_span")
+        (param i32) (param i32) (param i32) (param i32) (param i32)
+        (param i32) (param i32) (result i32)
+    (call $gdi_brush_fill_span
+      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
+      (local.get 4) (local.get 5) (local.get 6)))
   ;; The status bar's sizing grip, drawn into any DC. Exported so its Win98
   ;; rib pattern can be asserted without rendering a whole application.
   (func (export "test_statusbar_draw_size_grip") (param i32) (param i32) (param i32)
@@ -1316,17 +1274,6 @@
       (local.get 0) (local.get 1) (local.get 2) (local.get 3) (local.get 4)
       (local.get 5) (local.get 6) (local.get 7) (local.get 8)
       (local.get 9) (local.get 10) (local.get 11) (local.get 12)))
-  (func (export "test_call_DeleteObject") (param i32) (result i32)
-    (call $handle_DeleteObject
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_TextOutA")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_TextOutA
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_ExtTextOutA")
         (param i32 i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
@@ -1351,24 +1298,6 @@
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DrawTextA")
-        (param i32 i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_DrawTextA
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DrawTextW")
-        (param i32 i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_DrawTextW
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_ExtTextOutW")
         (param i32 i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
@@ -1384,24 +1313,6 @@
   (func (export "test_gdi_ext_text_out_w_packed_ansi_len")
         (param i32 i32) (result i32)
     (call $gdi_ext_text_out_w_packed_ansi_len (call $g2w (local.get 0)) (local.get 1)))
-  (func (export "test_call_GetTabbedTextExtentA")
-        (param i32 i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTabbedTextExtentA
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetTabbedTextExtentW")
-        (param i32 i32 i32 i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTabbedTextExtentW
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_TabbedTextOutA")
         (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
@@ -1432,30 +1343,6 @@
       (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
       (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_LineTo")
-        (param i32) (param i32) (param i32) (result i32)
-    (call $handle_LineTo
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetPixel")
-        (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetPixel
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetPixel")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetPixel
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_BitBlt")
         (param i32) (param i32) (param i32) (param i32) (param i32)
         (param i32) (param i32) (param i32) (param i32) (result i32)
@@ -1479,15 +1366,6 @@
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 20)) (local.get 4))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
     (call $handle_PatBlt
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ExtFloodFill")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_ExtFloodFill
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
@@ -1527,17 +1405,24 @@
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_Rectangle")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_Rectangle
+  (func (export "test_call_DrawDibDraw")
+        (param i32) (param i32) (param i32) (param i32) (param i32)
+        (param i32) (param i32) (param i32) (param i32) (param i32)
+        (param i32) (param i32) (param i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 28)) (local.get 6))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 32)) (local.get 7))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 36)) (local.get 8))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 40)) (local.get 9))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 44)) (local.get 10))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 48)) (local.get 11))
+    (call $gs32 (i32.add (local.get $saved_esp) (i32.const 52)) (local.get 12))
+    (call $handle_DrawDibDraw
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_Ellipse")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_Ellipse
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_RoundRect")
         (param i32) (param i32) (param i32) (param i32) (param i32)
@@ -1549,24 +1434,6 @@
     (call $handle_RoundRect
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PolyBezier")
-        (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PolyBezier
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PolyBezierTo")
-        (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PolyBezierTo
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_Arc")
@@ -1637,64 +1504,6 @@
       (local.get 4) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PolyDraw")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PolyDraw
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PolyPolyline")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_PolyPolyline
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetArcDirection") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetArcDirection
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetMapMode") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetMapMode
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetTextCharacterExtra") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetTextCharacterExtra
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetColorAdjustment") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetColorAdjustment
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetColorAdjustment") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetColorAdjustment
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_start_LineDDA")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $start_esp i32)
@@ -1707,98 +1516,6 @@
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
     (global.get $eip))
-  (func (export "test_call_GetTextCharacterExtra") (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetTextCharacterExtra
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetTextJustification") (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetTextJustification
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetMapperFlags") (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetMapperFlags
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetBrushOrgEx")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_SetBrushOrgEx
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_FillRect") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_FillRect
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_FrameRect") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_FrameRect
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DrawEdge")
-        (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_DrawEdge
-      (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DrawFocusRect") (param i32) (param i32) (result i32)
-    (call $handle_DrawFocusRect
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_Polygon") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_Polygon
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_Polyline") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_Polyline
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_PolylineTo") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_PolylineTo
-      (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetDC") (param i32) (result i32)
-    (call $handle_GetDC
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetDCOrgEx") (param i32 i32) (result i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_GetDCOrgEx
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetWindowDC") (param i32) (result i32)
-    (call $handle_GetWindowDC
-      (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_ReleaseDC") (param i32) (param i32) (result i32)
-    (call $handle_ReleaseDC
-      (local.get 0) (local.get 1) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_gdi_client_rect_set")
         (param i32) (param i32) (param i32) (param i32) (param i32)
     (call $client_rect_set
@@ -1812,7 +1529,39 @@
   (func (export "test_gdi_object_record") (param i32) (result i32)
     (call $gdi_object_record (local.get 0)))
   (func (export "test_dx_set_primary_palette_wa") (param i32)
-    (global.set $dx_primary_pal_wa (local.get 0)))
+    (call $dx_primary_pal_set (local.get 0)))
+  ;; Seed/read the process-wide DirectDraw state from two WebAssembly instances
+  ;; in the cross-thread SendMessage regression. These are deliberately helper
+  ;; calls rather than raw memory accesses so the test covers the production
+  ;; accessors used by DirectDraw handlers and GetSystemMetrics.
+  (func (export "test_dx_set_process_state")
+        (param $w i32) (param $h i32) (param $bpp i32) (param $mode i32)
+        (param $hwnd i32) (param $exclusive i32) (param $palette i32)
+    (call $dx_display_w_set (local.get $w))
+    (call $dx_display_h_set (local.get $h))
+    (call $dx_display_bpp_set (local.get $bpp))
+    (call $dx_display_mode_set (local.get $mode))
+    (call $dx_coop_hwnd_set (local.get $hwnd))
+    (call $dx_exclusive_set (local.get $exclusive))
+    (call $dx_primary_pal_set (local.get $palette)))
+  (func (export "test_dx_get_process_state") (param $field i32) (result i32)
+    (if (i32.eq (local.get $field) (i32.const 0))
+      (then (return (call $dx_display_w_get))))
+    (if (i32.eq (local.get $field) (i32.const 1))
+      (then (return (call $dx_display_h_get))))
+    (if (i32.eq (local.get $field) (i32.const 2))
+      (then (return (call $dx_display_bpp_get))))
+    (if (i32.eq (local.get $field) (i32.const 3))
+      (then (return (call $dx_display_mode_get))))
+    (if (i32.eq (local.get $field) (i32.const 4))
+      (then (return (call $dx_coop_hwnd_get))))
+    (if (i32.eq (local.get $field) (i32.const 5))
+      (then (return (call $dx_exclusive_get))))
+    (call $dx_primary_pal_get))
+  (func (export "test_dx_set_primary_wa") (param i32)
+    (global.set $dx_primary_wa (local.get 0)))
+  (func (export "test_dx_primary_entry") (result i32)
+    (call $dx_primary_entry))
 
   ;; ---- NC/message plumbing exports (JS host posts messages into WAT's queues) ----
   (func (export "nc_post_paint") (param $hwnd i32)
@@ -1840,23 +1589,32 @@
       (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
       (br $scan)))
   )
+  (func (export "test_cs_try_enter") (param $cs i32) (result i32)
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00700000))
+    (call $handle_TryEnterCriticalSection (local.get $cs) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
   ;; Host-side child exposure happens while an app is still recalculating its
   ;; control-bar layout. Put the resulting repaint into USER's update-region
   ;; queue so pending non-client work drains before parent/child WM_PAINT.
   (func (export "paint_invalidate_visible_tree") (param $hwnd i32)
     (call $paint_mark_visible_tree (local.get $hwnd)))
-  ;; The posted-message queue, for looking at rather than guessing about. It
-  ;; lives at WASM 0x400, below GUEST_BASE, so --dump cannot reach it: that
-  ;; address goes through g2w and lands somewhere else entirely. `field` is
-  ;; 0 hwnd, 1 message, 2 wParam, 3 lParam.
+  ;; The posted-message queue, for looking at rather than guessing about.
+  ;; Production posts use the process-shared canonical FIFO; the private prefix
+  ;; remains visible first for focused tests which seed raw queue bytes.
+  ;; `field` is 0 hwnd, 1 message, 2 wParam, 3 lParam.
   (func (export "post_queue_depth") (result i32)
-    (global.get $post_queue_count))
+    (i32.add (call $post_queue_total_count)
+      (call $shared_post_queue_total_count)))
+  (func (export "get_post_queue_base") (result i32) (call $post_queue_base))
   (func (export "post_queue_peek") (param $i i32) (param $field i32) (result i32)
-    (if (i32.ge_u (local.get $i) (global.get $post_queue_count))
-      (then (return (i32.const 0))))
-    (i32.load (i32.add (i32.add (i32.const 0x400)
-                                (i32.mul (local.get $i) (i32.const 16)))
-                       (i32.shl (local.get $field) (i32.const 2)))))
+    (if (result i32)
+        (i32.lt_u (local.get $i) (call $post_queue_total_count))
+      (then (call $post_queue_peek_field (local.get $i) (local.get $field)))
+      (else (call $shared_post_queue_peek_field_tid
+        (global.get $current_thread_id)
+        (i32.sub (local.get $i) (call $post_queue_total_count))
+        (local.get $field)))))
 
   (func (export "nc_flags_test") (param $hwnd i32) (result i32)
     (call $nc_flags_test (local.get $hwnd)))
@@ -1868,9 +1626,37 @@
     (local.set $slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return (i32.const 0))))
     (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $slot))))
+  ;; The WAT-owned update rect, packed l,t,r,b into two i32s (0 when the
+  ;; window has none). PAINT_FLAGS alone does not get a window painted: the
+  ;; selector also demands a non-empty update rect, and $paint_seed_child_paints
+  ;; propagates a parent's rect, not its flag. So "flag set, rect empty" and
+  ;; "parent rect empty so children were never seeded" are distinct stalls that
+  ;; look identical without this.
+  (func (export "update_rect_lt") (param $hwnd i32) (result i32)
+    (local $r i32)
+    (local.set $r (call $paint_scratch_take))
+    (if (i32.eqz (call $update_get_rect (local.get $hwnd) (local.get $r)))
+      (then (return (i32.const 0))))
+    (i32.or
+      (i32.and (i32.load (local.get $r)) (i32.const 0xFFFF))
+      (i32.shl (i32.load offset=4 (local.get $r)) (i32.const 16))))
+  (func (export "update_rect_rb") (param $hwnd i32) (result i32)
+    (local $r i32)
+    (local.set $r (call $paint_scratch_take))
+    (if (i32.eqz (call $update_get_rect (local.get $hwnd) (local.get $r)))
+      (then (return (i32.const 0))))
+    (i32.or
+      (i32.and (i32.load offset=8 (local.get $r)) (i32.const 0xFFFF))
+      (i32.shl (i32.load offset=12 (local.get $r)) (i32.const 16))))
+
   (func (export "post_message_q")
         (param $hwnd i32) (param $msg i32) (param $wP i32) (param $lP i32) (result i32)
     (call $post_queue_push (local.get $hwnd) (local.get $msg) (local.get $wP) (local.get $lP)))
+  ;; Browser audio topology bridge.  lib/host-audio.js diffs
+  ;; MediaDevices.enumerateDevices() snapshots and supplies only documented
+  ;; arrival/removal event codes; WAT retains filter and HWND ownership.
+  (func (export "device_notify_audio_change") (param $event i32) (result i32)
+    (call $device_notify_broadcast_audio (local.get $event)))
   ;; Renderer-wide top-level lifecycle bridge. code uses the Win9x HSHELL_*
   ;; values (1=created, 2=destroyed, 4=activated); hwnd is lParam.
   (func (export "notify_shell_window")
@@ -1896,8 +1682,8 @@
     (local $cw i32) (local $ch i32)
     (local.set $rect (call $paint_scratch_take))
     (call $host_get_window_rect (local.get $hwnd) (local.get $rect))
-    (local.set $x (i32.load         (local.get $rect)))
-    (local.set $y (i32.load offset=4 (local.get $rect)))
+    (local.set $x (load.field PaintRect left (local.get $rect)))
+    (local.set $y (load.field.memarg PaintRect top (local.get $rect)))
     (call $defwndproc_do_nccalcsize (local.get $hwnd))
     (local.set $cw (i32.sub (call $client_rect_get_r (local.get $hwnd))
                              (call $client_rect_get_l (local.get $hwnd))))
@@ -1958,6 +1744,11 @@
     (call $defwndproc_do_ncpaint (local.get $hwnd)))
   ;; Cursor state readback — for tests / JS to verify SetCursor plumbing.
   (func (export "get_cursor") (result i32) (global.get $current_cursor))
+  ;; ShowCursor's signed display count is also browser presentation state.
+  ;; A negative count means the guest deliberately hid the system cursor and
+  ;; is normally drawing/tracking its own (often through DirectInput).
+  (func (export "get_cursor_display_count") (result i32)
+    (global.get $cursor_count))
   ;; Synchronous NCHITTEST helper — JS calls before generating mouse
   ;; events so classification lives in WAT. Returns HT* code.
   (func (export "hittest_sync")
@@ -2029,6 +1820,8 @@
       (if (i32.eq (local.get $marker) (i32.const 0xCACA0023))
         (then (global.set $createwnd_setfocus_thunk (local.get $guest))))
       (if (i32.eq (local.get $marker) (i32.const 0xCACA0024))
+        (then (global.set $createwnd_move_thunk (local.get $guest))))
+      (if (i32.eq (local.get $marker) (i32.const 0xCACA0031))
         (then (global.set $createwnd_size_thunk (local.get $guest))))
       (if (i32.eq (local.get $marker) (i32.const 0xCACA0026))
         (then (global.set $child_cbt_ret_thunk (local.get $guest))))
@@ -2042,6 +1835,10 @@
         (then (global.set $child_create_nccreate_ret_thunk (local.get $guest))))
       (if (i32.eq (local.get $marker) (i32.const 0xCACA002A))
         (then (global.set $setfocus_ret_thunk (local.get $guest))))
+      (if (i32.eq (local.get $marker) (i32.const 0xCACA002B))
+        (then (global.set $enum_child_thunk (local.get $guest))))
+      (if (i32.eq (local.get $marker) (i32.const 0xCACA0030))
+        (then (global.set $enum_rsrc_thunk (local.get $guest))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
@@ -2055,42 +1852,6 @@
   (func (export "test_crt_exit_begin") (param $code i32)
     (global.set $atexit_exit_code (local.get $code))
     (call $crt_atexit_run_next))
-
-  ;; Focused cooperative CRITICAL_SECTION state-machine tests. The handlers
-  ;; normally run on an import stack frame, so preserve the harness's ESP.
-  ;; test_cs_enter returns a bit mask for a parked call: 1=yield reason 9,
-  ;; 2=ESP untouched, 4=thunk auto-pop suppressed.
-  (func (export "test_cs_init") (param $cs i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_InitializeCriticalSection
-      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
-  (func (export "test_cs_enter") (param $cs i32) (result i32)
-    (local $saved_esp i32) (local $bits i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_EnterCriticalSection
-      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (if (i32.eq (global.get $yield_reason) (i32.const 9))
-      (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
-    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp))
-      (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
-    (if (global.get $handler_set_eip)
-      (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
-    (global.set $yield_reason (i32.const 0))
-    (global.set $yield_flag (i32.const 0))
-    (global.set $handler_set_eip (i32.const 0))
-    (local.get $bits))
-  (func (export "test_cs_leave") (param $cs i32)
-    (local $saved_esp i32)
-    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
-    (call $handle_LeaveCriticalSection
-      (local.get $cs) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 
   ;; Exercise the exact cooperative retry transition: the first call parks on
   ;; another owner, the owner releases while the import frame remains live,
@@ -2148,28 +1909,102 @@
       (param $img_base i32) (param $code_s i32) (param $code_e i32)
       (param $thunk_gs i32) (param $thunk_ge i32) (param $num_th i32)
       (param $main_rsrc_rva i32)
-    ;; Per-thread x86 register file. Globals are per-instance but memory is
-    ;; shared, so every spawned instance must be pointed at its own slice
-    ;; before any register is touched — this is the first thing init_thread
-    ;; does, and the host calls init_thread immediately after instantiation
-    ;; (before set_esp / the stack setup in thread-manager.js spawnPending).
-    (global.set $reg_base (i32.add (global.get $REGFILE_BASE)
-      (i32.mul (local.get $tid) (global.get $REGFILE_STRIDE))))
-    (global.set $THREAD_BASE (i32.add (i32.const 0x05000000)
-      (i32.mul (local.get $tid) (i32.const 0x400000))))
-    (global.set $THREAD_END  (i32.add (global.get $THREAD_BASE) (i32.const 0x400000)))
-    (global.set $CACHE_INDEX (i32.add (i32.const 0x07152000)
-      (i32.mul (local.get $tid) (i32.const 0x8000))))
+    (local $pe_off i32)
+    ;; A reused Worker instance must not retain heap-backed queue overflow from
+    ;; its previous guest thread. Do this before replacing allocator cursors.
+    (call $post_queue_reset)
+    ;; The three per-thread arenas are split, not strided: the main thread
+    ;; (tid 0) gets a large partition at offset 0 and every worker gets a small
+    ;; one after it. A worker compiles the single routine it was spawned for,
+    ;; so an equal share would have starved the thread that decodes the whole
+    ;; program to feed fifteen that decode almost nothing. See the declarations
+    ;; in 00-regions.wat. tid 0 keeps the globals' declared defaults, which are
+    ;; the main thread's values, so only the worker arithmetic lives here.
+    (if (local.get $tid)
+      (then
+        (global.set $THREAD_BASE (i32.add (region.addr $THREAD_CACHE_BASE 0)
+          (i32.add (global.get $THREAD_CACHE_MAIN_BYTES)
+            (i32.mul (i32.sub (local.get $tid) (i32.const 1))
+                     (global.get $THREAD_CACHE_STRIDE)))))
+        (global.set $THREAD_END (i32.add (global.get $THREAD_BASE)
+          (global.get $THREAD_CACHE_STRIDE))))
+      (else
+        (global.set $THREAD_BASE (region.addr $THREAD_CACHE_BASE 0))
+        (global.set $THREAD_END (i32.add (global.get $THREAD_BASE)
+          (global.get $THREAD_CACHE_MAIN_BYTES)))))
     (global.set $thread_alloc (global.get $THREAD_BASE))
+    ;; The register file IS strided, unlike the three arenas above: every
+    ;; thread needs exactly eight slots, so tid*64 with no special case for the
+    ;; main thread. Memory is shared between instances while globals are not,
+    ;; so skipping this would give every worker the main thread's registers.
+    (global.set $reg_base (i32.add (global.get $REGFILE)
+      (i32.mul (local.get $tid) (global.get $REGFILE_STRIDE))))
+    ;; Page-compilation state is per-instance for the same reason THREAD_BASE
+    ;; is: a worker is a separate instance over the same memory, and chunk
+    ;; pointers name that thread's own arena partition.
+    (if (local.get $tid)
+      (then
+        (global.set $PAGE_DIR (i32.add (global.get $PAGE_DIR_BASE)
+          (i32.add (global.get $PAGE_DIR_MAIN_BYTES)
+            (i32.mul (i32.sub (local.get $tid) (i32.const 1))
+                     (global.get $PAGE_DIR_STRIDE)))))
+        (global.set $PAGE_DIR_ENTRIES (global.get $PAGE_DIR_WORKER_ENTRIES))
+        (global.set $PAGE_DIR_MASK
+          (i32.sub (global.get $PAGE_DIR_WORKER_ENTRIES) (i32.const 1)))
+        (global.set $PAGE_INDEX (i32.add (global.get $PAGE_INDEX_ARENA)
+          (i32.add (global.get $PAGE_INDEX_MAIN_BYTES)
+            (i32.mul (i32.sub (local.get $tid) (i32.const 1))
+                     (global.get $PAGE_INDEX_STRIDE)))))
+        (global.set $PAGE_INDEX_SLOTS (global.get $PAGE_INDEX_WORKER_SLOTS)))
+      (else
+        (global.set $PAGE_DIR (global.get $PAGE_DIR_BASE))
+        (global.set $PAGE_DIR_ENTRIES
+          (i32.div_u (global.get $PAGE_DIR_MAIN_BYTES)
+                     (global.get $PAGE_DIR_SLOT_BYTES)))
+        (global.set $PAGE_DIR_MASK
+          (i32.sub (i32.div_u (global.get $PAGE_DIR_MAIN_BYTES)
+                              (global.get $PAGE_DIR_SLOT_BYTES))
+                   (i32.const 1)))
+        (global.set $PAGE_INDEX (global.get $PAGE_INDEX_ARENA))
+        (global.set $PAGE_INDEX_SLOTS
+          (i32.div_u (global.get $PAGE_INDEX_MAIN_BYTES)
+                     (global.get $PAGE_INDEX_BYTES)))))
+    (global.set $page_index_next (i32.const 0))
+    (call $page_dir_reset)
+    (global.set $code_cache_generation_seen
+      (i32.atomic.load offset=4 (global.get $SHARED_COUNTERS)))
     (global.set $image_base (local.get $img_base))
-    ;; Resource lookup state is instance-local. PE headers are not mapped into
-    ;; guest memory, so a worker cannot reconstruct this RVA by rereading the
-    ;; optional header; copy the value the main loader retained instead.
-    (global.set $rsrc_rva (local.get $main_rsrc_rva))
+    ;; Resource lookup state is instance-local: the loading instance populates
+    ;; $rsrc_rva, every other one starts at zero. A cooperative thread is handed
+    ;; the value the main loader retained. The worker backend has none to hand
+    ;; over — nothing loaded the PE on the main-thread instance — but there the
+    ;; mapped DOS/PE headers do live in shared memory, so reread them.
+    (if (local.get $main_rsrc_rva)
+      (then (global.set $rsrc_rva (local.get $main_rsrc_rva)))
+      (else
+        (local.set $pe_off (i32.add (local.get $img_base)
+          (i32.load (call $g2w (i32.add (local.get $img_base) (i32.const 0x3C))))))
+        (global.set $rsrc_rva
+          (i32.load (call $g2w (i32.add (local.get $pe_off) (i32.const 136)))))))
+    ;; Allocator cursors are per-instance and describe one process-wide arena, so
+    ;; a worker must NOT inherit main's: zero them and let the first allocation
+    ;; reserve a private chunk from the shared cursors. heap_base is immutable
+    ;; after load, so that one is read across directly.
+    (global.set $heap_ptr (i32.const 0))
+    (global.set $heap_end (i32.const 0))
+    (global.set $heap_arena_record (i32.const 0))
+    (global.set $heap_sparse_record (i32.const 0))
+    (global.set $heap_base
+      (i32.load (region.addr $HEAP_SHARED 4)))
     (global.set $heap_sparse_ptr (i32.const 0))
     (global.set $heap_sparse_end (i32.const 0))
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT))
     (global.set $current_thread_id (i32.add (local.get $tid) (i32.const 1)))
+    (call $shared_post_queue_reset_tid (global.get $current_thread_id))
+    (global.set $post_queue_count (i32.const 0))
+    (global.set $pq_read_off (i32.const 0))
+    (global.set $sync_msg_depth (i32.const 0))
+    (global.set $cross_thread_send_depth (i32.const 0))
     (global.set $code_start (local.get $code_s))
     (global.set $code_end (local.get $code_e))
     (global.set $thunk_guest_base (local.get $thunk_gs))
@@ -2181,6 +2016,36 @@
     ;; vtable global eagerly so those calls never dispatch through address 0.
     (call $dx_sync_thread_vtables)
   )
+
+  ;; Multimedia-timer state, for debugging a client that waits on a
+  ;; timeSetEvent callback that never arrives. "The guest holds timer id N" and
+  ;; "WAT is still running timer id N" can disagree; only this export can tell
+  ;; them apart from the host side.
+  ;; field: 0=id 1=interval 2=callback 3=dwUser 4=last_tick 5=oneshot
+  ;;        6=next_id (slot ignored) 7=in_cb (slot ignored) 8=slot count
+  (func (export "dbg_mm_timer") (param $slot i32) (param $field i32) (result i32)
+    (local $p i32)
+    (if (i32.eq (local.get $field) (i32.const 6))
+      (then (return (i32.load (global.get $MM_TIMER_NEXT_ID)))))
+    (if (i32.eq (local.get $field) (i32.const 7))
+      (then (return (global.get $mm_timer_in_cb))))
+    (if (i32.eq (local.get $field) (i32.const 8))
+      (then (return (global.get $MM_TIMER_MAX))))
+    (if (i32.ge_u (local.get $slot) (global.get $MM_TIMER_MAX))
+      (then (return (i32.const -1))))
+    (local.set $p (call $mm_timer_slot (local.get $slot)))
+    (if (i32.eqz (local.get $field)) (then (return (i32.load (local.get $p)))))
+    (if (i32.eq (local.get $field) (i32.const 1))
+      (then (return (i32.load offset=4 (local.get $p)))))
+    (if (i32.eq (local.get $field) (i32.const 2))
+      (then (return (i32.load offset=8 (local.get $p)))))
+    (if (i32.eq (local.get $field) (i32.const 3))
+      (then (return (i32.load offset=12 (local.get $p)))))
+    (if (i32.eq (local.get $field) (i32.const 4))
+      (then (return (i32.load offset=16 (local.get $p)))))
+    (if (i32.eq (local.get $field) (i32.const 5))
+      (then (return (i32.load offset=20 (local.get $p)))))
+    (i32.const -1))
 
   ;; Yield state exports
   (func (export "get_yield_reason") (result i32) (global.get $yield_reason))
@@ -2196,16 +2061,26 @@
     (global.set $wait_timeout (i32.const 0xFFFFFFFF))
     (global.set $wait_stack_bytes (i32.const 12)))
   (func (export "resume_message_wait") (result i32)
+    (local $msg_ptr i32)
     (if (i32.ne (global.get $yield_reason) (i32.const 7))
       (then (return (i32.const 0))))
+    (local.set $msg_ptr (global.get $message_wait_msg_ptr))
+    (global.set $message_wait_msg_ptr (i32.const 0))
     (global.set $yield_reason (i32.const 0))
-    (call $handle_GetMessageA
-      (global.get $message_wait_msg_ptr)
-      (i32.const 0)
-      (i32.const 0)
-      (i32.const 0)
-      (i32.const 0)
-      (i32.const 0))
+    (if (local.get $msg_ptr)
+      (then
+        (call $handle_GetMessageA
+          (local.get $msg_ptr)
+          (i32.const 0)
+          (i32.const 0)
+          (i32.const 0)
+          (i32.const 0)
+          (i32.const 0)))
+      (else
+        ;; WaitMessage has no output buffer to fill and consumes no message.
+        ;; Complete only its zero-argument stdcall frame.
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
     (i32.eqz (global.get $yield_reason)))
   (func (export "get_sync_table") (result i32) (global.get $SYNC_TABLE))
   (func (export "get_yield_flag") (result i32) (global.get $yield_flag))
@@ -2220,13 +2095,220 @@
     (global.set $sleep_yielded (i32.const 0))
     (local.get $v))
   (func (export "get_sleep_timeout") (result i32) (global.get $sleep_timeout))
-  (func (export "has_pending_message") (result i32)
+
+  ;; ---- vertical blank (see $vblank_counter in src/01-header.wat) --------
+  ;; The host says a refresh happened. In the browser that is a
+  ;; requestAnimationFrame callback, already divided down to ~60 Hz; the CLI
+  ;; never calls this, which is exactly what leaves it on the guest-clock
+  ;; model. The first call latches $vblank_host_driven, so a page that turns
+  ;; out to have a working rAF stops using the synthetic grid from then on.
+  (func (export "vblank_tick")
+    (global.set $vblank_host_driven (i32.const 1))
+    (global.set $vblank_counter (i32.add (global.get $vblank_counter) (i32.const 1))))
+  ;; The guest millisecond a parked vblank wait is due at. The CLI advances
+  ;; its batch clock to this; the browser uses it only as a no-rAF backstop.
+  (func (export "get_vblank_deadline_ms") (result i32) (global.get $vblank_deadline_ms))
+  (func (export "get_vblank_wait_active") (result i32) (global.get $vblank_wait_active))
+  (func (export "get_vblank_counter") (result i32) (global.get $vblank_counter))
+  (func (export "set_flip_vsync") (param $on i32)
+    (global.set $dx_flip_vsync (i32.ne (local.get $on) (i32.const 0))))
+  ;; Unit-test seams for the model itself: both are pure functions of a guest
+  ;; millisecond, so they can be checked without running a guest at all.
+  (func (export "test_vblank_next_boundary") (param $now i32) (result i32)
+    (call $vblank_next_boundary (local.get $now)))
+  (func (export "test_vblank_scanline") (param $now i32) (result i32)
+    (call $vblank_scanline (local.get $now)))
+  (func (export "test_vblank_in_blank") (param $now i32) (result i32)
+    (call $vblank_in_blank (local.get $now)))
+  (func (export "test_vblank_reset")
+    (global.set $vblank_wait_active (i32.const 0))
+    (global.set $vblank_host_driven (i32.const 0))
+    (global.set $vblank_counter (i32.const 0))
+    (global.set $vblank_deadline_ms (i32.const 0)))
+  ;; Drive WaitForVerticalBlank once and report what it did, the way
+  ;; test_cs_enter does for EnterCriticalSection. Bits:
+  ;;   1  parked with yield_reason 13
+  ;;   2  left the stdcall frame alone (so the re-entry sees the same args)
+  ;;   4  raised $handler_set_eip (opts out of $run's thunk-zone auto-pop --
+  ;;      without it the parked call is spliced out and the guest resumes past
+  ;;      its own WaitForVerticalBlank)
+  ;;   8  returned DD_OK
+  ;;  16  popped exactly the 3-arg stdcall frame
+  (func (export "test_vblank_wait_once") (result i32)
+    (local $saved_esp i32) (local $saved_eip i32) (local $bits i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $saved_eip (global.get $eip))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xDEADBEEF))
+    (call $handle_IDirectDraw_WaitForVerticalBlank
+      (i32.const 0) (i32.const 1) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (if (i32.eq (global.get $yield_reason) (i32.const 13))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
+    (if (global.get $handler_set_eip)
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 8)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.add (local.get $saved_esp) (i32.const 16)))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 16)))))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (global.set $eip (local.get $saved_eip))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $handler_set_eip (i32.const 0))
+    (local.get $bits))
+
+  ;; ---- spin parking (see $spin_dispatch_seq in src/01-header.wat) -------
+  ;; K, the number of consecutive indistinguishable reads that classifies a
+  ;; thread as spinning. 0 disables both detectors outright, which is the A/B
+  ;; arm (test/run.js --no-spin-park) and how a suspected false park is ruled
+  ;; in or out in one run.
+  (func (export "set_spin_park_k") (param $k i32)
+    (global.set $spin_park_k (local.get $k)))
+  (func (export "get_spin_park_k") (result i32) (global.get $spin_park_k))
+  ;; The guest millisecond a clock park is due at. The CLI compares it against
+  ;; the batch clock; the browser turns it into a setTimeout.
+  (func (export "get_spin_deadline_ms") (result i32) (global.get $spin_deadline_ms))
+  ;; The last millisecond a clock API handed the guest. Paired with the
+  ;; deadline above so a host can turn "due at T" into "sleep for N" without
+  ;; having to agree with the guest about what time it is.
+  (func (export "get_tick_count") (result i32) (global.get $tick_count))
+  ;; Trip counters. These are the acceptance measurement: a game that must not
+  ;; debounce is one that ends a run with both of these at zero.
+  (func (export "get_clock_spin_parks") (result i32) (global.get $clock_spin_parks))
+  (func (export "get_peek_spin_parks") (result i32) (global.get $peek_spin_parks))
+  (func (export "get_clock_spin_count") (result i32) (global.get $clock_spin_count))
+  (func (export "get_peek_spin_count") (result i32) (global.get $peek_spin_count))
+  (func (export "get_spin_nonpoll_seq") (result i32) (global.get $spin_nonpoll_seq))
+  (func (export "test_spin_reset")
+    (global.set $spin_dispatch_seq (i32.const 0))
+    (global.set $spin_nonpoll_seq (i32.const 0))
+    (global.set $spin_deadline_ms (i32.const 0))
+    (global.set $clock_spin_count (i32.const 0))
+    (global.set $clock_spin_value (i32.const 0))
+    (global.set $clock_spin_seq (i32.const 0))
+    (global.set $clock_spin_ret (i32.const 0))
+    (global.set $clock_spin_esp (i32.const 0))
+    (global.set $clock_spin_key0 (i64.const 0))
+    (global.set $clock_spin_key1 (i64.const 0))
+    (global.set $clock_spin_key2 (i64.const 0))
+    (global.set $clock_spin_history0 (i64.const 0))
+    (global.set $clock_spin_history1 (i64.const 0))
+    (global.set $clock_spin_history2 (i64.const 0))
+    (global.set $clock_spin_count0 (i32.const 0))
+    (global.set $clock_spin_count1 (i32.const 0))
+    (global.set $clock_spin_count2 (i32.const 0))
+    (global.set $clock_spin_parked_value (i32.const 0))
+    (global.set $clock_spin_parked_valid (i32.const 0))
+    (global.set $clock_spin_qualified_valid (i32.const 0))
+    (global.set $clock_spin_qualified_ret (i32.const 0))
+    (global.set $clock_spin_qualified_esp (i32.const 0))
+    (global.set $spin_peek_activity_marked (i32.const 0))
+    (global.set $clock_spin_parks (i32.const 0))
+    (global.set $peek_spin_count (i32.const 0))
+    (global.set $peek_spin_seq (i32.const 0))
+    (global.set $peek_spin_ret (i32.const 0))
+    (global.set $peek_spin_esp (i32.const 0))
+    (global.set $peek_spin_parks (i32.const 0)))
+  ;; Drive one timeGetTime the way $win32_dispatch would — the sequence bump
+  ;; included, because "was anything else dispatched in between" is half of
+  ;; what the detector tests and a seam that skipped it would test the other
+  ;; half twice. Bits:
+  ;;    1  parked with yield_reason 14
+  ;;    2  left the stdcall frame alone (the re-entry sees the same args)
+  ;;    4  raised $handler_set_eip (opts out of $run's thunk-zone auto-pop)
+  ;;    8  completed instead: popped exactly the 0-arg stdcall frame
+  ;;   16  completed instead: returned the clock in EAX
+  ;; ESP and EIP are put back afterwards, so repeated calls look to the
+  ;; detector like one call site spinning — which is the point.
+  (func (export "test_clock_spin_once") (result i32)
+    (local $saved_esp i32) (local $saved_eip i32) (local $bits i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $saved_eip (global.get $eip))
+    (global.set $spin_dispatch_seq (i32.add (global.get $spin_dispatch_seq) (i32.const 1)))
+    (call $handle_timeGetTime
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (if (i32.eq (global.get $yield_reason) (i32.const 14))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
+    (if (global.get $handler_set_eip)
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.add (local.get $saved_esp) (i32.const 4)))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 8)))))
+    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (global.get $tick_count))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 16)))))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (global.set $eip (local.get $saved_eip))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $handler_set_eip (i32.const 0))
+    (local.get $bits))
+  ;; A Win32 call that is NOT the clock, to interleave between two reads. Any
+  ;; API would do; GetDoubleClickTime is picked because it has no side effects
+  ;; and no arguments. This is how the "no other call in between" reset is
+  ;; tested without inventing a fake dispatch.
+  (func (export "test_spin_other_call")
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (global.set $spin_dispatch_seq (i32.add (global.get $spin_dispatch_seq) (i32.const 1)))
+    (global.set $spin_nonpoll_seq (i32.add (global.get $spin_nonpoll_seq) (i32.const 1)))
+    (call $handle_GetDoubleClickTime
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
+  ;; The PeekMessage twin. Same bits, with reason 15 and the 5-arg frame.
+  (func (export "test_peek_spin_once") (param $msg i32) (result i32)
+    (local $saved_esp i32) (local $saved_eip i32) (local $bits i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $saved_eip (global.get $eip))
+    (global.set $spin_dispatch_seq (i32.add (global.get $spin_dispatch_seq) (i32.const 1)))
+    (global.set $spin_nonpoll_seq (i32.add (global.get $spin_nonpoll_seq) (i32.const 1)))
+    (global.set $spin_peek_activity_marked (i32.const 1))
+    (call $handle_PeekMessageA
+      (local.get $msg) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (if (i32.eq (global.get $yield_reason) (i32.const 15))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
+    (if (global.get $handler_set_eip)
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.add (local.get $saved_esp) (i32.const 24)))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 8)))))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 16)))))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (global.set $eip (local.get $saved_eip))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $handler_set_eip (i32.const 0))
+    (local.get $bits))
+  ;; Model the Win16 USER bridge, which invokes the ANSI handler without first
+  ;; passing through $win32_dispatch. Its empty result must not roll back some
+  ;; earlier Win32 call's activity mark.
+  (func (export "test_peek_spin_direct_empty") (param $msg i32)
+    (local $saved_esp i32) (local $saved_eip i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $saved_eip (global.get $eip))
+    (call $handle_PeekMessageA
+      (local.get $msg) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (global.set $eip (local.get $saved_eip))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $handler_set_eip (i32.const 0)))
+  (func $has_pending_message (export "has_pending_message") (result i32)
     (if (global.get $quit_flag) (then (return (i32.const 1))))
     (if (global.get $pending_child_create) (then (return (i32.const 1))))
     (if (global.get $pending_child_size) (then (return (i32.const 1))))
     (if (global.get $pending_input_packed) (then (return (i32.const 1))))
-    (if (global.get $post_queue_count) (then (return (i32.const 1))))
-    (if (call $shared_post_queue_read (call $paint_scratch_take) (i32.const 0))
+    (if (call $post_queue_total_count) (then (return (i32.const 1))))
+    (if (call $shared_post_queue_read
+          (call $w2g (call $paint_scratch_take)) (i32.const 0))
       (then (return (i32.const 1))))
     (if (global.get $pending_wm_size) (then (return (i32.const 1))))
     ;; Bit 3 is persistent state: it records that DefWindowProc owns the
@@ -2239,6 +2321,75 @@
     (if (call $timer_check_due (call $paint_scratch_take) (i32.const 0))
       (then (return (i32.const 1))))
     (i32.const 0))
+
+  ;; next_timer_due_ms() — milliseconds until the soonest timer this thread owns
+  ;; becomes due, or -1 when it owns none. $has_pending_message answers "is
+  ;; there work now"; a host that parks a guest waiting on GetMessage needs the
+  ;; complementary "and when could there be", because a WM_TIMER is the one
+  ;; wake source that arrives with nothing else touching the emulator: no
+  ;; input event, no worker, no posted message. Without it the drive loop can
+  ;; only poll. Same two tables $timer_check_due walks, same ownership rule
+  ;; (a WM_TIMER is delivered to the thread that set it), and it consumes
+  ;; nothing — a due timer reports 0 and is still there for the next
+  ;; GetMessage/PeekMessage to take.
+  (func (export "next_timer_due_ms") (result i32)
+    (local $i i32) (local $addr i32) (local $elapsed i32)
+    (local $interval i32) (local $remain i32) (local $best i32)
+    (local.set $best (i32.const -1))
+    (global.set $tick_count (call $host_get_ticks))
+    (call $lock_wnd_acquire)
+    (block $break
+      (loop $loop
+        (br_if $break (i32.ge_u (local.get $i) (global.get $TIMER_MAX)))
+        (local.set $addr (i32.add (global.get $TIMER_TABLE)
+          (i32.mul (local.get $i) (global.get $TIMER_ENTRY_SIZE))))
+        ;; Both halves normalized to 0/1 before the i32.and: the raw hwnd/id are
+        ;; arbitrary integers and an even one would clear the low bit.
+        (if (i32.and
+              (i32.or
+                (i32.ne (i32.load (local.get $addr)) (i32.const 0))
+                (i32.ne (i32.atomic.load offset=4 (local.get $addr)) (i32.const 0)))
+              (i32.eq (i32.load (i32.add (global.get $TIMER_SHARED)
+                (i32.add (i32.const 0x10) (i32.mul (local.get $i) (i32.const 4)))))
+                (global.get $current_thread_id)))
+          (then
+            (local.set $interval (i32.load offset=8 (local.get $addr)))
+            (local.set $elapsed (i32.sub (global.get $tick_count)
+              (i32.load offset=12 (local.get $addr))))
+            (local.set $remain
+              (select (i32.const 0)
+                (i32.sub (local.get $interval) (local.get $elapsed))
+                (i32.ge_u (local.get $elapsed) (local.get $interval))))
+            (if (i32.or
+                  (i32.lt_s (local.get $best) (i32.const 0))
+                  (i32.lt_u (local.get $remain) (local.get $best)))
+              (then (local.set $best (local.get $remain))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $loop)))
+    (call $lock_wnd_release)
+    ;; Multimedia timers (timeSetEvent): id at +0, period at +4, last tick at +16.
+    (local.set $i (i32.const 0))
+    (block $mm_break
+      (loop $mm_loop
+        (br_if $mm_break (i32.ge_u (local.get $i) (global.get $MM_TIMER_MAX)))
+        (local.set $addr (call $mm_timer_slot (local.get $i)))
+        (if (i32.load (local.get $addr))
+          (then
+            (local.set $interval (i32.load offset=4 (local.get $addr)))
+            (local.set $elapsed (i32.sub (global.get $tick_count)
+              (i32.load offset=16 (local.get $addr))))
+            (local.set $remain
+              (select (i32.const 0)
+                (i32.sub (local.get $interval) (local.get $elapsed))
+                (i32.ge_u (local.get $elapsed) (local.get $interval))))
+            (if (i32.or
+                  (i32.lt_s (local.get $best) (i32.const 0))
+                  (i32.lt_u (local.get $remain) (local.get $best)))
+              (then (local.set $best (local.get $remain))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $mm_loop)))
+    (local.get $best))
+
   (func (export "get_com_dll_name") (result i32) (global.get $com_dll_name))
   (func (export "get_loadlib_name") (result i32) (global.get $loadlib_name_ptr))
 
@@ -2256,6 +2407,85 @@
   (func (export "set_ebx") (param i32) (i32.store offset=12 (global.get $reg_base) (local.get 0)))
   (func (export "set_esi") (param i32) (i32.store offset=24 (global.get $reg_base) (local.get 0)))
   (func (export "set_edi") (param i32) (i32.store offset=28 (global.get $reg_base) (local.get 0)))
+  ;; Owner-thread SendMessage dispatcher support.  guest-worker.js snapshots
+  ;; these few interpreter-control globals around a nested dispatch just as
+  ;; $wnd_send_message_inner does for a local synchronous send.
+  (func (export "get_handler_set_eip") (result i32) (global.get $handler_set_eip))
+  (func (export "set_handler_set_eip") (param i32) (global.set $handler_set_eip (local.get 0)))
+  (func (export "get_steps") (result i32) (global.get $steps))
+  (func (export "set_steps") (param i32) (global.set $steps (local.get 0)))
+  (func (export "set_yield_state") (param $reason i32) (param $flag i32)
+    (global.set $yield_reason (local.get $reason))
+    (global.set $yield_flag (local.get $flag)))
+  (func (export "get_send_target_tid") (result i32) (global.get $send_target_tid))
+  (func (export "get_send_hwnd") (result i32) (global.get $send_hwnd))
+  (func (export "get_send_msg") (result i32) (global.get $send_msg))
+  (func (export "get_send_wparam") (result i32) (global.get $send_wparam))
+  (func (export "get_send_lparam") (result i32) (global.get $send_lparam))
+  (func (export "get_send_post_kind") (result i32) (global.get $send_post_kind))
+
+  ;; Finish message-specific compatibility work on the HWND owner's instance,
+  ;; after its native WndProc has returned but before the LRESULT is delivered
+  ;; to the parked sender.
+  (func (export "thread_send_post")
+    (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32)
+    (param $post_kind i32) (param $result i32) (result i32)
+    (if (i32.eq (local.get $post_kind) (i32.const 1))
+      (then (return (call $richedit_formatrange_next (local.get $lparam)))))
+    (if (i32.eq (local.get $post_kind) (i32.const 2))
+      (then
+        (call $richedit_patch_get_charformat_message
+          (local.get $hwnd) (local.get $msg) (local.get $lparam))))
+    (local.get $result))
+
+  ;; Start a synchronous dispatch on this instance. Native USER procedures can
+  ;; complete immediately; an x86 WndProc is entered with CACA0005 as its return
+  ;; thunk and is driven by the worker until EIP becomes zero.
+  (func (export "thread_send_begin")
+    (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32)
+    (result i32)
+    (local $wp i32)
+    (global.set $cross_thread_send_depth
+      (i32.add (global.get $cross_thread_send_depth) (i32.const 1)))
+    (local.set $wp (call $wnd_table_get (local.get $hwnd)))
+    (if (i32.or (i32.eqz (local.get $wp))
+                (i32.ge_u (local.get $wp) (i32.const 0xFFFF0000)))
+      (then
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
+          (local.get $hwnd) (local.get $msg) (local.get $wparam) (local.get $lparam)))
+        (global.set $cross_thread_send_depth
+          (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))
+        (return (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $lparam))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $wparam))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $msg))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $sync_msg_ret_thunk))
+    (global.set $eip (local.get $wp))
+    (global.set $steps (i32.const 0))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
+    (global.set $sync_msg_depth (i32.add (global.get $sync_msg_depth) (i32.const 1)))
+    (i32.const 1))
+
+  (func (export "thread_send_end") (result i32)
+    (global.set $sync_msg_depth (i32.sub (global.get $sync_msg_depth) (i32.const 1)))
+    (global.set $cross_thread_send_depth
+      (i32.sub (global.get $cross_thread_send_depth) (i32.const 1)))
+    (i32.load offset=0 (global.get $reg_base)))
+
+  ;; Finish the original parked SendMessage stdcall on its owning instance.
+  (func (export "complete_thread_send") (param $result i32)
+    (local $ret i32)
+    (if (i32.ne (global.get $yield_reason) (i32.const 10)) (then (return)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (global.set $eip (local.get $ret))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0)))
 
   ;; Windows version
   (func (export "set_winver") (param i32) (global.set $winver (local.get 0)))
@@ -2282,6 +2512,22 @@
   (func (export "set_bp") (param $addr i32) (global.set $bp_addr (local.get $addr)) (global.set $bp_first_caller (i32.const 0)) (call $dbg_recompute))
   (func (export "clear_bp") (global.set $bp_addr (i32.const 0)) (call $dbg_recompute))
   (func (export "get_bp_addr") (result i32) (global.get $bp_addr))
+  ;; --fault-null: 0=off, 1=log unmapped guest accesses, 2=log and trap,
+  ;; 3=log and raise a guest EXCEPTION_ACCESS_VIOLATION at the faulting
+  ;; instruction (--fault-null=raise), which is what real hardware does.
+  ;; Per-instance like every mutable global, so a worker thread needs its own
+  ;; call to see the same setting.
+  ;; Arming this retires every decoded block, because the per-block executor
+  ;; (H458) declines to install while it is set: a native micro-op that traps
+  ;; inside $g2w under --fault-null=stop would do so with the register file
+  ;; still in wasm locals, so the crash dump would name stale registers. The
+  ;; decline is decode-time, so a block installed BEFORE the flag was armed
+  ;; would keep running -- hence the flush. Costs nothing on an unarmed run.
+  (func (export "set_fault_unmapped") (param $mode i32)
+    (global.set $fault_unmapped (local.get $mode))
+    (if (local.get $mode) (then (global.set $thread_flush_pending (i32.const 1)))))
+  (func (export "get_guest_page_table_size") (result i32)
+    (global.get $GUEST_PAGE_TABLE_SIZE))
   (func (export "get_bp_first_caller") (result i32) (global.get $bp_first_caller))
 
   ;; --trace-esp wiring (test harness uses this). Pass hi=0 to disable the
@@ -2306,8 +2552,16 @@
     (local $base i32)
     (local.set $base (i32.add (global.get $HIT_COUNT_BASE)
                               (i32.shl (local.get $slot) (i32.const 3))))
-    (i32.store          (local.get $base) (local.get $addr))
-    (i32.store offset=4 (local.get $base) (i32.const 0))
+    ;; Arming the same address twice must not throw the count away. The slots
+    ;; live in linear memory, which worker instances share, and every spawn
+    ;; re-arms all of them (lib/thread-manager.js) -- so an app that started a
+    ;; thread mid-run reset every counter to zero and the flag reported 0 for
+    ;; addresses it had already counted hundreds of thousands of times. Use
+    ;; clear_counts to deliberately start over.
+    (if (i32.ne (i32.load (local.get $base)) (local.get $addr))
+      (then
+        (i32.store          (local.get $base) (local.get $addr))
+        (i32.store offset=4 (local.get $base) (i32.const 0))))
     (if (i32.gt_s (i32.add (local.get $slot) (i32.const 1)) (global.get $hit_count_n))
       (then (global.set $hit_count_n (i32.add (local.get $slot) (i32.const 1)))))
     (call $dbg_recompute))
@@ -2315,6 +2569,15 @@
     (i32.load offset=4 (i32.add (global.get $HIT_COUNT_BASE)
                                 (i32.shl (local.get $slot) (i32.const 3)))))
   (func (export "clear_counts") (global.set $hit_count_n (i32.const 0)) (call $dbg_recompute))
+  ;; Who reached slot 0's address (see $hit0_first_caller in 01-header.wat).
+  (func (export "get_hit0_first_caller") (result i32) (global.get $hit0_first_caller))
+  (func (export "get_hit0_last_caller")  (result i32) (global.get $hit0_last_caller))
+  (func (export "get_hit0_last_ebp")     (result i32) (global.get $hit0_last_ebp))
+  (func (export "get_hit0_frame") (param $n i32) (result i32)
+    (if (i32.eq (local.get $n) (i32.const 1)) (then (return (global.get $hit0_f1))))
+    (if (i32.eq (local.get $n) (i32.const 2)) (then (return (global.get $hit0_f2))))
+    (if (i32.eq (local.get $n) (i32.const 3)) (then (return (global.get $hit0_f3))))
+    (global.get $hit0_f4))
 
   ;; Disabled-by-default stack-packet compiler prototype. Toggling clears the
   ;; decoded-block cache so already-decoded generic/packet blocks do not linger.
@@ -2364,6 +2627,602 @@
   (func (export "get_stack_packet_0049dd20_to_e0ad_entries") (result i32)
     (global.get $stack_packet_0049dd20_to_e0ad_entries))
 
+  ;; Loop-idiom matcher (src/07b-loop-match.wat). Decode-time only, so these
+  ;; can be flipped at any point without disturbing a running block.
+  (func (export "set_loop_trace") (param $flag i32) (param $eip i32)
+    (global.set $loop_trace (local.get $flag))
+    (global.set $loop_trace_eip (local.get $eip)))
+  (func (export "get_loop_selfloop_blocks") (result i32)
+    (global.get $loop_selfloop_blocks))
+  (func (export "get_loop_matched_blocks") (result i32)
+    (global.get $loop_matched_blocks))
+  (func (export "get_loop_lut_bounded_matches") (result i32)
+    (global.get $loop_lut_bounded_matches))
+  (func (export "get_loop_lut_runs") (result i32)
+    (global.get $loop_lut_runs))
+  (func (export "get_loop_lut_bytes") (result i64)
+    (global.get $loop_lut_bytes))
+  (func (export "get_loop_xlat_stosb_matches") (result i32)
+    (global.get $loop_xlat_stosb_matches))
+  (func (export "get_loop_xlat_stosb_candidates") (result i32)
+    (global.get $loop_xlat_stosb_candidates))
+  (func (export "get_loop_xlat_stosb_runs") (result i32)
+    (global.get $loop_xlat_stosb_runs))
+  (func (export "get_loop_xlat_stosb_bytes") (result i64)
+    (global.get $loop_xlat_stosb_bytes))
+  (func (export "get_loop_lut16_matches") (result i32)
+    (global.get $loop_lut16_matches))
+  (func (export "get_loop_lut16_runs") (result i32)
+    (global.get $loop_lut16_runs))
+  (func (export "get_loop_lut16_bytes") (result i64)
+    (global.get $loop_lut16_bytes))
+  (func (export "get_lut_span_matches") (result i32)
+    (global.get $lut_span_matches))
+  (func (export "get_lut_span_runs") (result i32)
+    (global.get $lut_span_runs))
+  (func (export "get_lut_span_bytes") (result i64)
+    (global.get $lut_span_bytes))
+  ;; Compatibility switch: control both families together. Prefer the family
+  ;; switches for an A/B because COPY_RUN remains disabled by default.
+  (func (export "set_loop_emit") (param $flag i32)
+    (global.set $loop_lut_emit_enabled (local.get $flag))
+    (call $loop_copy_emit_set (local.get $flag))
+    (call $loop_generic_copy_emit_set (local.get $flag)))
+  (func (export "set_loop_lut_emit") (param $flag i32)
+    (global.set $loop_lut_emit_enabled (local.get $flag)))
+  (func (export "set_loop_lut16_stack_emit") (param $flag i32)
+    (global.set $loop_lut16_stack_emit_enabled (local.get $flag)))
+  (func (export "set_loop_copy_emit") (param $flag i32)
+    (call $loop_copy_emit_set (local.get $flag)))
+  ;; Unsafe generic COPY_RUN/AVG rollback switch. Production app policy uses
+  ;; set_loop_copy_emit for exact byte-proved folds and never enables this.
+  (func (export "set_loop_generic_copy_emit") (param $flag i32)
+    (call $loop_generic_copy_emit_set (local.get $flag)))
+  (func (export "set_loop_copy32_counted_emit") (param $flag i32)
+    (call $loop_copy32_counted_emit_set (local.get $flag)))
+  (func (export "get_loop_copy32_counted_matches") (result i32)
+    (global.get $loop_copy32_counted_matches))
+  (func (export "get_loop_copy32_counted_runs") (result i32)
+    (global.get $loop_copy32_counted_runs))
+  (func (export "get_loop_copy32_counted_bulk_bytes") (result i64)
+    (global.get $loop_copy32_counted_bulk_bytes))
+  (func (export "set_loop_aoe_fill_emit") (param $flag i32)
+    (global.set $loop_aoe_fill_emit_enabled (local.get $flag))
+    (call $clear_cache))
+  (func (export "get_loop_aoe_fill_matches") (result i32)
+    (global.get $loop_aoe_fill_matches))
+  (func (export "get_loop_aoe_fill_runs") (result i32)
+    (global.get $loop_aoe_fill_runs))
+  (func (export "get_loop_aoe_fill_bytes") (result i64)
+    (global.get $loop_aoe_fill_bytes))
+  (func (export "set_loop_aoe_span_emit") (param $flag i32)
+    (global.set $loop_aoe_span_emit_enabled (local.get $flag))
+    (call $clear_cache))
+  (func (export "get_loop_aoe_span_matches") (result i32)
+    (global.get $loop_aoe_span_matches))
+  (func (export "get_loop_aoe_span_runs") (result i32)
+    (global.get $loop_aoe_span_runs))
+  (func (export "get_loop_colorkey8_matches") (result i32)
+    (global.get $loop_colorkey8_matches))
+  (func (export "get_loop_colorkey8_runs") (result i32)
+    (global.get $loop_colorkey8_runs))
+  (func (export "get_loop_colorkey8_bytes") (result i64)
+    (global.get $loop_colorkey8_bytes))
+
+  ;; --no-sib-fusion: emit the unfused compute_ea_sib + consumer pair, so a
+  ;; fused build and an unfused one differ in exactly one thing and need no
+  ;; rebuild between them. Must be set before the first decode, and on every
+  ;; per-thread instance — mut globals are per-instance.
+  (func (export "set_sib_fusion") (param $flag i32)
+    (global.set $sib_fusion_enabled (local.get $flag)))
+
+  (func (export "set_store_span_fusion") (param $flag i32)
+    (global.set $store_span_enabled (local.get $flag))
+    (call $clear_cache))
+
+  (func (export "set_x87_pipeline4_fusion") (param $flag i32)
+    (global.set $x87_pipeline4_emit_enabled (local.get $flag))
+    (call $clear_cache))
+  (func (export "get_x87_pipeline4_matches") (result i32)
+    (global.get $x87_pipeline4_matches))
+  (func (export "get_x87_pipeline4_runs") (result i32)
+    (global.get $x87_pipeline4_runs))
+  (func (export "get_x87_tree4_matches") (result i32)
+    (global.get $x87_tree4_matches))
+  (func (export "get_x87_tree4_runs") (result i32)
+    (global.get $x87_tree4_runs))
+  (func (export "get_x87_island_matches") (result i32)
+    (global.get $x87_island_matches))
+  (func (export "get_x87_island_runs") (result i32)
+    (global.get $x87_island_runs))
+  (func (export "set_x87_affine_fusion") (param $flag i32)
+    (global.set $x87_affine_emit_enabled (local.get $flag))
+    (call $clear_cache))
+  (func (export "get_x87_affine_prepare_matches") (result i32)
+    (global.get $x87_affine_prepare_matches))
+  (func (export "get_x87_affine_prepare_runs") (result i32)
+    (global.get $x87_affine_prepare_runs))
+  (func (export "get_x87_affine_finish_matches") (result i32)
+    (global.get $x87_affine_finish_matches))
+  (func (export "get_x87_affine_finish_runs") (result i32)
+    (global.get $x87_affine_finish_runs))
+
+  ;; The unrolled-rectangle fold ($th_rect_run). Same rules: before the first
+  ;; decode, and on every per-thread instance.
+  (func (export "set_rect_run") (param $flag i32)
+    (global.set $rect_run_enabled (local.get $flag)))
+
+  (func (export "set_case_chain") (param $flag i32)
+    (global.set $case_chain_enabled (local.get $flag)))
+
+  ;; The run-length blit fold ($th_rle_run). Decode-time, so this only steers
+  ;; blocks decoded after it is called -- set it before the first decode for a
+  ;; clean A/B, and on every per-thread instance.
+  (func (export "set_rle_run") (param $flag i32)
+    (global.set $rle_run_enabled (local.get $flag)))
+  (func (export "get_rle_run") (result i32) (global.get $rle_run_enabled))
+
+  ;; The colour-keyed LUT16 blit fold ($th_ck_lut16_run). Same decode-time
+  ;; rules as the three above. `matches` counts blocks the grammar accepted,
+  ;; `runs` dispatches of the executor, `px` pixels it actually blitted -- so
+  ;; a run that matched but never executed is visible as matches>0, runs==0.
+  (func (export "set_ck_lut16") (param $flag i32)
+    (global.set $ck_lut16_enabled (local.get $flag)))
+  (func (export "get_ck_lut16") (result i32) (global.get $ck_lut16_enabled))
+  (func (export "get_ck_lut16_matches") (result i32) (global.get $ck_lut16_matches))
+  (func (export "get_ck_lut16_runs") (result i32) (global.get $ck_lut16_runs))
+  (func (export "get_ck_lut16_px") (result i64) (global.get $ck_lut16_px))
+
+  ;; The colour-keyed 8bpp->8bpp copy fold ($th_ck_copy8_run). Same
+  ;; decode-time off switch as the rest, so an A/B needs two code addresses
+  ;; or a cleared block cache.
+  (func (export "set_ck_copy8") (param $flag i32)
+    (global.set $ck_copy8_enabled (local.get $flag)))
+  (func (export "get_ck_copy8") (result i32) (global.get $ck_copy8_enabled))
+  (func (export "get_ck_copy8_matches") (result i32) (global.get $ck_copy8_matches))
+  (func (export "get_ck_copy8_runs") (result i32) (global.get $ck_copy8_runs))
+  (func (export "get_ck_copy8_px") (result i64) (global.get $ck_copy8_px))
+
+  ;; The two stream-idiom folds of docs/loop-idiom-superops-design.md §20.
+  ;; `matches` counts blocks the recognizer accepted, `runs` entries into the
+  ;; super-op, and `levels`/`tokens` the guest iterations those entries stand
+  ;; for -- that last one is what a --handler-hist total is divided into to
+  ;; get the share of work caught. Both off switches are decode-time, so an
+  ;; A/B needs two code addresses or a cleared block cache.
+  (func (export "set_smk_tree") (param $flag i32)
+    (global.set $smk_tree_enabled (local.get $flag)))
+  (func (export "get_smk_tree") (result i32) (global.get $smk_tree_enabled))
+  (func (export "get_smk_tree_matches") (result i32) (global.get $smk_tree_matches))
+  (func (export "get_smk_tree_runs") (result i32) (global.get $smk_tree_runs))
+  (func (export "get_smk_tree_levels") (result i64) (global.get $smk_tree_levels))
+
+  (func (export "set_pcx_run") (param $flag i32)
+    (global.set $pcx_run_enabled (local.get $flag)))
+  (func (export "get_pcx_run") (result i32) (global.get $pcx_run_enabled))
+  (func (export "get_pcx_run_matches") (result i32) (global.get $pcx_run_matches))
+  (func (export "get_pcx_run_runs") (result i32) (global.get $pcx_run_runs))
+  (func (export "get_pcx_run_tokens") (result i64) (global.get $pcx_run_tokens))
+
+  ;; The alpha-blended RGB565 blit fold ($th_ck_blend16_run). The off switch
+  ;; is decode-time like every other fold's, so an A/B has to run the two arms
+  ;; at different code addresses or clear the block cache between them.
+  (func (export "set_ck_blend16") (param $flag i32)
+    (global.set $ck_blend16_enabled (local.get $flag)))
+  (func (export "get_ck_blend16") (result i32) (global.get $ck_blend16_enabled))
+  (func (export "get_ck_blend16_matches") (result i32) (global.get $ck_blend16_matches))
+  (func (export "get_ck_blend16_runs") (result i32) (global.get $ck_blend16_runs))
+  (func (export "get_ck_blend16_px") (result i64) (global.get $ck_blend16_px))
+
+  ;; The dest-indexed keyed blit fold ($th_ck_shadow16_run). Same decode-time
+  ;; off switch, same A/B caveat.
+  (func (export "set_ck_shadow16") (param $flag i32)
+    (global.set $ck_shadow16_enabled (local.get $flag)))
+  (func (export "get_ck_shadow16") (result i32) (global.get $ck_shadow16_enabled))
+  (func (export "get_ck_shadow16_matches") (result i32) (global.get $ck_shadow16_matches))
+  (func (export "get_ck_shadow16_runs") (result i32) (global.get $ck_shadow16_runs))
+  (func (export "get_ck_shadow16_px") (result i64) (global.get $ck_shadow16_px))
+
+  ;; TREE_FOLD ($th_tree_fold, src/07b-loop-match.wat). The general integer
+  ;; expression fold; OFF by default. Decode-time, so the same rule as the
+  ;; three above: set it before the first decode, and on every per-thread
+  ;; instance. `matches` counts every block the predicate accepted whether or
+  ;; not the gate let it emit, so a --tree-fold-off run still reports how much
+  ;; of the corpus the family covers.
+  (func (export "set_tree_fold") (param $flag i32)
+    (global.set $tree_fold_enabled (local.get $flag)))
+  (func (export "get_tree_fold") (result i32) (global.get $tree_fold_enabled))
+  ;; --trace-tree-fold. Decode-time like the fold itself, so it has to reach
+  ;; every per-thread instance or the census sees only the main thread's blocks.
+  (func (export "set_tree_trace") (param $flag i32)
+    (global.set $tree_trace (local.get $flag)))
+  (func (export "set_tree_fold_min_ops") (param $n i32)
+    (global.set $tree_fold_min_ops (local.get $n)))
+  ;; The ceiling, clamped: a descriptor past $TREE_FOLD_UOPS_LIMIT overruns
+  ;; either $decode_block's reserved slack or the classify scratch, and both
+  ;; corrupt silently rather than declining, so the flag cannot be allowed to
+  ;; ask for one. Lowering it is always safe, which is what an A/B wants.
+  (func (export "set_tree_fold_max_ops") (param $n i32)
+    (global.set $tree_fold_max_ops
+      (select (global.get $TREE_FOLD_UOPS_LIMIT) (local.get $n)
+              (i32.gt_u (local.get $n) (global.get $TREE_FOLD_UOPS_LIMIT)))))
+  (func (export "get_tree_fold_max_ops") (result i32) (global.get $tree_fold_max_ops))
+  (func (export "get_tree_fold_matches") (result i32) (global.get $tree_fold_matches))
+  (func (export "get_tree_fold_runs") (result i32) (global.get $tree_fold_runs))
+  (func (export "get_tree_fold_iters") (result i64) (global.get $tree_fold_iters))
+  (func (export "get_tree_fold_ops") (result i64) (global.get $tree_fold_ops))
+  (func (export "get_tree_fold_dead_flag_ops") (result i32)
+    (global.get $tree_fold_dead_flag_ops))
+  ;; What the most recent lowering put in the descriptor header. A fold that
+  ;; runs the right number of iterations while publishing the wrong register
+  ;; set is indistinguishable from one that never ran its body; these two say
+  ;; which. Diagnostic only.
+  (func (export "get_tree_fold_last_nuops") (result i32)
+    (global.get $tree_fold_last_nuops))
+  (func (export "get_tree_fold_last_live_out") (result i32)
+    (global.get $tree_fold_last_live_out))
+  ;; The decline split -- what a wider predicate would have to cover.
+  (func (export "get_tree_decl_short") (result i32) (global.get $tree_decl_short))
+  (func (export "get_tree_decl_long") (result i32) (global.get $tree_decl_long))
+  (func (export "get_tree_decl_term") (result i32) (global.get $tree_decl_term))
+  (func (export "get_tree_decl_uop") (result i32) (global.get $tree_decl_uop))
+  (func (export "get_tree_decl_uop_fn") (result i32) (global.get $tree_decl_uop_fn))
+  ;; The x87 sub-bucket of `unfoldable-op`: how many self-loops were declined
+  ;; because an x87 op was outside the accepted set, and (group<<8)|(reg<<4)|rm
+  ;; of the last one -- which names the instruction, where lastFn 188 cannot.
+  (func (export "get_tree_decl_x87") (result i32) (global.get $tree_decl_x87))
+  (func (export "get_tree_decl_x87_op") (result i32) (global.get $tree_decl_x87_op))
+
+  ;; REGION descriptors. H454's descriptor is a graph; the shipped fold emits
+  ;; the one-block case of it. These three exports install a hand-built
+  ;; multi-block one at a chosen guest EIP, and exist for
+  ;; tools/bench-loops.js --toggle=region and test/test-tree-fold.js only.
+  ;; OFF by default and decode-time like every other fold gate, so the flag has
+  ;; to be set before the block at that EIP is first decoded.
+  ;;
+  ;; There is deliberately no region MATCHER. Recognizing a graph in real code
+  ;; is the app-scale work this measurement exists to decide about; building it
+  ;; first would have been the thing the go/no-go was meant to gate. The
+  ;; harness supplies the descriptor AND the x86 the other arm runs, and
+  ;; checksum equality between the arms is what proves the two agree.
+  ;; The per-block executor (H458, src/07c-block-exec.wat,
+  ;; docs/block-executor-design.md). OFF by default and decode-time like every
+  ;; other fold gate, so it has to be set before the first decode and on every
+  ;; per-thread instance -- lib/worker-imports.js carries it for the second
+  ;; half and test/test-worker-wasm-globals.js is the gate on that.
+  ;; Block chaining (docs/block-chaining-design.md). Default OFF. Round 19
+  ;; removed the mutual exclusion with the block executor: the slot no longer
+  ;; holds a delta from the operand word's own address but a chunk selector
+  ;; plus an offset inside one of the loaded page's two chunks, so a slot in a
+  ;; descriptor's copied terminator names its target exactly as one in the
+  ;; threaded stream does. Both flags on is a supported configuration and is
+  ;; what section 8 of the design doc measures. The setter order no longer
+  ;; decides anything, which is what the inherited-setter replay needed.
+  (func (export "set_block_chain") (param $flag i32)
+    (global.set $block_chain_on (i32.ne (local.get $flag) (i32.const 0))))
+  (func (export "get_block_chain") (result i32) (global.get $block_chain_on))
+  (func (export "get_chain_hits") (result i64) (global.get $chain_hits))
+  (func (export "get_chain_slow") (result i64) (global.get $chain_slow))
+  (func (export "get_chain_patches") (result i32) (global.get $chain_patches))
+  (func (export "get_chain_bumps") (result i32) (global.get $chain_bumps))
+  (func (export "get_chain_epoch") (result i32) (global.get $chain_epoch))
+  (func (export "get_branch_end_calls") (result i64) (global.get $branch_end_calls))
+  ;; ROUND 19 -- the anchor-location split. "pool" means the chain slot lives in
+  ;; a page's block-executor DESCRIPTOR chunk, which can only be a copied
+  ;; terminator, which can only be an executor tail exit.
+  (func (export "get_chain_hits_pool") (result i64) (global.get $chain_hits_pool))
+  (func (export "get_chain_slow_pool") (result i64) (global.get $chain_slow_pool))
+  (func (export "get_chain_patches_pool") (result i32) (global.get $chain_patches_pool))
+  (func (export "get_chain_refuse_target") (result i32) (global.get $chain_refuse_target))
+  (func (export "get_chain_refuse_anchor") (result i32) (global.get $chain_refuse_anchor))
+  (func (export "get_chain_stale_regs") (result i64) (global.get $chain_stale_regs))
+  (func (export "get_branch_end_pool") (result i64) (global.get $branch_end_pool))
+  (func (export "get_block_exec_tail_exit_count") (result i64)
+    (global.get $block_exec_tail_exit_count))
+  (func (export "get_block_exec_tail_chainable") (result i64)
+    (global.get $block_exec_tail_chainable))
+  ;; The epoch is 13 bits and the wrap has to be reachable from a test in under
+  ;; a second. Every real invalidation path -- $page_retire_at, $page_chunk_put,
+  ;; $page_dir_reset, $page_dir_drop_mode -- calls exactly this function, and
+  ;; test-block-chain.js covers those paths separately through
+  ;; invalidate_code_range and a guest SMC write. What this export exists for is
+  ;; the arithmetic AT the wrap: that past $CHAIN_EPOCH_MAX the epoch parks on a
+  ;; value no stored slot can hold, and that a later run restarts it at 1.
+  ;; Driving 8192 real page drops takes hundreds of thousands of compile/run
+  ;; cycles because a page dir slot that is already free costs nothing to drop.
+  (func (export "test_chain_bump") (call $chain_bump))
+
+  ;; ROUND 19: no longer clears $block_chain_on. The two features coexist --
+  ;; see docs/block-chaining-design.md section 8 -- so this setter and
+  ;; set_block_chain are independent and the replay order of the inherited
+  ;; setters no longer decides which one a worker instance runs.
+  (func (export "set_block_exec") (param $flag i32)
+    (global.set $block_exec_enabled (local.get $flag))
+    (call $bx_hot_gate_refresh))
+  (func (export "get_block_exec") (result i32) (global.get $block_exec_enabled))
+  (func (export "set_block_exec_min_uops") (param $n i32)
+    (global.set $block_exec_min_uops (local.get $n)))
+  (func (export "set_block_exec_max_uops") (param $n i32)
+    (global.set $block_exec_max_uops (local.get $n)))
+  (func (export "set_block_exec_trace") (param $n i32)
+    (global.set $block_exec_trace (local.get $n)))
+  ;; ---- round 11: the load/op split pass -------------------------------
+  (func (export "set_block_exec_split") (param $flag i32)
+    (global.set $block_exec_split (local.get $flag)))
+  (func (export "get_block_exec_split") (result i32) (global.get $block_exec_split))
+  (func (export "set_block_exec_x87") (param $flag i32)
+    (global.set $block_exec_x87 (local.get $flag)))
+  (func (export "get_block_exec_x87") (result i32) (global.get $block_exec_x87))
+  (func (export "get_bx_pass_uops_before") (result i64)
+    (global.get $bx_pass_uops_before))
+  (func (export "get_bx_pass_uops_after") (result i64)
+    (global.get $bx_pass_uops_after))
+  (func (export "get_bx_pass_split") (result i64) (global.get $bx_pass_split))
+  (func (export "get_bx_pass_rle") (result i64) (global.get $bx_pass_rle))
+  (func (export "get_bx_pass_stlf") (result i64) (global.get $bx_pass_stlf))
+  (func (export "get_bx_pass_movelim") (result i64) (global.get $bx_pass_movelim))
+  (func (export "get_bx_pass_immfold") (result i64) (global.get $bx_pass_immfold))
+  (func (export "get_bx_x87_uops") (result i64) (global.get $bx_x87_uops))
+  (func (export "get_bx_x87run_uops") (result i64) (global.get $bx_x87run_uops))
+  ;; Round 15 (section 24): the x87 machine state the executor deliberately
+  ;; does NOT model, exported so a test can assert that directly instead of
+  ;; inferring it from a stored float. Getters only -- nothing sets these from
+  ;; the host, so they are not INHERITED_WASM_GLOBALS.
+  (func (export "get_fpu_top") (result i32) (global.get $fpu_top))
+  (func (export "get_fpu_sw") (result i32) (global.get $fpu_sw))
+  (func (export "get_fpu_tags") (result i32) (global.get $fpu_tag))
+  (func (export "get_bx_x87_native_uops") (result i64)
+    (global.get $bx_x87_native_uops))
+  (func (export "set_block_exec_carry") (param $flag i32)
+    (global.set $block_exec_carry (local.get $flag)))
+  (func (export "get_block_exec_carry") (result i32) (global.get $block_exec_carry))
+  (func (export "get_bx_pass_carry_rle") (result i64)
+    (global.get $bx_pass_carry_rle))
+  (func (export "get_bx_carry_edges") (result i64) (global.get $bx_carry_edges))
+  (func (export "get_bx_carry_refused") (result i64)
+    (global.get $bx_carry_refused))
+  (func (export "set_block_exec_rmw") (param $flag i32)
+    (global.set $block_exec_rmw (local.get $flag)))
+  (func (export "get_block_exec_rmw") (result i32) (global.get $block_exec_rmw))
+  ;; Round 16: the one-block leaf entry point (H463). ON by default inside an
+  ;; armed executor; zero sends every one-block install back through H458.
+  (func (export "set_block_exec_leaf") (param $flag i32)
+    (global.set $block_exec_leaf (local.get $flag)))
+  (func (export "get_block_exec_leaf") (result i32) (global.get $block_exec_leaf))
+  (func (export "get_block_exec_leaf_runs") (result i32)
+    (global.get $block_exec_leaf_runs))
+  ;; Round 17: the SECOND leaf (H464), the one that may fall back. Meaningless
+  ;; with set_block_exec_leaf(0), which already sends every one-block install
+  ;; back to H458; zero here narrows that to the fallback-carrying ones and
+  ;; reproduces round 16 exactly.
+  (func (export "set_block_exec_leaf_fb") (param $flag i32)
+    (global.set $block_exec_leaf_fb (local.get $flag)))
+  (func (export "get_block_exec_leaf_fb") (result i32) (global.get $block_exec_leaf_fb))
+  (func (export "get_block_exec_leaf_fb_runs") (result i32)
+    (global.get $block_exec_leaf_fb_runs))
+  ;; Round 18 (section 28): the unmodelled-terminator side exit. Zero here
+  ;; reproduces round 17 exactly on this build -- a block ending in a call, a
+  ;; ret or an indirect branch goes back to being a classify refusal.
+  (func (export "set_block_exec_tail_exits") (param $flag i32)
+    (global.set $block_exec_tail_exits (local.get $flag)))
+  (func (export "get_block_exec_tail_exits") (result i32)
+    (global.get $block_exec_tail_exits))
+  (func (export "get_block_exec_tail_exit_runs") (result i32)
+    (global.get $block_exec_tail_exit_runs))
+  ;; The census. `would_admit` / `would_grow` are the UPPER BOUND -- walks that
+  ;; a term_kind 10 member could have turned into, or grown, a region --
+  ;; counted whether or not the switch above is on, so the off arm measures the
+  ;; opportunity and the on arm measures what was realised.
+  (func (export "get_block_exec_tail_would_admit") (result i32)
+    (global.get $bx_rg_tail_would_admit))
+  (func (export "get_block_exec_tail_would_grow") (result i32)
+    (global.get $bx_rg_tail_would_grow))
+  (func (export "get_block_exec_tail_refusals") (result i64)
+    (global.get $bx_rg_tail_refusals))
+  (func (export "get_block_exec_tail_admitted") (result i64)
+    (global.get $bx_rg_tail_admitted))
+  (func (export "get_block_exec_tail_regions") (result i32)
+    (global.get $bx_rg_tail_regions))
+  (func (export "get_block_exec_tail_members") (result i32)
+    (global.get $bx_rg_tail_members))
+  (func (export "get_block_exec_tail_norm") (result i32)
+    (global.get $bx_rg_tail_norm))
+  (func (export "get_bx_pass_rmw") (result i64) (global.get $bx_pass_rmw))
+  (func (export "get_block_exec_installs") (result i32)
+    (global.get $block_exec_installs))
+  (func (export "get_block_exec_declines") (result i32)
+    (global.get $block_exec_declines))
+  (func (export "get_block_exec_runs") (result i32) (global.get $block_exec_runs))
+  ;; The migration meter. native/(native+fallback) is the share of retired ops
+  ;; the executor served in-loop; the rest went out to a real handler through
+  ;; the spill/call/reload path, and $..._last_fallback_fn names the family to
+  ;; widen next.
+  (func (export "get_block_exec_native_ops") (result i64)
+    (global.get $block_exec_native_ops))
+  (func (export "get_block_exec_fallback_ops") (result i64)
+    (global.get $block_exec_fallback_ops))
+  (func (export "get_block_exec_last_fallback_fn") (result i32)
+    (global.get $block_exec_last_fallback_fn))
+  (func (export "get_block_exec_decl_why") (result i32)
+    (global.get $block_exec_decl_why))
+  ;; Interior block edges the executor did not have to take. With the run count
+  ;; and the two op totals this is everything a ns/entry-vs-ns/op fit needs, and
+  ;; it is the one term nothing else records -- a folded edge is invisible to
+  ;; the handler histogram and to $block_budget alike.
+  (func (export "get_block_exec_transfers_saved") (result i64)
+    (global.get $block_exec_transfers_saved))
+
+  ;; The multi-block matcher (src/07c-block-exec.wat section "THE MULTI-BLOCK
+  ;; MATCHER"). It rides on --block-exec; this setter exists so an A/B can
+  ;; turn just the N-block half off and leave the one-block executor armed,
+  ;; which is the only way to attribute a change to one of the two.
+  (func (export "set_block_exec_regions") (param $flag i32)
+    (global.set $bx_region_enabled (local.get $flag))
+    (call $bx_hot_gate_refresh))
+  (func (export "get_block_exec_regions") (result i32)
+    (global.get $bx_region_enabled))
+  ;; Discovery knobs (round 10). K entries before a head is walked, blocks one
+  ;; walk may visit, declines before a head is memoised out. All three are
+  ;; A/B levers, not tuning taste: the round-9 loss was decode-time discovery
+  ;; cost, so the arm that prices it has to be able to move it.
+  (func (export "set_block_exec_walk_k") (param $n i32)
+    (global.set $bx_walk_hot_k (local.get $n)))
+  (func (export "set_block_exec_walk_budget") (param $n i32)
+    (global.set $bx_walk_budget (local.get $n)))
+  (func (export "get_block_exec_walk_attempts") (result i32)
+    (global.get $bx_walk_attempts))
+  (func (export "get_block_exec_walk_installs") (result i32)
+    (global.get $bx_walk_installs))
+  ;; The discovery COST, in the two units the design doc reports it in: blocks
+  ;; visited (each one a $decode_block) and micro-ops classified.
+  (func (export "get_block_exec_walk_blocks") (result i64)
+    (global.get $bx_walk_blocks))
+  (func (export "get_block_exec_walk_uops") (result i64)
+    (global.get $bx_walk_uops))
+  (func (export "get_block_exec_walk_memo") (result i32)
+    (global.get $bx_walk_memo_refusals))
+  (func (export "get_block_exec_walk_probes") (result i32)
+    (global.get $bx_walk_hot_probes))
+  ;; Walks that failed and hinted a lower head to the gate instead. A high
+  ;; number against few installs means discovery keeps arriving at loops from
+  ;; the bottom.
+  (func (export "get_block_exec_walk_reanchors") (result i32)
+    (global.get $bx_walk_reanchors))
+  (func (export "get_block_exec_region_installs") (result i32)
+    (global.get $bx_region_installs))
+  (func (export "get_block_exec_region_declines") (result i32)
+    (global.get $bx_region_declines))
+  ;; Sum of member blocks over every installed region; divided by the install
+  ;; count it is the mean region size, and the histogram below is its shape.
+  (func (export "get_block_exec_region_blocks") (result i32)
+    (global.get $bx_region_blocks))
+  (func (export "get_block_exec_region_why") (result i32)
+    (global.get $bx_region_why))
+  (func (export "get_block_exec_region_thrash") (result i32)
+    (global.get $bx_region_thrash))
+  ;; Classify refusals by reason, 1 <= $r <= 8. See $bx_rg_nofit.
+  (func (export "get_block_exec_region_nofit") (param $r i32) (result i32)
+    (if (i32.gt_u (local.get $r) (i32.const 8))
+      (then (return (i32.const 0))))
+    (i32.load (call $bx_rg_word
+      (i32.add (global.get $BX_RG_NOFIT_OFF) (local.get $r)))))
+  ;; Collect refusals: 0..3 = notContiguous/blockCap/poison/classify with an
+  ;; empty chain, 4..7 = the same four with members already collected.
+  (func (export "get_block_exec_region_cfail") (param $s i32) (result i32)
+    (if (i32.gt_u (local.get $s) (i32.const 7))
+      (then (return (i32.const 0))))
+    (i32.load (call $bx_rg_word
+      (i32.add (global.get $BX_RG_CFAIL_OFF) (local.get $s)))))
+  ;; How many region candidates were declined for reason $w, 1 <= w <= 7.
+  ;; See $bx_rg_decline for what each number means.
+  (func (export "get_block_exec_region_why_n") (param $w i32) (result i32)
+    (if (i32.gt_u (local.get $w) (i32.const 7))
+      (then (return (i32.const 0))))
+    (i32.load (call $bx_rg_word
+      (i32.add (global.get $BX_RG_WHY_OFF) (local.get $w)))))
+  ;; How many regions of exactly $n blocks were installed, 0 <= n <= 16.
+  (func (export "get_block_exec_region_hist") (param $n i32) (result i32)
+    (if (i32.gt_u (local.get $n) (global.get $REGION_MAX_BLOCKS))
+      (then (return (i32.const 0))))
+    (i32.load (call $bx_rg_word
+      (i32.add (global.get $BX_RG_HIST_OFF) (local.get $n)))))
+  ;; Coverage by size: micro-ops retired inside, and entries into, a descriptor
+  ;; of exactly $n blocks. $n == 1 is the plain-block case, so the two together
+  ;; are the "ops in 1-block vs N-block regions" split.
+  (func (export "get_block_exec_ops_by_n") (param $n i32) (result i64)
+    (if (i32.gt_u (local.get $n) (global.get $REGION_MAX_BLOCKS))
+      (then (return (i64.const 0))))
+    (i64.load (call $bx_rg_word
+      (i32.add (global.get $BX_RG_OPSN_OFF) (i32.shl (local.get $n) (i32.const 1))))))
+  (func (export "get_block_exec_entries_by_n") (param $n i32) (result i32)
+    (if (i32.gt_u (local.get $n) (global.get $REGION_MAX_BLOCKS))
+      (then (return (i32.const 0))))
+    (i32.load (call $bx_rg_word
+      (i32.add (global.get $BX_RG_ENTN_OFF) (local.get $n)))))
+
+  (func (export "set_region_fold") (param $flag i32)
+    (global.set $region_fold_enabled (local.get $flag)))
+  (func (export "get_region_fold") (result i32) (global.get $region_fold_enabled))
+  ;; $ptr is a GUEST address -- the descriptor words are read through $gl32, so
+  ;; the harness writes them the same way it writes the guest code beside them.
+  (func (export "set_region_spec") (param $eip i32) (param $ptr i32) (param $words i32)
+    (global.set $region_spec_eip (local.get $eip))
+    (global.set $region_spec_ptr (local.get $ptr))
+    (global.set $region_spec_words (local.get $words)))
+  (func (export "get_region_installs") (result i32) (global.get $region_installs))
+
+  ;; Page compilation (docs/page-compile-design.md). There is deliberately no
+  ;; switch: this replaces the storage layer rather than accelerating it, so the
+  ;; thing to compare against is the commit before it, not a flag.
+  (func (export "get_page_compiles") (result i32) (global.get $page_compiles))
+  (func (export "get_page_chunk_samples") (result i32) (global.get $page_chunk_samples))
+  (func (export "get_page_chunk_used_total") (result i64) (global.get $page_chunk_used_total))
+  (func (export "get_page_chunk_used_max") (result i32) (global.get $page_chunk_used_max))
+  (func (export "get_page_chunk_le_4k") (result i32) (global.get $page_chunk_le_4k))
+  (func (export "get_page_chunk_le_8k") (result i32) (global.get $page_chunk_le_8k))
+  (func (export "get_page_chunk_le_12k") (result i32) (global.get $page_chunk_le_12k))
+  (func (export "get_page_chunk_le_16k") (result i32) (global.get $page_chunk_le_16k))
+  (func (export "get_page_chunk_grows") (result i32) (global.get $page_chunk_grows))
+  (func (export "get_page_chunk_reuses") (result i32) (global.get $page_chunk_reuses))
+  (func (export "get_page_unpublished") (result i32) (global.get $page_unpublished))
+  (func (export "get_page_hits")     (result i32) (global.get $page_hits))
+  (func (export "get_page_misses")   (result i32) (global.get $page_misses))
+  (func (export "get_page_fast")     (result i32) (global.get $page_fast))
+  (func (export "get_page_ft")       (result i32) (global.get $page_ft))
+  (func (export "get_page_ft_missed")(result i32) (global.get $page_ft_missed))
+  (func (export "get_page_retires")  (result i32) (global.get $page_retires))
+  (func (export "get_page_range_drops")(result i32) (global.get $page_range_drops))
+  ;; Round 14 (docs/block-executor-design.md section 23): the SECOND per-page
+  ;; chunk, the one executor descriptors live in. `full` is the count that
+  ;; matters -- it is a publish that DECLINED because the descriptor chunk was
+  ;; out of room, where round 13's equivalent dropped the whole page.
+  (func (export "get_page_desc_chunk_allocs")(result i32) (global.get $page_desc_chunk_allocs))
+  (func (export "get_page_desc_chunk_grows") (result i32) (global.get $page_desc_chunk_grows))
+  (func (export "get_page_desc_chunk_full")  (result i32) (global.get $page_desc_chunk_full))
+  ;; Round 17, section 27.2: the one-block family's headroom reserve inside the
+  ;; per-page DESCRIPTOR chunk, and the count of one-block installs it declined
+  ;; that the bare chunk would have taken. 0 is round 16's behaviour.
+  (func (export "set_page_desc_rg_reserve") (param $n i32)
+    (global.set $page_desc_rg_reserve (local.get $n)))
+  (func (export "get_page_desc_rg_reserve") (result i32)
+    (global.get $page_desc_rg_reserve))
+  (func (export "get_page_desc_reserve_declines") (result i32)
+    (global.get $page_desc_reserve_declines))
+  (func (export "get_block_exec_no_room")    (result i32) (global.get $bx_no_room))
+  ;; Round 16 (section 26). Discovery's view of the one-block family: how many
+  ;; successors a walk could not read back, how many descriptors it had to take
+  ;; back for want of a displaced-stream copy, and how many installs published
+  ;; WITHOUT that copy in the first place -- which is what makes the previous
+  ;; two happen.
+  (func (export "get_block_exec_walk_uncached") (result i32)
+    (global.get $bx_walk_uncached))
+  (func (export "get_block_exec_raw_wants") (result i32) (global.get $bx_raw_wants))
+  (func (export "get_block_exec_desc_nocopy") (result i32) (global.get $bx_desc_nocopy))
+  (func (export "get_block_exec_rg_nocopy") (result i32) (global.get $bx_rg_nocopy))
+  ;; Round 16: regions installed carrying at least one x87 member micro-op, and
+  ;; the region classifier's own x87 split.
+  (func (export "get_block_exec_rg_x87_regions") (result i32)
+    (global.get $bx_rg_x87_regions))
+  (func (export "get_block_exec_rg_x87run") (result i64) (global.get $bx_rg_x87run_uops))
+  (func (export "get_block_exec_rg_x87_native") (result i64)
+    (global.get $bx_rg_x87_native_uops))
+  (func (export "get_block_exec_rg_x87_fb") (result i64) (global.get $bx_rg_x87_fb_uops))
+  ;; Round 16: decline reason 3, split by site, plus the two measures of the
+  ;; seam between the families -- walks that arrived at a head the one-block
+  ;; installer already owned, and heads the memo permanently locked out.
+  (func (export "set_block_exec_x87_regions") (param $f i32)
+    (global.set $block_exec_x87_regions (local.get $f)))
+  (func (export "get_block_exec_x87_regions") (result i32)
+    (global.get $block_exec_x87_regions))
+  (func (export "get_block_exec_rg_nr_bytes") (result i32) (global.get $bx_rg_nr_bytes))
+  (func (export "get_block_exec_rg_nr_arena") (result i32) (global.get $bx_rg_nr_arena))
+  (func (export "get_block_exec_rg_nr_fit")   (result i32) (global.get $bx_rg_nr_fit))
+  (func (export "get_block_exec_rg_head_desc") (result i32) (global.get $bx_rg_head_desc))
+  (func (export "get_block_exec_rg_head_desc_fail") (result i32)
+    (global.get $bx_rg_head_desc_fail))
+  (func (export "get_block_exec_memo_locked") (result i32) (global.get $bx_memo_locked))
+  (func (export "get_page_ft_chains")(result i32) (global.get $page_ft_chains))
+  (func (export "get_page_ft_blocks")(result i32) (global.get $page_ft_blocks))
+
   ;; Threaded-handler histogram. Profiling tools enable this only around a
   ;; measured window. Counts are stored in WAT-private memory and read by JS.
   (func (export "set_handler_hist_enabled") (param $flag i32)
@@ -2372,57 +3231,23 @@
     (if (local.get $flag)
       (then (global.set $handler_hist_last (i32.const -1))))
     (call $dbg_recompute))
+  ;; Seven whole-region zero fills. Each region is page-sized, so the dword
+  ;; loops these replace covered exactly the same bytes.
   (func (export "reset_handler_hist")
-    (local $ptr i32) (local $end i32)
-    (local.set $ptr (global.get $HANDLER_HIST_COUNTS))
-    (local.set $end (i32.add (global.get $HANDLER_HIST_COUNTS) (global.get $HANDLER_HIST_COUNTS_SIZE)))
-    (block $counts_done (loop $counts
-      (br_if $counts_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $counts)))
-    (local.set $ptr (global.get $HANDLER_PAIR_HIST_COUNTS))
-    (local.set $end (i32.add (global.get $HANDLER_PAIR_HIST_COUNTS) (global.get $HANDLER_PAIR_HIST_COUNTS_SIZE)))
-    (block $pairs_done (loop $pairs
-      (br_if $pairs_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $pairs)))
-    (local.set $ptr (global.get $BRANCH_CMP_JCC_HIST))
-    (local.set $end (i32.add (global.get $BRANCH_CMP_JCC_HIST) (global.get $BRANCH_CMP_JCC_HIST_SIZE)))
-    (block $cmp_branch_done (loop $cmp_branch
-      (br_if $cmp_branch_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $cmp_branch)))
-    (local.set $ptr (global.get $BRANCH_TEST_JCC_HIST))
-    (local.set $end (i32.add (global.get $BRANCH_TEST_JCC_HIST) (global.get $BRANCH_TEST_JCC_HIST_SIZE)))
-    (block $test_branch_done (loop $test_branch
-      (br_if $test_branch_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $test_branch)))
-    (local.set $ptr (global.get $BRANCH_ALU_M32_RO_JCC_HIST))
-    (local.set $end (i32.add (global.get $BRANCH_ALU_M32_RO_JCC_HIST) (global.get $BRANCH_ALU_M32_RO_JCC_HIST_SIZE)))
-    (block $alu_branch_done (loop $alu_branch
-      (br_if $alu_branch_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $alu_branch)))
-    (local.set $ptr (global.get $HOT_BLOCK_HIST))
-    (local.set $end (i32.add (global.get $HOT_BLOCK_HIST) (global.get $HOT_BLOCK_HIST_SIZE)))
-    (block $hot_block_done (loop $hot_block
-      (br_if $hot_block_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $hot_block)))
-    (local.set $ptr (global.get $SIB_CONSUMER_HIST))
-    (local.set $end (i32.add (global.get $SIB_CONSUMER_HIST) (global.get $SIB_CONSUMER_HIST_SIZE)))
-    (block $sib_consumer_done (loop $sib_consumer
-      (br_if $sib_consumer_done (i32.ge_u (local.get $ptr) (local.get $end)))
-      (i32.store (local.get $ptr) (i32.const 0))
-      (local.set $ptr (i32.add (local.get $ptr) (i32.const 4)))
-      (br $sib_consumer)))
+    (memory.fill (global.get $HANDLER_HIST_COUNTS) (i32.const 0)
+      (global.get $HANDLER_HIST_COUNTS_SIZE))
+    (memory.fill (global.get $HANDLER_PAIR_HIST_COUNTS) (i32.const 0)
+      (global.get $HANDLER_PAIR_HIST_COUNTS_SIZE))
+    (memory.fill (global.get $BRANCH_CMP_JCC_HIST) (i32.const 0)
+      (global.get $BRANCH_CMP_JCC_HIST_SIZE))
+    (memory.fill (global.get $BRANCH_TEST_JCC_HIST) (i32.const 0)
+      (global.get $BRANCH_TEST_JCC_HIST_SIZE))
+    (memory.fill (global.get $BRANCH_ALU_M32_RO_JCC_HIST) (i32.const 0)
+      (global.get $BRANCH_ALU_M32_RO_JCC_HIST_SIZE))
+    (memory.fill (global.get $HOT_BLOCK_HIST) (i32.const 0)
+      (global.get $HOT_BLOCK_HIST_SIZE))
+    (memory.fill (global.get $SIB_CONSUMER_HIST) (i32.const 0)
+      (global.get $SIB_CONSUMER_HIST_SIZE))
     (global.set $branch_hist_kind (i32.const 0))
     (global.set $hot_block_hist_collisions (i32.const 0))
     (global.set $sib_consumer_hist_collisions (i32.const 0))
@@ -2509,26 +3334,30 @@
     (global.get $mm_timer_in_cb))
 
   (func $fire_mm_timer (export "fire_mm_timer") (result i32)
-    (local $elapsed i32)
-    (if (i32.eqz (global.get $mm_timer_id)) (then (return (i32.const 0))))
-    ;; A yielded Win32 wait keeps its stdcall frame parked for the cooperative
-    ;; scheduler. Interrupting that frame would make wait completion mistake
-    ;; this callback's continuation thunk for the wait's return address.
-    (if (global.get $yield_reason) (then (return (i32.const 0))))
+    (local $slot i32) (local $id i32) (local $dwuser i32) (local $cb i32)
+    ;; Most yielded APIs cannot be interrupted. A plain object wait is the one
+    ;; exception: timeSetEvent runs on a system thread on Win32 and is commonly
+    ;; used specifically to signal the object the application is waiting on.
+    (if (i32.and (global.get $yield_reason)
+          (i32.ne (global.get $yield_reason) (i32.const 1)))
+      (then (return (i32.const 0))))
     ;; The CACA000A callback-return continuation clears this flag exactly when
     ;; the guest callback returns. Do not infer that event from later ESP: the
     ;; interrupted code may already have entered a deeper call by this poll.
     (if (global.get $mm_timer_in_cb)
       (then (return (i32.const 0))))
-    (global.set $tick_count (call $host_get_ticks))
-    (local.set $elapsed (i32.sub (global.get $tick_count) (global.get $mm_timer_last_tick)))
-    (if (i32.lt_u (local.get $elapsed) (global.get $mm_timer_interval))
-      (then (return (i32.const 0))))
+    (local.set $slot (call $mm_timer_due_slot))
+    (if (i32.eqz (local.get $slot)) (then (return (i32.const 0))))
+    (local.set $id (i32.load (local.get $slot)))
+    (local.set $dwuser (i32.load offset=12 (local.get $slot)))
+    (local.set $cb (i32.load offset=8 (local.get $slot)))
     ;; Timer is due — consume through the latest interval boundary without
-    ;; turning host scheduling lateness into permanent periodic-timer drift.
-    (call $mm_timer_consume_due_tick)
-    (if (global.get $mm_timer_oneshot)
-      (then (global.set $mm_timer_id (i32.const 0))))
+    ;; turning host scheduling lateness into permanent periodic-timer drift,
+    ;; retiring the slot first if it was a one-shot.
+    (call $mm_timer_consume_slot (local.get $slot))
+    (global.set $mm_timer_resume_yield (global.get $yield_reason))
+    (global.set $yield_reason (i32.const 0))
+    (global.set $yield_flag (i32.const 0))
     (global.set $mm_timer_in_cb (i32.const 1))
     ;; Save caller-saved regs + flags (36 bytes, includes EIP for restore)
     (call $save_caller_regs)
@@ -2538,17 +3367,57 @@
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))                   ;; dw1
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $mm_timer_dwuser))   ;; dwUser
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $dwuser))             ;; dwUser
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))                   ;; uMsg
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
-    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $mm_timer_id))       ;; uTimerID
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $id))                 ;; uTimerID
     ;; Push return address = CACA000A thunk (restores regs when callback returns)
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $mm_timer_ret_thunk))
     ;; Redirect EIP to callback
-    (global.set $eip (global.get $mm_timer_callback))
+    (global.set $eip (local.get $cb))
     (i32.const 1))
+
+  ;; Deliver one completed waveOut buffer to a CALLBACK_FUNCTION client.
+  ;; The host queues WOM_DONE notifications until a slice boundary, then calls
+  ;; this export. Reuse the multimedia-timer continuation because it already
+  ;; saves/restores the interrupted x86 caller state and rejects nested async
+  ;; callbacks. waveOutProc(hwo, WOM_DONE, instance, waveHdr, 0) is stdcall.
+  (func (export "fire_wave_out_callback")
+      (param $handle i32) (param $wave_hdr i32) (result i32)
+    (local $cb i32) (local $instance i32)
+    (if (global.get $yield_reason) (then (return (i32.const 0))))
+    (if (global.get $mm_timer_in_cb) (then (return (i32.const 0))))
+    (if (i32.ne (i32.load (i32.const 0xD16C)) (i32.const 3))
+      (then (return (i32.const 0))))
+    (local.set $cb (i32.load (i32.const 0xD164)))
+    (if (i32.eqz (local.get $cb)) (then (return (i32.const 0))))
+    (local.set $instance (i32.load (i32.const 0xD168)))
+    (global.set $mm_timer_in_cb (i32.const 1))
+    (call $save_caller_regs)
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))                    ;; dwParam2
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $wave_hdr))            ;; dwParam1
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $instance))            ;; dwInstance
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x03BD))               ;; WOM_DONE
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $handle))              ;; hwo
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $mm_timer_ret_thunk))
+    (global.set $eip (local.get $cb))
+    (i32.const 1))
+
+  ;; A host-side writer that fills guest memory directly (ReadFile into the
+  ;; guest's buffer, a mapped view, a decompressed resource) bypasses every
+  ;; store handler, so nothing retires the decoded blocks it just overwrote.
+  ;; Storm keeps its generated code and its file buffers in the same heap
+  ;; region, so that is a real collision, not a theoretical one.
+  (func (export "invalidate_code_range") (param $ga i32) (param $len i32)
+    (call $invalidate_code_range (local.get $ga) (local.get $len)))
 
   ;; Write guest memory (guest addr)
   (func (export "guest_write32") (param $ga i32) (param $val i32)
@@ -2585,8 +3454,68 @@
   ;; Allocate guest heap memory (returns guest address)
   (func (export "guest_alloc") (param $size i32) (result i32)
     (call $heap_alloc (local.get $size)))
+  ;; Reserve and commit a page-aligned sparse guest range for file mappings.
+  ;; Unlike HeapAlloc, this can hold a large view without crossing the fixed
+  ;; low-memory stack/thunk arenas on its way upward.
+  (func (export "guest_map_alloc") (param $requested i32) (result i32)
+    (local $size i32) (local $guest i32)
+    (local.set $size
+      (i32.and (i32.add (local.get $requested) (i32.const 0xFFF))
+        (i32.const 0xFFFFF000)))
+    (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))
+    (local.set $guest (call $virtual_reserve_down (local.get $size)))
+    (if (i32.eqz (local.get $guest)) (then (return (i32.const 0))))
+    (call $virtual_map_commit (local.get $guest) (local.get $size)))
   (func (export "guest_free") (param $g i32)
     (call $heap_free (local.get $g)))
+  ;; Paired with guest_map_alloc; heap_free cannot release a sparse mapping.
+  (func (export "guest_map_free") (param $g i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $result (call $virtual_map_release (local.get $g)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $result))
+
+  ;; Host launchers call this before guest entry. Queue entries in fixed low
+  ;; memory so launch compatibility settings do not eagerly allocate the
+  ;; environment heap and perturb an executable's startup layout.
+  (func (export "set_process_environment_a")
+      (param $name_g i32) (param $value_g i32) (result i32)
+    (local $name_len i32) (local $value_len i32) (local $p i32)
+    (if (i32.or (i32.eqz (local.get $name_g)) (i32.eqz (local.get $value_g)))
+      (then (return (i32.const 0))))
+    ;; These pointers are WASM offsets supplied by the host, just like the PE
+    ;; staging-buffer arguments to set_exe_name/set_extra_cmdline. Do not run
+    ;; them through guest virtual-address translation.
+    (block $name_len_done (loop $name_len_loop
+      (br_if $name_len_done
+        (i32.eqz (i32.load8_u (i32.add (local.get $name_g) (local.get $name_len)))))
+      (local.set $name_len (i32.add (local.get $name_len) (i32.const 1)))
+      (br $name_len_loop)))
+    (block $value_len_done (loop $value_len_loop
+      (br_if $value_len_done
+        (i32.eqz (i32.load8_u (i32.add (local.get $value_g) (local.get $value_len)))))
+      (local.set $value_len (i32.add (local.get $value_len) (i32.const 1)))
+      (br $value_len_loop)))
+    ;; Entry bytes are NAME, '=', VALUE, NUL; retain one more byte for the
+    ;; environment block's second NUL.
+    (if (i32.gt_u
+          (i32.add (global.get $launch_env_len)
+            (i32.add (local.get $name_len) (i32.add (local.get $value_len) (i32.const 3))))
+          (global.get $LAUNCH_ENV_OVERRIDES_SIZE))
+      (then (return (i32.const 0))))
+    (local.set $p (i32.add (region.addr $LAUNCH_ENV_OVERRIDES 0) (global.get $launch_env_len)))
+    (memory.copy (local.get $p) (local.get $name_g) (local.get $name_len))
+    (i32.store8 (i32.add (local.get $p) (local.get $name_len)) (i32.const 0x3d))
+    (local.set $p (i32.add (local.get $p) (i32.add (local.get $name_len) (i32.const 1))))
+    (memory.copy (local.get $p) (local.get $value_g) (local.get $value_len))
+    (local.set $p (i32.add (local.get $p) (local.get $value_len)))
+    (i32.store8 (local.get $p) (i32.const 0))
+    (global.set $launch_env_len
+      (i32.add (global.get $launch_env_len)
+        (i32.add (local.get $name_len) (i32.add (local.get $value_len) (i32.const 2)))))
+    (i32.store8 (i32.add (region.addr $LAUNCH_ENV_OVERRIDES 0) (global.get $launch_env_len)) (i32.const 0))
+    (i32.const 1))
 
   ;; sscanf — exercised by test/test-sscanf.js. Varargs are a guest array of
   ;; pointers here rather than a live stack frame, which is exactly what
@@ -2597,106 +3526,37 @@
   ;; Dynamic menus — exercised by test/test-menu-insert.js. The read-backs
   ;; expose the MNUD item records so a test can assert insertion *order*,
   ;; which is the part InsertMenuItem exists to get right.
-  (func (export "test_call_CreatePopupMenu") (result i32)
-    (call $handle_CreatePopupMenu (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_AppendMenuA") (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_AppendMenuA (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_InsertMenuA")
-        (param i32) (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_InsertMenuA (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (local.get 4) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_InsertMenuItemA") (param i32) (param i32) (param i32) (param i32) (result i32)
-    (call $handle_InsertMenuItemA (local.get 0) (local.get 1) (local.get 2) (local.get 3)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DestroyMenu") (param i32) (result i32)
-    (call $handle_DestroyMenu (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
   ;; -1 when the handle is not a WAT dynamic menu.
   (func (export "test_menu_item_count") (param $hmenu i32) (result i32)
     (local $sw i32)
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
     (i32.load offset=4 (local.get $sw)))
-  ;; $field: 0 = flags, 1 = id, 2 = itemData.
+  ;; $field: 0 = flags, 1 = id, 2 = legacy payload (text when present,
+  ;; otherwise dwItemData), 3 = submenu, 4 = raw text.
   (func (export "test_menu_item_field") (param $hmenu i32) (param $index i32) (param $field i32) (result i32)
-    (local $sw i32)
+    (local $sw i32) (local $rec i32)
     (local.set $sw (call $dynamic_menu_state_w (local.get $hmenu)))
     (if (i32.eqz (local.get $sw)) (then (return (i32.const -1))))
     (if (i32.ge_u (local.get $index) (i32.load offset=4 (local.get $sw)))
       (then (return (i32.const -1))))
+    (local.set $rec
+      (i32.add (local.get $sw)
+        (i32.add (i32.const 16)
+          (i32.mul (local.get $index) (global.get $DYNAMIC_MENU_ITEM_BYTES)))))
+    (if (i32.eq (local.get $field) (i32.const 2))
+      (then
+        (return
+          (select
+            (i32.load offset=16 (local.get $rec))
+            (i32.load offset=8 (local.get $rec))
+            (i32.ne (i32.load offset=16 (local.get $rec)) (i32.const 0))))))
     (i32.load
-      (i32.add
-        (i32.add (local.get $sw)
-          (i32.add (i32.const 16) (i32.mul (local.get $index) (i32.const 16))))
-        (i32.mul (local.get $field) (i32.const 4)))))
+      (i32.add (local.get $rec) (i32.mul (local.get $field) (i32.const 4)))))
 
   ;; Atom tables — exercised by test/test-atom-table.js. The A/W and
   ;; local/global split is the part worth pinning: the same name in different
   ;; namespaces must yield independent atoms and independent reference counts.
-  (func (export "test_call_AddAtomA") (param i32) (result i32)
-    (call $handle_AddAtomA (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_AddAtomW") (param i32) (result i32)
-    (call $handle_AddAtomW (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_FindAtomA") (param i32) (result i32)
-    (call $handle_FindAtomA (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_FindAtomW") (param i32) (result i32)
-    (call $handle_FindAtomW (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_DeleteAtom") (param i32) (result i32)
-    (call $handle_DeleteAtom (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetAtomNameA") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GetAtomNameA (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetAtomNameW") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GetAtomNameW (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalAddAtomA") (param i32) (result i32)
-    (call $handle_GlobalAddAtomA (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalAddAtomW") (param i32) (result i32)
-    (call $handle_GlobalAddAtomW (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalFindAtomA") (param i32) (result i32)
-    (call $handle_GlobalFindAtomA (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalFindAtomW") (param i32) (result i32)
-    (call $handle_GlobalFindAtomW (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalDeleteAtom") (param i32) (result i32)
-    (call $handle_GlobalDeleteAtom (local.get 0) (i32.const 0) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalGetAtomNameA") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GlobalGetAtomNameA (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GlobalGetAtomNameW") (param i32) (param i32) (param i32) (result i32)
-    (call $handle_GlobalGetAtomNameW (local.get 0) (local.get 1) (local.get 2) (i32.const 0)
-      (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-
   ;; Non-OLE clipboard inspection/helpers for renderer shortcuts and tests.
   (func (export "clipboard_rtf_format_id") (result i32)
     (global.get $clipboard_rtf_format_id))
@@ -2760,29 +3620,37 @@
 
   ;; Set EXE name — copies NUL-terminated string to 0x120 buffer (max 127 chars)
   (func (export "set_exe_name") (param $wa i32) (param $len i32)
-    (local $i i32) (local $n i32)
+    (local $n i32)
     (local.set $n (if (result i32) (i32.gt_u (local.get $len) (i32.const 127))
       (then (i32.const 127)) (else (local.get $len))))
-    (block $done (loop $copy
-      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
-      (i32.store8 (i32.add (i32.const 0x120) (local.get $i))
-        (i32.load8_u (i32.add (local.get $wa) (local.get $i))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $copy)))
+    (memory.copy (i32.const 0x120) (local.get $wa) (local.get $n))
     (i32.store8 (i32.add (i32.const 0x120) (local.get $n)) (i32.const 0))
     (global.set $exe_name_wa (i32.const 0x120))
     (global.set $exe_name_len (local.get $n)))
 
+  ;; The browser and CLI know the guest launch path. Keep GetModuleFileName and
+  ;; argv on that drive instead of pretending every mounted executable is C:.
+  (func (export "set_exe_drive") (param $drive i32)
+    (local.set $drive (i32.and (local.get $drive) (i32.const 0xDF)))
+    (if (i32.and
+          (i32.ge_u (local.get $drive) (i32.const 0x41))
+          (i32.le_u (local.get $drive) (i32.const 0x5A)))
+      (then (global.set $exe_drive (local.get $drive)))
+      (else (global.set $exe_drive (i32.const 0x43)))))
+
   ;; Get GUEST_BASE for direct WASM memory access
   (func (export "get_guest_base") (result i32) (global.get $GUEST_BASE))
   (func (export "get_dll_table") (result i32) (global.get $DLL_TABLE))
+  (func (export "set_dll_path") (param $idx i32) (param $path_g i32)
+    (if (i32.lt_u (local.get $idx) (i32.const 16))
+      (then
+        (i32.store
+          (i32.add (global.get $DLL_PATH_TABLE)
+            (i32.shl (local.get $idx) (i32.const 2)))
+          (local.get $path_g)))))
   (func (export "set_dll_count") (param $count i32) (global.set $dll_count (local.get $count)))
   (func (export "test_set_dll_count") (param $count i32) (global.set $dll_count (local.get $count)))
   (func (export "get_ansi_code_page") (result i32) (global.get $ansi_code_page))
-  (func (export "test_call_WSAStartup") (param $version i32) (param $wsadata i32) (result i32)
-    (call $handle_WSAStartup (local.get $version) (local.get $wsadata)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
   ;; --- Virtual LAN Winsock (docs/virtual-lan-party.md, Slice 1) ---
   ;; Each wrapper restores ESP because the handlers pop their stdcall frame,
   ;; and these exports are called without a guest frame underneath.
@@ -2798,7 +3666,10 @@
     (global.set $wsa_started (i32.const 0))
     (global.set $vsock_sel_waiting (i32.const 0))
     (global.set $vsock_local_ip (i32.const 0x0A4D0001))
-    (global.set $vsock_next_port (i32.const 49152)))
+    ;; The cursor moved into shared memory (one per process, not one per
+    ;; instance), so the reset has to clear it there or a fresh test inherits the
+    ;; previous one's port.
+    (i32.store (global.get $VSOCK_NEXT_PORT_SHARED) (i32.const 49152)))
 
   ;; Room address of this process. The host of the room keeps 10.77.0.1;
   ;; every other member is assigned its own address before the guest runs.
@@ -2818,7 +3689,16 @@
   (func (export "test_dde_intern") (param $ga i32) (result i32)
     (call $win16_dde_hsz_intern (local.get $ga)))
   (func (export "test_dde_instance") (param $i i32) (param $used i32)
-    (i32.store (call $win16_dde_inst (local.get $i)) (local.get $used)))
+    (local $slot i32) (local $was_used i32)
+    (local.set $slot (call $win16_dde_inst (local.get $i)))
+    (local.set $was_used (i32.ne (i32.load (local.get $slot)) (i32.const 0)))
+    (local.set $used (i32.ne (local.get $used) (i32.const 0)))
+    (if (i32.ne (local.get $was_used) (local.get $used))
+      (then
+        (global.set $win16_dde_users
+          (i32.add (global.get $win16_dde_users)
+            (select (i32.const 1) (i32.const -1) (local.get $used))))))
+    (i32.store (local.get $slot) (local.get $used)))
   ;; Point an instance's DDE callback at a far proc. A real task sets this
   ;; through DdeInitialize; a test needs it to aim the callback at a stub it
   ;; can predict the answer of, which is the only way to exercise the
@@ -3033,6 +3913,22 @@
       (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_sendto") (param $s i32) (param $buf i32) (param $len i32)
+                                     (param $flags i32) (param $to i32) (param $tolen i32) (result i32)
+    (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 24)) (local.get $tolen))
+    (call $handle_sendto (local.get $s) (local.get $buf) (local.get $len) (local.get $flags)
+      (local.get $to) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_recvfrom") (param $s i32) (param $buf i32) (param $len i32)
+                                       (param $flags i32) (param $from i32) (param $fromlen i32) (result i32)
+    (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (local.get $sp) (i32.const 24)) (local.get $fromlen))
+    (call $handle_recvfrom (local.get $s) (local.get $buf) (local.get $len) (local.get $flags)
+      (local.get $from) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_select") (param $n i32) (param $r i32) (param $w i32) (param $e i32) (param $t i32) (result i32)
     (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_select (local.get $n) (local.get $r) (local.get $w) (local.get $e) (local.get $t)
@@ -3061,6 +3957,18 @@
     (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_setsockopt (local.get $s) (local.get $lvl) (local.get $opt) (local.get $val) (local.get $len)
       (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_getsockopt") (param $s i32) (param $lvl i32) (param $opt i32) (param $val i32) (param $lenp i32) (result i32)
+    (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_getsockopt (local.get $s) (local.get $lvl) (local.get $opt) (local.get $val) (local.get $lenp)
+      (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_getsockname") (param $s i32) (param $name i32) (param $lenp i32) (result i32)
+    (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_getsockname (local.get $s) (local.get $name) (local.get $lenp)
+      (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_htons") (param $v i32) (result i32)
@@ -3105,27 +4013,13 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (i32.load offset=0 (global.get $reg_base)))
-
-  (func (export "test_call_joyGetNumDevs") (result i32)
-    (call $handle_joyGetNumDevs
+  (func (export "test_call_WSAIsBlocking") (result i32)
+    (local $sp i32) (local.set $sp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_WSAIsBlocking
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_joyGetDevCapsA") (param $joy_id i32) (param $caps i32) (param $size i32) (result i32)
-    (call $handle_joyGetDevCapsA (local.get $joy_id) (local.get $caps) (local.get $size)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_joySetCapture") (param $hwnd i32) (param $joy_id i32) (param $period i32) (param $changed i32) (result i32)
-    (call $handle_joySetCapture (local.get $hwnd) (local.get $joy_id) (local.get $period)
-      (local.get $changed) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_joyReleaseCapture") (param $joy_id i32) (result i32)
-    (call $handle_joyReleaseCapture (local.get $joy_id)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_SetProcessWorkingSetSize") (param $process i32) (param $minimum i32) (param $maximum i32) (result i32)
-    (call $handle_SetProcessWorkingSetSize (local.get $process) (local.get $minimum) (local.get $maximum)
-      (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
+
   (func (export "set_ansi_code_page") (param $cp i32)
     (if (call $is_supported_code_page (local.get $cp))
       (then (global.set $ansi_code_page (call $resolve_code_page (local.get $cp))))))
@@ -3133,22 +4027,6 @@
     (call $is_dbcs_lead_byte (local.get $ch)))
   (func (export "test_mbsinc") (param $gp i32) (result i32)
     (call $mbsinc_ptr (local.get $gp)))
-  (func (export "test_call_GetModuleHandleA") (param $name i32) (result i32)
-    (call $handle_GetModuleHandleA (local.get $name)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetModuleHandleW") (param $name i32) (result i32)
-    (call $handle_GetModuleHandleW (local.get $name)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetCommandLineW") (result i32)
-    (call $handle_GetCommandLineW
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_GetLastError") (result i32)
-    (call $handle_GetLastError
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_SetLastError") (param $err i32)
     (call $handle_SetLastError (local.get $err)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
@@ -3426,7 +4304,7 @@
   (func (export "test_ole_format_enum_next") (param $obj i32) (param $requested i32) (param $formats i32) (param $fetched i32) (result i32)
     (call $ole_format_enum_next (local.get $obj) (local.get $requested) (local.get $formats) (local.get $fetched)))
   (func (export "test_ole_format_enum_skip") (param $obj i32) (param $requested i32) (result i32)
-    (call $ole_format_enum_skip (local.get $obj) (local.get $requested)))
+    (call $ole_enum_skip (local.get $obj) (local.get $requested)))
   (func (export "test_ole_format_enum_reset") (param $obj i32)
     (call $gs32 (i32.add (local.get $obj) (i32.const 20)) (i32.const 0)))
   (func (export "test_ole_clone_format_enum") (param $obj i32) (result i32)
@@ -3454,6 +4332,22 @@
     (if (global.get $clipboard_ole_data_object)
       (then (drop (call $ole_obj_addref (global.get $clipboard_ole_data_object)))))
     (global.get $clipboard_ole_data_object))
+  ;; Native OpenGL encoder controls and parity-test surface. stackWa is a
+  ;; linear-memory address whose first dword is the x86 return address.
+  (func (export "gl_wat_encoder_call") (param $opcode i32) (param $stackWa i32)
+      (param $aux i32) (result i32)
+    (call $gl_wat_encode_call (local.get $opcode) (local.get $stackWa) (local.get $aux)))
+  (export "gl_wat_stream_flush" (func $gl_wat_stream_flush))
+  (export "gl_wat_encoder_reset" (func $gl_wat_encoder_reset))
+  (func (export "gl_wat_stream_base") (result i32) (global.get $gl_stream_wa))
+  (func (export "gl_wat_stream_capacity") (result i32) (i32.const 0x00200000))
+  (func (export "gl_wat_stream_used") (result i32) (global.get $gl_stream_used_bytes))
+  (func (export "gl_wat_stream_commands") (result i32) (global.get $gl_stream_command_count))
+  (func (export "gl_wat_stat_calls") (result i64) (global.get $gl_wat_stat_calls))
+  (func (export "gl_wat_stat_spans") (result i64) (global.get $gl_wat_stat_spans))
+  (func (export "gl_wat_stat_vertices") (result i64) (global.get $gl_wat_stat_vertices))
+  (func (export "gl_wat_stat_flushes") (result i64) (global.get $gl_wat_stat_flushes))
+
   (func (export "test_ole_flush_clipboard") (result i32)
     (call $ole_flush_clipboard_value))
   (func (export "test_call_OpenMutexA") (param $name i32) (result i32)
@@ -3463,18 +4357,6 @@
   (func (export "test_call_CreateMutexA") (param $name i32) (result i32)
     (call $handle_CreateMutexA (i32.const 0) (i32.const 0) (local.get $name)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_RegisterClassW") (param $wc i32) (result i32)
-    (call $handle_RegisterClassW (local.get $wc)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_RegisterClassA") (param $wc i32) (result i32)
-    (call $handle_RegisterClassA (local.get $wc)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (i32.load offset=0 (global.get $reg_base)))
-  (func (export "test_call_RegisterClassExW") (param $wcx i32) (result i32)
-    (call $handle_RegisterClassExW (local.get $wcx)
-      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_GetClassInfoW") (param $name i32) (param $out i32) (result i32)
     (call $handle_GetClassInfoW (i32.const 0) (local.get $name) (local.get $out)
@@ -3509,7 +4391,7 @@
   (func (export "get_focus_hwnd")       (result i32) (global.get $focus_hwnd))
   (func (export "get_capture_hwnd")     (result i32) (global.get $capture_hwnd))
   (func (export "release_capture")
-    (global.set $capture_hwnd (i32.const 0)))
+    (drop (call $capture_replace (i32.const 0))))
   (func (export "clip_cursor_active")   (result i32) (global.get $clip_cursor_active))
   (func (export "clip_cursor_left")     (result i32) (global.get $clip_cursor_l))
   (func (export "clip_cursor_top")      (result i32) (global.get $clip_cursor_t))
@@ -3611,6 +4493,22 @@
       (local.get $hwnd) (local.get $msg) (local.get $lParam))
     (local.get $ret))
 
+  ;; Browser startup automation occasionally needs the semantics of a real
+  ;; BUTTON click, not merely its parent WM_COMMAND notification. In
+  ;; particular, automatic radio buttons update their checked state before
+  ;; notifying the dialog procedure. Keep control lookup and input dispatch
+  ;; inside USER so the host does not duplicate either table's layout.
+  (func (export "click_dialog_control")
+    (param $parent i32) (param $ctrl_id i32) (result i32)
+    (local $child i32)
+    (local.set $child (call $ctrl_find_by_id (local.get $parent) (local.get $ctrl_id)))
+    (if (i32.eqz (local.get $child)) (then (return (i32.const 0))))
+    (drop (call $wnd_send_message
+      (local.get $child) (i32.const 0x0201) (i32.const 0) (i32.const 0)))
+    (drop (call $wnd_send_message
+      (local.get $child) (i32.const 0x0202) (i32.const 0) (i32.const 0)))
+    (i32.const 1))
+
   (func (export "richedit_formatrange_next") (param $fr i32) (result i32)
     (call $richedit_formatrange_next (local.get $fr)))
 
@@ -3629,12 +4527,12 @@
   ;; Caller is responsible for the destination buffer; we NUL-terminate.
   (func (export "get_edit_text")
     (param $hwnd i32) (param $dest_guest i32) (param $max i32) (result i32)
-    (local $state i32) (local $state_w i32) (local $len i32) (local $src i32)
+    (local $state i32) (local $state_w ptr<EditState>) (local $len i32) (local $src i32)
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (local.set $state_w (call $g2w (local.get $state)))
-    (local.set $len (i32.load offset=4 (local.get $state_w)))
-    (local.set $src (i32.load (local.get $state_w)))
+    (local.set $state_w (cast ptr<EditState> (call $g2w (local.get $state))))
+    (local.set $len (load.field EditState text_len (local.get $state_w)))
+    (local.set $src (load.field EditState text_buf_ptr (local.get $state_w)))
     (if (i32.le_u (local.get $max) (i32.const 0)) (then (return (i32.const 0))))
     (if (i32.ge_u (local.get $len) (local.get $max))
       (then (local.set $len (i32.sub (local.get $max) (i32.const 1)))))
@@ -3648,31 +4546,35 @@
 
   ;; EditState cursor position (offset+12).
   (func (export "get_edit_cursor") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<EditState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=12 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<EditState> (call $g2w (local.get $s))))
+    (load.field EditState cursor (local.get $sw)))
 
   ;; EditState selection anchor (offset+16).
   (func (export "get_edit_sel_start") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<EditState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=16 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<EditState> (call $g2w (local.get $s))))
+    (load.field EditState sel_anchor (local.get $sw)))
 
   ;; EditState flags (offset+24), used by tests/debugging to verify focus.
   (func (export "get_edit_flags") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<EditState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=24 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<EditState> (call $g2w (local.get $s))))
+    (load.field EditState flags (local.get $sw)))
 
   ;; EditState text length (offset+4).
   (func (export "get_edit_text_len") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<EditState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=4 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<EditState> (call $g2w (local.get $s))))
+    (load.field EditState text_len (local.get $sw)))
 
   ;; Test helper: create a parent + EDIT child, return EDIT hwnd. The caller
   ;; passes the full EDIT/WS_* style and optional initial text guest pointer.
@@ -3692,10 +4594,10 @@
 
   (func $test_edit_visual_line_count (export "test_edit_visual_line_count")
     (param $hwnd i32) (result i32)
-    (local $s i32) (local $sw i32) (local $sz i32) (local $w i32) (local $style i32)
+    (local $s i32) (local $sw ptr<EditState>) (local $sz i32) (local $w i32) (local $style i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (local.set $sw (call $g2w (local.get $s)))
+    (local.set $sw (cast ptr<EditState> (call $g2w (local.get $s))))
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
     (local.set $sz (call $ctrl_get_wh_packed (local.get $hwnd)))
     (local.set $w (i32.and (local.get $sz) (i32.const 0xFFFF)))
@@ -3711,7 +4613,7 @@
           (local.get $sw) (i32.add (local.get $hwnd) (i32.const 0x40000))
           (local.get $w)))))
     (i32.add
-      (call $edit_line_from_char (local.get $sw) (i32.load offset=4 (local.get $sw)))
+      (call $edit_line_from_char (local.get $sw) (load.field EditState text_len (local.get $sw)))
       (i32.const 1)))
 
   (func (export "test_edit_max_scroll")
@@ -3803,18 +4705,38 @@
       (local.get $smin)
       (local.get $smax)))
   (func (export "modal_dialog_hwnd") (result i32)
-    (global.get $modal_dlg_hwnd))
+    (i32.atomic.load (global.get $SHARED_MODAL_DLG_HWND)))
+  ;; Guest DialogBoxParam has a different pump from WAT common dialogs.
+  ;; Keep the existing export's input-routing semantics unchanged.
+  (func (export "dialogbox_hwnd") (result i32)
+    (i32.atomic.load (global.get $SHARED_DLG_PUMP_HWND)))
   (func (export "modal_cancel_if_hwnd") (param $hwnd i32)
-    (if (i32.eq (global.get $modal_dlg_hwnd) (local.get $hwnd))
+    (if (i32.eq (i32.atomic.load (global.get $SHARED_MODAL_DLG_HWND)) (local.get $hwnd))
       (then
-        (global.set $modal_result (i32.const 0))
-        (global.set $modal_dlg_hwnd (i32.const 0)))))
+        (i32.atomic.store (global.get $SHARED_MODAL_RESULT) (i32.const 0))
+        (i32.atomic.store (global.get $SHARED_MODAL_DONE) (i32.const 1)))))
   (func (export "wnd_mouse_msg_origin_x") (param $hwnd i32) (result i32)
     (call $wnd_mouse_msg_origin_x (local.get $hwnd)))
   (func (export "wnd_mouse_msg_origin_y") (param $hwnd i32) (result i32)
     (call $wnd_mouse_msg_origin_y (local.get $hwnd)))
   (func (export "wnd_child_from_point_deep") (param $parent i32) (param $sx i32) (param $sy i32) (result i32)
     (call $wnd_child_from_point_deep (local.get $parent) (local.get $sx) (local.get $sy)))
+  ;; Browser Shell file-drop bridge. Start at the deepest child under the
+  ;; pointer and walk toward the supplied top-level until the first window
+  ;; registered by DragAcceptFiles (WS_EX_ACCEPTFILES) is found.
+  (func (export "drop_target_at") (param $top i32) (param $sx i32) (param $sy i32) (result i32)
+    (local $hwnd i32)
+    (local.set $hwnd (call $wnd_child_from_point_deep
+      (local.get $top) (local.get $sx) (local.get $sy)))
+    (if (i32.eqz (local.get $hwnd)) (then (local.set $hwnd (local.get $top))))
+    (block $none (loop $parents
+      (br_if $none (i32.eqz (local.get $hwnd)))
+      (if (i32.and (call $ctrl_get_ex_style (local.get $hwnd)) (i32.const 0x10))
+        (then (return (local.get $hwnd))))
+      (br_if $none (i32.eq (local.get $hwnd) (local.get $top)))
+      (local.set $hwnd (call $wnd_get_parent (local.get $hwnd)))
+      (br $parents)))
+    (i32.const 0))
   (func (export "dialog_route_mouse_screen")
     (param $parent i32) (param $msg i32) (param $wParam i32) (param $sx i32) (param $sy i32) (result i32)
     (call $dialog_route_mouse_screen
@@ -3873,6 +4795,10 @@
     (local.set $aux (call $scroll_aux_bar_addr (local.get $slot)
       (i32.ne (local.get $bar) (i32.const 0))))
     (i32.load (local.get $aux)))
+  (func $standard_scroll_arrows (export "standard_scroll_arrows")
+      (param $hwnd i32) (param $bar i32) (result i32)
+    (call $scroll_arrow_mask
+      (local.get $hwnd) (i32.ne (local.get $bar) (i32.const 0))))
 
   (func (export "dc_apply_client_clip") (param $hdc i32) (param $hwnd i32)
     (call $dc_apply_client_clip (local.get $hdc) (local.get $hwnd)))
@@ -3986,6 +4912,16 @@
   (func (export "wnd_get_style_export") (param $hwnd i32) (result i32)
     (call $wnd_get_style (local.get $hwnd)))
 
+  (func (export "test_show_scroll_bar")
+      (param $hwnd i32) (param $bar i32) (param $show i32) (result i32)
+    (call $show_scroll_bar_core
+      (local.get $hwnd) (local.get $bar) (local.get $show)))
+
+  (func (export "test_enable_scroll_bar")
+      (param $hwnd i32) (param $bar i32) (param $arrows i32) (result i32)
+    (call $enable_scroll_bar_core
+      (local.get $hwnd) (local.get $bar) (local.get $arrows)))
+
   ;; ButtonState text reader (parallel to get_edit_text).
   (func (export "button_get_text")
     (param $hwnd i32) (param $dest_guest i32) (param $max i32) (result i32)
@@ -4019,6 +4955,29 @@
   (func (export "wnd_destroy_tree") (param $hwnd i32)
     (call $wnd_destroy_tree (local.get $hwnd)))
 
+  ;; Windows owned by a terminating thread do not survive that thread. Scan
+  ;; the shared USER table and restart after each recursive teardown because
+  ;; descendants can occupy any later slot.
+  (func (export "wnd_destroy_thread_windows") (param $tid i32) (result i32)
+    (local $slot i32) (local $ptr i32) (local $hwnd i32) (local $count i32)
+    (block $done
+      (loop $scan
+        (br_if $done (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
+        (local.set $ptr (call $wnd_record_addr (local.get $slot)))
+        (local.set $hwnd (load.field WndRecord hwnd (local.get $ptr)))
+        (if (i32.and
+              (i32.ne (local.get $hwnd) (i32.const 0))
+              (i32.eq (i32.load (call $wnd_thread_addr (local.get $slot)))
+                      (local.get $tid)))
+          (then
+            (call $wnd_destroy_recursive (local.get $hwnd))
+            (local.set $count (i32.add (local.get $count) (i32.const 1)))
+            (local.set $slot (i32.const 0))
+            (br $scan)))
+        (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+        (br $scan)))
+    (local.get $count))
+
   ;; Tear down a dialog frame without sending WM_DESTROY to the dialog proc.
   ;; DialogBoxParamA uses the same shape after EndDialog; modeless dialog
   ;; titlebar-close fallback uses this when the guest closes its children but
@@ -4032,15 +4991,10 @@
   ;; JS calls this from the <input type="file"> change handler once the
   ;; new file has been written into the VFS, so the listbox shows it.
   (func (export "opendlg_refresh_listbox") (param $dlg i32)
-    (local $dir_g i32) (local $dir_w i32) (local $len i32) (local $copy_g i32) (local $copy_w i32)
+    (local $dir_g i32) (local $copy_g i32)
     (local.set $dir_g (global.get $opendlg_current_dir))
     (if (i32.eqz (local.get $dir_g)) (then (return)))
-    (local.set $dir_w (call $g2w (local.get $dir_g)))
-    (local.set $len (call $strlen (local.get $dir_w)))
-    (local.set $copy_g (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
-    (local.set $copy_w (call $g2w (local.get $copy_g)))
-    (call $memcpy (local.get $copy_w) (local.get $dir_w) (local.get $len))
-    (i32.store8 (i32.add (local.get $copy_w) (local.get $len)) (i32.const 0))
+    (local.set $copy_g (call $guest_strdup (local.get $dir_g)))
     (call $opendlg_set_dir (local.get $dlg) (local.get $copy_g))
     (call $heap_free (local.get $copy_g)))
 
@@ -4057,10 +5011,11 @@
 
   ;; Current selection for a colorgrid hwnd (reads ColorGridState[0]).
   (func (export "colorgrid_get_sel") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<ColorGridState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const -1))))
-    (i32.load (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<ColorGridState> (call $g2w (local.get $s))))
+    (load.field ColorGridState sel_idx (local.get $sw)))
 
   ;; Test helper: build a Color dialog standalone (no x86 caller).
   (func (export "test_create_color_dialog") (result i32)
@@ -4110,7 +5065,9 @@
   ;; SetWindowLongPtr stash.
   (func (export "test_create_find_dialog") (result i32)
     (local $dlg i32) (local $fr i32)
-    (local.set $fr (call $heap_alloc (i32.const 32)))
+    (local.set $fr (call $heap_alloc (i32.const 40)))
+    (memory.fill (call $g2w (local.get $fr)) (i32.const 0) (i32.const 40))
+    (i32.store (call $g2w (local.get $fr)) (i32.const 40))
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $create_findreplace_dialog (local.get $dlg) (i32.const 0) (local.get $fr) (i32.const 0))
@@ -4120,8 +5077,9 @@
   ;; A standalone owner is unnecessary for validating WM_COMMAND flag assembly.
   (func (export "test_create_replace_dialog") (result i32)
     (local $dlg i32) (local $fr i32)
-    (local.set $fr (call $heap_alloc (i32.const 32)))
-    (memory.fill (call $g2w (local.get $fr)) (i32.const 0) (i32.const 32))
+    (local.set $fr (call $heap_alloc (i32.const 40)))
+    (memory.fill (call $g2w (local.get $fr)) (i32.const 0) (i32.const 40))
+    (i32.store (call $g2w (local.get $fr)) (i32.const 40))
     (local.set $dlg (global.get $next_hwnd))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $create_findreplace_dialog (local.get $dlg) (i32.const 0) (local.get $fr) (i32.const 1))
@@ -4138,7 +5096,6 @@
   (func (export "test_create_treeview")
     (param $x i32) (param $y i32) (param $w i32) (param $h i32) (param $style i32) (result i32)
     (local $parent i32) (local $tv i32)
-    (global.set $tv_first_visible_row (i32.const 0))
     (global.set $tv_drag_anchor_y (i32.const 0))
     (global.set $tv_drag_anchor_row (i32.const 0))
     (global.set $tv_debug_expand_notify_count (i32.const 0))
@@ -4153,10 +5110,22 @@
     (local.set $tv (call $ctrl_create_child (local.get $parent) (i32.const 8) (i32.const 100)
                      (local.get $x) (local.get $y) (local.get $w) (local.get $h)
                      (i32.or (i32.const 0x50000000) (local.get $style)) (i32.const 0)))
+    ;; The view state a bare export reads is the one belonging to the control
+    ;; the test just made, so point the active owner at it.
+    (global.set $tv_active_owner (local.get $tv))
+    (call $tv_view_set_row (i32.const 0))
     (local.get $tv))
 
+  ;; Where the item table lives and how far the walks go. Debug readers used to
+  ;; hardcode both; the table has since moved and grown, and a hardcoded base
+  ;; silently dumps an empty tree instead of failing.
+  (func (export "treeview_get_table_base") (result i32)
+    (global.get $TV_TABLE))
+  (func (export "treeview_get_slot_limit") (result i32)
+    (call $tv_slot_limit))
+
   (func (export "treeview_get_first_visible_row") (result i32)
-    (global.get $tv_first_visible_row))
+    (call $tv_view_row))
   (func (export "treeview_get_visible_count") (result i32)
     (call $tv_visible_count))
 
@@ -4265,28 +5234,32 @@
       (local.get $style) (local.get $text_g)))
 
   (func (export "listview_get_count") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<ListViewState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<ListViewState> (call $g2w (local.get $s))))
+    (load.field ListViewState item_count (local.get $sw)))
 
   (func (export "listview_get_column_count") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<ListViewState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=16 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<ListViewState> (call $g2w (local.get $s))))
+    (load.field ListViewState col_count (local.get $sw)))
 
   (func (export "listview_get_top_index") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<ListViewState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=36 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<ListViewState> (call $g2w (local.get $s))))
+    (load.field ListViewState top_index (local.get $sw)))
 
   (func (export "listview_get_selected_index") (param $hwnd i32) (result i32)
-    (local $s i32)
+    (local $s i32) (local $sw ptr<ListViewState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const -1))))
-    (i32.load offset=32 (call $g2w (local.get $s))))
+    (local.set $sw (cast ptr<ListViewState> (call $g2w (local.get $s))))
+    (load.field ListViewState selected_index (local.get $sw)))
 
   (func (export "listview_get_debug_notify_count") (result i32)
     (global.get $lv_debug_notify_count))
@@ -4316,14 +5289,14 @@
     (call $lv_max_scroll_for_h (local.get $sw) (i32.shr_u (local.get $sz) (i32.const 16))))
 
   (func (export "listview_get_column_width") (param $hwnd i32) (param $idx i32) (result i32)
-    (local $s i32) (local $sw i32)
+    (local $s i32) (local $sw ptr<ListViewState>)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (local.set $sw (call $g2w (local.get $s)))
+    (local.set $sw (cast ptr<ListViewState> (call $g2w (local.get $s))))
     (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
-                (i32.ge_s (local.get $idx) (i32.load offset=16 (local.get $sw))))
+                (i32.ge_s (local.get $idx) (load.field ListViewState col_count (local.get $sw))))
       (then (return (i32.const 0))))
-    (i32.load (i32.add (call $g2w (i32.load offset=24 (local.get $sw))) (i32.mul (local.get $idx) (i32.const 4)))))
+    (i32.load (i32.add (call $g2w (load.field ListViewState col_widths_ptr (local.get $sw))) (i32.mul (local.get $idx) (i32.const 4)))))
 
   (func (export "listview_get_item_text")
     (param $hwnd i32) (param $idx i32) (param $sub i32) (param $dest_guest i32) (param $max i32) (result i32)
@@ -4356,29 +5329,29 @@
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=12 (call $g2w (local.get $s))))
+    (call $lb_count (call $g2w (local.get $s))))
   (func (export "listbox_get_cur_sel") (param $hwnd i32) (result i32)
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const -1))))
-    (i32.load offset=16 (call $g2w (local.get $s))))
+    (call $lb_cur_sel (call $g2w (local.get $s))))
   (func (export "listbox_get_sel") (param $hwnd i32) (param $idx i32) (result i32)
     (local $s i32) (local $sw i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
     (local.set $sw (call $g2w (local.get $s)))
     (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
-                (i32.ge_s (local.get $idx) (i32.load offset=12 (local.get $sw))))
+                (i32.ge_s (local.get $idx) (call $lb_count (local.get $sw))))
       (then (return (i32.const 0))))
-    (if (i32.eqz (i32.load offset=44 (local.get $sw)))
-      (then (return (i32.eq (local.get $idx) (i32.load offset=16 (local.get $sw))))))
+    (if (i32.eqz (call $lb_sel_ptr (local.get $sw)))
+      (then (return (i32.eq (local.get $idx) (call $lb_cur_sel (local.get $sw))))))
     (i32.load8_u
-      (i32.add (call $g2w (i32.load offset=44 (local.get $sw))) (local.get $idx))))
+      (i32.add (call $g2w (call $lb_sel_ptr (local.get $sw))) (local.get $idx))))
   (func (export "listbox_get_top_index") (param $hwnd i32) (result i32)
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=20 (call $g2w (local.get $s))))
+    (call $lb_top_index (call $g2w (local.get $s))))
   ;; Copy item $idx text into $dest_guest (NUL-terminated). Returns chars
   ;; copied (excluding NUL), or 0 if out of range. Same shape as
   ;; get_edit_text / button_get_text so the renderer can use the same
@@ -4390,11 +5363,11 @@
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
     (local.set $sw (call $g2w (local.get $s)))
-    (local.set $count (i32.load offset=12 (local.get $sw)))
+    (local.set $count (call $lb_count (local.get $sw)))
     (if (i32.or (i32.lt_s (local.get $idx) (i32.const 0))
                 (i32.ge_s (local.get $idx) (local.get $count)))
       (then (return (i32.const 0))))
-    (local.set $items_w (call $g2w (i32.load (local.get $sw))))
+    (local.set $items_w (call $g2w (call $lb_items_ptr (local.get $sw))))
     (local.set $p (local.get $items_w))
     (local.set $i (i32.const 0))
     (block $found (loop $skip
@@ -4455,31 +5428,31 @@
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const -1))))
-    (i32.load offset=16 (call $g2w (local.get $s))))
+    (call $cb_cur_sel (call $g2w (local.get $s))))
 
   (func (export "combobox_is_dropped") (param $hwnd i32) (result i32)
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=32 (call $g2w (local.get $s))))
+    (call $cb_is_dropped (call $g2w (local.get $s))))
 
   (func (export "combobox_get_lb_hwnd") (param $hwnd i32) (result i32)
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=20 (call $g2w (local.get $s))))
+    (call $cb_lb_hwnd (call $g2w (local.get $s))))
 
   (func (export "combobox_get_popup_hwnd") (param $hwnd i32) (result i32)
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=24 (call $g2w (local.get $s))))
+    (call $cb_popup_hwnd (call $g2w (local.get $s))))
 
   (func (export "combobox_get_edit_hwnd") (param $hwnd i32) (result i32)
     (local $s i32)
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
-    (i32.load offset=28 (call $g2w (local.get $s))))
+    (call $cb_edit_hwnd (call $g2w (local.get $s))))
 
   (func (export "combobox_get_text")
     (param $hwnd i32) (param $dest_guest i32) (param $max i32) (result i32)
@@ -4487,8 +5460,8 @@
     (local.set $s (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $s)) (then (return (i32.const 0))))
     (local.set $sw (call $g2w (local.get $s)))
-    (local.set $src (i32.load (local.get $sw)))
-    (local.set $len (i32.load offset=4 (local.get $sw)))
+    (local.set $src (call $cb_text_ptr (local.get $sw)))
+    (local.set $len (call $cb_text_len (local.get $sw)))
     (if (i32.le_u (local.get $max) (i32.const 0)) (then (return (i32.const 0))))
     (if (i32.ge_u (local.get $len) (local.get $max))
       (then (local.set $len (i32.sub (local.get $max) (i32.const 1)))))
@@ -4521,8 +5494,8 @@
     (i32.store8 (i32.add (call $g2w (local.get $dest_guest)) (local.get $len)) (i32.const 0))
     (local.get $len))
 
-  ;; GDI table occupancy. Both the DC-state and object tables are fixed 256-slot
-  ;; arrays, and running one dry does not announce itself: GetDC starts
+  ;; GDI table occupancy. The DC-state and object tables are fixed-size arrays,
+  ;; and running one dry does not announce itself: GetDC starts
   ;; returning NULL and the app converts that into whatever its own error path
   ;; is (MFC throws CResourceException, which lands as an unhandled C++ throw
   ;; several thousand instructions away from the leak). These are pure reads of
@@ -4538,6 +5511,9 @@
       (br $scan)))
     (local.get $n))
 
+  (func (export "gdi_dc_state_capacity") (result i32)
+    (global.get $GDI_DC_STATE_COUNT))
+
   (func (export "gdi_object_used") (result i32)
     (local $i i32) (local $n i32)
     (block $done (loop $scan
@@ -4548,6 +5524,9 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (local.get $n))
+
+  (func (export "gdi_object_capacity") (result i32)
+    (global.get $GDI_OBJECT_COUNT))
 
   ;; DIB backing arena occupancy. $kind: 0 = used pages, 1 = free pages,
   ;; 2 = largest free contiguous run, 3 = total pages. A screen-sized overlay
@@ -4580,10 +5559,17 @@
     (i32.load (i32.add (global.get $GDI_TABLE_MARKS)
       (i32.shl (local.get $slot) (i32.const 2)))))
 
+  ;; The shutting-down (0), safe-to-turn-off (1) and its footered form (2), painted by GDI
+  ;; into a 320x400 32bpp DIB; returns the linear address of the pixels or 0.
+  (func (export "paint_power_screen") (param $kind i32) (result i32)
+    (call $paint_power_screen (local.get $kind)))
+
   (func (export "static_get_image_ordinal") (param $hwnd i32) (result i32)
-    (local $state i32)
+    (local $state i32) (local $sw ptr<StaticState>)
     (local.set $state (call $wnd_get_state_ptr (local.get $hwnd)))
     (if (i32.eqz (local.get $state)) (then (return (i32.const 0))))
-    (i32.load offset=12 (call $g2w (local.get $state))))
+    (local.set $sw (cast ptr<StaticState> (call $g2w (local.get $state))))
+    (load.field StaticState image_ord (local.get $sw)))
 
-)
+  ;; NO closing paren for `(module` here — this fragment is self-balanced.
+  ;; See the banner at the top of src/01-header.wat.

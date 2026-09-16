@@ -18,6 +18,9 @@ const assert = require('assert');
 const { LoopbackSegment } = require('../lib/vlan-wire');
 const { compile, makeNode, ip2int, AF_INET, SOCK_STREAM, INVALID_SOCKET } = require('./vlan-node');
 
+const SOCK_DGRAM = 2;
+const IPPROTO_UDP = 17;
+
 const SD_SEND = 1;
 
 const WSAEWOULDBLOCK = 10035;
@@ -62,6 +65,47 @@ async function main() {
   check('each process keeps its own room address', () => {
     assert.strictEqual(host.wat.get_vlan_local_ip() >>> 0, ip2int(HOST_IP));
     assert.strictEqual(peer.wat.get_vlan_local_ip() >>> 0, ip2int(PEER_IP));
+  });
+
+  // ---- connectionless datagrams --------------------------------------
+
+  const udpHost = host.wat.test_call_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) | 0;
+  const udpPeer = peer.wat.test_call_socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) | 0;
+  host.nonblocking(udpHost);
+  peer.nonblocking(udpPeer);
+  assert.strictEqual(host.wat.test_call_bind(
+    udpHost, host.sockaddr('0.0.0.0', GAME_PORT + 1), 16) | 0, 0);
+
+  check('a UDP datagram crosses the wire with its source address', () => {
+    const msg = Array.from(Buffer.from('UT2003/query'));
+    assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(msg), msg.length, 0,
+      peer.sockaddr(HOST_IP, GAME_PORT + 1), 16) | 0, msg.length);
+    settle(host, peer);
+
+    const rx = host.buf(64);
+    const from = host.alloc(16);
+    const fromLen = host.alloc(4);
+    new DataView(host.memory.buffer, host.wa(fromLen), 4).setUint32(0, 16, true);
+    const got = host.wat.test_call_recvfrom(udpHost, rx, 64, 0, from, fromLen) | 0;
+    assert.strictEqual(got, msg.length,
+      `recvfrom failed with WSA error ${host.err()} (wire pending ${host.wire.pending})`);
+    assert.deepStrictEqual(host.readBuf(rx, msg.length), msg);
+    assert.strictEqual(host.readSockaddr(from).ip, PEER_IP);
+  });
+
+  check('UDP preserves datagram boundaries while the receiver drains', () => {
+    const one = [1, 2, 3];
+    const two = [4, 5];
+    const dst = peer.sockaddr(HOST_IP, GAME_PORT + 1);
+    assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(one), one.length, 0, dst, 16) | 0, one.length);
+    assert.strictEqual(peer.wat.test_call_sendto(udpPeer, peer.buf(two), two.length, 0, dst, 16) | 0, two.length);
+    settle(host, peer);
+    const rx = host.buf(8);
+    assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0, one.length);
+    assert.deepStrictEqual(host.readBuf(rx, one.length), one);
+    settle(host, peer);
+    assert.strictEqual(host.wat.test_call_recvfrom(udpHost, rx, 8, 0, 0, 0) | 0, two.length);
+    assert.deepStrictEqual(host.readBuf(rx, two.length), two);
   });
 
   // ---- opening a connection across the wire ---------------------------

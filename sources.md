@@ -4,6 +4,202 @@ Verified 2026-08-20. These are possible future compatibility targets for
 Wine-Assembly, with an emphasis on official demos and shareware that can be
 tested without distributing a full retail game.
 
+## Windows 98 games A-D archive
+
+Verified 2026-09-04. The local compatibility fixtures for **Curse of Monkey
+Island**, **Atomic Bomberman**, **Broken Sword**, **Dungeon Keeper**, and
+**Darkstone** came from the Internet Archive item
+[*Win98 Games A-D.7z*](https://archive.org/details/win-98-games-a-d.-7z).
+Its Archive.org-generated
+[`torrent`](https://archive.org/download/win-98-games-a-d.-7z/win-98-games-a-d.-7z_archive.torrent)
+has BitTorrent v1 info hash `3ade118219510c517927fb43a50618776ca4fef7`.
+The selected payload is `Win98_Games-A-D.7z`, 7,169,873,753 bytes, with SHA-1
+`c53417bcc617790d9671ec385c49ee6f018846c9` and MD5
+`7610b389f075be9f4ea8b521157e87d2` as recorded in that torrent.
+
+Only those five demo trees were unpacked into the local, ignored
+`test/binaries/win98-games-a-d/` corpus. Their launch executable SHA-256 values
+are:
+
+- Curse of Monkey Island `COMI.EXE`:
+  `b55524231edacc7d184c22c762d25193d616adc55d0141785fb21b8890d352b9`
+- Atomic Bomberman `_BOMB.EXE`:
+  `0ff14a352d6626660ceb66ea0e6743cd33c457e754cfd5705120bacae0530638`
+- Broken Sword installed `winsword.exe`:
+  `8ca6e3f0c56e1f289f79e2d52ca8cd98466c5b5c2817b3d05b7f7d80425c4177`
+- Dungeon Keeper `KEEPER95.EXE`:
+  `4d3cd6a7866520f360288b08440e0f20379b4b39216a9576c388e42fcdf72c84`
+- Darkstone installed `darkstonedemo.exe`:
+  `b43db5e1b835eb1e93688a1f3f1d9c814517be6fc8110c7fb6e024d467ee721b`
+
+The archive and extracted binaries remain local-only. The source links identify
+the preserved original distributions; they are not permission to republish the
+playable files. Focused compatibility work has reached Guybrush movement, an
+Atomic Bomberman arena with movement and bomb placement, Broken Sword's
+playable café scene, Dungeon Keeper's live dungeon level, and Darkstone's town.
+
+Atomic Bomberman's browser route is now a durable functional gate rather than
+only a manual audit. `test/test-atomic-bomberman-gameplay.js` crosses the
+title/menu sequence through ordinary Win32 keys, then verifies arena
+movement, visible bomb placement, and an explosion. The selected `BMANDEMO`
+tree contains no installer executable to bypass; its launch and data hashes are
+recorded in `docs/re-notes/atomic-bomberman-demo.md`.
+
+Broken Sword is installed by running the archive's original `SETUP.EXE`
+(SHA-256 `091ad0e2e8f1f49f6c2cb69067c7c0b7c7d75f3255ab227b6ef17152bb6f40ae`)
+inside Wine-Assembly. Its DirectX bootstrap launches `GAMECFIG.EXE` (SHA-256
+`2f67c74ce3ce737383c6481e5e50ac47de682f670383f8d385d9d6abfe4da439`),
+which runs the original full-screen installer and writes a 17-file,
+26,815,476-byte tree under `C:\\Sword`. The registered app launches that
+guest-produced `installed/` tree and mounts the original distribution's movie,
+speech, and music directories as its requested CD media. The source link above
+identifies the original playable demo distribution; neither its package nor
+the generated local install tree is republished here. See
+`docs/re-notes/broken-sword-demo.md`.
+
+Dungeon Keeper is installed by running the archive's original `KDDATA.EXE`
+(SHA-256 `f121c2f77583e35a258617308f609aefbd73ca249974e3cdbac7520c4cdda92a`)
+with its documented `-d` argument inside ToyVM. The guest emits 166 files and
+19,754,866 bytes; Wine-Assembly launches that output rather than the archive's
+separate pre-unpacked copy. A frozen headless CLI acceptance now crosses the
+main menu and portal into the live Eversmile level. The bundled readme
+explicitly reserves copying rights to Electronic Arts, so the playable demo
+and generated install tree remain local-only. This source entry links where
+the original distribution can be obtained; it does not redistribute it. See
+`docs/re-notes/dungeon-keeper-demo.md`.
+
+Darkstone is installed by running the archive's original `Setup.exe` (SHA-256
+`a6d2f8b9173fd43f03aabff0b8cc3fadbd0b15224bcbe5f562a32158a297b502`)
+inside Wine-Assembly. That bootstrap emits the original InstallShield engine,
+which writes a 14-file, 33,471,003-byte playable tree under
+`C:\\Program Files\\DelphineSoft\\Darkstone Demo`. The registered app mounts
+that guest-produced `installed/` tree rather than the separately unpacked
+`data/` directory. The bundled readme identifies this as demo 1.0 and requires
+Windows 95 or 98, but gives no explicit redistribution grant, so both the
+package and installed output remain local-only. The frozen headless functional
+gate creates `CODEX`, places the champion on the party slab, waits past the
+loading screen for the live town HUD, and verifies camera input. Demo 1.0
+enters Town directly after party confirmation; it does not show the retail
+manual's difficulty menu.
+See `docs/re-notes/darkstone-demo.md`.
+
+## Baldur's Gate demos and commercial preview
+
+Verified 2026-08-29. Three different Windows promotional builds are preserved
+on Archive.org and are useful local compatibility fixtures. None is shareware,
+and the payloads must remain out of the repository and deployed site.
+
+- The [non-interactive demo](https://archive.org/details/BALDUR) is the
+  34,296,832-byte `BALDUR.EXE` WinZip self-extractor (SHA-1
+  `e7caae4255e8ed570cef3a29642432c8d28ecdb9`). It expands to a DirectX 5
+  presentation headed by a 913,408-byte `Baldur.exe`. Its README permits
+  personal, noncommercial copies shared at no cost, but excludes commercial
+  or bundled distribution.
+- The [interactive demo](https://archive.org/details/bg-demo) is a
+  513,132,544-byte `BG Demo.iso` (SHA-1
+  `3796defce51a3e867aa216bc27f0be0689fdadf0`). Its README identifies demo
+  version 1.0.0 and explains that it omits the main quests and story, disables
+  multiplayer and character import/export, and exists to demonstrate the
+  engine. The disc installs its data cabinet but runs the 4,848,640-byte
+  `BGDemo.exe` from the CD root.
+- [*Baldur's Gate: Chapters I & II*](https://archive.org/details/20230723_20230723_0858)
+  is a separate version 1.1.0003 commercial preview. The exact preserved ZIP
+  is 612,538,616 bytes (SHA-1
+  `2e5256bc8c418aec51ea39ef1a5bf8640dd3317a`) and contains a matching CUE plus
+  a 753,844,224-byte raw MODE1/2352 BIN. Its README calls the game an abridged,
+  self-contained version of the prologue and first two chapters, with some
+  areas removed and a modified ending. The bundled license prohibits copying
+  or electronic distribution, so the corpus records only a checksum-pinned,
+  local-only fetch recipe.
+
+## ToyVM DOS game corpus
+
+This is a separate source collection from ToyVM's scene-demo corpus. The
+existing corpus is fetched from the Hornet scene archive by
+`tools/toyvm/fetch-demos.js` and the generated gallery offers Pouët lookup
+links. This collection is for official playable DOS game demos and shareware,
+including the companion files a game needs rather than selecting isolated
+executables from demo-scene archives.
+
+An official demo download is not automatically permission to republish it.
+Record the upstream page, exact archive URL and digest here first; keep the
+payload out of the repository and public corpus until its redistribution terms
+have been checked separately.
+
+### The Settlers II DOS demos
+
+Verified 2026-08-28. The [Settlers II downloads
+page](https://settlers2.net/download/) preserves six public DOS demo builds.
+The maintainer says the files came from Blue Byte's FTP server; the convenient
+ZIP files are modern repackagings, while the page also links original
+self-extracting distributions where they survive.
+
+| Release | Language | Preserved ZIP | Size | Notes |
+|---|---|---|---:|---|
+| *Die Siedler II: Erste Demo* v0.15 | German | [`S2DEMO15.ZIP`](https://settlers2.net/downloads/demo/s2demo15.zip) | 20.8 MB | First public pre-release build; includes extra images and video. |
+| *Die Siedler II: Erste Demo* v0.16 | German | [`S2DEMO16.ZIP`](https://settlers2.net/downloads/demo/s2demo16.zip) | 3.79 MB | Commonly preserved compact version of the first demo. |
+| *The Settlers II: Veni Vidi Vici* v1.01 | English | [`SETTLER2.ZIP`](https://settlers2.net/downloads/demo/settler2_v101.zip) | 50.0 MB | Playable demo with the intro video and files not needed to run it. |
+| *The Settlers II: Veni Vidi Vici* v1.02 | English | [`SETTLER2.ZIP`](https://settlers2.net/wp-content/uploads/2012/09/settler2_v102.zip) | 3.41 MB | Compact playable demo; the preferred first ToyVM game fixture. |
+| *The Settlers II: Mission CD* v1.51 | English | [`S2MISS.ZIP`](https://settlers2.net/wp-content/uploads/2012/09/s2miss.zip) | 9.91 MB | Includes a map editor limited to 15 minutes and unable to save. |
+| *The Settlers II: Gold Edition* v1.51 | English | [`S2GOLD.ZIP`](https://settlers2.net/wp-content/uploads/2012/09/s2gold.zip) | 9.75 MB | Closely related to the Mission CD demo, with a few differing files. |
+
+The v1.02 ZIP was downloaded and inspected locally. It is 3,579,784 bytes with
+SHA-256
+`b3b96739fc25e475c7f4ff610c1bef35df790bbf2aaf1d51dbe2261d65dd95b5`.
+It contains 181 entries and expands to 8,844,950 bytes. The launch path is
+`START.BAT` to `S2.EXE` (1,897,074 bytes), with `DOS4GW.EXE`, Miles sound
+drivers, maps, saved state, graphics, music and other files in sibling
+directories. A corpus importer must therefore retain the full extracted tree;
+`S2.EXE` alone is not a valid fixture.
+
+This is a DOS/4GW game, not a native Windows release. Its included readme asks
+for roughly 7 MB of XMS memory and VESA VBE support; its Windows 95 “Autorun”
+note describes launching the DOS program from Windows. The demo is a useful
+ToyVM target precisely because it broadens the corpus beyond tiny real-mode,
+single-file intros into a protected-mode, VESA, mouse, sound and filesystem
+workload. DOS Games Archive describes v1.02 as a playable demo containing the
+[tutorial and an exclusive single-player
+scenario](https://www.dosgamesarchive.com/download/the-settlers-ii-veni-vidi-vici).
+It is a demo, not shareware, and no explicit redistribution grant was found in
+the included `README.TXT`; keep the archive source-only unless a separate grant
+is established.
+
+### Grand Theft Auto demos and Rockstar Classics
+
+Verified 2026-08-30. The preserved official **Grand Theft Auto** DOS demo is
+the Liberty City, 24-bit high-resolution release. The exact 9,531,378-byte
+[`gta24.zip`](https://archive.org/download/gta-1997/Files/Demo%20-%20Liberty%20City%20-%2024%20Bit%20-%20High%20Res%20Version/gta24.zip)
+has SHA-256
+`76f1e1da5c898f755597b86357c4d77b7447cb483673a23d10d34f40cfe03ec9`.
+It expands to a `GTA24` tree whose launch executable is the 2,001,991-byte
+`GTADOS/DEMO24.EXE` (SHA-256
+`2f1cedfb95254b2f1a8913f1aeac7a915966cb42c70c9c96b14b8861fbf78c9f`).
+The executable embeds DOS/4GW and requires VESA; its 117 companion files must
+remain beside it. The manifest and fetch recipe therefore keep the complete
+tree as an ignored local fixture.
+
+The preserved **Grand Theft Auto 2** Wild Demo is the original 12,972,175-byte
+[`gta2demo.exe`](https://archive.org/download/gta2-1999/Files/Demo/gta2demo.exe)
+(SHA-256
+`f8fc0a9653932f008a03e56ea892fb31dbeb98d228cc4df61b910bcb35d08d21`).
+This is a PackageForTheWeb self-extractor around an InstallShield 5 setup, not
+an already-installed game. Wine Assembly's acceptance starts from that file,
+lets its own LZ32 path emit Disk1, runs the emitted `Setup.exe`, then runs the
+emitted `_INS5576._MP` wizard. The stages are separate processes only because
+the emulator does not yet execute Win32 child processes. The final test checks
+the wizard's completion message and its 73-file payload before the matching
+installed executable is launched into the Wild Demo map.
+
+Rockstar later offered three complete games at no charge through its Rockstar
+Classics series: **Grand Theft Auto**, **Grand Theft Auto 2**, and **Wild Metal
+Country**. That historical offer did not include the GTA London expansions,
+and it is no longer available. More importantly for this repository, the
+Rockstar download notice explicitly said the games were *not freeware* and
+could not be mirrored or duplicated without written consent. “Free download”
+therefore does not authorize bundling those full versions here; both demo
+fixtures remain local-only as well because their included terms contain no
+clear public-redistribution grant.
+
 ## Win16 Entertainment Pack recovery
 
 The byte-level recovery ledger for Rodent's Revenge, Fuji Golf, and Tic Tac
@@ -726,32 +922,223 @@ solid-grey frames (versus nine before the change), and every attachment in the
 sample was the DirectDraw primary. The final unobstructed gameplay capture is
 `/private/tmp/starcraft-no-flash-gameplay.png`.
 
+## GOG zero-price classic-game installers
+
+Verified 2026-08-25 against GOG's official product pages. The following seven
+games in the Internet Archive
+[`gog_collection`](https://archive.org/details/gog_collection) item were listed
+by GOG at **USD 0.00** and tagged as free games when they were added to the
+local candidate corpus:
+
+- [Beneath a Steel Sky](https://www.gog.com/en/game/beneath_a_steel_sky):
+  `beneath.a.steel.sky.rar`, 91,327,768 bytes, SHA-1
+  `dee0ca140e5d8cea0738c7f0f9bba2b970ad8f44`; extracts
+  `setup_beneath_a_steel_sky_1.0_(20270).exe`.
+- [Flight of the Amazon Queen](https://www.gog.com/en/game/flight_of_the_amazon_queen):
+  `flight.of.the.amazon.queen.rar`, 140,413,462 bytes, SHA-1
+  `5381b63e357f91ef78050a5880c6020d2bc2d630`; extracts
+  `setup_flight_of_the_amazon_queen_1.0_(20270).exe`.
+- [Lure of the Temptress](https://www.gog.com/en/game/lure_of_the_temptress):
+  `lure.of.the.temptress.rar`, 26,465,516 bytes, SHA-1
+  `8a0ff33dbd94ebfbf8d4edd979c5fee7c3985b2f`; extracts
+  `setup_lure_of_the_temptress_1.0_(20270).exe`.
+- [Shadow Warrior Classic Complete](https://www.gog.com/en/game/shadow_warrior_complete):
+  `shadow.warrior.rar`, 241,578,512 bytes, SHA-1
+  `92f1c925d235c3176ab4c21b6f1f0461b1b602c8`; extracts
+  `setup_shadow_warrior_complete_2.0.0.7.exe`.
+- [The Elder Scrolls: Arena](https://www.gog.com/en/game/the_elder_scrolls_arena):
+  `the.elder.scrolls.1.arena.rar`, 81,068,818 bytes, SHA-1
+  `aa8f357433ea5c07a9ebda4c6dd062b53348f57b`; extracts
+  `setup_the_elder_scrolls_arena_1.07_(28043).exe`.
+- [The Elder Scrolls II: Daggerfall](https://www.gog.com/en/game/the_elder_scrolls_chapter_ii_daggerfall):
+  `the.elder.scrolls.2.daggerfall.rar`, 184,129,634 bytes, SHA-1
+  `05276866d94746987a56617b708fa6eb4653359b`; extracts
+  `setup_the_elder_scrolls_ii_daggerfall_1.07_(28043).exe`.
+- [Ultima IV: Quest of the Avatar](https://www.gog.com/en/game/ultima_iv_quest_of_the_avatar):
+  `ultima.4.quest.of.the.avatar.rar`, 12,548,654 bytes, SHA-1
+  `a75b5a57226650c47fe8f8cdb0872c8289da1cf7`; extracts
+  `setup_ultima_iv_-_quest_of_the_avatar_1.0_cs_(28045).exe`.
+
+All seven RAR hashes match the values recorded by the Archive item, and each
+RAR contains one PE32/i386 GOG offline installer. The exact URLs, hashes,
+installer versions, and filenames are pinned in
+`test/candidate-corpus/manifest.json`; `tools/fetch-candidate-corpus.js`
+downloads, verifies, and extracts them beneath the gitignored
+`test/binaries/candidates/gog-free-*` fixture directories.
+
+"Free on GOG" describes the store price and acquisition path, not a public
+domain or open-source license. These remain proprietary packages unless their
+individual rights holders say otherwise, and a zero price does not by itself
+grant permission to redistribute the GOG installers. They therefore remain
+local research fixtures and must not enter a public deployment merely because
+GOG offered them without charge or Archive.org hosts copies.
+
+### Local runtime acceptance status (2026-08-29)
+
+All seven downloads contain PE32/i386 Windows installers. The installed game
+payloads are not all native Windows games: Beneath a Steel Sky, Flight of the
+Amazon Queen, and Lure of the Temptress use GOG's bundled Windows ScummVM;
+Shadow Warrior, Arena, Daggerfall, and Ultima IV use GOG's bundled Windows
+DOSBox to host the original DOS game. The launch checks below execute those
+Windows runtimes directly inside Wine-Assembly. They do not use host Wine or
+DOSBox-X.
+
+The local screenshot set is
+`/private/tmp/free-gog-screenshots.EC8yad`. Six numbered frames have been
+visually checked as actual gameplay rather than logos, menus, installers, or
+load selectors:
+
+| Game | Verified local frame | Content |
+|---|---|---|
+| Beneath a Steel Sky | `1-beneath-a-steel-sky.png` | playable industrial opening scene |
+| Flight of the Amazon Queen | `2-flight-of-the-amazon-queen.png` | Joe's bedroom with the verb/inventory UI |
+| Lure of the Temptress | `3-lure-of-the-temptress.png` | player-controlled dungeon cell |
+| Shadow Warrior Classic Complete | `4-shadow-warrior.png` | first-person combat in Wang's bar |
+| The Elder Scrolls: Arena | `5-elder-scrolls-arena.png` | first-person city view with live HUD |
+| Ultima IV | `7-ultima-iv.png` | overhead world-map gameplay with party/status UI |
+
+Daggerfall is the remaining handoff item. The bundled GOG DOSBox dynamic core
+now reaches character creation, and a deterministic physical-input script has
+been visually verified through exhausted attribute and skill bonus pools,
+reflex selection, and final review. The first full capture attempt clicked
+`(60,204)` on that last page; the drawn OK button is actually at `(284,204)`,
+so its five nominal gameplay frames remained identical to final review. The
+corrected sequence is preserved by `tools/run-daggerfall-gameplay.js`; a
+partial handoff retry reached attribute allocation batch 12,770 before it was
+stopped to wrap and commit this state. Until a complete retry produces a
+first-person dungeon frame,
+`6-elder-scrolls-daggerfall.png` must not be presented as gameplay.
+
 ## Further shareware/demo/freeware game candidates
 
 Research on 2026-08-22 narrowed the next browser targets to distributions that
-were released as demos or shareware. Archive.org availability is evidence that
-the historical package can be obtained and inspected, not by itself permission
-to redistribute it with this repository; keep external downloads and verify
-the original package terms before bundling any commercial demo.
+were released as demos or shareware. Entries in this file identify and link to
+the original distributions; Wine-Assembly can download and run those packages
+without republishing them. A playable demo is therefore a valid target even
+when its terms do not grant redistribution, unless those terms explicitly
+prohibit the project's method of obtaining or running it.
+
+### Little Fighter 2 v1.9 freeware
+
+The exact 12,669,116-byte `lf2_v19.exe` archived at
+[Archive.org](https://archive.org/details/lf2_v19) is pinned as
+`little-fighter-2-installer` with SHA-1
+`708c6be6dc4a195c1011fde480157862c60fbdee`. The unchanged Win32 installer now
+completes under Wine-Assembly and its installed game reaches interactive
+three-fighter VS combat. See
+[`docs/re-notes/little-fighter-2.md`](docs/re-notes/little-fighter-2.md) for the
+installer route, hashes, DirectDraw fix, and frozen gameplay gate.
+
+The [official LF2 introduction](https://www.lf2.net/en/intro.html) describes
+the game as freeware, and the [official FAQ](https://www.lf2.net/faq_en.html)
+confirms that the authors intended it to be free to play. The package readme
+still says **All rights reserved**, and no inspected official page expressly
+permits redistribution. Keep both the installer and prepared game payload
+local/gitignored; freeware status permits this compatibility target under the
+candidate policy but does not clear it for public deployment.
+
+### Pocket Tanks v1.6 shareware
+
+The official [Pocket Tanks page](https://classic.blitwise.com/pockettanks.html)
+offers the shareware edition, and its direct
+[`ptanks.exe` download](https://classic.blitwise.com/ptanks.exe) is pinned as
+`pocket-tanks-installer`. The package has SHA-1
+`1f10dd5830eecf117bc10daf7e85d29f364dbdc2` and SHA-256
+`a3d7da899ab2d3cdd33c6b10747478628175c5a5e0c215eb43a629e6cf98c982`.
+
+Wine-Assembly runs the unchanged bootstrap and the Inno Setup child it creates,
+then launches the installed game into Target Practice. See
+[`docs/re-notes/pocket-tanks.md`](docs/re-notes/pocket-tanks.md) for the exact
+guest-only installer route and frozen gameplay gate. Keep the installer and
+installed payload local/gitignored unless its package terms are separately
+confirmed to authorize public bundling; the official shareware label does not
+make the game open source.
+
+### Icy Tower v1.3.1 freeware
+
+The exact 2,647,172-byte installer from the
+[Icy Tower Archive item](https://archive.org/details/Icy_Tower) is pinned as
+`icy-tower`, with archive SHA-1
+`21aa4fb949c5f0718a59f922df6ad644a80e6715` and installer SHA-256
+`e8a6ddc8a11d49b1e68484f725afc9204d9d15e0bf6cf90f0b14f0d1c9d24302`.
+The unchanged bootstrap and its generated Inno child now complete inside
+Wine-Assembly, and the installed game reaches moving tower gameplay. See
+[`docs/re-notes/icy-tower.md`](docs/re-notes/icy-tower.md).
+
+The installed readme calls Icy Tower freeware and expressly encourages copying
+the game in its original form, provided Free Lunch Design receives credit and a
+site link. It separately forbids inclusion in commercial compilations or
+packages without the author's permission. Preserve the original package and
+those conditions for any public distribution; the extracted local browser
+payload remains gitignored.
+
+### Jardinains! v1.2 shareware
+
+The original author's [Jardinains 2 downloads
+page](https://jardinains2.com/otherDownloads.html) still links the
+[original Jardinains! 1.2 Windows
+installer](https://jardinains2.com/download.php?download=1). The current
+4,647,761-byte download is byte-identical to the pinned local package: SHA-1
+`805d7639f3ffbc0e771800c580c4799546d86bd7`, SHA-256
+`78c37d94d9bcf927343b56201ac6cdefed5b3233819c935650ce24260c49268c`.
+
+The installed manual describes this as fully functional shareware that may be
+played indefinitely, but its copyright notice explicitly prohibits
+redistribution or reproduction without written consent. Wine-Assembly
+therefore links to the original distribution and keeps both the installer and
+its installed payload local/gitignored. The unchanged installer produces 115
+files; its `jardinains.exe` hashes to
+`f1a8ba7040b190da398ced766940b6a853d747cb2dbbd6c46690a41a8368f117`.
+
+The installer-produced game now renders its original menu art, accepts the
+DirectInput-driven **New Game** and **Easy** choices, and reaches the playable
+Level 1 brick field. See
+[`docs/re-notes/jardinains.md`](docs/re-notes/jardinains.md) for the original
+installer workflow, DirectDraw diagnosis, hashes, and frozen CLI gameplay
+gate.
+
+### NetHack 3.4.3 for Windows
+
+The [official NetHack 3.4.3 Windows download
+page](https://www.nethack.org/v343/ports/download-win.html) provides the native
+Win32 graphical and console builds for Windows 95/98. The unchanged
+[`nethack-343-win.zip`](https://www.nethack.org/download/3.4.3/nethack-343-win.zip)
+is 2,046,488 bytes: MD5 `b91739c9f101a787220853eae904941d`, SHA-1
+`5b8e4717fb18d7888678f54b47aafd0060bf576b`, and SHA-256
+`c067acbca513961640e0064da21ec41359fda5150533ed53132012d188184ff7`.
+
+This official package has no installer. Its `README` instructs users to unzip
+all files into one directory, which is exactly what the reproducible candidate
+fetch recipe does. The included NetHack General Public License permits
+verbatim redistribution when its notices and source-access conditions are
+preserved. Wine-Assembly links the original package here and keeps the fetched
+runtime local/gitignored. The graphical build reaches an interactive tile
+dungeon; see [`docs/re-notes/nethack-win32.md`](docs/re-notes/nethack-win32.md)
+for exact executable hashes, compatibility fixes, and the gameplay gate.
 
 Recommended order:
 
 1. [Jazz Jackrabbit 2 Demo v1.23s](https://archive.org/details/JazzJackrabbit2Demo)
-   remains the best next target. The Archive item identifies it as a 1998
+   is now a completed target. The Archive item identifies it as a 1998
    Windows action-game demo, provides a 19.2 MB Windows executable, and says it
    contains three single-player levels including a boss plus multiplayer maps.
    The exact `J2swc123.exe` package and SHA-1 are already pinned in
-   `test/candidate-corpus/manifest.json`, so acquisition is reproducible.
+   `test/candidate-corpus/manifest.json`, so acquisition is reproducible. Its
+   unchanged installer now completes and the installer-produced game reaches
+   animated Darn Ratz gameplay; see
+   [`docs/re-notes/jazz2-demo.md`](docs/re-notes/jazz2-demo.md).
 2. [RollerCoaster Tycoon Demo](https://archive.org/details/RollercoasterTycoonDemo)
    is a 1999 Windows demo delivered as the single 18.7 MB `RCTYCOON.EXE`.
    Archive.org describes a roughly 25-minute playable session with saving,
    most scenarios, some rides, and ride music disabled. It is a useful change
    from action games: dense GDI/DirectDraw UI, timers, simulation, and mouse
    interaction matter more than twitch input.
-3. [Worms 2 Demo](https://archive.org/details/Worms2_1020) is a 1998 Windows
-   action/strategy demo in a 13.6 MB Archive item. Turn-based local play makes
-   it forgiving of emulator speed while still exercising destructible 2D
-   graphics, sound, keyboard, and precise mouse input.
+3. [Worms 2 Demo](https://archive.org/details/Worms2_1020) is now a completed
+   target. The tested package is Team17's smaller
+   [October 9, 1997 demo](http://www.classicdosgames.com/files/games/team17/Worms2Demo10Oct.zip),
+   whose installed README permits redistribution while the original files stay
+   intact. Turn-based local play exercises destructible 2D graphics,
+   DirectSound, keyboard input, and timers; this demo explicitly has no music.
 4. [Total Annihilation Demo](https://archive.org/details/TotalAnnihilation_201405)
    is a 1997 Windows strategy-game demo offered as a 20.6 MB item with a direct
    Windows executable download. It is a strong later stress target for large
@@ -779,16 +1166,21 @@ downloaded into ignored `test/binaries/candidates/` directories and exercised
 through their original installers before using any extracted game files.
 
 - Jazz Jackrabbit 2 uses the pinned `J2swc123.exe`. Its InstallShield wizard
-  reaches the DirectX 5 choice and accepts **No, continue without DirectX 5**,
-  then enters a long synchronous extraction batch; a 330-second bounded run did
-  not return, so completion is not yet proven.
-- Worms 2 was ultimately installed from Team17's smaller October demo archive,
+  now renders all five original property-sheet pages, accepts **No, continue
+  without DirectX 5**, and completes the unchanged package's extraction dialog.
+  It exits normally through its own completion message and writes all 53 files
+  and shortcuts under `C:\\Games\\Jazz2Sw`. Launching the installer-produced
+  `jazz2.exe` reaches distinct animated Darn Ratz gameplay frames.
+- Worms 2 was ultimately installed from Team17's smaller
+  [October demo archive](http://www.classicdosgames.com/files/games/team17/Worms2Demo10Oct.zip),
   `Worms2Demo10Oct.zip` (7,299,379 bytes; SHA-256
   `c65d36cef69437f066a3d50d8ff26d43d228a0595d7bcc106d541375e1d3cfd8`).
   The original Win16 InstallShield bootstrap expanded and ran its native
   32-bit engine; fixing `IsWindow(HWND_BROADCAST)` to reject the `0xFFFF`
   sentinel let that unchanged bootstrap finish, and three ordinary **Next**
-  clicks completed the install to `C:\\Team 17\\Worms 2 Demo`.
+  clicks completed the install to `C:\\Team 17\\Worms 2 Demo`. The durable gate
+  runs the bootstrap and its emitted child inside Wine-Assembly and never opens
+  an InstallShield cabinet on the host.
 - Total Annihilation is the direct `Total Annihilation.exe`. The native
   self-extractor calls `FindResourceA` with string-form integer names `#130`,
   `#135`, and `#136`; these correspond to numeric `ADD` resources containing
@@ -802,8 +1194,10 @@ through their original installers before using any extracted game files.
   Game startup then exposed a VFS enumeration error: `palettes\\*` against a
   missing directory fell back to the drive root and recursively invented paths
   such as `palettes\\program files\\program files`. Broad wildcards in missing
-  directories now fail normally; TA advances into archive/audio/palette setup,
-  but its next CPU-bound allocator scan has not yet reached a rendered menu.
+  directories now fail normally. TA now completes that initialization, renders
+  its title and campaign menus, loads the first Arm mission, and reaches the
+  live battlefield through the registered installer-produced payload. See
+  [`docs/re-notes/total-annihilation-demo.md`](docs/re-notes/total-annihilation-demo.md).
 - Captain Claw is the direct 11,275,313-byte `claw_demo.exe`. Its original
   InstallShield self-extractor runs from 1% through 99% and yields a complete
   10,689,596-byte `data.z`, 185,356-byte `_setup.lib`, and the native Win16
@@ -814,7 +1208,7 @@ through their original installers before using any extracted game files.
 ### 2026-08-22 Worms 2 October demo gameplay
 
 The completed native install contains `worms2demo.exe` plus `worms2.dat`, the
-terrain/graphics/level archives, and 136 installed effect and speech WAV files.
+terrain/graphics/level archives, and 140 installed effect and speech WAV files.
 Despite its extension, `worms2.dat` is the actual PE32 game. Static and runtime
 tracing show that `worms2demo.exe` is only a promotional carousel: a click
 posts `WM_CHAR`, enters its `_spawn` implementation, and calls
@@ -822,13 +1216,14 @@ posts `WM_CHAR`, enters its `_spawn` implementation, and calls
 single-process browser model, the debug manifest launches that exact installed
 PE directly instead of emulating a second process solely for the wrapper.
 
-An unchanged direct run finished the native loading sequence and entered the
-playable two-player medieval demo match. Captures at batches 50,000, 100,000,
-150,000, and 199,000 show different live worms (`Fudge`, `Nadger`, `Knuckle`,
-and `Woodbine`), turn arrows, moving camera/cursor, health, and changing turn
-timers. The first gameplay evidence is
-`/private/tmp/w2-direct-50k.png`; the later sustained-gameplay capture is
-`/private/tmp/w2-direct-199k.png`.
+An unchanged direct run finishes the native loading sequence and enters the
+playable two-player medieval demo match. The frozen stdio gate now launches
+only files produced by that installer run, uses a 5 ms-per-batch clock, and
+holds Left to move `Fudge` from the shore into a visible drowning animation.
+It checks the 640x480 8-bit DirectDraw surface, changed gameplay pixels, and
+submitted DirectSound bytes. Durable captures are written beneath
+`build/worms2-candidate/`; exact hashes and reproduction details are in
+[`docs/re-notes/worms2-demo.md`](docs/re-notes/worms2-demo.md).
 
 The shared `worms2_demo` app manifest was then exercised through the actual
 Chromium page, not only the CLI host. After loading the same installed files,
@@ -938,6 +1333,20 @@ unchanged web manifest creates and shows the 640x480 "Total Annihilation"
 window and remains live through 1,200 execution batches (874 API calls), past
 the former batch-665 failure.
 
+On 2026-09-03 the same installer-produced payload was driven beyond startup
+with the frozen stdin CLI. It rendered the title menu, accepted **Single
+Player** -> **New Campaign** -> **Arm**, displayed mission `10001ARME`, and
+entered the live battlefield with units, terrain, minimap, and metal/energy
+HUD. `test/test-total-annihilation-candidate.js` now preserves that route and
+requires a Right-arrow battlefield scroll to change more than 5,000 pixels.
+The same test reruns the native self-extractor first and verifies that its
+fresh EXE and HPI match the pinned hashes. This supersedes the earlier
+window-only status. The embedded EULA permits no-fee copying/distribution only
+with its notice and other stated conditions. That clause is not an inclusion
+blocker: the Sources entry links to the original distribution, and the emulator
+runs its installer rather than distributing either the installer or extracted
+runtime files.
+
 ### 2026-08-22 Caesar III demo
 
 The sixth compatibility target is the [Caesar III Demo Archive.org item](https://archive.org/details/CaesarIiiDemo),
@@ -978,13 +1387,20 @@ is real progress rather than a deadlock: the executable performs a software
 RGB555-to-RGB565 conversion over the whole surface one pixel at a time, then
 leaves that loop and enters its normal message pump.
 
-An actual Chromium launch through the shared web manifest reaches the Caesar III
-main menu, accepts **Start new game** and the default governor name, and loads
-the **Assignment 1 - Aventine / The Birth of a City** briefing from
-`mission1.pak`, with no runtime or missing-API failure. The scripted coordinate
-probe can scroll that briefing but has not yet made its **To the city** button
-advance, so this verifies the browser launch and first mission load but not the
-final transition into the city map.
+The installer-produced payload now has a frozen-stdio acceptance route through
+the Caesar III title, **Start new game**, governor-name entry, the **Assignment
+1 - Aventine / The Birth of a City** briefing from `mission1.pak`, **To the
+city**, and the live 800x600 city simulation. The final frame contains the
+green terrain map, stone control panel, minimap, resources, and construction
+controls rather than a menu or loading frame.
+
+The demo initializes its 32-byte name capture buffer with `The new governor`
+but leaves its overwrite cursor at byte zero, so a short typed name retains the
+old suffix (`Codexew governor`). A verified load-time compatibility patch for
+this exact `c3.exe` skips that one default copy and clears the buffer before the
+game starts capture. The installer-produced executable remains unchanged on
+disk; subsequent typing, drawing, and mission state are the game's own. See
+`docs/re-notes/caesar3-demo.md` and `test/test-caesar3-gameplay.js`.
 
 ### 2026-08-23 Captain Claw demo gameplay
 
@@ -1017,3 +1433,32 @@ Player**, and remained in animated gameplay for a 15-second sample. The canvas
 changed in 16 of 17 one-second probes with no runtime error or browser long
 task; the inspected browser capture is
 `/private/tmp/claw-browser-gameplay.png`.
+
+### 2026-09-04 Captain Claw frozen gameplay regression
+
+The installer-produced runtime files above still match their recorded SHA-256
+values. A dedicated low-load headless regression now runs the registered app in
+one frozen stdio-controlled CLI process with its internal wall-clock guard. It
+selects **Single Player**, reaches **Demo Level #1 - La Roca**, holds the real
+DirectInput right-arrow state, and verifies that Claw and the level camera move.
+Fresh manually inspected captures are `/private/tmp/claw-before.png` and
+`/private/tmp/claw-after.png`; see `docs/re-notes/captain-claw-demo.md` for the
+repeatable command and visual acceptance criteria.
+
+## Snood 2.2W shareware
+
+Verified 2026-09-05. The authentic 1,450,602-byte Windows installer is
+available from the preserved PCH 1200 disc through DiscMaster's
+[browser page](https://discmaster.textfiles.com/browse/40163/PCH_1200.iso/program/spel/snood/SnoodWin22Install.exe)
+and [original file](https://discmaster.textfiles.com/file/40163/PCH_1200.iso/program/spel/snood/SnoodWin22Install.exe).
+Its SHA-256 is
+`af87ef644d2a8d5a99f160ac522a7d318b0dc378285fd337c53dbf41c70db4ea`.
+
+This is the native Windows 95/98/NT 4.0 demonstration build, not the unrelated
+DOS/DJGPP Archive item previously recorded by the candidate manifest. The
+installed readme permits a 30-day trial and then requires registration or
+deletion; no public redistribution grant was found. Wine Assembly keeps the
+download and emulator-installed tree as ignored local fixtures and publishes
+only these source links and compatibility metadata. The original bootstrap,
+its generated Inno child, installation route, and verified interactive
+gameplay are documented in `docs/re-notes/snood.md`.

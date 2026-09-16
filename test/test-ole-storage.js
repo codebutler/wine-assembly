@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
@@ -13,18 +13,30 @@ const extraWat = String.raw`
         (param $name i32) (param $mode i32) (param $out i32) (result i32)
     (call $handle_StgCreateDocfile (local.get $name) (local.get $mode)
       (i32.const 0) (local.get $out) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CoMarshalInterThreadInterfaceInStream")
+        (param $iid i32) (param $iface i32) (param $out i32) (result i32)
+    (call $handle_CoMarshalInterThreadInterfaceInStream
+      (local.get $iid) (local.get $iface) (local.get $out)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_CoGetInterfaceAndReleaseStream")
+        (param $stream i32) (param $iid i32) (param $out i32) (result i32)
+    (call $handle_CoGetInterfaceAndReleaseStream
+      (local.get $stream) (local.get $iid) (local.get $out)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_CoGetClassObject")
         (param $clsid i32) (param $ctx i32) (param $reserved i32)
         (param $iid i32) (param $out i32) (result i32)
     (call $handle_CoGetClassObject (local.get $clsid) (local.get $ctx)
       (local.get $reserved) (local.get $iid) (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_CoGetClassObject_yield")
         (param $clsid i32) (param $iid i32) (param $out i32) (result i32)
     (local $saved_esp i32) (local $saved_eip i32)
     (local $saved_thunk i32) (local $bits i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (local.set $saved_eip (global.get $eip))
     (local.set $saved_thunk (global.get $current_thunk_eip))
     (global.set $current_thunk_eip (i32.const 0x0BADF00D))
@@ -32,7 +44,7 @@ const extraWat = String.raw`
       (i32.const 0) (local.get $iid) (local.get $out) (i32.const 0))
     (if (i32.eq (global.get $yield_reason) (i32.const 3))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
-    (if (i32.eq (global.get $esp) (local.get $saved_esp))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
     (if (global.get $handler_set_eip)
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
@@ -40,7 +52,7 @@ const extraWat = String.raw`
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 8)))))
     (if (i32.eq (global.get $eip) (global.get $current_thunk_eip))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 16)))))
-    (global.set $esp (local.get $saved_esp))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (global.set $eip (local.get $saved_eip))
     (global.set $current_thunk_eip (local.get $saved_thunk))
     (global.set $yield_reason (i32.const 0))
@@ -73,42 +85,61 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x2c20) (i32.const 0x4003))
     (call $gs32 (i32.const 0x2c28) (i32.const 0x2c40))
     (call $gs32 (i32.const 0x2c40) (i32.const 112))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $gs32 (i32.const 0x00300018) (i32.const 0x2c00))
     (call $handle_ICommonDialogDispatch_Invoke
       (local.get $dispatch) (i32.const 6) (i32.const 0) (i32.const 1033)
       (i32.const 4) (i32.const 0))
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
-    (global.set $esp (i32.const 0x00300000))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00300028))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 8)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $gs32 (i32.const 0x00300018) (i32.const 0))
     (call $gs32 (i32.const 0x0030001c) (i32.const 0x2c60))
     (call $handle_ICommonDialogDispatch_Invoke
       (local.get $dispatch) (i32.const 6) (i32.const 0) (i32.const 1033)
       (i32.const 2) (i32.const 0))
     (if (i32.and
-          (i32.eqz (global.get $eax))
+          (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (i32.and
             (i32.eq (call $gl16 (i32.const 0x2c60)) (i32.const 3))
             (i32.eq (call $gl32 (i32.const 0x2c68)) (i32.const 112))))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00300028))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 16)))))
     (drop (call $ole_obj_release (local.get $obj)))
     (drop (call $ole_obj_release (local.get $obj)))
+    (local.get $bits))
+  (func (export "test_storage_enum_elements_handler")
+        (param $storage i32) (param $out i32) (result i32)
+    (local $bits i32)
+    (call $gs32 (local.get $out) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $handle_IStorage_EnumElements
+      (local.get $storage) (i32.const 0) (i32.const 0) (i32.const 0)
+      (local.get $out) (i32.const 0))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 1)))))
+    (if (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00300018))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 2)))))
+    (if (call $gl32 (local.get $out))
+      (then (local.set $bits (i32.or (local.get $bits) (i32.const 4)))))
     (local.get $bits))
 `;
 
 async function main() {
-  const wasm = await compileWat(async file => {
-    const source = await fs.promises.readFile(path.join(SRC, file), 'utf8');
-    if (file !== '13-exports.wat') return source;
-    return source.replace(/\n\)\s*$/, `\n${extraWat}\n)\n`);
-  });
+  // Plain append: src fragments are self-balanced now, so there is no trailing
+  // `)` to splice into — the old regex matched nothing and dropped extraWat.
+  const wasm = compileSrcWasm((file, source) =>
+    file === '13-exports.wat' ? `${source}\n${extraWat}\n` : source);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const imports = createHostImports(ctx);
   imports.host.memory = memory;
   imports.host.create_thread = () => 0;
   imports.host.exit_thread = () => 0;
+  imports.host.terminate_thread = () => 0;
   imports.host.create_event = () => 0;
   imports.host.set_event = () => 0;
   imports.host.reset_event = () => 0;
@@ -117,6 +148,26 @@ async function main() {
   let comArgs = null;
   let comShouldYield = false;
   let testExports = null;
+  let namedFileCreate = null;
+  let namedFilePath = '';
+  let namedFileWrite = null;
+  imports.host.fs_create_file = (...args) => {
+    namedFileCreate = args;
+    const view = new DataView(memory.buffer);
+    for (let offset = args[0]; ; offset += 2) {
+      const code = view.getUint16(offset, true);
+      if (!code) break;
+      namedFilePath += String.fromCharCode(code);
+    }
+    return 0x456;
+  };
+  imports.host.fs_write_file = (handle, buffer, size, written) => {
+    const writtenWa = written - testExports.get_image_base() + testExports.get_guest_base();
+    new DataView(memory.buffer).setUint32(writtenWa, size, true);
+    namedFileWrite = { handle, buffer, size };
+    return 1;
+  };
+  imports.host.fs_close_handle = () => 1;
   imports.host.com_create_instance = (...args) => {
     comArgs = args;
     if (comShouldYield) return 0x800401f0;
@@ -204,7 +255,7 @@ async function main() {
   dv.setUint32(wa(dispatchIid), 0x00020400, true);
   dv.setUint32(wa(classOut), 0, true);
   check('Common Dialog exposes IDispatch and round-trips scalar properties',
-    e.test_common_dialog_scalar_dispatch(comClsid, dispatchIid, classOut) === 7);
+    e.test_common_dialog_scalar_dispatch(comClsid, dispatchIid, classOut) === 31);
 
   const anonymousOut = alloc(4);
   check('StgCreateDocfile creates a functional anonymous temporary storage',
@@ -215,11 +266,48 @@ async function main() {
       if (anonymous) e.test_ole_release(anonymous);
       return ok;
     })());
+  const namedOut = alloc(4);
+  const namedPath = writeWide('C:\\BW2StgCreate.cfb');
+  const namedHr = e.test_call_StgCreateDocfile(namedPath, 0x00001012, namedOut);
+  check('StgCreateDocfile creates a functional named compound file',
+    namedHr === 0 &&
+    (() => {
+      const named = dv.getUint32(wa(namedOut), true);
+      const ok = named !== 0 && dv.getUint32(wa(named) + 8, true) === 2 &&
+        namedFilePath === 'C:\\BW2StgCreate.cfb' && namedFileCreate?.[1] === 0x40000000 &&
+        namedFileCreate?.[2] === 2 && namedFileCreate?.[4] === 1 &&
+        namedFileWrite?.handle === 0x456 && namedFileWrite.size >= 512 &&
+        Array.from(u8.slice(wa(namedFileWrite.buffer), wa(namedFileWrite.buffer) + 8)).join(',') ===
+          '208,207,17,224,161,177,26,225';
+      if (named) e.test_ole_release(named);
+      return ok;
+    })(), `hr=0x${(namedHr >>> 0).toString(16)} create=${JSON.stringify(namedFileCreate)} write=${JSON.stringify(namedFileWrite)}`);
   check('StgCreateDocfile rejects a missing output pointer',
     (e.test_call_StgCreateDocfile(0, 0x04000012, 0) >>> 0) === 0x80004003);
 
   const lockbytes = e.test_ole_create_lockbytes(0, 1) >>> 0;
   const storage = e.test_ole_create_storage(lockbytes) >>> 0;
+  const marshalIid = writeBytes(new Uint8Array(16));
+  const marshalOut = alloc(4);
+  const interfaceOut = alloc(4);
+  const storageRefsBeforeMarshal = dv.getUint32(wa(storage) + 4, true);
+  e.set_esp(savedEsp);
+  const marshalHr = e.test_call_CoMarshalInterThreadInterfaceInStream(
+    marshalIid, storage, marshalOut);
+  const marshaledStream = dv.getUint32(wa(marshalOut), true);
+  check('CoMarshalInterThreadInterfaceInStream retains a one-shot local interface stream',
+    marshalHr === 0 && marshaledStream !== 0 &&
+    dv.getUint32(wa(marshaledStream) + 8, true) === 21 &&
+    dv.getUint32(wa(storage) + 4, true) === storageRefsBeforeMarshal + 1);
+  e.set_esp(savedEsp);
+  const unmarshalHr = e.test_call_CoGetInterfaceAndReleaseStream(
+    marshaledStream, marshalIid, interfaceOut);
+  const unmarshaledInterface = dv.getUint32(wa(interfaceOut), true);
+  check('CoGetInterfaceAndReleaseStream transfers the retained interface reference',
+    unmarshalHr === 0 && unmarshaledInterface === storage &&
+    dv.getUint32(wa(storage) + 4, true) === storageRefsBeforeMarshal + 1);
+  if (unmarshaledInterface) e.test_ole_release(unmarshaledInterface);
+  e.set_esp(savedEsp);
   const name = writeWide('ObjectData');
   const stream = e.test_ole_create_stream(storage, name) >>> 0;
   check('creates distinct ILockBytes, IStorage and IStream objects',
@@ -551,6 +639,10 @@ async function main() {
   e.test_ole_release(moveDestination);
 
   const enumStorage = e.test_ole_create_storage(0) >>> 0;
+  const enumHandlerOut = alloc(4);
+  check('IStorage::EnumElements returns an enumerator and pops its six-word frame',
+    e.test_storage_enum_elements_handler(enumStorage, enumHandlerOut) === 7);
+  e.test_ole_release(dv.getUint32(wa(enumHandlerOut), true));
   const enumAlphaName = writeWide('Alpha');
   const enumBetaName = writeWide('Beta');
   const enumFolderName = writeWide('EnumFolder');

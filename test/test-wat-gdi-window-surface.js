@@ -3,12 +3,14 @@
 'use strict';
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 const { createCanvas } = require('../lib/canvas-compat');
 const { createHostImports } = require('../lib/host-imports');
 const { mountBundledFonts } = require('./render-helper');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// The WAT-private tables this test pokes are ALLOCATED regions since wave 3:
+// their addresses are chosen by the compiler and change whenever anything
+// earlier in the map changes size. Read them, never retype them.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const HWND = 0x10001;
 const CHILD = 0x10002;
@@ -16,8 +18,37 @@ const GRANDCHILD = 0x10003;
 const SECOND_CHILD = 0x10004;
 
 async function main() {
-  const root = path.join(__dirname, '..');
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const extraWat = String.raw`
+  (func (export "test_clip_dialog_mode") (param $hwnd i32) (param $mode i32)
+    (global.set $is_win16 (local.get $mode))
+    (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_DIALOG)))
+  (func (export "test_clip_control_class") (param $hwnd i32) (param $class i32)
+    (call $ctrl_table_set (call $wnd_table_find (local.get $hwnd)) (local.get $class) (i32.const 100)))
+  (func (export "test_beginpaint_system_update_clip") (param $hwnd i32) (result i32)
+    (local $ps i32) (local $hdc i32) (local $clip i32) (local $ok i32)
+    (local.set $ps (global.get $GUEST_STACK))
+    (call $update_invalidate_rect (local.get $hwnd)
+      (i32.const 4) (i32.const 4) (i32.const 8) (i32.const 8))
+    (call $handle_BeginPaint (local.get $hwnd) (local.get $ps)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (local.set $hdc (call $gl32 (local.get $ps)))
+    ;; Simulate CARDS.DLL replacing the application clip while painting one
+    ;; card. USER's rcPaint system clip must still exclude (1,1).
+    (local.set $clip (call $gdi_rgn_alloc_rect
+      (i32.const 0) (i32.const 0) (i32.const 34) (i32.const 22)))
+    (drop (call $gdi_dc_clip_select (local.get $hdc) (local.get $clip)))
+    (local.set $ok (i32.and
+      (i32.eqz (call $gdi_dc_clip_point_visible
+        (local.get $hdc) (i32.const 1) (i32.const 1)))
+      (call $gdi_dc_clip_point_visible
+        (local.get $hdc) (i32.const 5) (i32.const 5))))
+    (call $handle_EndPaint (local.get $hwnd) (local.get $ps)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (drop (call $gdi_rgn_delete (local.get $clip)))
+    (local.get $ok))
+`;
+  const wasm = compileSrcWasm((file, source) =>
+    (file === '13-exports.wat' ? `${source}\n${extraWat}\n` : source));
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   let canvas = createCanvas(40, 30);
   let repaints = 0;
@@ -106,6 +137,9 @@ async function main() {
   wat.test_gdi_client_rect_set(HWND, 3, 5, 37, 27);
   wat.test_gdi_client_rect_set(CHILD, 0, 0, 20, 14);
   wat.test_gdi_client_rect_set(GRANDCHILD, 0, 0, 10, 10);
+
+  assert.strictEqual(wat.test_beginpaint_system_update_clip(HWND), 1,
+    'replacing the application clip during WM_PAINT must not escape rcPaint');
 
   const hdc = wat.test_call_GetDC(HWND) >>> 0;
   assert(hdc, 'GetDC must allocate a real window DC');
@@ -214,15 +248,15 @@ async function main() {
   wat.wnd_set_style_export(SECOND_CHILD, 0x54000000);
   const wndSlot = hwnd => {
     for (let slot = 0; slot < 256; slot++) {
-      if (dv.getUint32(0x7000 + slot * 24, true) === hwnd) return slot;
+      if (dv.getUint32(RegionMap.BASE.WND_RECORDS + slot * 24, true) === hwnd) return slot;
     }
     return -1;
   };
   const childSlot = wndSlot(CHILD);
   const secondChildSlot = wndSlot(SECOND_CHILD);
   assert(childSlot >= 0 && secondChildSlot >= 0, 'sibling windows need table slots');
-  dv.setInt32(0x079C8000 + childSlot * 4, 100, true);
-  dv.setInt32(0x079C8000 + secondChildSlot * 4, 200, true);
+  dv.setInt32(RegionMap.BASE.WND_Z_ORDER_TABLE +childSlot * 4, 100, true);
+  dv.setInt32(RegionMap.BASE.WND_Z_ORDER_TABLE +secondChildSlot * 4, 200, true);
   assert.strictEqual(wat.wnd_z_get(CHILD), 100);
   assert.strictEqual(wat.wnd_z_get(SECOND_CHILD), 200);
   assert.strictEqual(wat.wnd_get_parent(CHILD), HWND);
@@ -236,14 +270,14 @@ async function main() {
   const siblingDc = wat.test_call_GetDC(CHILD) >>> 0;
   let systemClip = 0;
   for (let slot = 0; slot < 256; slot++) {
-    const entry = 0x07F0C000 + slot * 8;
+    const entry = RegionMap.BASE.GDI_DC_SYSTEM_CLIP_TABLE + slot * 8;
     if (dv.getUint32(entry, true) === siblingDc) {
       systemClip = dv.getUint32(entry + 4, true);
       break;
     }
   }
   assert(systemClip, 'child DC needs a retained USER system clip');
-  const systemClipRecord = 0x07F0D000 + ((systemClip & 0xFF) - 1) * 32;
+  const systemClipRecord = RegionMap.BASE.GDI_REGION_TABLE + ((systemClip & 0xFF) - 1) * 32;
   const systemClipRects = dv.getUint32(systemClipRecord + 28, true);
   const systemClipBox = [8, 12, 16, 20].map(offset =>
     dv.getInt32(systemClipRecord + offset, true));
@@ -252,7 +286,49 @@ async function main() {
     `(rects=${systemClipRects}, box=${systemClipBox.join(',')})`);
   assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
     'a higher-z overlapping sibling must be excluded from the child DC');
-  dv.setInt32(0x079C8000 + childSlot * 4, 300, true);
+  wat.test_clip_dialog_mode(HWND, 0);
+  wat.test_clip_control_class(CHILD, 2);
+  wat.wnd_set_style_export(CHILD, 0x50000000);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 1,
+    'Win32 EDIT without WS_CLIPSIBLINGS may overlay a score label');
+  wat.wnd_set_style_export(CHILD, 0x54000000);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
+    'Win32 EDIT with explicit WS_CLIPSIBLINGS still clips');
+  wat.test_clip_control_class(CHILD, 0);
+  wat.test_clip_dialog_mode(HWND, 1);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
+    'Win16 still honors explicit WS_CLIPSIBLINGS');
+  wat.wnd_set_style_export(CHILD, 0x50000000);
+  wat.test_clip_control_class(CHILD, 3);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 1,
+    'Win16 decorative dialog siblings do not implicitly hide enclosed labels');
+  wat.test_clip_control_class(CHILD, 0);
+  wat.test_clip_control_class(SECOND_CHILD, 3);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
+    'Win16 custom frames retain clipping around higher heading labels');
+  dv.setInt32(RegionMap.BASE.WND_Z_ORDER_TABLE +secondChildSlot * 4, 50, true);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
+    'an earlier outer frame also clears a later heading');
+  const childWh = wat.ctrl_get_wh(CHILD) >>> 0;
+  wat.ctrl_set_geom(SECOND_CHILD, 7, 12, childWh & 65535, childWh >>> 16);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 1,
+    'the heading own coincident frame is not clipped away');
+  wat.ctrl_set_geom(SECOND_CHILD, 10, 13, 5, 5);
+  wat.test_clip_control_class(SECOND_CHILD, 0);
+  dv.setInt32(RegionMap.BASE.WND_Z_ORDER_TABLE +secondChildSlot * 4, 200, true);
+  wat.test_clip_dialog_mode(HWND, 0);
+  wat.dc_apply_client_clip(siblingDc, CHILD);
+  assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 0,
+    'Win32 dialog compatibility clipping is preserved');
+  wat.wnd_set_style_export(CHILD, 0x54000000);
+  dv.setInt32(RegionMap.BASE.WND_Z_ORDER_TABLE +childSlot * 4, 300, true);
   wat.dc_apply_client_clip(siblingDc, CHILD);
   assert.strictEqual(wat.test_gdi_dc_clip_point_visible(siblingDc, 3, 1), 1,
     'raising the child above its sibling must restore the overlap');

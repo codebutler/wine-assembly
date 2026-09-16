@@ -8,11 +8,13 @@ current major regions; the memory-map comment and sized globals in
 
 ```
 0x20000000 ┌────────────────────────┐  End of shared linear memory
-           │  DIB pixel arena (64MB)│  Fixed CreateDIBSection backing
+           │  DIB pixel arena (63MB)│  Fixed CreateDIBSection backing
 0x1C000000 ├────────────────────────┤
+           │ Flat guest PTEs (4MB)  │  One packed entry per 4KB guest page
+0x1BC00000 ├────────────────────────┤
            │                        │
-           │  VirtualAlloc backing │  320MB for sparse high guest maps
-           │  pool (320MB)          │
+           │  VirtualAlloc backing │  316MB for sparse high guest maps
+           │  pool (316MB)          │
            │                        │
 0x08000000 ├────────────────────────┤  End of direct g2w window
            │  High private tables   │  API hashes, regions, COM/DX state
@@ -23,14 +25,14 @@ current major regions; the memory-map comment and sized globals in
 0x07992000 ├────────────────────────┤
            │  PE staging (8MB)      │  Temporary PE/DLL load buffer
 0x07192000 ├────────────────────────┤
-           │  Cache indexes (256KB) │  8 x 4096 decoded-block indexes
+           │  (free, 256KB)         │  was CACHE_INDEX_BASE; pages replaced it
 0x07152000 ├────────────────────────┤
            │  IAT thunk zone (256KB)│  API import trampolines
 0x07112000 ├────────────────────────┤
            │  Main stack (1MB)      │  Guest ESP starts at 0x07112000
 0x07012000 ├────────────────────────┤
-           │  Thread cache (32MB)   │  8 x 4MB decoded-thread arenas
-0x05000000 ├────────────────────────┤
+           │  Thread cache (30MB)   │  8 x 3.75MB decoded-thread arenas
+           ├────────────────────────┤  Allocator-owned base; query region-layout.js
            │  Heap (1MB initial)    │  Reusing HeapAlloc/malloc arena
 0x03D12000 ├────────────────────────┤
            │  Guest address space   │  PE sections and large image data

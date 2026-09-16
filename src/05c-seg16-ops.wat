@@ -15,14 +15,16 @@
   ;; can rebuild the linear address as `cs_base | ip`.
   ;;
   ;; Segment ids follow the x86 ModRM sreg encoding throughout: 0=ES, 1=CS,
-  ;; 2=SS, 3=DS. FS and GS have no meaning in a Win16 task and trap.
+  ;; 2=SS, 3=DS, 4=FS. WinG uses LFS and FS-relative accesses in Win16 code;
+  ;; GS still has no modeled use and traps.
 
   (func $seg16_base (param $id i32) (result i32)
     (if (i32.eq (local.get $id) (i32.const 0)) (then (return (global.get $seg_base_es))))
     (if (i32.eq (local.get $id) (i32.const 1)) (then (return (global.get $seg_base_cs))))
     (if (i32.eq (local.get $id) (i32.const 2)) (then (return (global.get $seg_base_ss))))
     (if (i32.eq (local.get $id) (i32.const 3)) (then (return (global.get $seg_base_ds))))
-    (call $host_log_i32 (i32.const 0xCA165E67))  ;; FS/GS in a 16-bit task
+    (if (i32.eq (local.get $id) (i32.const 4)) (then (return (global.get $fs_base))))
+    (call $host_log_i32 (i32.const 0xCA165E67))  ;; GS in a 16-bit task
     (call $host_log_i32 (local.get $id))
     (unreachable))
 
@@ -112,16 +114,19 @@
         (return)))
     (if (i32.eq (local.get $id) (i32.const 3))
       (then (global.set $sreg_ds (local.get $sel)) (global.set $seg_base_ds (local.get $base)) (return)))
+    (if (i32.eq (local.get $id) (i32.const 4))
+      (then (global.set $fs_base (local.get $base)) (return)))
     (call $host_log_i32 (i32.const 0xCA165E67))
     (call $host_log_i32 (local.get $id))
     (unreachable))
 
   ;; ---- Effective addresses ----
   ;;
-  ;; info = base | index<<4 | seg<<8, with 0xF meaning "no register". The sum
-  ;; wraps inside the segment before the base is added, which is what makes
-  ;; `[bp-2]` with a small BP address the top of the segment rather than the
-  ;; segment below it.
+  ;; info = base | index<<4 | seg<<8 | addr32<<11, with 0xF meaning "no
+  ;; register". A normal 16-bit-address sum wraps inside the segment before
+  ;; the base is added, which is what makes `[bp-2]` with a small BP address
+  ;; the top of the segment rather than the segment below it. An address-size
+  ;; override keeps the full 32-bit offset while still applying the selector.
   (func $ea16_compute (param $info i32) (param $disp i32) (result i32)
     (local $off i32)
     (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
@@ -129,9 +134,12 @@
     (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $off (i32.add (local.get $off)
         (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
+    (local.set $off (i32.add (local.get $off) (local.get $disp)))
     (i32.add
       (call $seg16_base (i32.and (i32.shr_u (local.get $info) (i32.const 8)) (i32.const 7)))
-      (i32.and (i32.add (local.get $off) (local.get $disp)) (i32.const 0xFFFF))))
+      (if (result i32) (i32.and (local.get $info) (i32.const 0x800))
+        (then (local.get $off))
+        (else (i32.and (local.get $off) (i32.const 0xFFFF))))))
 
   ;; 363: compute a 16-bit segmented EA into ea_temp, then fall through to the
   ;; handler that consumes it — the same contract as $th_compute_ea_sib.
@@ -153,6 +161,92 @@
         (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
     (call $set_reg16 (local.get $op)
       (i32.and (i32.add (local.get $off) (call $read_thread_word)) (i32.const 0xFFFF)))
+    (return_call $next))
+
+  ;; 442: LAR r16/32, r/m16. The NE loader's selector table is the protected-
+  ;; mode descriptor table for a Win16 task, so report the same access-byte
+  ;; shape real 386 code observes: readable code has type 0xB and writable data
+  ;; type 0x3, both present at DPL 3. Civ II uses precisely the architectural
+  ;; contract here: reject an invalid far-pointer selector when ZF is clear,
+  ;; then test access-right bit 11 to distinguish code from data.
+  ;;
+  ;; op = src | dst<<4 | memory<<8 | word-destination<<9. A memory source has
+  ;; its ordinary read_addr word after the handler. Outside Win16 there is no
+  ;; modeled GDT, so accept any non-null user selector as a flat data segment.
+  (func $th_lar (param $op i32)
+    (local $sel i32) (local $index i32) (local $entry i32)
+    (local $rights i32) (local $valid i32) (local $f i32)
+    (if (i32.and (local.get $op) (i32.const 0x100))
+      (then (local.set $sel (call $gl16 (call $read_addr))))
+      (else (local.set $sel
+        (call $get_reg16 (i32.and (local.get $op) (i32.const 0xF))))))
+    (local.set $index (call $win16_sel_to_index (local.get $sel)))
+    (if (global.get $code16)
+      (then
+        (local.set $valid
+          (i32.ne (call $win16_seg_base (local.get $index)) (i32.const 0)))
+        (if (local.get $valid)
+          (then
+            (local.set $entry (i32.add (global.get $WIN16_SEG_TABLE)
+              (i32.shl (local.get $index) (i32.const 4))))
+            ;; A loaded NE segment has a non-zero segment number. Bit 0 of its
+            ;; NE flags distinguishes data from code; arena allocations and
+            ;; aliases have segment number zero and are data descriptors.
+            (local.set $rights
+              (if (result i32)
+                (i32.and
+                  (i32.ne (i32.load offset=12 (local.get $entry)) (i32.const 0))
+                  (i32.eqz (i32.and (i32.load offset=8 (local.get $entry))
+                                    (i32.const 1))))
+                (then (i32.const 0xFB00))
+                (else (i32.const 0xF300)))))))
+      (else
+        (local.set $valid (i32.ne (local.get $sel) (i32.const 0)))
+        (local.set $rights (i32.const 0x00CFF300))))
+    (if (local.get $valid)
+      (then
+        (if (i32.and (local.get $op) (i32.const 0x200))
+          (then (call $set_reg16
+            (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 7))
+            (local.get $rights)))
+          (else (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 7)) (i32.const 2))) (local.get $rights))))))
+    ;; LAR defines ZF only. The remaining arithmetic flags are architecturally
+    ;; undefined, so materializing the prior lazy word while replacing ZF is a
+    ;; faithful and deterministic choice.
+    (local.set $f (i32.and (call $build_eflags) (i32.const 0xFFFFFFBF)))
+    (if (local.get $valid)
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
+    (call $load_eflags (local.get $f))
+    (return_call $next))
+
+  ;; 447: VERR r/m16. VBRUN100 uses the memory form while unwinding a VB
+  ;; window: `0f 00 /4` asks whether a selector names a readable descriptor
+  ;; and reports only through ZF. Every mapped NE code descriptor we expose is
+  ;; readable (the same 0xB type synthesized by LAR), and data/arena selectors
+  ;; are readable as well, so validity is exactly a non-empty selector-table
+  ;; entry. Outside a Win16 task, retain the flat model's non-null-selector
+  ;; answer.
+  ;;
+  ;; op = source register in bits 0-3, or bit 8 plus a read_addr word.
+  (func $th_verr (param $op i32)
+    (local $sel i32) (local $valid i32) (local $f i32)
+    (if (i32.and (local.get $op) (i32.const 0x100))
+      (then (local.set $sel (call $gl16 (call $read_addr))))
+      (else (local.set $sel
+        (call $get_reg16 (i32.and (local.get $op) (i32.const 7))))))
+    (if (global.get $code16)
+      (then
+        (local.set $valid
+          (i32.ne
+            (call $win16_seg_base
+              (call $win16_sel_to_index (local.get $sel)))
+            (i32.const 0))))
+      (else (local.set $valid (i32.ne (local.get $sel) (i32.const 0)))))
+    ;; VERR defines ZF only; preserve all other materialized arithmetic flags.
+    (local.set $f (i32.and (call $build_eflags) (i32.const 0xFFFFFFBF)))
+    (if (local.get $valid)
+      (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
+    (call $load_eflags (local.get $f))
     (return_call $next))
 
   ;; ---- Near returns ----
@@ -301,6 +395,25 @@
     (call $set_reg16 (i32.and (local.get $op) (i32.const 0xF)) (call $gl16 (local.get $addr)))
     (call $win16_set_sreg (i32.shr_u (local.get $op) (i32.const 4))
       (call $gl16 (i32.add (local.get $addr) (i32.const 2))))
+    (return_call $next))
+
+  ;; 425: LES/LDS r32, m16:32 in a *flat* task — op = 16bit<<4 | reg, address
+  ;; in the next word.
+  ;;
+  ;; LES and LDS are not 16-bit-only instructions: they are legal in 32-bit
+  ;; protected mode, and Watcom emits `les eax, [edx-8]` in its va_arg walker,
+  ;; which is how Fallout's demo reaches one. Every selector in a Win32 process
+  ;; is flat, so the segment half is a value we would only load to throw away —
+  ;; the offset half is the whole instruction here. Loading it and dropping the
+  ;; selector is what a flat task actually observes; touching $seg_base_es
+  ;; instead would move every later ES-relative access off the flat mapping.
+  (func $th_load_far_ptr32 (param $op i32)
+    (local $addr i32)
+    (local.set $addr (call $read_addr))
+    (if (i32.and (local.get $op) (i32.const 0x10))
+      (then (call $set_reg16 (i32.and (local.get $op) (i32.const 0xF))
+              (call $gl16 (local.get $addr))))
+      (else (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))) (call $gl32 (local.get $addr)))))
     (return_call $next))
 
   ;; 377: MOV r16, Sreg — op = sreg<<4 | reg

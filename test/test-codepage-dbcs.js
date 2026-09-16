@@ -4,19 +4,22 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
 
 async function main() {
-  const wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC, f), 'utf-8'));
+  const wasmBytes = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const base = createHostImports(ctx);
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -27,7 +30,7 @@ async function main() {
   const { instance } = await WebAssembly.instantiate(wasmBytes, base);
   const e = instance.exports;
   const u8 = new Uint8Array(memory.buffer);
-  const wa = gp => gp - e.get_image_base() + 0x12000;
+  const wa = gp => RegionMap.g2w(gp, e.get_image_base());
 
   let pass = 0;
   let fail = 0;

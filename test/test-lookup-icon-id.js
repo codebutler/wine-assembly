@@ -33,13 +33,13 @@ const extraWat = String.raw`
       (i32.const 48) (i32.const 48) (i32.const 32) (i32.const 33))
     (call $put_group_icon_entry (i32.add (local.get $p) (i32.const 48))
       (i32.const 32) (i32.const 32) (i32.const 32) (i32.const 44))
-    (global.set $esp (i32.const 0x00421000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00421000))
     (call $handle_LookupIconIdFromDirectoryEx
       (local.get $p) (i32.const 1) (i32.const 32) (i32.const 32)
       (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
   (func (export "test_lookup_icon_header") (result i32)
     (call $gl32 (global.get $test_icon_group)))
   (func (export "test_lookup_icon_count") (result i32)

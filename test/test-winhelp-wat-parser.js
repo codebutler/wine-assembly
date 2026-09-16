@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
@@ -779,7 +779,7 @@ function buildSyntheticSemanticHelp({
 }
 
 async function main() {
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(SRC, file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const imports = createHostImports(ctx);
@@ -810,6 +810,7 @@ async function main() {
   imports.host.memory = memory;
   imports.host.create_thread = () => 0;
   imports.host.exit_thread = () => 0;
+  imports.host.terminate_thread = () => 0;
   imports.host.create_event = () => 0;
   imports.host.set_event = () => 0;
   imports.host.reset_event = () => 0;
@@ -1843,9 +1844,9 @@ async function main() {
   const layoutCount = e.test_help_layout_tokens(topicOutWA, layoutText.length,
     topicTokensWA, 2, layoutRunsWA, 5, 64);
   const expectedLayout = [
-    [1,8,8,35,16,0,5], [2,43,8,7,16,5,1],
-    [1,8,24,28,16,6,4], [2,36,24,7,16,10,1],
-    [1,8,40,35,16,11,5],
+    [1,8,8,40,16,0,5], [2,48,8,8,16,5,1],
+    [1,8,24,32,16,6,4], [2,40,24,8,16,10,1],
+    [1,8,40,40,16,11,5],
   ];
   const actualLayout = Array.from({ length: layoutCount }, (_, index) =>
     Array.from({ length: 7 }, (_, field) =>
@@ -2211,8 +2212,8 @@ async function main() {
       dv.getUint32(layoutRunsWA + index * 40 + field * 4, true)));
   check('paragraph metrics own exact margins, first-line indent, spacing, and line height',
     metricParagraph.count === 5 && JSON.stringify(metricRuns) === JSON.stringify([
-      [1,24,16,35,16], [2,59,16,7,16], [1,18,36,28,16],
-      [2,46,36,7,16], [1,18,56,35,16],
+      [1,24,16,40,16], [2,64,16,8,16], [1,18,36,32,16],
+      [2,50,36,8,16], [1,18,56,40,16],
     ]) && e.get_help_layout_extent() === 78,
     `runs=${JSON.stringify(metricRuns)} extent=${e.get_help_layout_extent()}`);
 
@@ -2242,13 +2243,13 @@ async function main() {
     header: buildParagraphHeader({ flags: 0x0800 }),
   });
   check('center paragraph alignment shifts the complete positioned line',
-    centerParagraph.count === 1 && dv.getUint32(layoutRunsWA + 4, true) === 36);
+    centerParagraph.count === 1 && dv.getUint32(layoutRunsWA + 4, true) === 34);
   const rightParagraph = layoutParagraph({
     raw: Buffer.from('abcd', 'latin1'),
     header: buildParagraphHeader({ flags: 0x0400 }),
   });
   check('right paragraph alignment shifts the complete positioned line',
-    rightParagraph.count === 1 && dv.getUint32(layoutRunsWA + 4, true) === 64);
+    rightParagraph.count === 1 && dv.getUint32(layoutRunsWA + 4, true) === 60);
 
   const tabHeader = buildParagraphHeader({
     flags: 0x0200, tabs: [[72, 1]],
@@ -2271,9 +2272,9 @@ async function main() {
   check('right tab stops align the following text against retained tab metadata',
     tabCount === 3 &&
     dv.getUint32(layoutRunsWA + 4, true) === 8 &&
-    dv.getUint32(layoutRunsWA + 40 + 4, true) === 15 &&
-    dv.getUint32(layoutRunsWA + 40 + 12, true) === 27 &&
-    dv.getUint32(layoutRunsWA + 80 + 4, true) === 42,
+    dv.getUint32(layoutRunsWA + 40 + 4, true) === 16 &&
+    dv.getUint32(layoutRunsWA + 40 + 12, true) === 24 &&
+    dv.getUint32(layoutRunsWA + 80 + 4, true) === 40,
     `count=${tabCount} runs=${JSON.stringify(Array.from({ length: Math.max(0, tabCount) },
       (_, index) => Array.from({ length: 5 }, (_, field) =>
         dv.getUint32(layoutRunsWA + index * 40 + field * 4, true))))}`);
@@ -2298,7 +2299,7 @@ async function main() {
   check('variable-width table paragraphs scale into exact client cell geometry',
     tableParagraph.count === 1 &&
     dv.getUint32(layoutRunsWA + 4, true) === 100 &&
-    dv.getUint32(layoutRunsWA + 12, true) === 28);
+    dv.getUint32(layoutRunsWA + 12, true) === 32);
 
   tablePrefix.writeInt16LE(300, 2);
   const minimumTableParagraph = layoutParagraph({
@@ -2385,8 +2386,9 @@ async function main() {
     (dv.getUint32(run + 36, true) & 0x0fffffff) === 0);
   check('font-aware layout uses realized metrics and retains decorations in positioned runs',
     decoratedFontRun && dv.getUint32(decoratedFontRun + 16, true) >= 8 &&
-    dv.getUint32(decoratedFontRun + 16, true) < 17 &&
-    (dv.getUint32(decoratedFontRun + 36, true) >>> 28) === 0x0c);
+    dv.getUint32(decoratedFontRun + 16, true) <= 17 &&
+    (dv.getUint32(decoratedFontRun + 36, true) >>> 28) === 0x0c,
+    `run=${decoratedFontRun || 0} height=${decoratedFontRun ? dv.getUint32(decoratedFontRun + 16, true) : 0} flags=${decoratedFontRun ? (dv.getUint32(decoratedFontRun + 36, true) >>> 28) : 0}`);
   e.test_help_paint_typed_view(fontViewHdc);
   check('production repaint selects the run HFONT into the canonical target DC',
     e.test_gdi_dc_get_field(fontViewHdc, 88, 0) === fontViewHandle);

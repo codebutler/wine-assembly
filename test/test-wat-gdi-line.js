@@ -7,7 +7,10 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $DIB_BACKING_BASE and $GDI_LINE_DESC, from the map declared in
+// src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC = path.join(ROOT, 'src');
@@ -19,13 +22,14 @@ const WIDE_GRID_SUMMARY = JSON.parse(fs.readFileSync(
   path.join(__dirname, 'fixtures', 'gdi-wide-line-grid-summary.json'), 'utf8'));
 
 async function main() {
-  const wasmBytes = await compileWat(file => fs.promises.readFile(path.join(SRC, file), 'utf8'));
+  const wasmBytes = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const base = createHostImports(ctx);
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -61,7 +65,7 @@ async function main() {
     wat.guest_write16(bmi + 14, bpp);
     const bitmap = wat.test_call_CreateDIBSection(0, bmi, out) >>> 0;
     const bitsGa = wat.guest_read32(out) >>> 0;
-    const bits = 0x1C000000 + (bitsGa - 0x50000000);
+    const bits = RegionMap.BASE.DIB_BACKING_BASE + (bitsGa - 0x50000000);
     const hdc = wat.test_call_CreateCompatibleDC(0) >>> 0;
     assert(bitmap && hdc, `failed to create ${width}x${height}x${bpp} DIB/DC`);
     assert.strictEqual(selectObject(hdc, bitmap), 0x30007);
@@ -195,9 +199,10 @@ async function main() {
     selectObject(dib.hdc, pen);
     assert.strictEqual(wat.test_gdi_object_type(dib.bitmap), 3);
     assert.strictEqual(wat.test_gdi_dc_get_field(dib.hdc, 84, 0) >>> 0, dib.bitmap);
-    assert.strictEqual(wat.test_gdi_surface_descriptor(dib.hdc, 0x07EF1000), 1);
-    assert.strictEqual(dv.getUint32(0x07EF1000, true), dib.bits >>> 0);
-    assert.strictEqual(dv.getUint32(0x07EF1000 + 24, true), 0x00332211);
+    const desc = RegionMap.BASE.GDI_LINE_DESC;
+    assert.strictEqual(wat.test_gdi_surface_descriptor(dib.hdc, desc), 1);
+    assert.strictEqual(dv.getUint32(desc, true), dib.bits >>> 0);
+    assert.strictEqual(dv.getUint32(desc + 24, true), 0x00332211);
     assert.strictEqual(wat.test_gdi_line_try(dib.hdc, 1, 1, 6, 4), 1);
     const expected = new Set(['1,1', '2,2', '3,2', '4,3', '5,3']);
     for (let y = 0; y < dib.height; y++) {

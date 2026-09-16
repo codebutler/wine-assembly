@@ -4,15 +4,22 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 (async () => {
   // There is no host text import left to stub: measurement, metrics and
   // rasterization all happen in WAT against a strike the VFS supplied.
   // test/test-gdi-migration-status.js is what holds that surface closed.
-  const { exports: wat, memory, hostCtx } = await bootRenderHarness();
+  const { exports: wat, memory, hostCtx } = await bootRenderHarness({extraWat: `
+    (func (export "font_language_info") (param $dc i32) (result i32)
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $handle_GetFontLanguageInfo (local.get $dc) (i32.const 0) (i32.const 0)
+        (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
+  `});
   const bytes = new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  const wa = guest => RegionMap.g2w(guest, imageBase);
   let passed = 0;
 
   const check = (name, fn) => {
@@ -39,6 +46,18 @@ const { bootRenderHarness } = require('./render-helper');
     wat.test_call_SelectObject(hdc, bitmap);
     return { bitmap, hdc, bits: wat.guest_read32(bitsOut) >>> 0 };
   };
+
+  check('font language information follows the selected font', () => {
+    assert.strictEqual(wat.font_language_info(0)>>>0,0xffffffff);
+    const {hdc}=createTextDc();
+    assert.strictEqual(wat.font_language_info(hdc),0,'stock bitmap font is normalized');
+    const face=allocZero(32);
+    [...'Arial'].forEach((c,i)=>wat.guest_write16(face+i*2,c.charCodeAt(0)));
+    const font=wat.test_call_CreateFontW(-16,400,0,face)>>>0;
+    assert(font);wat.test_call_SelectObject(hdc,font);
+    assert.strictEqual(wat.font_language_info(hdc)&8,8,'real classic kerning table advertised');
+    assert.strictEqual(wat.get_esp()>>>0,0x074ff008);
+  });
 
   check('ANSI extent-ex returns progressive widths and exact fit count', () => {
     const { hdc } = createTextDc();
@@ -83,6 +102,19 @@ const { bootRenderHarness } = require('./render-helper');
       assert(wat.guest_read32(abc + index * 12 + 4) > 0);
       assert.strictEqual(wat.guest_read32(abc + index * 12 + 8), 0);
     }
+  });
+
+  check('ABC widths terminate for a sign-extended ANSI singleton', () => {
+    const { hdc } = createTextDc();
+    const abc = allocZero(24);
+    bytes.fill(0xa5, wa(abc), wa(abc) + 24);
+    assert.strictEqual(wat.test_call_GetCharABCWidthsA(
+      hdc, 0xffffffff, 0xffffffff, abc), 1);
+    assert.strictEqual(wat.guest_read32(abc), 0);
+    assert(wat.guest_read32(abc + 4) > 0);
+    assert.strictEqual(wat.guest_read32(abc + 8), 0);
+    assert.deepStrictEqual([...bytes.slice(wa(abc) + 12, wa(abc) + 24)],
+      Array(12).fill(0xa5));
   });
 
   check('GetGlyphOutlineA provides GGO_METRICS and a sized GGO_BITMAP', () => {

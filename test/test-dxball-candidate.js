@@ -9,7 +9,8 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { PNG } = require('pngjs');
-const { compileWatSnapshot } = require('../lib/compile-wat');
+const { diffPng } = require('../tools/png-diff');
+const { compileSrcWasm } = require('./compile-src');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -50,22 +51,13 @@ function imageStats(filename) {
   return { width: png.width, height: png.height, nonBlack, colors: colors.size };
 }
 
-function pixelDiff(filenameA, filenameB, region = null) {
-  const a = PNG.sync.read(fs.readFileSync(filenameA));
-  const b = PNG.sync.read(fs.readFileSync(filenameB));
-  assert(a.width === b.width && a.height === b.height, 'cannot compare differently sized frames');
-  const box = region || { x: 0, y: 0, width: a.width, height: a.height };
-  let changed = 0;
-  for (let y = box.y; y < box.y + box.height; y++) {
-    for (let x = box.x; x < box.x + box.width; x++) {
-      const i = (y * a.width + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2] || a.data[i + 3] !== b.data[i + 3]) {
-        changed++;
-      }
-    }
-  }
-  return changed;
+function changedPixels(filenameA, filenameB, region = null) {
+  const options = region
+    ? { region: { x: region.x, y: region.y, w: region.width, h: region.height } }
+    : undefined;
+  const result = diffPng(filenameA, filenameB, options);
+  assert(!result.sizeMismatch, 'cannot compare differently sized frames');
+  return result.changed;
 }
 
 function assert(condition, message) {
@@ -93,7 +85,7 @@ async function main() {
   fs.copyFileSync(INSTALLER, path.join(inputRoot, 'dxball19.exe'));
 
   try {
-    const wasm = await compileWatSnapshot(file => fs.promises.readFile(path.join(ROOT, 'src', file), 'utf8'));
+    const wasm = compileSrcWasm();
     await WebAssembly.compile(wasm);
     fs.writeFileSync(wasmPath, wasm);
 
@@ -147,16 +139,27 @@ async function main() {
     const gameOutput = runCli([
       `--exe=${gameExe}`,
       ...common,
+      // The installed game sits in the temp VFS, so it is not the registered
+      // dxball app and inherits no asset manifest: run.js mounts a bare --exe
+      // and nothing else. Without this the game opens default.bds, intro.pcx
+      // and candy.sbk, gets FAIL for each, and exits code 1 at 193 API calls
+      // before any scheduled frame -- which reads as "omitted frame", not as
+      // "could not find its data". The install is flat, so one glob covers it.
+      '--vfs-include=*',
       '--batch-size=50000',
-      '--max-batches=340',
-      '--stuck-after=500',
+      '--max-batches=900',
+      '--stuck-after=1000',
       '--trace-api=midiStreamOpen,midiStreamOut,midiStreamRestart,midiStreamPause,IDirectSound_CreateSoundBuffer,IDirectSound_Release',
       '--trace-host=voice_play_ring',
-      `--input=62:keydown:27,63:keyup:27,120:png-pixels:${menuPng},123:dump-focus:before-gameplay,` +
-        `124:mousedown:320:240,140:mouseup:320:240,180:dump-focus:gameplay,220:png-pixels:${readyPng},` +
-        `235:mousedown:320:430,245:mouseup:320:430,255:png-pixels:${ballPngA},` +
-        `275:png-pixels:${ballPngB},295:png-pixels:${ballPngC},` +
-        `305:mousemove:120:430,325:png-pixels:${paddleLeftPng}`,
+      // The first click advances the title into its fading instructions page;
+      // wait for that page to settle before the second click starts a level.
+      // Clicking again during the fade is ignored by the original game.
+      `--input=62:keydown:27,63:keyup:27,123:dump-focus:before-gameplay,` +
+        `124:mousedown:320:240,140:mouseup:320:240,340:png-pixels:${menuPng},` +
+        `360:mousedown:320:240,375:mouseup:320:240,376:dump-focus:gameplay,480:png-pixels:${readyPng},` +
+        `500:mousedown:320:430,515:mouseup:320:430,600:png-pixels:${ballPngA},` +
+        `680:png-pixels:${ballPngB},760:png-pixels:${ballPngC},` +
+        `800:mousemove:120:430,880:png-pixels:${paddleLeftPng}`,
     ], 60000);
     assert(/title="DX-Ball"/i.test(gameOutput), 'installed game did not create its DX-Ball window');
     for (const frame of [menuPng, readyPng, ballPngA, ballPngB, ballPngC, paddleLeftPng]) {
@@ -172,11 +175,11 @@ async function main() {
       `installed game level stayed blank: ${JSON.stringify(gameStats)}`);
 
     const playfield = { x: 0, y: 270, width: 640, height: 170 };
-    const ballDeltaAB = pixelDiff(ballPngA, ballPngB, playfield);
-    const ballDeltaBC = pixelDiff(ballPngB, ballPngC, playfield);
+    const ballDeltaAB = changedPixels(ballPngA, ballPngB, playfield);
+    const ballDeltaBC = changedPixels(ballPngB, ballPngC, playfield);
     assert(ballDeltaAB > 300 && ballDeltaBC > 300,
       `ball did not animate across successive gameplay frames: ${ballDeltaAB}, ${ballDeltaBC}`);
-    const paddleDelta = pixelDiff(readyPng, paddleLeftPng,
+    const paddleDelta = changedPixels(readyPng, paddleLeftPng,
       { x: 0, y: 420, width: 640, height: 60 });
     assert(paddleDelta > 1000, `paddle did not follow mouse movement: ${paddleDelta} changed pixels`);
 

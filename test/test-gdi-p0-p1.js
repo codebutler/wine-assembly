@@ -6,7 +6,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 async function main() {
   const root = path.join(__dirname, '..');
@@ -23,13 +25,14 @@ async function main() {
     assert.strictEqual(api.nargs, nargs, `${name} arity`);
   }
 
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const imports = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   Object.assign(imports.host, {
     memory,
     create_thread: () => 0,
     exit_thread: () => 0,
+    terminate_thread: () => 0,
     create_event: () => 0,
     set_event: () => 0,
     reset_event: () => 0,
@@ -45,7 +48,7 @@ async function main() {
   let passed = 0;
 
   function wasmAddress(guest) {
-    return (guest - imageBase + 0x12000) >>> 0;
+    return RegionMap.g2w(guest, imageBase);
   }
   function alloc(size) {
     const p = wat.guest_alloc(size) >>> 0;
@@ -73,9 +76,14 @@ async function main() {
   }
 
   check('all nine corpus APIs are append-only public dispatch entries', () => {
-    const tail = table.slice(-9);
-    assert.deepStrictEqual(tail.map(x => x.name), [...expected.keys()]);
-    tail.forEach((entry, i) => assert.strictEqual(entry.id, table.length - 9 + i));
+    // Anchored on the first entry's actual id rather than a literal: the ids
+    // are array positions in api_table.json, so anything appended on either
+    // side of a merge shifts them. The invariant under test is that the block
+    // stays contiguous and in order, which this still checks.
+    const firstId = table.find(entry => entry.name === expected.keys().next().value).id;
+    const entries = table.slice(firstId, firstId + expected.size);
+    assert.deepStrictEqual(entries.map(x => x.name), [...expected.keys()]);
+    entries.forEach((entry, i) => assert.strictEqual(entry.id, firstId + i));
   });
 
   check('indirect ellipse and exact normalized region equality', () => {
@@ -225,6 +233,8 @@ async function main() {
     const miter = widenedJoin(0x2000);
     assert.strictEqual(wat.test_call_EqualRgn(round, bevel), 0);
     assert.strictEqual(wat.test_call_EqualRgn(round, miter), 0);
+    assert.strictEqual(wat.test_call_EqualRgn(bevel, miter), 0,
+      'PS_JOIN_BEVEL and PS_JOIN_MITER must execute their distinct outer wedges');
     [round, bevel, miter].forEach(r => assert.strictEqual(wat.test_gdi_rgn_delete(r), 1));
   });
 

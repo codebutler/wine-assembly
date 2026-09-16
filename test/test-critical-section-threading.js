@@ -5,12 +5,14 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { createHostImports } = require('../lib/host-imports');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const IMAGE_BASE = 0x400000;
 const CS_GUEST = 0x500000;
-const CS_WASM = CS_GUEST - IMAGE_BASE + 0x12000;
+const CS_WASM = RegionMap.g2w(CS_GUEST, IMAGE_BASE);
 
 async function instantiate(wasmBytes, memory, tid) {
   const ctx = {
@@ -20,7 +22,7 @@ async function instantiate(wasmBytes, memory, tid) {
   };
   const imports = createHostImports(ctx);
   imports.host.memory = memory;
-  for (const name of ['create_thread', 'exit_thread', 'create_event',
+  for (const name of ['create_thread', 'exit_thread', 'terminate_thread', 'create_event',
     'set_event', 'reset_event', 'wait_single', 'wait_multiple']) {
     imports.host[name] = () => 0;
   }
@@ -32,8 +34,7 @@ async function instantiate(wasmBytes, memory, tid) {
 
 (async () => {
   const src = path.join(__dirname, '..', 'src');
-  const wasmBytes = await compileWat(file =>
-    fs.promises.readFile(path.join(src, file), 'utf8'));
+  const wasmBytes = compileSrcWasm();
   const memory = new WebAssembly.Memory({
     initial: 8192, maximum: 8192, shared: true,
   });
@@ -84,7 +85,11 @@ async function instantiate(wasmBytes, memory, tid) {
   assert.deepStrictEqual(state(), { lock: 0, recursion: 1, owner: 2 });
   main.test_cs_leave(CS_GUEST);
   assert.deepStrictEqual(state(), { lock: 0, recursion: 1, owner: 2 },
-    'a non-owner Leave cannot release another live thread');
+    'a non-owner Leave cannot release another thread\'s section');
+  worker.test_cs_leave(CS_GUEST);
+  assert.deepStrictEqual(state(), { lock: -1, recursion: 0, owner: 0 });
+  assert.strictEqual(worker.test_cs_enter(CS_GUEST), 0,
+    'the section remains reusable after the owner releases it');
   worker.test_cs_leave(CS_GUEST);
   assert.deepStrictEqual(state(), { lock: -1, recursion: 0, owner: 0 });
 

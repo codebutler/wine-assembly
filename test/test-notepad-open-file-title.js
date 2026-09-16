@@ -10,22 +10,23 @@ const { execSync } = require('child_process');
 const ROOT = path.join(__dirname, '..');
 const RUN  = path.join(__dirname, 'run.js');
 const EXE  = path.join(__dirname, 'binaries', 'notepad.exe');
+const SOURCE_FIXTURE = path.join(ROOT, 'test', 'dos-game-corpus', 'README.md');
 
 if (!fs.existsSync(EXE)) {
   console.log('SKIP  notepad.exe not found at', EXE);
   process.exit(0);
 }
 
-// SOURCES.md is preloaded into the VFS from test/binaries as c:\sources.md.
-// Use a relative filename so the shell cannot eat backslashes before run.js
-// parses the input spec.
+// Mount the fixture explicitly: a bare --exe run only mounts that executable.
+// Use a relative dialog filename so the shell cannot eat backslashes before
+// run.js parses the input spec.
 const inputSpec = [
   '40:0x111:10',                       // Notepad File -> Open...
   '90:open-dlg-pick:sources.md',       // choose existing VFS file + OK
   '150:dump-main-edit',
 ].join(',');
 
-const cmd = `node "${RUN}" --exe="${EXE}" --input=${inputSpec} --max-batches=220 --batch-size=50000 --trace-api=GetOpenFileNameA,GetFileTitleA,CreateFileA,ReadFile --no-close`;
+const cmd = `node "${RUN}" --exe="${EXE}" --vfs-mount="${SOURCE_FIXTURE}=c:\\sources.md" --input=${inputSpec} --max-batches=220 --batch-size=50000 --trace-api=GetOpenFileNameA,GetFileTitleA,CreateFileA,ReadFile --no-close`;
 console.log('$', cmd);
 
 let out = '';

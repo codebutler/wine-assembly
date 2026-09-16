@@ -6,12 +6,69 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { mountBundledFonts } = require('./render-helper');
+// $WINDOW_RECT_SCRATCH and $GDI_LINE_DESC, from the map declared in
+// src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
+
+const gdiQueryTestExports = String.raw`
+  (func (export "test_call_CreateFontIndirectA") (param $logfont i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_CreateFontIndirectA
+      (local.get $logfont) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetStockObject") (param $index i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetStockObject
+      (local.get $index) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetMapMode") (param $hdc i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetMapMode
+      (local.get $hdc) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetNearestColor")
+        (param $hdc i32) (param $color i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetNearestColor
+      (local.get $hdc) (local.get $color) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextCharset") (param $hdc i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextCharset
+      (local.get $hdc) (i32.const 0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_call_GetTextCharsetInfo")
+        (param $hdc i32) (param $signature i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $handle_GetTextCharsetInfo
+      (local.get $hdc) (local.get $signature) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
+`;
 
 async function main() {
   const root = path.join(__dirname, '..');
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm((file, source) =>
+    file === '13-exports.wat' ? `${source}\n${gdiQueryTestExports}\n` : source);
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const ctx = { getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
   const base = createHostImports(ctx);
@@ -19,6 +76,7 @@ async function main() {
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -107,6 +165,84 @@ async function main() {
 
   const hdcA = wat.test_call_CreateCompatibleDC(0) >>> 0;
   const hdcB = wat.test_call_CreateCompatibleDC(0) >>> 0;
+  assert.strictEqual(wat.test_call_GetStockObject(0), 0x30010,
+    'WHITE_BRUSH maps to the first stock handle');
+  assert.strictEqual(wat.test_call_GetStockObject(8), 0x30018,
+    'NULL_PEN maps to the final classic pen handle');
+  assert.strictEqual(wat.test_call_GetStockObject(10), 0x3001A,
+    'OEM_FIXED_FONT maps past the reserved selector');
+  assert.strictEqual(wat.test_call_GetStockObject(15), 0x3001F,
+    'DEFAULT_PALETTE retains its stock handle');
+  assert.strictEqual(wat.test_call_GetStockObject(17), 0x30021,
+    'DEFAULT_GUI_FONT is the final Win98 stock selector');
+  for (const invalidStock of [9, 18, 19, 32, -1]) {
+    assert.strictEqual(wat.test_call_GetStockObject(invalidStock), 0,
+      `invalid Win98 stock selector ${invalidStock} must return NULL`);
+  }
+  assert.strictEqual(wat.test_call_GetNearestColor(hdcA, 0x00123456), 0x00123456,
+    'the true-color browser display preserves representable COLORREF values');
+  assert.strictEqual(wat.test_call_GetNearestColor(0x7FFFFFFF, 0x00123456), -1,
+    'GetNearestColor must return CLR_INVALID for an invalid HDC');
+  assert.strictEqual(wat.test_call_GetTextCharset(hdcA), 0,
+    'the stock system font reports ANSI_CHARSET');
+  assert.strictEqual(wat.test_call_GetTextCharset(0x7FFFFFFF), 1,
+    'an invalid HDC reports DEFAULT_CHARSET');
+
+  const oemLogfont = wat.guest_alloc(60) >>> 0;
+  for (let offset = 0; offset < 60; offset += 4) wat.guest_write32(oemLogfont + offset, 0);
+  wat.guest_write32(oemLogfont, -12);
+  wat.guest_write8(oemLogfont + 23, 255); // OEM_CHARSET
+  'Terminal'.split('').forEach((ch, index) =>
+    wat.guest_write8(oemLogfont + 28 + index, ch.charCodeAt(0)));
+  const oemFont = wat.test_call_CreateFontIndirectA(oemLogfont) >>> 0;
+  assert(oemFont, 'CreateFontIndirectA should create the requested OEM font');
+  const previousFont = wat.test_call_SelectObject(hdcA, oemFont) >>> 0;
+  assert.strictEqual(wat.test_call_GetTextCharset(hdcA), 255,
+    'GetTextCharset must report the selected Terminal OEM strike');
+  const fontSignature = wat.guest_alloc(24) >>> 0;
+  for (let offset = 0; offset < 24; offset += 4) wat.guest_write32(fontSignature + offset, -1);
+  assert.strictEqual(wat.test_call_GetTextCharsetInfo(hdcA, fontSignature), 255,
+    'GetTextCharsetInfo must return the same selected-font charset');
+  for (let offset = 0; offset < 24; offset += 4) {
+    assert.strictEqual(wat.guest_read32(fontSignature + offset), 0,
+      'a bitmap font has an empty FONTSIGNATURE');
+  }
+  const textMetrics = wat.guest_alloc(56) >>> 0;
+  assert.strictEqual(wat.test_call_GetTextMetricsA(hdcA, textMetrics), 1);
+  assert.strictEqual(wat.guest_read8(textMetrics + 52), 255,
+    'TEXTMETRICA.tmCharSet must agree with GetTextCharset');
+  const serializedFont = wat.guest_alloc(60) >>> 0;
+  assert.strictEqual(wat.test_call_GetObjectA(oemFont, 60, serializedFont), 60);
+  assert.strictEqual(wat.guest_read8(serializedFont + 23), 255,
+    'GetObjectA must preserve the requested LOGFONT lfCharSet');
+  assert.strictEqual(wat.test_call_SelectObject(hdcA, previousFont), oemFont);
+  assert.strictEqual(wat.test_gdi_object_delete(oemFont), 1);
+
+  wat.guest_write8(oemLogfont + 23, 1); // DEFAULT_CHARSET
+  const defaultCharsetFont = wat.test_call_CreateFontIndirectA(oemLogfont) >>> 0;
+  assert(defaultCharsetFont, 'CreateFontIndirectA should accept DEFAULT_CHARSET');
+  assert.strictEqual(wat.test_call_SelectObject(hdcA, defaultCharsetFont), previousFont);
+  assert.strictEqual(wat.test_call_GetTextCharset(hdcA), 255,
+    'a bound Terminal strike reports its realized OEM charset, not DEFAULT_CHARSET');
+  assert.strictEqual(wat.test_call_GetObjectA(defaultCharsetFont, 60, serializedFont), 60);
+  assert.strictEqual(wat.guest_read8(serializedFont + 23), 1,
+    'GetObjectA keeps the original DEFAULT_CHARSET request');
+  assert.strictEqual(wat.test_call_SelectObject(hdcA, previousFont), defaultCharsetFont);
+  assert.strictEqual(wat.test_gdi_object_delete(defaultCharsetFont), 1);
+
+  for (let index = 0; index < 32; index++) wat.guest_write8(oemLogfont + 28 + index, 0);
+  'Missing Face'.split('').forEach((ch, index) =>
+    wat.guest_write8(oemLogfont + 28 + index, ch.charCodeAt(0)));
+  const mappedDefaultFont = wat.test_call_CreateFontIndirectA(oemLogfont) >>> 0;
+  assert(mappedDefaultFont, 'the Win98 mapper should create a fallback font');
+  assert.strictEqual(wat.test_call_SelectObject(hdcA, mappedDefaultFont), previousFont);
+  assert.strictEqual(wat.test_call_GetTextCharset(hdcA), 0,
+    'DEFAULT_CHARSET realizes as ANSI for the Western scalable fallback');
+  assert.strictEqual(wat.test_call_GetObjectA(mappedDefaultFont, 60, serializedFont), 60);
+  assert.strictEqual(wat.guest_read8(serializedFont + 23), 1,
+    'the mapped font still serializes the original DEFAULT_CHARSET request');
+  assert.strictEqual(wat.test_call_SelectObject(hdcA, previousFont), mappedDefaultFont);
+  assert.strictEqual(wat.test_gdi_object_delete(mappedDefaultFont), 1);
   assert.strictEqual(wat.test_gdi_dc_get_field(hdcA, 4, 0x30017), 0x30017);
   assert.strictEqual(wat.test_call_SelectObject(hdcA, pen), 0x30017);
   assert.strictEqual(wat.test_call_SelectObject(hdcA, 0x30018), pen);
@@ -123,7 +259,7 @@ async function main() {
   assert.strictEqual(wat.test_gdi_dc_set_rop2(hdcA, 7), 13);
   assert.strictEqual(wat.test_gdi_dc_get_rop2(hdcA), 7);
 
-  const clipRect = 0x07EF12D0;
+  const clipRect = RegionMap.BASE.WINDOW_RECT_SCRATCH;
   const memoryView = new DataView(memory.buffer);
   const readClipRect = () => [0, 4, 8, 12].map(offset =>
     memoryView.getInt32(clipRect + offset, true));
@@ -177,13 +313,23 @@ async function main() {
   assert.strictEqual(wat.test_gdi_map_coordinate(3, 1, -4, 20, 8), 16,
     'negative extents must invert an axis');
 
+  assert.strictEqual(wat.test_call_GetMapMode(hdcA), 1,
+    'new device contexts start in MM_TEXT');
+  assert.strictEqual(wat.test_call_GetMapMode(0x7FFFFFFF), 0,
+    'GetMapMode must fail for an invalid HDC');
   assert.strictEqual(wat.test_call_SetMapMode(hdcA, 8), 1);
+  assert.strictEqual(wat.test_call_GetMapMode(hdcA), 8,
+    'GetMapMode must return the per-DC MM_ANISOTROPIC state');
+  assert.strictEqual(wat.test_call_GetMapMode(hdcB), 1,
+    'mapping modes must not leak between device contexts');
   assert.strictEqual(wat.test_gdi_dc_set_field(hdcA, 48, 0x4000, 1), 1);
   assert.strictEqual(wat.test_gdi_dc_set_field(hdcA, 52, 0x4000, 1), 1);
   assert.strictEqual(wat.test_gdi_dc_set_field(hdcA, 64, 0x147B, 1), 1);
   assert.strictEqual(wat.test_gdi_dc_set_field(hdcA, 68, 0x147B, 1), 1);
   assert.strictEqual(wat.test_call_SetMapMode(hdcA, 1), 8,
     'switching a preview DC to MM_TEXT returns the anisotropic mode');
+  assert.strictEqual(wat.test_call_GetMapMode(hdcA), 1,
+    'GetMapMode must observe a switch back to MM_TEXT');
   for (const offset of [48, 52, 64, 68]) {
     assert.strictEqual(wat.test_gdi_dc_get_field(hdcA, offset, 0), 1,
       'MM_TEXT must replace stale anisotropic extents with identity mapping');
@@ -222,7 +368,7 @@ async function main() {
   const text = wat.guest_alloc(2) >>> 0;
   wat.guest_write16(text, 0x58); // "X\0"
   assert.strictEqual(wat.test_call_TextOutA(hdcA, 1, 1, text, 1), 1);
-  const descriptor = 0x07EF1000;
+  const descriptor = RegionMap.BASE.GDI_LINE_DESC;
   assert.strictEqual(wat.test_gdi_surface_descriptor(hdcA, descriptor), 1);
   const bits = new Uint8Array(memory.buffer);
   const bitsWa = new DataView(memory.buffer).getUint32(descriptor, true);

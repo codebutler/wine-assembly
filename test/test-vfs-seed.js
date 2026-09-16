@@ -7,7 +7,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { seedExeImage, win16FileCandidates } = require('../lib/vfs-seed');
+const { seedExeImage, win16FileCandidates, residentWin16Module } = require('../lib/vfs-seed');
 
 let failures = 0;
 function check(name, fn) {
@@ -44,6 +44,17 @@ check('a launch path is reduced to its basename, lowercased', () => {
   assert.strictEqual(win.base, 'hearts.exe', 'a backslash path is a path too');
 });
 
+check('an explicit guest launch path is seeded without losing default aliases', () => {
+  const vfs = fakeVfs();
+  const bytes = new Uint8Array([0x4d, 0x5a]);
+  const r = seedExeImage(vfs, bytes, 'Setup.exe', 'D:\\System\\Setup.exe');
+  assert.strictEqual(r.base, 'setup.exe');
+  assert.deepStrictEqual(r.paths, [
+    'c:\\app.exe', 'c:\\setup.exe', 'd:\\system\\setup.exe',
+  ]);
+  assert.strictEqual(vfs.files.get('d:\\system\\setup.exe').data, bytes);
+});
+
 check('an exe already named app.exe is seeded once', () => {
   const vfs = fakeVfs();
   seedExeImage(vfs, new Uint8Array(4), 'APP.EXE');
@@ -77,10 +88,63 @@ check('a Win16 module name is tried as every suffix under every case', () => {
     'cards.DLL', 'cards.dll', 'cards.VBX', 'cards.vbx', 'cards.EXE',
     'CARDS.DLL', 'CARDS.dll', 'CARDS.VBX', 'CARDS.vbx', 'CARDS.EXE',
   ]);
+  // LoadLibrary supplies a filename rather than the suffix-free module name.
+  // It must still find the sibling file, not search for WING.DLL.DLL.
+  assert.deepStrictEqual(win16FileCandidates('wing.dll'), [
+    'wing.DLL', 'wing.dll', 'wing.VBX', 'wing.vbx', 'wing.EXE',
+    'WING.DLL', 'WING.dll', 'WING.VBX', 'WING.vbx', 'WING.EXE',
+  ]);
+  assert.ok(!win16FileCandidates('wing.dll').some(c => /\.dll\.(?:dll|vbx|exe)$/i.test(c)));
   // .IW is deliberately absent: staging IdleWild's six screen-saver libraries
   // makes it run out of module slots and stop, where not finding them costs
   // only the previews.
   assert.ok(!win16FileCandidates('SCRNSAVE').some(c => /\.IW$/i.test(c)));
+});
+
+check('a runtime-created Win16 temporary module is found by its stripped stem', () => {
+  const vfs = fakeVfs();
+  const ne = new Uint8Array(0x82);
+  ne[0] = 0x4d; ne[1] = 0x5a;
+  ne[0x3c] = 0x80;
+  ne[0x80] = 0x4e; ne[0x81] = 0x45;
+  vfs.files.set('c:\\windows\\~glc0000.tmp', { data: ne, attrs: 0x80 });
+  const found = residentWin16Module(vfs, '~GLC0000');
+  assert.strictEqual(found.path, 'c:\\windows\\~glc0000.tmp');
+  assert.strictEqual(found.bytes, ne, 'staging reuses the resident guest-written bytes');
+});
+
+check('the WISE W32INST PE helper is distinguished from an arbitrary PE', () => {
+  const vfs = fakeVfs();
+  const helper = new Uint8Array(0xa0);
+  helper[0] = 0x4d; helper[1] = 0x5a;
+  helper[0x3c] = 0x80;
+  helper[0x80] = 0x50; helper[0x81] = 0x45;
+  helper.set(Buffer.from('W32INST.dll', 'ascii'), 0x90);
+  vfs.files.set('c:\\windows\\temp\\glf4.tmp', { data: helper, attrs: 0x20 });
+  const found = residentWin16Module(vfs, 'GLF4');
+  assert.strictEqual(found.format, 'w32inst');
+  assert.strictEqual(found.bytes, helper);
+
+  const plainPe = helper.slice();
+  plainPe.fill(0, 0x90);
+  vfs.files.set('c:\\windows\\temp\\other.tmp', { data: plainPe, attrs: 0x20 });
+  assert.strictEqual(residentWin16Module(vfs, 'other'), null,
+    'normal PE files must still be rejected by the Win16 module loader');
+});
+
+check('runtime module lookup rejects lazy and non-NE entries', () => {
+  const vfs = fakeVfs();
+  vfs.files.set('d:\\lazy.dll', {
+    _provider: {},
+    data: new Uint8Array([0x4d, 0x5a]),
+  });
+  vfs.files.set('c:\\windows\\plain.tmp', {
+    data: new Uint8Array([0x4d, 0x5a]),
+  });
+  assert.strictEqual(residentWin16Module(vfs, 'lazy'), null,
+    'a synchronous host import must not pull a lazy mounted file');
+  assert.strictEqual(residentWin16Module(vfs, 'plain'), null,
+    'an arbitrary resident file must not be staged as executable code');
 });
 
 // Both hosts must be calling this, not carrying their own copy — that is the
@@ -93,14 +157,27 @@ check('neither host still spells the candidates itself', () => {
     assert.ok(/win16FileCandidates/.test(src) && /seedExeImage/.test(src),
       `${f} does not use lib/vfs-seed.js`);
   }
+  const browserHost = fs.readFileSync(path.join(ROOT, 'host.js'), 'utf8');
+  assert.ok(/VfsSeed\.residentWin16Module/.test(browserHost),
+    'host.js does not stage runtime-created modules from the guest VFS');
 });
 
 check('the page loads the module before host.js needs it', () => {
   const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
   const seed = html.indexOf('lib/vfs-seed.js');
-  const host = html.indexOf('host.js');
+  const host = html.indexOf('<script src="host.js');
   assert.ok(seed > 0, 'index.html never loads lib/vfs-seed.js — VfsSeed is undefined at launch');
   assert.ok(seed < host, 'vfs-seed.js must be loaded before host.js');
+});
+
+check('WISE helper exports use callable Win16 thunks', () => {
+  const wat = fs.readFileSync(path.join(ROOT, 'src', '09e-win16-api.wat'), 'utf8');
+  assert.match(wat, /fixed GLF4\.tmp basename/,
+    'Worker mode must recognize the helper before consulting its startup-only module snapshot');
+  assert.match(wat, /\(call \$win16_thunk_for \(local\.get \$id\) \(local\.get \$ord\)/,
+    'GetProcAddress must return a callable FARPROC rather than a raw 32-bit token');
+  assert.match(wat, /\(i32\.eq \(local\.get \$module\) \(global\.get \$win16_w32inst_module_id\)\)/,
+    'the Win16 dispatcher must execute W32INST FARPROCs');
 });
 
 console.log(failures === 0 ? '\nAll vfs-seed checks passed' : `\n${failures} failed`);

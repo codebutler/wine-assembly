@@ -6,17 +6,20 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $DIB_BACKING_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 async function main() {
   const root = path.join(__dirname, '..');
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const base = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   Object.assign(base.host, {
     memory,
     create_thread: () => 0,
     exit_thread: () => 0,
+    terminate_thread: () => 0,
     create_event: () => 0,
     set_event: () => 0,
     reset_event: () => 0,
@@ -51,7 +54,7 @@ async function main() {
     return {
       bitmap, hdc, width, height, bpp, topDown,
       stride: ((width * bpp + 31) >> 5) << 2,
-      bits: 0x1C000000 + (bitsGa - 0x50000000),
+      bits: RegionMap.BASE.DIB_BACKING_BASE + (bitsGa - 0x50000000),
     };
   }
 

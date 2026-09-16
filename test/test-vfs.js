@@ -32,6 +32,86 @@ test('standard Win98 shell folders exist before an installer runs', () => {
   assert(vfs.dirs.has('c:\\windows\\desktop'));
 });
 
+test('GetFileAttributes rejects an empty path instead of resolving the CWD', () => {
+  const vfs = makeVFS({});
+  assert.strictEqual(vfs.getFileAttributes('') >>> 0, 0xFFFFFFFF,
+    'an empty ANSI or Unicode filename is invalid');
+  assert.strictEqual(vfs.getFileAttributes(null) >>> 0, 0xFFFFFFFF,
+    'a missing filename is invalid');
+  assert.strictEqual(vfs.getFileAttributes('.'), 0x10,
+    'an explicit current-directory path remains valid');
+});
+
+function watch(vfs, handle, path, subtree, filter) {
+  const state = { signaled: false, signals: 0, resets: 0, closes: 0 };
+  assert(vfs.registerChangeNotification(handle, path, subtree, filter, {
+    signal: () => { state.signaled = true; state.signals++; return true; },
+    reset: () => { state.signaled = false; state.resets++; return true; },
+    close: () => { state.closes++; return true; },
+  }));
+  return state;
+}
+
+test('directory notification latches one change and records another until rearm', () => {
+  const vfs = new VirtualFS();
+  vfs.dirs.add('c:\\watch');
+  const state = watch(vfs, 0xE001, 'C:\\watch', false, 0x01);
+  assert(vfs.createFile('C:\\watch\\first.txt', 0x40000000, 2));
+  assert.strictEqual(state.signaled, true);
+  assert.strictEqual(state.signals, 1);
+  assert(vfs.createFile('C:\\watch\\second.txt', 0x40000000, 2));
+  assert.strictEqual(state.signals, 1, 'a signalled manual-reset watch coalesces changes');
+  assert(vfs.nextChangeNotification(0xE001));
+  assert.strictEqual(state.resets, 1);
+  assert.strictEqual(state.signaled, true,
+    'a change recorded before FindNext immediately satisfies the rearmed watch');
+  assert.strictEqual(state.signals, 2);
+  assert(vfs.nextChangeNotification(0xE001));
+  assert.strictEqual(state.signaled, false, 'a rearm with no pending change becomes nonsignalled');
+  assert(vfs.closeChangeNotification(0xE001));
+  assert.strictEqual(state.closes, 1);
+  assert.strictEqual(vfs.nextChangeNotification(0xE001), false,
+    'a closed notification handle cannot be rearmed');
+});
+
+test('directory notifications honor filter and subtree boundaries', () => {
+  const vfs = new VirtualFS();
+  vfs.dirs.add('c:\\watch');
+  vfs.dirs.add('c:\\watch\\nested');
+  const fileName = watch(vfs, 0xE011, 'C:\\watch', false, 0x01);
+  const size = watch(vfs, 0xE012, 'C:\\watch', false, 0x08);
+  const attrs = watch(vfs, 0xE013, 'C:\\watch', false, 0x04);
+  const dirName = watch(vfs, 0xE014, 'C:\\watch', false, 0x02);
+  const shallow = watch(vfs, 0xE015, 'C:\\watch', false, 0x01);
+  const tree = watch(vfs, 0xE016, 'C:\\watch', true, 0x01);
+
+  const handle = vfs.createFile('C:\\watch\\data.bin', 0x40000000, 2);
+  assert.strictEqual(fileName.signals, 1);
+  assert.strictEqual(size.signals, 0, 'creating an empty name is not a size change');
+  assert.strictEqual(attrs.signals, 0);
+  assert.strictEqual(dirName.signals, 0);
+  assert.deepStrictEqual(vfs.writeFile(handle, Uint8Array.of(1, 2, 3), 3),
+    { ok: true, bytesWritten: 3 });
+  assert.strictEqual(size.signals, 1, 'extending a file satisfies FILE_NOTIFY_CHANGE_SIZE');
+  assert(vfs.setFileAttributes('C:\\watch\\data.bin', 0x21));
+  assert.strictEqual(attrs.signals, 1);
+  assert(vfs.createDirectory('C:\\watch\\newdir'));
+  assert.strictEqual(dirName.signals, 1);
+
+  assert(vfs.nextChangeNotification(0xE015));
+  assert(vfs.nextChangeNotification(0xE016));
+  assert(vfs.createFile('C:\\watch\\nested\\deep.txt', 0x40000000, 2));
+  assert.strictEqual(shallow.signals, 1,
+    'the shallow file-name watch saw only the earlier direct child');
+  assert.strictEqual(tree.signals, 2,
+    'the rearmed subtree watch observes a nested file-name change');
+  assert(vfs.nextChangeNotification(0xE013));
+  vfs.setFileAttributes('C:\\watch', 0x10);
+  assert.strictEqual(attrs.signals, 1,
+    'changes to the watched directory itself do not satisfy its notification');
+  assert.strictEqual(attrs.signaled, false);
+});
+
 // --- findFirstFile ---
 
 test('wildcard *.* in CWD finds files in c:\\', () => {
@@ -40,6 +120,22 @@ test('wildcard *.* in CWD finds files in c:\\', () => {
   assert(r.handle, 'should find files');
   assert((r.handle >>> 0) <= 0x7fffffff,
     'search handle must remain nonnegative for MSVCRT _findfirst');
+  const names = [r.entry.name];
+  let next;
+  while ((next = vfs.findNextFile(r.handle))) names.push(next.name);
+  assert.deepStrictEqual(names.slice(0, 2), ['.', '..'],
+    'Win9x wildcard enumeration exposes dot directory records first');
+});
+
+test('wildcard enumeration of an empty directory still returns . and ..', () => {
+  const vfs = makeVFS({});
+  vfs.dirs.add('c:\\empty');
+  const r = vfs.findFirstFile('C:\\empty\\*.*');
+  assert(r.handle, 'dot entries make an empty existing directory enumerable');
+  assert.strictEqual(r.entry.name, '.');
+  assert.strictEqual(r.entry.attrs, 0x10);
+  assert.strictEqual(vfs.findNextFile(r.handle).name, '..');
+  assert.strictEqual(vfs.findNextFile(r.handle), null);
 });
 
 test('wildcard *.* on different drive letter finds nothing', () => {
@@ -48,11 +144,48 @@ test('wildcard *.* on different drive letter finds nothing', () => {
   assert(!r.handle, 'should not find files on D:');
 });
 
+test('exact drive-root lookup returns the existing root directory', () => {
+  const vfs = makeVFS({ 'c:\\fall.exe': 10 });
+  const r = vfs.findFirstFile('C:\\');
+  assert(r.handle, 'a mounted drive root should be discoverable');
+  assert.strictEqual(r.entry.attrs, 0x10);
+});
+
+test('manifest parent registration makes a non-C drive enumerable', () => {
+  const vfs = makeVFS({ 'd:\\cd2\\data\\iwdcd.2': 1 });
+  vfs.ensureParentDirs('D:\\CD2\\Data\\IWDCD.2');
+  assert.strictEqual(vfs.setCurrentDirectory('D:\\'), true,
+    'the mounted drive root must be a real directory');
+  const root = vfs.findFirstFile('D:\\*.*');
+  assert(root.handle, 'the mounted drive root must be enumerable');
+  assert.strictEqual(root.entry.name, '.');
+  assert.strictEqual(root.entry.attrs, 0x10);
+  assert.strictEqual(vfs.findNextFile(root.handle).name, '..');
+  assert.strictEqual(vfs.findNextFile(root.handle).name, 'cd2');
+});
+
 test('basename fallback finds file by name on wrong drive', () => {
   const vfs = makeVFS({ 'c:\\demoopen.ddv': 100 });
   const r = vfs.findFirstFile('D:\\abe\\demoopen.ddv');
   assert(r.handle, 'should find via basename fallback');
   assert.strictEqual(r.entry.name, 'demoopen.ddv');
+});
+
+test('missing C-drive directories cannot borrow an exact filename from a cache', () => {
+  const vfs = makeVFS({ 'c:\\game\\cache\\data\\area.bif': 6586 });
+  vfs.ensureParentDirs('C:\\game\\cache\\data\\area.bif');
+  assert(vfs.setCurrentDirectory('C:\\game'));
+  for (const missing of ['C:\\game\\override\\data\\area.bif', '.\\override\\data\\area.bif']) {
+    const found = vfs.findFirstFile(missing);
+    assert.strictEqual(found.handle, 0, `${missing} must not enumerate the cached archive`);
+    assert.strictEqual(found.entry, null);
+    assert.strictEqual(vfs.createFile(missing, 0x80000000, 3), 0,
+      'enumeration and opening must agree about the missing path');
+  }
+  const exact = vfs.findFirstFile('C:\\game\\cache\\data\\area.bif');
+  assert(exact.handle, 'the actual cached file remains discoverable');
+  assert.strictEqual(exact.entry.size, 6586);
+  assert(vfs.createFile('C:\\game\\cache\\data\\area.bif', 0x80000000, 3));
 });
 
 test('exact lookup in an existing directory does not find a nested basename', () => {
@@ -75,6 +208,17 @@ test('wildcard *.ddv finds only .ddv files', () => {
   assert.strictEqual(names.length, 2);
   assert(names.includes('a.ddv'));
   assert(names.includes('c.ddv'));
+});
+
+test('parent traversal clamps at drive root for sibling asset wildcards', () => {
+  const vfs = makeVFS({ 'c:\\maps\\entry.dx': 10, 'c:\\maps\\training.dx': 20 });
+  vfs.dirs.add('c:\\maps');
+  const r = vfs.findFirstFile('..\\Maps\\*.dx');
+  assert(r.handle, 'C:\\..\\Maps must resolve to C:\\Maps');
+  const names = [r.entry.name];
+  let next;
+  while ((next = vfs.findNextFile(r.handle))) names.push(next.name);
+  assert.deepStrictEqual(names, ['entry.dx', 'training.dx']);
 });
 
 test('relative missing subdir wildcard falls back to current directory', () => {
@@ -119,6 +263,33 @@ test('createFile OPEN_EXISTING without match returns error', () => {
   assert(!h || h === -1 || h === null, 'should fail when file not found');
 });
 
+test('writable opens never basename-fallback onto a read-only source drive', () => {
+  const vfs = makeVFS({ 'd:\\readme.txt': 50 });
+  vfs.dirs.add('d:');
+  vfs.dirs.add('d:\\');
+  vfs.setDriveReadOnly('D:');
+  vfs.dirs.add('c:\\program files\\warwind');
+
+  assert.strictEqual(vfs.createFile(
+    'C:\\Program Files\\WarWind\\Data\\readme.txt', 0x80000000, 3), 0,
+  'a missing C: install subtree must not borrow a mounted-media basename');
+  assert.strictEqual(vfs.createFile(
+    'C:\\Program Files\\WarWind\\readme.txt', 0x80000000, 3), 0,
+  'an exact probe in an existing destination directory must not find the CD basename');
+  assert.strictEqual(vfs.createFile(
+    'C:\\Program Files\\WarWind\\readme.txt', 0x40000000, 3), 0,
+  'writable OPEN_EXISTING must not substitute an identically named CD file');
+  const h = vfs.createFile(
+    'C:\\Program Files\\WarWind\\readme.txt', 0x40000000, 4);
+  assert(h, 'writable OPEN_ALWAYS should create the requested destination');
+  assert.strictEqual(vfs.handles.get(h).path,
+    'c:\\program files\\warwind\\readme.txt');
+  assert.deepStrictEqual(vfs.writeFile(h, Uint8Array.of(1, 2, 3), 3),
+    { ok: true, bytesWritten: 3 });
+  assert.strictEqual(vfs.files.get('d:\\readme.txt').data.length, 50,
+    'creating the C: destination must leave the mounted source unchanged');
+});
+
 test('read-only drive permits reads and rejects every write path', () => {
   const vfs = makeVFS({ 'd:\\manual.hlp': 50 });
   vfs.dirs.add('d:');
@@ -147,21 +318,83 @@ test('read-only drive permits reads and rejects every write path', () => {
     'making the drive writable restores normal creation');
 });
 
+test('chunked writes grow capacity geometrically but expose exact file size', () => {
+  const vfs = makeVFS({});
+  const handle = vfs.createFile('C:\\cache\\data\\area.bif', 0x40000000, 2);
+  assert(vfs.dirs.has('c:\\cache') && vfs.dirs.has('c:\\cache\\data'),
+    'creating a nested cache file registers every parent directory');
+  for (let chunk = 0; chunk < 4096; chunk++) {
+    const data = new Uint8Array(257).fill(chunk & 0xff);
+    assert.deepStrictEqual(vfs.writeFile(handle, data, data.length),
+      { ok: true, bytesWritten: 257 });
+  }
+  const entry = vfs.files.get('c:\\cache\\data\\area.bif');
+  assert.strictEqual(entry.data.length, 4096 * 257,
+    'logical length must not expose spare capacity');
+  assert(entry._capacityData.length >= entry.data.length);
+  assert(entry._capacityData.length < entry.data.length * 2,
+    'doubling keeps spare capacity bounded');
+  assert.strictEqual(vfs.getFileSize(handle), entry.data.length);
+  assert.strictEqual(entry.data[256], 0);
+  assert.strictEqual(entry.data[257], 1);
+
+  vfs.setFilePointer(handle, 100, 0);
+  assert(vfs.setEndOfFile(handle));
+  assert.strictEqual(entry.data.length, 100);
+  vfs.setFilePointer(handle, 200, 0);
+  assert(vfs.setEndOfFile(handle));
+  assert.strictEqual(entry.data.length, 200);
+  assert(entry.data.subarray(100).every(byte => byte === 0),
+    'extending a truncated file zero-fills the restored range');
+});
+
 // --- path resolution ---
 
 test('relative path resolves against CWD', () => {
   const vfs = new VirtualFS();
   assert.strictEqual(vfs._resolvePath('foo.txt'), 'c:\\foo.txt');
-  vfs.setCurrentDirectory('C:\\game');
+  vfs.dirs.add('c:\\game');
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\game'), true);
   assert.strictEqual(vfs._resolvePath('data.dat'), 'c:\\game\\data.dat');
 });
 
-test('setCurrentDirectory normalizes trailing backslash', () => {
+test('drive-relative paths resolve against that drive current directory', () => {
   const vfs = new VirtualFS();
-  vfs.setCurrentDirectory('C:\\game\\');
-  assert.strictEqual(vfs.getCurrentDirectory(), 'c:\\game\\');
-  vfs.setCurrentDirectory('C:\\');
+  assert.strictEqual(vfs._resolvePath('C:defaults.nh'), 'c:\\defaults.nh');
+  vfs.dirs.add('c:\\games');
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\games'), true);
+  assert.strictEqual(vfs._resolvePath('C:save\\player.0'),
+    'c:\\games\\save\\player.0');
+  assert.strictEqual(vfs._resolvePath('C:'), 'c:\\games');
+  assert.strictEqual(vfs._resolvePath('D:data.dat'), 'd:\\data.dat');
+});
+
+test('GetCurrentDirectory omits a trailing backslash except at a drive root', () => {
+  const vfs = new VirtualFS();
+  vfs.dirs.add('c:\\game');
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\game\\'), true);
+  assert.strictEqual(vfs.getCurrentDirectory(), 'c:\\game');
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\'), true);
   assert.strictEqual(vfs.getCurrentDirectory(), 'c:\\');
+});
+
+test('setCurrentDirectory rejects files and missing alias paths without changing CWD', () => {
+  const vfs = makeVFS({ 'c:\\dialog.tlk': 16 });
+  assert.strictEqual(vfs.setCurrentDirectory('C:\\dialog.tlk'), false,
+    'an existing file is not a directory');
+  assert.strictEqual(vfs.setCurrentDirectory('hd0:\\dialog.tlk'), false,
+    'a failed application alias probe must not become the process directory');
+  assert.strictEqual(vfs.getCurrentDirectory(), 'C:\\');
+  assert.strictEqual(vfs.getFullPathName('.\\dialog.tlk'), 'C:\\dialog.tlk');
+});
+
+test('GetFullPathName rejects an empty filename instead of fabricating the drive', () => {
+  const memory = new ArrayBuffer(0x1000);
+  const bytes = new Uint8Array(memory);
+  bytes.fill(0x5a, 0x200, 0x220);
+  const imports = createFilesystemImports({ getMemory: () => memory });
+  assert.strictEqual(imports.fs_get_full_path_name(0x100, 16, 0x200, 0, 1), 0);
+  assert.strictEqual(bytes[0x200], 0x5a, 'failure must not replace the output with C:');
 });
 
 test('SearchPath finds an installed DLL in the Win98 system directory', () => {

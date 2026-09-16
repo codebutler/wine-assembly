@@ -10,6 +10,8 @@
 //   - LB_GETTEXT round-trips each string
 //   - LB_GETTEXTLEN matches strlen
 //   - LB_GETITEMHEIGHT reports the renderer's 16px native row height
+//   - LB_GETITEMRECT returns displayed client coordinates and rejects bad rows
+//   - LB_ITEMFROMPOINT returns the nearest row and outside-client flag
 //   - LB_SETCURSEL / LB_GETCURSEL round-trip; out-of-range clamps to -1
 //   - LB_RESETCONTENT zeros count and selection
 //   - Click at row 1 (y=20) sets cur_sel=1 and posts WM_COMMAND with
@@ -19,13 +21,15 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 const SRC_DIR = path.join(ROOT, 'src');
 
 async function main() {
-  const wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC_DIR, f), 'utf-8'));
+  const wasmBytes = compileSrcWasm();
 
   // WAT module imports its memory; create it externally and pass through.
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
@@ -46,6 +50,7 @@ async function main() {
   // listbox path never invokes.
   base.host.create_thread = () => 0;
   base.host.exit_thread   = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event  = () => 0;
   base.host.set_event     = () => 0;
   base.host.reset_event   = () => 0;
@@ -66,14 +71,14 @@ async function main() {
   // Helper to write a NUL-terminated string into a fresh guest_alloc buffer.
   const writeStr = (s) => {
     const g = e.guest_alloc(s.length + 1);
-    const wa = g - e.get_image_base() + 0x12000;
+    const wa = RegionMap.g2w(g, e.get_image_base());
     const u8 = new Uint8Array(memory.buffer);
     for (let i = 0; i < s.length; i++) u8[wa + i] = s.charCodeAt(i);
     u8[wa + s.length] = 0;
     return g;
   };
   const readStr = (g, max = 256) => {
-    const wa = g - e.get_image_base() + 0x12000;
+    const wa = RegionMap.g2w(g, e.get_image_base());
     const u8 = new Uint8Array(memory.buffer);
     let s = '';
     for (let i = 0; i < max && u8[wa + i]; i++) s += String.fromCharCode(u8[wa + i]);
@@ -104,6 +109,25 @@ async function main() {
   check('LB_GETCOUNT matches inserts', count === items.length,
     `got ${count} expected ${items.length}`);
   check('LB_GETITEMHEIGHT reports 16px rows', e.send_message(lb, 0x01A1, 0, 0) === 16);
+
+  const rect = e.guest_alloc(16);
+  const rectWa = RegionMap.g2w(rect, e.get_image_base());
+  const view = new DataView(memory.buffer);
+  check('LB_GETITEMRECT returns row 1 client bounds',
+    e.send_message(lb, 0x0198, 1, rect) === 0 &&
+    view.getInt32(rectWa, true) === 0 &&
+    view.getInt32(rectWa + 4, true) === 16 &&
+    view.getInt32(rectWa + 8, true) === 200 &&
+    view.getInt32(rectWa + 12, true) === 32);
+  check('LB_GETITEMRECT rejects an invalid row',
+    e.send_message(lb, 0x0198, items.length, rect) === -1);
+
+  const pointInRow1 = (5 & 0xFFFF) | ((20 & 0xFFFF) << 16);
+  const pointOutsideRow1 = (205 & 0xFFFF) | ((20 & 0xFFFF) << 16);
+  check('LB_ITEMFROMPOINT finds row 1 inside the client',
+    e.send_message(lb, 0x01A9, 0, pointInRow1) === 1);
+  check('LB_ITEMFROMPOINT marks an outside point and keeps nearest row',
+    e.send_message(lb, 0x01A9, 0, pointOutsideRow1) === 0x00010001);
 
   // Round-trip every item via LB_GETTEXT and check LB_GETTEXTLEN agrees
   let allOk = true;
@@ -137,7 +161,7 @@ async function main() {
   check('LB_GETSELCOUNT reports both selected rows', e.send_message(lb, 0x0190, 0, 0) === 2);
   check('LB_GETSELITEMS returns selected indexes',
     e.send_message(lb, 0x0191, items.length, selectedItems) === 2 &&
-    new DataView(memory.buffer).getUint32(selectedItems - e.get_image_base() + 0x12000, true) === 0 &&
+    new DataView(memory.buffer).getUint32(RegionMap.g2w(selectedItems, e.get_image_base()), true) === 0 &&
     new DataView(memory.buffer).getUint32(selectedItems - e.get_image_base() + 0x12004, true) === 2);
   check('listbox_get_sel export agrees', e.listbox_get_sel(lb, 0) === 1 && e.listbox_get_sel(lb, 2) === 1);
 
@@ -149,15 +173,33 @@ async function main() {
 
   // Click at y=20 (row 1) → cur_sel=1
   // lParam = (x & 0xFFFF) | (y << 16)
-  const clickL = (5 & 0xFFFF) | ((20 & 0xFFFF) << 16);
+  const clickL = pointInRow1;
   e.send_message(lb, 0x0201, 0, clickL); // WM_LBUTTONDOWN
   check('click at y=20 selects row 1', e.send_message(lb, 0x0188, 0, 0) === 1);
 
-  // Click at y=200 (way past visible) → clamps to count-1=3
+  // Click at y=200 (way past populated rows) leaves selection unchanged.
   const clickL2 = (5 & 0xFFFF) | ((200 & 0xFFFF) << 16);
   e.send_message(lb, 0x0201, 0, clickL2);
-  check('click way past last row clamps to count-1',
-    e.send_message(lb, 0x0188, 0, 0) === items.length - 1);
+  check('click past the last row does not select or notify',
+    e.send_message(lb, 0x0188, 0, 0) === 1);
+
+  // Grow beyond the six-row viewport and exercise every public scroll path.
+  for (let i = items.length; i < 12; i++) {
+    e.send_message(lb, 0x0180, 0, writeStr(`row-${i}`));
+  }
+  e.send_message(lb, 0x0186, 10, 0);
+  check('LB_SETCURSEL scrolls the selected row into view',
+    e.send_message(lb, 0x018E, 0, 0) === 5);
+  e.send_message(lb, 0x020A, 120 << 16, 0); // WM_MOUSEWHEEL, one notch up
+  check('WM_MOUSEWHEEL scrolls three rows', e.send_message(lb, 0x018E, 0, 0) === 2);
+  e.send_message(lb, 0x0115, 7, 0); // WM_VSCROLL / SB_BOTTOM
+  check('WM_VSCROLL SB_BOTTOM clamps to the last full page',
+    e.send_message(lb, 0x018E, 0, 0) === 6);
+  e.send_message(lb, 0x0115, 5 | (4 << 16), 0); // SB_THUMBTRACK position 4
+  check('WM_VSCROLL SB_THUMBTRACK follows the requested row',
+    e.send_message(lb, 0x018E, 0, 0) === 4);
+  e.send_message(lb, 0x0115, 6, 0); // SB_TOP
+  check('WM_VSCROLL SB_TOP returns to row zero', e.send_message(lb, 0x018E, 0, 0) === 0);
 
   // LB_RESETCONTENT
   e.send_message(lb, 0x0184, 0, 0);
@@ -183,6 +225,23 @@ async function main() {
   check('LB_DIR listbox text matches VFS files',
     dirItems[0] === 'pop.eqf' && dirItems[1] === 'rock.eqf',
     `got ${dirItems.join(',')}`);
+
+  // LBS_OWNERDRAWVARIABLE without LBS_HASSTRINGS stores each LB_ADDSTRING
+  // lParam as item data. Unreal's installer uses this for component objects.
+  const dataLb = e.test_create_listbox(0, 0, 200, 100);
+  e.wnd_set_style_export(dataLb, 0x50000020);
+  const objectData = 0x4f9ce1f0;
+  check('owner-draw LB_ADDSTRING accepts null item data',
+    e.send_message(dataLb, 0x0180, 0, 0) === 0);
+  check('owner-draw LB_ADDSTRING accepts opaque item data',
+    e.send_message(dataLb, 0x0180, 0, objectData) === 1);
+  check('owner-draw LB_GETITEMDATA returns LB_ADDSTRING lParam',
+    e.send_message(dataLb, 0x0199, 0, 0) === 0 &&
+    e.send_message(dataLb, 0x0199, 1, 0) === objectData);
+  check('owner-draw LB_FINDSTRING searches opaque item data',
+    e.send_message(dataLb, 0x018f, -1, objectData) === 1 &&
+    e.send_message(dataLb, 0x018f, -1, 0x4f9ce000) === -1);
+  if (e.wnd_destroy_tree) e.wnd_destroy_tree(dataLb - 1);
 
   // Tear down via $wnd_destroy_tree on the parent — the helper allocated
   // parent before lb so parent = lb - 1. wnd_destroy_tree posts WM_DESTROY

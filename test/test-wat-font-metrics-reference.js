@@ -38,6 +38,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'font-metrics.json');
 if (!fs.existsSync(FIXTURE)) {
@@ -83,21 +85,23 @@ const PER_SIZE = process.argv.includes('--per-size');
   const bytes = new Uint8Array(memory.buffer);
   const view = new DataView(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  const wa = guest => RegionMap.g2w(guest, imageBase);
   const allocZero = size => {
     const pointer = wat.guest_alloc(size) >>> 0;
-    bytes.fill(0, wa(pointer), wa(pointer) + size);
+    for (let offset = 0; offset < size; offset++) wat.guest_write8(pointer + offset, 0);
     return pointer;
   };
   const writeWide = value => {
     const pointer = allocZero((value.length + 1) * 2);
     [...value].forEach((character, index) =>
       wat.guest_write16(pointer + index * 2, character.charCodeAt(0)));
+    wat.guest_write16(pointer + value.length * 2, 0);
     return pointer;
   };
   const writeAnsi = value => {
     const pointer = allocZero(value.length + 1);
-    bytes.set(Buffer.from(value, 'latin1'), wa(pointer));
+    Buffer.from(value, 'latin1').forEach((byte, index) =>
+      wat.guest_write8(pointer + index, byte));
     return pointer;
   };
 

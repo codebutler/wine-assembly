@@ -497,10 +497,17 @@
   ;; tables, then calls $defwndproc_ncpaint. No JS-side plumbing.
   ;; ============================================================
   ;; Paint one standard non-client scrollbar from SCROLLINFO state.
+  ;; $pressed is the held part from $sb_pressed_part, or 0 for none. The
+  ;; codes are the ones the hit-testers store: on a vertical strip 1 = up
+  ;; arrow and 2 = down arrow, on a horizontal one 3 = left and 4 = right
+  ;; (5/6 are the thumbs, which do not change appearance while dragged).
+  ;; Without this the arrows always drew raised, so holding one scrolled
+  ;; the text but never sank the button.
   (func $defwndproc_paint_standard_scrollbar
         (param $hdc i32) (param $x i32) (param $y i32)
         (param $w i32) (param $h i32) (param $vert i32)
         (param $pos i32) (param $smin i32) (param $smax i32) (param $page i32)
+        (param $pressed i32) (param $disabled i32)
     (local $long i32) (local $cross i32) (local $arrow i32) (local $track i32)
     (local $total i32) (local $thumb i32) (local $travel i32)
     (local $max_pos i32) (local $range i32) (local $thumb_pos i32)
@@ -521,17 +528,23 @@
           (then
             (call $draw_sb_arrow (local.get $hdc)
               (local.get $x) (local.get $y) (local.get $cross) (local.get $arrow)
-              (i32.const 0) (i32.const 0))
+              (i32.const 0) (i32.eq (local.get $pressed) (i32.const 1))
+              (i32.and (local.get $disabled) (i32.const 1)))
             (call $draw_sb_arrow (local.get $hdc)
               (local.get $x) (i32.sub (i32.add (local.get $y) (local.get $long)) (local.get $arrow))
-              (local.get $cross) (local.get $arrow) (i32.const 1) (i32.const 0)))
+              (local.get $cross) (local.get $arrow) (i32.const 1)
+              (i32.eq (local.get $pressed) (i32.const 2))
+              (i32.and (local.get $disabled) (i32.const 2))))
           (else
             (call $draw_sb_arrow (local.get $hdc)
               (local.get $x) (local.get $y) (local.get $arrow) (local.get $cross)
-              (i32.const 2) (i32.const 0))
+              (i32.const 2) (i32.eq (local.get $pressed) (i32.const 3))
+              (i32.and (local.get $disabled) (i32.const 1)))
             (call $draw_sb_arrow (local.get $hdc)
               (i32.sub (i32.add (local.get $x) (local.get $long)) (local.get $arrow)) (local.get $y)
-              (local.get $arrow) (local.get $cross) (i32.const 3) (i32.const 0))))))
+              (local.get $arrow) (local.get $cross) (i32.const 3)
+              (i32.eq (local.get $pressed) (i32.const 4))
+              (i32.and (local.get $disabled) (i32.const 2)))))))
     ;; Geometry lives in $sb_page_* so that whoever hit-tests this scrollbar
     ;; computes the same thumb this draws. It used to be inline here, which is
     ;; why the EDIT could not tell a click on its thumb from a click on text.
@@ -574,25 +587,39 @@
   (func $defwndproc_do_ncpaint (param $hwnd i32)
     (local $rect i32) (local $w i32) (local $h i32)
     (local $style i32) (local $flags i32) (local $is_child i32) (local $has_caption i32)
+    (local $foreground i32)
     (local $title_wa i32) (local $title_len i32)
     (local $hdc i32) (local $slot i32) (local $base i32) (local $aux i32)
     (local $cl i32) (local $ct i32) (local $cr i32) (local $cb i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
     (local.set $rect (call $paint_scratch_take))
     (call $host_get_window_rect (local.get $hwnd) (local.get $rect))
-    (local.set $w (i32.sub (i32.load offset=8  (local.get $rect))
-                            (i32.load         (local.get $rect))))
-    (local.set $h (i32.sub (i32.load offset=12 (local.get $rect))
-                            (i32.load offset=4  (local.get $rect))))
+    (local.set $w (i32.sub (load.field.memarg PaintRect right (local.get $rect))
+                            (load.field PaintRect left (local.get $rect))))
+    (local.set $h (i32.sub (load.field.memarg PaintRect bottom (local.get $rect))
+                            (load.field.memarg PaintRect top (local.get $rect))))
     (if (i32.or (i32.le_s (local.get $w) (i32.const 0))
                 (i32.le_s (local.get $h) (i32.const 0)))
       (then (return)))
     ;; Flags
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
-    (local.set $flags (i32.const 1))                                ;; active (TODO: focus-aware)
+    (local.set $is_child (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
+    ;; A child/MDI caption keeps the long-standing active rendering selected
+    ;; by its parent.  For a top-level caption, USER's renderer-wide
+    ;; foreground HWND is authoritative: GetForegroundWindow may temporarily
+    ;; return NULL during activation, in which case no top-level caption is
+    ;; painted active.
+    (local.set $foreground (call $host_foreground_window))
+    (local.set $flags
+      (i32.or
+        (local.get $is_child)
+        (i32.and
+          (i32.ne (local.get $foreground) (i32.const 0))
+          (i32.eq (local.get $hwnd) (local.get $foreground)))))
+    ;; FlashWindow reverses the current active/inactive appearance; it does
+    ;; not replace the underlying activation state.
     (if (call $get_flash_state_slot (local.get $hwnd))
       (then (local.set $flags (i32.xor (local.get $flags) (i32.const 1)))))
-    (local.set $is_child (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
     (local.set $has_caption
       (i32.or
         (i32.eq (i32.and (local.get $style) (i32.const 0x00C00000))
@@ -674,13 +701,18 @@
                 (local.get $hdc) (local.get $cr) (local.get $ct)
                 (i32.const 16) (i32.sub (local.get $cb) (local.get $ct)) (i32.const 1)
                 (i32.load offset=12 (local.get $base)) (i32.load offset=16 (local.get $base))
-                (i32.load offset=20 (local.get $base)) (i32.load offset=8 (local.get $aux)))))
+                (i32.load offset=20 (local.get $base)) (i32.load offset=8 (local.get $aux))
+                ;; Frame scrollbars have no press tracking of their own yet.
+                (i32.const 0)
+                (call $scroll_arrow_mask (local.get $hwnd) (i32.const 1)))))
             (if (i32.and (local.get $style) (i32.const 0x00100000))
               (then (call $defwndproc_paint_standard_scrollbar
                 (local.get $hdc) (local.get $cl) (local.get $cb)
                 (i32.sub (local.get $cr) (local.get $cl)) (i32.const 16) (i32.const 0)
                 (i32.load (local.get $base)) (i32.load offset=4 (local.get $base))
-                (i32.load offset=8 (local.get $base)) (i32.load (local.get $aux)))))
+                (i32.load offset=8 (local.get $base)) (i32.load (local.get $aux))
+                (i32.const 0)
+                (call $scroll_arrow_mask (local.get $hwnd) (i32.const 0)))))
             (if (i32.eq (i32.and (local.get $style) (i32.const 0x00300000)) (i32.const 0x00300000))
               (then (drop (call $host_gdi_fill_rect (local.get $hdc)
                 (local.get $cr) (local.get $cb)
@@ -700,10 +732,10 @@
     (if (i32.eqz (local.get $hwnd)) (then (return)))
     (local.set $rect (call $paint_scratch_take))
     (call $host_get_window_rect (local.get $hwnd) (local.get $rect))
-    (local.set $w (i32.sub (i32.load offset=8  (local.get $rect))
-                            (i32.load         (local.get $rect))))
-    (local.set $h (i32.sub (i32.load offset=12 (local.get $rect))
-                            (i32.load offset=4  (local.get $rect))))
+    (local.set $w (i32.sub (load.field.memarg PaintRect right (local.get $rect))
+                            (load.field PaintRect left (local.get $rect))))
+    (local.set $h (i32.sub (load.field.memarg PaintRect bottom (local.get $rect))
+                            (load.field.memarg PaintRect top (local.get $rect))))
     (if (i32.or (i32.le_s (local.get $w) (i32.const 0))
                 (i32.le_s (local.get $h) (i32.const 0)))
       (then (return)))
@@ -725,8 +757,19 @@
           (i32.and
             (i32.ne (i32.and (local.get $style) (i32.const 0x00800000)) (i32.const 0))
             (i32.ne (i32.and (local.get $style) (i32.const 0x00080000)) (i32.const 0))))))
-    (local.set $has_border (i32.or (local.get $has_cap)
-                                    (i32.and (local.get $style) (i32.const 0x00800000))))
+    ;; WS_DLGFRAME (0x00400000) is a border in its own right, not just the
+    ;; upper half of WS_CAPTION. A template that asks for a fixed dialog frame
+    ;; and no title bar -- XP winmine's "enter your name" dialog, RT_DIALOG 600,
+    ;; is style WS_POPUP|WS_DLGFRAME|DS_SETFONT -- reserved no non-client area
+    ;; at all when only WS_BORDER counted here. $dc_apply_nc_clip then excluded
+    ;; the entire window rect from the NC DC, so every pixel
+    ;; $defwndproc_ncpaint drew (the btnFace fill and the raised 3D edge) was
+    ;; clipped away and the dialog rendered as a flat grey slab with no frame.
+    ;; Captioned windows already carry this bit, so they are unaffected.
+    (local.set $has_border
+      (i32.or (i32.ne (local.get $has_cap) (i32.const 0))
+              (i32.ne (i32.and (local.get $style) (i32.const 0x00C00000))
+                      (i32.const 0))))
     (local.set $simple_child_border
       (i32.and
         (i32.and
@@ -817,10 +860,10 @@
     (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 0))))
     (local.set $rect (call $paint_scratch_take))
     (call $host_get_window_rect (local.get $hwnd) (local.get $rect))
-    (local.set $wx (i32.load         (local.get $rect)))
-    (local.set $wy (i32.load offset=4 (local.get $rect)))
-    (local.set $w  (i32.sub (i32.load offset=8  (local.get $rect)) (local.get $wx)))
-    (local.set $h  (i32.sub (i32.load offset=12 (local.get $rect)) (local.get $wy)))
+    (local.set $wx (load.field PaintRect left (local.get $rect)))
+    (local.set $wy (load.field.memarg PaintRect top (local.get $rect)))
+    (local.set $w  (i32.sub (load.field.memarg PaintRect right (local.get $rect)) (local.get $wx)))
+    (local.set $h  (i32.sub (load.field.memarg PaintRect bottom (local.get $rect)) (local.get $wy)))
     (local.set $lx (i32.sub (local.get $sx) (local.get $wx)))
     (local.set $ly (i32.sub (local.get $sy) (local.get $wy)))
     ;; Outside window

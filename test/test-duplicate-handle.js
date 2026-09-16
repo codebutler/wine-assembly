@@ -8,7 +8,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = `
   (func (export "test_call_DuplicateHandle")
     (param $stack i32) (param $target i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     ;; Sixth/seventh arguments: bInheritHandle=FALSE,
     ;; dwOptions=DUPLICATE_SAME_ACCESS.
     (call $gs32 (i32.add (local.get $stack) (i32.const 24)) (i32.const 0))
@@ -16,7 +16,7 @@ const extraWat = `
     (call $handle_DuplicateHandle
       (i32.const -1) (i32.const -2) (i32.const -1)
       (local.get $target) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_read_guest32") (param $address i32) (result i32)
     (call $gl32 (local.get $address)))

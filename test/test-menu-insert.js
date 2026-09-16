@@ -40,7 +40,7 @@ function check(label, fn) {
       (call $handle_CreateMenu
         (i32.const 0) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_register_menu_window") (param $hwnd i32)
       (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_CTRL_NATIVE)))
     (func (export "test_call_SetMenu_bridge")
@@ -48,7 +48,28 @@ function check(label, fn) {
       (call $handle_SetMenu
         (local.get $hwnd) (local.get $hmenu) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
+    (func (export "test_call_SetMenuItemInfoA")
+        (param $hmenu i32) (param $item i32) (param $bypos i32) (param $mii i32)
+        (result i32)
+      (call $handle_SetMenuItemInfoA
+        (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
+        (i32.const 0) (i32.const 0))
+      (i32.load offset=0 (global.get $reg_base)))
+    (func (export "test_call_GetMenuItemInfoA")
+        (param $hmenu i32) (param $item i32) (param $bypos i32) (param $mii i32)
+        (result i32)
+      (call $handle_GetMenuItemInfoA
+        (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
+        (i32.const 0) (i32.const 0))
+      (i32.load offset=0 (global.get $reg_base)))
+    (func (export "test_call_SetMenuItemBitmaps")
+        (param $hmenu i32) (param $item i32) (param $flags i32)
+        (param $unchecked i32) (param $checked i32) (result i32)
+      (call $handle_SetMenuItemBitmaps
+        (local.get $hmenu) (local.get $item) (local.get $flags)
+        (local.get $unchecked) (local.get $checked) (i32.const 0))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
   const wat = harness.exports;
 
@@ -209,6 +230,49 @@ function check(label, fn) {
     wat.test_call_DestroyMenu(h);
   });
 
+  check('Set/GetMenuItemInfoA round-trips dynamic item state and bounded text', () => {
+    const h = popup();
+    wat.test_call_AppendMenuA(h, MF_STRING, 10, strA('Old'));
+    const replacement = strA('Replacement');
+    assert.strictEqual(wat.test_call_SetMenuItemInfoA(h, 10, 0,
+      menuItemInfo({ mask: MIIM_ID | MIIM_STATE | MIIM_STRING,
+        id: 11, state: MFS_CHECKED, typeData: replacement })), 1);
+    const dst = alloc(5);
+    const out = menuItemInfo({ mask: MIIM_ID | MIIM_STATE | MIIM_STRING,
+      typeData: dst });
+    wat.guest_write32(out + 40, 5);
+    assert.strictEqual(wat.test_call_GetMenuItemInfoA(h, 0, 1, out), 1);
+    assert.strictEqual(wat.guest_read32(out + 16), 11);
+    assert.strictEqual(wat.guest_read32(out + 12) & MFS_CHECKED, MFS_CHECKED);
+    assert.strictEqual(wat.guest_read32(out + 40), 'Replacement'.length,
+      'cch reports the full label length');
+    const got = Array.from({ length: 5 }, (_, i) => wat.guest_read8(dst + i));
+    assert.deepStrictEqual(got, [82, 101, 112, 108, 0], 'copy is bounded and terminated');
+    wat.test_call_DestroyMenu(h);
+  });
+
+  check('menu item info rejects unsupported output instead of silent success', () => {
+    const h = popup();
+    wat.test_call_AppendMenuA(h, MF_STRING, 1, strA('Item'));
+    const bitmapInfo = menuItemInfo({ mask: 0x80 }); // MIIM_BITMAP
+    assert.strictEqual(wat.test_call_GetMenuItemInfoA(h, 0, 1, bitmapInfo), 0);
+    assert.strictEqual(wat.test_call_SetMenuItemInfoA(0x00030065, 0, 1,
+      menuItemInfo({ mask: MIIM_ID, id: 2 })), 0);
+    wat.test_call_DestroyMenu(h);
+  });
+
+  check('SetMenuItemBitmaps resolves dynamic items by command and position', () => {
+    const h = popup();
+    wat.test_call_AppendMenuA(h, MF_STRING, 10, strA('First'));
+    wat.test_call_AppendMenuA(h, MF_STRING, 20, strA('Second'));
+    assert.strictEqual(wat.test_call_SetMenuItemBitmaps(h, 20, 0, 0x410001, 0x410002), 1);
+    assert.strictEqual(wat.test_call_SetMenuItemBitmaps(h, 0, MF_BYPOSITION, 0, 0), 1);
+    assert.strictEqual(wat.test_call_SetMenuItemBitmaps(h, 99, 0, 0, 0), 0);
+    assert.strictEqual(wat.test_call_SetMenuItemBitmaps(h, 2, MF_BYPOSITION, 0, 0), 0);
+    assert.strictEqual(wat.test_call_SetMenuItemBitmaps(0x30065, 0, MF_BYPOSITION, 0, 0), 0);
+    wat.test_call_DestroyMenu(h);
+  });
+
   check('a resource-backed handle reports success without a dynamic table', () => {
     // winamp.exe passes a GetSubMenu-encoded handle like this one. Mutating a
     // resource menu blob is not modelled, and these entry points report
@@ -245,6 +309,15 @@ function check(label, fn) {
       'SetMenu should serialize the host-created bar into WAT');
     assert.strictEqual(wat.menu_child_count(hwnd, 0), 1);
     assert.strictEqual(wat.menu_child_id(hwnd, 0, 0), 42);
+    const encodedFileMenu = ((root & 0xffff) | 0x10000) >>> 0;
+    assert.strictEqual(
+      wat.test_call_SetMenuItemBitmaps(encodedFileMenu, 0, MF_BYPOSITION,
+        0x410001, 0x410002), 1,
+      'an attached resource-style submenu should resolve by position');
+    assert.strictEqual(
+      wat.test_call_SetMenuItemBitmaps(encodedFileMenu, 42, 0,
+        0x410001, 0x410002), 1,
+      'an attached resource-style submenu should resolve by command id');
     wat.menu_clear(hwnd);
     wat.test_call_DestroyMenu(file);
     wat.test_call_DestroyMenu(root);

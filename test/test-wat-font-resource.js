@@ -19,6 +19,8 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 const { fontMounts } = require('../lib/font-substitutions');
 
 const REPO = path.join(__dirname, '..');
@@ -77,7 +79,7 @@ const familyNameOf = buffer => {
   // before it, and a stale view reads as zeroes rather than throwing.
   const mem = () => new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  const wa = guest => RegionMap.g2w(guest, imageBase);
 
   const readStr = at => {
     const bytes = mem();
@@ -105,6 +107,10 @@ const familyNameOf = buffer => {
 
   const add = p => wat.test_call_AddFontResourceA(allocStr(p));
   const remove = p => wat.test_call_RemoveFontResourceA(allocStr(p));
+  const createScalable = (resource, file, currentPath = null, hidden = 0) =>
+    wat.test_call_CreateScalableFontResourceA(
+      hidden, resource ? allocStr(resource) : 0, file ? allocStr(file) : 0,
+      currentPath ? allocStr(currentPath) : 0);
   const registered = (name, weight = 400, italic = 0) => {
     const found = wat.test_tt_reg_path(wa(allocStr(name)), weight, italic) >>> 0;
     return found ? readStr(found) : null;
@@ -145,6 +151,45 @@ const familyNameOf = buffer => {
   // install four files and then ask for one face in four weights.
   assert.strictEqual(boldFamily, family,
     'the bold file must declare the same family name as the regular one');
+
+  // ---- CreateScalableFontResourceA / .FOT association ------------------
+
+  const writableFot = 'C:\\WINDOWS\\FONTS\\ARIAL.FOT';
+  assert.strictEqual(createScalable(writableFot, ARIAL), 1,
+    'a valid full-path TTF must create a scalable font resource');
+  assert.ok(hostCtx.vfs.files.has(writableFot.toLowerCase()),
+    'writable media gets a concrete resource file');
+  assert.strictEqual(add(writableFot), 1,
+    'AddFontResourceA must install the TTF represented by a created .FOT');
+  assert.strictEqual(remove(writableFot), 1,
+    'RemoveFontResourceA must remove a face installed through its .FOT');
+  assert.strictEqual(createScalable(writableFot, ARIAL), 0,
+    'an existing destination must fail instead of being overwritten');
+
+  // Imported game discs are intentionally immutable. Alpha Centauri ships a
+  // complete installed tree on the disc and creates ARIALN.FOT beside its
+  // ARIALN.TTF at startup. Keep the process-local FOT association useful even
+  // when the concrete copy is refused by the read-only drive.
+  hostCtx.vfs.dirs.add('d:\\programs');
+  hostCtx.vfs.files.set('d:\\programs\\arialn.ttf', {
+    data: new Uint8Array(fileFor.get('c:\\windows\\fonts\\arial.ttf')),
+    attrs: 0x20,
+  });
+  hostCtx.vfs.setDriveReadOnly('d', true);
+  assert.ok(hostCtx.vfs.setCurrentDirectory('D:\\programs'));
+  assert.strictEqual(createScalable('arialn.fot', 'arialn.ttf', 'D:\\programs'), 1,
+    'a valid font on read-only imported media gets a process-local resource');
+  assert.strictEqual(hostCtx.vfs.files.has('d:\\programs\\arialn.fot'), false,
+    'the read-only disc itself must remain unchanged');
+  assert.strictEqual(add('arialn.fot'), 1,
+    'the process-local .FOT association must install its source TTF');
+  assert.strictEqual(remove('arialn.fot'), 1,
+    'the process-local .FOT association must also remove its source TTF');
+  assert.strictEqual(createScalable('bad.fot', 'missing.ttf', 'D:\\programs'), 0,
+    'a missing source must not become a fake successful resource');
+  assert.strictEqual(wat.test_call_CreateScalableFontResourceA(0, 0, 0, 0), 0,
+    'null resource/source paths must fail');
+  assert.ok(hostCtx.vfs.setCurrentDirectory('C:\\'));
 
   // ---- the WAT name reader agrees with the spec -------------------------
 

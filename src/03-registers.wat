@@ -2,10 +2,11 @@
   ;; REGISTER ACCESS
   ;; ============================================================
   ;; The eight GPRs are slots of a per-thread register file in linear memory
-  ;; (see $REGFILE_BASE / $reg_base in 01-header.wat), so an indexed access is
-  ;; a single load or store. Every former `call $get_reg` / `call $set_reg`
-  ;; site has been inlined to exactly the expressions below; these two
-  ;; functions are kept only as the readable definition of the encoding.
+  ;; (see $REGFILE / $reg_base in 01-header.wat), so an indexed access is a
+  ;; single load or store — no call, no br_table, no data-dependent branch.
+  ;; Every former `call $get_reg` / `call $set_reg` site is rewritten to
+  ;; exactly the expressions below by tools/regarray-transform.js; these two
+  ;; functions are kept as the readable definition of the encoding.
   (func $get_reg (param $r i32) (result i32)
     (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))))
   )
@@ -50,12 +51,206 @@
   ;; Used as g2w fallback so reads from invalid guest addresses see zeros
   ;; (simulating Windows null-page behavior) and writes go to a harmless sink.
   (global $NULL_SENTINEL i32 (i32.const 0xF0))
+
+  ;; Win98 private-page protections accepted by VirtualAlloc/VirtualProtect.
+  ;; PAGE_WRITECOPY variants apply to mapped views, and PAGE_WRITECOMBINE did
+  ;; not exist on the target OS. PAGE_GUARD/PAGE_NOCACHE are mutually exclusive
+  ;; and neither may modify PAGE_NOACCESS.
+  (func $guest_page_protection_valid (param $protect i32) (result i32)
+    (local $base i32) (local $modifier i32)
+    (if (i32.ne
+          (i32.and (local.get $protect)
+            (i32.xor (global.get $GUEST_PTE_PROTECT_MASK) (i32.const -1)))
+          (i32.const 0))
+      (then (return (i32.const 0))))
+    (local.set $base (i32.and (local.get $protect) (i32.const 0xFF)))
+    (if (i32.eqz
+          (i32.or
+            (i32.or (i32.eq (local.get $base) (i32.const 0x01))
+                    (i32.eq (local.get $base) (i32.const 0x02)))
+            (i32.or
+              (i32.or (i32.eq (local.get $base) (i32.const 0x04))
+                      (i32.eq (local.get $base) (i32.const 0x10)))
+              (i32.or (i32.eq (local.get $base) (i32.const 0x20))
+                      (i32.eq (local.get $base) (i32.const 0x40))))))
+      (then (return (i32.const 0))))
+    (local.set $modifier (i32.and (local.get $protect) (i32.const 0x700)))
+    (if (i32.ne (i32.and (local.get $modifier) (i32.const 0x400)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (if (i32.eq (local.get $modifier) (i32.const 0x300))
+      (then (return (i32.const 0))))
+    (if (i32.and
+          (i32.eq (local.get $base) (i32.const 0x01))
+          (i32.ne (local.get $modifier) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (i32.const 1))
+
+  ;; Publish an affine, page-aligned guest-to-WASM range into packed PTEs.
+  ;; Low bits retain the caller's validated PAGE_* value verbatim.
+  (func $guest_page_publish_range
+    (param $guest i32) (param $size i32) (param $backing i32)
+      (param $protect i32) (result i32)
+    (local $cur i32) (local $end i32) (local $back i32)
+    (if (i32.or
+          (i32.or
+            (i32.ne (i32.and (local.get $guest) (i32.const 0xFFF)) (i32.const 0))
+            (i32.ne (i32.and (local.get $backing) (i32.const 0xFFF)) (i32.const 0)))
+          (i32.ne (i32.and (local.get $size) (i32.const 0xFFF)) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $size)) (then (return (i32.const 1))))
+    (local.set $end (i32.add (local.get $guest) (local.get $size)))
+    (if (i32.lt_u (local.get $end) (local.get $guest))
+      (then (return (i32.const 0))))
+    (local.set $cur (local.get $guest))
+    (local.set $back (local.get $backing))
+    (block $done (loop $pages
+      (br_if $done (i32.ge_u (local.get $cur) (local.get $end)))
+      (i32.atomic.store
+        (i32.add (global.get $GUEST_PAGE_TABLE)
+          (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
+            (i32.const 0x003FFFFC)))
+        (i32.or (i32.and (local.get $back) (i32.const 0xFFFFF000))
+          (i32.or
+            (i32.and (local.get $protect) (global.get $GUEST_PTE_PROTECT_MASK))
+            (global.get $GUEST_PTE_PRESENT))))
+      (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
+      (local.set $back (i32.add (local.get $back) (i32.const 0x1000)))
+      (br $pages)))
+    (i32.const 1))
+
+  (func $guest_page_clear_range (param $guest i32) (param $size i32)
+    (local $cur i32) (local $end i32)
+    (local.set $end (i32.add (local.get $guest) (local.get $size)))
+    (if (i32.lt_u (local.get $end) (local.get $guest)) (then (return)))
+    (local.set $cur (local.get $guest))
+    (block $done (loop $pages
+      (br_if $done (i32.ge_u (local.get $cur) (local.get $end)))
+      (i32.atomic.store
+        (i32.add (global.get $GUEST_PAGE_TABLE)
+          (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
+            (i32.const 0x003FFFFC)))
+        (i32.const 0))
+      (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
+      (br $pages))))
+
+  ;; Change PAGE_* on a page-rounded committed range. The caller holds
+  ;; LOCK_VIRTUAL_MAP, so the validation pass and update pass are atomic with
+  ;; respect to commit/release. Return -1 without changing anything if a page
+  ;; is missing; otherwise return the first page's previous protection.
+  (func $guest_page_protect_range
+      (param $guest i32) (param $size i32) (param $protect i32) (result i32)
+    (local $base i32) (local $raw_end i32) (local $end i32) (local $cur i32)
+    (local $cell i32) (local $pte i32) (local $old i32)
+    (local.set $base (i32.and (local.get $guest) (i32.const 0xFFFFF000)))
+    (local.set $raw_end (i32.add (local.get $guest) (local.get $size)))
+    (if (i32.or
+          (i32.le_u (local.get $raw_end) (local.get $guest))
+          (i32.gt_u (local.get $raw_end) (i32.const 0xFFFFF000)))
+      (then (return (i32.const -1))))
+    (local.set $end
+      (i32.and (i32.add (local.get $raw_end) (i32.const 0xFFF))
+        (i32.const 0xFFFFF000)))
+    (local.set $cur (local.get $base))
+    (block $checked (loop $check
+      (br_if $checked (i32.ge_u (local.get $cur) (local.get $end)))
+      (local.set $cell
+        (i32.add (global.get $GUEST_PAGE_TABLE)
+          (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
+            (i32.const 0x003FFFFC))))
+      (local.set $pte (i32.atomic.load (local.get $cell)))
+      (if (i32.eqz (i32.and (local.get $pte) (global.get $GUEST_PTE_PRESENT)))
+        (then (return (i32.const -1))))
+      (if (i32.eq (local.get $cur) (local.get $base))
+        (then (local.set $old
+          (i32.and (local.get $pte) (global.get $GUEST_PTE_PROTECT_MASK)))))
+      (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
+      (br $check)))
+    (local.set $cur (local.get $base))
+    (block $updated (loop $update
+      (br_if $updated (i32.ge_u (local.get $cur) (local.get $end)))
+      (local.set $cell
+        (i32.add (global.get $GUEST_PAGE_TABLE)
+          (i32.and (i32.shr_u (local.get $cur) (i32.const 10))
+            (i32.const 0x003FFFFC))))
+      (local.set $pte (i32.atomic.load (local.get $cell)))
+      (i32.atomic.store (local.get $cell)
+        (i32.or
+          (i32.and (local.get $pte) (i32.const 0xFFFFF800))
+          (i32.and (local.get $protect) (global.get $GUEST_PTE_PROTECT_MASK))))
+      (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
+      (br $update)))
+    (local.get $old))
+
+  (func $guest_page_translate (param $ga i32) (result i32)
+    (local $pte i32)
+    (local.set $pte
+      (i32.atomic.load
+        (i32.add (global.get $GUEST_PAGE_TABLE)
+          (i32.and (i32.shr_u (local.get $ga) (i32.const 10))
+            (i32.const 0x003FFFFC)))))
+    (if (i32.eqz (i32.and (local.get $pte) (global.get $GUEST_PTE_PRESENT)))
+      (then (return (global.get $NULL_SENTINEL))))
+    (i32.or
+      (i32.and (local.get $pte) (i32.const 0xFFFFF000))
+      (i32.and (local.get $ga) (i32.const 0xFFF))))
+
+  ;; Resolve a complete sparse span only when every crossed guest page maps to
+  ;; the corresponding contiguous backing page. Checking merely the two ends
+  ;; would accept a hole or a differently backed middle page; checking each
+  ;; page boundary proves the affine range that bulk string/loop helpers need.
+  (func $guest_page_affine_span (param $ga i32) (param $len i32) (result i32)
+    (local $start_wa i32) (local $cur_wa i32)
+    (local $end i32) (local $cur i32)
+    (local.set $start_wa (call $guest_page_translate (local.get $ga)))
+    (if (i32.eq (local.get $start_wa) (global.get $NULL_SENTINEL))
+      (then (return (global.get $NULL_SENTINEL))))
+    (if (i32.eqz (local.get $len)) (then (return (local.get $start_wa))))
+    (local.set $end (i32.add (local.get $ga) (local.get $len)))
+    (if (i32.le_u (local.get $end) (local.get $ga))
+      (then (return (global.get $NULL_SENTINEL))))
+    (local.set $cur
+      (i32.add (i32.or (local.get $ga) (i32.const 0xFFF)) (i32.const 1)))
+    (block $done (loop $pages
+      (br_if $done (i32.ge_u (local.get $cur) (local.get $end)))
+      (local.set $cur_wa (call $guest_page_translate (local.get $cur)))
+      (if (i32.ne (local.get $cur_wa)
+            (i32.add (local.get $start_wa)
+              (i32.sub (local.get $cur) (local.get $ga))))
+        (then (return (global.get $NULL_SENTINEL))))
+      (local.set $cur (i32.add (local.get $cur) (i32.const 0x1000)))
+      (br $pages)))
+    (local.get $start_wa))
+
+  (func $g2w_miss (param $ga i32) (result i32)
+    (if (global.get $fault_unmapped)
+      (then
+        (call $host_unmapped_trace (local.get $ga) (global.get $eip))
+        (if (i32.eq (global.get $fault_unmapped) (i32.const 2))
+          (then (unreachable)))
+        ;; Mode 3: what the hardware does. The sentinel keeps a guest that
+        ;; dereferences NULL alive -- reads answer 0, writes go nowhere -- which
+        ;; is why a corrupted pointer surfaces thousands of instructions from
+        ;; where it was made, and why a list walk that should have taken an
+        ;; access violation on its first step instead runs forever. Raising
+        ;; hands the fault to the guest's own __except, or to the unhandled-
+        ;; exception path, at the instruction that caused it.
+        ;;
+        ;; The sentinel is still returned: the faulting op completes against
+        ;; four bytes of scratch rather than being unwound mid-instruction, so
+        ;; one register may take a garbage value before control reaches the
+        ;; handler. $eip is already the handler's by then, and $eip_redirected
+        ;; stops $run resuming the abandoned block.
+        (if (i32.and (i32.eq (global.get $fault_unmapped) (i32.const 3))
+                     (i32.eqz (global.get $fault_raising)))
+          (then (call $raise_exception (i32.const 0xC0000005))))))
+    (i32.store (global.get $NULL_SENTINEL) (i32.const 0))
+    (global.get $NULL_SENTINEL))
+
   (func $g2w (param $ga i32) (result i32)
-    (local $wa i32) (local $i i32) (local $count i32) (local $off i32)
-    (local $rec i32) (local $base i32) (local $size i32) (local $backing i32)
+    (local $wa i32)
     (local.set $wa (i32.add (i32.sub (local.get $ga) (global.get $image_base)) (global.get $GUEST_BASE)))
     (if (i32.eqz (i32.or (i32.lt_s (local.get $wa) (i32.const 0))
-                (i32.ge_u (local.get $wa) (i32.const 0x8000000)))) ;; direct guest window
+                (i32.ge_u (local.get $wa) (region.end $DIRECT_WINDOW))))
       (then (return (local.get $wa))))
     ;; CreateDIBSection pointers live in a dedicated high guest range backed by
     ;; the final 64MB of linear memory. Test it only after the normal direct
@@ -67,64 +262,112 @@
         (return (i32.add
           (global.get $DIB_BACKING_BASE)
           (i32.sub (local.get $ga) (global.get $DIB_GUEST_BASE))))))
-    ;; Sparse VirtualAlloc mappings live outside the direct image-relative
-    ;; window. Map records are append-only (VirtualFree currently preserves
-    ;; its backing), so a successful last-range translation remains valid even
-    ;; when another thread appends or extends a record. An extension can miss
-    ;; the old cached size once, then the scan below refreshes it.
-    (local.set $off
-      (i32.sub (local.get $ga) (global.get $g2w_sparse_base)))
-    (if (i32.lt_u (local.get $off) (global.get $g2w_sparse_size))
-      (then
-        (return (i32.add (global.get $g2w_sparse_backing) (local.get $off)))))
-    (local.set $off
-      (i32.sub (local.get $ga) (global.get $g2w_sparse_base1)))
-    (if (i32.lt_u (local.get $off) (global.get $g2w_sparse_size1))
-      (then
-        (return (i32.add (global.get $g2w_sparse_backing1) (local.get $off)))))
-    (local.set $off
-      (i32.sub (local.get $ga) (global.get $g2w_sparse_base2)))
-    (if (i32.lt_u (local.get $off) (global.get $g2w_sparse_size2))
-      (then
-        (return (i32.add (global.get $g2w_sparse_backing2) (local.get $off)))))
-    (local.set $off
-      (i32.sub (local.get $ga) (global.get $g2w_sparse_base3)))
-    (if (i32.lt_u (local.get $off) (global.get $g2w_sparse_size3))
-      (then
-        (return (i32.add (global.get $g2w_sparse_backing3) (local.get $off)))))
-    ;; Scan only after direct, DIB, and cached sparse translation failed.
-    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
-    (local.set $i (i32.const 0))
-    (block $mapped_done (loop $mapped_scan
-      (br_if $mapped_done (i32.ge_u (local.get $i) (local.get $count)))
-      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
-      (local.set $base (i32.load (local.get $rec)))
-      (local.set $size (i32.load (i32.add (local.get $rec) (i32.const 4))))
-      (if (i32.and
-            (i32.ge_u (local.get $ga) (local.get $base))
-            (i32.lt_u (local.get $ga) (i32.add (local.get $base) (local.get $size))))
-        (then
-          (local.set $backing (i32.load (i32.add (local.get $rec) (i32.const 8))))
-          (global.set $g2w_sparse_base3 (global.get $g2w_sparse_base2))
-          (global.set $g2w_sparse_size3 (global.get $g2w_sparse_size2))
-          (global.set $g2w_sparse_backing3 (global.get $g2w_sparse_backing2))
-          (global.set $g2w_sparse_base2 (global.get $g2w_sparse_base1))
-          (global.set $g2w_sparse_size2 (global.get $g2w_sparse_size1))
-          (global.set $g2w_sparse_backing2 (global.get $g2w_sparse_backing1))
-          (global.set $g2w_sparse_base1 (global.get $g2w_sparse_base))
-          (global.set $g2w_sparse_size1 (global.get $g2w_sparse_size))
-          (global.set $g2w_sparse_backing1 (global.get $g2w_sparse_backing))
-          (global.set $g2w_sparse_base (local.get $base))
-          (global.set $g2w_sparse_size (local.get $size))
-          (global.set $g2w_sparse_backing (local.get $backing))
-          (return (i32.add (local.get $backing) (i32.sub (local.get $ga) (local.get $base))))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $mapped_scan)))
-    ;; Re-zero the sentinel (in case a prior bad write landed here).
-    (i32.store (global.get $NULL_SENTINEL) (i32.const 0))
-    (global.get $NULL_SENTINEL)
+    ;; Sparse VirtualAlloc mappings use the flat PTE table. A missing entry is
+    ;; authoritative: VIRTUAL_MAP_TABLE remains allocation/query metadata and
+    ;; is never a second translation mechanism.
+    (local.set $wa (call $guest_page_translate (local.get $ga)))
+    (if (i32.ne (local.get $wa) (global.get $NULL_SENTINEL))
+      (then (return (local.get $wa))))
+    (call $g2w_miss (local.get $ga))
   )
+
+  ;; The lowest guest address a sparse VirtualAlloc reservation may occupy.
+  ;;
+  ;; It used to be the flat $VIRTUAL_ALLOC_MIN, which is not a fact about
+  ;; anything. The real constraint is that a sparse mapping must not land inside
+  ;; the direct window, because $g2w answers a direct-window address from the
+  ;; image's affine delta above and never consults the page table at all. That
+  ;; window ends at guest (region.end $DIRECT_WINDOW) + image_base - GUEST_BASE,
+  ;; which for the usual 0x400000 image is 0x083EE000 -- so the constant was
+  ;; holding back 124 MB of guest address space that nothing else could use.
+  ;;
+  ;; Black & White 2 is what made that matter. At the land picker its reserve
+  ;; cursor stands at 0x289F0000 and the land loader asks for one 430 MB
+  ;; (0x19AA0000) reservation; that lands at 0x0EF50000, 18 MB below the old
+  ;; floor and 100 MB above this one. It was refused, operator new returned
+  ;; null, and the unhandled std::bad_alloc ended the process.
+  ;;
+  ;; Capped at the old constant rather than simply derived: an image based high
+  ;; enough to push the direct window past it would *raise* the floor, and the
+  ;; code-page bitmap that records decoded pages below the floor covers exactly
+  ;; 0x10000000 pages' worth. Raising the floor is a separate change with its
+  ;; own correctness argument to make; lowering it needs none.
+  (func $virtual_alloc_min (result i32)
+    (local $end i32)
+    (local.set $end
+      (i32.and
+        (i32.add
+          (i32.sub (i32.add (region.end $DIRECT_WINDOW) (global.get $image_base))
+                   (global.get $GUEST_BASE))
+          (i32.const 0xFFFF))
+        (i32.const 0xFFFF0000)))
+    (select (local.get $end) (global.get $VIRTUAL_ALLOC_MIN)
+      (i32.lt_u (local.get $end) (global.get $VIRTUAL_ALLOC_MIN))))
+
+  ;; Translate a complete guest span only when one affine mapping contains it.
+  ;; Unlike translating two endpoints, this proves that every byte between them
+  ;; uses the same guest->WASM delta. Return NULL_SENTINEL when the span crosses
+  ;; a mapping boundary or is unmapped, so callers can retain their elementwise
+  ;; fallback. The unsigned `len <= size-off` form also rejects wrapped ends.
+  (func $g2w_affine_span (param $ga i32) (param $len i32) (result i32)
+    (local $wa i32) (local $off i32)
+
+    (local.set $wa
+      (i32.add (i32.sub (local.get $ga) (global.get $image_base))
+        (global.get $GUEST_BASE)))
+    (if (i32.and
+          (i32.lt_u (local.get $wa) (region.end $DIRECT_WINDOW))
+          (i32.le_u (local.get $len)
+            (i32.sub (region.end $DIRECT_WINDOW) (local.get $wa))))
+      (then (return (local.get $wa))))
+
+    (local.set $off
+      (i32.sub (local.get $ga) (global.get $DIB_GUEST_BASE)))
+    (if (i32.and
+          (i32.lt_u (local.get $off) (global.get $DIB_GUEST_CAPACITY))
+          (i32.le_u (local.get $len)
+            (i32.sub (global.get $DIB_GUEST_CAPACITY) (local.get $off))))
+      (then
+        (return (i32.add (global.get $DIB_BACKING_BASE) (local.get $off)))))
+
+    ;; The page-boundary walk is amortized by the bulk operation that requested
+    ;; the span. NULL_SENTINEL tells that caller to preserve exact x86 ordering
+    ;; through its elementwise path when pages are missing or non-contiguous.
+    (call $guest_page_affine_span (local.get $ga) (local.get $len))
+  )
+  ;; Sparse backing is not in the direct affine guest window. In particular,
+  ;; native shader allocations retain WASM pointers and must recover the real
+  ;; guest allocation on release. Serialize against map removal/compaction.
+  (func $w2g_sparse (param $wa i32) (result i32)
+    (local $i i32) (local $count i32) (local $rec i32)
+    (local $off i32) (local $guest i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $count (i32.atomic.load (global.get $VIRTUAL_MAP_STATE)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $off (i32.sub (local.get $wa) (i32.load offset=8 (local.get $rec))))
+      (if (i32.lt_u (local.get $off) (i32.load offset=4 (local.get $rec)))
+        (then
+          (local.set $guest (i32.add (i32.load (local.get $rec)) (local.get $off)))
+          (br $done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $guest))
   (func $w2g (param $wa i32) (result i32)
+    (if (i32.lt_u
+          (i32.sub (local.get $wa) (global.get $VIRTUAL_BACKING_BASE))
+          (global.get $VIRTUAL_BACKING_BASE_SIZE))
+      (then (return (call $w2g_sparse (local.get $wa)))))
+    ;; The extension backing window, above the declared map. Same record table,
+    ;; so the same walk answers it; only the range test has to know it exists.
+    ;; A host that created the 512MB minimum has no such addresses, and
+    ;; $virtual_backing_ext_end returns 0 there so this test never fires.
+    (if (i32.and (i32.ge_u (local.get $wa) (call $virtual_backing_ext_base))
+          (i32.lt_u (local.get $wa) (call $virtual_backing_ext_end)))
+      (then (return (call $w2g_sparse (local.get $wa)))))
     (if (result i32)
       (i32.lt_u
         (i32.sub (local.get $wa) (global.get $DIB_BACKING_BASE))
@@ -151,7 +394,7 @@
       (then (return (i32.load (local.get $wa)))))
     (i32.or
       (i32.or
-        (i32.load8_u (call $g2w (local.get $ga)))
+        (i32.load8_u (local.get $wa))
         (i32.shl
           (i32.load8_u (call $g2w (i32.add (local.get $ga) (i32.const 1))))
           (i32.const 8)))
@@ -174,56 +417,66 @@
       (i32.load8_u (local.get $wa))
       (i32.shl (i32.load8_u (local.get $end_wa)) (i32.const 8))))
   (func $gl8 (param $ga i32) (result i32)
-    (local $page i32) (local $wa i32)
-    (local.set $page (i32.and (local.get $ga) (i32.const 0xFFFFF000)))
-    (if (i32.eq (local.get $page) (global.get $g2w_gl8_page))
-      (then
-        (return (i32.load8_u
-          (i32.add (local.get $ga) (global.get $g2w_gl8_delta))))))
-    (local.set $wa (call $g2w (local.get $ga)))
-    ;; Never cache an invalid translation: NULL_SENTINEL is four bytes, not a
-    ;; backing page, and adding an address offset to it would turn later bad
-    ;; reads into arbitrary linear-memory reads.
-    (if (i32.ne (local.get $wa) (global.get $NULL_SENTINEL))
-      (then
-        (global.set $g2w_gl8_page (local.get $page))
-        (global.set $g2w_gl8_delta (i32.sub (local.get $wa) (local.get $ga)))))
-    (i32.load8_u (local.get $wa)))
-  (func $invalidate_code_write (param $ga i32)
-    (local $in_code i32) (local $in_generated i32) (local $in_sparse_generated i32)
-    ;; Invalidate decoded blocks only when writes can affect already-decoded
-    ;; executable bytes. RCT mutates large image-data buffers during startup;
-    ;; treating every image write as self-modifying code makes each byte/word
-    ;; update scan the whole block-cache index.
-    (if (i32.eqz (global.get $exe_size_of_image)) (then (return)))
-    (local.set $in_code
-      (i32.and
-        (i32.ge_u (local.get $ga) (global.get $code_start))
-        (i32.lt_u (local.get $ga) (global.get $code_end))))
-    (local.set $in_generated
-      (i32.and
-        (i32.ne (global.get $generated_code_start) (i32.const 0))
-        (i32.and (i32.ge_u (local.get $ga) (global.get $generated_code_start))
-                 (i32.lt_u (local.get $ga) (global.get $generated_code_end)))))
+    (i32.load8_u (call $g2w (local.get $ga))))
+  ;; Cheap "could a write here be touching code?" test, for one guest address.
+  ;; Split out of $invalidate_code_write so the range form can skip it when the
+  ;; write spans pages and the per-page walk will ask the question anyway.
+  (func $code_write_is_code (param $ga i32) (result i32)
+    (local $in_sparse_generated i32)
     (local.set $in_sparse_generated
       (i32.and
         (i32.ne (global.get $generated_sparse_code_start) (i32.const 0))
         (i32.and (i32.ge_u (local.get $ga) (global.get $generated_sparse_code_start))
                  (i32.lt_u (local.get $ga) (global.get $generated_sparse_code_end)))))
-    (if (i32.or
-          (local.get $in_code)
-          (i32.or (local.get $in_generated) (local.get $in_sparse_generated)))
-      (then (call $invalidate_page (local.get $ga)))))
+    (i32.or
+      (local.get $in_sparse_generated)
+      (call $code_page_test (local.get $ga))))
+
+  ;; A write of $len bytes starting at $ga. The length is not decoration: with
+  ;; per-offset invalidation (docs/page-compile-design.md section 5) the retire
+  ;; walk needs the real extent, because it retires the blocks that cover the
+  ;; bytes named and nothing else. Passing only the first and last byte of a
+  ;; REP MOVS -- which is what the page-granularity design got away with, since
+  ;; two endpoints named every page in between as long as there were at most
+  ;; two -- would now leave every block in the middle live over rewritten bytes.
+  (func $invalidate_code_write (param $ga i32) (param $len i32)
+    ;; Invalidate decoded blocks only when writes can affect already-decoded
+    ;; executable bytes. RCT mutates large image-data buffers during startup;
+    ;; treating every image write as self-modifying code makes each byte/word
+    ;; update scan the whole block-cache index.
+    ;;
+    ;; $code_page_test answers that exactly for every guest page below
+    ;; $VIRTUAL_ALLOC_MIN: its bit is set by $cache_store, so it is on iff a
+    ;; block was decoded out of that page. It replaces the old code_start..end
+    ;; and generated_code_start..end span tests, which were both coarser (a
+    ;; span covers every data page between its ends — RCT executes and writes
+    ;; inside one CodeSeg section) and blind to code generated into ordinary
+    ;; heap memory, which lies in neither span. Storm's runtime blitters are
+    ;; exactly that case.
+    (if (i32.eqz (global.get $exe_size_of_image)) (then (return)))
+    ;; The hot case is a 1/2/4-byte write inside one page: answer it with the
+    ;; bitmap and decline without a call. A write that spans pages goes straight
+    ;; to the range walk, which tests each page's directory slot itself -- a
+    ;; first-page test would be wrong there, since the code could be in the last
+    ;; page of the span.
+    (if (i32.le_u (i32.add (i32.and (local.get $ga) (i32.const 0xFFF)) (local.get $len))
+                  (i32.const 4096))
+      (then
+        (if (i32.eqz (call $code_write_is_code (local.get $ga))) (then (return)))))
+    ;; Multi-page spans need every page in between retired, not just the two
+    ;; ends -- main fixed that with its own $invalidate_code_range, and the
+    ;; page-compile one below already walks page by page, so that fix arrives
+    ;; here as a property of the range walk rather than a second function.
+    (call $invalidate_code_range (local.get $ga) (local.get $len)))
   (func $gs32 (param $ga i32) (param $v i32)
     (local $wa i32) (local $end_wa i32)
     (local.set $wa (call $g2w (local.get $ga)))
-    (call $invalidate_code_write (local.get $ga))
+    (call $invalidate_code_write (local.get $ga) (i32.const 4))
     (if (i32.le_u (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFFC))
       (then (i32.store (local.get $wa) (local.get $v)) (return)))
     (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 3))))
     (if (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 3)))
       (then (i32.store (local.get $wa) (local.get $v)) (return)))
-    (call $invalidate_code_write (i32.add (local.get $ga) (i32.const 3)))
     (i32.store8 (local.get $wa) (local.get $v))
     (i32.store8
       (call $g2w (i32.add (local.get $ga) (i32.const 1)))
@@ -235,19 +488,18 @@
   (func $gs16 (param $ga i32) (param $v i32)
     (local $wa i32) (local $end_wa i32)
     (local.set $wa (call $g2w (local.get $ga)))
-    (call $invalidate_code_write (local.get $ga))
+    (call $invalidate_code_write (local.get $ga) (i32.const 2))
     (if (i32.ne (i32.and (local.get $ga) (i32.const 0xFFF)) (i32.const 0xFFF))
       (then (i32.store16 (local.get $wa) (local.get $v)) (return)))
     (local.set $end_wa (call $g2w (i32.add (local.get $ga) (i32.const 1))))
     (if (i32.eq (local.get $end_wa) (i32.add (local.get $wa) (i32.const 1)))
       (then (i32.store16 (local.get $wa) (local.get $v)) (return)))
-    (call $invalidate_code_write (i32.add (local.get $ga) (i32.const 1)))
     (i32.store8 (local.get $wa) (local.get $v))
     (i32.store8 (local.get $end_wa) (i32.shr_u (local.get $v) (i32.const 8))))
   (func $gs8 (param $ga i32) (param $v i32)
     (local $wa i32)
     (local.set $wa (call $g2w (local.get $ga)))
-    (call $invalidate_code_write (local.get $ga))
+    (call $invalidate_code_write (local.get $ga) (i32.const 1))
     (i32.store8 (local.get $wa) (local.get $v)))
 
   ;; ============================================================
@@ -289,11 +541,14 @@
       (then (global.get $flag_b))  ;; Shift: flag_b stores last bit shifted out
     (else (if (result i32) (i32.eq (global.get $flag_op) (i32.const 8))
       (then (global.get $flag_a))  ;; Raw mode: CF stored in flag_a
-    (else (i32.const 0))))))))))))))
+    (else (if (result i32) (i32.eq (global.get $flag_op) (i32.const 9))
+      (then (i32.and (global.get $flag_a) (i32.const 1)))  ;; Exact raw: packed CF
+    (else (i32.const 0))))))))))))))))
   (func $get_of (result i32)
     (local $sa i32) (local $sb i32) (local $sr i32)
     ;; Raw mode: OF stored in flag_b
-    (if (i32.eq (global.get $flag_op) (i32.const 8))
+    (if (i32.or (i32.eq (global.get $flag_op) (i32.const 8))
+                 (i32.eq (global.get $flag_op) (i32.const 9)))
       (then (return (global.get $flag_b))))
     ;; MUL/IMUL: OF = CF = flag_b
     (if (i32.eq (global.get $flag_op) (i32.const 6))
@@ -306,6 +561,16 @@
     (else (if (result i32) (i32.or (i32.eq (global.get $flag_op) (i32.const 2)) (i32.eq (global.get $flag_op) (i32.const 5)))
       (then (i32.and (i32.ne (local.get $sa) (local.get $sb)) (i32.eq (local.get $sb) (local.get $sr))))
     (else (i32.const 0))))))
+
+  ;; SAHF/POPF supply independently writable flags. In exact raw mode (9),
+  ;; flag_a packs CF in bit 0 and PF in bit 1. Other modes derive parity from
+  ;; the lazy arithmetic result as before.
+  (func $get_pf (result i32)
+    (if (result i32) (i32.eq (global.get $flag_op) (i32.const 9))
+      (then (i32.and (i32.shr_u (global.get $flag_a) (i32.const 1)) (i32.const 1)))
+      (else (i32.eqz (i32.and
+        (i32.popcnt (i32.and (global.get $flag_res) (i32.const 0xFF)))
+        (i32.const 1))))))
 
   ;; Evaluate condition code (same encoding as x86 Jcc lower nibble)
   ;; 0=O,1=NO,2=B,3=AE,4=Z,5=NZ,6=BE,7=A,8=S,9=NS,A=P,B=NP,C=L,D=GE,E=LE,F=G
@@ -322,9 +587,9 @@
     (if (i32.eq (local.get $cc) (i32.const 0x8)) (then (return (call $get_sf))))
     (if (i32.eq (local.get $cc) (i32.const 0x9)) (then (return (i32.eqz (call $get_sf)))))
     ;; 0xA=P (parity even): low byte of result has even number of set bits
-    (if (i32.eq (local.get $cc) (i32.const 0xA)) (then (return (i32.eqz (i32.and (i32.popcnt (i32.and (global.get $flag_res) (i32.const 0xFF))) (i32.const 1))))))
+    (if (i32.eq (local.get $cc) (i32.const 0xA)) (then (return (call $get_pf))))
     ;; 0xB=NP (parity odd)
-    (if (i32.eq (local.get $cc) (i32.const 0xB)) (then (return (i32.and (i32.popcnt (i32.and (global.get $flag_res) (i32.const 0xFF))) (i32.const 1)))))
+    (if (i32.eq (local.get $cc) (i32.const 0xB)) (then (return (i32.eqz (call $get_pf)))))
     ;; 0xC=L: SF!=OF
     (if (i32.eq (local.get $cc) (i32.const 0xC)) (then (return (i32.ne (call $get_sf) (call $get_of)))))
     ;; 0xD=GE: SF==OF
@@ -336,8 +601,13 @@
   )
 
   ;; Build EFLAGS from lazy state (for pushfd)
+  ;;
+  ;; PF comes from the same expression $eval_cc uses for JP/SETP, so a program
+  ;; that reads parity out of a pushed EFLAGS word agrees with one that branches
+  ;; on it. $eflags_extra carries every bit we do not model (IF, IOPL, NT, RF,
+  ;; AC, and bit 21 ID) straight back out of the last popfd -- see $load_eflags.
   (func $build_eflags (result i32)
-    (i32.or (i32.or (i32.or
+    (i32.or (i32.or (i32.or (i32.or
       (i32.shl (call $get_cf) (i32.const 0))
       (i32.const 2))  ;; bit 1 always set
       (i32.or
@@ -346,22 +616,38 @@
       (i32.or
         (i32.shl (global.get $df) (i32.const 10))
         (i32.shl (call $get_of) (i32.const 11))))
+      (i32.or
+        (i32.shl (call $get_pf) (i32.const 2))  ;; PF
+        (global.get $eflags_extra)))
   )
 
   ;; Restore flags from EFLAGS value (for popfd)
-  ;; Uses flag_op=8 (raw mode): CF/ZF/SF/OF stored directly in flag globals
+  ;; Uses flag_op=9 (exact raw mode): CF/PF/ZF/SF/OF are independent.
   (func $load_eflags (param $f i32)
+    ;; Everything outside the six bits we model is remembered verbatim, so
+    ;; pushfd hands it back. Dropping it used to break the standard CPUID probe
+    ;; (toggle bit 21, pushfd, compare): the toggle never survived, so the ID
+    ;; bit read back unchanged and the program concluded the CPU has no CPUID
+    ;; at all. Allegro does exactly this, which is why Liquid War never even
+    ;; executed the cpuid its binary contains, and so never installed its MMX
+    ;; blitters. Mask = ~(CF|bit1|PF|AF|ZF|SF|DF|OF).
+    (global.set $eflags_extra (i32.and (local.get $f) (i32.const 0xFFFFF328)))
     (global.set $df (i32.and (i32.shr_u (local.get $f) (i32.const 10)) (i32.const 1)))
-    (global.set $flag_op (i32.const 8))  ;; raw flags mode
-    ;; Store individual flag bits in globals: CF in flag_a, OF in flag_b, ZF/SF encoded in flag_res
-    (global.set $flag_a (i32.and (local.get $f) (i32.const 1)))  ;; CF = bit 0
+    (global.set $flag_op (i32.const 9))  ;; exact raw flags mode
+    ;; Pack CF/PF in flag_a, OF in flag_b, and encode ZF/SF in flag_res.
+    (global.set $flag_a (i32.or
+      (i32.and (local.get $f) (i32.const 1))
+      (i32.and (i32.shr_u (local.get $f) (i32.const 1)) (i32.const 2))))
     (global.set $flag_b (i32.and (i32.shr_u (local.get $f) (i32.const 11)) (i32.const 1)))  ;; OF = bit 11
     ;; flag_res: bit 31 = SF, zero iff ZF. This makes get_zf and get_sf work with flag_sign_shift=31.
+    ;;
+    ;; PF is carried independently in flag_a, so even synthetic combinations
+    ;; such as ZF=1/PF=0 round-trip exactly.
     (global.set $flag_sign_shift (i32.const 31))
     (if (i32.and (local.get $f) (i32.const 0x40))  ;; ZF = bit 6
       (then (global.set $flag_res (i32.const 0)))
       (else (if (i32.and (local.get $f) (i32.const 0x80))  ;; SF = bit 7
-        (then (global.set $flag_res (i32.const 0x80000000)))
+        (then (global.set $flag_res (i32.const 0x80000001)))
         (else (global.set $flag_res (i32.const 1))))))
   )
 

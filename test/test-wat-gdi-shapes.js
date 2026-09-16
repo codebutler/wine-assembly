@@ -6,16 +6,17 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 
 async function main() {
   const root = path.join(__dirname, '..');
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const base = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -321,6 +322,72 @@ async function main() {
     assert.deepStrictEqual(bytes.slice(t.bits, t.bits + t.stride * t.height), before);
   });
 
+  // The XOR round trip above cannot tell a dotted border from a filled block:
+  // any symmetric pattern toggles back. Pin which pixels are actually touched,
+  // so walking the border instead of testing every interior pixel stays
+  // observably identical. R2_NOT over a black surface gives white.
+  check('DrawFocusRect touches only the border, on alternating parity', () => {
+    const t = target(8, 6, 24, false);
+    bytes.fill(0, t.bits, t.bits + t.stride * t.height);
+    assert.strictEqual(wat.test_gdi_focus_rect_desc(t.hdc, t.desc, 1, 1, 7, 5), 1);
+    assert.deepStrictEqual(rows(t), [
+      '........',
+      '.W.W.W..',
+      '......W.',
+      '.W......',
+      '..W.W.W.',
+      '........',
+    ]);
+  });
+
+  // The caption gradient had no pixel oracle at all -- test-wat-window-frame
+  // samples one pixel of one column, which cannot tell a correct ramp from a
+  // ramp that is off by a column or a row. Pin the whole rect. The channel
+  // ramp is a + (b-a)*step/(span-1) with i32.div_s, so from COLORREF red to
+  // COLORREF blue over 5 columns the red channel truncates toward zero at
+  // 255/192/128/64/0 and blue rises 0/63/127/191/255. Every row of a
+  // horizontal gradient is identical by construction, which is what makes
+  // filling one row and repeating it sound -- and this is the test that would
+  // fail if a repeated row ever drifted by a column.
+  const RAMP = [0xFF0000, 0xC0003F, 0x80007F, 0x4000BF, 0x0000FF];
+
+  check('horizontal gradient ramps per column and repeats per row', () => {
+    const t = target(5, 3, 32, true);
+    assert.strictEqual(wat.test_gdi_gradient_fill_h_desc(
+      t.hdc, t.desc, 0, 0, 5, 3, 0x000000FF, 0x00FF0000), 1);
+    for (let y = 0; y < 3; y++) {
+      assert.deepStrictEqual(
+        Array.from({ length: 5 }, (_, x) => colorAt(t, x, y)), RAMP, `row ${y}`);
+    }
+  });
+
+  check('gradient columns keep their ramp position under a clip', () => {
+    const t = target(5, 3, 32, true, false);
+    const clip = wat.test_gdi_rgn_alloc_rect(1, 0, 4, 2);
+    assert.strictEqual(wat.test_gdi_dc_clip_select(t.hdc, clip), 2);
+    wat.test_gdi_rgn_delete(clip);
+    assert.strictEqual(wat.test_gdi_gradient_fill_h_desc(
+      t.hdc, t.desc, 0, 0, 5, 3, 0x000000FF, 0x00FF0000), 1);
+    // Columns 1..3 of rows 0..1 only, and each keeps the colour its x has in
+    // the full ramp: a clip narrows what is written, never what is computed.
+    assert.deepStrictEqual(Array.from({ length: 3 }, (_, y) =>
+      Array.from({ length: 5 }, (_, x) => colorAt(t, x, y))), [
+      [0, RAMP[1], RAMP[2], RAMP[3], 0],
+      [0, RAMP[1], RAMP[2], RAMP[3], 0],
+      [0, 0, 0, 0, 0],
+    ]);
+  });
+
+  check('gradient fills a bottom-up 24bpp surface', () => {
+    const t = target(5, 3, 24, false);
+    assert.strictEqual(wat.test_gdi_gradient_fill_h_desc(
+      t.hdc, t.desc, 0, 0, 5, 3, 0x000000FF, 0x00FF0000), 1);
+    for (let y = 0; y < 3; y++) {
+      assert.deepStrictEqual(
+        Array.from({ length: 5 }, (_, x) => colorAt(t, x, y)), RAMP, `row ${y}`);
+    }
+  });
+
   check('line uses integer Bresenham coverage and excludes its endpoint', () => {
     const t = target(9, 7);
     const red = object(1, 0, 1, 0x000000FF);
@@ -464,6 +531,97 @@ async function main() {
     assert.strictEqual(wat.test_gdi_ellipse_desc(
       t.hdc, t.desc, 0, 0, 8, 6, wide, 0x30015, 13), 0);
     assert.deepStrictEqual(rows(t), before);
+  });
+
+  // Two 9x7 fixtures cannot pin a scan converter: they are symmetric, small
+  // enough that the outline is nearly the whole shape, and identical under an
+  // off-by-one in either direction. Model the documented rule directly --
+  // pixel-center membership, and outline wherever one of the four neighbours
+  // is outside -- and compare every pixel of a range of shapes against it,
+  // including the flat and one-wide degenerate cases where a row's interior
+  // is empty and every covered pixel is outline.
+  function ellipseModel(w, h, left, top, right, bottom, hasPen) {
+    const cx2 = BigInt(left + right), cy2 = BigInt(top + bottom);
+    const ew = BigInt(right - left), eh = BigInt(bottom - top);
+    const inside = (x, y) => {
+      const dx = BigInt(2 * x + 1) - cx2, dy = BigInt(2 * y + 1) - cy2;
+      return dx * dx * eh * eh + dy * dy * ew * ew <= ew * ew * eh * eh;
+    };
+    return Array.from({ length: h }, (_, y) =>
+      Array.from({ length: w }, (_, x) => {
+        if (!inside(x, y)) return '.';
+        const edge = hasPen && !(inside(x - 1, y) && inside(x + 1, y)
+          && inside(x, y - 1) && inside(x, y + 1));
+        return edge ? 'R' : 'W';
+      }).join(''));
+  }
+
+  check('ellipse coverage matches the pixel-center model at many sizes', () => {
+    const redPen = object(1, 0, 1, 0x000000FF);
+    const whiteBrush = 0x30010;
+    [[21, 13, 0, 0, 21, 13], [21, 13, 2, 1, 19, 12], [16, 16, 0, 0, 16, 16],
+     [12, 9, 1, 1, 12, 8], [9, 5, 0, 0, 9, 1], [5, 9, 0, 0, 1, 9],
+     [7, 7, 1, 1, 4, 6], [4, 4, 0, 0, 4, 4], [8, 6, 0, 0, 3, 3],
+    ].forEach(([w, h, l, tp, r, btm]) => {
+      const t = target(w, h);
+      assert.strictEqual(wat.test_gdi_ellipse_desc(
+        t.hdc, t.desc, l, tp, r, btm, redPen, whiteBrush, 13), 1);
+      assert.deepStrictEqual(rows(t), ellipseModel(w, h, l, tp, r, btm, true),
+        `pen ellipse ${w}x${h} [${l},${tp},${r},${btm}]`);
+      const n = target(w, h);
+      assert.strictEqual(wat.test_gdi_ellipse_desc(
+        n.hdc, n.desc, l, tp, r, btm, 0x30018, whiteBrush, 13), 1);
+      assert.deepStrictEqual(rows(n), ellipseModel(w, h, l, tp, r, btm, false),
+        `null-pen ellipse ${w}x${h} [${l},${tp},${r},${btm}]`);
+    });
+  });
+
+  // Same argument as the ellipse model above: one 12x10 fixture with 6x6
+  // corners cannot distinguish a correct corner from one that is a column off,
+  // and the row-span rewrite has to hold for corners that are the whole rect,
+  // corners of one pixel, and every asymmetric size in between.
+  function roundRectModel(w, h, left, top, right, bottom, rw, rh, hasPen) {
+    const halfW = rw >>> 1, halfH = rh >>> 1;
+    const inside = (x, y) => {
+      if (x < left || x >= right || y < top || y >= bottom) return false;
+      if ((x >= left + halfW && x < right - halfW)
+        || (y >= top + halfH && y < bottom - halfH)) return true;
+      const cx2 = BigInt(x < left + halfW ? 2 * left + rw : 2 * right - rw);
+      const cy2 = BigInt(y < top + halfH ? 2 * top + rh : 2 * bottom - rh);
+      const dx = BigInt(2 * x + 1) - cx2, dy = BigInt(2 * y + 1) - cy2;
+      const ew = BigInt(rw), eh = BigInt(rh);
+      return dx * dx * eh * eh + dy * dy * ew * ew <= ew * ew * eh * eh;
+    };
+    return Array.from({ length: h }, (_, y) =>
+      Array.from({ length: w }, (_, x) => {
+        if (!inside(x, y)) return '.';
+        const edge = hasPen && !(inside(x - 1, y) && inside(x + 1, y)
+          && inside(x, y - 1) && inside(x, y + 1));
+        return edge ? 'R' : 'W';
+      }).join(''));
+  }
+
+  check('round rectangle coverage matches the corner-ellipse model', () => {
+    const redPen = object(1, 0, 1, 0x000000FF);
+    const whiteBrush = 0x30010;
+    [[20, 14, 0, 0, 20, 14, 8, 6], [20, 14, 1, 2, 19, 13, 9, 7],
+     [20, 14, 0, 0, 20, 14, 20, 14], [16, 16, 0, 0, 16, 16, 15, 3],
+     [16, 16, 0, 0, 16, 16, 3, 15], [12, 9, 1, 1, 12, 8, 4, 4],
+     [12, 9, 0, 0, 12, 9, 2, 2], [9, 9, 2, 2, 7, 7, 5, 5],
+    ].forEach(([w, h, l, tp, r, btm, rw, rh]) => {
+      const t = target(w, h);
+      assert.strictEqual(wat.test_gdi_round_rect_desc(
+        t.hdc, t.desc, l, tp, r, btm, rw, rh, redPen, whiteBrush, 13), 1);
+      assert.deepStrictEqual(rows(t),
+        roundRectModel(w, h, l, tp, r, btm, rw, rh, true),
+        `pen round rect ${w}x${h} [${l},${tp},${r},${btm}] corner ${rw}x${rh}`);
+      const n = target(w, h);
+      assert.strictEqual(wat.test_gdi_round_rect_desc(
+        n.hdc, n.desc, l, tp, r, btm, rw, rh, 0x30018, whiteBrush, 13), 1);
+      assert.deepStrictEqual(rows(n),
+        roundRectModel(w, h, l, tp, r, btm, rw, rh, false),
+        `null-pen round rect ${w}x${h} [${l},${tp},${r},${btm}] corner ${rw}x${rh}`);
+    });
   });
 
   check('round rectangle has integer corner coverage and no fringe colors', () => {

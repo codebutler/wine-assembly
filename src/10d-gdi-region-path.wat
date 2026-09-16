@@ -33,6 +33,55 @@
       (then (i32.load offset=24 (local.get $record)))
       (else (local.get $hrgn))))
 
+  ;; Once SetWindowRgn succeeds, USER owns the supplied HRGN until that
+  ;; window's region is replaced, cleared, or the window is destroyed. Keep
+  ;; that association on the canonical region record instead of maintaining a
+  ;; second handle table. Bits 16..24 of the generation word encode window
+  ;; slot + 1; the low byte remains the handle generation and bit 8 remains
+  ;; the lazy JS-mirror flag.
+  (global $GDI_RGN_WINDOW_OWNER_MASK i32 (i32.const 0x01FF0000))
+
+  (func $gdi_rgn_window_owner_set (param $hrgn i32) (param $slot i32) (result i32)
+    (local $record i32) (local $owner i32)
+    (local.set $record (call $gdi_rgn_record (local.get $hrgn)))
+    (if (i32.eqz (local.get $record)) (then (return (i32.const 0))))
+    (if (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS))
+      (then
+        (if (i32.ne (local.get $slot) (i32.const -1))
+          (then (return (i32.const 0))))))
+    (if (i32.ge_s (local.get $slot) (i32.const 0))
+      (then
+        (local.set $owner
+          (i32.shl (i32.add (local.get $slot) (i32.const 1)) (i32.const 16)))))
+    (i32.store offset=4 (local.get $record)
+      (i32.or
+        (i32.and (i32.load offset=4 (local.get $record))
+          (i32.xor (global.get $GDI_RGN_WINDOW_OWNER_MASK) (i32.const -1)))
+        (local.get $owner)))
+    (i32.const 1))
+
+  (func $gdi_rgn_window_owned_handle (param $slot i32) (result i32)
+    (local $i i32) (local $record i32) (local $owner i32)
+    (if (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS))
+      (then (return (i32.const 0))))
+    (local.set $owner
+      (i32.shl (i32.add (local.get $slot) (i32.const 1)) (i32.const 16)))
+    (block $missing (loop $scan
+      (br_if $missing (i32.ge_u (local.get $i) (i32.const 255)))
+      (local.set $record
+        (i32.add (global.get $GDI_REGION_TABLE)
+          (i32.mul (local.get $i) (i32.const 32))))
+      (if (i32.and
+            (i32.ne (i32.load (local.get $record)) (i32.const 0))
+            (i32.eq
+              (i32.and (i32.load offset=4 (local.get $record))
+                (global.get $GDI_RGN_WINDOW_OWNER_MASK))
+              (local.get $owner)))
+        (then (return (i32.load offset=24 (local.get $record)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
   (func $gdi_rgn_bands (param $record i32) (result i32)
     (i32.add (global.get $GDI_REGION_BANDS)
       (i32.mul
@@ -50,7 +99,8 @@
   ;; has actually asked JS to hold this region, and only then do mutations
   ;; propagate. Bit 8 of the record's generation word carries that state; every
   ;; reader of the generation masks it to 0xFF (see $gdi_rgn_record), so the
-  ;; high bits are ours, and a freshly allocated record has them clear.
+  ;; high bits are internal metadata, and a freshly allocated record has them
+  ;; clear. Bits 16..24 carry SetWindowRgn ownership as described above.
   (global $GDI_RGN_MIRRORED i32 (i32.const 0x100))
 
   (func $gdi_rgn_mirror_live (param $record i32) (result i32)
@@ -212,6 +262,62 @@
         (i64.mul (i64.mul (local.get $dy) (local.get $dy)) (i64.mul (local.get $w) (local.get $w))))
       (i64.mul (i64.mul (local.get $w) (local.get $w)) (i64.mul (local.get $h) (local.get $h)))))
 
+  ;; Where row $y of the ellipse inscribed in [$left,$right) starts and ends,
+  ;; as the half-open interval [$gdi_rgn_ellipse_row_x0, _x1); returns 0 when
+  ;; the row has no coverage. The row's covered set is contiguous because the
+  ;; implicit equation is monotone in |dx| for a fixed dy, which is what lets
+  ;; the two ends be bisected instead of scanned -- and testing the centre
+  ;; first is what decides "this row is empty" in one call.
+  ;;
+  ;; Both the region builder below and the raster's $gdi_ellipse_desc ask this
+  ;; question, and they must never answer it differently: an ellipse that
+  ;; fills one pixel wider than the region clipped to is a fringe the
+  ;; scan-converter can produce and no test would obviously name.
+  (global $gdi_rgn_ellipse_row_x0 (mut i32) (i32.const 0))
+  (global $gdi_rgn_ellipse_row_x1 (mut i32) (i32.const 0))
+
+  (func $gdi_rgn_ellipse_row_span (param $y i32) (param $left i32) (param $right i32)
+        (param $cx2 i32) (param $cy2 i32) (param $width i32) (param $height i32)
+        (result i32)
+    (local $lo i32) (local $hi i32) (local $mid i32) (local $center i32)
+    (global.set $gdi_rgn_ellipse_row_x0 (i32.const 0))
+    (global.set $gdi_rgn_ellipse_row_x1 (i32.const 0))
+    (local.set $center (i32.add (local.get $left)
+      (i32.shr_u (i32.sub (local.get $width) (i32.const 1)) (i32.const 1))))
+    (if (i32.eqz (call $gdi_rgn_ellipse_inside
+          (local.get $center) (local.get $y) (local.get $cx2) (local.get $cy2)
+          (local.get $width) (local.get $height)))
+      (then (return (i32.const 0))))
+    ;; First covered x on the monotonic false-to-true left half.
+    (local.set $lo (local.get $left))
+    (local.set $hi (local.get $center))
+    (block $left_done (loop $left_search
+      (br_if $left_done (i32.ge_s (local.get $lo) (local.get $hi)))
+      (local.set $mid (i32.add (local.get $lo)
+        (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
+      (if (call $gdi_rgn_ellipse_inside
+            (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
+            (local.get $width) (local.get $height))
+        (then (local.set $hi (local.get $mid)))
+        (else (local.set $lo (i32.add (local.get $mid) (i32.const 1)))))
+      (br $left_search)))
+    (global.set $gdi_rgn_ellipse_row_x0 (local.get $lo))
+    ;; First uncovered x after the right half of the covered span.
+    (local.set $lo (local.get $center))
+    (local.set $hi (local.get $right))
+    (block $right_done (loop $right_search
+      (br_if $right_done (i32.ge_s (local.get $lo) (local.get $hi)))
+      (local.set $mid (i32.add (local.get $lo)
+        (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
+      (if (call $gdi_rgn_ellipse_inside
+            (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
+            (local.get $width) (local.get $height))
+        (then (local.set $lo (i32.add (local.get $mid) (i32.const 1))))
+        (else (local.set $hi (local.get $mid))))
+      (br $right_search)))
+    (global.set $gdi_rgn_ellipse_row_x1 (local.get $lo))
+    (i32.const 1))
+
   (func $gdi_rgn_alloc_ellipse (param $left_in i32) (param $top_in i32) (param $right_in i32) (param $bottom_in i32) (result i32)
     (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
     (local $width i32) (local $height i32) (local $cx2 i32) (local $cy2 i32)
@@ -243,38 +349,13 @@
     (local.set $y (local.get $top))
     (block $rows_done (loop $rows
       (br_if $rows_done (i32.ge_s (local.get $y) (local.get $bottom)))
-      (if (call $gdi_rgn_ellipse_inside
-            (local.get $center) (local.get $y) (local.get $cx2) (local.get $cy2)
+      (if (call $gdi_rgn_ellipse_row_span
+            (local.get $y) (local.get $left) (local.get $right)
+            (local.get $cx2) (local.get $cy2)
             (local.get $width) (local.get $height))
         (then
-          ;; First covered x on the monotonic false-to-true left half.
-          (local.set $lo (local.get $left))
-          (local.set $hi (local.get $center))
-          (block $left_done (loop $left_search
-            (br_if $left_done (i32.ge_s (local.get $lo) (local.get $hi)))
-            (local.set $mid (i32.add (local.get $lo)
-              (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
-            (if (call $gdi_rgn_ellipse_inside
-                  (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
-                  (local.get $width) (local.get $height))
-              (then (local.set $hi (local.get $mid)))
-              (else (local.set $lo (i32.add (local.get $mid) (i32.const 1)))))
-            (br $left_search)))
-          (local.set $first (local.get $lo))
-          ;; First uncovered x after the right half of the covered span.
-          (local.set $lo (local.get $center))
-          (local.set $hi (local.get $right))
-          (block $right_done (loop $right_search
-            (br_if $right_done (i32.ge_s (local.get $lo) (local.get $hi)))
-            (local.set $mid (i32.add (local.get $lo)
-              (i32.shr_u (i32.sub (local.get $hi) (local.get $lo)) (i32.const 1))))
-            (if (call $gdi_rgn_ellipse_inside
-                  (local.get $mid) (local.get $y) (local.get $cx2) (local.get $cy2)
-                  (local.get $width) (local.get $height))
-              (then (local.set $lo (i32.add (local.get $mid) (i32.const 1))))
-              (else (local.set $hi (local.get $mid))))
-            (br $right_search)))
-          (local.set $last (local.get $lo))
+          (local.set $first (global.get $gdi_rgn_ellipse_row_x0))
+          (local.set $last (global.get $gdi_rgn_ellipse_row_x1))
           (if (i32.gt_u (local.get $count) (i32.const 0))
             (then (local.set $prev (i32.add (global.get $GDI_REGION_WORK)
               (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 4))))))
@@ -965,6 +1046,24 @@
             (return (i32.const 0))))))
     (local.get $result))
 
+  ;; One 16-byte slot per HDC with an open or closed path, found by linear scan
+  ;; on the handle at +0. The field names are the ones the comment above
+  ;; $gdi_dc_path_discard has always used; that comment stays, because it also
+  ;; documents the *buffer* this record points at, which is a different record
+  ;; with a different base and is not covered here.
+  ;;
+  ;; `buffer` is a GUEST address ($heap_alloc / $heap_free own it, and every
+  ;; reader passes it through $g2w) — unlike `region`, which is a GDI region
+  ;; handle. Both are plain i32, so nothing but this note distinguishes them.
+  ;;
+  ;; Emulator-private, not a guest ABI.
+  (layout GdiDcPath
+    (field handle i32)   ;; +0   the HDC this slot is for; 0 == free
+    (field region i32)   ;; +4   cached region handle, built from the path
+    (field state  i32)   ;; +8   0 == none, 1 == open (BeginPath), 2 == closed
+    (field buffer i32))  ;; +12  owned guest point buffer; ends at +16 ==
+                         ;;      $GDI_DC_PATH_STRIDE
+
   (func $gdi_dc_path_entry (param $hdc i32) (param $create i32) (result i32)
     (local $i i32) (local $entry i32) (local $empty i32)
     (block $done (loop $scan
@@ -1014,17 +1113,17 @@
     (memory.fill (local.get $buffer) (i32.const 0) (i32.const 208))
     (i32.store offset=4 (local.get $buffer) (i32.const 16))
     (i32.store offset=8 (local.get $buffer) (i32.const -1))
-    (i32.store offset=8 (local.get $entry) (i32.const 1))
-    (i32.store offset=12 (local.get $entry) (local.get $buffer_g))
+    (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 1))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $buffer_g))
     (i32.const 1))
 
   (func $gdi_dc_path_end (param $hdc i32) (result i32)
     (local $entry i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 1)))
+          (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1)))
       (then (return (i32.const 0))))
-    (i32.store offset=8 (local.get $entry) (i32.const 2))
+    (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 2))
     (i32.const 1))
 
   (func $gdi_dc_path_abort (param $hdc i32) (result i32)
@@ -1039,7 +1138,7 @@
     (local $entry i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (i32.and (i32.ne (local.get $entry) (i32.const 0))
-      (i32.eq (i32.load offset=8 (local.get $entry)) (i32.const 1))))
+      (i32.eq (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1))))
 
   (func $gdi_dc_path_reserve (param $entry i32) (param $additional i32) (result i32)
     (local $old_g i32) (local $old i32) (local $count i32) (local $capacity i32)
@@ -1128,7 +1227,7 @@
     (local $additional i64)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.or (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 1))
+          (i32.or (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1))
             (i32.or (i32.le_s (local.get $width) (i32.const 0))
               (i32.or (i32.le_s (local.get $height) (i32.const 0))
                 (i32.lt_u (local.get $stride) (local.get $width))))))
@@ -1179,16 +1278,16 @@
     (local $entry i32) (local $buffer i32) (local $index i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 1)))
+          (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1)))
       (then (return (i32.const 0))))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (local.set $index (i32.load (local.get $buffer)))
     (if (i32.eqz (call $gdi_dc_path_append_device (local.get $entry)
           (call $gdi_dc_clip_map_x (local.get $hdc) (local.get $x))
           (call $gdi_dc_clip_map_y (local.get $hdc) (local.get $y))
           (i32.const 6)))
       (then (return (i32.const 0))))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (i32.store offset=8 (local.get $buffer) (local.get $index))
     (i32.store offset=12 (local.get $buffer) (i32.const 0))
     (i32.const 1))
@@ -1199,9 +1298,9 @@
     (local $from_x i32) (local $from_y i32) (local $start_index i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 1)))
+          (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1)))
       (then (return (i32.const 0))))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (local.set $count (i32.load (local.get $buffer)))
     (if (i32.or (i32.eqz (local.get $count))
           (i32.ne (i32.and (i32.load offset=12 (local.get $buffer)) (i32.const 1)) (i32.const 0)))
@@ -1214,14 +1313,14 @@
               (call $gdi_dc_clip_map_y (local.get $hdc) (local.get $from_y))
               (i32.const 6)))
           (then (return (i32.const 0))))
-        (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+        (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
         (i32.store offset=8 (local.get $buffer) (local.get $start_index))))
     (if (i32.eqz (call $gdi_dc_path_append_device (local.get $entry)
           (call $gdi_dc_clip_map_x (local.get $hdc) (local.get $x))
           (call $gdi_dc_clip_map_y (local.get $hdc) (local.get $y))
           (i32.const 2)))
       (then (return (i32.const 0))))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (i32.store offset=12 (local.get $buffer) (i32.const 0))
     (i32.const 1))
 
@@ -1229,9 +1328,9 @@
     (local $entry i32) (local $buffer i32) (local $count i32) (local $last i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 1)))
+          (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1)))
       (then (return (i32.const 0))))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (local.set $count (i32.load (local.get $buffer)))
     (if (i32.eqz (local.get $count)) (then (return (i32.const 0))))
     (local.set $last (i32.add (i32.add (local.get $buffer) (i32.const 16))
@@ -1256,7 +1355,7 @@
     (local.set $additional (local.get $count))
     (if (local.get $from_current)
       (then
-        (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+        (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
         (if (i32.or (i32.eqz (i32.load (local.get $buffer)))
               (i32.ne (i32.and (i32.load offset=12 (local.get $buffer)) (i32.const 1)) (i32.const 0)))
           (then (local.set $additional (i32.add (local.get $additional) (i32.const 1)))))))
@@ -1313,7 +1412,7 @@
     (local.set $additional (local.get $count))
     (if (local.get $from_current)
       (then
-        (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+        (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
         (if (i32.or (i32.eqz (i32.load (local.get $buffer)))
               (i32.ne (i32.and (i32.load offset=12 (local.get $buffer)) (i32.const 1)) (i32.const 0)))
           (then (local.set $additional (i32.add (local.get $additional) (i32.const 1)))))))
@@ -1321,7 +1420,7 @@
       (then (return (i32.const 0))))
     (if (local.get $from_current)
       (then
-        (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+        (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
         (if (i32.or (i32.eqz (i32.load (local.get $buffer)))
               (i32.ne (i32.and (i32.load offset=12 (local.get $buffer)) (i32.const 1)) (i32.const 0)))
           (then
@@ -1351,7 +1450,7 @@
         (then (return (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $curves)))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (i32.store offset=12 (local.get $buffer) (i32.const 0))
     (if (local.get $from_current)
       (then
@@ -1398,7 +1497,7 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))))
       (br $validate)))
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (local.set $needs_start (i32.or (i32.eqz (i32.load (local.get $buffer)))
       (i32.ne (i32.and (i32.load offset=12 (local.get $buffer)) (i32.const 1)) (i32.const 0))))
     (local.set $i (i32.const 0))
@@ -1442,7 +1541,7 @@
                     (i32.load (local.get $point)) (i32.load offset=4 (local.get $point))))
                 (then (return (i32.const 0)))))
             (else
-              (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+              (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
               (if (i32.or (i32.eqz (i32.load (local.get $buffer)))
                     (i32.ne (i32.and (i32.load offset=12 (local.get $buffer)) (i32.const 1)) (i32.const 0)))
                 (then
@@ -1471,7 +1570,7 @@
         (i32.load offset=4 (local.get $point)) (i32.const 0)))
       (if (i32.ne (i32.and (local.get $type) (i32.const 1)) (i32.const 0))
         (then
-          (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+          (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
           (local.set $last (i32.add (i32.add (local.get $buffer) (i32.const 16))
             (i32.mul (i32.sub (i32.load (local.get $buffer)) (i32.const 1)) (i32.const 12))))
           (i32.store offset=8 (local.get $last)
@@ -1536,7 +1635,7 @@
         (then (return (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $points_loop)))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (local.set $last (i32.add (i32.add (local.get $buffer) (i32.const 16))
       (i32.mul (i32.sub (i32.load (local.get $buffer)) (i32.const 1)) (i32.const 12))))
     (i32.store offset=8 (local.get $last)
@@ -1563,7 +1662,7 @@
     (drop (call $gdi_dc_path_append_device (local.get $entry)
       (call $gdi_dc_clip_map_x (local.get $hdc) (local.get $left))
       (call $gdi_dc_clip_map_y (local.get $hdc) (local.get $bottom)) (i32.const 2)))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (local.set $last (i32.add (i32.add (local.get $buffer) (i32.const 16))
       (i32.mul (i32.sub (i32.load (local.get $buffer)) (i32.const 1)) (i32.const 12))))
     (i32.store offset=8 (local.get $last)
@@ -1860,7 +1959,7 @@
     (if (i32.eqz (call $gdi_dc_path_reserve (local.get $entry)
           (select (i32.const 17) (i32.const 16) (local.get $to_mode))))
       (then (return (i32.const 0))))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (if (local.get $to_mode)
       (then
         (local.set $count (i32.load (local.get $buffer)))
@@ -1939,7 +2038,7 @@
       (local.set $part_start (local.get $part_end))
       (local.set $first (i32.const 0))
       (br $parts_loop)))
-    (local.set $buffer (call $g2w (i32.load offset=12 (local.get $entry))))
+    (local.set $buffer (call $g2w (load.field.memarg GdiDcPath buffer (local.get $entry))))
     (i32.store offset=12 (local.get $buffer) (i32.const 0))
     (if (local.get $to_mode)
       (then
@@ -2006,18 +2105,18 @@
     (local $old_buffer i32) (local $temp_g i32) (local $temp i32) (local $ok i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 1)))
     (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
-    (if (i32.eq (i32.load offset=8 (local.get $entry)) (i32.const 1))
+    (if (i32.eq (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1))
       (then (return (call $gdi_dc_path_record_arc_shape
         (local.get $hdc) (local.get $left) (local.get $top)
         (local.get $right) (local.get $bottom)
         (local.get $start_x) (local.get $start_y)
         (local.get $end_x) (local.get $end_y) (local.get $mode)))))
-    (local.set $old_region (i32.load offset=4 (local.get $entry)))
-    (local.set $old_state (i32.load offset=8 (local.get $entry)))
-    (local.set $old_buffer (i32.load offset=12 (local.get $entry)))
-    (i32.store offset=4 (local.get $entry) (i32.const 0))
-    (i32.store offset=8 (local.get $entry) (i32.const 0))
-    (i32.store offset=12 (local.get $entry) (i32.const 0))
+    (local.set $old_region (load.field.memarg GdiDcPath region (local.get $entry)))
+    (local.set $old_state (load.field.memarg GdiDcPath state (local.get $entry)))
+    (local.set $old_buffer (load.field.memarg GdiDcPath buffer (local.get $entry)))
+    (store.field.memarg GdiDcPath region (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (i32.const 0))
     (local.set $temp_g (call $heap_alloc (i32.const 208)))
     (if (local.get $temp_g)
       (then
@@ -2025,23 +2124,23 @@
         (memory.fill (local.get $temp) (i32.const 0) (i32.const 208))
         (i32.store offset=4 (local.get $temp) (i32.const 16))
         (i32.store offset=8 (local.get $temp) (i32.const -1))
-        (i32.store offset=8 (local.get $entry) (i32.const 1))
-        (i32.store offset=12 (local.get $entry) (local.get $temp_g))
+        (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 1))
+        (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $temp_g))
         (if (call $gdi_dc_path_record_arc_shape
               (local.get $hdc) (local.get $left) (local.get $top)
               (local.get $right) (local.get $bottom)
               (local.get $start_x) (local.get $start_y)
               (local.get $end_x) (local.get $end_y) (local.get $mode))
           (then
-            (i32.store offset=8 (local.get $entry) (i32.const 2))
+            (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 2))
             (local.set $ok (call $gdi_dc_path_stroke_and_fill (local.get $hdc)))))))
     ;; A successful consumer already discarded the temporary path. Clean up
     ;; partial construction on failure before restoring the retained path.
-    (if (i32.load offset=12 (local.get $entry))
+    (if (load.field.memarg GdiDcPath buffer (local.get $entry))
       (then (call $gdi_dc_path_discard (local.get $entry))))
-    (i32.store offset=4 (local.get $entry) (local.get $old_region))
-    (i32.store offset=8 (local.get $entry) (local.get $old_state))
-    (i32.store offset=12 (local.get $entry) (local.get $old_buffer))
+    (store.field.memarg GdiDcPath region (local.get $entry) (local.get $old_region))
+    (store.field.memarg GdiDcPath state (local.get $entry) (local.get $old_state))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $old_buffer))
     (local.get $ok))
 
   ;; AngleArc is defined in logical polar coordinates and always connects the
@@ -2144,16 +2243,16 @@
     (local $old_buffer i32) (local $temp_g i32) (local $temp i32) (local $ok i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 1)))
     (if (i32.eqz (local.get $entry)) (then (return (i32.const 0))))
-    (if (i32.eq (i32.load offset=8 (local.get $entry)) (i32.const 1))
+    (if (i32.eq (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 1))
       (then (return (call $gdi_dc_path_record_angle_arc
         (local.get $hdc) (local.get $center_x) (local.get $center_y)
         (local.get $radius) (local.get $start_degrees) (local.get $sweep_degrees)))))
-    (local.set $old_region (i32.load offset=4 (local.get $entry)))
-    (local.set $old_state (i32.load offset=8 (local.get $entry)))
-    (local.set $old_buffer (i32.load offset=12 (local.get $entry)))
-    (i32.store offset=4 (local.get $entry) (i32.const 0))
-    (i32.store offset=8 (local.get $entry) (i32.const 0))
-    (i32.store offset=12 (local.get $entry) (i32.const 0))
+    (local.set $old_region (load.field.memarg GdiDcPath region (local.get $entry)))
+    (local.set $old_state (load.field.memarg GdiDcPath state (local.get $entry)))
+    (local.set $old_buffer (load.field.memarg GdiDcPath buffer (local.get $entry)))
+    (store.field.memarg GdiDcPath region (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (i32.const 0))
     (local.set $temp_g (call $heap_alloc (i32.const 208)))
     (if (local.get $temp_g)
       (then
@@ -2161,19 +2260,19 @@
         (memory.fill (local.get $temp) (i32.const 0) (i32.const 208))
         (i32.store offset=4 (local.get $temp) (i32.const 16))
         (i32.store offset=8 (local.get $temp) (i32.const -1))
-        (i32.store offset=8 (local.get $entry) (i32.const 1))
-        (i32.store offset=12 (local.get $entry) (local.get $temp_g))
+        (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 1))
+        (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $temp_g))
         (if (call $gdi_dc_path_record_angle_arc
               (local.get $hdc) (local.get $center_x) (local.get $center_y)
               (local.get $radius) (local.get $start_degrees) (local.get $sweep_degrees))
           (then
-            (i32.store offset=8 (local.get $entry) (i32.const 2))
+            (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 2))
             (local.set $ok (call $gdi_dc_path_stroke (local.get $hdc)))))))
-    (if (i32.load offset=12 (local.get $entry))
+    (if (load.field.memarg GdiDcPath buffer (local.get $entry))
       (then (call $gdi_dc_path_discard (local.get $entry))))
-    (i32.store offset=4 (local.get $entry) (local.get $old_region))
-    (i32.store offset=8 (local.get $entry) (local.get $old_state))
-    (i32.store offset=12 (local.get $entry) (local.get $old_buffer))
+    (store.field.memarg GdiDcPath region (local.get $entry) (local.get $old_region))
+    (store.field.memarg GdiDcPath state (local.get $entry) (local.get $old_state))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $old_buffer))
     (local.get $ok))
 
   ;; A half-pixel device-space tolerance keeps the raster result stable while
@@ -2423,11 +2522,11 @@
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (local.set $flat_g (call $gdi_dc_path_flatten_copy (local.get $entry)))
     (if (i32.eqz (local.get $flat_g)) (then (return (i32.const 0))))
-    (local.set $old_g (i32.load offset=12 (local.get $entry)))
-    (local.set $region (i32.load offset=4 (local.get $entry)))
+    (local.set $old_g (load.field.memarg GdiDcPath buffer (local.get $entry)))
+    (local.set $region (load.field.memarg GdiDcPath region (local.get $entry)))
     (if (local.get $region) (then (drop (call $gdi_rgn_delete (local.get $region)))))
-    (i32.store offset=4 (local.get $entry) (i32.const 0))
-    (i32.store offset=12 (local.get $entry) (local.get $flat_g))
+    (store.field.memarg GdiDcPath region (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $flat_g))
     (call $heap_free (local.get $old_g))
     (i32.const 1))
 
@@ -2797,7 +2896,7 @@
     (local $mx f64) (local $my f64) (local $t f64) (local $dx f64) (local $dy f64)
     (if (i32.eq (local.get $join) (i32.const 0))
       (then (call $gdi_path_widen_disk (local.get $mask) (local.get $mask_w) (local.get $mask_h)
-        (local.get $origin_x) (local.get $origin_y) (local.get $bx) (local.get $by) (local.get $width)))
+        (local.get $origin_x) (local.get $origin_y) (local.get $bx) (local.get $by) (local.get $width))
         (return)))
     (local.set $ux (f64.convert_i32_s (i32.sub (local.get $bx) (local.get $ax))))
     (local.set $uy (f64.convert_i32_s (i32.sub (local.get $by) (local.get $ay))))
@@ -2868,24 +2967,24 @@
     (local $out i32) (local $old_g i32) (local $old_region i32) (local $ok i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 2)))
+          (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 2)))
       (then (return (i32.const 0))))
     (local.set $pen (call $gdi_dc_get_field
       (local.get $hdc) (i32.const 4) (i32.const 0x30017)))
     (local.set $pen_record (call $gdi_object_record (local.get $pen)))
     (if (i32.or (i32.eqz (local.get $pen_record))
-          (i32.or (i32.ne (i32.load offset=4 (local.get $pen_record)) (i32.const 1))
-            (i32.ne (i32.and (i32.load offset=20 (local.get $pen_record)) (i32.const 1))
+          (i32.or (i32.ne (load.field.memarg GdiObject type (local.get $pen_record)) (i32.const 1))
+            (i32.ne (i32.and (load.field.memarg GdiPen flags (local.get $pen_record)) (i32.const 1))
               (i32.const 0))))
       (then (return (i32.const 0))))
     (local.set $width (call $gdi_object_width (local.get $pen)))
-    (local.set $pen_flags (i32.load offset=20 (local.get $pen_record)))
+    (local.set $pen_flags (load.field.memarg GdiPen flags (local.get $pen_record)))
     (local.set $geometric (i32.and (local.get $pen_flags) (i32.const 0x00010000)))
     (local.set $cap (i32.and (local.get $pen_flags) (i32.const 0x00000F00)))
     (local.set $join (i32.and (local.get $pen_flags) (i32.const 0x0000F000)))
     (if (i32.or (i32.gt_u (local.get $width) (i32.const 64))
           (i32.and (i32.le_u (local.get $width) (i32.const 1))
-            (i32.eqz (i32.and (i32.load offset=20 (local.get $pen_record))
+            (i32.eqz (i32.and (load.field.memarg GdiPen flags (local.get $pen_record))
               (i32.const 0x00010000)))))
       (then (return (i32.const 0))))
     (local.set $flat_g (call $gdi_dc_path_flatten_copy (local.get $entry)))
@@ -3143,11 +3242,11 @@
             (i32.store offset=44 (local.get $out) (i32.const 3))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
             (br $write)))
-          (local.set $old_region (i32.load offset=4 (local.get $entry)))
-          (local.set $old_g (i32.load offset=12 (local.get $entry)))
-          (i32.store offset=4 (local.get $entry) (i32.const 0))
-          (i32.store offset=8 (local.get $entry) (i32.const 2))
-          (i32.store offset=12 (local.get $entry) (local.get $new_g))
+          (local.set $old_region (load.field.memarg GdiDcPath region (local.get $entry)))
+          (local.set $old_g (load.field.memarg GdiDcPath buffer (local.get $entry)))
+          (store.field.memarg GdiDcPath region (local.get $entry) (i32.const 0))
+          (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 2))
+          (store.field.memarg GdiDcPath buffer (local.get $entry) (local.get $new_g))
           (local.set $new_g (i32.const 0))
           (if (local.get $old_region) (then (drop (call $gdi_rgn_delete (local.get $old_region)))))
           (if (local.get $old_g) (then (call $heap_free (local.get $old_g))))
@@ -3373,10 +3472,10 @@
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (local.set $region (call $gdi_dc_path_materialize (local.get $hdc) (local.get $entry)))
     (if (i32.eqz (local.get $region)) (then (return (i32.const 0))))
-    (local.set $buffer_g (i32.load offset=12 (local.get $entry)))
-    (i32.store offset=4 (local.get $entry) (i32.const 0))
-    (i32.store offset=8 (local.get $entry) (i32.const 0))
-    (i32.store offset=12 (local.get $entry) (i32.const 0))
+    (local.set $buffer_g (load.field.memarg GdiDcPath buffer (local.get $entry)))
+    (store.field.memarg GdiDcPath region (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 0))
+    (store.field.memarg GdiDcPath buffer (local.get $entry) (i32.const 0))
     (if (local.get $buffer_g) (then (call $heap_free (local.get $buffer_g))))
     (local.get $region))
 
@@ -3388,9 +3487,9 @@
     (local $vx i32) (local $vy i32) (local $vex i32) (local $vey i32)
     (local.set $entry (call $gdi_dc_path_entry (local.get $hdc) (i32.const 0)))
     (if (i32.or (i32.eqz (local.get $entry))
-          (i32.ne (i32.load offset=8 (local.get $entry)) (i32.const 2)))
+          (i32.ne (load.field.memarg GdiDcPath state (local.get $entry)) (i32.const 2)))
       (then (return (i32.const -1))))
-    (local.set $buffer_g (i32.load offset=12 (local.get $entry)))
+    (local.set $buffer_g (load.field.memarg GdiDcPath buffer (local.get $entry)))
     (if (i32.eqz (local.get $buffer_g)) (then (return (i32.const -1))))
     (local.set $buffer (call $g2w (local.get $buffer_g)))
     (local.set $count (i32.load (local.get $buffer)))
@@ -3447,8 +3546,8 @@
         (drop (call $gdi_rgn_delete (local.get $copy)))
         (return (i32.const 0))))
     (call $gdi_dc_path_discard (local.get $entry))
-    (i32.store offset=4 (local.get $entry) (local.get $copy))
-    (i32.store offset=8 (local.get $entry) (i32.const 2))
+    (store.field.memarg GdiDcPath region (local.get $entry) (local.get $copy))
+    (store.field.memarg GdiDcPath state (local.get $entry) (i32.const 2))
     (i32.const 1))
 
   (func $gdi_dc_path_select_clip (param $hdc i32) (param $mode i32) (result i32)
@@ -3671,7 +3770,7 @@
     (local $entry i32) (local $record i32) (local $size i32) (local $clip i32)
     ;; Surface bounds are always part of the effective clipping region.
     (local.set $size (call $gdi_dc_target_size (local.get $hdc)))
-    (if (i32.and (local.get $size) (i32.eqz (i32.and
+    (if (i32.and (i32.ne (local.get $size) (i32.const 0)) (i32.eqz (i32.and
           (i32.and (i32.ge_s (local.get $x) (i32.const 0))
             (i32.lt_s (local.get $x) (i32.and (local.get $size) (i32.const 0xFFFF))))
           (i32.and (i32.ge_s (local.get $y) (i32.const 0))
@@ -3745,12 +3844,196 @@
 
   ;; ---- WAT-owned GDI objects and DC state ------------------------------
   ;; Object records use 48 bytes. Types are 1=pen, 2=brush, 3=bitmap,
-  ;; 4=font, 5=palette, 6=WMF, 7=EMF. Font records keep height@8, weight@12,
-  ;; italic@16, optional FNT strike@24, and a WAT-owned guest face pointer@28.
-  ;; Bitmap fields are width@8, height@12, bpp@16, flags@20 (DIB/top-down),
-  ;; bitsWa@24, stride@28, paletteWa@32, paletteCount@36, surfaceId@40.
-  ;; Palette fields are count@8, capacity@12, version@16, flags@20,
-  ;; PALETTEENTRY storage WA@24. Palette storage is always WAT-owned.
+  ;; 4=font, 5=palette, 6=WMF, 7=EMF.
+  ;;
+  ;; THIS RECORD IS A DISCRIMINATED UNION, NOT A STRUCT. Only +0 (handle) and
+  ;; +4 (type) mean the same thing for every object. Everything from +8 up is
+  ;; reinterpreted per type, so there is no single (layout GdiObject) that is
+  ;; right — one would compile perfectly and be wrong at two thirds of its
+  ;; sites, which is the exact silent-plausible failure the layout migration
+  ;; exists to kill (docs/watx-layout-migration-design.md §5.4, §9).
+  ;;
+  ;; +24 alone carries FIVE unrelated meanings, and two of them are spelled
+  ;; 1000 lines apart in one file:
+  ;;     bitmap   +24 = pixel bits, a WASM address   (09a4:2286, w2g'd out as
+  ;;                                                  CreateDIBSection's ppvBits)
+  ;;     font     +24 = optional installed FNT strike (09a4:1264, "a raster face
+  ;;                                                  has no sfnt tables")
+  ;;     palette  +24 = PALETTEENTRY storage, a WA    (10e:2585)
+  ;;     metafile +24 = record bits, a WA             (10e:2592)
+  ;;     brush    +24 = the owned pattern bitmap's    (10a:906 store,
+  ;;                    HANDLE, not a pointer          10e:2597 / 10g:742 loads)
+  ;; $gdi_object_delete_full (10e:2569) is the union's own dispatch and frees a
+  ;; different +24 per type; it is the best single piece of evidence for all of
+  ;; the above.
+  ;;
+  ;; So the record is declared as ONE (layout-union ...) with six variants. That
+  ;; spelling is not a tidier way to write the seven separate layouts it
+  ;; replaces -- it moves three invariants from "a gate reads the source back
+  ;; and checks them" to "the compiler cannot express their violation":
+  ;;
+  ;;   * every variant carries handle@0 and type@4, because the (prefix ...) is
+  ;;     written ONCE and prepended to each variant at identical offsets;
+  ;;   * every variant is the same 48 bytes, because the compiler pads them all
+  ;;     to the widest, so (size-of ...) pins one table stride whichever variant
+  ;;     a site reaches for;
+  ;;   * a site holding the union reaches ONLY handle and type. Everything above
+  ;;     the prefix belongs to a variant, and naming it through the union is an
+  ;;     unknown-field compile error that says which variant owns it and what to
+  ;;     (cast ptr<...>) to get there.
+  ;;
+  ;; (tag type GdiType) names the discriminant, so the tag VALUES are declared
+  ;; here beside the variants instead of being copied into the gate by hand --
+  ;; and with --checked-casts a (cast ptr<GdiBitmap> ...) becomes a real
+  ;; load-tag-and-trap. See docs/watx-typed-pointers-design.md.
+  ;;
+  ;; What the compiler still cannot decide is WHICH variant a given site holds:
+  ;; that comes from the type check already in scope (`i32.eq (load +4) N`, or a
+  ;; named predicate like $gdi_bitmap_record_valid, which is 10a:12's `+4 == 3`),
+  ;; or from the producer that made the handle. tools/union-gate.js holds that
+  ;; site->variant attribution and machine-checks it against the union table the
+  ;; compiler lowers from this declaration (see §6.1/§6.2).
+
+  ;; The discriminant at +4. Written by $gdi_object_alloc and tested by every
+  ;; `+4 == N` guard in this family.
+  (enum GdiType
+    (PEN     1)
+    (BRUSH   2)
+    (BITMAP  3)
+    (FONT    4)
+    (PALETTE 5)
+    (WMF     6)
+    (EMF     7))
+
+  ;; A site that reads +0 or +4 has not yet decided what kind of object this is
+  ;; -- it is usually the very read that decides ($gdi_object_type returns +4;
+  ;; $gdi_object_delete_full dispatches on it). Naming one of the six variants at
+  ;; such a site would claim a type the code does not have yet, so those 24 sites
+  ;; spell the union name itself: handle and type are the two words every variant
+  ;; agrees on, and reading further through GdiObject is a compile error.
+  (layout-union GdiObject
+    (tag type GdiType)
+    (prefix
+      (field handle  i32)        ;; +0
+      (field type    i32))       ;; +4   1..7, the discriminant
+
+  ;; Pen (type 1). flags@20 is a rich bitfield, not a boolean: bit0 forces
+  ;; PS_NULL (set at creation as `style == 5`, read 10d:2878 / 10f:1852),
+  ;; 0x00000F00 is the end cap (10g:1745), 0x0000F000 the join (10d:2885), and
+  ;; 0x00010000 marks a geometric pen (10d:2883, 10g:1695/1740/3312).
+  ;; 0x000F0F00 is echoed straight into the LOGPEN style word at 10f:807.
+    (variant GdiPen (tag-value PEN)
+      (field style     i32)      ;; +8   PS_*
+      (field width     i32)      ;; +12  lopnWidth.x  (10e:390 $gdi_object_width)
+      (field color     i32)      ;; +16  masked 0x03FFFFFF — keeps the
+                                 ;;      PALETTEINDEX/PALETTERGB qualifier byte
+      (field flags     i32))     ;; +20  see above
+                                 ;; +24..+44 unused by pens; the compiler pads
+
+  ;; Brush (type 2). Identical to a pen through +8, +16 and +20 — which is what
+  ;; lets $gdi_object_write_pen_brush (10f:806/807) read style and flags BEFORE
+  ;; it branches on the type. The two diverge at +12 only (width vs hatch), and
+  ;; a brush alone owns +24.
+    (variant GdiBrush (tag-value BRUSH)
+      (field style           i32) ;; +8   BS_*  (0 solid, 2 hatched, 3/6 pattern)
+      (field hatch           i32) ;; +12  lbHatch  (10f:814, 10g:856)
+      (field color           i32) ;; +16  masked 0x03FFFFFF, as for a pen
+      (field flags           i32) ;; +20
+      (field pattern_bitmap  i32)) ;; +24  a HANDLE, live only when style is 3 or
+                                 ;;      6; written 10a:906, read 10g:742/791,
+                                 ;;      recursively deleted at 10e:2597
+
+  ;; Bitmap (type 3). flags@20 bits: 0 = the bits are a public DIB section
+  ;; (10e:418, 10g:4042), 1 = top-down (10e:318 forwards it as (flags>>1)&1),
+  ;; 2 = this record owns the +24 block and delete must dib_free_wasm it
+  ;; (10e:2603), 4 (0x10) = the palette holds DIB_PAL_COLORS indices
+  ;; (set 10a:681, read 10g:808).
+  ;; palette@32 has a nested discriminant of its own: when palette_count == 3 it
+  ;; is not an RGBQUAD table but a three-DWORD channel-mask triplet for a 16bpp
+  ;; DIB (10g:3941+3943, 10g:5821+5822).
+  ;; +40 is the record's OWN handle, not an opaque surface id: $gdi_bitmap_alloc
+  ;; stores $handle there (10e:314) and the raster layer round-trips it back
+  ;; into an object record through desc+68 (10g:5752 -> 10g:3690 etc).
+    (variant GdiBitmap (tag-value BITMAP)
+      (field width         i32)  ;; +8
+      (field height        i32)  ;; +12
+      (field bpp           i32)  ;; +16
+      (field flags         i32)  ;; +20  see above
+      (field bits          i32)  ;; +24  WASM address of the pixels
+      (field stride        i32)  ;; +28
+      (field palette       i32)  ;; +32  RGBQUAD table, or a mask triplet
+      (field palette_count i32)  ;; +36
+      (field self_handle   i32)  ;; +40  == handle; the desc+68 round trip
+      ;; +44 is padding, but it is the WIDEST variant that sets the union's
+      ;; stride, and $GDI_OBJECT_STRIDE is 48. Named `reserved` rather than
+      ;; dropped so this variant ends at 48 and the whole union does: without
+      ;; it every variant would be 44 and the table stride would no longer
+      ;; match the global. The gate refuses any site that reads a `reserved*`.
+      (field reserved      i32)) ;; +44
+
+  ;; Font (type 4). flags@20 bit0 means "a bitmap strike is bound at +24" —
+  ;; a completely different meaning from the same bit on a bitmap. +28 is a
+  ;; GUEST pointer (heap_free'd by $gdi_object_delete_full), unlike every other +24/+28 in
+  ;; this union, which are WASM addresses.
+  ;; width@32, pitch_and_family@36 and charset@40 were kept out of the allocator's four
+  ;; positional fields on purpose; the dedicated setters fill them after
+  ;; $gdi_font_create. They alias the
+  ;; bitmap's palette/palette_count, which is harmless because the types are
+  ;; disjoint but is exactly why one shared layout cannot work.
+    (variant GdiFont (tag-value FONT)
+      (field height            i32) ;; +8   lfHeight
+      (field weight            i32) ;; +12  lfWeight
+      (field italic            i32) ;; +16  lfItalic & 1
+      (field flags             i32) ;; +20  bit0 = strike bound at +24
+      (field strike            i32) ;; +24  installed FNT strike, or 0
+      (field face              i32) ;; +28  GUEST pointer to the face name
+      (field width             i32) ;; +32  lfWidth
+      (field pitch_and_family  i32) ;; +36  lfPitchAndFamily, & 0xFF
+      (field charset           i32)) ;; +40  requested lfCharSet, & 0xFF
+                                  ;; +44 padded by the compiler
+
+  ;; Palette (type 5). Storage at +24 is always WAT-owned, which is what
+  ;; flags@20 bit2 records. capacity@12 and version@16 are written by
+  ;; $gdi_palette_alloc (10e:77) and read by NOTHING in the tree — named, not
+  ;; dropped, because the allocator's positional store still writes them.
+  ;; count@8 is mutated after creation by $gdi_palette_resize (10e:172).
+    (variant GdiPalette (tag-value PALETTE)
+      (field count     i32)      ;; +8
+      (field capacity  i32)      ;; +12  write-only
+      (field version   i32)      ;; +16  write-only
+      (field flags     i32)      ;; +20  always 4 = owns the +24 block
+      (field storage   i32))     ;; +24  PALETTEENTRY storage, a WA
+                                 ;; +28..+44 padded by the compiler
+
+  ;; Metafile (types 6 = WMF and 7 = EMF share one shape). $gdi_metafile_create
+  ;; allocates as (type, size, 0, 0, 4) at 10e:452, so +12 and +16 are written
+  ;; zero and never read by anything — reserved, not fields.
+    (variant GdiMetafile (tag-value WMF EMF)
+      (field size         i32)   ;; +8
+      (field reserved_12  i32)   ;; +12  written 0, never read
+      (field reserved_16  i32)   ;; +16  written 0, never read
+      (field flags        i32)   ;; +20  always 4 = owns the +24 block
+      (field bits         i32))) ;; +24  record bits, a WA
+                                 ;; +28..+44 padded by the compiler
+
+  ;; The pen-or-brush projection. $gdi_object_write_pen_brush (10f:806/807),
+  ;; $gdi_object_style (10e:376) and $gdi_object_color (10e:370) genuinely serve
+  ;; both types through one load, so they name ONLY the three fields pen and
+  ;; brush agree on. +12 is deliberately absent: it is the one word the two
+  ;; disagree about (pen width vs brush hatch), and a site that wants it must
+  ;; first say which type it has.
+  ;;
+  ;; A (view ...) does not lay anything out -- it ADOPTS its targets' offsets,
+  ;; and the compiler refuses it if GdiPen and GdiBrush ever stop agreeing on
+  ;; one of these three. That is the whole invariant this declaration used to
+  ;; assert by repeating the offsets and hoping they stayed in step.
+  ;;
+  ;; handle and type are deliberately NOT projected here: a +0/+4 site has not
+  ;; decided a type, and must spell the union itself.
+  (view GdiPenBrush (of GdiPen GdiBrush)
+    (field style  i32)           ;; +8
+    (field color  i32)           ;; +16
+    (field flags  i32))          ;; +20
   ;; Two positive hints, not one: a blit resolves the source handle and the
   ;; destination handle alternately for every single pixel, and a single hint
   ;; thrashes between them so neither ever hits. The two $gdi_object_miss slots

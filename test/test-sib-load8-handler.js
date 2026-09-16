@@ -6,6 +6,8 @@ const childProcess = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 async function main() {
   const root = path.join(__dirname, '..');
@@ -37,7 +39,7 @@ async function main() {
   new Uint8Array(memory.buffer).set(exe, e.get_staging());
   e.load_pe(exe.length);
   const imageBase = e.get_image_base() >>> 0;
-  const g2w = guest => (guest - imageBase + 0x12000) >>> 0;
+  const g2w = guest => RegionMap.g2w(guest, imageBase);
   const mem = new Uint8Array(memory.buffer);
   const dv = new DataView(memory.buffer);
   const le32 = value => [value, value >>> 8, value >>> 16, value >>> 24].map(v => v & 0xff);
@@ -113,6 +115,45 @@ async function main() {
     'fused indexed dword loads must use the full SIB effective address');
   assert.strictEqual(e.get_edx() & 0xff, 1,
     'fused indexed dword loads must preserve flags');
+
+  const sibAddCode = imageBase + 0x1800;
+  dv.setUint32(g2w(scratch + 0x40), 0x20, true);
+  counts = run(sibAddCode, [
+    0x03, 0x14, 0x45, ...le32(scratch), // add edx,[eax*2+scratch]
+    0x03, 0x2c, 0x45, ...le32(scratch), // add ebp,[eax*2+scratch]
+    0x03, 0x34, 0x45, ...le32(scratch), // add esi,[eax*2+scratch]
+  ], () => {
+    e.set_eax(0x20);
+    e.set_edx(1);
+    e.set_ebp(2);
+    e.set_esi(3);
+  });
+  assert.strictEqual(e.get_edx() >>> 0, 0x21,
+    'specialized EDX SIB ADD must load [EAX*2+disp]');
+  assert.strictEqual(e.get_ebp() >>> 0, 0x22,
+    'specialized EBP SIB ADD must load [EAX*2+disp]');
+  assert.strictEqual(e.get_esi() >>> 0, 0x23,
+    'specialized ESI SIB ADD must load [EAX*2+disp]');
+  assert.strictEqual(counts[444] >>> 0, 1, 'EDX form must use H444');
+  assert.strictEqual(counts[445] >>> 0, 1, 'EBP form must use H445');
+  assert.strictEqual(counts[446] >>> 0, 1, 'ESI form must use H446');
+  assert.strictEqual(counts[149] >>> 0, 0,
+    'specialized SIB ADDs must remove the generic EA dispatch');
+  assert.strictEqual(counts[48] >>> 0, 0,
+    'specialized SIB ADDs must remove the generic ALU dispatch');
+
+  counts = run(sibAddCode + 0x30, [
+    0x03, 0x14, 0x4d, ...le32(scratch), // add edx,[ecx*2+scratch]
+  ], () => {
+    e.set_ecx(0x20);
+    e.set_edx(1);
+  });
+  assert.strictEqual(e.get_edx() >>> 0, 0x21,
+    'non-EAX SIB ADD retains generic semantics');
+  assert.strictEqual(counts[149] >>> 0, 1,
+    'non-EAX SIB ADD must retain the generic EA handler');
+  assert.strictEqual(counts[48] >>> 0, 1,
+    'non-EAX SIB ADD must retain the generic ALU handler');
 
   const loadTestCode = imageBase + 0x1260;
   dv.setUint32(g2w(scratch + 0x40), 0x80000010, true);

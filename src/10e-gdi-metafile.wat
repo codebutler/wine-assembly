@@ -8,7 +8,7 @@
     (local $record i32)
     (local.set $record (call $gdi_object_record (local.get $handle)))
     (if (i32.and (i32.ne (local.get $record) (i32.const 0))
-          (i32.eq (i32.load offset=4 (local.get $record)) (i32.const 5)))
+          (i32.eq (load.field.memarg GdiObject type (local.get $record)) (i32.const 5)))
       (then (return (local.get $record))))
     (i32.const 0))
 
@@ -213,7 +213,7 @@
   ;; canonical hot DC record, so no separate raster mirror remains.
   (func $gdi_dc_meta_entry (param $hdc i32) (param $create i32) (result i32)
     (local $i i32) (local $p i32) (local $empty i32)
-    (local $meta_g i32)
+    (local $meta_g i32) (local $meta_wa i32)
     (if (i32.eqz (local.get $hdc)) (then (return (i32.const 0))))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $GDI_DC_SAVE_COUNT)))
@@ -234,13 +234,13 @@
       (then (return (i32.const 0))))
     (local.set $meta_g (call $heap_alloc (i32.const 44)))
     (if (i32.eqz (local.get $meta_g)) (then (return (i32.const 0))))
-    (memory.fill (call $g2w (local.get $meta_g)) (i32.const 0) (i32.const 44))
-    (i32.store offset=8 (call $g2w (local.get $meta_g)) (i32.const 1))
-    (i32.store offset=12 (call $g2w (local.get $meta_g)) (i32.const 1))
-    (i32.store offset=28 (call $g2w (local.get $meta_g)) (i32.const 1))
+    (local.set $meta_wa (call $g2w (local.get $meta_g))) (memory.fill (local.get $meta_wa) (i32.const 0) (i32.const 44))
+    (i32.store offset=8 (local.get $meta_wa) (i32.const 1))
+    (i32.store offset=12 (local.get $meta_wa) (i32.const 1))
+    (i32.store offset=28 (local.get $meta_wa) (i32.const 1))
     (i32.store (local.get $empty) (local.get $hdc))
     (i32.store offset=4 (local.get $empty) (local.get $meta_g))
-    (call $g2w (local.get $meta_g)))
+    (local.get $meta_wa))
 
   (func $gdi_dc_selected_palette (param $hdc i32) (result i32)
     (local $meta i32) (local $palette i32)
@@ -307,11 +307,11 @@
       (local.get $width) (local.get $height) (local.get $bpp) (local.get $flags)))
     (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
     (local.set $p (call $gdi_object_record (local.get $handle)))
-    (i32.store offset=24 (local.get $p) (local.get $bits))
-    (i32.store offset=28 (local.get $p) (local.get $stride))
-    (i32.store offset=32 (local.get $p) (local.get $palette))
-    (i32.store offset=36 (local.get $p) (local.get $palette_count))
-    (i32.store offset=40 (local.get $p) (local.get $handle))
+    (store.field.memarg GdiBitmap bits (local.get $p) (local.get $bits))
+    (store.field.memarg GdiBitmap stride (local.get $p) (local.get $stride))
+    (store.field.memarg GdiBitmap palette (local.get $p) (local.get $palette))
+    (store.field.memarg GdiBitmap palette_count (local.get $p) (local.get $palette_count))
+    (store.field.memarg GdiBitmap self_handle (local.get $p) (local.get $handle))
     (if (i32.eqz (call $host_gdi_surface_create
           (local.get $handle) (local.get $width) (local.get $height)
           (local.get $bpp) (local.get $bits) (local.get $stride)
@@ -352,7 +352,7 @@
           (then (return (i32.const 5))))
         (return (i32.const 4))))
     (local.set $p (call $gdi_object_record (local.get $handle)))
-    (if (local.get $p) (then (return (i32.load offset=4 (local.get $p)))))
+    (if (local.get $p) (then (return (load.field.memarg GdiObject type (local.get $p)))))
     (i32.const 0))
 
   (func $gdi_stock_object_color (param $handle i32) (result i32)
@@ -367,13 +367,13 @@
   (func $gdi_object_color (param $handle i32) (result i32)
     (local $p i32)
     (local.set $p (call $gdi_object_record (local.get $handle)))
-    (if (local.get $p) (then (return (i32.load offset=16 (local.get $p)))))
+    (if (local.get $p) (then (return (load.field.memarg GdiPenBrush color (local.get $p)))))
     (call $gdi_stock_object_color (local.get $handle)))
 
   (func $gdi_object_style (param $handle i32) (result i32)
     (local $p i32)
     (local.set $p (call $gdi_object_record (local.get $handle)))
-    (if (local.get $p) (then (return (i32.load offset=8 (local.get $p)))))
+    (if (local.get $p) (then (return (load.field.memarg GdiPenBrush style (local.get $p)))))
     ;; Stock NULL_BRUSH is BS_NULL/BS_HOLLOW.  Returning BS_SOLID here makes
     ;; GetObject callers clone it as a painting brush; VB1 does exactly that
     ;; while creating a PictureBox AutoRedraw DC.
@@ -387,7 +387,7 @@
     (local.set $p (call $gdi_object_record (local.get $handle)))
     (if (local.get $p)
       (then
-        (local.set $width (i32.load offset=12 (local.get $p)))
+        (local.set $width (load.field.memarg GdiPen width (local.get $p)))
         (if (i32.le_s (local.get $width) (i32.const 0))
           (then (local.set $width (i32.const 1))))
         (return (local.get $width))))
@@ -406,25 +406,25 @@
     (local $p i32)
     (local.set $p (call $gdi_object_record (local.get $handle)))
     (if (i32.and (i32.ne (local.get $p) (i32.const 0))
-          (i32.eq (i32.load offset=4 (local.get $p)) (i32.const 3)))
-      (then (return (i32.load offset=24 (local.get $p)))))
+          (i32.eq (load.field.memarg GdiObject type (local.get $p)) (i32.const 3)))
+      (then (return (load.field.memarg GdiBitmap bits (local.get $p)))))
     (i32.const 0))
 
   (func $gdi_bitmap_public_bits (param $handle i32) (result i32)
     (local $p i32)
     (local.set $p (call $gdi_object_record (local.get $handle)))
     (if (i32.and (i32.ne (local.get $p) (i32.const 0))
-          (i32.and (i32.eq (i32.load offset=4 (local.get $p)) (i32.const 3))
-            (i32.ne (i32.and (i32.load offset=20 (local.get $p)) (i32.const 1)) (i32.const 0))))
-      (then (return (i32.load offset=24 (local.get $p)))))
+          (i32.and (i32.eq (load.field.memarg GdiObject type (local.get $p)) (i32.const 3))
+            (i32.ne (i32.and (load.field.memarg GdiBitmap flags (local.get $p)) (i32.const 1)) (i32.const 0))))
+      (then (return (load.field.memarg GdiBitmap bits (local.get $p)))))
     (i32.const 0))
 
   (func $gdi_bitmap_bpp (param $handle i32) (result i32)
     (local $p i32)
     (local.set $p (call $gdi_object_record (local.get $handle)))
     (if (i32.and (i32.ne (local.get $p) (i32.const 0))
-          (i32.eq (i32.load offset=4 (local.get $p)) (i32.const 3)))
-      (then (return (i32.load offset=16 (local.get $p)))))
+          (i32.eq (load.field.memarg GdiObject type (local.get $p)) (i32.const 3)))
+      (then (return (load.field.memarg GdiBitmap bpp (local.get $p)))))
     (i32.const 0))
 
   ;; Opaque classic/enhanced metafile byte objects. Recording/playback support
@@ -454,14 +454,14 @@
     (if (i32.eqz (local.get $handle))
       (then (call $dib_free_wasm (local.get $bits)) (return (i32.const 0))))
     (local.set $record (call $gdi_object_record (local.get $handle)))
-    (i32.store offset=24 (local.get $record) (local.get $bits))
+    (store.field.memarg GdiMetafile bits (local.get $record) (local.get $bits))
     (local.get $handle))
 
   (func $gdi_metafile_record (param $handle i32) (param $type i32) (result i32)
     (local $record i32)
     (local.set $record (call $gdi_object_record (local.get $handle)))
     (if (result i32) (i32.and (i32.ne (local.get $record) (i32.const 0))
-          (i32.eq (i32.load offset=4 (local.get $record)) (local.get $type)))
+          (i32.eq (load.field.memarg GdiObject type (local.get $record)) (local.get $type)))
       (then (local.get $record)) (else (i32.const 0))))
 
   (func $gdi_metafile_bits (param $handle i32) (param $type i32)
@@ -532,9 +532,9 @@
       (i32.const 640) (i32.const 480) (i32.const 0)))
     (if (i32.eqz (local.get $bitmap)) (then (return (i32.const 0))))
     (local.set $record (call $gdi_object_record (local.get $bitmap)))
-    (memory.fill (i32.load offset=24 (local.get $record)) (i32.const 0xFF)
-      (i32.mul (i32.load offset=28 (local.get $record))
-        (i32.load offset=12 (local.get $record))))
+    (memory.fill (load.field.memarg GdiBitmap bits (local.get $record)) (i32.const 0xFF)
+      (i32.mul (load.field.memarg GdiBitmap stride (local.get $record))
+        (load.field.memarg GdiBitmap height (local.get $record))))
     (drop (call $host_gdi_surface_upload (local.get $bitmap)
       (i32.const 0) (i32.const 0) (i32.const 640) (i32.const 480)))
     (local.set $dc (call $gdi_dc_alloc))
@@ -848,6 +848,8 @@
     (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
     (call $gdi_font_set_width (local.get $handle)
       (i32.load16_s offset=8 (local.get $record)))
+    (call $gdi_font_set_charset (local.get $handle)
+      (i32.load8_u offset=19 (local.get $record)))
     (call $gdi_bitmap_font_bind (local.get $handle) (global.get $TEXT_SCRATCH))
     (local.get $handle))
 
@@ -2573,28 +2575,28 @@
     (if (i32.eqz (local.get $p))
       (then (return (select (i32.const 1) (i32.const 0)
         (i32.ne (call $gdi_object_type (local.get $handle)) (i32.const 0))))))
-    (local.set $type (i32.load offset=4 (local.get $p)))
+    (local.set $type (load.field.memarg GdiObject type (local.get $p)))
     (if (i32.eq (local.get $type) (i32.const 3))
       (then
-        (local.set $bits (i32.load offset=24 (local.get $p)))
-        (local.set $flags (i32.load offset=20 (local.get $p)))
-        (local.set $surface (i32.load offset=40 (local.get $p)))
+        (local.set $bits (load.field.memarg GdiBitmap bits (local.get $p)))
+        (local.set $flags (load.field.memarg GdiBitmap flags (local.get $p)))
+        (local.set $surface (load.field.memarg GdiBitmap self_handle (local.get $p)))
         (drop (call $host_gdi_surface_delete (local.get $surface)))))
     (if (i32.eq (local.get $type) (i32.const 5))
       (then
-        (local.set $bits (i32.load offset=24 (local.get $p)))
-        (local.set $flags (i32.load offset=20 (local.get $p)))))
+        (local.set $bits (load.field.memarg GdiPalette storage (local.get $p)))
+        (local.set $flags (load.field.memarg GdiPalette flags (local.get $p)))))
     (if (i32.eq (local.get $type) (i32.const 4))
-      (then (local.set $font_face_guest (i32.load offset=28 (local.get $p)))))
+      (then (local.set $font_face_guest (load.field.memarg GdiFont face (local.get $p)))))
     (if (i32.or (i32.eq (local.get $type) (i32.const 6))
           (i32.eq (local.get $type) (i32.const 7)))
       (then
-        (local.set $bits (i32.load offset=24 (local.get $p)))
-        (local.set $flags (i32.load offset=20 (local.get $p)))))
-    (if (i32.and (i32.eq (i32.load offset=4 (local.get $p)) (i32.const 2))
-          (i32.or (i32.eq (i32.load offset=8 (local.get $p)) (i32.const 3))
-            (i32.eq (i32.load offset=8 (local.get $p)) (i32.const 6))))
-      (then (local.set $owned_bitmap (i32.load offset=24 (local.get $p)))))
+        (local.set $bits (load.field.memarg GdiMetafile bits (local.get $p)))
+        (local.set $flags (load.field.memarg GdiMetafile flags (local.get $p)))))
+    (if (i32.and (i32.eq (load.field.memarg GdiObject type (local.get $p)) (i32.const 2))
+          (i32.or (i32.eq (load.field.memarg GdiBrush style (local.get $p)) (i32.const 3))
+            (i32.eq (load.field.memarg GdiBrush style (local.get $p)) (i32.const 6))))
+      (then (local.set $owned_bitmap (load.field.memarg GdiBrush pattern_bitmap (local.get $p)))))
     (drop (call $gdi_object_delete (local.get $handle)))
     (if (local.get $font_face_guest)
       (then (call $heap_free (local.get $font_face_guest))))
@@ -2621,10 +2623,42 @@
         (local.set $bits_ga (call $dib_alloc (i32.wrap_i64 (local.get $size64))))
         (if (i32.eqz (local.get $bits_ga)) (then (return (i32.const 0))))
         (local.set $bits (call $g2w (local.get $bits_ga)))))
+    ;; Flags bit1 (0x2, top-down) always; bit2 (0x4, "this record owns its +24
+    ;; block") only when we allocated that block ourselves.
+    ;;
+    ;; A caller-supplied $backing belongs to the caller. The host import that
+    ;; passes one says so -- gdi_create_compat_bitmap(hdc, w, h, backingWa)
+    ;; "registers a DDB whose private canonical pixels live at backingWa" -- and
+    ;; the failure path immediately below already encodes exactly this contract,
+    ;; freeing only when (i32.eqz $backing). Claiming ownership unconditionally
+    ;; contradicted the line under it: $gdi_object_delete_full (10e:2603) reads
+    ;; bit2 and would hand a run we never allocated to $dib_free_wasm.
+    ;;
+    ;; No caller reaches that today -- all six pass backing 0 (10e:531,
+    ;; 10f:908/953/1121, and both $host_gdi_create_compat_bitmap sites at
+    ;; 09a7:139 and 09a9:387), and no JS calls the import -- so nothing has been
+    ;; double-freed. It is fixed rather than left as a comment because the way
+    ;; it would have surfaced is silence: $dib_free_wasm range-checks the arena
+    ;; and returns without complaint for a pointer outside it, so a guest-heap
+    ;; or host-owned buffer would be released with no trap, no log and no
+    ;; failing test -- and an in-arena one would be quietly handed back for
+    ;; reuse while the original owner kept writing to it.
     (local.set $handle (call $gdi_bitmap_alloc
-      (local.get $width) (local.get $height) (i32.const 32) (i32.const 6)
+      (local.get $width) (local.get $height) (i32.const 32)
+      (select (i32.const 6) (i32.const 2) (i32.eqz (local.get $backing)))
       (local.get $bits) (i32.mul (local.get $width) (i32.const 4))
       (i32.const 0) (i32.const 0)))
     (if (i32.and (i32.eqz (local.get $handle)) (i32.eqz (local.get $backing)))
       (then (call $dib_free_wasm (local.get $bits))))
     (local.get $handle))
+
+  ;; Test hooks for the ownership contract above. $gdi_create_compat_bitmap_internal
+  ;; has no export of its own, and its only non-zero-$backing entry point is a
+  ;; host import with no JS caller, so the adopting path is otherwise
+  ;; unreachable from a test. $gdi_object_delete_full is the reader of bit2 and
+  ;; the only thing that can turn the flag into a free.
+  (func (export "test_gdi_create_compat_bitmap") (param i32 i32 i32) (result i32)
+    (call $gdi_create_compat_bitmap_internal
+      (local.get 0) (local.get 1) (local.get 2)))
+  (func (export "test_gdi_object_delete_full") (param i32) (result i32)
+    (call $gdi_object_delete_full (local.get 0)))

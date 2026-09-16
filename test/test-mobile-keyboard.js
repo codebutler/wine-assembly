@@ -48,6 +48,36 @@ assert.strictEqual(
   keyboardProxyAction({ hasCaret: true, proxyFocused: false, gesture: false, caretIsNew: false }),
   'none', 'a caret the user already dismissed the keyboard on stays dismissed');
 
+assert.strictEqual(keyboardProxyAction({ hasCaret: true, proxyFocused: true,
+  gesture: true, focusNeedsGesture: true, keyboardVisible: false }), 'refocus',
+  'late dialog focus without an iOS keyboard can be retried by tapping');
+assert.strictEqual(keyboardProxyAction({ hasCaret: true, proxyFocused: true,
+  gesture: true, focusNeedsGesture: true, keyboardVisible: true }), 'none',
+  'late focus that already opened a keyboard must not restart it');
+assert.strictEqual(keyboardProxyAction({ hasCaret: true, proxyFocused: true,
+  gesture: false, focusNeedsGesture: true }), 'none',
+  'the caret polling timer must not keep refocusing');
+
+// The manual keyboard. A fullscreen DirectDraw game -- Diablo II asking for a
+// character name, StarCraft's chat line, a Half-Life console -- draws its own
+// text field and never calls CreateCaret, so hasCaret is false for the entire
+// time the user is trying to type. The on-screen pill says so directly, and it
+// has to beat the caret rule in BOTH directions: without the override the
+// 500ms resync blurs the proxy immediately after the pill focused it, and the
+// keyboard drops back down on its own a moment after it appears.
+assert.strictEqual(
+  keyboardProxyAction({ hasCaret: false, proxyFocused: false, manual: true }), 'focus',
+  'the manual toggle opens the keyboard with no caret anywhere');
+assert.strictEqual(
+  keyboardProxyAction({ hasCaret: false, proxyFocused: true, manual: true }), 'none',
+  'and the resync leaves it alone instead of blurring it a moment later');
+assert.strictEqual(
+  keyboardProxyAction({ hasCaret: false, proxyFocused: true, manual: false }), 'blur',
+  'turning the toggle back off lets the ordinary no-caret rule close it');
+assert.strictEqual(
+  keyboardProxyAction({ hasCaret: true, proxyFocused: true, manual: false }), 'none',
+  'but a guest text field keeps its own keyboard when the toggle goes off');
+
 // --- telling a keyboard from everything else that shrinks the viewport ---
 
 assert.strictEqual(
@@ -166,6 +196,46 @@ assert.strictEqual(canvasShift({ ...PHONE, focus: { top: 100, bottom: 700 } }), 
   // callback that fires on every poll would re-run the whole resize path four
   // times a second for as long as the keyboard is up.
   assert.strictEqual(changes.length, 2, 'only real transitions are reported');
+}
+
+{
+  // reset(): the shift has to be droppable without waiting for a viewport
+  // event. The element being translated is #screen-wrap, and the desktop icon
+  // grid lives inside it -- so a shift that outlives the app it was computed
+  // for carries the only launcher a phone has off the top of the screen, and
+  // the page reads as a bare teal dead end. update() cannot undo it at that
+  // moment: the keyboard is still on its way down and the viewport still
+  // reports it as up.
+  const style = {};
+  const classes = new Set();
+  const vp = { height: 508, offsetTop: 0, scale: 1, addEventListener() {} };
+  const rect = { top: 0, bottom: 844, height: 844 };
+  const changes = [];
+  const controller = createKeyboardController({
+    viewport: vp,
+    document: {
+      documentElement: { clientHeight: 844 },
+      body: { classList: { toggle: (n, on) => (on ? classes.add(n) : classes.delete(n)),
+                           remove: (n) => classes.delete(n) } },
+    },
+    element: () => ({ style, getBoundingClientRect: () => rect }),
+    focusRect: () => ({ top: 700, bottom: 713 }),
+    onChange: (info) => changes.push(info),
+  });
+
+  controller.update();
+  assert.strictEqual(controller.inset(), 336, 'keyboard is up');
+  assert.strictEqual(style.transform, 'translateY(-213px)', 'and the wrap is shifted');
+
+  // The viewport is left saying the keyboard is still up -- that is the whole
+  // point: reset() must not consult it.
+  controller.reset();
+  assert.strictEqual(controller.inset(), 0, 'reset drops the inset');
+  assert.strictEqual(controller.shift(), 0, 'reset drops the shift');
+  assert.strictEqual(controller.frozenHeight(), 0, 'reset releases the frozen size');
+  assert.strictEqual(style.transform, '', 'and the icon grid comes back on screen');
+  assert.ok(!classes.has('keyboard-open'), 'the page is told the keyboard is down');
+  assert.strictEqual(changes.length, 2, 'reset reports the transition it made');
 }
 
 console.log('PASS  on-screen keyboard lifts the guest instead of resizing it');

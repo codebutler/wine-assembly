@@ -9,12 +9,16 @@ const extraWat = String.raw`
     (global.set $DX_VTBL_DINPUT (local.get $vtbl)))
   (func (export "test_dinput8_call")
       (param $iid i32) (param $out i32) (param $outer i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_DirectInput8Create
       (i32.const 0x400000) (i32.const 0x800) (local.get $iid)
       (local.get $out) (local.get $outer) (i32.const 0))
-    (global.get $eax))
-  (func (export "test_dinput8_esp") (result i32) (global.get $esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_dinput8_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
+  (func (export "test_dinput8_refcount") (param $obj i32) (result i32)
+    (load.field DxObject refcount (call $dx_from_this (local.get $obj))))
+  (func (export "test_dinput8_release") (param $obj i32) (result i32)
+    (call $dx_com_release_basic (local.get $obj)))
 `;
 
 (async () => {
@@ -35,15 +39,35 @@ const extraWat = String.raw`
   assert(object, 'DirectInput8Create should publish an interface pointer');
   assert.strictEqual(wat.guest_read32(object) >>> 0, vtable,
     'created interface should use the DirectInput vtable');
+  assert.strictEqual(wat.test_dinput8_refcount(object), 1,
+    'created interface transfers one caller-owned reference');
   assert.strictEqual(wat.test_dinput8_esp() >>> 0, 0x30018,
     'DirectInput8Create pops its return address and five stdcall arguments');
+  assert.strictEqual(wat.test_dinput8_release(object), 0,
+    'created IDirectInput8A releases cleanly');
+
+  wat.guest_write32(iid, 0xBF798031);
+  assert.strictEqual(wat.test_dinput8_call(iid, out, 0) >>> 0, 0,
+    'complete IDirectInput8W creation should succeed');
+  assert.strictEqual(wat.test_dinput8_release(wat.guest_read32(out) >>> 0), 0,
+    'created IDirectInput8W releases cleanly');
 
   wat.guest_write32(out, 0xdeadbeef);
-  wat.guest_write32(iid, 0x12345678);
+  wat.guest_write32(iid, 0xBF798030);
+  wat.guest_write32(iid + 4, 0);
+  wat.guest_write32(iid + 8, 0);
+  wat.guest_write32(iid + 12, 0);
   assert.strictEqual(wat.test_dinput8_call(iid, out, 0) >>> 0, 0x80004002,
-    'unsupported interfaces should return E_NOINTERFACE');
+    'same-Data1 IID forgery should return E_NOINTERFACE');
   assert.strictEqual(wat.guest_read32(out) >>> 0, 0,
     'interface failure should clear the output pointer');
+
+  wat.guest_write32(iid, 0x89521360);
+  wat.guest_write32(iid + 4, 0x11CFAA8A);
+  wat.guest_write32(iid + 8, 0x4544C7BF);
+  wat.guest_write32(iid + 12, 0x00005453);
+  assert.strictEqual(wat.test_dinput8_call(iid, out, 0) >>> 0, 0x80004002,
+    'DirectInput8 class rejects legacy IDirectInput interfaces');
 
   wat.guest_write32(out, 0xdeadbeef);
   assert.strictEqual(wat.test_dinput8_call(iid, out, 1) >>> 0, 0x80040110,

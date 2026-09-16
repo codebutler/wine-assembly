@@ -3,8 +3,8 @@
 This is an intentionally separate pool of possible future Wine-Assembly
 fixtures. The general survey is not referenced by `test/run-all.sh`,
 `test/test-all-exes.js`, the normal browser desktop, or deployment tooling.
-DX-Ball is the first exception: its dedicated installer-plus-game gate is in
-the canonical end-to-end matrix, while its package remains local and
+DX-Ball and Snood are exceptions: their dedicated installer-plus-game gates
+are in the canonical end-to-end matrix, while their packages remain local and
 gitignored.
 
 The manifest records exact versions, source pages, package hashes, executable
@@ -76,8 +76,20 @@ open 'http://127.0.0.1:8000/index.html?debug'
 The `DX-Ball 1.09` option is deliberately debug-only. The prepared files stay
 under gitignored `test/binaries/candidates/` and are not part of deployment.
 
-The runner rejects DOS, NE, and non-x86 files before invoking Wine-Assembly;
-only PE32/i386 executables enter the survey. It compiles one immutable WAT
+Snood has the same local-only boundary and a dedicated gate that runs its
+original bootstrap, preserves the temporary Inno child before bootstrap
+cleanup, completes that child installer inside Wine Assembly, and then proves
+interactive gameplay plus DirectSound output:
+
+```sh
+node test/test-snood-candidate.js
+```
+
+Set `KEEP_SNOOD_CANDIDATE_TMP=1` to retain its emulator-installed VFS. Set
+`PREPARE_SNOOD_DEBUG_WEB=1` to prepare the ignored `Snood 2.2W` debug app.
+
+The runner rejects DOS and non-x86 files before invoking Wine-Assembly;
+Win16 NE and PE32/i386 executables enter the survey. It compiles one immutable WAT
 snapshot and reuses that snapshot for every local candidate. The default
 survey reports `READY`, `BLOCKED`, `SKIP`, or `HARNESS` and exits successfully
 when applications merely hit expected compatibility gaps. `--strict` turns
@@ -94,3 +106,10 @@ freeware and shareware remain local research fixtures, and Dependency Walker
 is explicitly internal-only because its upstream terms forbid bundling it with
 another product. None of these files should enter public deployment merely
 because the fetcher can recover them.
+
+The two Civilization II entries are commercial-retail compatibility fixtures,
+not redistributable game packages. Their pinned Redump-oriented Archive.org
+ZIPs prepare Track 01 into a local `cd/` tree and retain the CUE plus all raw
+CD-audio tracks. The CLI attaches that CUE lazily through MCI, so launching the
+game does not load the soundtrack. GOG does not currently sell a Civilization
+II release, so there is no GOG package recipe to maintain yet.

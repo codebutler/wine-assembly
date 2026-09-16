@@ -17,9 +17,11 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { Win98Renderer } = require('../lib/renderer');
 const { VirtualFS } = require('../lib/filesystem');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 let createCanvas;
 try { createCanvas = require('../lib/canvas-compat').createCanvas; } catch (_) {
@@ -29,7 +31,7 @@ try { createCanvas = require('../lib/canvas-compat').createCanvas; } catch (_) {
 
 (async () => {
   const SRC = path.join(__dirname, '..', 'src');
-  const wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC, f), 'utf-8'));
+  const wasmBytes = compileSrcWasm();
 
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const canvas = createCanvas(640, 480);
@@ -53,6 +55,7 @@ try { createCanvas = require('../lib/canvas-compat').createCanvas; } catch (_) {
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -86,7 +89,7 @@ try { createCanvas = require('../lib/canvas-compat').createCanvas; } catch (_) {
   const readItem = (idx) => {
     const dest = e.guest_alloc(64);
     const n = e.listbox_get_item_text(lb, idx, dest, 63);
-    const wa = dest - e.get_image_base() + 0x12000;
+    const wa = RegionMap.g2w(dest, e.get_image_base());
     let s = '';
     for (let i = 0; i < n; i++) s += String.fromCharCode(u8[wa + i]);
     return s;

@@ -5,19 +5,22 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const apiTable = require('../src/api_table.json');
+// $THUNK_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const ROOT = path.join(__dirname, '..');
 
 async function main() {
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(ROOT, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const imports = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   imports.host.memory = memory;
   Object.assign(imports.host, {
     create_thread: () => 0,
     exit_thread: () => 0,
+    terminate_thread: () => 0,
     create_event: () => 0,
     set_event: () => 0,
     reset_event: () => 0,
@@ -85,7 +88,7 @@ async function main() {
     const api = apiTable.find(entry => entry.name === name);
     assert(api, `${name} must exist in api_table.json`);
     assert(args.length <= 4, `${name} test call exceeds call_func argument bridge`);
-    const thunkWa = 0x07112000;
+    const thunkWa = RegionMap.BASE.THUNK_BASE;
     const thunkGuest = (thunkWa - guestBase + imageBase) >>> 0;
     const savedName = dv.getUint32(thunkWa, true);
     const savedId = dv.getUint32(thunkWa + 4, true);
@@ -113,6 +116,23 @@ async function main() {
   const originalPath = 'C:\\Documents\\Mixed Case\\sample.rtf';
   const created = createMoniker(originalPath);
   check('CreateFileMoniker returns an object with caller ownership', created.hr === 0 && created.object !== 0);
+
+  const parsedEaten = alloc(4);
+  const parsedOut = alloc(4);
+  write(parsedEaten, 0xcccccccc);
+  write(parsedOut, 0xcccccccc);
+  check('MkParseDisplayName consumes a file display name into an owned moniker',
+    callApi('MkParseDisplayName', 0, writeWide(originalPath), parsedEaten, parsedOut) === 0 &&
+    read(parsedEaten) === originalPath.length && read(parsedOut) !== 0);
+  const parsedObject = read(parsedOut);
+  write(parsedEaten, 0xcccccccc);
+  write(parsedOut, 0xcccccccc);
+  check('MkParseDisplayName rejects empty syntax without publishing outputs',
+    callApi('MkParseDisplayName', 0, writeWide(''), parsedEaten, parsedOut) === 0x800401e4 &&
+    read(parsedEaten) === 0 && read(parsedOut) === 0);
+  check('MkParseDisplayName validates both output pointers',
+    callApi('MkParseDisplayName', 0, writeWide(originalPath), 0, parsedOut) === 0x80004003 &&
+    callApi('MkParseDisplayName', 0, writeWide(originalPath), parsedEaten, 0) === 0x80004003);
 
   const vtable = read(created.object);
   check('file moniker exposes all 23 inherited IMoniker slots',
@@ -285,9 +305,20 @@ async function main() {
   assert.strictEqual(callMethod(loaded, 2), 0);
   assert.strictEqual(callMethod(unicodeMoniker, 2), 0);
   assert.strictEqual(callMethod(guestLoaded, 2), 0);
+  assert.strictEqual(callMethod(parsedObject, 2), 0);
   assert.strictEqual(e.test_ole_release(localStream), 0);
   assert.strictEqual(e.test_ole_release(guestStream), 0);
   assert.strictEqual(e.test_ole_release(malformedStream), 0);
+
+  for (const name of [
+    'NdrDllRegisterProxy',
+    'NdrDllUnregisterProxy',
+    'DllRegisterServer',
+    'DllUnregisterServer',
+  ]) {
+    assert.throws(() => callApi(name, 1, 2, 3), WebAssembly.RuntimeError,
+      `${name} must not claim unimplemented registry side effects succeeded`);
+  }
 
   console.log(`\n${checks}/${checks} checks passed`);
 }

@@ -6,12 +6,14 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { mountBundledFonts } = require('./render-helper');
+// $GDI_LINE_DESC, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 async function main() {
   const root = path.join(__dirname, '..');
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   // Text is rasterized from mounted strikes now, so a host with an empty font
   // directory measures every string as zero pixels wide.
@@ -21,6 +23,7 @@ async function main() {
   base.host.memory = memory;
   base.host.create_thread = () => 0;
   base.host.exit_thread = () => 0;
+  base.host.terminate_thread = () => 0;
   base.host.create_event = () => 0;
   base.host.set_event = () => 0;
   base.host.reset_event = () => 0;
@@ -73,7 +76,7 @@ async function main() {
   const before = new Uint8Array(memory.buffer).slice();
   const drawn = wat.test_call_TabbedTextOutA(hdc, 5, 4, ansi, 3, 2, stops, 5) >>> 0;
   assert.strictEqual(drawn & 0xffff, 30);
-  const descriptor = 0x07EF1000;
+  const descriptor = RegionMap.BASE.GDI_LINE_DESC;
   assert.strictEqual(wat.test_gdi_surface_descriptor(hdc, descriptor), 1);
   const dv = new DataView(memory.buffer);
   const bits = dv.getUint32(descriptor, true);

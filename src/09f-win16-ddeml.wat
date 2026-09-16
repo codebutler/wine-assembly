@@ -103,7 +103,7 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (i32.const 4)))
       (local.set $slot (call $win16_dde_async_slot (local.get $i)))
-      (if (i32.and (i32.load (local.get $slot))
+      (if (i32.and (i32.ne (i32.load (local.get $slot)) (i32.const 0))
                    (i32.eq (i32.load offset=8 (local.get $slot)) (local.get $conv)))
         (then
           (if (i32.or (i32.eq (local.get $best) (i32.const -1))
@@ -152,7 +152,7 @@
       (local.set $slot (call $win16_dde_advise_slot (local.get $i)))
       ;; Asking twice for the same item is not an error and must not make two
       ;; loops, or the app's one update would go out twice.
-      (if (i32.and (i32.load (local.get $slot))
+      (if (i32.and (i32.ne (i32.load (local.get $slot)) (i32.const 0))
                    (i32.and (i32.eq (i32.load offset=4 (local.get $slot)) (local.get $conv))
                             (i32.eq (i32.load offset=8 (local.get $slot)) (local.get $item))))
         (then
@@ -183,7 +183,7 @@
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
       (local.set $slot (call $win16_dde_advise_slot (local.get $i)))
-      (if (i32.and (i32.load (local.get $slot))
+      (if (i32.and (i32.ne (i32.load (local.get $slot)) (i32.const 0))
                    (i32.eq (i32.load offset=4 (local.get $slot)) (local.get $conv)))
         (then (i32.store (local.get $slot) (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -1173,6 +1173,8 @@
         (return)))
     (local.set $slot (call $win16_dde_inst (local.get $i)))
     (i32.store (local.get $slot) (i32.const 1))
+    (global.set $win16_dde_users
+      (i32.add (global.get $win16_dde_users) (i32.const 1)))
     (i32.store offset=4 (local.get $slot) (call $win16_arg32 (i32.const 4)))
     (i32.store offset=8 (local.get $slot) (call $win16_arg32 (i32.const 2)))
     ;; The instance id is what every other call identifies itself by, so it has
@@ -1184,12 +1186,18 @@
 
   ;; DDEML.3 DdeUninitialize(DWORD idInst) -> BOOL.
   (func $win16_DdeUninitialize
-    (local $id i32)
+    (local $id i32) (local $slot i32)
     (local.set $id (call $win16_arg32 (i32.const 0)))
     (if (i32.and (i32.gt_u (local.get $id) (i32.const 0))
                  (i32.le_u (local.get $id) (i32.const 8)))
-      (then (i32.store (call $win16_dde_inst (i32.sub (local.get $id) (i32.const 1)))
-                       (i32.const 0))))
+      (then
+        (local.set $slot
+          (call $win16_dde_inst (i32.sub (local.get $id) (i32.const 1))))
+        (if (i32.load (local.get $slot))
+          (then
+            (i32.store (local.get $slot) (i32.const 0))
+            (global.set $win16_dde_users
+              (i32.sub (global.get $win16_dde_users) (i32.const 1)))))))
     (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
@@ -1408,7 +1416,8 @@
         ;; asked again. Windows keeps asking until the caller's timeout, and so
         ;; does this -- at an interval, because the far side needs its own
         ;; message loop to get anywhere before it can answer differently.
-        (if (i32.and (i32.load offset=28 (local.get $pend))
+        (if (i32.and
+              (i32.ne (i32.load offset=28 (local.get $pend)) (i32.const 0))
                      (i32.ge_u (i32.sub (call $host_real_time_ms)
                                         (i32.load offset=48 (local.get $pend)))
                                (global.get $DDE_BUSY_RETRY_MS)))

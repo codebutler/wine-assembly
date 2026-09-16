@@ -154,7 +154,18 @@
       (else (i32.store offset=24 (global.get $reg_base) (i32.add (i32.load offset=24 (global.get $reg_base)) (i32.const 4)))))
     (return_call $next))
   ;; REP versions (inline loop)
-  (func $th_rep_movsb (param $op i32)
+  ;;
+  ;; Each one is split into a `_do` body and a thin handler that calls it and
+  ;; dispatches. The body is what TREE_FOLD's TU_REP_STR micro-op calls, so a
+  ;; folded `rep movsd` runs THIS code rather than a transcription of it --
+  ;; the DF direction, the overlap and page-contiguity tests, the
+  ;; $invalidate_code_write extent, the per-element $gl/$gs fallback and the
+  ;; ECX-exhaustion write are all the interpreter's, once. These read and write
+  ;; the register GLOBALS, which is why the fold publishes its locals before
+  ;; the call and reloads them after: that also makes a fault mid-copy leave
+  ;; ECX/ESI/EDI exactly where the unfolded path would have left them, because
+  ;; it is the same stores to the same globals.
+  (func $rep_movsb_do
     (local $n i32) (local $dst i32) (local $src i32) (local $i i32)
     (local.set $n (i32.load offset=4 (global.get $reg_base)))
     (if (local.get $n) (then
@@ -163,8 +174,12 @@
           ;; Backward: src/dst point to highest byte, copy from (addr - n + 1)
           (local.set $dst (i32.sub (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $n) (i32.const 1))))
           (local.set $src (i32.sub (i32.load offset=24 (global.get $reg_base)) (i32.sub (local.get $n) (i32.const 1))))
-          (call $invalidate_code_write (local.get $dst))
-          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
+          ;; One call over the whole destination extent, not two endpoint calls.
+          ;; Endpoints were enough while invalidation was per-page and a copy of
+          ;; this size spanned at most two pages; per-offset retirement
+          ;; (docs/page-compile-design.md section 5) retires exactly the bytes it
+          ;; is handed, so the middle has to be named too.
+          (call $invalidate_code_write (local.get $dst) (local.get $n))
           (if (i32.or
                 (i32.and
                   (i32.lt_u (local.get $dst) (local.get $src))
@@ -191,8 +206,7 @@
         (else
           (local.set $src (i32.load offset=24 (global.get $reg_base)))
           (local.set $dst (i32.load offset=28 (global.get $reg_base)))
-          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
-          (call $invalidate_code_write (i32.add (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $n) (i32.const 1))))
+          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)) (local.get $n))
           (if (i32.or
                 (i32.and
                   (i32.lt_u (local.get $src) (local.get $dst))
@@ -213,9 +227,11 @@
               (memory.copy (call $g2w (i32.load offset=28 (global.get $reg_base))) (call $g2w (i32.load offset=24 (global.get $reg_base))) (local.get $n))))
           (i32.store offset=24 (global.get $reg_base) (i32.add (i32.load offset=24 (global.get $reg_base)) (local.get $n)))
           (i32.store offset=28 (global.get $reg_base) (i32.add (i32.load offset=28 (global.get $reg_base)) (local.get $n)))))
-      (i32.store offset=4 (global.get $reg_base) (i32.const 0))))
+      (i32.store offset=4 (global.get $reg_base) (i32.const 0)))))
+  (func $th_rep_movsb (param $op i32)
+    (call $rep_movsb_do)
     (return_call $next))
-  (func $th_rep_movsd (param $op i32)
+  (func $rep_movsd_do
     (local $n i32) (local $bytes i32) (local $dst i32) (local $src i32) (local $i i32)
     (local.set $n (i32.load offset=4 (global.get $reg_base)))
     (if (local.get $n) (then
@@ -224,8 +240,7 @@
         (then
           (local.set $dst (i32.sub (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 4))))
           (local.set $src (i32.sub (i32.load offset=24 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 4))))
-          (call $invalidate_code_write (local.get $dst))
-          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
+          (call $invalidate_code_write (local.get $dst) (local.get $bytes))
           (if (i32.or
                 (i32.and
                   (i32.lt_u (local.get $dst) (local.get $src))
@@ -252,8 +267,7 @@
         (else
           (local.set $src (i32.load offset=24 (global.get $reg_base)))
           (local.set $dst (i32.load offset=28 (global.get $reg_base)))
-          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
-          (call $invalidate_code_write (i32.add (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 1))))
+          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)) (local.get $bytes))
           (if (i32.or
                 (i32.and
                   (i32.lt_u (local.get $src) (local.get $dst))
@@ -274,17 +288,18 @@
               (memory.copy (call $g2w (i32.load offset=28 (global.get $reg_base))) (call $g2w (i32.load offset=24 (global.get $reg_base))) (local.get $bytes))))
           (i32.store offset=24 (global.get $reg_base) (i32.add (i32.load offset=24 (global.get $reg_base)) (local.get $bytes)))
           (i32.store offset=28 (global.get $reg_base) (i32.add (i32.load offset=28 (global.get $reg_base)) (local.get $bytes)))))
-      (i32.store offset=4 (global.get $reg_base) (i32.const 0))))
+      (i32.store offset=4 (global.get $reg_base) (i32.const 0)))))
+  (func $th_rep_movsd (param $op i32)
+    (call $rep_movsd_do)
     (return_call $next))
-  (func $th_rep_stosb (param $op i32)
+  (func $rep_stosb_do
     (local $n i32) (local $dst i32) (local $i i32)
     (local.set $n (i32.load offset=4 (global.get $reg_base)))
     (if (local.get $n) (then
       (if (global.get $df)
         (then
           (local.set $dst (i32.sub (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $n) (i32.const 1))))
-          (call $invalidate_code_write (local.get $dst))
-          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
+          (call $invalidate_code_write (local.get $dst) (local.get $n))
           (if (call $string_guest_range_contiguous (local.get $dst) (local.get $n))
             (then
               (memory.fill
@@ -301,8 +316,7 @@
                 (br $fill)))))
           (i32.store offset=28 (global.get $reg_base) (i32.sub (i32.load offset=28 (global.get $reg_base)) (local.get $n))))
         (else
-          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
-          (call $invalidate_code_write (i32.add (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $n) (i32.const 1))))
+          (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)) (local.get $n))
           (if (call $string_guest_range_contiguous (i32.load offset=28 (global.get $reg_base)) (local.get $n))
             (then
               (memory.fill (call $g2w (i32.load offset=28 (global.get $reg_base)))
@@ -316,9 +330,11 @@
                 (local.set $i (i32.add (local.get $i) (i32.const 1)))
                 (br $fill)))))
           (i32.store offset=28 (global.get $reg_base) (i32.add (i32.load offset=28 (global.get $reg_base)) (local.get $n)))))
-      (i32.store offset=4 (global.get $reg_base) (i32.const 0))))
+      (i32.store offset=4 (global.get $reg_base) (i32.const 0)))))
+  (func $th_rep_stosb (param $op i32)
+    (call $rep_stosb_do)
     (return_call $next))
-  (func $th_rep_stosd (param $op i32)
+  (func $rep_stosd_do
     (local $n i32) (local $bytes i32) (local $al i32) (local $dst i32)
     (local.set $n (i32.load offset=4 (global.get $reg_base)))
     (if (local.get $n) (then
@@ -339,15 +355,15 @@
         (then
           (if (global.get $df)
             (then
-              (call $invalidate_code_write (i32.sub (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 4))))
-              (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
+              (call $invalidate_code_write
+                (i32.sub (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 4)))
+                (local.get $bytes))
               (memory.fill
                 (call $g2w (i32.sub (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 4))))
                 (local.get $al) (local.get $bytes))
               (i32.store offset=28 (global.get $reg_base) (i32.sub (i32.load offset=28 (global.get $reg_base)) (local.get $bytes))))
             (else
-              (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)))
-              (call $invalidate_code_write (i32.add (i32.load offset=28 (global.get $reg_base)) (i32.sub (local.get $bytes) (i32.const 1))))
+              (call $invalidate_code_write (i32.load offset=28 (global.get $reg_base)) (local.get $bytes))
               (memory.fill (call $g2w (i32.load offset=28 (global.get $reg_base))) (local.get $al) (local.get $bytes))
               (i32.store offset=28 (global.get $reg_base) (i32.add (i32.load offset=28 (global.get $reg_base)) (local.get $bytes))))))
         (else
@@ -360,7 +376,9 @@
               (else (i32.store offset=28 (global.get $reg_base) (i32.add (i32.load offset=28 (global.get $reg_base)) (i32.const 4)))))
             (local.set $n (i32.sub (local.get $n) (i32.const 1)))
             (br $l)))))
-      (i32.store offset=4 (global.get $reg_base) (i32.const 0))))
+      (i32.store offset=4 (global.get $reg_base) (i32.const 0)))))
+  (func $th_rep_stosd (param $op i32)
+    (call $rep_stosd_do)
     (return_call $next))
   (func $th_cmpsb (param $op i32)
     (local $a i32) (local $b i32)

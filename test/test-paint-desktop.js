@@ -4,18 +4,20 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+// $GDI_LINE_DESC, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const extraWat = String.raw`
   (func (export "test_alloc_screen_dc") (result i32)
     (call $host_alloc_screen_dc))
   (func (export "test_paint_desktop") (param $hdc i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_PaintDesktop
       (local.get $hdc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 `;
 
 (async () => {
@@ -23,7 +25,7 @@ const extraWat = String.raw`
     extraWat, width: 64, height: 48,
   });
   const hdc = wat.test_alloc_screen_dc() >>> 0;
-  const desc = 0x07EF1000;
+  const desc = RegionMap.BASE.GDI_LINE_DESC;
   assert(hdc, 'screen DC allocation should succeed');
   assert.strictEqual(wat.test_gdi_surface_descriptor(hdc, desc), 1);
   assert.strictEqual(wat.test_call_SetPixel(hdc, 63, 47, 0x000000ff) >>> 0,

@@ -9,19 +9,19 @@ const extraWat = String.raw`
   (func (export "test_call_InitializeSecurityDescriptor")
     (param $descriptor i32) (param $revision i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_InitializeSecurityDescriptor
       (local.get $descriptor) (local.get $revision)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_AllocateAndInitializeSid")
     (param $authority i32) (param $count i32)
     (param $sub0 i32) (param $sub1 i32) (param $out i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.const 0x07000000))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07000000))
     ;; Arguments 6-10 are unused subauthorities; argument 11 is the output.
     (call $gs32 (i32.const 0x07000018) (i32.const 0))
     (call $gs32 (i32.const 0x0700001C) (i32.const 0))
@@ -32,36 +32,36 @@ const extraWat = String.raw`
     (call $handle_AllocateAndInitializeSid
       (local.get $authority) (local.get $count)
       (local.get $sub0) (local.get $sub1) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_SetSecurityDescriptorOwner")
     (param $descriptor i32) (param $sid i32) (param $defaulted i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetSecurityDescriptorOwner
       (local.get $descriptor) (local.get $sid) (local.get $defaulted)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_EqualSid") (param $a i32) (param $b i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_EqualSid
       (local.get $a) (local.get $b)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_FreeSid") (param $sid i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_FreeSid
       (local.get $sid) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

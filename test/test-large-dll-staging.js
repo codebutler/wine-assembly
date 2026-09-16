@@ -3,13 +3,10 @@
 'use strict';
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWatSnapshot } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
 const { loadDll } = require('../lib/dll-loader');
-
-const ROOT = path.join(__dirname, '..');
+const { REGIONS, GUEST_BASE, g2w: regionG2w } = require('../lib/region-map.generated');
 
 function makeMinimalDll(totalSize, options = {}) {
   const bytes = Buffer.alloc(totalSize);
@@ -26,7 +23,8 @@ function makeMinimalDll(totalSize, options = {}) {
   bytes.writeUInt16LE(0x210e, pe + 22);
 
   bytes.writeUInt16LE(0x010b, opt);
-  const rawSize = options.wsockStartupOrdinal ? 0x400 : 0x200;
+  const systemOrdinal = options.wsockStartupOrdinal || options.dplayLobbyOrdinal;
+  const rawSize = systemOrdinal ? 0x400 : 0x200;
   bytes.writeUInt32LE(rawSize, opt + 4);
   bytes.writeUInt32LE(0x1000, opt + 16);
   bytes.writeUInt32LE(0x1000, opt + 20);
@@ -38,7 +36,7 @@ function makeMinimalDll(totalSize, options = {}) {
   bytes.writeUInt32LE(0x200, opt + 60);
   bytes.writeUInt16LE(2, opt + 68);
   bytes.writeUInt32LE(16, opt + 92);
-  if (options.wsockStartupOrdinal) {
+  if (systemOrdinal) {
     bytes.writeUInt32LE(0x1100, opt + 104);
     bytes.writeUInt32LE(40, opt + 108);
   }
@@ -50,22 +48,31 @@ function makeMinimalDll(totalSize, options = {}) {
   bytes.writeUInt32LE(0x200, section + 20);
   bytes.writeUInt32LE(0x60000020, section + 36);
   Buffer.from([0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0]).copy(bytes, 0x200);
-  if (options.wsockStartupOrdinal) {
+  if (systemOrdinal) {
+    const dllName = options.dplayLobbyOrdinal ? 'DPLAYX.dll' : 'WSOCK32.dll';
+    const ordinal = options.dplayLobbyOrdinal ? 4 : 115;
     bytes.writeUInt32LE(0x1140, 0x300); // OriginalFirstThunk
     bytes.writeUInt32LE(0x1130, 0x30c); // DLL name RVA
     bytes.writeUInt32LE(0x1150, 0x310); // FirstThunk
-    bytes.write('WSOCK32.dll\0', 0x330, 'ascii');
-    bytes.writeUInt32LE(0x80000073, 0x340); // WSAStartup ordinal 115
-    bytes.writeUInt32LE(0x80000073, 0x350);
+    bytes.write(`${dllName}\0`, 0x330, 'ascii');
+    bytes.writeUInt32LE((0x80000000 | ordinal) >>> 0, 0x340);
+    bytes.writeUInt32LE((0x80000000 | ordinal) >>> 0, 0x350);
   }
   return bytes;
 }
 
 async function main() {
-  const wasm = await compileWatSnapshot(file =>
-    fs.promises.readFile(path.join(ROOT, 'src', file), 'utf8'));
+  // The full src tree, through the canonical compiler: the legacy compileWat
+  // path lowers the tree's region-symbolic operands to traps (commit 24b79256).
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
-  const ctx = { exports: null, getMemory: () => memory.buffer, renderer: null, resourceJson: {} };
+  const ctx = {
+    exports: null,
+    getMemory: () => memory.buffer,
+    renderer: null,
+    resourceJson: {},
+    apiTable: require('../src/api_table.json'),
+  };
   const imports = createHostImports(ctx);
   imports.host.memory = memory;
   const module = await WebAssembly.compile(wasm);
@@ -97,25 +104,38 @@ async function main() {
     'large DLL metadata should occupy the next table entry');
 
   const imageBase = e.get_image_base() >>> 0;
-  const entryWa = (second.dllMain >>> 0) - imageBase + 0x12000;
+  const entryWa = regionG2w(second.dllMain, imageBase);
   assert.deepStrictEqual(Array.from(new Uint8Array(memory.buffer, entryWa, 8)),
     [0xb8, 1, 0, 0, 0, 0xc2, 0x0c, 0],
     'large DLL executable section should map from the intact staging buffer');
 
-  const g2w = guest => (guest >>> 0) - imageBase + 0x12000;
-  assert.strictEqual(Buffer.from(memory.buffer, 0x11300, 11).toString('ascii'), 'WSOCK32.dll',
-    'static WinSock ordinal map should contain the DLL name');
+  const g2w = guest => regionG2w(guest, imageBase);
+  // $ORDINAL_NAMES_WSOCK32 was a packed NUL-separated blob of ordinal-import
+  // names addressed by hand-counted offset; 74e4ac34 replaced all 46 sites with
+  // interned string literals and deleted the region. What that assertion was
+  // really guarding — that WSOCK32 ordinal 115 still resolves to WSAStartup —
+  // is checked below against the host thunk, which is the observable behaviour.
   assert.strictEqual(Buffer.from(memory.buffer,
     g2w((second.loadAddr >>> 0) + 0x1130), 11).toString('ascii'), 'WSOCK32.dll',
     'synthetic large DLL should retain its import descriptor name');
   const iatThunk = dv.getUint32(g2w((second.loadAddr >>> 0) + 0x1150), true);
-  const thunkWa = 0x07112000;
+  const thunkWa = REGIONS.THUNK_BASE.base;
   assert.strictEqual(iatThunk, 0x07100000,
     'WSOCK32 ordinal import should point at the first host thunk');
   assert.strictEqual(dv.getUint32(thunkWa, true), 0x80000073,
     'host thunk should retain the source WSOCK32 ordinal');
   assert.strictEqual(dv.getUint32(thunkWa + 4, true), 923,
     'WSOCK32 ordinal 115 should resolve to the existing WSAStartup API ID');
+
+  const third = loadDll(e, memory.buffer,
+    makeMinimalDll(0x600, { dplayLobbyOrdinal: true }));
+  const dplayIatThunk = dv.getUint32(g2w((third.loadAddr >>> 0) + 0x1150), true);
+  assert.strictEqual(dplayIatThunk, 0x07100008,
+    'DPLAYX ordinal imported by a loaded DLL should point at the next host thunk');
+  assert.strictEqual(dv.getUint32(thunkWa + 8, true), 0x80000004,
+    'DPLAYX host thunk should retain DirectPlayLobbyCreateA ordinal 4');
+  assert.strictEqual(dv.getUint32(thunkWa + 12, true), 1235,
+    'loaded-DLL ordinal fallback should resolve DPLAYX #4 to DirectPlayLobbyCreateA');
 
   const wsadata = e.guest_alloc(400) >>> 0;
   const wsadataWa = g2w(wsadata);
@@ -142,8 +162,24 @@ async function main() {
   assert.throws(() => loadDll(e, memory.buffer, Buffer.alloc(0x00800001)),
     /PE staging capacity/, 'oversized DLLs should fail before corrupting fixed memory');
 
+  const smallDll = makeMinimalDll(0x400);
+  const capacity = e.get_dll_capacity() >>> 0;
+  assert.strictEqual(capacity, 32, 'WAT should publish the fixed DLL table capacity');
+  while ((e.get_dll_count() >>> 0) < capacity) loadDll(e, memory.buffer, smallDll);
+  const rsrcTable = e.get_dll_table() + capacity * 32;
+  const rsrcBytes = capacity * 8;
+  const rsrcBefore = Buffer.from(new Uint8Array(memory.buffer, rsrcTable, rsrcBytes));
+  assert.throws(() => loadDll(e, memory.buffer, smallDll),
+    /DLL table capacity 32 exhausted/,
+    'the 33rd DLL should fail before staging or table writes');
+  assert.strictEqual(e.get_dll_count() >>> 0, capacity,
+    'a rejected DLL must not advance the table count');
+  assert.deepStrictEqual(Buffer.from(new Uint8Array(memory.buffer, rsrcTable, rsrcBytes)), rsrcBefore,
+    'a rejected DLL must not overwrite DLL_RSRC_TABLE');
+
   console.log('PASS  4.75MB DLL staging preserves metadata and executable sections');
   console.log('PASS  oversized DLL staging fails explicitly');
+  console.log('PASS  DLL table capacity fails explicitly without metadata corruption');
 }
 
 main().catch(error => {

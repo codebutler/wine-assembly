@@ -4,21 +4,35 @@ const { execSync } = require('child_process');
 const { createHostImports } = require('../lib/host-imports');
 const { loadDlls, callDllMain, detectRequiredDlls, shouldReportNtForDlls, loadWin16Dlls } = require('../lib/dll-loader');
 const { inputEventHwnd } = require('../lib/host-window');
-const { compileWat } = require('../lib/compile-wat');
-const { resolveDllGraph, mountLoadedDllFiles, stageAndLoadPe, setExeName, setExtraCmdline,
-  handleLoadLibraryYield, handleComDllYield } = require('../lib/process-boot');
+const { SYSTEM_DATA_FILES, resolveDllGraph, mountLoadedDllFiles, mountSystemDataFiles,
+  stageAndLoadPe, setExeName, setExeDrive, setExtraCmdline,
+  setEnvironmentVariable, handleLoadLibraryYield, handleComDllYield } = require('../lib/process-boot');
 const {
   applyExeCompatibilityPatches: applyProfilePatches,
+  applyLaunchPreferences: applyProfileLaunchPrefs,
   onThreadExit: profileThreadExit,
 } = require('../lib/app-profiles');
-const { processSharedCtx, adoptThreadPrimitives, makeWorkerApiLogger } = require('../lib/worker-imports');
-const { seedExeImage, win16FileCandidates } = require('../lib/vfs-seed');
-const { expandIncludePatterns } = require('../lib/vfs-host-files');
-const { decodeMfcCString, g2w: translateGuest } = require('../lib/mem-utils');
+const {
+  processSharedCtx, adoptThreadPrimitives, makeWorkerApiLogger,
+  createInheritedWasmGlobals, recordInheritedWasmGlobal,
+} = require('../lib/worker-imports');
+const { seedExeImage, win16FileCandidates, residentWin16Module } = require('../lib/vfs-seed');
+const { expandIncludePatterns, guestPathInTree } = require('../lib/vfs-host-files');
+const { saveVfsToHost } = require('../lib/vfs-export');
+const {
+  decodeMfcCString,
+  g2w: translateGuest,
+  readSyncObjectName,
+} = require('../lib/mem-utils');
 const { formatCall: fmtApiCall, formatRet: fmtApiRet, formatOutParams: fmtApiOutParams, walkFrames } = require('../lib/api-format');
 const { fontMounts, BUNDLED_BITMAP_FONTS } = require('../lib/font-substitutions');
-const { APPS } = require('../lib/apps');
+const { APPS, resolveCopySuperops } = require('../lib/apps');
 const { CliVideoRecorder } = require('../lib/cli-recorder');
+const { renderTinySynthNotes } = require('../lib/tinysynth-offline');
+const { createBatchClock } = require('../lib/batch-clock');
+const { parseShellLaunchCommand, resolveShellLaunchPath } = require('../host.js');
+// Fixed memory-map addresses, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 let PNG;
 try { ({ PNG } = require('pngjs')); } catch (_) {}
 let createCanvas, Win98Renderer;
@@ -45,7 +59,14 @@ const SRC_DIR = path.join(ROOT, 'src');
 // This is hygiene, not a fix for anything measured: it made no difference to
 // memory or runtime. The snapshot memory problem was GPU surfaces -- see the
 // note in renderer.js _createOffscreen.
+// Set by main() once the DirectDraw present path exists. Every capture in this
+// harness goes through canvasToPng, so hooking here is what makes a --png or a
+// --dump land on the frame the guest just finished instead of on whatever the
+// last time-bounded upload left behind.
+let dxPresentHook = null;
+
 function canvasToPng(canvas) {
+  if (dxPresentHook) dxPresentHook();
   return typeof canvas.toBufferSync === 'function'
     ? canvas.toBufferSync('png')
     : canvas.toBuffer('image/png');
@@ -79,15 +100,75 @@ const getArgs = name => {
     .map(value => value.trim()).filter(Boolean);
 };
 const hasFlag = name => args.includes(`--${name}`);
+// Was `--name=...` written at all? Distinct from getArg(), which cannot tell an
+// absent option from one that was given its default value.
+const argHas = name => args.some(a => a.startsWith(`--${name}=`));
 
-const NO_BUILD = hasFlag('no-build');      // --no-build: skip auto-build
+// WINE_ASSEMBLY_WASM=PATH pins one prebuilt artifact for this process and every
+// test that spawns it. Several tests already read that variable and forward it
+// as `--no-build --wasm=`; reading it here means a test that only passes
+// `--no-build` (the common shape) is pinned too, which is what makes the
+// legacy-vs-WATX matrix (tools/watx-matrix.js) able to run the SAME test file
+// against two different artifacts. An explicit --wasm= still wins.
+const ENV_WASM = process.env.WINE_ASSEMBLY_WASM || '';
+const NO_BUILD = hasFlag('no-build') || !!ENV_WASM; // --no-build: skip auto-build
 const NO_CLOSE = hasFlag('no-close');      // --no-close: don't inject WM_CLOSE
 const NO_RENDERER = hasFlag('no-renderer'); // --no-renderer: skip CLI canvas/renderer (guest-state diagnostics)
+// Experimental programmable D3D9 software path; no DOM or GL provider needed.
+// Keep capability opt-in separate: the implementation is not a full SM profile.
+const D3D9_RENDERER = getArg('d3d9-renderer', null);
+const D3D9_PROGRAMMABLE = hasFlag('d3d9-programmable');
+if (args.some(arg => arg === '--gl-encoder' || arg.startsWith('--gl-encoder='))) {
+  throw new Error('--gl-encoder was removed; OpenGL encoding always runs in WAT');
+}
+if (D3D9_RENDERER !== null && D3D9_RENDERER !== 'software') {
+  throw new Error('CLI --d3d9-renderer currently supports software only; WebGL requires a browser/provider');
+}
+const NO_MMX = hasFlag('no-mmx');          // --no-mmx: report a 486DX from CPUID so guests take scalar paths
 const DUMP_GDI = getArg('dump-gdi', null); // --dump-gdi=DIR: dump GDI bitmaps as PNGs
 const DUMP_DDRAW = getArg('dump-ddraw-surfaces', null); // --dump-ddraw-surfaces=DIR: dump DirectDraw surface DIBs as PNGs
 const DUMP_SDB = getArg('dump-sdb', null); // --dump-sdb=DIR: dump StretchDIBits source DIBs + per-call log
+const DUMP_CURSORS = getArg('dump-cursors', null); // --dump-cursors=DIR: PNG per cursor the guest builds (CreateIconIndirect)
 const DUMP_VIRTUAL_MAPS = hasFlag('dump-virtual-maps'); // --dump-virtual-maps: print raw sparse guest-map records
-const MAX_BATCHES = parseInt(getArg('max-batches', '200'));
+// --control[=PORT]: live agent command channel (docs/design-agent-control.md).
+// An HTTP server accepts the same actions as --input, minus the batch prefix,
+// while the guest runs; drive it with tools/ctl.js or plain curl.
+const CONTROL_SPEC = getArg('control', null);
+const CONTROL = hasFlag('control') || CONTROL_SPEC !== null;
+// --control-stdin: same command set over stdin NDJSON instead of (or beside)
+// the HTTP server — one command per line, a JSON object or a bare --input
+// entry string; each reply comes back on stdout as one "[ctl] {...}" line.
+// For piping a generated stream or driving run.js from a parent process; an
+// interactive agent is better served by --control, whose replies pair with
+// the request. Not compatible with the interactive debug prompt (--break
+// without --watch-log), which owns stdin.
+const CONTROL_STDIN = hasFlag('control-stdin');
+// --frozen: with a live control channel, park before the first batch and run
+// only batches explicitly released by {action:"step", n}. This is the CLI
+// twin of browser frozen mode: agent think-time advances neither guest state
+// nor a --control recording.
+const CONTROL_FROZEN_START = hasFlag('frozen');
+const CONTROL_PORT = parseInt(CONTROL_SPEC || '8123', 10) || 8123;
+const CONTROL_HOST = getArg('control-host', '127.0.0.1'); // --control-host=0.0.0.0: explicit LAN opt-in (the channel carries eval)
+if (CONTROL_FROZEN_START && !(CONTROL || CONTROL_STDIN)) {
+  console.error('error: --frozen requires --control or --control-stdin');
+  process.exit(2);
+}
+// With --control the schedule is external, so a default batch budget makes no
+// sense: the run ends on a quit command, a stop action, or the outer timeout.
+// An explicit --max-batches still bounds it.
+const MAX_BATCHES = getArg('max-batches', null) !== null
+  ? parseInt(getArg('max-batches', '200'))
+  : ((CONTROL || CONTROL_STDIN) ? Infinity : 200);
+// --max-seconds=N: stop the batch loop after N seconds of wall clock, whatever
+// --max-batches says. For benchmarking, this is the useful axis: an app's cost
+// per batch is not constant (Caesar runs ~0.1ms/batch through its boot and then
+// several times that once a city is simulating), so picking a batch count that
+// lands near a target duration is guesswork that has to be redone per app and
+// breaks the moment the app gets further in the same budget. Fix the duration
+// instead and read the batch count as the throughput: same wall clock on both
+// sides of an A/B, and the faster build is simply the one that got further.
+const MAX_SECONDS = parseFloat(getArg('max-seconds', '0')) || 0;
 // Composite the screen only every Nth batch. Nobody watches a headless run, so
 // intermediate frames exist only to be overwritten -- and they are not free:
 // skia-canvas 3.0.8 leaks roughly 320 bytes of unreclaimable native memory per
@@ -96,6 +177,15 @@ const MAX_BATCHES = parseInt(getArg('max-batches', '200'));
 // a long run pays that leak millions of times over. Snapshot actions call
 // repaint() themselves, so raising this does not affect captured pixels.
 const REPAINT_EVERY = Math.max(1, parseInt(getArg('repaint-every', '1')) || 1);
+// Minimum wall-clock gap between *unforced* DirectDraw surface uploads. An
+// upload of a live 640x480 surface measures ~11ms, about what a 20k-step batch
+// costs, so uploading each finished guest frame doubles a dxball run and a 16ms
+// cap does not help (the batches are already that long). Nothing looks at a
+// headless canvas between captures and every capture forces an upload anyway,
+// so the default is deliberately slow: 10Hz keeps a video recording and any
+// mid-run liveness check honest for ~10% of the run time. Pass 0 to upload
+// every finished frame, which is what measuring the present path itself needs.
+const DX_PRESENT_MIN_MS = Math.max(0, parseFloat(getArg('dx-present-min-ms', '100')) || 0);
 // When multiple --break addrs are passed, the WASM `set_bp` only holds one,
 // so the JS fallback (eipBefore check) must see every block entry. Force
 // batch-size=1 so each block run hits the check loop.
@@ -135,16 +225,197 @@ const ESP_DELTA = hasFlag('esp-delta');   // --esp-delta: log ESP before/after e
 const TRACE_ESP = getArg('trace-esp', null); // --trace-esp=LO-HI: per-block (eip, esp) + Δ from prev block (hex; HI optional)
 const TRACE_EIP_RANGE = getArg('trace-eip-range', null); // --trace-eip-range=LO-HI: log every block-entry EIP inside [LO,HI] (module+0xVA OK)
 const TRACE_EIP_DETAIL = hasFlag('trace-eip-detail'); // --trace-eip-detail: include regs/flags/memory with --trace-eip-range
+const TRACE_EIP_STREAM = hasFlag('trace-eip-stream'); // --trace-eip-stream: write EIP lines immediately instead of buffering to the next batch boundary
 const TRACE_EIP_DUMP = getArg('trace-eip-dump', null); // --trace-eip-dump=0xADDR:LEN[,..]: compact dump on each detailed EIP hit
+// --trace-loopmatch[=0xEIP]: at decode time, dump the emitted op sequence of
+// every self-loop block (or just the one at 0xEIP). Prints the block's entry,
+// op count and each (handler index, operand) -- the input the Design A matcher
+// in src/07b-loop-match.wat actually sees. See docs/loop-idiom-superops-design.md
+const TRACE_LOOPMATCH = hasFlag('trace-loopmatch') || getArg('trace-loopmatch', null) !== null;
+const TRACE_LOOPMATCH_EIP = (() => {
+  const v = getArg('trace-loopmatch', null);
+  return v && v !== 'true' ? (parseInt(v, 16) | 0) : 0;
+})();
+// The decode-time trace has no channel but log_i32, which lib/host-imports.js
+// gates on DBG_INV. Asking for the flag is asking for the output.
+if (TRACE_LOOPMATCH) process.env.DBG_INV = '1';
+// LUT_RUN is independently enabled by default; COPY_RUN remains disabled.
+// The broad legacy switch controls both, while the family switches allow a
+// useful LUT A/B without opting into COPY's historical Storm divergence.
+const LOOP_SUPEROPS = hasFlag('loop-superops');
+const NO_LOOP_SUPEROPS = hasFlag('no-loop-superops');
+const LUT_SUPEROPS = hasFlag('lut-superops');
+const NO_LUT_SUPEROPS = hasFlag('no-lut-superops');
+const COPY_SUPEROPS_ARG = hasFlag('copy-superops');
+const NO_COPY_SUPEROPS = hasFlag('no-copy-superops');
+// --block-exec: run every eligible basic block through the per-block executor
+// (H458) instead of dispatching its ops one at a time. Default OFF, decode
+// time, so it steers only blocks decoded after it is applied — which is why it
+// is set before the first batch and on every per-thread instance.
+// --block-exec-stats prints installs/declines/runs and the native-vs-fallback
+// op split at exit; that split is the migration meter, not a curiosity.
+// docs/block-executor-design.md.
+// --tree-fold named the second half of the same machine and is now an alias.
+// One round of deprecation: it still works, and it says so.
+const TREE_FOLD_ALIAS = hasFlag('tree-fold');
+if (TREE_FOLD_ALIAS) {
+  console.log('[deprecated] --tree-fold is now --block-exec: the self-loop fold '
+    + 'and the block executor are one descriptor format and one handler. '
+    + 'Passing --block-exec instead does exactly this.');
+}
+const BLOCK_EXEC = hasFlag('block-exec') || TREE_FOLD_ALIAS;
+const BLOCK_EXEC_STATS = hasFlag('block-exec-stats');
+// --block-chain: patch a taken direct branch's own operand word with the
+// resolved threaded-code address of its target, so every later transfer skips
+// $branch_end and $page_resolve. Default OFF; the `chain:` line at exit is the
+// counter pair the round's gate is stated against.
+// docs/block-chaining-design.md.
+// Round 19 removed the mutual exclusion with --block-exec: a chain slot holds
+// a chunk selector plus an offset inside one of the loaded page's two chunks,
+// not a delta from its own address, so a slot inside a descriptor's copied
+// terminator names its target exactly as one in the threaded stream does.
+// Both flags together is the configuration section 8 of the design doc
+// measures, and the `chain:` line's pool columns are that measurement.
+const BLOCK_CHAIN = hasFlag('block-chain');
+const BLOCK_EXEC_MIN_UOPS = parseInt(getArg('block-exec-min-uops', '0'), 10) || 0;
+// Debug ceiling. With the floor it makes the installer a one-size sieve, which
+// is how a --block-exec divergence gets bisected to a block shape.
+const BLOCK_EXEC_MAX_UOPS = parseInt(getArg('block-exec-max-uops', '0'), 10) || 0;
+const BLOCK_EXEC_TRACE = hasFlag('trace-block-exec');
+// --no-block-exec-regions: arm the one-block executor but not the multi-block
+// matcher. The two halves ride the same switch, so this is the only way to
+// attribute an app-scale change to one of them.
+const NO_BLOCK_EXEC_REGIONS = hasFlag('no-block-exec-regions');
+// --block-exec-region-max=N: the largest multi-block region the matcher may
+// install. This is the bisect knob for a divergence — a picture that differs
+// at 16 and matches at 2 names the size at which the descriptor stops being
+// right, which "regions on/off" cannot.
+const BLOCK_EXEC_REGION_MAX = parseInt(getArg('block-exec-region-max', '0'), 10) || 0;
+// --block-exec-walk-k=N / --block-exec-walk-budget=N: the two discovery knobs
+// of the round-10 CFG walker. K is how many times a block has to be branched
+// to before its region is looked for; the budget is how many blocks one such
+// look may decode. Together they are the whole decode-time cost of the
+// multi-block matcher, which is what the round-9 measurement blamed for a 2.6%
+// loss on Quake II, so they are flags rather than constants.
+const BLOCK_EXEC_WALK_K = parseInt(getArg('block-exec-walk-k', '0'), 10) || 0;
+const BLOCK_EXEC_WALK_BUDGET = parseInt(getArg('block-exec-walk-budget', '0'), 10) || 0;
+// Round 11's decode-time load/op split. ON whenever the executor is on, so the
+// only switch is the negative one -- this is the A/B partner, not an opt-in.
+const NO_BLOCK_EXEC_SPLIT = hasFlag('no-block-exec-split');
+// Round 12's x87 widening (design doc section 17). Also ON whenever the
+// executor is on, so this too is only a negative switch: it restores round 11's
+// behaviour of declining any block that holds an H188-H190 or a fused
+// H449-H453, which is the `before` arm of section 17's coverage table.
+// Round 12 lever A. OFF by default -- see section 17.5 of
+// docs/block-executor-design.md; ONE is the meaningful value here.
+const BLOCK_EXEC_X87 = hasFlag('block-exec-x87');
+// Round 16 (section 26): x87 inside a REGION MEMBER. A sub-lever of the one
+// above and ON whenever it is, so ZERO is the meaningful value here --
+// --no-block-exec-x87-regions restores round 15's one-block-only behaviour and
+// is the A/B partner every section-26 table is taken against.
+const NO_BLOCK_EXEC_X87_REGIONS = hasFlag('no-block-exec-x87-regions');
+const NO_BLOCK_EXEC_CARRY = hasFlag('no-block-exec-carry');
+const NO_BLOCK_EXEC_RMW = hasFlag('no-block-exec-rmw');
+// Round 16's one-block leaf entry point (H463, section 25). ON by default
+// inside an armed executor, so ZERO is the meaningful value: --no-block-exec-leaf
+// sends every one-block install back through the merged H458.
+const NO_BLOCK_EXEC_LEAF = hasFlag('no-block-exec-leaf');
+// Round 17's fallback-carrying leaf (H464, section 27). ON by default inside an
+// armed executor, so ZERO is the meaningful value: --no-block-exec-leaf-fb
+// sends every fallback-carrying one-block install back through H458 and
+// reproduces round 16 exactly on this build.
+const NO_BLOCK_EXEC_LEAF_FB = hasFlag('no-block-exec-leaf-fb');
+// Round 18 (design doc section 28): let a region member end in an unmodelled
+// terminator and side-exit into threaded execution there. ON within the
+// executor; this flag is the arm that reproduces round 17 exactly.
+const NO_BLOCK_EXEC_TAIL_EXITS = hasFlag('no-block-exec-tail-exits');
+// Round 17, section 27.2: headroom (in bytes) a ONE-BLOCK install must leave
+// in the per-page descriptor chunk, so a region install gets first refusal on
+// the page's last bytes. 0 (the module default) is round 16's admission test.
+const PAGE_DESC_RG_RESERVE = (() => {
+  const v = getArg('page-desc-rg-reserve');
+  return v == null ? null : parseInt(v, 10);
+})();
+const NO_AOE_FILL = hasFlag('no-aoe-fill');
+const NO_AOE_SPAN = hasFlag('no-aoe-span');
+// --no-sib-fusion: decode indexed SIB memory operands as the unfused
+// compute_ea_sib + consumer pair. On by default in the module; this is the
+// A/B partner, so a fusion's op-count delta and its wall-clock effect can be
+// measured on one build. See docs/interpreter-dispatch-perf.md -- fewer
+// dispatches has measured ZERO more than once, so the flag is not optional.
+const NO_SIB_FUSION = hasFlag('no-sib-fusion');
+const NO_RECT_RUN = hasFlag('no-rect-run');
+const NO_CASE_CHAIN = hasFlag('no-case-chain');
+const NO_RLE_RUN = hasFlag('no-rle-run');
+// The two stream-idiom folds (docs/loop-idiom-superops-design.md §20). Both
+// are on by default and both off switches exist for the same reason the ones
+// above do: a same-binary A/B of the fold against the threaded blocks it
+// replaced. They are decode-time, so the two arms have to be separate runs.
+const NO_SMK_TREE = hasFlag('no-smk-tree');
+const NO_PCX_RUN = hasFlag('no-pcx-run');
+// --x87-fusion: arm the semantic x87 families (H449 pipeline4/short, H450
+// balanced tree, H451 island, H452/453 affine prefix+suffix). Default OFF in
+// the module, and until now the browser's window.WineSuperops.x87Fusion was
+// the ONLY way to turn them on -- so every headless measurement of "how much
+// x87 does the fold catch" was silently measuring the fold switched off.
+// The match COUNTERS increment either way (the emit gate is checked after the
+// predicate), so `--loopmatch-stats` alone answers "how many blocks would
+// match"; this flag is what makes those matches actually run, which is the
+// only way to get an entry-weighted share out of --handler-hist.
+const X87_FUSION = hasFlag('x87-fusion');
+// --loopmatch-stats: print the self-loop/match counts at exit.
+const LOOPMATCH_STATS = hasFlag('loopmatch-stats');
+// --tree-fold: the general decode-time integer-expression fold, H448.
+// docs/tree-fold-design-a.md. OFF by default, so this is the only way to turn
+// it on -- and, like every other decode-time gate, it has to reach every
+// per-thread instance or the A/B measures two different decoders.
+// --tree-fold-min-ops=N lowers or raises the interior-op floor (default 4).
+// --tree-fold-max-ops=N lowers or raises the ceiling (default 160, clamped in
+// WAT to the structural limit; see $TREE_FOLD_UOPS_LIMIT). The default is not
+// a throughput guess -- tools/bench-loops.js tree_len8..tree_len160 found no
+// crossover at any length -- so this exists to A/B a SHORTER cap, e.g. to ask
+// what one app's long bodies are actually contributing.
+const TREE_FOLD = BLOCK_EXEC;
+// --trace-tree-fold: dump every lowered TREE_FOLD block's classified micro-op
+// list (entry EIP, terminator, per-uop kind/dst/src/imm/handler/b) through the
+// decode-time log_i32 channel. Consumed by tools/tree-shape-census.js, which
+// joins it against a --hot-block-dump to weight each shape by hit count.
+// Implies --tree-fold, since only a lowered block writes the descriptor.
+const TRACE_TREE_FOLD = hasFlag('trace-tree-fold');
+if (TRACE_TREE_FOLD) process.env.DBG_INV = '1';
+const TREE_FOLD_MIN_OPS = (() => {
+  const v = getArg('tree-fold-min-ops', null);
+  return v === null ? null : (parseInt(v, 10) | 0);
+})();
+const TREE_FOLD_MAX_OPS = (() => {
+  const v = getArg('tree-fold-max-ops', null);
+  return v === null ? null : (parseInt(v, 10) | 0);
+})();
 const TRACE_GDI = hasFlag('trace-gdi');   // --trace-gdi: log GDI calls (CreateBitmap, BitBlt, etc.)
 const GDI_STATS = hasFlag('gdi-stats');   // --gdi-stats: print software-raster span/pixel totals at exit
 const LATENCY_STATS = hasFlag('latency-stats'); // --latency-stats: measure injected input -> next surface blit
+// --frame-stats[=FROM_BATCH]: guest-frame pacing (interval percentiles + jitter)
+// at exit. A benchmark that has to click through a menu to reach gameplay
+// spends most of its batches in the menu, and a menu redrawing on demand paces
+// nothing like a game loop -- mixing them buries the game's own distribution
+// under a much larger, much flatter one. Pass the batch gameplay starts at.
+const FRAME_STATS_ARG = getArg('frame-stats', null);
+const FRAME_STATS = FRAME_STATS_ARG !== null || hasFlag('frame-stats');
+const FRAME_STATS_FROM = Math.max(0, parseInt(FRAME_STATS_ARG, 10) || 0);
+const AUTO_MOUSE = getArg('auto-mouse', null); // --auto-mouse=X0,Y0,X1,Y1[,PERIOD]: sweep the pointer every PERIOD batches
 const TRACE_CTRL = hasFlag('trace-ctrl'); // --trace-ctrl: log every WAT-native control paint + its screen rect
+// --trace-input: which routing branch in lib/renderer-input.js consumed each
+// mouse event. Reach for it on "the click does nothing": a swallowed click
+// makes no API call, so an API trace shows a healthy-looking message pump and
+// nothing else. This names the early return that ate it.
+const TRACE_INPUT = hasFlag('trace-input');
 const TRACE_ERASE = hasFlag('trace-erase'); // --trace-erase: log every window-background erase + the brush it fills with
 const TRACE_RGN = hasFlag('trace-rgn');   // --trace-rgn: log HRGN create/combine/select + branch counts
 const TRACE_DC = hasFlag('trace-dc');     // --trace-dc: log DC→canvas target resolution (hwnd, ox/oy, canvas size)
 const TRACE_CLIP = hasFlag('trace-clip'); // --trace-clip: log _excludeChildrenClip kid/cousin rects + cover size per draw
-const TRACE_DX = hasFlag('trace-dx');     // --trace-dx: log DirectX COM methods with decoded rects/surface metadata
+const TRACE_COMPOSITE = hasFlag('trace-composite'); // --trace-composite: one line per repaint: which path composited, and what each window contributed
+const TRACE_DX = hasFlag('trace-dx');   // --trace-dx: log DirectX COM methods with decoded rects/surface metadata
+const DX_SURFACES = hasFlag('dx-surfaces'); // --dx-surfaces: print the DX_OBJECTS surface manifest at exit
 const TRACE_DX_RAW = hasFlag('trace-dx-raw'); // --trace-dx-raw: on each Execute, walk+hexdump the full instruction stream
 const TRACE_FS = hasFlag('trace-fs');     // --trace-fs: log filesystem CreateFile hits/misses
 const TRACE_INI = hasFlag('trace-ini');   // --trace-ini: log GetPrivateProfileString resolutions
@@ -157,6 +428,14 @@ const TRACE_SEH = hasFlag('trace-seh');   // --trace-seh: log SEH chain operatio
 // exist are invisible to the CLI without these.
 const REG_IMPORT = getArg('reg-import', '');
 const REG_EXPORT = getArg('reg-export', '');
+// --import-saves=FILE / --export-saves=FILE: the same state as a *save bundle*
+// (lib/save-bundle.js) — the app's persistFiles matches plus the registry/INI
+// store, in one zip. --reg-export carries only the second half, so a game whose
+// state lives in a .sav file round-trips through this pair and not that one.
+// Both need --app=ID: the bundle is keyed by app id and the persistFiles globs
+// that decide what may be written come from lib/apps.js, never from the bundle.
+const IMPORT_SAVES = getArg('import-saves', '');
+const EXPORT_SAVES = getArg('export-saves', '');
 const TRACE_WIN16 = hasFlag('trace-win16'); // --trace-win16: log every Win16 (NE) API call and its result
 // --trace-win16=dde: only the DDEML offers and answers. The full trace is
 // large enough to change the timing of anything involving two processes, so a
@@ -191,7 +470,99 @@ if (process.send) {
 }
 const TIME_SCALE = parseFloat(getArg('time-scale', '1')) || 1;  // --time-scale=10: guest clock runs 10x
 const REAL_TICKS = hasFlag('real-ticks'); // --real-ticks: GetTickCount from the wall clock, not the batch counter
+// --wall-clock-ms=N: pin the CALENDAR clock (GetLocalTime/GetSystemTime/
+// GetSystemTimeAsFileTime, i.e. the `wall_clock` import) to a fixed epoch
+// millisecond. The elapsed-time clock is already batch-driven and reproducible,
+// but the calendar one is deliberately real, so a guest that seeds itself from
+// the time of day makes an otherwise identical A/B pair diverge. Pin it and the
+// two arms see the same calendar, which is what an A/B needs; leave it off and
+// nothing changes. `0` is not a valid pin (it is falsy, and a 1970 calendar is
+// not what anyone means) — the flag takes a real epoch value.
+const WALL_CLOCK_MS_ARG = getArg('wall-clock-ms', '');
+const WALL_CLOCK_MS = WALL_CLOCK_MS_ARG === '' ? 0 : Number(WALL_CLOCK_MS_ARG);
+if (WALL_CLOCK_MS_ARG !== '' && !(Number.isFinite(WALL_CLOCK_MS) && WALL_CLOCK_MS > 0)) {
+  throw new Error(`--wall-clock-ms=${WALL_CLOCK_MS_ARG}: expected a positive epoch millisecond`);
+}
+if (CONTROL_FROZEN_START && !(CONTROL || CONTROL_STDIN)) {
+  throw new Error('--frozen needs --control or --control-stdin');
+}
+if (CONTROL_FROZEN_START && REAL_TICKS) {
+  throw new Error('--frozen is incompatible with --real-ticks; use the deterministic batch clock');
+}
+// --tick-ms-per-batch=N: how much guest time one batch is worth on the
+// batch-driven clock (default 200). Neither default clock suits a game whose
+// engine steps on a WM_TIMER: at 200ms/batch Chip's Challenge burns its whole
+// 100-second level clock in 500 batches and puts up "Ooops! Out of time!"
+// before any input lands, while --real-ticks gives a 16-bit app that runs
+// 5000 batches in a third of a second about three timer ticks in total, so
+// nothing ever moves. Turn it down to drive a timer-paced game headlessly.
+const TICK_MS_PER_BATCH = Math.max(0, parseFloat(getArg('tick-ms-per-batch', '200')) || 0);
 const CLOCK_ORIGIN = Date.now();
+// --dx-lock-pause-ms=N: charge N milliseconds of GUEST time to every Lock of a
+// PRIMARY DirectDraw surface and to every Flip. Off (0) by default.
+//
+// Why it exists: on real hardware, locking or flipping the primary is where
+// presentation back-pressure lives -- the call blocks until the display is
+// ready. Our emulator returns instantly, so a game whose loop was throttled by
+// the display on a Pentium free-runs here, and its "fps" is a number no real
+// machine ever produced. This flag puts the back-pressure back and asks what
+// the game does about it. A CLOCK_PACED game reads the clock, sees the time it
+// lost, and keeps the same simulation speed with fewer frames -- which is
+// exactly the proof that capping frames is safe for it. A FRAME_LOCKED game
+// has nothing to read and simply gets slower.
+//
+// It is charged as GUEST time, not host wall time: the headless clock is
+// batch-driven (see TICK_MS_PER_BATCH), so a real sleep would be invisible to
+// the guest. Adding guest ms without adding guest work is precisely "the Lock
+// blocked for N ms". Offscreen/back buffers are deliberately NOT charged --
+// those are composition, not presentation, and slowing them would measure
+// something else. Zero cost when the flag is absent.
+const DX_LOCK_PAUSE = {
+  ms: Math.max(0, parseFloat(getArg('dx-lock-pause-ms', '0')) || 0),
+  clock: null,          // set once createBatchClock has run
+  guestMsAdded: 0,
+  presents: 0,        // dx_trace kind 5 -- the charged event
+  primaryLocks: 0,
+  offscreenLocks: 0,
+  flips: 0,
+};
+// --- vertical blank, headless -------------------------------------------
+// There is no display and no requestAnimationFrame out here, so the guest
+// clock IS the display (the browser instead wakes a vblank park on a real rAF
+// callback; see host.js _awaitVblank and the block comment on $vblank_counter
+// in src/01-header.wat — the two are meant to differ and should not be
+// "unified"). When a DirectDraw call parks on yield_reason 13 the model has
+// already named the guest millisecond it is due at, and the honest thing is to
+// charge exactly that much guest time and let it through. Rescheduling instead
+// would never resolve at a small --tick-ms-per-batch, and would make the wait
+// cost a variable number of batches at a large one.
+//
+// Same pausedMs seam as --dx-lock-pause-ms: guest time the harness has decided
+// elapsed outside the batch schedule. It shifts the whole clock, so it cannot
+// go backwards.
+const VBLANK = {
+  clock: null,        // set once createBatchClock has run
+  waits: 0,
+  guestMsAdded: 0,
+};
+// --flip-vsync: make IDirectDrawSurface::Flip block to the next vblank the way
+// real hardware does, instead of returning immediately. Off by default — see
+// $dx_flip_vsync in src/01-header.wat.
+const FLIP_VSYNC = hasFlag('flip-vsync');
+// --- spin parking --------------------------------------------------------
+// Eight of the games in docs/frame-pacing-census.md busy-wait on the
+// millisecond clock and four more on an empty PeekMessage. Both detectors are
+// ON; --no-spin-park is the A/B arm that turns them off in one run, which is
+// how a suspected false park is ruled in or out. --spin-park-k=N moves the
+// threshold (K consecutive indistinguishable reads) for the same purpose.
+//
+// IMPORTANT for measuring any of this: at the default 200ms of guest time per
+// batch a spin loop never spins -- the clock leaps past whatever the guest is
+// waiting for on its first read. Spin numbers need
+// `--tick-ms-per-batch=1 --batch-size=100000`.
+const NO_SPIN_PARK = hasFlag('no-spin-park');
+const SPIN_PARK_K = parseInt(getArg('spin-park-k', ''), 10);
+const SPIN_PARK = { clockWaits: 0, peekWaits: 0, guestMsAdded: 0 };
 // --trace-sched[=N]: one compact line whenever what the threads are doing
 // changes, plus a heartbeat every N batches (default 5000) so a stall shows up
 // as a repeated line rather than as silence.
@@ -213,6 +584,39 @@ const ASYNC_MM_TIMER_AFTER = Math.max(0,
   parseInt(getArg('async-mm-timer-after', '0'), 10) || 0);
 const TRACE_YIELD = hasFlag('trace-yield');   // --trace-yield: log yield_reason transitions per thread
 const TRACE_BATCH_TIMING = hasFlag('trace-batch-timing'); // --trace-batch-timing: log run/repaint wall time per batch
+// --decode-stats[=FROM_BATCH]: per-batch distribution of block decodes and of
+// the guest slice's wall time, printed at exit.
+//
+// This exists because --frame-stats cannot see decode cost. Its `interval
+// batches` series is the load-immune one, but a batch is a budget of *blocks*,
+// and decoding a block advances no EIP -- so a batch that re-decodes a thousand
+// blocks and a batch that decodes none retire the same number of blocks and are
+// indistinguishable in that series. The cost lands in host CPU, i.e. in
+// `interval ms`, which is the load-sensitive one.
+//
+// Decodes per batch is both: deterministic (identical across runs of one build)
+// and pointed straight at the mechanism. A block cache that evicts under
+// collision re-decodes in bursts; those bursts are the jank. Read the p99 and
+// the storm share, not the mean -- the mean is just total decodes over batches,
+// which the exit line already prints.
+// --batch-stats[=FROM_BATCH]: how many blocks each batch actually retired, and
+// why it stopped, printed at exit.
+//
+// `--batch-size=N` is a budget of N *blocks*, not steps, and a batch is free to
+// end long before it spends that budget: a blocking API yields, a WM_TIMER sets
+// $yield_flag, EIP goes to zero. From the outside a batch that ran 1000 blocks
+// and one that ran 12 look the same, so a region that is slow per batch is
+// ambiguous -- it is either genuine work per block, or a batch that keeps
+// bailing after a handful of blocks and paying the host's per-batch overhead
+// every time. Those two want opposite fixes, and this is the series that tells
+// them apart. Deterministic, so it is safe to diff between builds; the halt
+// histogram beside it names what is cutting the batches short.
+const BATCH_STATS_ARG = getArg('batch-stats', null);
+const BATCH_STATS = BATCH_STATS_ARG !== null || hasFlag('batch-stats');
+const BATCH_STATS_FROM = Math.max(0, parseInt(BATCH_STATS_ARG, 10) || 0);
+const DECODE_STATS_ARG = getArg('decode-stats', null);
+const DECODE_STATS = DECODE_STATS_ARG !== null || hasFlag('decode-stats');
+const DECODE_STATS_FROM = Math.max(0, parseInt(DECODE_STATS_ARG, 10) || 0);
 const AUDIO_STATS_RAW = args.find(a => a === '--audio-stats' || a.startsWith('--audio-stats=')); // --audio-stats[=N]: heartbeat every N waveOutWrites
 const AUDIO_STATS = !!AUDIO_STATS_RAW;
 const AUDIO_STATS_STRIDE = (AUDIO_STATS_RAW && AUDIO_STATS_RAW.includes('=')) ? parseInt(AUDIO_STATS_RAW.split('=')[1]) || 50 : 50;
@@ -221,6 +625,18 @@ const TRACE_CALLSTACK_RAW = args.find(a => a === '--trace-callstack' || a.starts
 const TRACE_CALLSTACK = !!TRACE_CALLSTACK_RAW;
 const TRACE_CALLSTACK_DEPTH = TRACE_CALLSTACK_RAW && TRACE_CALLSTACK_RAW.includes('=')
   ? Math.min(64, parseInt(TRACE_CALLSTACK_RAW.split('=')[1]) || 16) : 16;
+// --fault-null[=stop]: report every guest access no mapping covers (log, or
+// trap with =stop) instead of letting $g2w quietly absorb it into the NULL
+// sentinel. Off by default because the sentinel is what keeps a guest that
+// dereferences NULL running at all; arm it when a symptom shows up far from
+// whatever corrupted the pointer.
+const FAULT_NULL_RAW = args.find(a => a === '--fault-null' || a.startsWith('--fault-null='));
+const FAULT_NULL = !FAULT_NULL_RAW ? 0
+  : (FAULT_NULL_RAW.split('=')[1] === 'stop' ? 2 : 1);
+// Offline census mode requires the separately built instrumented artifact from
+// tools/build-page-translation-stats.js. The canonical WASM has no counter
+// branch in $g2w, so profiling cannot perturb ordinary production runs.
+const GUEST_PAGE_STATS = hasFlag('guest-page-stats');
 const BREAKPOINT = getArg('break', null); // --break=0xADDR[,0xADDR,...]: break at address(es)
 const BREAK_ONCE = hasFlag('break-once'); // --break-once: do NOT re-arm bp after first hit (so prev_eip stays the true caller)
 const TRACE_AT = getArg('trace-at', null); // --trace-at=0xADDR: log regs each time EIP hits addr (non-interactive)
@@ -240,13 +656,29 @@ const TRACE_AT_WATCH = hasFlag('trace-at-watch'); // --trace-at-watch: diff --tr
 const SHOW_CSTRING = getArg('show-cstring', null); // --show-cstring=0xADDR[,0xADDR...]: decode MFC CString at these addrs in trace-at and debug prompt
 const SKIP_SPEC = getArg('skip', null);          // --skip=0xADDR[,0xADDR,...]: auto-return (simulate ret) when EIP hits
 const COUNT_SPEC = getArg('count', null);        // --count=0xADDR[,0xADDR,...]: passive hit counter per block dispatch (up to 16 slots)
-// --handler-hist-thread=N --handler-hist-start=A --handler-hist-stop=B:
-// enable the existing WAT handler/block/pair histograms only for thread N and
-// only in [A,B), then print a compact snapshot. Profiling is off by default.
-const HANDLER_HIST_THREAD = parseInt(getArg('handler-hist-thread', '-1'), 10);
+// --handler-hist-thread=N[,N...] --handler-hist-start=A --handler-hist-stop=B:
+// enable the existing WAT handler/block/pair histograms only for the requested
+// thread(s) in [A,B), then print a compact snapshot. A list divides that window
+// evenly and profiles one instance at a time because the counters live in the
+// shared linear memory. Profiling is off by default.
+const HANDLER_HIST_THREAD_SPEC = getArg('handler-hist-thread', '-1');
+const HANDLER_HIST_THREADS = HANDLER_HIST_THREAD_SPEC.split(',')
+  .map(v => parseInt(v, 10))
+  .filter(v => Number.isInteger(v) && v >= 0);
+const HANDLER_HIST_THREAD = HANDLER_HIST_THREADS.length ? HANDLER_HIST_THREADS[0] : -1;
 const HANDLER_HIST_START = Math.max(0, parseInt(getArg('handler-hist-start', '0'), 10) || 0);
+// How many rows the histogram prints. The default 24 is a reading convenience,
+// not a measurement boundary: a question about the terminator population (which
+// handlers reach $branch_end) needs the tail, because a block-ending handler can
+// be far down a per-op histogram and still be a large share of the transfers.
+const HANDLER_HIST_TOP = Math.max(1, parseInt(getArg('handler-hist-top', '24'), 10) || 24);
 const HANDLER_HIST_STOP = Math.max(HANDLER_HIST_START + 1,
   parseInt(getArg('handler-hist-stop', String(MAX_BATCHES)), 10) || MAX_BATCHES);
+// --hot-block-dump=FILE: write every distinct block the histogram window saw,
+// as "0xADDR hits", one per line. The printed top-20 is for reading; this is
+// for tools/cache-slots.js, which needs the whole set to say whether the
+// direct-mapped block cache index is aliasing them.
+const HOT_BLOCK_DUMP = getArg('hot-block-dump', null);
 const DUMP_SPEC = getArg('dump', null);   // --dump=0xADDR:LEN: hexdump memory region
 const DUMP_SEH = hasFlag('dump-seh');     // --dump-seh: detailed SEH chain dump at end
 const DUMP_VMAP = hasFlag('dump-vmap');   // --dump-vmap: sparse VirtualAlloc map + which probes are mapped
@@ -254,10 +686,146 @@ const DUMP_BACKCANVAS = hasFlag('dump-backcanvas'); // --dump-backcanvas: save b
 const DUMP_VFS = hasFlag('dump-vfs');     // --dump-vfs: list all VFS files at end
 const SAVE_VFS = getArg('save-vfs', null); // --save-vfs=DIR: extract VFS files to directory
 const SAVE_VFS_SUFFIX = getArg('save-vfs-suffix', null); // --save-vfs-suffix=.gid: restrict extraction
+// --capture-launch=DIR: snapshot the VFS when ShellExecute names a VFS-backed
+// executable, before an installer bootstrap can delete its temporary child.
+// At exit DIR contains the snapshot plus launch.json for a second CLI stage.
+const CAPTURE_LAUNCH = getArg('capture-launch', null);
+// --overlay-dir=DIR: the writable C:\ overlay of docs/design-byo-media.md ⑤,
+// persisted to a host directory. Everything the guest writes is journalled and
+// replayed on the next run, so an installer can be run headlessly once and its
+// installed tree is simply there the second time. Unlike the browser's
+// localStorage persistFiles path this has no glob list and no per-file cap.
+const OVERLAY_DIR = getArg('overlay-dir', null);
+// Checkpoint between guest batches, where this otherwise-synchronous runner
+// can actually await storage. A hard SIGKILL can still cut off the current
+// interval or one long WASM batch, but it no longer loses the entire run.
+// Zero deliberately restores exit-only behavior for measurement/debugging.
+const OVERLAY_FLUSH_MS = Math.max(0,
+  parseInt(getArg('overlay-flush-ms', '5000'), 10) || 0);
+let vfsOverlay = null;
+let nextOverlayFlushAt = 0;
+let signalExitStarted = false;
+let terminationSignal = null;
+let signalExitWake = null;
 const VFS_DRIVE = getArg('vfs-drive', null); // --vfs-drive=D: mirror the EXE + explicit --vfs-include files on read-only D:\
 const VFS_INCLUDE = getArgs('vfs-include'); // --vfs-include=GLOB: mount matching files relative to the EXE directory
+// --vfs-tree=DIR: replay a captured VFS directory at C:\ while preserving its
+// relative paths. This is the second stage of --capture-launch for bootstrap
+// installers whose real child lives below WINDOWS\TEMP.
+const VFS_TREES = getArgs('vfs-tree');
+const GUEST_CWD = getArg('cwd', null); // --cwd=C:\DIR: initial guest process working directory
+// --vfs-mount=HOSTPATH=GUESTPATH: mount one host file at an exact guest path.
+// --vfs-include can only place a file at its own path relative to the EXE, so
+// an asset that has to appear somewhere else has no other way in -- a Winamp
+// visualizer kept in binaries/plugins/candidates has to be seen at
+// c:\plugins\vis_avs.dll before Winamp will enumerate it at all.
+const VFS_MOUNT = getArgs('vfs-mount');
+// --zip=PATH (repeatable): mount a read-only ZIP archive into the VFS before
+// launch, under c:\program files\<zipname>\ (override with --zip-root=DIR); a
+// single top-level folder in the archive is unwrapped. Stored and deflated
+// entries only -- anything else fails loudly rather than handing the guest
+// garbage. Entries stay lazy: the catalog supplies each size, so enumerating a
+// mount inflates nothing. Coexists with --exe/--app, which still choose what
+// runs. See lib/zip-mount.js and docs/design-byo-media.md phase 2.
+const ZIP_MOUNTS = getArgs('zip');
+const ZIP_ROOT = getArg('zip-root', null);
+// --zip-exe=NAME: launch an executable that lives inside the archive. The
+// guest reads through the lazy zip mount, but the PE and DLL loaders are
+// host-path based -- `--exe` is a file and sibling DLLs are discovered next to
+// it -- so the archive is also unpacked to a temp directory to give them one.
+// The guest CWD becomes the mount root, so everything the app opens at runtime
+// still comes from the mounted archive.
+const ZIP_EXE = getArg('zip-exe', null);
+const ZIP_LAUNCH = (() => {
+  if (!ZIP_EXE) return null;
+  if (!ZIP_MOUNTS.length) throw new Error('--zip-exe needs --zip=PATH');
+  const zipMount = require('../lib/zip-mount');
+  const want = ZIP_EXE.toLowerCase().replace(/\//g, '\\');
+  for (const zipPath of ZIP_MOUNTS) {
+    const bytes = new Uint8Array(fs.readFileSync(zipPath));
+    const plan = zipMount.mountPlan(zipMount.readCatalogSync(bytes),
+      { zipPath, root: ZIP_ROOT || undefined });
+    const hit = plan.mapped.find(m => m.rel.toLowerCase() === want
+      || m.rel.toLowerCase().replace(/^.*\\/, '') === want);
+    if (!hit) continue;
+    const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'wine-zip-'));
+    for (const m of plan.mapped) {
+      const out = path.join(dir, ...m.rel.split('\\'));
+      fs.mkdirSync(path.dirname(out), { recursive: true });
+      fs.writeFileSync(out, zipMount.extractSync(bytes, m.entry));
+    }
+    return { exePath: path.join(dir, ...hit.rel.split('\\')), root: plan.root, zipPath, dir };
+  }
+  throw new Error(`--zip-exe=${ZIP_EXE} not found in ${ZIP_MOUNTS.join(', ')}`);
+})();
+// --iso=PATH (repeatable): mount an ISO 9660 image as a read-only CD-ROM
+// drive, D:\ for the first image and the next free letter after that
+// (override with --iso-drive=E). Joliet long names win when the image has
+// them; --iso-primary takes the 8.3 ISO names instead. Entries stay lazy: the
+// directory records supply every size, so a mount reads nothing but the
+// descriptors until the guest opens a file. The drive reports DRIVE_CDROM and
+// the image's volume label. See lib/iso9660.js and docs/design-byo-media.md
+// phase 3.
+const ISO_MOUNTS = getArgs('iso');
+const ISO_DRIVE = getArg('iso-drive', null);
+const ISO_PRIMARY = hasFlag('iso-primary');
+// --iso-exe=NAME: launch an executable that lives on the disc. Same shape as
+// --zip-exe: the bytes go to a temp file because the PE loader takes a host
+// path, and the guest CWD becomes the file's directory on D:\, so everything
+// the app opens afterwards comes off the disc.
+const ISO_EXE = getArg('iso-exe', null);
+const ISO_LAUNCH = (() => {
+  if (!ISO_EXE) return null;
+  if (!ISO_MOUNTS.length) throw new Error('--iso-exe needs --iso=PATH');
+  const iso9660 = require('../lib/iso9660');
+  const want = ISO_EXE.toLowerCase().replace(/\//g, '\\').replace(/^[a-z]:\\/, '');
+  let drive = (ISO_DRIVE || 'D').replace(/:$/, '').toUpperCase();
+  for (const isoPath of ISO_MOUNTS) {
+    const image = iso9660.parseIso(new Uint8Array(fs.readFileSync(isoPath)),
+      { prefer: ISO_PRIMARY ? 'primary' : 'joliet' });
+    const hit = image.files.find(f => !f.isDirectory && (f.path.toLowerCase() === want
+      || f.path.toLowerCase().replace(/^.*\\/, '') === want));
+    if (!hit) { drive = String.fromCharCode(drive.charCodeAt(0) + 1); continue; }
+    const dir = fs.mkdtempSync(require('path').join(require('os').tmpdir(), 'wine-iso-'));
+    const out = require('path').join(dir, hit.name);
+    fs.writeFileSync(out, iso9660.readEntry(image, hit));
+    const guestDir = hit.path.includes('\\')
+      ? `${drive}:\\${hit.path.slice(0, hit.path.lastIndexOf('\\'))}`
+      : `${drive}:\\`;
+    return { exePath: out, guestDir, isoPath, drive };
+  }
+  throw new Error(`--iso-exe=${ISO_EXE} not found in ${ISO_MOUNTS.join(', ')}`);
+})();
+// --cue=PATH (repeatable): attach a mixed-mode CUE/BIN table of contents to
+// the CD-ROM drive. Pair this with --iso for the data track. Audio BIN files
+// stay on the host and are read only when an MCI cdaudio play reaches them.
+const CUE_MOUNTS = args.filter(value => value.startsWith('--cue='))
+  .map(value => value.slice('--cue='.length)).filter(Boolean);
+const CUE_DRIVE = getArg('cue-drive', null);
+// Browser-equivalent imported-media mount. tools/run-media.js analyzes the
+// selection, materializes only the chosen executable for the loader, then
+// forwards these exact source paths so this process mounts the original media
+// lazily into the guest VFS through lib/media-import.js.
+const MEDIA_MOUNTS = args.filter(value => value.startsWith('--media-mount='))
+  .map(value => value.slice('--media-mount='.length)).filter(Boolean);
+const MEDIA_EXE = getArg('media-exe', null);
+// --dll-seed=PATH[,PATH]: preload one more DLL as if the app registry had
+// listed it in `dlls:`. LoadLibraryA resolves a guest path against modules
+// that are already loaded and never opens the VFS itself, so a plugin the app
+// discovers at runtime -- every Winamp visualizer past the one in the registry
+// -- returns a junk handle unless it was seeded here first.
+const DLL_SEED = getArgs('dll-seed');
 const STUCK_AFTER = parseInt(getArg('stuck-after', '10'));  // --stuck-after=N: stuck detection after N same-EIP batches
 const WINVER = getArg('winver', null); // --winver=nt4|win2k|win98 or hex like 0x05650004
+// --env=NAME=VALUE (repeatable): set a compatibility variable in this guest
+// process only. The value may itself contain '='; an empty value is retained.
+const PROCESS_ENVIRONMENT = args.filter(value => value.startsWith('--env='))
+  .map(value => value.slice('--env='.length))
+  .map(spec => {
+    const equals = spec.indexOf('=');
+    if (equals <= 0) throw new Error(`invalid --env value ${JSON.stringify(spec)}; expected NAME=VALUE`);
+    return [spec.slice(0, equals), spec.slice(equals + 1)];
+  });
 // --app=sol launches what the desktop icon launches: lib/apps.js is the one
 // registry both hosts read, so the exe, the DLLs beside it, the data files it
 // needs in the VFS and its command line all come from the same entry the
@@ -271,10 +839,35 @@ const APP_ENTRY = (() => {
     Object.keys(APPS).sort().join(' '));
   process.exit(1);
 })();
+// Match the browser: an app registry opt-in is launch behavior, not a UI-only
+// hint. Keep explicit CLI flags as the A/B override, with `--no-…` strongest.
+const COPY_SUPEROPS = resolveCopySuperops(
+  APP_ENTRY, COPY_SUPEROPS_ARG, NO_COPY_SUPEROPS);
 // Registry paths are repo-relative and lean on the top-level `binaries`
 // symlink, so they resolve the same from the page and from here.
 const appAsset = p => (path.isAbsolute(p) ? p : path.join(ROOT, p));
-const EXE_PATH = getArg('exe', APP_ENTRY ? appAsset(APP_ENTRY.exe) : 'test/binaries/notepad.exe');
+const capturedGuestPath = hostPath => {
+  for (const tree of VFS_TREES) {
+    const guestPath = guestPathInTree(appAsset(tree), hostPath);
+    if (guestPath) return guestPath;
+  }
+  return null;
+};
+const EXE_PATH = getArg('exe', ZIP_LAUNCH ? ZIP_LAUNCH.exePath
+  : ISO_LAUNCH ? ISO_LAUNCH.exePath
+  : (APP_ENTRY ? appAsset(APP_ENTRY.exe) : 'test/binaries/notepad.exe'));
+const EXE_GUEST_PATH = (() => {
+  const requested = getArg('exe-guest-path', null);
+  if (!requested) return null;
+  const rooted = /^[a-z]:[\\/]/i.test(requested) ? requested : `c:\\${requested}`;
+  const normalized = path.win32.normalize(rooted.replace(/\//g, '\\'));
+  if (!/^[a-z]:\\[^\\]/i.test(normalized)) {
+    throw new Error(`--exe-guest-path needs a file path, got: ${requested}`);
+  }
+  return normalized;
+})();
+const EXE_PROCESS_NAME = EXE_GUEST_PATH
+  ? EXE_GUEST_PATH.replace(/^[a-z]:\\/i, '') : path.basename(EXE_PATH);
 const canonicalPath = p => {
   try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); }
 };
@@ -291,9 +884,82 @@ const MATCHED_APP = (() => {
 // arbitrary EXE outside the registry still mounts no companions implicitly.
 const ASSET_ENTRY = MATCHED_APP && MATCHED_APP.entry;
 const ASSET_ENTRY_ID = MATCHED_APP && MATCHED_APP.id;
-const WASM_PATH = getArg('wasm', path.join(ROOT, 'build', 'wine-assembly.wasm')); // --wasm=FILE: isolated prebuilt used with --no-build
+const getAssetFiles = entry => {
+  const files = [...((entry && entry.files) || [])];
+  if (!entry || !entry.localFileManifest) return files;
+  const manifestPath = appAsset(entry.localFileManifest);
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (!manifest || manifest.schemaVersion !== 1 || !Array.isArray(manifest.files)) {
+    throw new Error(`${ASSET_ENTRY_ID || APP_ID || 'app'}: invalid local media manifest`);
+  }
+  const manifestDir = path.dirname(entry.localFileManifest);
+  for (const file of manifest.files) {
+    if (!file || !file.url) continue;
+    files.push({
+      ...file,
+      url: path.join(manifestDir, file.url),
+    });
+  }
+  return files;
+};
+const WASM_PATH = getArg('wasm', ENV_WASM || path.join(ROOT, 'build', 'wine-assembly.wasm')); // --wasm=FILE (or $WINE_ASSEMBLY_WASM): isolated prebuilt used with --no-build
+// Was a SPECIFIC artifact asked for, as opposed to falling back on the canonical
+// build/wine-assembly.wasm? A pin is a promise about WHICH module is under test —
+// the whole basis of the legacy-vs-WATX differential (tools/watx-matrix.js), where
+// one test file is run twice against two artifacts. Silently substituting a
+// different module for a pin does not produce a worse run, it produces a
+// MEANINGLESS one that still reports a verdict, so a pin that cannot be honoured
+// is fatal here (see main()). Nothing changes when no pin is given.
+const WASM_PINNED = argHas('wasm') || !!ENV_WASM;
 const PNG_OUT = getArg('png', null);     // --png=out.png: render to PNG via node-canvas
 const PNG_CANVAS = hasFlag('png-canvas'); // --png-canvas: always capture the composited screen, never a raw DX surface
+// --headless-gl: run the OpenGL path for real, with no browser. Without it
+// wglCreateContext returns 0 here and the guest takes its no-3D-hardware path,
+// which is why Warcraft III and Quake II could only ever be driven through
+// tools/profile-web-frames.js and a real Chrome -- and why none of this file's
+// tracing (--trace-api, --count, --break, --handler-hist) reached them.
+// Opt-in: a large amount of existing headless behaviour is pinned to the
+// software path, so enabling it by default would silently change what many
+// runs mean. Needs the optional native deps; it says so rather than rendering
+// black if they are missing.
+const HEADLESS_GL = hasFlag('headless-gl');
+if (HEADLESS_GL) {
+  const _hgl = require('../lib/headless-gl');
+  // Say it at startup, not at the first wglCreateContext. A GL context that
+  // silently fails to exist looks exactly like an emulator bug for the rest of
+  // the run, and that misreading has cost whole sessions before.
+  if (!_hgl.available()) {
+    console.log(`[gl] --headless-gl requested but UNAVAILABLE: ${_hgl.unavailableReason()}`);
+  } else {
+    // Installed and loadable is NOT the same as usable: GLFW needs a display,
+    // and on macOS the display list empties when the screen sleeps. Asking now
+    // turns "the app puts up a DirectX error and spins" into one line here.
+    const noDisplay = _hgl.noDisplayReason();
+    console.log(noDisplay
+      ? `[gl] --headless-gl requested but UNUSABLE: ${noDisplay}`
+      : `[gl] headless WebGL enabled (@node-3d/webgl), ${_hgl.displayCount()} display(s)`);
+  }
+}
+// --dump-image=0xGUESTADDR:W:H:PITCH:BPP:FILE.png (repeatable, comma-separated)
+// Render an arbitrary guest memory region as an image at exit, through the
+// current DirectDraw palette for 8bpp. A blit bug is a disagreement between
+// two buffers -- decoder output vs the surface it was copied into -- and only
+// one of them is a DX surface that --png can already show. A hexdump cannot
+// answer "is this one sheared too"; a picture can.
+const DUMP_IMAGE = getArg('dump-image', null);
+// --dx-raw-index: for an 8bpp DX surface, write the raw palette indices as
+// greyscale instead of looking them up in the colour table. An all-black
+// capture then tells you which of the two things is wrong: nothing there to
+// draw, or art sitting under a colour table that is still black.
+const DX_RAW_INDEX = hasFlag('dx-raw-index');
+// --dx-slot=N: capture this DirectDraw surface instead of the one the content
+// heuristic picks. The heuristic prefers an offscreen surface whose colour
+// count dwarfs the primary's, which is right for a game that composes into a
+// back buffer and wrong for a 3D app whose texture atlas is more colourful
+// than its rendered frame — every Organic Art screensaver captures its leaf
+// sheet that way and reads as "renders a texture, not a scene". --dx-surfaces
+// prints the slot numbers to choose from.
+const DX_SLOT = getArg('dx-slot', null);
 const VIDEO_OUT = getArg('video', null); // --video=out.webm: record deterministic renderer frames through ffmpeg
 const VIDEO_FPS = parseFloat(getArg('video-fps', '30')); // --video-fps=N: playback rate; one frame is captured per batch
 const VIDEO_START_BATCH = Math.max(0, parseInt(getArg('video-start-batch', '0'), 10) || 0); // --video-start-batch=N: skip setup batches before capture
@@ -304,6 +970,26 @@ const EXTRA_ARGS = getArg('args', (APP_ENTRY && APP_ENTRY.args) || null); // --a
 const AUDIO_OUT = getArg('audio-out', null); // --audio-out=file.pcm: write raw PCM to file
 const AUDIO_EXIT_BYTES = parseInt(getArg('audio-exit-bytes', '0'), 10) || 0; // --audio-exit-bytes=N: stop once captured PCM reaches N bytes
 const THREAD_SLICES = parseInt(getArg('thread-slices', '4')); // --thread-slices=N: worker slices per main batch (default 4; raise for compute-heavy audio decode)
+const WORKER_THREADS = hasFlag('threads'); // --threads: run each guest thread in a real OS thread (node worker_threads) instead of the cooperative scheduler
+const FORCE_COOPERATIVE_THREADS = hasFlag('no-threads'); // --no-threads: explicitly select the default cooperative scheduler for A/B commands
+if (WORKER_THREADS && FORCE_COOPERATIVE_THREADS) {
+  console.error('error: --threads and --no-threads are mutually exclusive');
+  process.exit(2);
+}
+const THREAD_BATCH_SIZE_ARG = parseInt(getArg('thread-batch-size', '0'), 10) || 0; // --thread-batch-size=N: steps per worker-thread slice with --threads (default: BATCH_SIZE * --thread-slices, min 20000)
+const CS_STEAL_AFTER = parseInt(getArg('cs-steal-after', '0'), 10) || 0; // --cs-steal-after=N: fruitless EnterCriticalSection rounds before taking the section by force (0 = WAT default; huge = never, to tell "waiting forever" from "took it")
+const THREADS_SERIAL = hasFlag('threads-serial'); // --threads-serial: with --threads, never run two guest threads at once (splits "race" from "wrong per-thread state")
+const ESP_AUDIT = hasFlag('esp-audit'); // --esp-audit: with --threads, check every handler's stdcall epilogue (4*(nargs+1)) on the thread that actually ran it
+const RPC_CENSUS = hasFlag('rpc-census'); // --rpc-census: with --threads, per-thread histogram of brokered host imports (a blocking one stops that thread until the main thread answers)
+// Module scope so every exit path can terminate the threads: a live worker keeps
+// node alive, so a run that ends — cleanly or by throwing — would otherwise hang
+// instead of reporting.
+let workerThreadHost = null;
+let closeD3DRender = null;
+// --wait-slices=N: worker slices per batch while the MAIN thread is parked in a
+// blocking wait a worker has to satisfy. Nothing else can run then, so this is
+// much larger than THREAD_SLICES; set it to THREAD_SLICES to turn the boost off.
+const WAIT_SLICES = parseInt(getArg('wait-slices', '64'));
 
 // Default is to compile from src/*.wat on every launch, so an edit is always
 // picked up. --no-build is honored (see main()): it loads WASM_PATH as-is, and
@@ -312,6 +998,9 @@ const THREAD_SLICES = parseInt(getArg('thread-slices', '4')); // --thread-slices
 // several runs, never to check whether an edit worked.
 
 const hex = v => '0x' + (v >>> 0).toString(16).padStart(8, '0');
+// Guest thread ids are $current_thread_id: main is 1, a spawned thread is tid+1.
+// Printing "T0" for main reads as a thread that does not exist, so name it.
+const threadName = id => (((id >>> 0) === 1) ? 'main' : `T${(id >>> 0) - 1}`);
 
 // Win16 module ids, as assigned by $win16_module_id in src/08c-ne-loader.wat.
 // Index 0 is "the loader could not identify the module", which is a real state
@@ -415,9 +1104,15 @@ const traceAtDumps = TRACE_AT_DUMP ? TRACE_AT_DUMP.split(',').map(s => {
   const addr = /\+/.test(a) ? 0 : (parseInt(a, 16) >>> 0); // resolved later if module-relative
   return { addr, spec: a, len: parseInt(l) || 64, prev: null };
 }) : [];
+// `expr[:len]`, where a leading `*` dereferences (read the dword at the
+// computed address and use that as the address) and `len` of `s` reads a
+// NUL-terminated ASCII string. Stack arguments are pointers, so without those
+// two forms this flag can only ever print the pointer, never the string or
+// struct it names: `*esp+4:s` is "the filename this call was given".
 const traceAtMem = TRACE_AT_MEM ? TRACE_AT_MEM.split(',').map(s => {
   const [expr, l] = s.split(':');
-  return { expr: (expr || '').trim(), len: parseInt(l) || 4 };
+  const str = /^s$/i.test((l || '').trim());
+  return { expr: (expr || '').trim(), len: str ? 0 : (parseInt(l) || 4), str };
 }).filter(d => d.expr) : [];
 const traceEipDumps = TRACE_EIP_DUMP ? TRACE_EIP_DUMP.split(',').map(s => {
   const [a, l] = s.split(':');
@@ -491,7 +1186,24 @@ function describeSchedule(instance, threadManager) {
   if (threadManager && threadManager.threads) {
     for (const [, t] of threadManager.threads) {
       const e = t.instance ? t.instance.exports : null;
-      if (!e) continue;
+      if (!e) {
+        // Worker-backed (--threads): the registers are in another OS thread, so
+        // the state comes from what its last slice reported. Skipping these would
+        // make a threaded hang look like a system with no threads in it.
+        if (!t.link) continue;
+        const yr = t.lastYield | 0;
+        const st = t.state !== 'active' ? t.state
+          : t.suspendCount > 0 ? 'susp'
+          : yr === 1 ? 'wait'
+          : yr === 2 ? 'exited'
+          : yr === 7 ? 'msgwait'
+          : yr === 8 ? 'netwait'
+          : (t.sleepUntil && Date.now() < t.sleepUntil) ? 'sleep'
+          : t.inFlight ? 'run' : 'idle';
+        parts.push(`T${t.tid}:${st}@${hex(t.lastEip || 0)}`);
+        sig.push(`T${t.tid}:${st}`);
+        continue;
+      }
       const st = stateOf(e, t);
       parts.push(`T${t.tid}:${st}@${hex(e.get_eip())}`);
       sig.push(`T${t.tid}:${st}`);
@@ -517,10 +1229,39 @@ function buildHandlerNameList() {
 
 async function main() {
   let wasmBytes;
+  // A PIN THAT CANNOT BE HONOURED IS FATAL. This used to fall through to the
+  // `else` and compile from src/, so `--wasm=/typo/path.wasm` (or a stale
+  // $WINE_ASSEMBLY_WASM) ran the CANONICAL build and reported a perfectly normal
+  // verdict about a module nobody asked for. Under tools/watx-matrix.js both
+  // columns then compile the same source and agree with each other by
+  // construction — a green differential that measured one compiler twice.
+  if (WASM_PINNED && !fs.existsSync(WASM_PATH)) {
+    console.error(`run.js: pinned wasm artifact does not exist: ${WASM_PATH}`);
+    console.error(`run.js: refusing to silently compile from src/ instead — ` +
+      `${argHas('wasm') ? '--wasm=' : '$WINE_ASSEMBLY_WASM'} names which module is under test.`);
+    process.exit(2);
+  }
   if (NO_BUILD && fs.existsSync(WASM_PATH)) {
     wasmBytes = fs.readFileSync(WASM_PATH);
   } else {
-    wasmBytes = await compileWat(f => fs.promises.readFile(path.join(SRC_DIR, f), 'utf-8'));
+    // The canonical compiler is WATX (lib/compile-wat.js's compileWat was retired
+    // for full-tree builds; the src tree now spells region-symbolic operands that
+    // legacy silently lowers to `unreachable`). tools/watx-closure.js owns the
+    // closure and the option set so this path cannot drift from tools/build.sh —
+    // tailCalls:true is the same artifact build.sh writes to build/wine-assembly.wasm.
+    const { watxSourceClosure, compileClosure } = require('../tools/watx-closure.js');
+    const r = compileClosure(watxSourceClosure(), { tailCalls: true });
+    if (!r || !r.success || !r.wasmBinary) {
+      const where = r && r.file ? ` at ${r.file}:${r.line || '?'}:${r.col || '?'}` : '';
+      console.error(`run.js: WATX compile failed${where}: ` +
+        String((r && (r.error || r.message)) || 'compile() returned no binary'));
+      process.exit(2);
+    }
+    // Stamp the layout fingerprint the same way tools/build-compile-wat.js
+    // does, so this path is checked by the same rule as a prebuilt artifact
+    // rather than being the one door the check does not cover.
+    const { layoutHash, appendSection } = require('../tools/region-layout-hash.js');
+    wasmBytes = appendSection(Buffer.from(r.wasmBinary), layoutHash(r.regions.regions));
   }
   const exeBytes = fs.readFileSync(EXE_PATH);
 
@@ -555,6 +1296,10 @@ async function main() {
 
   const logs = [];
   let stopped = false;
+  // Batches actually executed. Not the same as MAX_BATCHES once --max-seconds
+  // or an early exit ends the loop, and it is the throughput number a
+  // fixed-duration benchmark is asking for.
+  let batchesRun = 0;
   let netWaits = 0;   // consecutive net_wait yields, reset by any progress
   let apiCount = 0;
   const apiCounts = TRACE_API_COUNTS ? new Map() : null;
@@ -566,6 +1311,7 @@ async function main() {
   let pendingComApiId = -1; // COM api_id from 0xC0DE0000 marker emitted just BEFORE the '<ord>' name log
   let pendingWin16 = null;  // words following the 0xCA16A9F1 Win16 dispatch marker
   let pendingFpu = null;    // words following the 0xCAF00001 --trace-fpu marker
+  let pendingSyncBail = null; // words following the 0xCADE5000 abandoned-wndproc marker
   let dedupLast = null;    // {line, count} for --trace-api-dedup
   const flushDedup = () => {
     if (dedupLast && dedupLast.count > 1) logs.push(`  (x${dedupLast.count})`);
@@ -590,10 +1336,13 @@ async function main() {
   //   B:keydown:VK          — call renderer.handleKeyDown(VK)
   //   B:di-keydown:VK       — set DirectInput/GetAsyncKeyState key-down state without WM_KEYDOWN
   //   B:di-keyup:VK         — clear DirectInput/GetAsyncKeyState key-down state without WM_KEYUP
+  //   B:di-mousedown[:BTN]   — press DirectInput mouse button 1 or 2 without moving the cursor
+  //   B:di-mouseup[:BTN]     — release DirectInput mouse button 1 or 2 without moving the cursor
   //   B:click:X:Y           — handleMouseDown+Up at canvas (X,Y)
   //   B:mousedown:X:Y       — handleMouseDown at canvas (X,Y)
   //   B:mouseup:X:Y         — handleMouseUp at canvas (X,Y)
   //   B:mousemove:X:Y       — handleMouseMove at canvas (X,Y)
+  //   B:relmousemove:DX:DY  — feed a pointer-lock relative delta
   //   B:wheel:X:Y:DELTA     — handleWheel at canvas (X,Y)
   //   B:dump-find           — log current find dialog edit state
   //   B:dump-main-edit      — log main edit text
@@ -624,6 +1373,9 @@ async function main() {
   //   B:wheel-main-edit:DELTA — send WM_MOUSEWHEEL to the main edit
   //   B:drag-main-edit:X1:Y1:X2:Y2 — mouse-drag inside the main edit
   //   B:dlg-cmd:CMD — send WM_COMMAND wParam=CMD to the topmost visible dialog
+  //   B:dlg-post-cmd:CMD — post WM_COMMAND to the topmost visible dialog
+  //   B:dlg-input-cmd:CMD — deliver WM_COMMAND through check_input to that dialog
+  //   B:dlg-input-click:CTRL_ID — deliver an asynchronous BN_CLICKED WM_COMMAND
   //   B:dlg-click:CTRL_ID — click a control by id in the topmost visible dialog
   //   B:dlg-send:CTRL_ID:MSG:WPARAM:LPARAM — send a message to a dialog control by id
   //   B:dlg-set-edit:CTRL_ID:TEXT — set an Edit control by id in the topmost visible dialog
@@ -650,13 +1402,23 @@ async function main() {
   //   B:dump-scrollbar:AXIS[:LABEL] — log a live scrollbar's screen strip rect and pos/page/range
   //   B:wait-dlg-control:CTRL_ID[:LIMIT] — delay following events until a visible dialog has CTRL_ID
   //   B:wait-focus-length:MIN_LENGTH[:LIMIT] — delay until focused text reaches MIN_LENGTH
+  //   B:wait-canvas-dark-pixels:MIN:MAX[:LIMIT] — delay until the repainted screen's near-black pixel count is in range
+  //   B:wait-vfs-file:LIMIT:PATH — delay until PATH exists in the guest VFS
   //   B:sleep-ms:MS — wait real wall-clock time before continuing scheduled actions
+  //   B:set-batch-size:BLOCKS — change the main guest block budget for later batches
+  //   B:set-win16-trace:0|1 — toggle Win16 API tracing during a long run
   //   B:wait-go[:LIMIT] — hold later events until the parent sends {t:'go'} over IPC (LIMIT in batches; default none)
   //   B:call-func:ADDR[:A0:A1:A2:A3] — call a guest function through the WASM helper
   //   B:read-dword:ADDR[:LABEL] — log a guest dword value
   const scheduledInput = [];
-  if (INPUT_SPEC) {
-    for (const spec of INPUT_SPEC.split(',')) {
+  // Parse "BATCH:kind:args" entries into scheduled events. Shared by the
+  // --input schedule and the --control live channel, which is why this is a
+  // function: the body below pushes straight into scheduledInput (100+ push
+  // sites predate the live channel) and the tail is spliced back off, so a
+  // caller gets exactly the events its own entries produced.
+  const parseInputEntries = (entries) => {
+    const first = scheduledInput.length;
+    for (const spec of entries) {
       const parts = spec.split(':');
       const batch = parseInt(parts[0]);
       const kind = parts[1];
@@ -679,6 +1441,10 @@ async function main() {
       } else if (kind === 'dump-fr') {
         // B:dump-fr — log current FINDREPLACE struct (Flags + lpstrFindWhat).
         scheduledInput.push({ batch, action: 'dump-fr' });
+      } else if (kind === 'dump-mem') {
+        // B:dump-mem:0xADDR[:LEN] — hexdump guest memory at that batch.
+        scheduledInput.push({ batch, action: 'dump-mem',
+          arg: parts[2], arg2: parts[3] });
       } else if (kind === 'slot-count') {
         // B:slot-count[:LABEL] — log live WND_RECORDS slot count.
         scheduledInput.push({ batch, action: 'slot-count', label: parts[2] || '' });
@@ -764,6 +1530,12 @@ async function main() {
           ctrlClass: parseInt(parts[2]), cmdId: parseInt(parts[3]) });
       } else if (kind === 'dlg-cmd') {
         scheduledInput.push({ batch, action: 'dlg-cmd', cmdId: parseInt(parts[2]) });
+      } else if (kind === 'dlg-post-cmd') {
+        scheduledInput.push({ batch, action: 'dlg-post-cmd', cmdId: parseInt(parts[2]) });
+      } else if (kind === 'dlg-input-cmd') {
+        scheduledInput.push({ batch, action: 'dlg-input-cmd', cmdId: parseInt(parts[2]) });
+      } else if (kind === 'dlg-input-click') {
+        scheduledInput.push({ batch, action: 'dlg-input-click', ctrlId: parseInt(parts[2]) });
       } else if (kind === 'dlg-click') {
         scheduledInput.push({ batch, action: 'dlg-click', ctrlId: parseInt(parts[2]) });
       } else if (kind === 'ctrl-click') {
@@ -951,6 +1723,12 @@ async function main() {
       } else if (kind === 'keypress' || kind === 'keydown' || kind === 'keyup' ||
                  kind === 'di-keydown' || kind === 'di-keyup') {
         scheduledInput.push({ batch, action: kind, code: parseInt(parts[2]) });
+      } else if (kind === 'di-mousedown' || kind === 'di-mouseup') {
+        const button = parts[2] === undefined ? 1 : parseInt(parts[2]);
+        if (button !== 1 && button !== 2) {
+          throw new Error(`${kind} button must be 1 or 2`);
+        }
+        scheduledInput.push({ batch, action: kind, button });
       } else if (kind === 'ime-start') {
         scheduledInput.push({ batch, action: 'ime-start' });
       } else if (kind === 'ime-update' || kind === 'ime-commit') {
@@ -1052,6 +1830,25 @@ async function main() {
         // B:pixel:X:Y[:LABEL] — repaint and log one canvas pixel.
         scheduledInput.push({ batch, action: 'pixel',
           x: parseInt(parts[2]), y: parseInt(parts[3]), label: parts[4] || '' });
+      } else if (kind === 'wait-canvas-dark-pixels') {
+        // Visual loading gates are host-load independent: later actions move
+        // with this event until the repainted frame actually reaches the range.
+        scheduledInput.push({
+          batch,
+          action: 'wait-canvas-dark-pixels',
+          min: Math.max(0, parseInt(parts[2]) || 0),
+          max: Math.max(0, parseInt(parts[3]) || 0),
+          limit: parseInt(parts[4]) || 2000,
+          startBatch: batch,
+        });
+      } else if (kind === 'wait-vfs-file') {
+        scheduledInput.push({
+          batch,
+          action: 'wait-vfs-file',
+          limit: parseInt(parts[2]) || 2000,
+          filename: parts.slice(3).join(':'),
+          startBatch: batch,
+        });
       } else if (kind === 'png-raw') {
         // B:png-raw:PATH — write the already-composited canvas without forcing repaint.
         scheduledInput.push({ batch, action: 'png-raw', path: parts.slice(2).join(':') });
@@ -1063,6 +1860,10 @@ async function main() {
         scheduledInput.push({ batch, action: 'stop' });
       } else if (kind === 'sleep-ms') {
         scheduledInput.push({ batch, action: 'sleep-ms', ms: parseInt(parts[2]) || 0 });
+      } else if (kind === 'set-batch-size') {
+        scheduledInput.push({ batch, action: 'set-batch-size', size: parseInt(parts[2]) || 1 });
+      } else if (kind === 'set-win16-trace') {
+        scheduledInput.push({ batch, action: 'set-win16-trace', enabled: parseInt(parts[2]) !== 0 });
       } else if (kind === 'canvas-resize') {
         // B:canvas-resize:WIDTH:HEIGHT — emulate browser backing-canvas resize.
         scheduledInput.push({ batch, action: 'canvas-resize', w: parseInt(parts[2]), h: parseInt(parts[3]) });
@@ -1086,6 +1887,9 @@ async function main() {
         // derived from the window's live rect, the same way close-click does.
         scheduledInput.push({ batch, action: 'caption-click',
           target: parts[2] || '', part: parts[3] || 'close' });
+      } else if (kind === 'relmousemove') {
+        scheduledInput.push({ batch, action: kind,
+          x: parseInt(parts[2]), y: parseInt(parts[3]) });
       } else if (kind === 'click') {
         scheduledInput.push({ batch, action: 'click', x: parseInt(parts[2]), y: parseInt(parts[3]) });
       } else if (kind === 'mousedown') {
@@ -1107,6 +1911,47 @@ async function main() {
         const lParam = parseInt(parts[3]) || 0;
         scheduledInput.push({ batch, msg, wParam, lParam });
       }
+    }
+    return scheduledInput.splice(first);
+  };
+  if (INPUT_SPEC) {
+    scheduledInput.push(...parseInputEntries(INPUT_SPEC.split(',')));
+    scheduledInput.sort((a, b) => a.batch - b.batch);
+  }
+  // --auto-mouse=X0,Y0,X1,Y1[,PERIOD][,START]: a hand on the mouse, scripted.
+  // The browser HUD can only measure what a person does live, which is not a
+  // benchmark: nobody moves the pointer the same way twice. This sweeps it
+  // between two points forever, one move every PERIOD batches, so an input
+  // measurement is repeatable and diffable across builds. PERIOD is in
+  // batches rather than ms on purpose -- a batch is one message-loop turn, so
+  // the sweep keeps pace with the guest instead of with this machine's load.
+  if (AUTO_MOUSE) {
+    const n = AUTO_MOUSE.split(',').map(v => parseInt(v.trim(), 10));
+    const [x0, y0, x1, y1] = n;
+    const period = Math.max(1, n[4] || 4);
+    const start = Math.max(0, n[5] || 0);
+    if ([x0, y0, x1, y1].some(v => !Number.isFinite(v))) {
+      console.error('--auto-mouse needs at least X0,Y0,X1,Y1');
+      process.exit(2);
+    }
+    if (!Number.isFinite(MAX_BATCHES)) {
+      console.error('--auto-mouse with --control needs an explicit --max-batches (the sweep is pre-scheduled per batch)');
+      process.exit(2);
+    }
+    // Ping-pong, so the pointer never teleports: a jump from one edge back to
+    // the other is not a motion a hand makes, and a game that tracks pointer
+    // DELTA rather than position would see one huge bogus step per sweep.
+    const legs = Math.max(1, Math.floor(((MAX_BATCHES - start) / period) / 2));
+    let k = 0;
+    for (let b = start; b < MAX_BATCHES; b += period, k++) {
+      const leg = Math.floor(k / legs) % 2;
+      const t = (k % legs) / legs;
+      const f = leg ? 1 - t : t;
+      scheduledInput.push({
+        batch: b, action: 'mousemove',
+        x: Math.round(x0 + (x1 - x0) * f),
+        y: Math.round(y0 + (y1 - y0) * f),
+      });
     }
     scheduledInput.sort((a, b) => a.batch - b.batch);
   }
@@ -1133,8 +1978,13 @@ async function main() {
     const [screenW, screenH] = screenArg ? screenArg.split('=')[1].split('x').map(Number) : [640, 480];
     const canvas = createCanvas(screenW, screenH);
     renderer = new Win98Renderer(canvas);
+    if (TRACE_COMPOSITE) renderer.traceComposite = true;
+    if (TRACE_INPUT) renderer.onInputTrace = (what) => console.log(`[input-route] ${what}`);
   }
   let videoRecorder = null;
+  let videoEvery = 1;
+  let videoStartBatch = VIDEO_START_BATCH;
+  const audioTapPumps = new Set();
   if (VIDEO_OUT) {
     if (!renderer) throw new Error('--video requires the CLI renderer (remove --no-renderer)');
     videoRecorder = new CliVideoRecorder(renderer.canvas, {
@@ -1161,7 +2011,7 @@ async function main() {
   ];
 
   // DX_OBJECTS lives in high WASM memory on this branch.
-  // Matches src/09a8-handlers-directx.wat ($DX_OBJECTS = 0x07FF0000).
+  // $DX_OBJECTS, from the map declared in src/00-regions.wat.
   const DX_TYPE_NAMES = { 1:'DDraw', 2:'DDSurface', 3:'DDPalette', 4:'DSound', 5:'DSBuffer',
     6:'DInput', 7:'DIDev', 8:'D3D', 9:'D3D3', 20:'D3DDev3', 23:'D3DVp3', 24:'D3DLight', 25:'D3DMat3',
     26:'DPlay3', 27:'DPlayLobby2' };
@@ -1172,8 +2022,8 @@ async function main() {
       wa = g2w(thisGuest);
       slot = dv.getUint32(wa + 4, true);
     } catch (_) { return null; }
-    if (slot >= 256) return null;
-    const entry = 0x07FF0000 + slot * 32;
+    if (slot >= 4096) return null;
+    const entry = RegionMap.BASE.DX_OBJECTS + slot * 32;
     const type = dv.getUint32(entry, true);
     if (!type) return null;
     const rc = dv.getUint32(entry + 4, true);
@@ -1299,7 +2149,23 @@ async function main() {
   const apiByName = new Map(apiTable.map(e => [e.name, e]));
   const ctx = {
     getMemory: () => ctx._memory ? ctx._memory.buffer : null,
+    d3d9Backend: D3D9_RENDERER || 'webgl',
+    d3d9Programmable: D3D9_PROGRAMMABLE || APP_ENTRY?.d3d9Programmable === true,
+    createD3DRenderWorker: () => {
+      const {Worker} = require('worker_threads');
+      const {WorkerConsumer} = require('../lib/d3d-command-stream');
+      const sigs = JSON.parse(fs.readFileSync(path.join(ROOT,'lib','host-import-sigs.generated.json'),'utf8')).sigs;
+      return new WorkerConsumer(new Worker(path.join(ROOT,'lib','d3d-render-worker.js')),
+        {module:wasmModule,memory,sigs,imageBase:instance.exports.get_image_base() >>> 0,
+          reclaimHeap:head=>instance.exports.d3d_render_adopt_free_list(head)});
+    },
     renderer,
+    // --headless-gl: give the OpenGL bridge a drawable factory so wglCreateContext
+    // can succeed without a browser. Opt-in, because without it these guests take
+    // their documented no-3D-hardware path and a large amount of existing headless
+    // behaviour is pinned to that; turning it on silently would change what many
+    // runs mean. See lib/headless-gl.js.
+    createCanvas: HEADLESS_GL ? createCanvas : null,
     processId: 1000,
     apiTable,
     log: VERBOSE ? console.log.bind(console) : null,
@@ -1316,15 +2182,24 @@ async function main() {
     // The guest clock. --time-scale runs it faster than the wall clock, which
     // separates "waiting for time to pass" from "doing work" in a slow run.
     guestNowMs: () => CLOCK_ORIGIN + (Date.now() - CLOCK_ORIGIN) * TIME_SCALE,
+    // The calendar clock, pinned only when --wall-clock-ms= asked for it.
+    wallNowMs: WALL_CLOCK_MS ? () => WALL_CLOCK_MS : undefined,
     // The room segment, when this process was launched into one. Without it
     // the guest's sockets still work; the room is just this process alone.
     vlanWire: VLAN_WIRE ? new (require('../lib/vlan-wire').ProcessWire)(process) : null,
     audioStatsStride: AUDIO_STATS ? AUDIO_STATS_STRIDE : 0,
+    signalSyncHandle: handle => threadManager
+      ? threadManager.setEvent(handle >>> 0) : 0,
+    resetSyncHandle: handle => threadManager
+      ? threadManager.resetEvent(handle >>> 0) : 0,
     dumpSdb: DUMP_SDB ? { images: new Map(), log: [] } : null,
     _audioOutFd: AUDIO_OUT ? fs.openSync(AUDIO_OUT, 'w') : undefined,
     _audioOutPath: AUDIO_OUT || null,
     _audioOutWav: AUDIO_OUT ? AUDIO_OUT.toLowerCase().endsWith('.wav') : false,
     sharedAudio: {},  // shared waveOut state across threads
+    audioTap: () => (videoRecorder && videoRecorder.active ? videoRecorder : null),
+    registerAudioTapPump: fn => { if (typeof fn === 'function') audioTapPumps.add(fn); },
+    renderMidiForTap: (smf, options) => renderTinySynthNotes(smf, options),
     g2w: (addr) => ctx.exports ? translateGuest(addr, ctx.exports.get_image_base(), ctx.getMemory()) : addr,
     readFile: (name) => {
       // Try to find file relative to exe directory
@@ -1346,20 +2221,42 @@ async function main() {
     win16StageModule: (name, id) => {
       if (!ctx.exports || !ctx.exports.win16_dll_staging) return false;
       const dir = path.dirname(EXE_PATH);
+      let bytes = null;
       for (const f of win16FileCandidates(name)) {
         const p = path.join(dir, f);
         if (!fs.existsSync(p)) continue;
-        const bytes = fs.readFileSync(p);
-        new Uint8Array(ctx.getMemory()).set(bytes, ctx.exports.win16_dll_staging(id));
-        return true;
+        bytes = fs.readFileSync(p);
+        break;
       }
-      return false;
+      if (!bytes) {
+        const resident = residentWin16Module(ctx.vfs, name);
+        if (resident) {
+          bytes = resident.bytes;
+          if (resident.format === 'w32inst') return (bytes.length | 0x80000000) >>> 0;
+        }
+      }
+      if (!bytes) return false;
+      const room = ctx.exports.win16_app_dll_staging_size
+        ? ctx.exports.win16_app_dll_staging_size()
+        : 0x00100000;
+      if (bytes.length > room) return false;
+      const base = ctx.exports.win16_dll_staging(id);
+      const memory = new Uint8Array(ctx.getMemory());
+      memory.fill(0, base, base + room);
+      memory.set(bytes, base);
+      return bytes.length;
     },
   };
   const base = createHostImports(ctx);
+  closeD3DRender = () => ctx.closeD3DRender();
   if (ctx.vfs) {
     ctx.vfs.dirs.add('c:\\windows');
+    ctx.vfs.dirs.add('c:\\windows\\system');
     ctx.vfs.dirs.add('c:\\windows\\fonts');
+    mountSystemDataFiles(ctx.vfs, SYSTEM_DATA_FILES.map(file => ({
+      ...file,
+      bytes: new Uint8Array(fs.readFileSync(path.join(ROOT, file.url))),
+    })));
     for (const name of BUNDLED_BITMAP_FONTS) {
       const bundledFon = path.join(ROOT, 'fonts', name);
       if (!fs.existsSync(bundledFon)) {
@@ -1478,6 +2375,163 @@ async function main() {
     };
   }
   const tickStateRef = { batch: 0 };
+  // --frame-stats: how evenly the guest presents, not how often. Average fps
+  // is the number that hides judder -- 55fps of even 18ms frames looks
+  // smooth, 55fps of alternating 17/34ms frames does not, and both report
+  // "55".
+  //
+  // Two different events get counted, because in this harness they are not
+  // the same event and only one of them is the guest's.
+  //
+  //   upload — WAT handing a dirty rect to the presentation surface. This is
+  //            the guest drawing, and it is driven by guest code alone.
+  //   flush  — the presentation surface decoding into the canvas. This is
+  //            what lib/host-imports.js counts for the browser HUD.
+  //
+  // In the browser those coincide closely enough to call one "a frame": the
+  // step loop repaints every step and the flush only does work when the guest
+  // actually dirtied something, so the flush rate IS the guest's draw rate.
+  // In the CLI they do NOT coincide: run.js repaints once every REPAINT_EVERY
+  // batches and the flush happens when the compositor reads the canvas, so
+  // the flush series is a picture of the HARNESS's sampling cadence and its
+  // interval collapses to exactly one batch. Reporting that as guest pacing
+  // would be measuring our own repaint loop and calling it the game.
+  // The present series is the one to trust for a DirectX app. gdi_surface_upload
+  // is NOT a frame: on DX-Ball it fires 182160 times against 20860 presents,
+  // because it tracks each BltFast of a sprite into the back buffer, about ten
+  // per frame. dx_trace kind 5/6 is the flip itself, it costs one JS call per
+  // frame, and unlike the flush it does not depend on --repaint-every at all --
+  // which matters, because a repaint of a live 640x480 surface costs ~6ms and
+  // repainting often enough to resolve a frame is slower than the run budget.
+  const frameStats = {
+    present: { iv: [], lastBatch: -1, lastAt: 0n },
+    flush: { iv: [], lastBatch: -1, lastAt: 0n },
+  };
+  // One entry per executed batch, for --decode-stats.
+  const decodeStatsDecodes = [];
+  const decodeStatsSliceUs = [];
+  // One entry per executed batch, for --batch-stats; halts is indexed by the
+  // reason code $run reports (see $last_run_halt in src/01-header.wat).
+  const batchStatsBlocks = [];
+  const batchStatsHalts = [0, 0, 0, 0, 0, 0];
+  const recordFrame = (series) => {
+    const at = process.hrtime.bigint();
+    // Outside the measurement window, still move the anchor forward. Skipping
+    // that would make the first in-window interval span the entire warm-up and
+    // land as a single enormous outlier at the top of every percentile.
+    if (tickStateRef.batch < FRAME_STATS_FROM) {
+      series.lastBatch = tickStateRef.batch;
+      series.lastAt = at;
+      return at;
+    }
+    if (series.lastBatch >= 0) {
+      series.iv.push({
+        batches: tickStateRef.batch - series.lastBatch,
+        ms: Number(at - series.lastAt) / 1e6,
+      });
+    }
+    series.lastBatch = tickStateRef.batch;
+    series.lastAt = at;
+    return at;
+  };
+  if (FRAME_STATS || LATENCY_STATS) {
+    ctx.onGuestFrame = () => {
+      const at = recordFrame(frameStats.flush);
+      // A presented frame is where a pointer move becomes pixels. The
+      // ctrl_paint + surface_upload pair above cannot close a move's sample
+      // in a fullscreen DirectDraw game, because such a game paints no
+      // WAT-native controls at all -- it blits its own back buffer.
+      if (latency.pending && latency.pending.kind === 'mousemove') {
+        latency.samples.push({
+          kind: 'mousemove',
+          batches: tickStateRef.batch - latency.pending.batch,
+          ms: Number(at - latency.pending.at) / 1e6,
+        });
+        latency.pending = null;
+      }
+    };
+  }
+  // The guest tells us when a DirectDraw frame is finished; nothing else can.
+  // Before this the harness polled -- one upload per 128 batches, kept only if
+  // presentBestDxOffscreen's 4-byte-per-row signature happened to differ -- so
+  // what reached the canvas was the harness's cadence, not the game's, and a
+  // ball moving between the sampled columns could stay stale indefinitely.
+  // Two rates, deliberately: correctness is tied to the guest (dirty), cost is
+  // tied to wall clock. Measured on dxball, 800 batches of 20k steps: uploads
+  // effectively off 15.0s, the 10Hz default 17.0s, one per finished frame
+  // 23.3s. Nothing watches a headless canvas between captures and the
+  // canvasToPng hook forces an upload at every capture, so the rate limit costs
+  // no evidence -- a --png still shows the frame the guest just finished.
+  const dxPresent = { dirty: false, lastAt: 0n };
+  const presentDxIfDirty = (minMs) => {
+    if (!dxPresent.dirty || !base.gdi || !base.gdi.presentBestDxOffscreen) return;
+    if (minMs > 0) {
+      const now = process.hrtime.bigint();
+      if (dxPresent.lastAt !== 0n && Number(now - dxPresent.lastAt) / 1e6 < minMs) return;
+      dxPresent.lastAt = now;
+    }
+    dxPresent.dirty = false;
+    // force=true: presentBestDxOffscreen's signature samples 4 bytes per row,
+    // so it cannot be trusted to notice a sprite moving between its columns.
+    base.gdi.presentBestDxOffscreen(true);
+  };
+  // ...but only if the upload is followed by a composite. presentBestDxOffscreen
+  // writes into the target window's canvas/frame layer, not into renderer.canvas,
+  // and renderer.canvas is what every capture serializes. The --png action ran
+  // renderer.repaint() and *then* canvasToPng, so on any batch where the 100ms
+  // rate limit had suppressed the present, the composite ran against the old
+  // layer and the upload arrived too late to reach the picture: the capture
+  // showed the previous finished frame. Because the limiter is keyed to the host
+  // wall clock, whether that happened depended on machine load and on nothing in
+  // the guest -- test-d3dim-globe-render-menu.js captures each of Globe's three
+  // fill modes five batches after selecting it and intermittently photographed
+  // the mode before (identical handler histogram, different PNG, on this box at
+  // load ~8). Present first, composite second, then serialize.
+  dxPresentHook = () => {
+    presentDxIfDirty(0);
+    if (renderer && typeof renderer.repaint === 'function') renderer.repaint();
+  };
+  if (typeof h.dx_trace === 'function') {
+    const rawDxTrace = h.dx_trace;
+    // kind 5 = Present, 6 = Flip. Every other kind (Lock/Unlock/Blt/SetEntries)
+    // happens several times within one frame and must not count as one FRAME,
+    // but kind 2 (Unlock) IS a finished write: a released lock means the guest
+    // is done touching those pixels, which is exactly when they are worth
+    // uploading for a game that renders straight into a locked surface.
+    h.dx_trace = (kind, ...a) => {
+      if (kind === 2 || kind === 5 || kind === 6) dxPresent.dirty = true;
+      if (FRAME_STATS && (kind === 5 || kind === 6)) recordFrame(frameStats.present);
+      // --dx-lock-pause-ms: presentation back-pressure, charged at kind 5.
+      //
+      // Kind 5 is $dx_present, and it is the ONE event every presentation path
+      // funnels into: Unlock on a primary, Flip on a flip chain, a Blt or
+      // BltFast whose destination is the primary, and a palette SetEntries.
+      // It is also exactly what host.js counts as PRESENT/s. Charging the
+      // primary Lock alone (the first thing tried here) reached only the
+      // games that render straight into a locked primary and silently missed
+      // every Blt-presenting game -- DX-Ball took 0ms over 6000 batches and
+      // read as a null result rather than as an unmeasured one.
+      //
+      // Kind 1 (Lock) is still classified, for the report only: it says
+      // whether the app presents by locking the primary or by blitting to it,
+      // and offscreen/back-buffer locks are composition and stay full speed.
+      if (DX_LOCK_PAUSE.ms > 0) {
+        if (kind === 1) {
+          if ((a[1] | 0) & 1) DX_LOCK_PAUSE.primaryLocks++;
+          else DX_LOCK_PAUSE.offscreenLocks++;
+        } else if (kind === 6) {
+          DX_LOCK_PAUSE.flips++;
+        } else if (kind === 5) {
+          DX_LOCK_PAUSE.presents++;
+          if (DX_LOCK_PAUSE.clock) {
+            DX_LOCK_PAUSE.clock.state.pausedMs += DX_LOCK_PAUSE.ms;
+            DX_LOCK_PAUSE.guestMsAdded += DX_LOCK_PAUSE.ms;
+          }
+        }
+      }
+      return rawDxTrace(kind, ...a);
+    };
+  }
   // Keep the CLI harness instantiable while optional host-side font resource
   // loading is unavailable; browser/full hosts can provide the real loader.
   if (!h.add_font_resource) h.add_font_resource = () => 0;
@@ -1577,7 +2631,7 @@ async function main() {
         const esp = e.get_esp() >>> 0;
         const imageBase = e.get_image_base() >>> 0;
         const dv = new DataView(memory.buffer);
-        const g2w = addr => addr - imageBase + 0x12000;
+        const g2w = addr => RegionMap.g2w(addr, imageBase);
         const cs = dv.getUint32(g2w((esp + 4) >>> 0), true) >>> 0;
         const state = () => ({
           lock: dv.getInt32(g2w((cs + 4) >>> 0), true),
@@ -1600,7 +2654,7 @@ async function main() {
         const esp = e.get_esp();
         const imageBase = e.get_image_base();
         const dv = new DataView(memory.buffer);
-        const g2w = addr => addr - imageBase + 0x12000;
+        const g2w = addr => RegionMap.g2w(addr, imageBase);
         const msgPtr = dv.getUint32(g2w(esp + 4), true);
         const msgHwnd = dv.getUint32(g2w(msgPtr), true);
         const msgMsg = dv.getUint32(g2w(msgPtr + 4), true);
@@ -1624,7 +2678,7 @@ async function main() {
         const esp = e.get_esp();
         const imageBase = e.get_image_base();
         const dv = new DataView(memory.buffer);
-        const g2w = addr => addr - imageBase + 0x12000;
+        const g2w = addr => RegionMap.g2w(addr, imageBase);
         const ret = dv.getUint32(g2w(esp), true);
         const stackVals = [];
         for (let i = 0; i < 8; i++) {
@@ -1665,7 +2719,7 @@ async function main() {
       const esp = e.get_esp();
       const imageBase = e.get_image_base();
       const dv = new DataView(memory.buffer);
-      const g2w = addr => addr - imageBase + 0x12000;
+      const g2w = addr => RegionMap.g2w(addr, imageBase);
       const fmtCtx = { dv, g2w, memory: memory.buffer, readStr, hex };
 
       const entry = apiByName.get(t);
@@ -1872,6 +2926,23 @@ async function main() {
     // run. Only the F1/F2 markers mean the task stopped.
     // --trace-fpu (06-fpu.wat): the flags, whether they went up or came down,
     // and the EIP of the block that did it.
+    // $wnd_send_message ran out of interpreter rounds and is about to restore
+    // the caller's registers with the wndproc still mid-flight. The guest call
+    // is dropped on the floor, so anything the tail of that handler would have
+    // done simply never happens -- and nothing else in the run says so. Three
+    // words follow: EIP, yield_reason, message id, HWND, wParam, lParam.
+    if ((val >>> 0) === 0xCADE5000) { pendingSyncBail = { words: [] }; return; }
+    if (pendingSyncBail) {
+      pendingSyncBail.words.push(val >>> 0);
+      if (pendingSyncBail.words.length < 6) return;
+      const [eip, yr, msg, hwnd, wParam, lParam] = pendingSyncBail.words;
+      pendingSyncBail = null;
+      flushDedup();
+      logs.push(`[sync] ABANDONED wndproc hwnd=${hex(hwnd)} msg=${hex(msg)} ` +
+        `wParam=${hex(wParam)} lParam=${hex(lParam)} at ${hex(eip)} ` +
+        `after 64 rounds (yield_reason=${yr})`);
+      return;
+    }
     if ((val >>> 0) === 0xCAF00001) { pendingFpu = { words: [] }; return; }
     if (pendingFpu) {
       pendingFpu.words.push(val >>> 0);
@@ -2047,6 +3118,8 @@ async function main() {
       if (TRACE_EIP_DETAIL && instance && instance.exports) {
         line += ` ${regs()}`;
         const e = instance.exports;
+        if (e.get_sync_msg_depth) line += ` syncDepth=${e.get_sync_msg_depth() | 0}`;
+        if (e.get_block_budget) line += ` blockBudget=${e.get_block_budget() | 0}`;
         if (e.get_flag_res && e.get_flag_op && e.get_flag_a && e.get_flag_b && e.get_flag_sign_shift) {
           line += ` flags{op=${e.get_flag_op()} a=${hex(e.get_flag_a())} b=${hex(e.get_flag_b())} res=${hex(e.get_flag_res())} sh=${e.get_flag_sign_shift()}}`;
         }
@@ -2061,7 +3134,7 @@ async function main() {
           }
         }
       }
-      logs.push(line);
+      TRACE_EIP_STREAM ? console.log(line) : logs.push(line);
     };
   }
 
@@ -2083,7 +3156,7 @@ async function main() {
       if (TRACE_API && lastApiEntry) {
         const dv = new DataView(memory.buffer);
         const imageBase = instance.exports.get_image_base();
-        const fmtCtx = { dv, g2w: addr => addr - imageBase + 0x12000, memory: memory.buffer, readStr, hex };
+        const fmtCtx = { dv, g2w: addr => RegionMap.g2w(addr, imageBase), memory: memory.buffer, readStr, hex };
         const eax = instance.exports.get_eax();
         const typedRet = fmtApiRet(lastApiEntry, eax, fmtCtx);
         const outInfo = lastApiArgs ? fmtApiOutParams(lastApiEntry, lastApiArgs, fmtCtx) : '';
@@ -2094,7 +3167,7 @@ async function main() {
       if (TRACE_API && lastApiName === 'SendMessageA' && lastTreeItemTrace) {
         try {
           const imageBase = instance.exports.get_image_base();
-          const textValue = readStr(lastTreeItemTrace.textGuest - imageBase + 0x12000,
+          const textValue = readStr(RegionMap.g2w(lastTreeItemTrace.textGuest, imageBase),
             Math.min(lastTreeItemTrace.textMax, 1024));
           logs.push(`  TVITEMA.text=${JSON.stringify(textValue)}`);
         } catch (_) {}
@@ -2116,6 +3189,49 @@ async function main() {
   h.shell_about = (dlgHwnd, ownerHwnd, appPtr) => {
     logs.push(`[ShellAbout] dlg=0x${dlgHwnd.toString(16)} owner=0x${ownerHwnd.toString(16)} "${readStr(appPtr)}"`);
     return 1;
+  };
+
+  let capturedLaunch = null;
+  const baseShellExecute = h.shell_execute;
+  h.shell_execute = (hwnd, opWa, fileWa, paramsWa, dirWa, nShow) => {
+    const file = fileWa ? readStr(fileWa) : '';
+    const params = paramsWa ? readStr(paramsWa) : '';
+    const operation = opWa ? readStr(opWa) : 'open';
+    const directory = dirWa ? readStr(dirWa) : '';
+    const result = baseShellExecute(hwnd, opWa, fileWa, paramsWa, dirWa, nShow);
+    if (!CAPTURE_LAUNCH || !ctx.vfs || capturedLaunch) return result;
+
+    // Inno and InstallShield both put command lines in lpFile, but disagree
+    // about whether the closing quote follows argv[0] or the final argument.
+    // Use the browser's parser so capture/replay sees exactly what a live
+    // ShellExecute handoff sees.
+    const parsedCommand = parseShellLaunchCommand(file, params, operation);
+    const executable = resolveShellLaunchPath(
+      parsedCommand.file.trim(), ctx.vfs, parsedCommand.isWinExec);
+    const inlineArgs = parsedCommand.params.trim();
+    const guestExe = ctx.vfs._resolvePath ? ctx.vfs._resolvePath(executable)
+      : (ctx.vfs._normPath ? ctx.vfs._normPath(executable) : executable.toLowerCase());
+    if (!ctx.vfs.files.has(guestExe)) return result;
+    // A mounted ISO entry may still be provider-backed here: ShellExecute
+    // names it without opening it first. Start the asynchronous read now and
+    // await it after the guest stops, before the synchronous VFS exporter
+    // writes the snapshot for the child stage.
+    const materialize = typeof ctx.vfs.materialize === 'function'
+      ? Promise.resolve(ctx.vfs.materialize(guestExe))
+      : null;
+    capturedLaunch = {
+      guestExe,
+      args: inlineArgs,
+      directory: directory || (ctx.vfs.getCurrentDirectory
+        ? ctx.vfs.getCurrentDirectory() : ctx.vfs.cwd || ''),
+      materialize,
+      vfs: {
+        files: new Map(ctx.vfs.files),
+        dirs: new Set(ctx.vfs.dirs),
+      },
+    };
+    logs.push(`[capture-launch] snapshotted ${guestExe} (${capturedLaunch.vfs.files.size} files)`);
+    return result;
   };
 
   // --- Override set_dlg_item_text to log ---
@@ -2153,7 +3269,11 @@ async function main() {
     // Inject button sequence if --buttons provided, else WM_CLOSE.
     // Skip auto-WM_CLOSE when --input is in use — the test is orchestrating
     // its own event timeline and shouldn't be killed prematurely.
-    if (!inputEvent && !inputQueue && !INPUT_SPEC) {
+    // SW_HIDE is not a window coming up, it is one going away: MFC hides its
+    // unused toolbar/status children during frame setup, and closing the app
+    // on that leaves the real frame unpainted (fontview exited before its
+    // first WM_PAINT this way).
+    if (cmd !== 0 && !inputEvent && !inputQueue && !INPUT_SPEC && !CONTROL && !CONTROL_STDIN) {
       const btnArg = args.find(a => a.startsWith('--buttons='));
       if (btnArg) {
         inputQueue = btnArg.split('=')[1].split(',').map(Number);
@@ -2234,8 +3354,13 @@ async function main() {
   // headless slices. Batch transitions add a larger jump (~200ms) to keep
   // the overall simulated pace realistic.
   const tickCallStepMs = Math.max(1, parseInt(process.env.TICK_CALL_STEP_MS || '1', 10) || 1);
-  const tickState = { batch: 0, callsInBatch: 0 };
-  ctx.sharedAudio.audioClockMs = () => tickState.batch * 200;
+  const batchClock = createBatchClock(TICK_MS_PER_BATCH, tickCallStepMs);
+  const tickState = batchClock.state;
+  // Published for the --dx-lock-pause-ms hook installed above, which runs long
+  // before this line but only ever fires during the batch loop, long after it.
+  DX_LOCK_PAUSE.clock = batchClock;
+  VBLANK.clock = batchClock;
+  ctx.sharedAudio.audioClockMs = () => batchClock.batchTicks();
   // --real-ticks hands the guest the wall clock instead. Two emulator
   // processes in one room CANNOT share a batch-driven clock: a batch is not a
   // unit of time and each process runs them at its own rate, so an idle Hearts
@@ -2245,7 +3370,7 @@ async function main() {
   // decided against a clock the other does not share.
   h.get_ticks = REAL_TICKS
     ? () => ((((Date.now() - CLOCK_ORIGIN) * TIME_SCALE) | 0) & 0x7FFFFFFF)
-    : () => (((tickState.batch * 200 + (tickState.callsInBatch++ * tickCallStepMs)) & 0x7FFFFFFF));
+    : batchClock.getTicks;
 
   // --- Override input for test injection ---
   let lastInputEvent = null;
@@ -2281,6 +3406,7 @@ async function main() {
   h.check_input_hwnd = () => inputEventHwnd(lastInputEvent, instance && instance.exports,
     (why) => logs.push(`[check_input_hwnd] ${why}`));
   h.check_input_lparam = () => (lastInputEvent ? (lastInputEvent.lParam || 0) : 0);
+  h.check_input_wparam = () => (lastInputEvent ? (lastInputEvent.wParam || 0) : 0);
   let lastMouseTracePos = -1;
   let lastMouseTraceButtons = -1;
   const lastAsyncMouseTrace = Object.create(null);
@@ -2376,30 +3502,35 @@ async function main() {
   let threadManager = null;
 
   // Wire thread/event imports to ThreadManager
-  h.create_thread = (startAddr, param, stackSize, creationFlags) =>
-    threadManager.createThread(startAddr, param, stackSize, creationFlags);
+  h.create_thread = (startAddr, param, stackSize, creationFlags, threadIdWa, creatorTid) =>
+    threadManager.createThread(startAddr, param, stackSize, creationFlags, threadIdWa, creatorTid);
   h.duplicate_current_thread = (tid) => threadManager.duplicateCurrentThread(tid);
   h.suspend_thread = (handle) => threadManager.suspendThread(handle);
   h.resume_thread = (handle) => threadManager.resumeThread(handle);
+  h.get_thread_priority = (handle, tid) => threadManager.getThreadPriority(handle, tid);
+  h.set_thread_priority = (handle, priority, tid) => threadManager.setThreadPriority(handle, priority, tid);
+  h.get_thread_locale = (tid) => threadManager.getThreadLocale(tid);
+  h.set_thread_locale = (locale, tid) => threadManager.setThreadLocale(locale, tid);
+  h.com_initialize_thread = (reserved, flags, tid) =>
+    threadManager.initializeComApartment(reserved, flags, tid);
+  h.com_uninitialize_thread = (tid) => threadManager.uninitializeComApartment(tid);
   h.exit_thread = (exitCode) => threadManager.exitThread(exitCode);
   h.get_exit_code_thread = (handle) => threadManager.getExitCodeThread(handle);
-  const readSyncObjectName = (nameWa, wide) => {
-    if (!nameWa) return '';
-    const dv = new DataView(memory.buffer);
-    let name = '';
-    for (let i = 0; i < 512; i++) {
-      const ch = wide
-        ? dv.getUint16(nameWa + i * 2, true)
-        : dv.getUint8(nameWa + i);
-      if (!ch) break;
-      name += String.fromCharCode(ch);
-    }
-    return name;
+  h.terminate_thread = (handle, exitCode) => threadManager.terminateThread(handle, exitCode);
+  const win32ThreadId = () => ((ctx.threadId | 0) + 1) | 0;
+  h.create_event = (manualReset, initialState, nameWa, wide) => {
+    const name = readSyncObjectName(memory, nameWa, wide);
+    return (wide & 2)
+      ? threadManager.createMutex(initialState, name, win32ThreadId())
+      : threadManager.createEvent(manualReset, initialState, name);
   };
-  h.create_event = (manualReset, initialState, nameWa, wide) =>
-    threadManager.createEvent(manualReset, initialState, readSyncObjectName(nameWa, wide));
-  h.open_event = (nameWa, wide) => threadManager.openEvent(readSyncObjectName(nameWa, wide));
-  h.set_event = (handle) => threadManager.setEvent(handle);
+  h.open_event = (nameWa, wide) => {
+    const name = readSyncObjectName(memory, nameWa, wide);
+    return (wide & 2) ? threadManager.openMutex(name) : threadManager.openEvent(name);
+  };
+  h.set_event = (handle) => ((handle >>> 0) & 0x80000000)
+    ? threadManager.releaseMutex((handle >>> 0) & 0x7fffffff, win32ThreadId())
+    : threadManager.setEvent(handle);
   h.reset_event = (handle) => threadManager.resetEvent(handle);
   // A wait reached from inside a synchronous SendMessage cannot yield: the
   // recursive interpreter frame in $wnd_send_message would be abandoned. Give
@@ -2408,12 +3539,21 @@ async function main() {
   const nestedSyncMessage = () =>
     !!(ctx.exports && ctx.exports.get_sync_msg_depth && (ctx.exports.get_sync_msg_depth() | 0));
   h.wait_single = (handle, timeout) => nestedSyncMessage()
-    ? threadManager.waitSingleCooperative(handle, timeout)
-    : threadManager.waitSingle(handle, timeout);
+    ? threadManager.waitSingleCooperative(handle, timeout, win32ThreadId())
+    : threadManager.waitSingle(handle, timeout, win32ThreadId());
   h.wait_multiple = (nCount, handlesWA, bWaitAll, timeout) => nestedSyncMessage()
-    ? threadManager.waitMultipleCooperative(nCount, handlesWA, bWaitAll, timeout)
-    : threadManager.waitMultiple(nCount, handlesWA, bWaitAll, timeout);
-  h.create_semaphore = (initialCount, maxCount) => threadManager.createSemaphore(initialCount, maxCount);
+    ? threadManager.waitMultipleCooperative(nCount, handlesWA, bWaitAll, timeout, win32ThreadId())
+    : threadManager.waitMultiple(nCount, handlesWA, bWaitAll, timeout, win32ThreadId());
+  // The critical-section face of the same problem: see pumpThreadsOnce().
+  h.cs_pump = () => threadManager.pumpThreadsOnce();
+  h.create_semaphore = (initialCount, maxCount, nameWa, wide) => {
+    const name = readSyncObjectName(memory, nameWa, wide);
+    return threadManager.createSemaphore(initialCount, maxCount, name);
+  };
+  h.open_semaphore = (nameWa, wide) => {
+    const name = readSyncObjectName(memory, nameWa, wide);
+    return threadManager.openSemaphore(name);
+  };
   h.release_semaphore = (handle, releaseCount, lpPrevCountWA) => threadManager.releaseSemaphore(handle, releaseCount, lpPrevCountWA);
   // Check if a DLL file exists in VFS or host filesystem
   h.has_dll_file = (nameWA) => {
@@ -2445,13 +3585,50 @@ async function main() {
     return 0;
   };
 
+  // A cursor an app builds for itself never touches a window surface, so no
+  // capture in this harness can show it: it goes ICONINFO -> WAT compositor ->
+  // one host call and then straight into a CSS cursor. This writes that
+  // composite out, which is the only way to answer "is that the hand the game
+  // drew, and is it the right way up".
+  if (DUMP_CURSORS && PNG) {
+    fs.mkdirSync(DUMP_CURSORS, { recursive: true });
+    const inner = h.set_cursor_image;
+    let seq = 0;
+    h.set_cursor_image = (hcur, width, height, hotX, hotY, bgraWa) => {
+      if (bgraWa && width > 0 && height > 0) {
+        const src = new Uint8Array(ctx.getMemory(), bgraWa >>> 0, width * height * 4);
+        const png = new PNG({ width, height });
+        for (let i = 0; i < width * height; i++) {
+          png.data[i * 4 + 0] = src[i * 4 + 2];
+          png.data[i * 4 + 1] = src[i * 4 + 1];
+          png.data[i * 4 + 2] = src[i * 4 + 0];
+          png.data[i * 4 + 3] = src[i * 4 + 3];
+        }
+        const out = path.join(DUMP_CURSORS,
+          `cursor_${(hcur >>> 0).toString(16)}_${width}x${height}_hot${hotX}x${hotY}.png`);
+        fs.writeFileSync(out, PNG.sync.write(png));
+        seq++;
+        console.log(`[cursor] wrote ${out}`);
+      }
+      return inner ? inner(hcur, width, height, hotX, hotY, bgraWa) : undefined;
+    };
+    process.on('exit', () => {
+      if (!seq) console.log(`[cursor] no guest-built cursors were presented`);
+    });
+  }
+
   // --host-census wraps the FINAL import table, after run.js has overridden
   // host-imports' versions with its own logging ones. Wrapping earlier misses
   // exactly the noisy functions the flag exists to find.
   if (HOST_CENSUS) {
-    const counts = new Map();
-    const argCounts = new Map();
+    // Published so the run can print a final census at exit. Printing only on
+    // exact multiples of N means a run that makes fewer than N host calls
+    // reports NOTHING, which reads as "no host calls happened" — the opposite
+    // of the truth, and it cost a design decision once.
+    const counts = globalThis.__hostCensusCounts = new Map();
+    const argCounts = globalThis.__hostCensusArgs = new Map();
     let total = 0;
+    globalThis.__hostCensusTotal = () => total;
     for (const name of Object.keys(h)) {
       if (typeof h[name] !== 'function') continue;
       const orig = h[name];
@@ -2480,9 +3657,79 @@ async function main() {
 
   const imports = { host: h };
 
-  const wasmModule = await WebAssembly.compile(wasmBytes);
+  // A CORRUPT PINNED ARTIFACT MUST NOT READ AS A PASS. The rejection from
+  // WebAssembly.compile() lands in the `main().catch` at the bottom of this file,
+  // which prints the error and deliberately leaves the exit code at 0 so guest
+  // threads still get stopped — fine for a guest-level fault mid-run, wrong here:
+  // a caller that pinned an artifact and got exit 0 has been told the artifact
+  // works. Fail loudly, before any of that machinery exists to be cleaned up.
+  let wasmModule;
+  try {
+    wasmModule = await WebAssembly.compile(wasmBytes);
+  } catch (e) {
+    if (!WASM_PINNED) throw e;
+    console.error(`run.js: pinned wasm artifact failed to compile: ${WASM_PATH}`);
+    console.error(`run.js: ${e && e.message ? e.message : e}`);
+    process.exit(1);
+  }
+
+  // THE WASM AND THE MIRROR ARE ONE MAP IN TWO PLACES. Since wave 3 the bases
+  // in both are the allocator's output, so a shaken artifact paired with the
+  // canonical lib/region-map.generated.js does not fail — every host import
+  // reads guest memory at the address the mirror names, the guest wrote it
+  // somewhere else, and the app draws a plausible wrong picture. That is what
+  // `--wasm=shaken.wasm` without $WINE_REGION_MAP used to do, silently.
+  // tools/region-shake-smoke.js pairs them; this refuses everything else.
+  //
+  // ABSENT is not a mismatch, and that costs nothing here. A stamp is written
+  // by tools/build-compile-wat.js, which is the only thing that can produce a
+  // SHAKEN artifact — the failure this guards. An unstamped .wasm came from an
+  // in-process compileClosure (tools/watx-matrix.js, test/compile-src.js and
+  // friends) with no regionShake, i.e. from this same tree, at the canonical
+  // layout the mirror already describes. Refusing those would break the
+  // compiler gates over a check they cannot satisfy.
+  {
+    const { SECTION_NAME } = require('../tools/region-layout-hash.js');
+    const found = WebAssembly.Module.customSections(wasmModule, SECTION_NAME);
+    const stamped = found.length ? new TextDecoder().decode(found[0]) : null;
+    if (stamped && stamped !== RegionMap.LAYOUT_HASH) {
+      console.error(`run.js: region layout MISMATCH between the wasm and the JS mirror.`);
+      console.error(`  wasm   ${WASM_PATH}`);
+      console.error(`         ${stamped}`);
+      console.error(`  mirror ${process.env.WINE_REGION_MAP || 'lib/region-map.generated.js'}`);
+      console.error(`         ${RegionMap.LAYOUT_HASH}`);
+      console.error(`run.js: the two halves of the memory map disagree about where the regions are. ` +
+        `A shaken artifact needs its own mirror — set $WINE_REGION_MAP, or use ` +
+        `tools/region-shake-smoke.js, which builds the pair. Running anyway would read the ` +
+        `wrong bytes and draw a plausible wrong picture rather than fail.`);
+      process.exit(2);
+    }
+  }
+
   const instance = await WebAssembly.instantiate(wasmModule, imports);
   ctx.exports = instance.exports;
+  if (GUEST_PAGE_STATS) {
+    if (!instance.exports.reset_guest_page_stats || !instance.exports.get_guest_page_stat) {
+      throw new Error('--guest-page-stats requires the offline artifact from ' +
+        '`node tools/build-page-translation-stats.js`');
+    }
+    instance.exports.reset_guest_page_stats();
+  }
+  let guestPageStatsReported = false;
+  const reportGuestPageStats = () => {
+    if (!GUEST_PAGE_STATS || guestPageStatsReported) return;
+    guestPageStatsReported = true;
+    const { STAT_NAMES } = require('../tools/build-page-translation-stats.js');
+    const values = STAT_NAMES.map((_, i) => instance.exports.get_guest_page_stat(i) >>> 0);
+    const stats = Object.fromEntries(STAT_NAMES.map((name, i) => [name, values[i]]));
+    const packedTotal = stats.packed_hit + stats.packed_miss;
+    const pct = (n, d) => d ? `${(n * 100 / d).toFixed(2)}%` : 'n/a';
+    console.log('\nGuest page translation stats (packed):');
+    console.log(`  direct=${stats.direct} dib=${stats.dib}`);
+    console.log(`  packed hit=${stats.packed_hit} miss=${stats.packed_miss} ` +
+      `hit-rate=${pct(stats.packed_hit, packedTotal)}`);
+    console.log(`  affine span packed hit=${stats.span_packed_hit} miss=${stats.span_packed_miss}`);
+  };
   // A run that is stopped from outside still knows things worth having. The
   // two-process tests kill both emulators when their checks are done, and
   // without this the --count summary -- the whole point of the flag -- was
@@ -2500,15 +3747,62 @@ async function main() {
     }
   };
 
-  if (countAddrs.length && instance.exports.get_count) {
-    for (const sig of ['SIGTERM', 'SIGINT']) {
-      process.on(sig, () => {
-        reportHitCounts(`Hit counts (on ${sig}):`);
-        process.exit(0);
-      });
+  // How many MMX instructions the guest retired, summed over the main
+  // instance and every worker (each is a separate WASM instance with its own
+  // globals). Reported on the way out however the run ends -- a long run that
+  // gets killed at a timeout is exactly the one where you most want to know
+  // whether the guest ever reached its MMX path.
+  var reportMmx = () => {
+    if (!instance.exports.get_mmx_exec_count) return;
+    let mmx = instance.exports.get_mmx_exec_count() >>> 0;
+    for (const t of (threadManager && threadManager.threads ? threadManager.threads.values() : [])) {
+      if (t.instance && t.instance.exports.get_mmx_exec_count) {
+        mmx += t.instance.exports.get_mmx_exec_count() >>> 0;
+      }
     }
+    console.log(`MMX: ${mmx} instructions retired (cpuid mmx bit ${NO_MMX ? 'off' : 'on'})`);
+  };
+  // set_count writes the address AND zeroes that slot's count, so arming is not
+  // idempotent: the DLL onLoaded hook re-armed every slot on every late
+  // LoadLibrary and threw away whatever had been counted so far. Diablo loads a
+  // DLL around batch 39000, which is why a probe that really was hit 297413
+  // times reported 0 at --max-batches=40000 and the right answer at 35000.
+  // Re-arm a slot only when its resolved address actually changed.
+  const countArmed = new Array(countAddrs.length).fill(null);
+  const armCounts = () => {
+    if (!countAddrs.length || !instance.exports.set_count) return;
+    for (let i = 0; i < countAddrs.length; i++) {
+      if (!Number.isFinite(countAddrs[i])) continue;   // module+0xVA, not resolved yet
+      const addr = countAddrs[i] >>> 0;
+      if (countArmed[i] === addr) continue;
+      countArmed[i] = addr;
+      instance.exports.set_count(i, addr);
+      // A slot armed late has counted nothing before that point -- worth one
+      // line, because a `module+0xVA` probe that resolves after the code ran
+      // is otherwise indistinguishable from an address that never executed.
+      console.log(`[count] slot ${i} armed at ${hex(addr)}`);
+    }
+  };
+  for (const sig of ['SIGTERM', 'SIGINT']) {
+    process.on(sig, () => {
+      if (signalExitStarted) return;
+      signalExitStarted = true;
+      terminationSignal = sig;
+      console.log(`[signal] ${sig} requested orderly shutdown`);
+      // Leave through the normal cleanup path. In particular, a controlled
+      // recording owns an ffmpeg child plus buffered audio; process.exit()
+      // orphaned the temporary video and made a deliberate stop look exactly
+      // like a crashed control server. A frozen runner may be parked in
+      // waitForControlBatch(), so wake that wait as well as setting stopped.
+      stopped = true;
+      if (signalExitWake) signalExitWake();
+    });
   }
   if (instance.exports.set_process_id) instance.exports.set_process_id(ctx.processId);
+  if (NO_MMX && instance.exports.set_cpu_mmx) instance.exports.set_cpu_mmx(0);
+  if ((hasFlag('sse') || APP_ENTRY?.cpuSSE === true) && instance.exports.set_cpu_sse) {
+    instance.exports.set_cpu_sse(1);
+  }
   if (VLAN_IP && instance.exports.set_vlan_local_ip) {
     const octets = VLAN_IP.split('.').map(Number);
     if (octets.length !== 4 || octets.some(o => !(o >= 0 && o <= 255))) {
@@ -2528,6 +3822,9 @@ async function main() {
   if (renderer) {
     renderer.wasm = instance;
     renderer.wasmMemory = memory;
+    if (renderer.setInputHooks) {
+      renderer.setInputHooks(instance, (ASSET_ENTRY && ASSET_ENTRY.inputHooks) || null);
+    }
   }
 
   // Create ThreadManager now that we have the main instance
@@ -2548,6 +3845,7 @@ async function main() {
     // audio device, the GDI handles — comes from one shared list, so the two
     // hosts cannot quietly disagree about what a thread inherits.
     const workerCtx = Object.assign(processSharedCtx(ctx), {
+      d3d9Bridge: ctx.d3d9Bridge,
       getMemory: () => memory.buffer,
       renderer,
       onExit: () => {},
@@ -2566,6 +3864,13 @@ async function main() {
     // list is shared, and adopting a name the main table does not implement
     // throws rather than leaving the return-0 stub in place.
     adoptThreadPrimitives(wh, h);
+    // A console reader may live on a guest worker (telnet does). Its low-level
+    // input buffer is process-scoped, so it must drain the same host event and
+    // metadata latch as the main instance.
+    wh.check_input = h.check_input;
+    wh.check_input_lparam = h.check_input_lparam;
+    wh.check_input_wparam = h.check_input_wparam;
+    wh.check_input_hwnd = h.check_input_hwnd;
     for (const name of profileHostNames) wrapProfileHost(wh, name);
     // Worker API tracing. The decode and the "the return belongs to the call
     // just logged" latch are shared; what stays here is the CLI's own policy —
@@ -2590,7 +3895,7 @@ async function main() {
       const e = workerExports();
       if (!e || !e.get_esp || !e.get_image_base) return null;
       const imageBase = e.get_image_base();
-      const g2w = addr => addr - imageBase + 0x12000;
+      const g2w = addr => RegionMap.g2w(addr, imageBase);
       return {
         esp: e.get_esp(),
         ctx: { dv: new DataView(memory.buffer), g2w, memory: memory.buffer, readStr, hex },
@@ -2672,7 +3977,7 @@ async function main() {
             + ` ESI=${hex(e.get_esi())} EDI=${hex(e.get_edi())}`;
           if (traceEipDumps.length) {
             const imageBase = e.get_image_base();
-            const g2w = addr => addr - imageBase + 0x12000;
+            const g2w = addr => RegionMap.g2w(addr, imageBase);
             const dv = new DataView(memory.buffer);
             for (const d of traceEipDumps) {
               const bytes = [];
@@ -2694,7 +3999,174 @@ async function main() {
     return workerImports;
   };
 
+  // --threads: each guest thread gets a real OS thread (node worker_threads over
+  // this same shared memory) instead of a slice of this one. The guest's main
+  // thread stays in-process — 237 sites here call instance.exports directly, and
+  // moving them behind an async proxy is a different change — so this is not the
+  // browser's shape, where slot 0 is a Worker too. What it does cover, headlessly
+  // and on every run: the WAT's shared-memory locks and publish ordering under
+  // genuine parallelism, the per-thread RPC blocks, the worker scheduler in
+  // lib/thread-manager.js, and the wait-completion path whose absence made worker
+  // mode quietly wrong for a whole phase with every test still green.
+  let guestThreadHost = null;
+  // Computed here, not at parse time: the debug flags above rewrite BATCH_SIZE.
+  const THREAD_BATCH_SIZE = THREAD_BATCH_SIZE_ARG || Math.max(BATCH_SIZE * THREAD_SLICES, 20000);
+  if (WORKER_THREADS) {
+    const { GuestThreadHost } = require('../lib/guest-thread-host');
+    const sigs = JSON.parse(fs.readFileSync(
+      path.join(ROOT, 'lib', 'host-import-sigs.generated.json'), 'utf8')).sigs;
+    guestThreadHost = new GuestThreadHost({
+      memory,
+      module: wasmModule,
+      sigs,
+      // One import table per thread, built by the same factory the cooperative
+      // backend uses — so a worker's API trace still says which tid it came from.
+      hostImportsForSlot: (slot, tid) => makeWorkerImports(tid).host,
+      workerUrl: path.join(ROOT, 'lib', 'guest-worker.js'),
+      localMainExports: () => instance.exports,
+      countCalls: RPC_CENSUS,
+      // Guest log hooks stay Worker-local in an ordinary run: forwarding all
+      // three hooks adds several postMessages per API. An explicit diagnostic
+      // flag, however, must see worker-thread output just as cooperative mode
+      // does. This includes log_i32-only loop/Win16/FPU traces.
+      forwardGuestLogs: VERBOSE || TRACE_API || TRACE_API_COUNTS ||
+        TRACE_LOOPMATCH || TRACE_WIN16 || TRACE_WIN16_DDE || TRACE_FPU,
+      // The audit runs inside each worker, against its own instance: this
+      // process's get_esp() belongs to the main thread and cannot see a
+      // worker's stack at all. Arities come from the same table
+      // tools/esp-epilogue.js checks the handlers against.
+      // Expected ESP movement per API, not raw nargs: the rule depends on the
+      // calling convention, and getting that wrong makes the audit lie. A
+      // stdcall handler pops the return address plus its arguments; a cdecl one
+      // pops ONLY the return address, because the caller cleans the arguments.
+      // Measured before this distinction existed, the audit's first "finding"
+      // was wsprintfA — a correct cdecl epilogue. tools/esp-epilogue.js skips
+      // cdecl entirely; expecting 4 checks it instead.
+      espExpect: ESP_AUDIT ? Object.fromEntries(apiTable
+        .filter(e => typeof e.nargs === 'number')
+        .map((e) => {
+          const conv = e.convention || 'stdcall';
+          if (conv === 'cdecl') return [e.name, 4];
+          if (conv !== 'stdcall' || e.nargs < 0) return null;
+          return [e.name, 4 * (e.nargs + 1)];
+        })
+        .filter(Boolean)) : null,
+      clockIntervalMs: 0,          // the CLI clock is the batch counter, published by hand
+      tickMs: () => tickState.batch * 200,
+      log: msg => console.log(msg),
+    });
+    await guestThreadHost.start();
+    workerThreadHost = guestThreadHost;
+    console.log('[threads] guest threads will run in node worker_threads (--threads)');
+  } else if (FORCE_COOPERATIVE_THREADS) {
+    console.log('[threads] guest threads will use the cooperative scheduler (--no-threads)');
+  }
+
+  const resolveThreadSendExternalYield = async (link, r) => {
+    if (!guestThreadHost || (r.yield !== 3 && r.yield !== 5)) return false;
+    // In CLI threaded mode slot 0 remains a local instance. Use the shared
+    // process-boot pumps there; Worker links use the worker-side loader commands
+    // below so all EIP/ESP mutations stay with the instance they belong to.
+    if (link === guestThreadHost._localLink) {
+      if (r.yield === 3) {
+        await handleComDllYield({
+          exports: instance.exports,
+          memoryBuffer: memory.buffer,
+          exeBytes: new Uint8Array(exeBytes),
+          resourceHost: ctx,
+          log: console.log,
+          findDll: findRuntimeDllBytes,
+        });
+      } else {
+        await handleLoadLibraryYield({
+          exports: instance.exports,
+          memoryBuffer: memory.buffer,
+          resourceHost: ctx,
+          log: console.log,
+          findDll: findRuntimeDllBytes,
+        });
+      }
+      return true;
+    }
+    const nameExport = r.yield === 3 ? 'get_com_dll_name' : 'get_loadlib_name';
+    const nameWA = (await link.callExport(nameExport)) >>> 0;
+    let dllName = '';
+    if (nameWA) {
+      const shared = new Uint8Array(memory.buffer);
+      for (let i = 0; i < 260 && shared[nameWA + i]; i++) {
+        dllName += String.fromCharCode(shared[nameWA + i]);
+      }
+    }
+    const fileName = dllName.split(/[\\/]/).pop().toLowerCase();
+    const dllBytes = fileName ? findRuntimeDllBytes(fileName, dllName) : null;
+    if (r.yield === 3) {
+      await guestThreadHost.comLoadDll(dllBytes, fileName, new Uint8Array(exeBytes), link);
+    } else {
+      await guestThreadHost.loadLibrary(dllBytes, fileName, link);
+    }
+    return true;
+  };
+
+  const inheritedWasmGlobals = createInheritedWasmGlobals();
+  const inheritWasm = (setter, ...args) =>
+    recordInheritedWasmGlobal(inheritedWasmGlobals, setter, args);
+  if (TRACE_LOOPMATCH) inheritWasm('set_loop_trace', 1, TRACE_LOOPMATCH_EIP);
+  if (LOOP_SUPEROPS) inheritWasm('set_loop_emit', 1);
+  if (NO_LOOP_SUPEROPS) inheritWasm('set_loop_emit', 0);
+  if (LUT_SUPEROPS) inheritWasm('set_loop_lut_emit', 1);
+  if (NO_LUT_SUPEROPS) inheritWasm('set_loop_lut_emit', 0);
+  if (COPY_SUPEROPS) inheritWasm('set_loop_copy_emit', 1);
+  if (NO_COPY_SUPEROPS) inheritWasm('set_loop_copy_emit', 0);
+  if (BLOCK_CHAIN) inheritWasm('set_block_chain', 1);
+  if (BLOCK_EXEC) inheritWasm('set_block_exec', 1);
+  if (BLOCK_EXEC_MIN_UOPS) inheritWasm('set_block_exec_min_uops', BLOCK_EXEC_MIN_UOPS);
+  if (BLOCK_EXEC_MAX_UOPS) inheritWasm('set_block_exec_max_uops', BLOCK_EXEC_MAX_UOPS);
+  if (BLOCK_EXEC_TRACE) inheritWasm('set_block_exec_trace', 1);
+  if (NO_BLOCK_EXEC_REGIONS) inheritWasm('set_block_exec_regions', 0);
+  else if (BLOCK_EXEC_REGION_MAX) inheritWasm('set_block_exec_regions', BLOCK_EXEC_REGION_MAX);
+  if (BLOCK_EXEC_WALK_K) inheritWasm('set_block_exec_walk_k', BLOCK_EXEC_WALK_K);
+  if (BLOCK_EXEC_WALK_BUDGET) inheritWasm('set_block_exec_walk_budget', BLOCK_EXEC_WALK_BUDGET);
+  if (NO_BLOCK_EXEC_SPLIT) inheritWasm('set_block_exec_split', 0);
+  if (BLOCK_EXEC_X87) inheritWasm('set_block_exec_x87', 1);
+  if (NO_BLOCK_EXEC_X87_REGIONS) inheritWasm('set_block_exec_x87_regions', 0);
+  if (NO_BLOCK_EXEC_CARRY) inheritWasm('set_block_exec_carry', 0);
+  if (NO_BLOCK_EXEC_RMW) inheritWasm('set_block_exec_rmw', 0);
+  if (NO_BLOCK_EXEC_LEAF) inheritWasm('set_block_exec_leaf', 0);
+  if (NO_BLOCK_EXEC_LEAF_FB) inheritWasm('set_block_exec_leaf_fb', 0);
+  if (NO_BLOCK_EXEC_TAIL_EXITS) inheritWasm('set_block_exec_tail_exits', 0);
+  if (PAGE_DESC_RG_RESERVE != null) {
+    inheritWasm('set_page_desc_rg_reserve', PAGE_DESC_RG_RESERVE);
+  }
+  if (NO_AOE_FILL) inheritWasm('set_loop_aoe_fill_emit', 0);
+  if (NO_AOE_SPAN) inheritWasm('set_loop_aoe_span_emit', 0);
+  if (FLIP_VSYNC) inheritWasm('set_flip_vsync', 1);
+  // Guest threads run their own module instance over the shared memory, so the
+  // spin state is per-thread by construction — but the THRESHOLD is a setting
+  // and has to be propagated like every other one.
+  if (NO_SPIN_PARK) inheritWasm('set_spin_park_k', 0);
+  else if (Number.isFinite(SPIN_PARK_K)) inheritWasm('set_spin_park_k', SPIN_PARK_K);
+  if (NO_SIB_FUSION) inheritWasm('set_sib_fusion', 0);
+  if (NO_RECT_RUN) inheritWasm('set_rect_run', 0);
+  if (NO_CASE_CHAIN) inheritWasm('set_case_chain', 0);
+  if (NO_RLE_RUN) inheritWasm('set_rle_run', 0);
+  if (NO_SMK_TREE) inheritWasm('set_smk_tree', 0);
+  if (NO_PCX_RUN) inheritWasm('set_pcx_run', 0);
+  if (X87_FUSION) {
+    inheritWasm('set_x87_pipeline4_fusion', 1);
+    inheritWasm('set_x87_affine_fusion', 1);
+  }
+  if (TREE_FOLD || TRACE_TREE_FOLD) inheritWasm('set_tree_fold', 1);
+  if (TRACE_TREE_FOLD) inheritWasm('set_tree_trace', 1);
+  // The thresholds too: a guest thread decodes in its own instance, so a cap
+  // set only on the main instance leaves the workers folding by a different
+  // rule and the --threads arm of an A/B compares two decoders.
+  if (TREE_FOLD_MIN_OPS !== null) inheritWasm('set_tree_fold_min_ops', TREE_FOLD_MIN_OPS);
+  if (TREE_FOLD_MAX_OPS !== null) inheritWasm('set_tree_fold_max_ops', TREE_FOLD_MAX_OPS);
+
   threadManager = new ThreadManager(wasmModule, memory, instance, makeWorkerImports, {
+    workerBackend: guestThreadHost,
+    serialSlices: THREADS_SERIAL,
+    csStealAfter: CS_STEAL_AFTER,
     traceThread: TRACE_THREAD,
     traceYield: TRACE_YIELD,
     breakThreadFilter: breakThreadFilter,
@@ -2702,13 +4174,21 @@ async function main() {
     traceCallstackDepth: TRACE_CALLSTACK_DEPTH,
     traceEipRange: (traceEipOn && traceEipArmed) ? { lo: traceEipLo, hi: traceEipHi } : null,
     countAddrs: countAddrs,
-    now: () => tickState.batch * 200,
+    faultUnmapped: FAULT_NULL,
+    inheritedWasmGlobals,
+    now: () => (tickState.batch * TICK_MS_PER_BATCH) | 0,
+    // For a spawned thread's io_wait park (yield 12). CLI providers usually
+    // read synchronously, so this mostly matters to tests that mount an
+    // async provider to mimic the browser's File-backed ISO reads.
+    getVfs: () => ctx.vfs || null,
+    onRenderWait: token => ctx.waitD3DRender(token),
     hasMessage: () => !!(
       inputEvent ||
       (crossThreadMsgs && crossThreadMsgs.length) ||
       (inputQueue && inputQueue.length) ||
       (renderer && renderer.inputQueue && renderer.inputQueue.length)
     ),
+    resolveThreadSendExternalYield,
     // The per-app thread-exit fixups the browser host has always run — Winamp's
     // visualizer bookkeeping — now run headless too, so a browser-only symptom
     // is reproducible from the CLI.
@@ -2719,8 +4199,30 @@ async function main() {
   ctx.closeSyncHandle = handle => threadManager.closeSyncHandle(handle);
 
   const mem = new Uint8Array(memory.buffer);
+
+  // MSVCRT data imports (__argc/__argv) can be resolved while load_pe walks
+  // the executable import table. Seed process identity first so a lazy argv
+  // block built during import resolution sees the real launcher metadata.
+  setExeDrive(instance.exports, EXE_GUEST_PATH || MEDIA_EXE);
+  setExeName(instance.exports, memory.buffer, EXE_PROCESS_NAME);
+  if (EXTRA_ARGS) {
+    setExtraCmdline(instance.exports, memory.buffer, EXTRA_ARGS);
+  }
+
   const { entry } = stageAndLoadPe(instance.exports, memory.buffer, exeBytes, console.log);
+  if (CS_STEAL_AFTER && instance.exports.set_cs_steal_after) {
+    instance.exports.set_cs_steal_after(CS_STEAL_AFTER);
+  }
   applyExeCompatibilityPatches(path.basename(EXE_PATH), instance.exports, memory.buffer);
+  // Screen-size-driven defaults from the same table (lib/app-profiles.js
+  // LAUNCH_PREFS) — the CLI's screen is whatever --screen= asked for, so a
+  // headless run reproduces exactly what a browser of that size would pick.
+  applyProfileLaunchPrefs(path.basename(EXE_PATH), instance.exports, memory.buffer, {
+    skip: process.env.WA_SKIP_LAUNCH_PREFS === '1',
+    hook: (ASSET_ENTRY && ASSET_ENTRY.launchPrefs) || null,
+    screen: renderer && renderer.canvas
+      ? { width: renderer.canvas.width, height: renderer.canvas.height } : null,
+  });
   // A 16-bit task's DLLs load into the same selector arena its own segments
   // went into, so this has to follow load_pe.
   loadWin16Dlls(instance.exports, memory, exeBytes, path.dirname(EXE_PATH),
@@ -2730,7 +4232,7 @@ async function main() {
         if (fs.existsSync(p)) return fs.readFileSync(p);
       }
       return null;
-    }, (m) => console.log(m));
+    }, (m) => console.log(m), (ASSET_ENTRY && ASSET_ENTRY.win16Modules) || []);
   const requiredDlls = detectRequiredDlls(exeBytes);
 
   // Initialize DirectX COM vtable thunks (must be after load_pe sets image_base)
@@ -2738,12 +4240,20 @@ async function main() {
     instance.exports.init_dx_com_thunks();
   }
 
-  // Set EXE name from path
-  setExeName(instance.exports, memory.buffer, path.basename(EXE_PATH));
+  // Queue environment overrides before loading DLLs: a CRT's DllMain snapshots
+  // GetEnvironmentStrings while it initializes. The WAT export keeps this
+  // lazy, so queueing here does not allocate or perturb the early guest heap.
+  const processEnvironment = new Map(Object.entries(
+    (ASSET_ENTRY && ASSET_ENTRY.environment) || {}));
+  for (const [name, value] of PROCESS_ENVIRONMENT) processEnvironment.set(name, value);
+  for (const [name, value] of processEnvironment) {
+    if (!setEnvironmentVariable(instance.exports, memory.buffer, name, value)) {
+      throw new Error(`failed to set guest process environment variable ${name}`);
+    }
+    console.log(`Guest environment: ${name}=${JSON.stringify(value)}`);
+  }
 
-  // Pass extra command-line arguments via the staging buffer (--args="...")
   if (EXTRA_ARGS) {
-    setExtraCmdline(instance.exports, memory.buffer, EXTRA_ARGS);
     console.log(`Extra cmdline args: ${JSON.stringify(EXTRA_ARGS)}`);
   }
 
@@ -2797,7 +4307,7 @@ async function main() {
     }
     dlls = await resolveDllGraph({
       exeBytes,
-      seeds: (ASSET_ENTRY && ASSET_ENTRY.dlls) || [],
+      seeds: [...((ASSET_ENTRY && ASSET_ENTRY.dlls) || []), ...DLL_SEED],
       detectRequiredDlls,
       loadSpec: (spec) => {
         // Registry seeds arrive as repo-relative paths; the graph walk's own
@@ -2807,7 +4317,11 @@ async function main() {
           ? appAsset(spec)
           : (findDllFile(name) || (appFileByName.has(name.toLowerCase())
               ? appAsset(appFileByName.get(name.toLowerCase())) : null));
-        return (p && fs.existsSync(p)) ? { name, bytes: fs.readFileSync(p) } : null;
+        return (p && fs.existsSync(p)) ? {
+          name,
+          bytes: fs.readFileSync(p),
+          path: capturedGuestPath(p) || undefined,
+        } : null;
       },
     });
   }
@@ -2855,18 +4369,12 @@ async function main() {
 
   // Put the exe where a running image expects to find itself; see lib/vfs-seed.js.
   if (ctx.vfs) {
-    const exeName = seedExeImage(ctx.vfs, exeBytes, path.basename(EXE_PATH)).base;
+    const exeName = seedExeImage(ctx.vfs, exeBytes, path.basename(EXE_PATH), EXE_GUEST_PATH).base;
     const exeDir = path.dirname(EXE_PATH);
     const addFile = (rawPath, hostPath, size) => {
       let vfsPath = String(rawPath).toLowerCase().replace(/\//g, '\\');
       if (!/^[a-z]:/.test(vfsPath)) vfsPath = 'c:\\' + vfsPath.replace(/^\\+/, '');
-      let p = vfsPath;
-      while (true) {
-        const idx = p.lastIndexOf('\\');
-        if (idx <= 2) break;
-        p = p.slice(0, idx);
-        ctx.vfs.dirs.add(p);
-      }
+      ctx.vfs.ensureParentDirs(vfsPath);
       return ctx.vfs.setLazyFile(vfsPath, {
         attrs: 0x20,
         size,
@@ -2886,17 +4394,31 @@ async function main() {
     // an EXE directly in /private/tmp no longer indexes every unrelated file
     // and directory below /private/tmp (nor any sibling directory above it).
     const includedFiles = expandIncludePatterns(exeDir, VFS_INCLUDE);
+    for (const tree of VFS_TREES) {
+      includedFiles.push(...expandIncludePatterns(appAsset(tree), ['**/*']));
+    }
     for (const file of includedFiles) {
       const size = fs.statSync(file.hostPath).size;
       addFile(file.guestPath, file.hostPath, size);
       addFontAlias(file.guestPath, file.hostPath, size);
     }
+    for (const spec of VFS_MOUNT) {
+      const eq = spec.lastIndexOf('=');
+      if (eq <= 0) throw new Error(`--vfs-mount needs HOSTPATH=GUESTPATH, got: ${spec}`);
+      const hostPath = appAsset(spec.slice(0, eq).trim());
+      const guestPath = spec.slice(eq + 1).trim();
+      if (!guestPath) throw new Error(`--vfs-mount needs a guest path: ${spec}`);
+      const size = fs.statSync(hostPath).size;
+      addFile(guestPath, hostPath, size);
+      addFontAlias(guestPath, hostPath, size);
+    }
     // Mount a matched registry app's data files at the same VFS paths the page
     // gives them. An entry is a repo-relative URL (-> c:\basename), or
     // {url, vfsPath}, or {url, vfsPaths} when one file needs several aliases.
-    if (ASSET_ENTRY && ASSET_ENTRY.files) {
+    if (ASSET_ENTRY) {
+      const assetFiles = getAssetFiles(ASSET_ENTRY);
       const missing = [];
-      for (const item of ASSET_ENTRY.files) {
+      for (const item of assetFiles) {
         const url = typeof item === 'string' ? item : (item && item.url);
         if (!url) continue;
         const hostPath = appAsset(url);
@@ -2944,6 +4466,109 @@ async function main() {
       ctx.vfs.setDriveReadOnly(drive, true);
     }
 
+    // Read-only ZIP mounts (docs/design-byo-media.md phase 2). Mounted after
+    // the app manifest so a registered app's own files still win a collision,
+    // and before the guest runs, so the archive is simply part of the VFS.
+    if (ZIP_MOUNTS.length) {
+      const { mountZipSync } = require('../lib/zip-mount');
+      for (const zipPath of ZIP_MOUNTS) {
+        const bytes = new Uint8Array(fs.readFileSync(zipPath));
+        const result = mountZipSync(ctx.vfs, bytes,
+          { zipPath, root: ZIP_ROOT || undefined });
+        console.log(`[zip] mounted ${zipPath} -> ${result.root} ` +
+          `(${result.mounted.length} files of ${result.entries.length} entries)`);
+      }
+      if (ZIP_LAUNCH) {
+        // An app launched out of the archive expects its own directory to be
+        // the working directory, the way a shortcut's "Start in" would set it.
+        ctx.vfs.setCurrentDirectory(ZIP_LAUNCH.root);
+        console.log(`[zip] launching ${ZIP_EXE} from ${ZIP_LAUNCH.root}`);
+      }
+    }
+
+    // Read-only ISO 9660 mounts (docs/design-byo-media.md phase 3). A disc is
+    // its own drive letter, so it never collides with the app manifest on C:.
+    if (ISO_MOUNTS.length) {
+      const { mountIso } = require('../lib/iso9660');
+      let drive = (ISO_DRIVE || 'D').replace(/:$/, '').toUpperCase();
+      for (const isoPath of ISO_MOUNTS) {
+        const result = mountIso(ctx.vfs, new Uint8Array(fs.readFileSync(isoPath)),
+          { drive, prefer: ISO_PRIMARY ? 'primary' : 'joliet' });
+        console.log(`[iso] mounted ${isoPath} -> ${result.root} ` +
+          `label="${result.volumeLabel}" (${result.fileCount} files, ` +
+          `${result.iso.joliet ? 'Joliet' : 'primary'} names)`);
+        drive = String.fromCharCode(drive.charCodeAt(0) + 1);
+      }
+      if (ISO_LAUNCH) {
+        ctx.vfs.setCurrentDirectory(ISO_LAUNCH.guestDir);
+        console.log(`[iso] launching ${ISO_EXE} from ${ISO_LAUNCH.guestDir}`);
+      }
+    }
+
+    if (CUE_MOUNTS.length) {
+      const { mountCue } = require('../lib/cdrom');
+      let drive = (CUE_DRIVE || ISO_DRIVE || 'D').replace(/:$/, '').toUpperCase();
+      for (const cuePath of CUE_MOUNTS) {
+        const absoluteCue = path.resolve(cuePath);
+        const directory = path.dirname(absoluteCue);
+        const resolveTrack = name => path.resolve(directory, ...String(name).split('/'));
+        const result = mountCue(ctx.vfs, fs.readFileSync(absoluteCue, 'utf8'), {
+          drive,
+          volumeLabel: (ctx.vfs.volumeLabels && ctx.vfs.volumeLabels.get(drive.toLowerCase())) || 'AUDIO_CD',
+          trackSize: name => fs.statSync(resolveTrack(name)).size,
+          loadTrack: name => fs.promises.readFile(resolveTrack(name)),
+        });
+        console.log(`[cue] mounted ${cuePath} -> ${result.root} ` +
+          `tracks=${result.firstTrack}-${result.lastTrack} (${result.audioTracks.length} audio, lazy)`);
+        drive = String.fromCharCode(drive.charCodeAt(0) + 1);
+      }
+    }
+
+    if (MEDIA_MOUNTS.length) {
+      const { analyzeMediaPaths } = require('../lib/media-cli');
+      const media = await analyzeMediaPaths(MEDIA_MOUNTS, { exePath: MEDIA_EXE });
+      const result = await media.plan.mount(ctx.vfs);
+      const guestExe = media.candidate.path;
+      const slash = guestExe.lastIndexOf('\\');
+      const guestDir = slash >= 2 ? guestExe.slice(0, slash) : guestExe.slice(0, 3);
+      ctx.vfs.setCurrentDirectory(guestDir);
+      console.log(`[media] mounted ${media.plan.name} -> ${result.root} ` +
+        `label="${media.plan.volumeLabel || ''}" (${media.plan.entryCount} entries)`);
+      console.log(`[media] launching ${guestExe} from ${guestDir}` +
+        `${media.candidate.autorun ? ' (AUTORUN.INF)' : ''}`);
+    }
+
+    // The writable C:\ overlay (docs/design-byo-media.md ⑤). Attached after
+    // every base mount and before the guest runs, because the replay order is
+    // base mounts → overlay files/dirs → whiteouts: a file the guest deleted
+    // last session must be removed *after* the mount put it back.
+    if (OVERLAY_DIR) {
+      const { nodeDirStore } = require('../lib/overlay-store');
+      const VfsOverlay = require('../lib/vfs-overlay');
+      vfsOverlay = VfsOverlay.attach(ctx.vfs, {
+        store: nodeDirStore(OVERLAY_DIR),
+        log: line => console.log(line),
+      });
+      const hydrated = await vfsOverlay.hydrate();
+      console.log(`[overlay] ${OVERLAY_DIR}: hydrated ${hydrated.files} file(s), ` +
+        `${hydrated.dirs} dir(s), ${hydrated.whiteouts} whiteout(s)` +
+        (vfsOverlay.errors.length ? `, ${vfsOverlay.errors.length} error(s)` : ''));
+      for (const error of vfsOverlay.errors) console.log(`[overlay] ${error.message}`);
+      nextOverlayFlushAt = Date.now() + OVERLAY_FLUSH_MS;
+    }
+
+    // Apply an explicit process cwd only after every mount, including the
+    // persisted writable overlay. Installer children commonly live solely in
+    // that overlay and must be directly resumable on a later CLI invocation.
+    if (GUEST_CWD) {
+      const rooted = /^[a-z]:[\\/]/i.test(GUEST_CWD) ? GUEST_CWD : `c:\\${GUEST_CWD}`;
+      const cwd = path.win32.normalize(rooted.replace(/\//g, '\\'));
+      if (!ctx.vfs.setCurrentDirectory(cwd)) {
+        throw new Error(`--cwd directory is not present in the guest VFS: ${GUEST_CWD}`);
+      }
+      console.log(`[vfs] working directory: ${ctx.vfs.getCurrentDirectory()}`);
+    }
+
     // A --reg-import snapshot stands in for the browser's localStorage: it is
     // loaded before the app manifest so manifest defaults still win, exactly
     // as they do on a browser profile that already has the key.
@@ -2955,6 +4580,27 @@ async function main() {
         console.log(`[reg] imported ${n} entries from ${REG_IMPORT}`);
       } catch (e) {
         console.error(`--reg-import failed: ${e.message}`);
+        process.exit(1);
+      }
+    }
+
+    // A save bundle restores both halves at once, and it restores them before
+    // the guest runs so the app finds its saves where it left them.
+    if (IMPORT_SAVES) {
+      try {
+        const saveBundle = require('../lib/save-bundle');
+        if (!APP_ENTRY) throw new Error('--import-saves needs --app=ID for its persistFiles globs');
+        const result = saveBundle.importBundle(
+          new Uint8Array(fs.readFileSync(IMPORT_SAVES)), {
+            vfs: ctx.vfs,
+            appId: APP_ID,
+            patterns: APP_ENTRY.persistFiles || [],
+            mode: hasFlag('import-saves-replace') ? 'replace' : 'merge',
+          });
+        console.log(`[saves] imported ${result.files.length} files and ` +
+          `${result.storeKeys} store keys from ${IMPORT_SAVES} (${result.mode})`);
+      } catch (e) {
+        console.error(`--import-saves failed: ${e.message}`);
         process.exit(1);
       }
     }
@@ -3056,6 +4702,29 @@ async function main() {
     }
 
   }
+
+  // Return addresses up the EBP chain, as a one-line list. The existing walker
+  // in the SEH dump caps EBP at 0x01A00000, which excludes any app whose stack
+  // the loader placed higher (Diablo's is at 0x074f____), so this one bounds
+  // the frame pointer only by "reads back a plausible frame".
+  const ebpChain = (depth = 8) => {
+    const dv = new DataView(memory.buffer);
+    const out = [];
+    let ebp = instance.exports.get_ebp() >>> 0;
+    for (let i = 0; i < depth; i++) {
+      if (!ebp || (ebp & 3)) break;
+      let saved, ret;
+      try {
+        saved = dv.getUint32(g2w(ebp), true) >>> 0;
+        ret = dv.getUint32(g2w(ebp + 4), true) >>> 0;
+      } catch (_) { break; }
+      if (!ret) break;
+      out.push(hex(ret));
+      if (saved <= ebp) break;
+      ebp = saved;
+    }
+    return out.join(' <- ');
+  };
 
   const regs = () => {
     const e = instance.exports;
@@ -3322,11 +4991,150 @@ async function main() {
   if (TRACE_CALLSTACK && instance.exports.set_callstack_enabled) {
     instance.exports.set_callstack_enabled(1);
   }
+  // Arm --fault-null. Same deal: the WAT check sits in the $g2w miss path, so
+  // an off-run never reaches it.
+  if (FAULT_NULL && instance.exports.set_fault_unmapped) {
+    instance.exports.set_fault_unmapped(FAULT_NULL);
+    console.log(`[fault] --fault-null armed (mode=${FAULT_NULL}: `
+      + `${FAULT_NULL === 2 ? 'log and trap' : 'log and continue'})`);
+  }
+  // Exclude PE/DLL load from the offline translation-path census.
+  if (GUEST_PAGE_STATS) instance.exports.reset_guest_page_stats();
   if (TRACE_WIN16_DDE && instance.exports.set_win16_dde_trace) {
     instance.exports.set_win16_dde_trace(1);
   }
   if (TRACE_WIN16 && instance.exports.set_win16_trace) {
     instance.exports.set_win16_trace(1);
+  }
+  if (TRACE_LOOPMATCH && instance.exports.set_loop_trace) {
+    instance.exports.set_loop_trace(1, TRACE_LOOPMATCH_EIP);
+  }
+  if (FLIP_VSYNC && instance.exports.set_flip_vsync) {
+    instance.exports.set_flip_vsync(1);
+  }
+  if (instance.exports.set_spin_park_k) {
+    if (NO_SPIN_PARK) instance.exports.set_spin_park_k(0);
+    else if (Number.isFinite(SPIN_PARK_K)) instance.exports.set_spin_park_k(SPIN_PARK_K);
+  }
+  if (LOOP_SUPEROPS && instance.exports.set_loop_emit) {
+    instance.exports.set_loop_emit(1);
+  }
+  if (NO_LOOP_SUPEROPS && instance.exports.set_loop_emit) {
+    instance.exports.set_loop_emit(0);
+  }
+  if (LUT_SUPEROPS && instance.exports.set_loop_lut_emit) {
+    instance.exports.set_loop_lut_emit(1);
+  }
+  if (NO_LUT_SUPEROPS && instance.exports.set_loop_lut_emit) {
+    instance.exports.set_loop_lut_emit(0);
+  }
+  if (COPY_SUPEROPS && instance.exports.set_loop_copy_emit) {
+    instance.exports.set_loop_copy_emit(1);
+  }
+  if (NO_COPY_SUPEROPS && instance.exports.set_loop_copy_emit) {
+    instance.exports.set_loop_copy_emit(0);
+  }
+  if (BLOCK_CHAIN && instance.exports.set_block_chain) {
+    instance.exports.set_block_chain(1);
+  }
+  if (BLOCK_EXEC && instance.exports.set_block_exec) {
+    instance.exports.set_block_exec(1);
+  }
+  if (BLOCK_EXEC_MIN_UOPS && instance.exports.set_block_exec_min_uops) {
+    instance.exports.set_block_exec_min_uops(BLOCK_EXEC_MIN_UOPS);
+  }
+  if (BLOCK_EXEC_MAX_UOPS && instance.exports.set_block_exec_max_uops) {
+    instance.exports.set_block_exec_max_uops(BLOCK_EXEC_MAX_UOPS);
+  }
+  if (BLOCK_EXEC_TRACE && instance.exports.set_block_exec_trace) {
+    instance.exports.set_block_exec_trace(1);
+  }
+  if (NO_BLOCK_EXEC_REGIONS && instance.exports.set_block_exec_regions) {
+    instance.exports.set_block_exec_regions(0);
+  } else if (BLOCK_EXEC_REGION_MAX && instance.exports.set_block_exec_regions) {
+    instance.exports.set_block_exec_regions(BLOCK_EXEC_REGION_MAX);
+  }
+  if (BLOCK_EXEC_WALK_K && instance.exports.set_block_exec_walk_k) {
+    instance.exports.set_block_exec_walk_k(BLOCK_EXEC_WALK_K);
+  }
+  if (BLOCK_EXEC_WALK_BUDGET && instance.exports.set_block_exec_walk_budget) {
+    instance.exports.set_block_exec_walk_budget(BLOCK_EXEC_WALK_BUDGET);
+  }
+  if (NO_BLOCK_EXEC_SPLIT && instance.exports.set_block_exec_split) {
+    instance.exports.set_block_exec_split(0);
+  }
+  if (BLOCK_EXEC_X87 && instance.exports.set_block_exec_x87) {
+    instance.exports.set_block_exec_x87(1);
+  }
+  if (NO_BLOCK_EXEC_X87_REGIONS && instance.exports.set_block_exec_x87_regions) {
+    instance.exports.set_block_exec_x87_regions(0);
+  }
+  if (NO_BLOCK_EXEC_CARRY && instance.exports.set_block_exec_carry) {
+    instance.exports.set_block_exec_carry(0);
+  }
+  if (NO_BLOCK_EXEC_RMW && instance.exports.set_block_exec_rmw) {
+    instance.exports.set_block_exec_rmw(0);
+  }
+  if (NO_BLOCK_EXEC_LEAF && instance.exports.set_block_exec_leaf) {
+    instance.exports.set_block_exec_leaf(0);
+  }
+  if (NO_BLOCK_EXEC_LEAF_FB && instance.exports.set_block_exec_leaf_fb) {
+    instance.exports.set_block_exec_leaf_fb(0);
+  }
+  if (NO_BLOCK_EXEC_TAIL_EXITS && instance.exports.set_block_exec_tail_exits) {
+    instance.exports.set_block_exec_tail_exits(0);
+  }
+  if (PAGE_DESC_RG_RESERVE != null && instance.exports.set_page_desc_rg_reserve) {
+    instance.exports.set_page_desc_rg_reserve(PAGE_DESC_RG_RESERVE);
+  }
+  if (NO_AOE_FILL && instance.exports.set_loop_aoe_fill_emit) {
+    instance.exports.set_loop_aoe_fill_emit(0);
+  }
+  if (NO_AOE_SPAN && instance.exports.set_loop_aoe_span_emit) {
+    instance.exports.set_loop_aoe_span_emit(0);
+  }
+  // Per-instance, not once: worker threads are separate WASM instances over
+  // one shared memory, so a mut global set only on the main instance leaves
+  // every worker decoding with the other setting and makes the A/B meaningless.
+  if (NO_SIB_FUSION && instance.exports.set_sib_fusion) {
+    instance.exports.set_sib_fusion(0);
+  }
+  if (NO_RECT_RUN && instance.exports.set_rect_run) {
+    instance.exports.set_rect_run(0);
+  }
+  if (NO_CASE_CHAIN && instance.exports.set_case_chain) {
+    instance.exports.set_case_chain(0);
+  }
+  if (NO_RLE_RUN && instance.exports.set_rle_run) {
+    instance.exports.set_rle_run(0);
+  }
+  if (NO_SMK_TREE && instance.exports.set_smk_tree) {
+    instance.exports.set_smk_tree(0);
+  }
+  if (NO_PCX_RUN && instance.exports.set_pcx_run) {
+    instance.exports.set_pcx_run(0);
+  }
+  // Per-instance, like every other decode-time setting: a guest thread decodes
+  // in its own instance, so arming only the main one would leave the workers
+  // running the scalar x87 handlers and make the share unreadable.
+  if (X87_FUSION && instance.exports.set_x87_pipeline4_fusion) {
+    instance.exports.set_x87_pipeline4_fusion(1);
+    instance.exports.set_x87_affine_fusion(1);
+  }
+  if ((TREE_FOLD || TRACE_TREE_FOLD) && instance.exports.set_tree_fold) {
+    instance.exports.set_tree_fold(1);
+  }
+  if (TRACE_TREE_FOLD && instance.exports.set_tree_trace) {
+    instance.exports.set_tree_trace(1);
+  }
+  // The floor applies whether or not the fold is armed: with it off, the
+  // matcher still counts what it WOULD have taken, and that census is only
+  // meaningful if both arms use the same threshold.
+  if (TREE_FOLD_MIN_OPS !== null && instance.exports.set_tree_fold_min_ops) {
+    instance.exports.set_tree_fold_min_ops(TREE_FOLD_MIN_OPS);
+  }
+  if (TREE_FOLD_MAX_OPS !== null && instance.exports.set_tree_fold_max_ops) {
+    instance.exports.set_tree_fold_max_ops(TREE_FOLD_MAX_OPS);
   }
   if (TRACE_FPU && instance.exports.set_fpu_trace) {
     instance.exports.set_fpu_trace(1);
@@ -3361,6 +5169,12 @@ async function main() {
       if (!filtered) {
         console.log(`\n*** WATCHPOINT hit at batch ${batch}: [${hex(watchAddr)}] changed`);
         console.log(`  Old: ${hex(watchPrevVal)}  New: ${hex(newVal)}  EIP: ${hex(instance.exports.get_eip())}  prev_eip: ${hex(instance.exports.get_dbg_prev_eip())}`);
+        // The writer's registers name the source of a bad store. A copy loop
+        // that wrote garbage into a surface is only diagnosable from the
+        // pointer it read, and --trace-at cannot stand in for this: it fires
+        // on block entries only, so a store inside a loop body never hits it.
+        console.log('  ' + regs());
+        console.log('  callers: ' + ebpChain());
         hit = true;
       }
       watchPrevVal = newVal;
@@ -3500,26 +5314,67 @@ async function main() {
   // callback: Heroes II hung ten batches after its main menu this way. host.js
   // has always made this exemption (_isMainExecutionSuspended); the CLI has to
   // agree or the browser and the harness run different schedulers.
+  let mainRenderWait = null;
   const mainExecutionSuspended = () => {
-    if (!threadManager.isMainThreadSuspended()) return false;
     const ex = instance.exports;
+    if (ex.get_yield_reason() === 16) {
+      const token = ex.get_d3d_render_token() | 0;
+      if (!mainRenderWait || mainRenderWait.token !== token) {
+        const wait = {token,done:false}; mainRenderWait = wait;
+        wait.promise = Promise.resolve().then(() => ctx.waitD3DRender(token))
+          .catch(error => console.error('[render]',error))
+          .then(() => { wait.done = true; });
+      }
+      if (!mainRenderWait.done) return true;
+      mainRenderWait = null; ex.clear_yield();
+    }
+    if (threadManager._renderSendTargets.has(ex)) return true;
+    if (ex.get_yield_reason() === 10 && (threadManager.backend === 'worker' ||
+        !threadManager.resolveCooperativeThreadSend(ex))) return true;
+    if (!threadManager.isMainThreadSuspended()) return false;
     return !(ex.is_mm_timer_callback_active && (ex.is_mm_timer_callback_active() | 0));
   };
 
   let lastSchedSig = null;
   let lastSchedAt = 0;
-  const handlerNames = HANDLER_HIST_THREAD >= 0 ? buildHandlerNameList() : [];
+  const handlerNames = HANDLER_HIST_THREADS.length ? buildHandlerNameList() : [];
+  let handlerHistThreadIndex = 0;
+  let handlerHistThread = HANDLER_HIST_THREAD;
+  let handlerHistWindowStart = HANDLER_HIST_START;
+  let handlerHistWindowStop = HANDLER_HIST_STOP;
   let handlerHistExports = null;
   let handlerHistArmed = false;
   let handlerHistDone = false;
+  const selectHandlerHistWindow = () => {
+    if (handlerHistThreadIndex >= HANDLER_HIST_THREADS.length) {
+      handlerHistDone = true;
+      return;
+    }
+    const span = HANDLER_HIST_STOP - HANDLER_HIST_START;
+    handlerHistThread = HANDLER_HIST_THREADS[handlerHistThreadIndex];
+    handlerHistWindowStart = HANDLER_HIST_START +
+      Math.floor(span * handlerHistThreadIndex / HANDLER_HIST_THREADS.length);
+    handlerHistWindowStop = HANDLER_HIST_START +
+      Math.floor(span * (handlerHistThreadIndex + 1) / HANDLER_HIST_THREADS.length);
+  };
+  selectHandlerHistWindow();
   const findHandlerHistExports = () => {
-    if (HANDLER_HIST_THREAD === 0) return instance.exports;
+    if (handlerHistThread === 0) return instance.exports;
     for (const [, thread] of threadManager.threads) {
-      if ((thread.tid | 0) === HANDLER_HIST_THREAD && thread.instance) {
+      if ((thread.tid | 0) === handlerHistThread && thread.instance) {
         return thread.instance.exports;
       }
     }
     return null;
+  };
+  const armHandlerHistogram = (batch) => {
+    handlerHistExports = findHandlerHistExports();
+    if (!handlerHistExports || !handlerHistExports.reset_handler_hist ||
+        !handlerHistExports.set_handler_hist_enabled) return;
+    handlerHistExports.reset_handler_hist();
+    handlerHistExports.set_handler_hist_enabled(1);
+    handlerHistArmed = true;
+    console.log(`[handler-hist] armed T${handlerHistThread} at batch ${batch}`);
   };
   const printHandlerHistogram = (batch) => {
     const e = handlerHistExports;
@@ -3541,11 +5396,29 @@ async function main() {
       if (hits) handlers.push({ id, hits });
     }
     handlers.sort((a, b) => b.hits - a.hits);
-    console.log(`[handler-hist] T${HANDLER_HIST_THREAD} batches=${HANDLER_HIST_START}..${batch} total=${total}`);
-    for (const row of handlers.slice(0, 24)) {
+    console.log(`[handler-hist] T${handlerHistThread} batches=${handlerHistWindowStart}..${batch} total=${total}`);
+    for (const row of handlers.slice(0, HANDLER_HIST_TOP)) {
       const pct = total ? (row.hits * 100 / total).toFixed(2) : '0.00';
       console.log(`  H${row.id} ${handlerNames[row.id] || '$handler_' + row.id} ${row.hits} (${pct}%)`);
     }
+    // The x87 split, named rather than left to the top-24 cut. A fused family
+    // retires ONE dispatch for a whole region, so the two columns are not
+    // comparable as work: read `raw` against the same run with --x87-fusion
+    // off to see how many x87 dispatches the fold actually absorbed. Printed
+    // unconditionally because an app with no x87 prints zeros, which is itself
+    // the answer to "is the x87 fold relevant here".
+    const sumIds = ids => ids.reduce((a, id) => a + ((u32[base + id] >>> 0) || 0), 0);
+    const rawX87 = sumIds([188, 189, 190]);
+    const fusedX87 = sumIds([449, 450, 451, 452, 453]);
+    const pctOf = v => (total ? (v * 100 / total).toFixed(2) : '0.00');
+    console.log(`  x87: raw ${rawX87} (${pctOf(rawX87)}%)`
+      + ` [H188 ${u32[base + 188] >>> 0} H189 ${u32[base + 189] >>> 0}`
+      + ` H190 ${u32[base + 190] >>> 0}]`
+      + ` fused-dispatches ${fusedX87} (${pctOf(fusedX87)}%)`
+      + ` [H449 ${u32[base + 449] >>> 0} H450 ${u32[base + 450] >>> 0}`
+      + ` H451 ${u32[base + 451] >>> 0} H452 ${u32[base + 452] >>> 0}`
+      + ` H453 ${u32[base + 453] >>> 0}]`
+      + ` H439 ${u32[base + 439] >>> 0}`);
     if (pairBase) {
       const pairs = [];
       let pairTotal = 0;
@@ -3576,10 +5449,22 @@ async function main() {
         if (addr && hits) blocks.push({ addr, hits });
       }
       blocks.sort((a, b) => b.hits - a.hits);
-      console.log(`  top blocks (collisions=${e.get_hot_block_hist_collisions ? e.get_hot_block_hist_collisions() >>> 0 : 0}):`);
+      // `distinct` is the executed-block working set for the window, which is
+      // what the direct-mapped block cache index (CACHE_MASK + 1 slots) has to
+      // hold. Compare the two before blaming cache size: distinct well under
+      // the slot count with heavy eviction is an index/aliasing problem, not a
+      // capacity one.
+      console.log(`  top blocks (distinct=${blocks.length} collisions=${e.get_hot_block_hist_collisions ? e.get_hot_block_hist_collisions() >>> 0 : 0}):`);
       for (const row of blocks.slice(0, 20)) {
         const pct = blockTotal ? (row.hits * 100 / blockTotal).toFixed(2) : '0.00';
         console.log(`    ${hex(row.addr)} ${row.hits} (${pct}%)`);
+      }
+      if (HOT_BLOCK_DUMP) {
+        const dumpPath = HANDLER_HIST_THREADS.length > 1
+          ? `${HOT_BLOCK_DUMP}.T${handlerHistThread}` : HOT_BLOCK_DUMP;
+        fs.writeFileSync(dumpPath,
+          blocks.map(row => `${hex(row.addr)} ${row.hits}`).join('\n') + '\n');
+        console.log(`  wrote ${blocks.length} distinct blocks to ${dumpPath}`);
       }
     }
     if (e.get_sib_consumer_hist_base && e.get_sib_consumer_hist_count) {
@@ -3615,23 +5500,339 @@ async function main() {
       }
     }
   };
-  for (let batch = 0; batch < MAX_BATCHES && !stopped; batch++) {
-    if (HANDLER_HIST_THREAD >= 0 && !handlerHistDone) {
-      if (!handlerHistArmed && batch >= HANDLER_HIST_START) {
-        handlerHistExports = findHandlerHistExports();
-        if (handlerHistExports && handlerHistExports.reset_handler_hist &&
-            handlerHistExports.set_handler_hist_enabled) {
-          handlerHistExports.reset_handler_hist();
-          handlerHistExports.set_handler_hist_enabled(1);
-          handlerHistArmed = true;
-          console.log(`[handler-hist] armed T${HANDLER_HIST_THREAD} at batch ${batch}`);
-        }
+  let deadlineMs = MAX_SECONDS ? Date.now() + MAX_SECONDS * 1000 : 0;
+  // --control: live agent command channel (docs/design-agent-control.md).
+  // Commands arrive over HTTP between batches. Input entries go through the
+  // same parseInputEntries the --input schedule uses and drain through the
+  // same per-action code at the top of the next batch; eval/snapshot/ping/
+  // quit execute right here in the callback — the guest is parked between
+  // batches, so instance and renderer state are coherent.
+  const liveOutstanding = new Map(); // last parsed ev of a live command -> resolve
+  let liveLogsStart = 0;
+  let controlFrozen = CONTROL_FROZEN_START;
+  let controlRunCredits = 0;
+  let controlWake = null;
+  let controlPreviousBatchRan = false;
+  let controlStepWaiter = null;
+  const wakeControlLoop = () => {
+    if (!controlWake) return;
+    const wake = controlWake;
+    controlWake = null;
+    wake();
+  };
+  signalExitWake = wakeControlLoop;
+  const finishPreviousControlBatch = () => {
+    if (!controlPreviousBatchRan) return;
+    controlPreviousBatchRan = false;
+    if (controlFrozen && controlRunCredits > 0) controlRunCredits--;
+    if (controlStepWaiter && --controlStepWaiter.remaining <= 0) {
+      const waiter = controlStepWaiter;
+      controlStepWaiter = null;
+      waiter.resolve({
+        batch: tickState.batch | 0,
+        ran: waiter.total,
+        steps: waiter.total,
+        frozen: controlFrozen,
+      });
+    }
+  };
+  const waitForControlBatch = async () => {
+    while (controlFrozen && controlRunCredits <= 0 && !stopped) {
+      const pausedAt = deadlineMs ? Date.now() : 0;
+      await new Promise(resolve => {
+        controlWake = resolve;
+      });
+      if (deadlineMs) deadlineMs += Date.now() - pausedAt;
+    }
+    if (!stopped) controlPreviousBatchRan = true;
+  };
+  const settleLiveInput = () => {
+    if (!liveOutstanding.size) return;
+    // One shared slice for every command settled this batch: per-command log
+    // attribution would need hooks all through the 2000-line action chain,
+    // and the common agent sends one command per round trip anyway.
+    const batchLogs = logs.slice(liveLogsStart);
+    for (const [ev, resolve] of liveOutstanding) {
+      if (!scheduledInput.includes(ev)) {
+        liveOutstanding.delete(ev);
+        resolve({ batch: tickState.batch | 0, logs: batchLogs });
       }
-      if (handlerHistArmed && batch >= HANDLER_HIST_STOP) {
+    }
+  };
+  const controlSafeValue = (value) => {
+    if (value === undefined) return null;
+    try {
+      return JSON.parse(JSON.stringify(value,
+        (k, v) => (typeof v === 'bigint' ? '0x' + v.toString(16) : v)));
+    } catch (_) { return String(value); }
+  };
+  const controlSnapshot = () => {
+    const we = instance.exports;
+    const windows = renderer ? Object.values(renderer.windows).map(w => ({
+      hwnd: '0x' + ((w.hwnd >>> 0) || 0).toString(16),
+      x: w.x | 0, y: w.y | 0, w: w.w | 0, h: w.h | 0,
+      visible: !!w.visible, isChild: !!w.isChild, title: w.title || '',
+    })) : [];
+    return {
+      batch: tickState.batch | 0,
+      eip: '0x' + (we.get_eip() >>> 0).toString(16),
+      quit: we.get_quit_flag ? !!we.get_quit_flag() : false,
+      yieldReason: we.get_yield_reason ? we.get_yield_reason() | 0 : 0,
+      focus: '0x' + ((we.get_focus_hwnd ? we.get_focus_hwnd() : 0) >>> 0).toString(16),
+      mainHwnd: '0x' + ((we.get_main_hwnd ? we.get_main_hwnd() : 0) >>> 0).toString(16),
+      screen: renderer && renderer.canvas
+        ? { w: renderer.canvas.width | 0, h: renderer.canvas.height | 0 } : null,
+      frozen: {
+        frozen: controlFrozen,
+        tickMs: batchClock.getTickMsPerBatch(),
+        credits: controlRunCredits,
+        recording: !!videoRecorder,
+      },
+      windows,
+    };
+  };
+  const controlEval = (code) => {
+    // Direct eval inside a non-strict function body: the params are in
+    // scope, statements work, and the last expression's value comes back.
+    const fn = new Function('instance', 'exports', 'renderer', 'memory', 'g2w', 'tickState', 'ctx',
+      'return eval(' + JSON.stringify(String(code)) + ')');
+    return controlSafeValue(fn(instance, instance.exports, renderer, memory, g2w, tickState, ctx));
+  };
+  const controlPng = (filename) => {
+    if (!renderer || !renderer.canvas) throw new Error('renderer is unavailable');
+    if (!filename) throw new Error('png needs a path');
+    presentDxIfDirty(0);
+    if (typeof renderer.repaint === 'function') renderer.repaint();
+    const buf = canvasToPng(renderer.canvas);
+    fs.writeFileSync(filename, buf);
+    return { batch: tickState.batch | 0, frozen: controlFrozen, path: filename, bytes: buf.length };
+  };
+  const handleControlCommand = (cmdIn) => {
+    const cmd = typeof cmdIn === 'string' ? { cmd: cmdIn } : (cmdIn || {});
+    const native = String(cmd.cmd || '').trim();
+    let match;
+    if (!cmd.action && /^(pause|resume)$/.test(native)) {
+      cmd.action = 'frozen';
+      cmd.mode = native === 'pause' ? 'on' : 'off';
+    } else if (!cmd.action && (match = native.match(/^(?:step|run)\s+(\d+)$/))) {
+      cmd.action = 'step';
+      cmd.n = Number(match[1]);
+    } else if (!cmd.action && (match = native.match(/^frozen\s+(on|off)$/))) {
+      cmd.action = 'frozen';
+      cmd.mode = match[1];
+    }
+    // Stdin ergonomics: a bare native name on a line ("snapshot") reads as
+    // the native action, not as an input entry that would fail to parse.
+    if (!cmd.action && /^(ping|snapshot|quit)$/.test(native)) {
+      cmd.action = native;
+    }
+    if (cmd.action === 'ping') {
+      return {
+        pong: true,
+        batch: tickState.batch | 0,
+        frozen: controlFrozen,
+        app: APP_ID || path.basename(EXE_PATH || ''),
+      };
+    }
+    if (cmd.action === 'snapshot') return controlSnapshot();
+    if (cmd.action === 'eval') return controlEval(cmd.code || '');
+    if (cmd.action === 'png') return controlPng(String(cmd.path || ''));
+    if (cmd.action === 'input-message') {
+      const fields = ['hwnd', 'msg', 'wParam', 'lParam'];
+      const values = Object.fromEntries(fields.map(field => [field, Number(cmd[field] || 0)]));
+      if (!fields.every(field => Number.isFinite(values[field]))) {
+        throw new Error('input-message fields must be finite numbers');
+      }
+      if (!instance.exports.post_message_q) throw new Error('guest message queue is unavailable');
+      const queued = instance.exports.post_message_q(
+        values.hwnd, values.msg, values.wParam, values.lParam) | 0;
+      if (!queued) throw new Error('guest message queue is full');
+      if (renderer && renderer._wakeMessageWait) renderer._wakeMessageWait();
+      return { queued: true, batch: tickState.batch | 0, ...values };
+    }
+    if (cmd.action === 'quit') { stopped = true; wakeControlLoop(); return { quitting: true }; }
+    if (cmd.action === 'frozen') {
+      const mode = cmd.mode || 'on';
+      if (mode !== 'on' && mode !== 'off') throw new Error("frozen needs mode 'on' or 'off'");
+      controlFrozen = mode === 'on';
+      if (!controlFrozen) {
+        controlRunCredits = 0;
+        if (controlStepWaiter) {
+          const waiter = controlStepWaiter;
+          controlStepWaiter = null;
+          waiter.reject(new Error('frozen mode was disabled before the requested steps completed'));
+        }
+        wakeControlLoop();
+      }
+      return { frozen: controlFrozen, batch: tickState.batch | 0,
+        tickMs: batchClock.getTickMsPerBatch() };
+    }
+    if (cmd.action === 'tick') {
+      if (!controlFrozen) throw new Error('tick requires frozen mode');
+      if (videoRecorder) throw new Error('cannot change tick cadence while recording');
+      const ms = Number(cmd.ms);
+      if (!Number.isFinite(ms) || ms <= 0) throw new Error('tick needs a positive finite ms value');
+      batchClock.setTickMsPerBatch(ms);
+      return { batch: tickState.batch | 0, tickMs: batchClock.getTickMsPerBatch(),
+        guestMs: batchClock.batchTicks() };
+    }
+    if (cmd.action === 'step') {
+      if (!controlFrozen) throw new Error('step requires frozen mode (launch with --frozen or send frozen on)');
+      if (controlStepWaiter) throw new Error('another step command is still running');
+      const n = cmd.n === undefined ? 1 : Number(cmd.n);
+      if (!Number.isInteger(n) || n < 1) throw new Error('step needs a positive integer n');
+      if (cmd.ms !== undefined && Number(cmd.ms) !== batchClock.getTickMsPerBatch()) {
+        throw new Error(`CLI tick size is ${batchClock.getTickMsPerBatch()}ms; requested ${Number(cmd.ms)}ms`);
+      }
+      controlRunCredits += n;
+      wakeControlLoop();
+      return new Promise((resolve, reject) => {
+        controlStepWaiter = { remaining: n, total: n, resolve, reject };
+      });
+    }
+    if (cmd.action === 'record') {
+      const mode = cmd.mode || 'status';
+      if (!['on', 'off', 'status'].includes(mode)) throw new Error("record needs mode 'on', 'off', or 'status'");
+      if (mode === 'status') {
+        return videoRecorder
+          ? { recording: true, ...videoRecorder.summary(), everyNSteps: videoEvery }
+          : { recording: false };
+      }
+      if (mode === 'off') {
+        if (!videoRecorder) return { recording: false };
+        const recorder = videoRecorder;
+        for (const pump of audioTapPumps) { try { pump(); } catch (_) {} }
+        videoRecorder = null;
+        return recorder.finish().then(summary => ({ recording: false, ...summary, everyNSteps: videoEvery }));
+      }
+      if (!controlFrozen) throw new Error('live CLI recording requires frozen mode so agent think-time is absent');
+      if (!renderer) throw new Error('CLI recording requires the renderer (remove --no-renderer)');
+      if (videoRecorder) throw new Error('a CLI recording is already active');
+      const every = cmd.everyNSteps === undefined ? 1 : Number(cmd.everyNSteps);
+      if (!Number.isInteger(every) || every < 1) throw new Error('record everyNSteps must be a positive integer');
+      const rawName = String(cmd.name || new Date().toISOString().replace(/[:.]/g, '-'));
+      const hasVideoExt = /\.(?:mp4|webm)$/i.test(rawName);
+      const safeName = rawName.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'recording';
+      const out = hasVideoExt ? path.resolve(rawName) : path.resolve('recordings', `${safeName}.mp4`);
+      videoEvery = every;
+      videoStartBatch = tickState.batch | 0;
+      const tickMs = batchClock.getTickMsPerBatch();
+      const derivedFps = tickMs > 0 ? 1000 / (tickMs * every) : VIDEO_FPS;
+      videoRecorder = new CliVideoRecorder(renderer.canvas, {
+        path: out,
+        fps: derivedFps,
+        ffmpeg: FFMPEG_PATH,
+        startGuestMs: batchClock.batchTicks(),
+      });
+      return { recording: true, ...videoRecorder.summary(), everyNSteps: videoEvery };
+    }
+    const entry = String(cmd.cmd || '');
+    if (!entry) throw new Error('need {cmd:"action:args"} or action: ping|snapshot|eval|png|input-message|frozen|tick|step|record|quit');
+    // A frozen CLI is already at a coherent between-batches boundary. Capture
+    // there instead of queueing a png action that cannot execute until a
+    // later `step` (ctl.js checks that the file exists before it returns).
+    if (controlFrozen && entry.startsWith('png:')) {
+      return controlPng(entry.slice(4));
+    }
+    if (/^wait-/.test(entry)) {
+      throw new Error('wait-* entries are scheduled-only; poll snapshot or png instead');
+    }
+    const evs = parseInputEntries([`${tickState.batch | 0}:${entry}`]);
+    const last = evs[evs.length - 1];
+    // The parser's fallback reads an unrecognized kind as a raw message id;
+    // NaN there is a typo'd action name, not a message.
+    if (last && last.action === undefined && !Number.isFinite(last.msg)) {
+      throw new Error(`unknown input action ${JSON.stringify(entry.split(':')[0])}`);
+    }
+    const enqueue = (resolve) => {
+      if (resolve) liveOutstanding.set(last, resolve);
+      // After everything already due this batch, before everything scheduled
+      // later: the schedule is the fixture, the stream is the driver.
+      const now = tickState.batch | 0;
+      for (const ev of evs) ev.batch = now;
+      let at = scheduledInput.findIndex(e => e.batch > now);
+      if (at < 0) at = scheduledInput.length;
+      scheduledInput.splice(at, 0, ...evs);
+    };
+    // In frozen mode an input is deliberately only queued; waiting for it to
+    // execute would deadlock the ordinary `ctl click; ctl step` agent loop.
+    if (controlFrozen) {
+      enqueue(null);
+      return { queued: true, batch: tickState.batch | 0 };
+    }
+    return new Promise((resolve) => enqueue(resolve));
+  };
+  const control = (CONTROL || CONTROL_STDIN) ? (() => {
+    const server = CONTROL ? require('../lib/control-server').startControlServer({
+      port: CONTROL_PORT, host: CONTROL_HOST,
+      onCommand: handleControlCommand, log: line => console.log(line),
+    }) : null;
+    if (CONTROL_STDIN) {
+      const rl = require('readline').createInterface({ input: process.stdin, terminal: false });
+      let stdinCommands = Promise.resolve();
+      rl.on('line', (line) => {
+        const text = line.trim();
+        if (!text) return;
+        let cmd;
+        try { cmd = JSON.parse(text); } catch (_) { cmd = { cmd: text }; }
+        const list = Array.isArray(cmd) ? cmd : [cmd];
+        for (const one of list) {
+          stdinCommands = stdinCommands.then(() => Promise.resolve(handleControlCommand(one)).then(
+            value => console.log(`[ctl] ${JSON.stringify({ ok: true, id: one.id, value })}`),
+            error => console.log(`[ctl] ${JSON.stringify({ ok: false, id: one.id, error: String(error && error.message || error) })}`)));
+        }
+      });
+      // EOF just ends the stream — the pipe's producer finishing must not
+      // kill a run the HTTP channel (or a schedule) may still be driving.
+      rl.on('close', () => {});
+      // But an open stdin must not keep the process alive after the batch
+      // loop ends either (a terminal's stdin never reaches EOF).
+      return { close() {
+        rl.close();
+        if (typeof process.stdin.unref === 'function') process.stdin.unref();
+        if (server) server.close();
+      } };
+    }
+    return { close() { if (server) server.close(); } };
+  })() : null;
+
+  const executionStartedAt = performance.now();
+  for (let batch = 0; batch < MAX_BATCHES && !stopped; batch++) {
+    if (deadlineMs && Date.now() >= deadlineMs) {
+      console.log(`[max-seconds] stopping after ${MAX_SECONDS}s at batch ${batch}`);
+      break;
+    }
+    // Timers cannot fire while the normal runner stays in its synchronous
+    // batch loop. Poll wall time sparsely at the one safe seam and await the
+    // journal before entering the next guest batch. Sixty-four Date checks per
+    // 4096 batches keeps the disabled/no-overlay path free and the enabled
+    // path's bookkeeping negligible.
+    if (vfsOverlay && OVERLAY_FLUSH_MS && (batch & 63) === 0 &&
+        Date.now() >= nextOverlayFlushAt) {
+      const checkpoint = await vfsOverlay.flush();
+      nextOverlayFlushAt = Date.now() + OVERLAY_FLUSH_MS;
+      if (checkpoint.written || checkpoint.failed) {
+        console.log(`[overlay] checkpointed ${checkpoint.written} record(s) to ${OVERLAY_DIR}` +
+          (checkpoint.failed ? `, ${checkpoint.failed} failed` : ''));
+      }
+    }
+    if (HANDLER_HIST_THREADS.length && !handlerHistDone) {
+      if (!handlerHistArmed && batch >= handlerHistWindowStart) {
+        armHandlerHistogram(batch);
+      }
+      if (handlerHistArmed && batch >= handlerHistWindowStop) {
         handlerHistExports.set_handler_hist_enabled(0);
         printHandlerHistogram(batch);
         handlerHistArmed = false;
-        handlerHistDone = true;
+        handlerHistExports = null;
+        handlerHistThreadIndex++;
+        selectHandlerHistWindow();
+        // This batch has not run yet. Arm the next instance immediately so
+        // adjacent scheduled windows remain exactly [start,stop), without
+        // losing their boundary batch to the profiler hand-off.
+        if (!handlerHistDone && batch >= handlerHistWindowStart) {
+          armHandlerHistogram(batch);
+        }
       }
     }
     if (TRACE_SCHED) {
@@ -3647,6 +5848,18 @@ async function main() {
     tickStateRef.batch = batch;
     tickState.callsInBatch = 0;
     if (ctx.pumpAudioCompletions) ctx.pumpAudioCompletions();
+    // --control: give the event loop a turn every batch so the control
+    // server's socket callbacks fire and settled replies flush. Without this
+    // the loop is synchronous end to end — the same mechanism that keeps
+    // SIGTERM queued forever (see the timeout -s KILL note in CLAUDE.md).
+    if (control) {
+      finishPreviousControlBatch();
+      await new Promise(resolve => setImmediate(resolve));
+      liveLogsStart = logs.length;
+      await waitForControlBatch();
+      if (stopped) break;
+    }
+    batchesRun = batch + 1;
     let injectedInputThisBatch = false;
     // Inject scheduled input events at the right batch
     while (scheduledInput.length && scheduledInput[0].batch <= batch) {
@@ -3654,7 +5867,21 @@ async function main() {
       injectedInputThisBatch = true;
       // Start the input->blit clock on events a user would perform. The
       // wrapped gdi_surface_upload stops it at the first blit that follows.
-      if (LATENCY_STATS && /^(keypress|keydown|keyup|click|dblclick)$/.test(ev.action)) {
+      // mousemove counts too: on a mouse-driven game (a paddle, a cursor, a
+      // camera) it is THE event whose latency the player feels, and it is the
+      // one a browser session cannot measure end-to-end. A move never clobbers
+      // an outstanding sample -- with --auto-mouse the moves arrive faster
+      // than the guest paints, and overwriting would restart the clock just
+      // before the blit and report a latency far shorter than the real one.
+      // A move never clobbers an outstanding MOVE -- with --auto-mouse the
+      // moves arrive faster than the guest paints, and overwriting would
+      // restart the clock just before the blit and report a latency far
+      // shorter than the real one. It does replace an outstanding event of
+      // any other kind, because those close on a WAT control paint that a
+      // fullscreen game never performs: left in place, one unclosable keydown
+      // from the menu would block every move for the rest of the run.
+      if (LATENCY_STATS && /^(keypress|keydown|keyup|click|dblclick|mousemove)$/.test(ev.action)
+          && !(latency.pending && latency.pending.kind === 'mousemove' && ev.action === 'mousemove')) {
         latency.pending = { kind: ev.action, batch, at: process.hrtime.bigint(), painted: false };
       }
       // UI-level events go through renderer handlers (mouse/keyboard pump),
@@ -3805,14 +6032,13 @@ async function main() {
             we.send_message(found, 0x0202, 0, 0);
             logs.push(`[input] find-click: id=0x${ev.ctrlId.toString(16)} hwnd=0x${found.toString(16)} at batch ${batch}`);
             {
-              const dv = new DataView(memory.buffer);
               const entries = [];
-              for (let i = 0; i < 8; i++) {
-                const h = dv.getUint32(0x400 + i*16, true);
-                const m = dv.getUint32(0x400 + i*16 + 4, true);
+              for (let i = 0; i < we.post_queue_depth(); i++) {
+                const h = we.post_queue_peek(i, 0);
+                const m = we.post_queue_peek(i, 1);
                 if (!h && !m) continue;
-                const wp = dv.getUint32(0x400 + i*16 + 8, true);
-                const lp = dv.getUint32(0x400 + i*16 + 12, true);
+                const wp = we.post_queue_peek(i, 2);
+                const lp = we.post_queue_peek(i, 3);
                 entries.push(`[${i}] h=0x${h.toString(16)} m=0x${m.toString(16)} wp=0x${wp.toString(16)} lp=0x${lp.toString(16)}`);
               }
               logs.push(`[input] post_queue after find-click: ${entries.length ? entries.join(' | ') : '(empty)'}`);
@@ -3823,6 +6049,19 @@ async function main() {
         } else {
           logs.push(`[input] find-click: no find dialog at batch ${batch}`);
         }
+      } else if (ev.action === 'dump-mem') {
+        // `--dump=` only fires at exit, and by then any scratch buffer has
+        // usually been freed and handed to something else -- a dump of it is
+        // then a picture of whatever moved in afterwards, which reads as
+        // corruption. This takes the same hexdump at a chosen batch instead,
+        // so a buffer can be inspected while its owner still holds it.
+        // Same format as --dump, so tools/dump2png.js parses either.
+        //   --input=41000:dump-mem:0xb9df84:12800
+        const at = parseInt(ev.arg, 16) >>> 0;
+        const len = parseInt(ev.arg2 || '256', 10) || 256;
+        logs.push(`[input] dump-mem at batch ${batch}`);
+        while (logs.length) console.log(logs.shift());
+        hexdump(at, len);
       } else if (ev.action === 'slot-count') {
         const we = instance.exports;
         const dlg = we.get_findreplace_dlg && we.get_findreplace_dlg();
@@ -4481,7 +6720,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           if (wins.length) dlg = wins[0].hwnd | 0;
         }
         if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
@@ -4510,13 +6749,110 @@ async function main() {
         } else {
           logs.push(`[input] dlg-cmd: cmd=${ev.cmdId} NO DIALOG at batch ${batch}`);
         }
+      } else if (ev.action === 'dlg-post-cmd') {
+        const we = instance.exports;
+        let dlg = 0;
+        if (renderer) {
+          const wins = Object.values(renderer.windows || {})
+            .filter(w => w && w.visible && w.isDialog)
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
+          if (wins.length) dlg = wins[0].hwnd | 0;
+        }
+        if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
+          for (let s = 255; s >= 0; s--) {
+            const hwnd = we.wnd_slot_hwnd(s);
+            if (hwnd && we.dlg_get_style(hwnd)) { dlg = hwnd; break; }
+          }
+        }
+        // Match dlg-cmd's property-sheet behavior: commands belong to the
+        // outer frame rather than its higher-z-order active page.
+        if (dlg && we.wnd_get_parent) {
+          for (let guard = 0; guard < 16; guard++) {
+            const parent = we.wnd_get_parent(dlg) | 0;
+            const parentWin = parent && renderer && renderer.windows
+              ? renderer.windows[parent]
+              : null;
+            if (!parent || !parentWin || !parentWin.isDialog) break;
+            dlg = parent;
+          }
+        }
+        if (dlg && we.post_message_q) {
+          const queued = we.post_message_q(dlg, 0x0111, ev.cmdId, 0) | 0;
+          logs.push(`[input] dlg-post-cmd: cmd=${ev.cmdId} hwnd=0x${dlg.toString(16)} queued=${queued} at batch ${batch}`);
+        } else if (dlg) {
+          logs.push(`[input] dlg-post-cmd: cmd=${ev.cmdId} hwnd=0x${dlg.toString(16)} NO POST QUEUE at batch ${batch}`);
+        } else {
+          logs.push(`[input] dlg-post-cmd: cmd=${ev.cmdId} NO DIALOG at batch ${batch}`);
+        }
+      } else if (ev.action === 'dlg-input-cmd') {
+        const we = instance.exports;
+        let dlg = 0;
+        if (renderer) {
+          const wins = Object.values(renderer.windows || {})
+            .filter(w => w && w.visible && w.isDialog)
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
+          if (wins.length) dlg = wins[0].hwnd | 0;
+        }
+        if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
+          for (let s = 255; s >= 0; s--) {
+            const hwnd = we.wnd_slot_hwnd(s);
+            if (hwnd && we.dlg_get_style(hwnd)) { dlg = hwnd; break; }
+          }
+        }
+        if (dlg) {
+          inputEvent = { msg: 0x0111, wParam: ev.cmdId, lParam: 0, hwnd: dlg };
+          logs.push(`[input] dlg-input-cmd: cmd=${ev.cmdId} hwnd=0x${dlg.toString(16)} at batch ${batch}`);
+        } else {
+          logs.push(`[input] dlg-input-cmd: cmd=${ev.cmdId} NO DIALOG at batch ${batch}`);
+        }
+      } else if (ev.action === 'dlg-input-click') {
+        const we = instance.exports;
+        let dlg = 0;
+        if (renderer) {
+          const wins = Object.values(renderer.windows || {})
+            .filter(w => w && w.visible && w.isDialog)
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
+          if (wins.length) dlg = wins[0].hwnd | 0;
+        }
+        if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
+          for (let s = 255; s >= 0; s--) {
+            const hwnd = we.wnd_slot_hwnd(s);
+            if (hwnd && we.dlg_get_style(hwnd)) { dlg = hwnd; break; }
+          }
+        }
+        let child = 0;
+        if (dlg && we.wnd_next_child_slot && we.wnd_slot_hwnd && we.ctrl_get_id) {
+          const seen = new Set();
+          const findChildById = parent => {
+            if (!parent || seen.has(parent)) return 0;
+            seen.add(parent);
+            let s = 0;
+            while ((s = we.wnd_next_child_slot(parent, s)) !== -1) {
+              const hwnd = we.wnd_slot_hwnd(s);
+              if (hwnd && we.ctrl_get_id(hwnd) === ev.ctrlId) return hwnd;
+              const nested = findChildById(hwnd);
+              if (nested) return nested;
+              s++;
+            }
+            return 0;
+          };
+          child = findChildById(dlg);
+        }
+        if (dlg && child) {
+          inputEvent = { msg: 0x0111, wParam: ev.ctrlId, lParam: child, hwnd: dlg };
+          logs.push(`[input] dlg-input-click: id=${ev.ctrlId} child=0x${child.toString(16)} dlg=0x${dlg.toString(16)} at batch ${batch}`);
+        } else if (dlg) {
+          logs.push(`[input] dlg-input-click: id=${ev.ctrlId} NOT FOUND dlg=0x${dlg.toString(16)} at batch ${batch}`);
+        } else {
+          logs.push(`[input] dlg-input-click: id=${ev.ctrlId} NO DIALOG at batch ${batch}`);
+        }
       } else if (ev.action === 'dlg-click') {
         const we = instance.exports;
         let dlg = 0;
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           if (wins.length) dlg = wins[0].hwnd | 0;
         }
         if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
@@ -4592,7 +6928,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           for (const w of wins) {
             found = findChildById(w.hwnd | 0);
             if (found) break;
@@ -4664,7 +7000,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           for (const w of wins) {
             found = findChildById(w.hwnd | 0);
             if (found) break;
@@ -4697,7 +7033,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           if (wins.length) dlg = wins[0].hwnd | 0;
         }
         if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
@@ -4751,7 +7087,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           if (wins.length) dlg = wins[0].hwnd | 0;
         }
         if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
@@ -4789,7 +7125,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           if (wins.length) dlg = wins[0].hwnd | 0;
         }
         if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
@@ -4902,13 +7238,27 @@ async function main() {
             const cr = we.get_client_rect_l
               ? `${we.get_client_rect_l(hwnd) | 0},${we.get_client_rect_t(hwnd) | 0},${we.get_client_rect_r(hwnd) | 0},${we.get_client_rect_b(hwnd) | 0}`
               : 'n/a';
-            children.push(`slot=${slot} hwnd=0x${hwnd.toString(16)} parent=0x${par.toString(16)} proc=0x${proc.toString(16)} cls=${cls} id=${id} style=0x${style.toString(16)} buttonFlags=0x${buttonFlags.toString(16)} xy=${xy & 0xffff},${xy >>> 16} wh=${wh & 0xffff}x${wh >>> 16} cr=${cr} dirty=${dirty}`);
+            // The update rect the selector actually reads. `dirty=1 upd=none`
+            // is a flag with no region (the selector drops it); a parent with
+            // `upd=none` never seeds its children at all.
+            const upd = we.update_rect_lt
+              ? (() => {
+                const lt = we.update_rect_lt(hwnd) | 0, rb = we.update_rect_rb(hwnd) | 0;
+                return (lt || rb) ? `${lt & 0xffff},${lt >> 16},${rb & 0xffff},${rb >> 16}` : 'none';
+              })()
+              : 'n/a';
+            children.push(`slot=${slot} hwnd=0x${hwnd.toString(16)} upd=${upd} parent=0x${par.toString(16)} proc=0x${proc.toString(16)} cls=${cls} id=${id} style=0x${style.toString(16)} buttonFlags=0x${buttonFlags.toString(16)} xy=${xy & 0xffff},${xy >>> 16} wh=${wh & 0xffff}x${wh >>> 16} cr=${cr} dirty=${dirty}`);
             slot++;
           }
         }
         const parentNc = we.nc_flags_test ? (we.nc_flags_test(parent) >>> 0) : 0;
         const parentDirty = we.paint_flag_test ? (we.paint_flag_test(parent) | 0) : -1;
-        logs.push(`[input] dump-children${ev.label ? ':' + ev.label : ''}: parent=0x${parent.toString(16)} nc=0x${parentNc.toString(16)} dirty=${parentDirty} ${children.length ? children.join(' | ') : '(none)'}`);
+        const parentUpdLt = we.update_rect_lt ? (we.update_rect_lt(parent) | 0) : 0;
+        const parentUpdRb = we.update_rect_rb ? (we.update_rect_rb(parent) | 0) : 0;
+        const parentUpd = (parentUpdLt || parentUpdRb)
+          ? `${parentUpdLt & 0xffff},${parentUpdLt >> 16},${parentUpdRb & 0xffff},${parentUpdRb >> 16}`
+          : 'none';
+        logs.push(`[input] dump-children${ev.label ? ':' + ev.label : ''}: parent=0x${parent.toString(16)} nc=0x${parentNc.toString(16)} dirty=${parentDirty} upd=${parentUpd} ${children.length ? children.join(' | ') : '(none)'}`);
       } else if (ev.action === 'menu-dump') {
         const we = instance.exports;
         const hwnd = we.menu_open_hwnd ? (we.menu_open_hwnd() >>> 0) : 0;
@@ -4952,18 +7302,21 @@ async function main() {
         // Where the dropdown and its cascade actually are. Without this a
         // "submenu never highlighted" report cannot be told apart from
         // "the test aimed the mouse at the wrong place": both look like
-        // subhover=-1. Widths are the fixed 180 the painter and hit-test
-        // share; the cascade hangs off the hovered row.
+        // subhover=-1. Read the measured widths shared by painting and hit
+        // testing; the cascade hangs off the hovered row.
         let geom = '';
         if (hwnd && we.menu_dropdown_x && we.menu_dropdown_y) {
           const dx = we.menu_dropdown_x(hwnd, top) | 0;
           const dy = we.menu_dropdown_y(hwnd) | 0;
           const dh = we.menu_dropdown_height ? (we.menu_dropdown_height(hwnd, top) | 0) : 0;
-          geom = ` drop=${dx},${dy} ${180}x${dh}`;
+          const dw = we.menu_dropdown_width ? (we.menu_dropdown_width(hwnd, top) | 0) : 180;
+          geom = ` drop=${dx},${dy} ${dw}x${dh}`;
           if (hover >= 0 && we.menu_child_sub_count) {
             const subn = we.menu_child_sub_count(hwnd, top, hover) | 0;
             if (subn > 0) {
-              geom += ` cascade=${dx + 180},${dy + 2 + hover * 20} 180x${subn * 20 + 4}`;
+              const sw = we.menu_submenu_width
+                ? (we.menu_submenu_width(hwnd, top, hover) | 0) : 180;
+              geom += ` cascade=${dx + dw},${dy + 2 + hover * 20} ${sw}x${subn * 20 + 4}`;
             }
           }
         }
@@ -4974,7 +7327,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           if (wins.length) dlg = wins[0].hwnd | 0;
         }
         let painted = 0;
@@ -4997,7 +7350,7 @@ async function main() {
         try {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           const dlgWin = wins[0] || null;
           const canvas = dlgWin && dlgWin._backCanvas;
           if (!canvas) throw new Error('no dialog back-canvas');
@@ -5088,8 +7441,12 @@ async function main() {
         const dv = new DataView(memory.buffer);
         const u8 = new Uint8Array(memory.buffer);
         const items = [];
-        const table = 0x07F00000;
-        for (let i = 0; i < 32; i++) {
+        // 0x07F00000 stays a literal: it is not a declared region base, only the
+        // exclusive end of the one below it, and spelling it region.end would
+        // encode an adjacency the allocator is free to change.
+        const table = we.treeview_get_table_base ? (we.treeview_get_table_base() >>> 0) : 0x07F00000;
+        const slots = we.treeview_get_slot_limit ? (we.treeview_get_slot_limit() | 0) : 32;
+        for (let i = 0; i < slots; i++) {
           const p = table + i * 32;
           const handle = dv.getUint32(p, true);
           if (!handle) continue;
@@ -5424,7 +7781,7 @@ async function main() {
           if (renderer) {
             const dialogs = Object.values(renderer.windows || {})
               .filter(w => w && w.visible && w.isDialog)
-              .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+              .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
             if (dialogs.length) dlg = dialogs[0].hwnd | 0;
           }
           if (!dlg && we.wnd_slot_hwnd && we.dlg_get_style) {
@@ -5534,7 +7891,7 @@ async function main() {
         if (renderer) {
           const wins = Object.values(renderer.windows || {})
             .filter(w => w && w.visible && w.isDialog)
-            .sort((a, b) => (b.zOrder || 0) - (a.zOrder || 0));
+            .sort((a, b) => ((b.zOrder || 0) - (a.zOrder || 0)) || ((b.hwnd || 0) - (a.hwnd || 0)));
           for (const w of wins) {
             found = findChildById(w.hwnd | 0);
             if (found) break;
@@ -5666,11 +8023,43 @@ async function main() {
         const key = ev.code & 0xFF;
         const down = ev.action === 'di-keydown';
         renderer._asyncKeys[key] = down;
+        if (renderer.pokeKeyDownState) renderer.pokeKeyDownState(key, down);
         if (down) renderer._asyncPressedKeys[key] = true;
+        // Event-buffered DirectInput devices must wake for test-injected state
+        // changes just as they do for renderer.handleKeyDown/handleKeyUp.
+        if (renderer._signalDirectInputDevice) renderer._signalDirectInputDevice(1);
         logs.push(`[input] ${ev.action} vk=${ev.code} at batch ${batch}`);
+      } else if ((ev.action === 'di-mousedown' || ev.action === 'di-mouseup') && renderer) {
+        const mask = ev.button === 2 ? 0x0002 : 0x0001;
+        const vk = ev.button === 2 ? 0x02 : 0x01;
+        const down = ev.action === 'di-mousedown';
+        const wasDown = !!((renderer._mouseButtonsMask || 0) & mask);
+        renderer._mouseButtonsMask = down
+          ? ((renderer._mouseButtonsMask || 0) | mask)
+          : ((renderer._mouseButtonsMask || 0) & ~mask);
+        if (!renderer._asyncPressedKeys) renderer._asyncPressedKeys = Object.create(null);
+        if (down) renderer._asyncPressedKeys[vk] = true;
+        // A frozen control command is queued until the next step, while eval
+        // and recovery commands run immediately at the parked boundary. If
+        // one of those clears the host mask before this mouse-up executes,
+        // wasDown is already false even though the guest DirectInput device
+        // still holds the preceding press. Always forward synthetic releases:
+        // an extra up record is harmless, but omitting it leaves games firing.
+        if ((!down || wasDown !== down) && renderer._queueDirectInputMouseButton) {
+          renderer._queueDirectInputMouseButton(
+            renderer._pointerInputMemory || renderer.wasmMemory, mask, down);
+        }
+        if (renderer._signalDirectInputDevice) renderer._signalDirectInputDevice(2);
+        logs.push(`[input] ${ev.action} button=${ev.button} at batch ${batch}`);
       } else if (ev.action === 'sleep-ms') {
         if (ev.ms > 0) await new Promise(resolve => setTimeout(resolve, ev.ms));
         logs.push(`[input] sleep-ms ${ev.ms} at batch ${batch}`);
+      } else if (ev.action === 'set-batch-size') {
+        BATCH_SIZE = Math.max(1, ev.size | 0);
+        logs.push(`[input] set-batch-size ${BATCH_SIZE} at batch ${batch}`);
+      } else if (ev.action === 'set-win16-trace') {
+        if (instance.exports.set_win16_trace) instance.exports.set_win16_trace(ev.enabled ? 1 : 0);
+        logs.push(`[input] set-win16-trace ${ev.enabled ? 1 : 0} at batch ${batch}`);
       } else if (ev.action === 'wave-in-feed') {
         const samples = new Float32Array(ev.frames);
         for (let i = 0; i < samples.length; i++) {
@@ -5769,6 +8158,32 @@ async function main() {
           if (renderer.handleMouseUp) renderer.handleMouseUp(x1, y1, 1);
           logs.push(`[input] scroll-drag ${ev.axis} hwnd=0x${bar.hwnd.toString(16)} ${p.x},${p.y} -> ${x1},${y1} at batch ${batch}`);
         }
+      } else if (ev.action === 'wait-vfs-file') {
+        const key = ctx.vfs._resolvePath(ev.filename);
+        const entry = ctx.vfs.files.get(key);
+        if (entry) {
+          logs.push(`[input] wait-vfs-file matched ${key} (${entry.data.length} bytes) at batch ${batch}`);
+        } else if (batch - (ev.startBatch || batch) < (ev.limit || 2000)) {
+          deferScheduledWait(ev, batch);
+        } else {
+          logs.push(`[input] wait-vfs-file TIMEOUT ${key} at batch ${batch}`);
+        }
+      } else if (ev.action === 'wait-canvas-dark-pixels' && renderer && renderer.canvas) {
+        if (typeof renderer.repaint === 'function') renderer.repaint();
+        const w = renderer.canvas.width | 0;
+        const h = renderer.canvas.height | 0;
+        const rgba = renderer.canvas.getContext('2d').getImageData(0, 0, w, h).data;
+        let dark = 0;
+        for (let i = 0; i < rgba.length; i += 4) {
+          if (rgba[i] <= 16 && rgba[i + 1] <= 16 && rgba[i + 2] <= 16) dark++;
+        }
+        if (dark >= ev.min && dark <= ev.max) {
+          logs.push(`[input] wait-canvas-dark-pixels matched ${dark} in ${ev.min}..${ev.max} at batch ${batch}`);
+        } else if (batch - (ev.startBatch || batch) < (ev.limit || 2000)) {
+          deferScheduledWait(ev, batch);
+        } else {
+          logs.push(`[input] wait-canvas-dark-pixels TIMEOUT ${dark} not in ${ev.min}..${ev.max} at batch ${batch}`);
+        }
       } else if (ev.action === 'png' && renderer && renderer.canvas) {
         try {
           if (typeof renderer.repaint === 'function') renderer.repaint();
@@ -5783,6 +8198,17 @@ async function main() {
                 const bcPath = ev.path.replace('.png', `_back_${hwndStr}.png`);
                 fs.writeFileSync(bcPath, canvasToPng(win._backCanvas));
                 logs.push(`[input] back-canvas ${bcPath}`);
+              }
+              // The DirectDraw frame layer is a separate canvas composited over
+              // the back-canvas, so a blank screenshot with a blank back-canvas
+              // says nothing about whether the guest presented a frame. Dump it
+              // too: content here plus a blank screenshot is a compositor bug,
+              // and blank here is a presentation bug.
+              const dxc = win._dxFrameLayer && win._dxFrameLayer.canvas;
+              if (dxc && dxc.toBuffer) {
+                const dxPath = ev.path.replace('.png', `_dxlayer_${hwndStr}.png`);
+                fs.writeFileSync(dxPath, canvasToPng(dxc));
+                logs.push(`[input] dx-layer ${dxPath} (${dxc.width}x${dxc.height})`);
               }
             }
           }
@@ -5870,45 +8296,29 @@ async function main() {
         const verifyStr = Array.from(mem8.slice(g2w(nameGA), g2w(nameGA) + nameLen)).map(c => String.fromCharCode(c)).join('');
         const verifyPtr = we.guest_read32(ptrGA);
         logs.push(`[winamp-play] nameGA=0x${nameGA.toString(16)} ptrGA=0x${ptrGA.toString(16)} str="${verifyStr}" [ptrGA]=0x${verifyPtr.toString(16)}`);
-        const dv = new DataView(memory.buffer);
         const mainHwnd = we.get_main_hwnd();
         // Restore original WndProc so IPC reaches Winamp's handler
         const origWndproc = we.get_wndproc();
         if (we.wnd_table_set) {
           we.wnd_table_set(mainHwnd, origWndproc);
         }
-        const postCount = we.get_post_queue_count ? we.get_post_queue_count() : 0;
         const ipcMsgs = [
           { hwnd: mainHwnd, msg: 0x400, wParam: 0, lParam: 101 },       // IPC_DELETE
           { hwnd: mainHwnd, msg: 0x400, wParam: ptrGA, lParam: 100 },    // IPC_PLAYFILE (wParam -> ptr -> string)
           // IPC_PLAYFILE auto-plays; don't send IPC_STARTPLAY here — it would Stop() the
           // just-started decode threads and restart, wasting decoded audio.
         ];
-        for (let i = 0; i < ipcMsgs.length && postCount + i < 8; i++) {
-          const off = 0x400 + (postCount + i) * 16;
-          dv.setUint32(off, ipcMsgs[i].hwnd, true);
-          dv.setUint32(off + 4, ipcMsgs[i].msg, true);
-          dv.setUint32(off + 8, ipcMsgs[i].wParam, true);
-          dv.setUint32(off + 12, ipcMsgs[i].lParam, true);
-        }
-        if (we.set_post_queue_count) {
-          we.set_post_queue_count(postCount + Math.min(ipcMsgs.length, 8 - postCount));
+        for (const msg of ipcMsgs) {
+          if (!we.post_message_q(msg.hwnd, msg.msg, msg.wParam, msg.lParam))
+            throw new Error('winamp-play: post queue full');
         }
         logs.push(`[input] winamp-play: "${ev.filename}" at GA=0x${nameGA.toString(16)} batch ${batch}`);
       } else if (ev.action === 'winamp-start') {
         // Post IPC_STARTPLAY to the main Winamp window
         const we = instance.exports;
         const mainHwnd = we.get_main_hwnd();
-        const postCount = we.get_post_queue_count ? we.get_post_queue_count() : 0;
-        if (postCount < 8) {
-          const dv = new DataView(memory.buffer);
-          const off = 0x400 + postCount * 16;
-          dv.setUint32(off, mainHwnd, true);
-          dv.setUint32(off + 4, 0x400, true);     // WM_USER
-          dv.setUint32(off + 8, 0, true);          // wParam=0
-          dv.setUint32(off + 12, 102, true);       // lParam=102 (IPC_STARTPLAY)
-          we.set_post_queue_count(postCount + 1);
-        }
+        if (!we.post_message_q(mainHwnd, 0x400, 0, 102))
+          throw new Error('winamp-start: post queue full');
         logs.push(`[input] winamp-start at batch ${batch}`);
       } else if (ev.action === 'post-cmd') {
         const we = instance.exports;
@@ -5927,16 +8337,8 @@ async function main() {
             if (hasMenu) { mainHwnd = parseInt(hs, 10) || mainHwnd; break; }
           }
         }
-        const postCount = we.get_post_queue_count ? we.get_post_queue_count() : 0;
-        if (postCount < 8) {
-          const dv = new DataView(memory.buffer);
-          const off = 0x400 + postCount * 16;
-          dv.setUint32(off, mainHwnd, true);
-          dv.setUint32(off + 4, 0x111, true);     // WM_COMMAND
-          dv.setUint32(off + 8, ev.wParam, true);
-          dv.setUint32(off + 12, 0, true);
-          we.set_post_queue_count(postCount + 1);
-        }
+        if (!we.post_message_q(mainHwnd, 0x111, ev.wParam, 0))
+          throw new Error('post-cmd: post queue full');
         logs.push(`[input] post-cmd wParam=0x${ev.wParam.toString(16)} at batch ${batch}`);
       } else if (ev.action === 'poke') {
         const wa = g2w(ev.addr);
@@ -6040,6 +8442,9 @@ async function main() {
         if (renderer.handleMenuHover) renderer.handleMenuHover(ev.x, ev.y);
         renderer.handleMouseMove(ev.x, ev.y);
         logs.push(`[input] mousemove ${ev.x},${ev.y} at batch ${batch}`);
+      } else if (ev.action === 'relmousemove' && renderer && renderer.handleRelativeMouseMove) {
+        renderer.handleRelativeMouseMove(ev.x, ev.y);
+        logs.push(`[input] relmousemove ${ev.x},${ev.y} at batch ${batch}`);
       } else if (ev.action === 'wheel' && renderer && renderer.handleWheel) {
         renderer.handleWheel(ev.x, ev.y, ev.delta);
         logs.push(`[input] wheel ${ev.x},${ev.y} delta=${ev.delta} at batch ${batch}`);
@@ -6051,6 +8456,7 @@ async function main() {
         logs.push(`[input] injected msg=0x${ev.msg.toString(16)} wParam=0x${ev.wParam.toString(16)} at batch ${batch}`);
       }
     }
+    if (control) settleLiveInput();
     if (stopped) {
       while (logs.length) console.log(logs.shift());
       break;
@@ -6077,6 +8483,16 @@ async function main() {
     // breakpoints can perturb hot generated-code paths before we need data.
     if (traceAtAddr && !breakAddrs.length && batch === TRACE_AT_START_BATCH && instance.exports.set_bp) {
       instance.exports.set_bp(traceAtAddr);
+      // Cooperative threads own separate WASM instances.  They inherit the
+      // main instance's breakpoint globals when spawned, but a delayed
+      // --trace-at is commonly armed after those instances already exist.
+      // Keep the diagnostic honest by arming every live instance here.
+      if (threadManager && threadManager.threads) {
+        for (const thread of threadManager.threads.values()) {
+          const te = thread && thread.instance && thread.instance.exports;
+          if (te && te.set_bp) te.set_bp(traceAtAddr);
+        }
+      }
     }
     // --trace-esp: arm range once
     if (traceEspOn && batch === 0 && instance.exports.set_trace_esp) {
@@ -6087,12 +8503,10 @@ async function main() {
     if (traceEipOn && traceEipArmed && batch === 0 && instance.exports.set_trace_eip_range) {
       instance.exports.set_trace_eip_range(1, traceEipLo, traceEipHi);
     }
-    // Hit counters: register once
-    if (countAddrs.length && batch === 0 && instance.exports.set_count) {
-      for (let i = 0; i < countAddrs.length; i++) {
-        instance.exports.set_count(i, countAddrs[i]);
-      }
-    }
+    // Hit counters: arm any slot whose address is known and not armed yet. A
+    // module-relative slot stays unresolved until its DLL loads, so this cannot
+    // be a batch-0-only job.
+    if (batch === 0) armCounts();
     // Breakpoint check (EIP before run)
     if (breakAddrs.length && breakAddrs.includes(eipBefore)) {
       if (breakThreadFilter !== null && breakThreadFilter !== 0) {
@@ -6133,7 +8547,7 @@ async function main() {
       }
       if (fired && TRACE_API) {
         const mem32 = new Uint32Array(memory.buffer);
-        const g2wOff = 0x12000 - instance.exports.get_image_base();
+        const g2wOff = RegionMap.g2wOffset(instance.exports.get_image_base());
         const trampVal = mem32[(0xa5a058 + g2wOff) >> 2];
         console.log(`[mm_timer] fired at batch ${batch}, EIP=${hex(instance.exports.get_eip())}, [0xa5a058]=${hex(trampVal)}`);
       }
@@ -6150,6 +8564,9 @@ async function main() {
     }
 
     const batchStartMs = TRACE_BATCH_TIMING ? Date.now() : 0;
+    const decodesBefore = DECODE_STATS && instance.exports.get_cache_stores
+      ? instance.exports.get_cache_stores() >>> 0 : 0;
+    const sliceT0 = DECODE_STATS ? process.hrtime.bigint() : 0n;
     try {
       if (!mainExecutionSuspended()) instance.exports.run(BATCH_SIZE);
     } catch (e) {
@@ -6180,10 +8597,26 @@ async function main() {
       }
     }
 
-    const afterRunMs = TRACE_BATCH_TIMING ? Date.now() : 0;
-    if ((batch & 0x7f) === 0 && base.gdi && base.gdi.presentBestDxOffscreen) {
-      base.gdi.presentBestDxOffscreen();
+    if (BATCH_STATS && batch >= BATCH_STATS_FROM && instance.exports.get_last_run_blocks) {
+      batchStatsBlocks.push(instance.exports.get_last_run_blocks() | 0);
+      const why = instance.exports.get_last_run_halt() | 0;
+      if (why >= 0 && why < batchStatsHalts.length) batchStatsHalts[why]++;
     }
+
+    if (DECODE_STATS && batch >= DECODE_STATS_FROM) {
+      // Wrap-safe: get_cache_stores is a u32 counter read as unsigned.
+      const decodesAfter = instance.exports.get_cache_stores
+        ? instance.exports.get_cache_stores() >>> 0 : 0;
+      decodeStatsDecodes.push((decodesAfter - decodesBefore) >>> 0);
+      decodeStatsSliceUs.push(Number(process.hrtime.bigint() - sliceT0) / 1000);
+    }
+
+    const afterRunMs = TRACE_BATCH_TIMING ? Date.now() : 0;
+    // Upload only when the guest says a frame is finished, rate-limited by wall
+    // clock. This replaced a '(batch & 0x7f) === 0' poll, which uploaded on the
+    // harness's cadence rather than the game's and then discarded the upload
+    // unless a 4-byte-per-row signature happened to change.
+    presentDxIfDirty(DX_PRESENT_MIN_MS);
 
     // Flush deferred repaint so back canvas composites after all GDI writes.
     // The scheduled-repaint flag survives a skipped flush, so coalescing here
@@ -6192,7 +8625,15 @@ async function main() {
         && (REPAINT_EVERY === 1 || batch % REPAINT_EVERY === 0)) {
       renderer.flushRepaint();
     }
-    if (videoRecorder && batch >= VIDEO_START_BATCH) {
+    if (videoRecorder && batch >= videoStartBatch
+        && ((batch - videoStartBatch) % videoEvery) === 0) {
+      for (const pump of audioTapPumps) { try { pump(); } catch (_) {} }
+      presentDxIfDirty(0);   // a recorded frame is a capture, not a live view
+      // DirectDraw presents schedule the desktop composite. A sparse
+      // --repaint-every value must not make the recorder repeatedly sample the
+      // previous screen canvas while the guest's surface advances underneath.
+      // Frozen PNG capture uses this same forced publication boundary.
+      if (renderer && typeof renderer.repaint === 'function') renderer.repaint();
       await videoRecorder.capture(renderer.canvas);
     }
     if (TRACE_BATCH_TIMING) {
@@ -6257,7 +8698,14 @@ async function main() {
               }
             };
             const parseAddrExpr = (expr) => {
-              const s = String(expr || '').replace(/^\[/, '').replace(/\]$/, '').trim();
+              let s = String(expr || '').replace(/^\[/, '').replace(/\]$/, '').trim();
+              let deref = false;
+              if (s.startsWith('*')) { deref = true; s = s.slice(1).trim(); }
+              const inner = parseAddrExprBase(s);
+              if (inner === null || !deref) return inner;
+              try { return dv.getUint32(g2w(inner), true) >>> 0; } catch (_) { return null; }
+            };
+            const parseAddrExprBase = (s) => {
               const m = s.match(/^(e(?:ax|bx|cx|dx|sp|bp|si|di|ip))\s*([+-])?\s*(0x[0-9a-fA-F]+|\d+)?$/i);
               if (m) {
                 const base = regValue(m[1]);
@@ -6278,6 +8726,17 @@ async function main() {
               try {
                 const wa = g2w(addr);
                 let val;
+                if (d.str) {
+                  const u8 = new Uint8Array(memory.buffer);
+                  let out = '';
+                  for (let i = 0; i < 128; i++) {
+                    const c = u8[wa + i];
+                    if (!c) break;
+                    out += (c >= 0x20 && c < 0x7f) ? String.fromCharCode(c) : '.';
+                  }
+                  parts.push(`${d.expr}@${hex(addr)}="${out}"`);
+                  continue;
+                }
                 if (d.len === 1) val = dv.getUint8(wa);
                 else if (d.len === 2) val = dv.getUint16(wa, true);
                 else if (d.len === 4) val = dv.getUint32(wa, true) >>> 0;
@@ -6325,6 +8784,92 @@ async function main() {
         log: console.log,
         findDll: findRuntimeDllBytes,
       });
+    }
+
+    // Handle the lazy-VFS io_wait yield (yield_reason=12). A provider-backed
+    // file (a mounted zip/iso entry, a dropped File, a remote URL) was asked
+    // for a chunk the host has not read yet. ReadFile parked with its stdcall
+    // frame restored and EIP on the thunk, so filling the chunk and clearing
+    // the yield re-enters the same call, which then takes the cache hit.
+    if (instance.exports.get_yield_reason() === 12) {
+      const pending = ctx.vfs && ctx.vfs.pendingRead;
+      if (TRACE_YIELD) {
+        console.log(`[yield] T0 reason=12 (io_wait) ` +
+          (pending ? `path=${pending.path} off=${pending.offset} len=${pending.length}` : 'no pending record'));
+      }
+      if (pending) {
+        // Fail loudly rather than spinning: a provider that cannot deliver is
+        // a mount bug, and a silent retry loop would look like a hang.
+        await ctx.vfs.fillPendingRead(pending);
+        ctx.vfs.pendingRead = null;
+      }
+      instance.exports.clear_yield();
+    }
+    if (instance.exports.get_yield_reason() === 16) mainExecutionSuspended();
+
+    // Handle the vertical-blank yield (yield_reason=13). A DirectDraw call
+    // parked with its stdcall frame intact and EIP on the thunk, so advancing
+    // the clock past the boundary and clearing the yield re-enters the same
+    // call, which then finds the vblank has happened and returns DD_OK.
+    if (instance.exports.get_yield_reason() === 13) {
+      const deadline = instance.exports.get_vblank_deadline_ms
+        ? instance.exports.get_vblank_deadline_ms() >>> 0 : 0;
+      // Charge against the batch BASE, not the last value handed out: the
+      // per-call step inside a batch is capped at the next base, so lifting
+      // only the last tick can leave the base short and re-park forever.
+      // +1 so the boundary is strictly passed rather than exactly met.
+      const owed = ((deadline + 1) - batchClock.batchTicks()) | 0;
+      if (owed > 0) {
+        tickState.pausedMs += owed;
+        VBLANK.guestMsAdded += owed;
+      }
+      VBLANK.waits++;
+      if (TRACE_YIELD) {
+        console.log(`[yield] T0 reason=13 (vblank_wait) due=${deadline} ` +
+          `now=${tickState.lastTick} charged=${Math.max(0, owed)}ms`);
+      }
+      instance.exports.clear_yield();
+    }
+
+    // Handle the spin parks (yield_reason 14 = clock, 15 = empty PeekMessage).
+    // Both parked with the stdcall frame intact and EIP on the thunk, so
+    // clearing the yield re-enters the same call.
+    //
+    // WHAT IS DELIBERATELY *NOT* DONE HERE: guest time is not charged by
+    // default. The headless clock already advances TICK_MS_PER_BATCH per batch
+    // and a park ends its batch, so the very next batch hands the guest a new
+    // millisecond -- the wait resolves on the schedule the run asked for, and
+    // the clock is left exactly as --tick-ms-per-batch defined it. Charging
+    // the way the vblank park does would be a real distortion here rather than
+    // a correction: a vblank deadline is ~17ms away and needs the lift, while
+    // a clock park's deadline is the NEXT MILLISECOND, which at
+    // --tick-ms-per-batch=1 is already where the next batch lands. Paying it
+    // anyway would run the guest clock at two to three times the requested
+    // rate and silently rewrite every GetTickCount-delta the app computes --
+    // exactly the kind of perturbation that would move GTA2's
+    // GetTickCount/Sleep/GetTickCount startup probe.
+    //
+    // The one case that does need a lift is a run with no batch step at all
+    // (--tick-ms-per-batch=0), where nothing else would ever move the clock.
+    {
+      const spinYield = instance.exports.get_yield_reason();
+      if (spinYield === 14 || spinYield === 15) {
+        const deadline = (spinYield === 14 && instance.exports.get_spin_deadline_ms)
+          ? instance.exports.get_spin_deadline_ms() >>> 0 : 0;
+        let owed = 0;
+        if (spinYield === 14 && batchClock.getTickMsPerBatch() <= 0) {
+          owed = ((deadline + 1) - batchClock.batchTicks()) | 0;
+          if (owed > 0) tickState.pausedMs += owed; else owed = 0;
+        }
+        if (spinYield === 14) SPIN_PARK.clockWaits++; else SPIN_PARK.peekWaits++;
+        SPIN_PARK.guestMsAdded += owed;
+        if (TRACE_YIELD) {
+          console.log(`[yield] T0 reason=${spinYield} `
+            + `(${spinYield === 14 ? 'clock_spin' : 'peek_spin'}) due=${deadline} `
+            + `now=${tickState.lastTick} charged=${owed}ms`);
+        }
+        instance.exports.clear_yield();
+      }
     }
 
     // Handle the virtual LAN net_wait yield (yield_reason=8). The guest is
@@ -6398,11 +8943,7 @@ async function main() {
             if (breakAddrs.length) instance.exports.set_bp(breakAddrs[0]);
             else if (traceAtAddr) instance.exports.set_bp(traceAtAddr);
           }
-          if (countAddrs.length && instance.exports.set_count) {
-            for (let i = 0; i < countAddrs.length; i++) {
-              instance.exports.set_count(i, countAddrs[i]);
-            }
-          }
+          armCounts();
           if (traceEipOn && traceEipArmed && instance.exports.set_trace_eip_range) {
             instance.exports.set_trace_eip_range(1, traceEipLo, traceEipHi);
           }
@@ -6414,9 +8955,77 @@ async function main() {
     if (threadManager._pendingThreads.length) {
       await threadManager.spawnPending();
     }
-    if (threadManager.hasActiveThreads()) {
+    if (WORKER_THREADS && threadManager.hasActiveThreads()) {
+      // Real threads: every runnable one gets a slice at the same time, and they
+      // run on other CPUs while this thread carries on. There is no quantum to
+      // hand out and no round-robin to be fair about — those exist because one JS
+      // thread has to be shared, which is the constraint this backend removes.
+      //
+      // The clock and the input-queue depth are published, not asked for: a
+      // worker reads them out of its control block without a round trip, and this
+      // is the only thread that knows them.
+      guestThreadHost.broker.publish({
+        tickMs: batchClock.batchTicks(),
+        inputPending: (inputQueue ? inputQueue.length : 0)
+          + (renderer && renderer.inputQueue ? renderer.inputQueue.length : 0),
+      });
+      const workerStartMs = TRACE_BATCH_TIMING ? Date.now() : 0;
+      // Same THREAD_SLICES structure as the cooperative branch below, and for a
+      // reason that is not cosmetic: what a producer thread gets out of a batch is
+      // counted in WAKEUPS, not in steps. Winamp's decoder does one buffer's worth
+      // of work and parks on its event again, so its slice ends on the yield no
+      // matter how large the slice was. One round of slices per batch gave it a
+      // quarter of the wakeups the cooperative backend gives it, and the captured
+      // PCM came out 4x behind — real samples, arriving too late to be the audio
+      // the run was measuring. Main runs between rounds for the same reason it does
+      // below, which is what keeps --max-batches meaning the same thing on both
+      // backends.
+      //
+      // Slice size is NOT BATCH_SIZE, though. A worker's slice size is only the
+      // granularity of its round trip back to this thread — nothing here is blocked
+      // while it runs — whereas BATCH_SIZE is tuned for the opposite constraint and
+      // apps run it as low as 100 steps.
+      let ran = 0;
+      for (let s = 0; s < THREAD_SLICES; s++) {
+        const workerSlices = threadManager.runWorkerSlices(THREAD_BATCH_SIZE);
+        // --threads-serial means nothing runs beside a guest thread, main
+        // included, or the switch would not answer the question it exists for.
+        if (THREADS_SERIAL) await workerSlices;
+        else if (s < THREAD_SLICES - 1 && !stopped && !mainExecutionSuspended()) {
+          // Main keeps running WHILE they do — the CLI's version of host.js
+          // awaiting the main slice and the thread slices together.
+          try { instance.exports.run(BATCH_SIZE); } catch (e) { /* reported below */ }
+        }
+        ran = await workerSlices;
+        if (!ran || stopped || !threadManager.hasActiveThreads()) break;
+      }
+      if (TRACE_BATCH_TIMING) {
+        console.log(`[batch-timing] batch=${batch} threads=${ran} worker=${Date.now() - workerStartMs}ms`);
+      }
+      if (threadManager.netWaitPending) {
+        threadManager.netWaitPending = false;
+        await new Promise(resolve => setImmediate(resolve));
+      }
+    } else if (threadManager.hasActiveThreads()) {
       // Give worker threads extra runtime when main thread is idle (e.g., waiting for extraction)
-      const slices = installingFiles ? 1000 : THREAD_SLICES;
+      // The same reasoning covers any blocking wait, not just the installer's:
+      // while the main thread is parked on an object only a worker can signal,
+      // the interleaved main runs below do nothing but re-poll it, and four
+      // worker slices a batch is the emulator throttling the one thread with
+      // work to do. Storm's MPQ reader is the case that shows it -- Diablo's
+      // Single Player transition waits on three MPQ decompression jobs, and
+      // giving the worker the batch it is blocking on took the same capture of
+      // its Choose Class screen from >75s (it did not finish) to 53s. The wait
+      // still returns the instant the object is signalled, so nothing is lost
+      // when the work finishes early. 256 slices measured no better than 64.
+      const mainParked = !!(threadManager.isMainWaitingOnThreads
+        && threadManager.isMainWaitingOnThreads());
+      const slices = installingFiles ? 1000 : (mainParked ? WAIT_SLICES : THREAD_SLICES);
+      // Keep re-polling the parked wait after every slice. Polling every 8th
+      // instead was measured 30% SLOWER on Diablo's Single Player transition
+      // (69s vs 53s, byte-identical output): the object gets signalled inside
+      // the boosted run, and any slice the main thread spends not noticing is
+      // a slice the worker spends spinning on an empty queue.
       // The run=/paint= line above covers only the main instance. In a threaded
       // app the game itself lives on a worker, so without this the profile
       // reads as "nothing is running" while the box is pinned.
@@ -6436,6 +9045,25 @@ async function main() {
       if (TRACE_BATCH_TIMING) {
         console.log(`[batch-timing] batch=${batch} worker=${Date.now() - workerStartMs}ms slices=${slices}`);
       }
+      // Same story for a worker that called LoadLibraryA: the WAT handler has
+      // parked it on yield 5 and only the host can finish the load, which is
+      // asynchronous. Serve it here, then hand the loader's cursors back to
+      // main, because the next slice copies them the other way.
+      for (const thread of threadManager.threadsAwaitingLoadLibrary()) {
+        const e = thread.instance.exports;
+        if (TRACE_YIELD) {
+          console.log(`[yield] T${thread.tid} reason=5 (load_library) eip=${hex(e.get_eip())} esp=${hex(e.get_esp())}`);
+        }
+        await handleLoadLibraryYield({
+          exports: e,
+          memoryBuffer: memory.buffer,
+          resourceHost: ctx,
+          log: console.log,
+          trace: TRACE_YIELD ? console.log : null,
+          findDll: findRuntimeDllBytes,
+        });
+        threadManager.publishWorkerGlobals(e);
+      }
       // A worker parked in a blocking socket call is waiting on a frame that
       // only the event loop can deliver. runSlice cannot await, so the turn
       // has to be given here or the wait never ends.
@@ -6444,6 +9072,10 @@ async function main() {
         await new Promise(resolve => setImmediate(resolve));
       }
     }
+    // Render worker replies also require a real event-loop turn; Promise-only
+    // CLI batches starve message delivery even though their guest is parked.
+    if (ctx.d3d9Bridge && ctx.d3d9Bridge.requests.size)
+      await new Promise(resolve => setImmediate(resolve));
     // A parked socket call is not the only way to be waiting on the wire. An
     // app using WSAAsyncSelect never blocks in winsock at all: it sits in its
     // message pump expecting to be told, so nothing above would ever yield and
@@ -6471,6 +9103,7 @@ async function main() {
       }
     }
     // Check if main thread is waiting on an event
+    await threadManager.resolveMainThreadSend();
     if (threadManager.checkMainYield()) {
       // Main thread still waiting — don't advance EIP check
     }
@@ -6536,6 +9169,12 @@ if (VERBOSE) {
         prevApiCount = apiCount;
         prevRegFp = regFp;
         stuckCount = 0;
+      } else if (ex.get_yield_reason() === 16 && ctx.d3d9Bridge &&
+          ctx.d3d9Bridge.requests.has(ex.get_d3d_render_token() | 0)) {
+        // The render worker owns a live continuation. An unchanged guest CPU
+        // while it runs is intentional; normal wall deadlines still apply.
+        // Do not exempt an orphaned yield with no corresponding request.
+        stuckCount = 0;
       } else if (ex.win16_pump_parked && ex.win16_pump_parked()) {
         // A 16-bit modal dialog or message box with no message to handle waits
         // on a continuation slot with every register unchanged. That is the
@@ -6546,17 +9185,46 @@ if (VERBOSE) {
         // until the next scheduled click/capture. Do not let that idle time
         // accumulate and instantly trip after the last event is consumed.
         stuckCount = 0;
+      } else if (control) {
+        // A controlled session idles by design between agent commands; the
+        // stuck detector would end it the moment the message pump goes quiet.
+        stuckCount = 0;
       } else {
         stuckCount++;
         if (stuckCount > STUCK_AFTER) {
           console.log(`STUCK at EIP=${hex(eip)} after ${stuckCount} batches`);
           if (instance.exports.get_dbg_prev_eip) console.log(`  dbg_prev_eip=${hex(instance.exports.get_dbg_prev_eip())}`);
+          // A NULL indirect-call target is usually a missing COM vtable slot.
+          // Preserve both levels of the pointer chain in the terminal dump;
+          // registers alone show the object but hide which method was NULL.
+          if (eip === 0) {
+            try {
+              const dv = new DataView(memory.buffer);
+              for (const [name, ptr] of [
+                ['eax', instance.exports.get_eax()],
+                ['ecx', instance.exports.get_ecx()],
+                ['esi', instance.exports.get_esi()],
+                ['edi', instance.exports.get_edi()],
+              ]) {
+                if (!ptr) continue;
+                const words = [];
+                for (let i = 0; i < 6; i++) {
+                  words.push(hex(dv.getUint32(g2w((ptr + i * 4) >>> 0), true)));
+                }
+                console.log(`  ${name}[${hex(ptr)}]: ${words.join(' ')}`);
+              }
+            } catch (_) {}
+          }
           dumpStack();
           break;
         }
       }
     }
   }
+  const executionElapsedSeconds = Math.max(0, (performance.now() - executionStartedAt) / 1000);
+  // The control server would otherwise hold the process open; unref lets a
+  // reply resolved in the final batch still flush while the exit path prints.
+  if (control) control.close();
 
   if (handlerHistArmed && handlerHistExports) {
     handlerHistExports.set_handler_hist_enabled(0);
@@ -6576,9 +9244,84 @@ if (VERBOSE) {
     if (instance.exports.get_heap_sparse_end) console.log('heap_sparse_end:', hex(instance.exports.get_heap_sparse_end()));
     if (instance.exports.get_virtual_alloc_top) console.log('virtual_alloc_top:', hex(instance.exports.get_virtual_alloc_top()));
     if (instance.exports.get_heap_base) console.log('heap_base:', hex(instance.exports.get_heap_base()));
+    // A full cache wipe re-decodes the app's whole working set. Per thread,
+    // because each worker owns its own arena and its own counter.
+    if (instance.exports.get_cache_clears) {
+      const parts = [`M ${instance.exports.get_cache_clears()}`];
+      if (threadManager) {
+        for (const [, t] of threadManager.threads) {
+          if (t.instance && t.instance.exports.get_cache_clears) {
+            parts.push(`T${t.tid} ${t.instance.exports.get_cache_clears()}`);
+          }
+        }
+      }
+      console.log('cache: full clears', parts.join('  '));
+      if (instance.exports.get_cache_stores) {
+        console.log('cache: block decodes', instance.exports.get_cache_stores(),
+          'of which evicted a live block', instance.exports.get_cache_evicts());
+      }
+      if (instance.exports.get_page_fast) {
+        const hits = instance.exports.get_page_hits();
+        const misses = instance.exports.get_page_misses();
+        const total = hits + misses;
+        console.log('pages: compiled', instance.exports.get_page_compiles(),
+          '| index hits', hits, 'misses', misses,
+          total ? `(${(100 * hits / total).toFixed(1)}% hit)` : '',
+          '| desk trips skipped', instance.exports.get_page_fast());
+        if (instance.exports.get_page_ft) {
+          console.log('runs:  extended', instance.exports.get_page_ft_chains(),
+            '| blocks chained', instance.exports.get_page_ft_blocks(),
+            '| free fall-throughs', instance.exports.get_page_ft());
+          if (instance.exports.get_page_ft_missed) {
+            const free = instance.exports.get_page_ft();
+            const missed = instance.exports.get_page_ft_missed();
+            const fell = free + missed;
+            console.log('       fall-through branches', fell,
+              `| free ${free}`, `| paid ${missed}`,
+              fell ? `(${(100 * missed / fell).toFixed(1)}% of fall-throughs are the defrag headroom)` : '');
+          }
+        }
+        if (instance.exports.get_page_chunk_samples) {
+          const samples = instance.exports.get_page_chunk_samples();
+          const total = instance.exports.get_page_chunk_used_total();
+          const totalNumber = typeof total === 'bigint' ? Number(total) : total;
+          console.log('chunks: samples', samples,
+            '| used mean', samples ? Math.round(totalNumber / samples) : 0,
+            'max', instance.exports.get_page_chunk_used_max(),
+            '| <=4K', instance.exports.get_page_chunk_le_4k(),
+            '<=8K', instance.exports.get_page_chunk_le_8k(),
+            '<=12K', instance.exports.get_page_chunk_le_12k(),
+            '<=16K', instance.exports.get_page_chunk_le_16k(),
+            '| grows', instance.exports.get_page_chunk_grows(),
+            'reuses', instance.exports.get_page_chunk_reuses(),
+            'unpublished', instance.exports.get_page_unpublished());
+        }
+      }
+      if (instance.exports.get_cache_invals) {
+        console.log('cache: page invalidations', instance.exports.get_cache_invals(),
+          'that dropped a block', instance.exports.get_cache_inval_hits(),
+          'last', hex(instance.exports.get_cache_inval_page()));
+        // Section 5's own scoreboard. A retire is one block taken out by a
+        // write to a byte it covers; a range drop is a write too wide to walk,
+        // where the whole page went instead. The ratio is the thesis: per-offset
+        // invalidation is only worth its complexity if retires dominate.
+        if (instance.exports.get_page_retires) {
+          const ret = instance.exports.get_page_retires();
+          const drop = instance.exports.get_page_range_drops();
+          console.log('       blocks retired one at a time', ret,
+            '| whole-page drops (write too wide to walk)', drop,
+            ret + drop ? `(${(100 * ret / (ret + drop)).toFixed(1)}% exact)` : '');
+        }
+      }
+    }
     if (instance.exports.gdi_dc_state_used) {
-      console.log('gdi: dc_states', instance.exports.gdi_dc_state_used(), '/ 256   objects',
-        instance.exports.gdi_object_used(), '/ 256   dc_mark', instance.exports.gdi_table_mark(2));
+      const dcCapacity = instance.exports.gdi_dc_state_capacity
+        ? instance.exports.gdi_dc_state_capacity() : 256;
+      const objectCapacity = instance.exports.gdi_object_capacity
+        ? instance.exports.gdi_object_capacity() : 256;
+      console.log('gdi: dc_states', instance.exports.gdi_dc_state_used(), '/',
+        dcCapacity, '  objects', instance.exports.gdi_object_used(), '/', objectCapacity,
+        '  dc_mark', instance.exports.gdi_table_mark(2));
     }
     if (instance.exports.gdi_dib_arena_stat) {
       const st = instance.exports.gdi_dib_arena_stat;
@@ -6586,11 +9329,493 @@ if (VERBOSE) {
         'largest free run', st(2), 'of', st(3));
     }
   }
+  // Critical-section contention, printed only when there was some. A steal means
+  // a section was taken from a holder that never released it — a real bug that
+  // was worked around to avoid hanging, so it should never pass unnoticed.
+  if (instance.exports.get_cs_waits) {
+    const waits = instance.exports.get_cs_waits() >>> 0;
+    const steals = instance.exports.get_cs_steals ? instance.exports.get_cs_steals() >>> 0 : 0;
+    const badLeaves = instance.exports.get_cs_bad_leaves ? instance.exports.get_cs_bad_leaves() >>> 0 : 0;
+    const barges = instance.exports.get_cs_barges ? instance.exports.get_cs_barges() >>> 0 : 0;
+    const abandoned = instance.exports.get_cs_abandoned ? instance.exports.get_cs_abandoned() >>> 0 : 0;
+    if (abandoned) {
+      const at = instance.exports.get_cs_abandoned_eip ? instance.exports.get_cs_abandoned_eip() >>> 0 : 0;
+      console.log(`critical sections: ${abandoned} parked Enter(s) ABANDONED — the guest was `
+        + `dispatched elsewhere (last at ${hex(at)}) with the call's frame still on the stack`);
+    }
+    const resumeDelta = instance.exports.get_cs_resume_esp_delta
+      ? instance.exports.get_cs_resume_esp_delta() | 0 : 0;
+    if (resumeDelta) {
+      console.log(`critical sections: ESP moved ${resumeDelta} bytes across a park before the retry`);
+    }
+    if (waits || steals || badLeaves || barges) {
+      console.log(`critical sections: main parked ${waits}x, stole ${steals}, `
+        + `barged ${barges} (nested wndproc), released ${badLeaves} it did not own`);
+    }
+    // Which sections are still held, and by whom. A thread that reports
+    // waitingOnCS says one half of a deadlock; this says the other, and a section
+    // whose OwningThread names a thread that is not inside it is the whole answer.
+    // Printed only when something is held at exit, which for a clean run is never.
+    if (instance.exports.get_cs_table) {
+      const dv = new DataView(memory.buffer);
+      const table = instance.exports.get_cs_table() >>> 0;
+      const entries = instance.exports.get_cs_table_entries() >>> 0;
+      const held = [];
+      for (let i = 0; i < entries; i++) {
+        const cs = dv.getUint32(table + i * 4, true) >>> 0;
+        if (!cs) continue;
+        const owner = dv.getUint32(cs + 12, true) >>> 0;
+        if (!owner) continue;
+        held.push(`    ${hex(cs)} owner=${threadName(owner)} lock=${dv.getInt32(cs + 4, true)} `
+          + `recursion=${dv.getInt32(cs + 8, true)}`);
+      }
+      if (held.length) {
+        console.log(`held critical sections at exit (${held.length}):`);
+        for (const line of held) console.log(line);
+      }
+    }
+  }
+
+  if ((BLOCK_EXEC || BLOCK_EXEC_STATS) && instance.exports.get_block_exec_runs) {
+    // Per instance, because a worker thread is its own module instance with
+    // its own decoder and its own counters -- a main-only read reports zero
+    // for an app whose hot code runs on a worker.
+    const bxReport = (label, e) => {
+      if (!e || !e.get_block_exec_runs) return;
+      const nat = e.get_block_exec_native_ops();
+      const fb = e.get_block_exec_fallback_ops();
+      const tot = nat + fb;
+      // The share served in-loop IS the fraction of the dispatch/register
+      // ceiling this build collects. `lastFallbackFn` names the handler
+      // family to migrate next; `declWhy` is why the most recent block was
+      // refused (1 short, 2 poisoned/16-bit/fault-null, 3 unsafe op,
+      // 4 past the emit slack, 5 past the classify scratch).
+      // `entries` and `transfersSaved` are the two terms of the cost model:
+      // one region entry is paid per run and one block transfer is saved per
+      // interior edge, so a ns/entry-vs-ns/op fit falls straight out of these
+      // four numbers and the run's user CPU. Nothing else records a saved
+      // transfer -- a folded edge leaves no trace in the handler histogram.
+      const ts = e.get_block_exec_transfers_saved
+        ? e.get_block_exec_transfers_saved() : 0n;
+      // Round 16: how the entries split between the one-block leaf (H463) and
+      // the general executor (H458). `entries` counts both, so the second
+      // number is `entries - leaf` and it is the region / fallback-carrying /
+      // folded-terminator population -- the part the leaf's contract excludes.
+      const leafRuns = e.get_block_exec_leaf_runs
+        ? e.get_block_exec_leaf_runs() : 0;
+      // Round 17: the leaf FAMILY is two entry points now. `leafEntries` stays
+      // the pure leaf so the round-16 numbers remain comparable; `leafFbEntries`
+      // is H464, and `genEntries` is what is left on the general region
+      // function -- which is the number round 17 exists to drive down.
+      const leafFbRuns = e.get_block_exec_leaf_fb_runs
+        ? e.get_block_exec_leaf_fb_runs() : 0;
+      console.log(`block-exec: ${label} armed`, e.get_block_exec() ? 'yes' : 'no',
+        'installs', e.get_block_exec_installs(),
+        'declines', e.get_block_exec_declines(),
+        'entries', e.get_block_exec_runs(),
+        'leafEntries', leafRuns,
+        'leafFbEntries', leafFbRuns,
+        'genEntries', e.get_block_exec_runs() - leafRuns - leafFbRuns,
+        'ops native', String(nat), 'fallback', String(fb),
+        'native%', tot > 0n ? (Number(nat * 10000n / tot) / 100).toFixed(2) : '-',
+        'transfersSaved', String(ts),
+        'lastFallbackFn', e.get_block_exec_last_fallback_fn(),
+        'declWhy', e.get_block_exec_decl_why());
+      // Round 11's decode-time pass, one line per instance. `before`/`after`
+      // are micro-ops in every descriptor this instance built, counted at the
+      // moment the pass started and the moment it finished, so `after-before`
+      // is the net change and the per-transform counters say where it came
+      // from. The split ADDS a micro-op each time it fires (one memory op
+      // becomes a load plus a register op), so `after` can exceed `before`
+      // while the pass is still doing its job -- read `split` against `rle`
+      // and `movelim`, which are the two that delete. `stlf` is structurally
+      // zero: store-to-load forwarding was removed as unsound (the $g2w NULL
+      // sentinel makes a store-then-load of an unmapped address read 0, not
+      // the stored value), and the counter is kept so a future attempt cannot
+      // silently reuse the name. `immfold` is a MOV r,r whose source held a
+      // known constant rewritten to MOV r,imm.
+      if (e.get_bx_pass_uops_before) {
+        const bef = e.get_bx_pass_uops_before();
+        const aft = e.get_bx_pass_uops_after();
+        const sp = e.get_bx_pass_split();
+        // `before` is counted at pass ENTRY, and the split already fired by
+        // then (it runs in the classify scan, not in the pass), so
+        // `before - split` is the descriptor size the same run would have
+        // built with --no-block-exec-split. `netVsOff%` is that comparison and
+        // is the number to quote against §8's predicted removable share;
+        // `delta%` only prices the three transforms inside the pass proper.
+        const off = bef - sp;
+        console.log(`block-exec-split: ${label} armed`,
+          e.get_block_exec_split() ? 'yes' : 'no',
+          'uopsBefore', String(bef), 'uopsAfter', String(aft),
+          'delta', String(aft - bef),
+          'delta%', bef > 0n ? (Number((aft - bef) * 10000n / bef) / 100).toFixed(2) : '-',
+          'uopsSplitOff', String(off),
+          'netVsOff%', off > 0n ? (Number((aft - off) * 10000n / off) / 100).toFixed(2) : '-',
+          'split', String(e.get_bx_pass_split()),
+          'rle', String(e.get_bx_pass_rle()),
+          'stlf', String(e.get_bx_pass_stlf()),
+          'movelim', String(e.get_bx_pass_movelim()),
+          'immfold', String(e.get_bx_pass_immfold()),
+          // Round 12: x87 micro-ops accepted as fallbacks instead of
+          // declining the whole block. One per FUSED region (H449-H453) or
+          // per bare x87 op, so it counts descriptor entries and not guest
+          // x87 instructions -- a single `x87` here can stand for a run of
+          // 255.
+          'x87', e.get_bx_x87_uops ? String(e.get_bx_x87_uops()) : '-',
+          // Round 15 section 24. `x87run` is the share of `x87` that went in
+          // as the CHEAP kind (TU_X87RUN -- the fused body called directly,
+          // partial publish, no trampoline); `x87 - x87run` is the residue
+          // still paying one. `x87native` is separate and counts BARE
+          // H188-H190 that became one of 07b's own native x87 micro-ops
+          // instead of a fallback -- those are real saved dispatches and are
+          // inside `opsNative`, which the other two are not.
+          'x87run', e.get_bx_x87run_uops ? String(e.get_bx_x87run_uops()) : '-',
+          'x87native',
+            e.get_bx_x87_native_uops ? String(e.get_bx_x87_native_uops()) : '-',
+          // Round 12 section 18: the cross-edge carry. `carryRle` is the share
+          // of `rle` that the carry itself found -- a load killed inside its
+          // own block is not one of these. `carryEdges` / `carryRefused` split
+          // every non-head member of every emitted region into "seeded from
+          // its one predecessor" and "not", so refused is the headroom a
+          // per-member fact table would reach.
+          'carryRle', e.get_bx_pass_carry_rle ? String(e.get_bx_pass_carry_rle()) : '-',
+          'carryEdges', e.get_bx_carry_edges ? String(e.get_bx_carry_edges()) : '-',
+          'carryRefused', e.get_bx_carry_refused ? String(e.get_bx_carry_refused()) : '-',
+          // Round 12 section 19: how many of `split` were READ-MODIFY-WRITE
+          // forms, which produce three micro-ops instead of two. Each one is a
+          // TU_FALLBACK that no longer happens, so read it beside the
+          // block-exec line's `fallback` column, not beside the uop counts.
+          'rmw', e.get_bx_pass_rmw ? String(e.get_bx_pass_rmw()) : '-');
+      }
+      // The multi-block matcher's own line. `ops by N` is the coverage split
+      // the census is compared against: N=1 is a plain block, N>=2 is a region
+      // the one-block matcher could never have built. It is a count of
+      // micro-ops retired inside a descriptor of that size, so it is directly
+      // comparable with the [handler-hist] total for the same window.
+      if (!e.get_block_exec_region_installs) return;
+      const byN = [];
+      let opsMulti = 0n; let ops1 = 0n; let entMulti = 0;
+      for (let n = 1; n <= 16; n += 1) {
+        const o = e.get_block_exec_ops_by_n(n);
+        const ent = e.get_block_exec_entries_by_n(n);
+        const inst = e.get_block_exec_region_hist(n);
+        if (o || ent || inst) byN.push(`${n}:${o}/${ent}/${inst}`);
+        if (n === 1) ops1 += o; else { opsMulti += o; entMulti += ent; }
+      }
+      console.log(`block-exec-regions: ${label}`,
+        'armed', e.get_block_exec_regions() ? 'yes' : 'no',
+        'installs', e.get_block_exec_region_installs(),
+        'declines', e.get_block_exec_region_declines(),
+        'meanBlocks',
+        e.get_block_exec_region_installs()
+          ? (e.get_block_exec_region_blocks() / e.get_block_exec_region_installs()).toFixed(2)
+          : '-',
+        'thrashRefusals', e.get_block_exec_region_thrash(),
+        'why', e.get_block_exec_region_why(),
+        'ops1', String(ops1), 'opsMulti', String(opsMulti),
+        'entriesMulti', entMulti);
+      // ops/entries/installs per N. Read it as "what shapes does this app
+      // actually have", not as a ranking: one 16-block region entered a
+      // million times outweighs a thousand 2-block ones.
+      console.log(`block-exec-regions: ${label} byN(ops/entries/installs)`,
+        byN.join(' '));
+      // Discovery cost, the round-10 number. `blocks` is $decode_block calls
+      // the walker made and `uops` the micro-ops it classified; both divided by
+      // installs is what the design doc quotes as cost per install, and the
+      // same blocks figure against the run's total decodes is the share of
+      // decode time discovery is responsible for.
+      if (e.get_block_exec_walk_attempts) {
+        const att = e.get_block_exec_walk_attempts();
+        const ins = e.get_block_exec_walk_installs();
+        const blk = e.get_block_exec_walk_blocks();
+        const uop = e.get_block_exec_walk_uops();
+        console.log(`block-exec-regions: ${label} discovery`,
+          'probes', e.get_block_exec_walk_probes(),
+          'attempts', att,
+          'installs', ins,
+          'memoRefusals', e.get_block_exec_walk_memo(),
+          'reanchorHints', e.get_block_exec_walk_reanchors
+            ? e.get_block_exec_walk_reanchors() : 0,
+          'blocksVisited', String(blk),
+          'uopsVisited', String(uop),
+          'blocksPerInstall', ins ? (Number(blk) / ins).toFixed(1) : '-',
+          'uopsPerInstall', ins ? (Number(uop) / ins).toFixed(1) : '-');
+      }
+      // Round 16 (section 26). The seam between the two families. A walk that
+      // cannot READ a successor turns it into an exit (`uncached`); when the
+      // reason is a one-block descriptor standing there with no copy of the
+      // stream it displaced, the walk takes the descriptor back (`rawWants`)
+      // and the whole attempt fails. `descNoCopy` is how many one-block
+      // installs published without that copy, which is the cause of both --
+      // and it rises whenever a one-block lever makes descriptors bigger.
+      if (e.get_block_exec_walk_uncached) {
+        console.log(`block-exec-regions: ${label} seam`,
+          'uncached', e.get_block_exec_walk_uncached(),
+          'rawWants', e.get_block_exec_raw_wants(),
+          'descNoCopy', e.get_block_exec_desc_nocopy(),
+          'regionNoCopy', e.get_block_exec_rg_nocopy(),
+          'noRoom', e.get_block_exec_no_room(),
+          'nrBytes', e.get_block_exec_rg_nr_bytes ? e.get_block_exec_rg_nr_bytes() : '-',
+          'nrArena', e.get_block_exec_rg_nr_arena ? e.get_block_exec_rg_nr_arena() : '-',
+          'nrChunkFull', e.get_block_exec_rg_nr_fit ? e.get_block_exec_rg_nr_fit() : '-',
+          // Round 17, section 27.2. `descChunkFull` is the page-level counter
+          // ($page_desc_chunk_full: a publish that did not fit), and
+          // `rgReserveDeclines` is how many ONE-BLOCK installs the region
+          // reserve turned away that the bare chunk would have taken -- the
+          // one number that says whether the policy is doing anything.
+          'descChunkFull', e.get_page_desc_chunk_full
+            ? e.get_page_desc_chunk_full() : '-',
+          'rgReserve', e.get_page_desc_rg_reserve
+            ? e.get_page_desc_rg_reserve() : '-',
+          'rgReserveDeclines', e.get_page_desc_reserve_declines
+            ? e.get_page_desc_reserve_declines() : '-',
+          'headWasDesc', e.get_block_exec_rg_head_desc
+            ? e.get_block_exec_rg_head_desc() : '-',
+          'headWasDescFailed', e.get_block_exec_rg_head_desc_fail
+            ? e.get_block_exec_rg_head_desc_fail() : '-',
+          'memoLocked', e.get_block_exec_memo_locked
+            ? e.get_block_exec_memo_locked() : '-',
+          'x87Regions', e.get_block_exec_rg_x87_regions
+            ? e.get_block_exec_rg_x87_regions() : '-',
+          'rgX87run', e.get_block_exec_rg_x87run
+            ? String(e.get_block_exec_rg_x87run()) : '-',
+          'rgX87native', e.get_block_exec_rg_x87_native
+            ? String(e.get_block_exec_rg_x87_native()) : '-',
+          'rgX87fb', e.get_block_exec_rg_x87_fb
+            ? String(e.get_block_exec_rg_x87_fb()) : '-');
+      }
+      if (e.get_block_exec_region_why_n) {
+        const WHY = [null, 'notWorthIt', 'exitsFull', 'noRoom', 'thrash',
+          'publishRefused', 'shortChain', 'memberDeclined', 'walkBudget',
+          'memoised'];
+        const why = [];
+        for (let w = 1; w <= 9; w += 1) {
+          const c = e.get_block_exec_region_why_n(w);
+          if (c) why.push(`${WHY[w]}=${c}`);
+        }
+        console.log(`block-exec-regions: ${label} declinedBy`, why.join(' ') || 'none');
+      }
+      if (e.get_block_exec_region_cfail) {
+        const CF = ['notContiguous', 'blockCap', 'poison', 'classify'];
+        const cf = [];
+        for (let s = 0; s < 8; s += 1) {
+          const c = e.get_block_exec_region_cfail(s);
+          if (c) cf.push(`${s < 4 ? 'head' : 'tail'}.${CF[s % 4]}=${c}`);
+        }
+        console.log(`block-exec-regions: ${label} chainEndedBy`, cf.join(' ') || 'none');
+      }
+      if (e.get_block_exec_region_nofit) {
+        const NF = [null, 'empty', 'byteFusedJcc', 'noFlagProducer', 'termNotModelled',
+          'uopsFull', 'unsafeOp', 'fbPoolFull', 'trailingEaSib'];
+        const nf = [];
+        for (let r = 1; r <= 8; r += 1) {
+          const c = e.get_block_exec_region_nofit(r);
+          if (c) nf.push(`${NF[r]}=${c}`);
+        }
+        console.log(`block-exec-regions: ${label} classifyRefused`, nf.join(' ') || 'none');
+      }
+      // Round 18, design doc section 28. `refusals` is every termNotModelled
+      // seen inside a walk and `admitted` how many of those became term_kind
+      // 10 members; `wouldAdmit`/`wouldGrow` are the census's UPPER BOUND --
+      // walks that a side-exiting member could have turned into a region, or
+      // grown -- and they are counted with the switch off as well, which is
+      // what makes the off arm the "before" measurement.
+      if (e.get_block_exec_tail_refusals) {
+        console.log(`block-exec-regions: ${label} tailExits`,
+          'on', e.get_block_exec_tail_exits(),
+          'refusals', String(e.get_block_exec_tail_refusals()),
+          'admitted', String(e.get_block_exec_tail_admitted()),
+          'regions', e.get_block_exec_tail_regions(),
+          'members', e.get_block_exec_tail_members(),
+          'runs', e.get_block_exec_tail_exit_runs(),
+          'wouldAdmit', e.get_block_exec_tail_would_admit(),
+          'wouldGrow', e.get_block_exec_tail_would_grow(),
+          'lastNo', e.get_block_exec_tail_norm());
+      }
+    };
+    bxReport('M ', instance.exports);
+    if (threadManager) {
+      for (const [, t] of threadManager.threads) {
+        if (t.instance) bxReport(`T${t.tid}`, t.instance.exports);
+      }
+    }
+  }
+
+  // Block chaining (docs/block-chaining-design.md). Printed in BOTH arms, so
+  // the off arm's `branchEnd` is the denominator the round's gate is stated
+  // against: `hits` is transfers that never reached $branch_end at all, and
+  // `branchEnd` is every entry to it, chained-terminator or not. `slow` is the
+  // subset of $branch_end entries that came from a chainable terminator, which
+  // is what says whether a low hit rate is "not chained yet" or "not chainable".
+  if ((BLOCK_CHAIN || VERBOSE) && instance.exports.get_branch_end_calls) {
+    const chainReport = (label, e) => {
+      if (!e || !e.get_branch_end_calls) return;
+      const hits = e.get_chain_hits();
+      const be = e.get_branch_end_calls();
+      const transfers = hits + be;
+      console.log(`chain: ${label} armed`, e.get_block_chain() ? 'yes' : 'no',
+        'hits', String(hits),
+        'slow', String(e.get_chain_slow()),
+        'branchEnd', String(be),
+        'chained%', transfers > 0n
+          ? (Number(hits * 10000n / transfers) / 100).toFixed(2) : '-',
+        'patches', e.get_chain_patches(),
+        'epochBumps', e.get_chain_bumps(),
+        'epoch', e.get_chain_epoch(),
+        // The third population, and the reason a chained% below 100 is not a
+        // miss rate: an adjacent fall-through never reaches either desk.
+        'adjacent', e.get_page_ft ? e.get_page_ft() : '-',
+        'ftMissed', e.get_page_ft_missed ? e.get_page_ft_missed() : '-');
+      // Round 19: the anchor-location split, and with it the executor-exit
+      // half of the round's gate. A threaded op executing out of a page's
+      // DESCRIPTOR chunk can only be a block-executor tail, so `poolHits` is
+      // "executor exits that chained" and `tailExits` (counted inside the
+      // executor itself) is the denominator. `poolDesk` is the same population
+      // measured from the desk side and is a superset of `poolSlow`: a tail
+      // whose terminator has no spare operand word never enters $chain_end.
+      if (e.get_chain_hits_pool) {
+        const tails = e.get_block_exec_tail_exit_count ? e.get_block_exec_tail_exit_count() : 0n;
+        const chainable = e.get_block_exec_tail_chainable ? e.get_block_exec_tail_chainable() : 0n;
+        const ph = e.get_chain_hits_pool();
+        console.log(`chain: ${label} pool hits`, String(ph),
+          'slow', String(e.get_chain_slow_pool()),
+          'patches', e.get_chain_patches_pool(),
+          'tailExits', String(tails),
+          'tailChained%', tails > 0n
+            ? (Number(ph * 10000n / tails) / 100).toFixed(2) : '-',
+          // The honest denominator: a tail whose copied terminator is a ret, a
+          // call, a generic Jcc or $th_block_end has no operand word to hold a
+          // chain slot, so it can never be chained however the anchor rule is
+          // widened. `chainableTails` is the subset that can be.
+          'chainableTails', String(chainable),
+          'ofChainable%', chainable > 0n
+            ? (Number(ph * 10000n / chainable) / 100).toFixed(2) : '-',
+          'poolDesk', String(e.get_branch_end_pool()),
+          'refuseTgt', e.get_chain_refuse_target(),
+          'refuseAnc', e.get_chain_refuse_anchor(),
+          'staleRegs', String(e.get_chain_stale_regs()));
+      }
+    };
+    chainReport('M ', instance.exports);
+    if (threadManager) {
+      for (const [, t] of threadManager.threads) {
+        if (t.instance) chainReport(`T${t.tid}`, t.instance.exports);
+      }
+    }
+  }
+
+  if ((TRACE_LOOPMATCH || LOOPMATCH_STATS) && instance.exports.get_loop_selfloop_blocks) {
+    // Each worker thread is its own WASM instance with its own decoder and its
+    // own counters, so a main-only read reports zero for an app whose hot code
+    // runs on a worker (Liquid War parks main in WaitForSingleObject at boot).
+    const report = (label, e) => {
+      if (!e || !e.get_loop_selfloop_blocks) return;
+      console.log(`loopmatch: ${label} self-loop blocks decoded`,
+        e.get_loop_selfloop_blocks(), 'matched', e.get_loop_matched_blocks());
+      if (e.get_loop_lut_runs) {
+        console.log(`loopmatch: ${label} bounded LUT matches`,
+          e.get_loop_lut_bounded_matches(), 'runs', e.get_loop_lut_runs(),
+          'bytes', String(e.get_loop_lut_bytes()));
+      }
+      if (e.get_loop_lut16_runs) {
+        console.log(`loopmatch: ${label} RGB565 LUT matches`,
+          e.get_loop_lut16_matches(), 'runs', e.get_loop_lut16_runs(),
+          'pixels', String(e.get_loop_lut16_bytes()));
+      }
+      if (e.get_tree_fold_runs) {
+        // `matches` is blocks the predicate accepted, counted even with the
+        // gate off; `runs` is entries into the super-op; `iters` is guest
+        // iterations executed inside it; `ops` is the guest ops those
+        // iterations stand for -- that last one is the number to compare
+        // against a --handler-hist total to get the share of work caught.
+        console.log(`loopmatch: ${label} TREE_FOLD blocks`,
+          e.get_tree_fold_matches(), 'armed', e.get_tree_fold() ? 'yes' : 'no',
+          'runs', e.get_tree_fold_runs(),
+          'iters', String(e.get_tree_fold_iters()),
+          'ops', String(e.get_tree_fold_ops()),
+          // Micro-ops whose $set_flags_* call the dead-flag pass removed,
+          // summed over every lowering. Decode-time, so it says how much of
+          // the folded CODE was flag-dead, not how hot that code was.
+          'deadflag', e.get_tree_fold_dead_flag_ops
+            ? e.get_tree_fold_dead_flag_ops() : 0);
+        // The decline split. A match rate alone cannot say what to widen; this
+        // names the barrier, and `lastFn` names one handler that hit it.
+        console.log(`loopmatch: ${label} TREE_FOLD declines short`,
+          e.get_tree_decl_short(), 'long', e.get_tree_decl_long(),
+          'terminator', e.get_tree_decl_term(),
+          'unfoldable-op', e.get_tree_decl_uop(),
+          'lastFn', e.get_tree_decl_uop_fn(),
+          // A sub-count of unfoldable-op, not a fourth bucket: how many of
+          // those declines were an x87 op outside the accepted set, and which
+          // instruction the last one was. `lastFn 188` names three hundred
+          // different instructions; this names one.
+          'x87-op', e.get_tree_decl_x87 ? e.get_tree_decl_x87() : 0,
+          'lastX87', e.get_tree_decl_x87_op
+            ? '0x' + (e.get_tree_decl_x87_op() >>> 0).toString(16) : '-');
+      }
+      if (e.get_x87_pipeline4_matches) {
+        // `matches` counts the blocks each x87 family's predicate ACCEPTED,
+        // whether or not --x87-fusion armed the emit; `runs` is entries into
+        // the fused handler and is zero unless it did. The two together say
+        // "this many shapes matched, and they were entered this often" --
+        // which is the only way to tell a family that never matches from one
+        // that matches cold code.
+        console.log(`loopmatch: ${label} x87 armed`,
+          X87_FUSION ? 'yes' : 'no',
+          'pipeline4', e.get_x87_pipeline4_matches(),
+          'runs', e.get_x87_pipeline4_runs(),
+          '| tree4', e.get_x87_tree4_matches(),
+          'runs', e.get_x87_tree4_runs(),
+          '| island', e.get_x87_island_matches(),
+          'runs', e.get_x87_island_runs(),
+          '| affine', e.get_x87_affine_prepare_matches()
+            + e.get_x87_affine_finish_matches(),
+          'runs', e.get_x87_affine_prepare_runs()
+            + e.get_x87_affine_finish_runs());
+      }
+      if (e.get_lut_span_runs) {
+        console.log(`loopmatch: ${label} fixed LUT spans`,
+          e.get_lut_span_matches(), 'runs', e.get_lut_span_runs(),
+          'bytes', String(e.get_lut_span_bytes()));
+      }
+      if (e.get_loop_aoe_fill_runs) {
+        console.log(`loopmatch: ${label} AoE grid fills`,
+          e.get_loop_aoe_fill_matches(), 'runs', e.get_loop_aoe_fill_runs(),
+          'bytes', String(e.get_loop_aoe_fill_bytes()));
+      }
+      if (e.get_loop_aoe_span_runs) {
+        console.log(`loopmatch: ${label} AoE span prefixes`,
+          e.get_loop_aoe_span_matches(), 'runs', e.get_loop_aoe_span_runs());
+      }
+      // The two stream-idiom folds. `levels`/`tokens` are guest iterations,
+      // so multiplying them by the per-iteration op cost in §20 of the design
+      // note gives the ops a --handler-hist no longer sees.
+      if (e.get_smk_tree_runs) {
+        console.log(`loopmatch: ${label} SMK_TREE blocks`,
+          e.get_smk_tree_matches(), 'armed', e.get_smk_tree() ? 'yes' : 'no',
+          'runs', e.get_smk_tree_runs(),
+          'levels', String(e.get_smk_tree_levels()));
+      }
+      if (e.get_pcx_run_runs) {
+        console.log(`loopmatch: ${label} PCX_RUN blocks`,
+          e.get_pcx_run_matches(), 'armed', e.get_pcx_run() ? 'yes' : 'no',
+          'runs', e.get_pcx_run_runs(),
+          'tokens', String(e.get_pcx_run_tokens()));
+      }
+    };
+    report('M ', instance.exports);
+    if (threadManager) {
+      for (const [, t] of threadManager.threads) {
+        if (t.instance) report(`T${t.tid}`, t.instance.exports);
+      }
+    }
+  }
 
   if (DUMP_VIRTUAL_MAPS) {
     const dv = new DataView(memory.buffer);
-    const state = 0x07F02400;
-    const table = 0x07F02410;
+    const state = RegionMap.BASE.VIRTUAL_MAP_STATE;
+    const table = RegionMap.BASE.VIRTUAL_MAP_TABLE;
     const count = dv.getUint32(state, true);
     const backingTop = dv.getUint32(state + 4, true);
     const reservationTop = dv.getUint32(state + 8, true);
@@ -6663,12 +9888,16 @@ if (VERBOSE) {
   }
 
   if (videoRecorder) {
+    for (const pump of audioTapPumps) { try { pump(); } catch (_) {} }
     const video = await videoRecorder.finish();
     console.log(`[video] wrote ${video.path}: ${video.frames} frames, ` +
       `${video.width}x${video.height} at ${video.fps}fps (${video.duration.toFixed(2)}s)`);
   }
 
-  console.log(`\nStats: ${apiCount} API calls, ${MAX_BATCHES} batches`);
+  console.log(`\nStats: ${apiCount} API calls, ${batchesRun} batches`
+    + ` in ${executionElapsedSeconds.toFixed(3)}s (${(batchesRun / Math.max(executionElapsedSeconds,0.001)).toFixed(0)} batches/s)`);
+  reportMmx();
+  reportGuestPageStats();
 
   // --reg-export writes what the run left in the registry/INI store, which is
   // what a browser tab would have kept in localStorage. Feed it back with
@@ -6678,6 +9907,30 @@ if (VERBOSE) {
     const snap = exportStore();
     fs.writeFileSync(REG_EXPORT, JSON.stringify(snap, null, 2));
     console.log(`[reg] exported ${Object.keys(snap).length} entries to ${REG_EXPORT}`);
+  }
+  // --export-saves writes the memory card: the app's persistFiles matches plus
+  // the registry/INI store, hashed and zipped. Feed it back with --import-saves,
+  // hand it to tools/save-bundle.js, or sync it with lib/save-sync.js.
+  if (EXPORT_SAVES) {
+    try {
+      const saveBundle = require('../lib/save-bundle');
+      if (!APP_ENTRY) throw new Error('--export-saves needs --app=ID for its persistFiles globs');
+      const patterns = APP_ENTRY.persistFiles || [];
+      if (!patterns.length) {
+        console.log(`[saves] --app=${APP_ID} declares no persistFiles; ` +
+          `the bundle carries registry/INI state only`);
+      }
+      const bytes = saveBundle.exportBundle({ appId: APP_ID, vfs: ctx.vfs, patterns });
+      fs.writeFileSync(EXPORT_SAVES, Buffer.from(bytes));
+      const listed = saveBundle.inspectBundle(bytes);
+      console.log(`[saves] exported ${listed.files.length} files ` +
+        `(${listed.totalFileBytes} bytes) + ${listed.registryKeys} registry keys ` +
+        `to ${EXPORT_SAVES}`);
+      for (const f of listed.files) console.log(`[saves]   ${f.path} (${f.size} bytes)`);
+    } catch (e) {
+      console.error(`--export-saves failed: ${e.message}`);
+      process.exitCode = 1;
+    }
   }
   if (traceHostNames && traceHostNames.has('com_create_instance') &&
       ctx.sharedCom && ctx.sharedCom.lastCallback) {
@@ -6689,6 +9942,67 @@ if (VERBOSE) {
     if (e) console.log(`[com-entry] clsid=${e.clsid} iid=${e.iid} ` +
       `factoryOnly=${e.classFactoryOnly ? 1 : 0} outer=${hex(e.outer)} ` +
       `context=${hex(e.context)} outPtr=${hex(e.outPtr)}`);
+  }
+
+  if (HOST_CENSUS && globalThis.__hostCensusCounts) {
+    const total = globalThis.__hostCensusTotal ? globalThis.__hostCensusTotal() : 0;
+    const top = [...globalThis.__hostCensusCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 20);
+    console.log(`\n[host-census] final: ${total} host calls total`);
+    for (const [n, c] of top) {
+      console.log(`  ${String(c).padStart(9)}  ${n}`);
+    }
+  }
+
+  if (VBLANK.waits > 0) {
+    console.log(`\n[vblank] ${VBLANK.waits} vertical-blank waits`
+      + ` -> ${VBLANK.guestMsAdded}ms of guest time charged`
+      + ` (${(VBLANK.guestMsAdded / VBLANK.waits).toFixed(1)}ms each)`);
+  }
+  // Always printed when a detector fired, and the trip counters are printed
+  // even at zero when the detectors are on: "this app never debounced" is the
+  // measurement that matters for a game that must not be parked, and a missing
+  // line cannot be told apart from a run that forgot to look.
+  {
+    const ex = instance && instance.exports;
+    let clockTrips = ex && ex.get_clock_spin_parks ? ex.get_clock_spin_parks() >>> 0 : 0;
+    let peekTrips = ex && ex.get_peek_spin_parks ? ex.get_peek_spin_parks() >>> 0 : 0;
+    const perThread = [];
+    // Guest threads spin too, and on the games this exists for they are where
+    // the spinning IS: Abe's Oddysee makes 56.9 million clock reads on a
+    // spawned thread and roughly eight hundred on its main one. A main-thread
+    // total would have read as "the detector barely fires".
+    if (threadManager && threadManager.threads) {
+      for (const [, t] of threadManager.threads) {
+        const te = t.instance && t.instance.exports;
+        if (!te || !te.get_clock_spin_parks) continue;
+        const c = te.get_clock_spin_parks() >>> 0;
+        const p = te.get_peek_spin_parks() >>> 0;
+        if (c || p) perThread.push(`T${t.tid} clock=${c} peek=${p}`);
+        clockTrips += c;
+        peekTrips += p;
+      }
+    }
+    if (!NO_SPIN_PARK && (clockTrips || peekTrips || SPIN_PARK.clockWaits || SPIN_PARK.peekWaits)) {
+      console.log(`\n[spin-park] clock ${clockTrips} trips`
+        + ` (${SPIN_PARK.clockWaits} serviced on the main thread), empty-PeekMessage`
+        + ` ${peekTrips} trips (${SPIN_PARK.peekWaits} serviced on the main thread)`
+        + (SPIN_PARK.guestMsAdded ? `, ${SPIN_PARK.guestMsAdded}ms of guest time charged` : '')
+        + `; K=${ex && ex.get_spin_park_k ? ex.get_spin_park_k() : '?'}`
+        + (perThread.length ? ` — ${perThread.join(', ')}` : ''));
+    }
+  }
+
+  // Retire a final non-barrier GL batch before any exit capture reads pixels or
+  // the process tears down shared memory. Normal frames still flush at their
+  // semantic barriers, so this adds no crossing to the run loop.
+  base.flushGLCommands(instance.exports);
+
+  if (DX_LOCK_PAUSE.ms > 0) {
+    console.log(`\n[dx-lock-pause] ${DX_LOCK_PAUSE.ms}ms per present:`
+      + ` ${DX_LOCK_PAUSE.presents} presents charged`
+      + ` (${DX_LOCK_PAUSE.primaryLocks} primary locks, ${DX_LOCK_PAUSE.flips} flips,`
+      + ` ${DX_LOCK_PAUSE.offscreenLocks} offscreen locks left at full speed)`
+      + ` -> ${DX_LOCK_PAUSE.guestMsAdded}ms of guest time charged`);
   }
 
   // --gdi-stats: how much software rasterization the run actually did. Span
@@ -6718,12 +10032,147 @@ if (VERBOSE) {
         (latency.pending ? ` (1 never blitted)` : ''));
       console.log(`             batches p50 ${pick('batches', 0.5)}, p95 ${pick('batches', 0.95)}, max ${pick('batches', 1)}`);
       console.log(`             ms      p50 ${pick('ms', 0.5).toFixed(2)}, p95 ${pick('ms', 0.95).toFixed(2)}, max ${pick('ms', 1).toFixed(2)}`);
+      const kinds = [...new Set(s.map(x => x.kind))];
+      if (kinds.length > 1 || kinds[0] !== 'mousemove') console.log(`             kinds: ${kinds.join(', ')}`);
+    }
+  }
+
+  if (FRAME_STATS) {
+    const report = (label, series, note) => {
+      const f = series.iv;
+      if (f.length < 2) {
+        console.log(`  ${label}: ${f.length + (series.lastBatch >= 0 ? 1 : 0)} events — too few to pace`);
+        return;
+      }
+      const q = (key, p) => {
+        const v = f.map(x => x[key]).sort((a, b) => a - b);
+        return v[Math.min(v.length - 1, Math.floor(p * v.length))];
+      };
+      const med = q('batches', 0.5);
+      // Judder is the share of frames that are not the usual length. A frame
+      // twice the median is one the player sees held on screen; an average
+      // would call that run smooth.
+      const long = f.filter(x => x.batches >= Math.max(1, med) * 1.75).length;
+      const stepsPer = med * BATCH_SIZE;
+      const window = MAX_BATCHES - FRAME_STATS_FROM;
+      console.log(`  ${label}: ${f.length + 1} over ${window} batches`
+        + ` (one per ${(window / (f.length + 1)).toFixed(2)} batches ≈ ${stepsPer >= 1000 ? (stepsPer / 1000).toFixed(0) + 'k' : stepsPer} steps)`);
+      console.log(`      interval batches p50 ${med}, p90 ${q('batches', 0.9)}, p99 ${q('batches', 0.99)}, max ${q('batches', 1)}`
+        + `   long (>=1.75x median) ${long} of ${f.length} (${(100 * long / f.length).toFixed(1)}%)`);
+      console.log(`      interval ms      p50 ${q('ms', 0.5).toFixed(1)}, p90 ${q('ms', 0.9).toFixed(1)}, p99 ${q('ms', 0.99).toFixed(1)}   (wall clock — load-sensitive, never diff across runs)`);
+      if (note) console.log(`      ${note}`);
+      if (med <= 1) {
+        console.log('      NOT RESOLVED: the interval is at or under one batch, so this series is'
+          + ' sampled at the batch rate and its spread is an artifact.'
+          + ` Re-run with --batch-size well under ${BATCH_SIZE} to resolve it.`);
+      }
+    };
+    console.log(FRAME_STATS_FROM
+      ? `\nFrame pacing (from batch ${FRAME_STATS_FROM}; earlier frames ignored):`
+      : '\nFrame pacing:');
+    report('guest present (dx_present)    ', frameStats.present,
+      'guest-driven and independent of --repaint-every, but NOT one per frame for every app:'
+      + ' $dx_present runs on each blit that reaches the primary, so an app that composes'
+      + ' straight onto the primary instead of flipping a back buffer trips it several times'
+      + ' per frame. Compare the count against --trace-api IDirectDrawSurface_Blt/Flip before'
+      + ' reading it as a frame rate');
+    report('host flush    (surface upload)', frameStats.flush,
+      `what the browser HUD counts as fps; in the CLI it is gated by the repaint loop (--repaint-every=${REPAINT_EVERY}), so treat it as the harness's cadence unless it agrees with the present count above`);
+  }
+
+  if (BATCH_STATS) {
+    const n = batchStatsBlocks.length;
+    if (n < 2) {
+      console.log(`\nBatch pacing: ${n} batches executed — too few to pace`);
+    } else {
+      const q = (arr, p) => {
+        const v = arr.slice().sort((a, b) => a - b);
+        return v[Math.min(v.length - 1, Math.floor(p * v.length))];
+      };
+      const total = batchStatsBlocks.reduce((a, b) => a + b, 0);
+      const full = batchStatsBlocks.filter(b => b >= BATCH_SIZE).length;
+      const tiny = batchStatsBlocks.filter(b => b < BATCH_SIZE / 100).length;
+      const names = ['(none)', 'budget spent', 'EIP zero', 'yield_flag',
+                     'blocking wait', 'debug facility'];
+      console.log(BATCH_STATS_FROM
+        ? `\nBatch pacing (from batch ${BATCH_STATS_FROM}):`
+        : '\nBatch pacing:');
+      console.log(`  blocks retired per batch (budget ${BATCH_SIZE}): total ${total} over ${n} batches,`
+        + ` mean ${(total / n).toFixed(1)}`);
+      console.log(`      p50 ${q(batchStatsBlocks, 0.5)}, p90 ${q(batchStatsBlocks, 0.9)},`
+        + ` p99 ${q(batchStatsBlocks, 0.99)}, max ${q(batchStatsBlocks, 1)}`);
+      console.log(`      batches that spent the whole budget: ${full} of ${n}`
+        + ` (${(100 * full / n).toFixed(1)}%);`
+        + ` batches that retired under 1% of it: ${tiny} (${(100 * tiny / n).toFixed(1)}%)`);
+      console.log('      why each batch stopped: '
+        + batchStatsHalts.map((c, i) => c ? `${names[i]} ${c}` : null)
+            .filter(Boolean).join(', '));
+      console.log('      A low p50 with "budget spent" rare means the batches are not doing the work'
+        + ' you sized them for — the host pays its per-batch cost either way, so the guest is'
+        + ' being charged overhead for blocks it never ran.');
+    }
+  }
+
+  if (DECODE_STATS) {
+    const n = decodeStatsDecodes.length;
+    if (n < 2) {
+      console.log(`\nDecode pacing: ${n} batches executed — too few to pace`);
+    } else {
+      const q = (arr, p) => {
+        const v = arr.slice().sort((a, b) => a - b);
+        return v[Math.min(v.length - 1, Math.floor(p * v.length))];
+      };
+      const total = decodeStatsDecodes.reduce((a, b) => a + b, 0);
+      const mean = total / n;
+      // A "storm" is a batch that decodes far more than the median batch. That
+      // is the shape re-decode jank actually has: a cache that evicts under
+      // collision does not decode a little more everywhere, it decodes nothing
+      // for a while and then a burst. The mean cannot see it; this can.
+      const med = q(decodeStatsDecodes, 0.5);
+      const stormFloor = Math.max(8, med * 4);
+      const storms = decodeStatsDecodes.filter(d => d >= stormFloor);
+      const stormWork = storms.reduce((a, b) => a + b, 0);
+      const zero = decodeStatsDecodes.filter(d => d === 0).length;
+      console.log(DECODE_STATS_FROM
+        ? `\nDecode pacing (from batch ${DECODE_STATS_FROM}):`
+        : '\nDecode pacing:');
+      console.log(`  block decodes per batch: total ${total} over ${n} batches, mean ${mean.toFixed(1)}`);
+      console.log(`      p50 ${med}, p90 ${q(decodeStatsDecodes, 0.9)}, p99 ${q(decodeStatsDecodes, 0.99)}, max ${q(decodeStatsDecodes, 1)}`
+        + `   decode-free batches ${zero} of ${n} (${(100 * zero / n).toFixed(1)}%)`);
+      console.log(`      storms (>=${stormFloor} decodes, i.e. 4x median): ${storms.length} batches`
+        + ` carrying ${stormWork} decodes (${total ? (100 * stormWork / total).toFixed(1) : '0.0'}% of all decode work)`);
+      console.log('      deterministic: identical across runs of one build, so this series IS safe to'
+        + ' diff between builds, unlike anything measured in wall clock');
+      console.log(`  guest slice ms per batch: p50 ${(q(decodeStatsSliceUs, 0.5) / 1000).toFixed(2)},`
+        + ` p90 ${(q(decodeStatsSliceUs, 0.9) / 1000).toFixed(2)},`
+        + ` p99 ${(q(decodeStatsSliceUs, 0.99) / 1000).toFixed(2)},`
+        + ` max ${(q(decodeStatsSliceUs, 1) / 1000).toFixed(2)}`);
+      console.log('      wall clock — load-sensitive. Read it only against the decode series above,'
+        + ' and only within one interleaved run.');
     }
   }
 
   if (threadManager && threadManager.threads && threadManager.threads.size) {
     console.log('\nThreads (final state):');
     for (const [handle, t] of threadManager.threads) {
+      // A worker-backed thread's registers live in another OS thread's instance,
+      // and reading them would mean a round trip to a worker that may already be
+      // gone. Report what the scheduler itself knows instead of a dump error.
+      if (!t.instance && t.link) {
+        console.log(`  T${t.tid} h=0x${handle.toString(16)} state=${t.state} slot=${t.link.slot} `
+          + `slices=${t.link.sliceStats.slices} guestMs=${t.link.sliceStats.guestMs.toFixed(1)} `
+          + `rpc=${t.link.sliceStats.rpcSync}sync/${t.link.sliceStats.rpcAsync}async/${t.link.sliceStats.rpcLocal}local `
+          + `sleepCount=${t.sleepCount || 0} waitPolls=${t.waitPolls || 0} `
+          + `csPark/steal=${t.csWaits || 0}/${t.csSteals || 0}`
+          // A Leave this thread had no right to make is reported next to the park
+          // count, because the two together read as one sentence: N threads are
+          // waiting for a section that M misdirected releases already unlocked.
+          + (t.csBadLeaves ? ` csBadLeave=${t.csBadLeaves}@${hex(t.csBadLeaveAddr || 0)}`
+              + `(owner=${threadName(t.csBadLeaveOwner || 0)})` : '')
+          + (t.csBarges ? ` csBarge=${t.csBarges}` : '')
+          + (t.csWaitAddr ? ` waitingOnCS=${hex(t.csWaitAddr)} heldBy=${threadName(t.csWaitOwner || 0)}` : ''));
+        continue;
+      }
       try {
         const e = t.instance.exports;
         const eip = e.get_eip ? e.get_eip() : 0;
@@ -6731,8 +10180,38 @@ if (VERBOSE) {
         const ebp = e.get_ebp ? e.get_ebp() : 0;
         const yr = e.get_yield_reason ? e.get_yield_reason() : -1;
         const wh = e.get_wait_handle ? e.get_wait_handle() : 0;
-        console.log(`  T${t.tid} h=0x${handle.toString(16)} state=${t.state} eip=0x${eip.toString(16)} esp=0x${esp.toString(16)} ebp=0x${ebp.toString(16)} yield=${yr} waitH=0x${wh.toString(16)} sleepCount=${t.sleepCount||0}`);
+        const cs = e.get_cs_waits ? `${e.get_cs_waits() >>> 0}/${e.get_cs_steals ? e.get_cs_steals() >>> 0 : 0}` : '-';
+        console.log(`  T${t.tid} h=0x${handle.toString(16)} state=${t.state} eip=0x${eip.toString(16)} esp=0x${esp.toString(16)} ebp=0x${ebp.toString(16)} yield=${yr} waitH=0x${wh.toString(16)} sleepCount=${t.sleepCount||0} csPark/steal=${cs}`);
       } catch (ex) { console.log(`  T${t.tid} dump error: ${ex.message}`); }
+    }
+  }
+
+  // --esp-audit: how much was actually measured, per thread. Printed even when
+  // nothing offended, because "no complaints" and "the audit never ran" look
+  // identical otherwise, and a silent audit is worse than none.
+  if (ESP_AUDIT && threadManager && threadManager.threads && threadManager.threads.size) {
+    let any = false;
+    for (const [, t] of threadManager.threads) {
+      const a = t.espAudit;
+      if (!a) continue;
+      if (!any) { console.log('\nStdcall epilogue audit (--esp-audit):'); any = true; }
+      console.log(`  T${t.tid} ${a.checked} of ${a.calls} dispatches checked, `
+        + `${a.bad.length} handler(s) off`
+        + (a.bad.length ? ': ' + a.bad.map(b => `${b.name} ${b.delta}!=${b.expected}`).join(', ') : ''));
+    }
+    if (!any) console.log('\nStdcall epilogue audit (--esp-audit): no worker thread reported (needs --threads)');
+  }
+
+  // --rpc-census: what each guest thread went out to the host for. In worker
+  // mode a blocking import costs that thread a postMessage and an Atomics.wait,
+  // so this is the throughput question, and --host-census cannot answer it —
+  // it wraps the main thread's table and never sees a worker's calls.
+  if (RPC_CENSUS && workerThreadHost && workerThreadHost.broker) {
+    const { calls, served } = workerThreadHost.broker.stats();
+    console.log(`\nBrokered host imports (${served} served, top ${Math.min(20, calls.length)}):`);
+    const pad = String(calls[0] ? calls[0].count : 0).length;
+    for (const c of calls.slice(0, 20)) {
+      console.log(`  ${String(c.count).padStart(pad)}  T${c.slot}  ${c.name}`);
     }
   }
 
@@ -6767,23 +10246,67 @@ if (VERBOSE) {
     }
   }
 
+  // The overlay batches dirty paths and never writes from inside a guest
+  // batch; this is where the batch lands. A run killed with SIGKILL loses the
+  // journal, which is the documented cost of not writing through every write.
+  if (vfsOverlay) {
+    const flushed = await vfsOverlay.flush();
+    const signalPrefix = terminationSignal ? `${terminationSignal} ` : '';
+    console.log(`[overlay] ${signalPrefix}flushed ${flushed.written} record(s) to ${OVERLAY_DIR}` +
+      (flushed.failed ? `, ${flushed.failed} failed` : ''));
+    for (const error of vfsOverlay.errors) console.log(`[overlay] ${error.message}`);
+  }
+
   if (SAVE_VFS && ctx.vfs) {
-    for (const [k, v] of ctx.vfs.files.entries()) {
-      if (k === 'c:\\app.exe') continue;
-      if (SAVE_VFS_SUFFIX && !k.toLowerCase().endsWith(SAVE_VFS_SUFFIX.toLowerCase())) continue;
-      const rel = k.replace(/^c:\\/, '');
-      const outPath = path.join(SAVE_VFS, ...rel.split('\\'));
-      fs.mkdirSync(path.dirname(outPath), { recursive: true });
-      fs.writeFileSync(outPath, Buffer.from(v.data));
-      console.log(`[save-vfs] ${outPath} (${v.data.length} bytes)`);
+    saveVfsToHost(ctx.vfs, SAVE_VFS, {
+      suffix: SAVE_VFS_SUFFIX,
+      skipPaths: ['c:\\app.exe'],
+      log: line => console.log(line),
+    });
+  }
+  if (CAPTURE_LAUNCH && capturedLaunch) {
+    if (capturedLaunch.materialize) {
+      const bytes = await capturedLaunch.materialize;
+      const entry = capturedLaunch.vfs.files.get(capturedLaunch.guestExe);
+      if (entry && bytes) {
+        capturedLaunch.vfs.files.set(capturedLaunch.guestExe, {
+          ...entry,
+          data: bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes),
+        });
+      }
     }
+    const written = saveVfsToHost(capturedLaunch.vfs, CAPTURE_LAUNCH, {
+      log: line => console.log(line.replace(/^\[save-vfs\]/, '[capture-launch]')),
+    });
+    const executable = written.find(row =>
+      String(row.guestPath).toLowerCase() === capturedLaunch.guestExe.toLowerCase());
+    if (!executable) throw new Error(`captured launch executable disappeared: ${capturedLaunch.guestExe}`);
+    const metadata = {
+      schemaVersion: 1,
+      guestExe: capturedLaunch.guestExe,
+      exe: path.relative(CAPTURE_LAUNCH, executable.outputPath).split(path.sep).join('/'),
+      args: capturedLaunch.args,
+      directory: capturedLaunch.directory,
+      files: written.length,
+    };
+    fs.writeFileSync(path.join(CAPTURE_LAUNCH, 'launch.json'),
+      `${JSON.stringify(metadata, null, 2)}\n`);
+    console.log(`[capture-launch] wrote ${path.join(CAPTURE_LAUNCH, 'launch.json')}`);
+  } else if (CAPTURE_LAUNCH) {
+    console.log('[capture-launch] no VFS-backed executable was launched');
   }
 
   if (DUMP_SPEC) {
-    const [addrStr, lenStr] = DUMP_SPEC.split(':');
-    const dumpAddr = parseInt(addrStr, 16);
-    const dumpLen = parseInt(lenStr) || 256;
-    hexdump(dumpAddr, dumpLen);
+    // Comma-separated, because the interesting question is almost always a
+    // *relationship* between two structs (a surface descriptor vs the globals
+    // that should agree with it), and one region per run costs a whole rerun
+    // of the app to answer it.
+    for (const spec of DUMP_SPEC.split(',')) {
+      const [addrStr, lenStr] = spec.split(':');
+      const dumpAddr = parseInt(addrStr, 16);
+      const dumpLen = parseInt(lenStr) || 256;
+      hexdump(dumpAddr, dumpLen);
+    }
   }
 
   // --dump-vmap: list the sparse VirtualAlloc mappings, and say for each
@@ -6794,11 +10317,11 @@ if (VERBOSE) {
   // line of output whenever you are chasing memory that "should" hold data.
   if (DUMP_VMAP) {
     const dv2 = new DataView(memory.buffer);
-    const count = dv2.getUint32(0x07F02400, true) >>> 0;
+    const count = dv2.getUint32(RegionMap.BASE.VIRTUAL_MAP_STATE, true) >>> 0;
     console.log(`Virtual map: ${count} mapping(s)`);
     const maps = [];
     for (let i = 0; i < count; i++) {
-      const rec = 0x07F02410 + i * 16;
+      const rec = RegionMap.BASE.VIRTUAL_MAP_TABLE + i * 16;
       const b = dv2.getUint32(rec, true) >>> 0;
       const sz = dv2.getUint32(rec + 4, true) >>> 0;
       const back = dv2.getUint32(rec + 8, true) >>> 0;
@@ -6829,8 +10352,9 @@ if (VERBOSE) {
   const getDxSurfaceManifest = () => {
     const mem = new Uint8Array(memory.buffer);
     const dv = new DataView(memory.buffer);
-    const DX_BASE = 0x07FF0000;
-    const DX_SLOTS = 1024; // matches $DX_MAX in src/09a8-handlers-directx.wat
+    const DX_BASE = RegionMap.BASE.DX_OBJECTS;
+    const DX_SLOTS = 4096; // matches $DX_MAX in src/09a8-handlers-directx.wat
+    const DX_SURF_PAL = RegionMap.BASE.DX_SURF_PAL; // per-surface palette data addr
     let paletteWa = 0;
     for (let slot = 0; slot < DX_SLOTS; slot++) {
       const entry = DX_BASE + slot * 32;
@@ -6858,7 +10382,12 @@ if (VERBOSE) {
         if (firstNonZero < 0 && v !== 0) firstNonZero = i;
         checksum = (checksum + v) >>> 0;
       }
-      surfaces.push({ slot, flags, w, h, bpp, pitch, dib, firstNonZero, checksum, paletteWa });
+      // A surface that had its own palette attached (an 8bpp texture, say)
+      // must be decoded with that one, not with whichever palette happened to
+      // be allocated first.
+      const ownPal = dv.getUint32(DX_SURF_PAL + slot * 4, true);
+      surfaces.push({ slot, flags, w, h, bpp, pitch, dib, firstNonZero, checksum,
+        paletteWa: ownPal || paletteWa });
     }
     return { mem, surfaces };
   };
@@ -6871,7 +10400,7 @@ if (VERBOSE) {
         const di = (y * surface.w + x) * 4;
         let r = 0, g = 0, b = 0;
         if (surface.bpp === 8) {
-          if (surface.paletteWa) {
+          if (surface.paletteWa && !DX_RAW_INDEX) {
             const pi = mem[srcRow + x];
             r = mem[surface.paletteWa + pi * 4];
             g = mem[surface.paletteWa + pi * 4 + 1];
@@ -6951,6 +10480,12 @@ if (VERBOSE) {
     const bestOffscreen = bestByDiversity(offscreenCandidates);
 
     if (!bestPrimary) {
+      // A flipping chain leaves the primary blank between presents while the
+      // frame sits in the back buffer — every Organic Art screensaver looks
+      // like that at an arbitrary batch count. The back buffer is the frame,
+      // so it outranks any texture regardless of colour count.
+      const bestBack = bestByDiversity(surfaces.filter(s => (s.flags & 2)).map(scored));
+      if (bestBack) return bestBack.surface;
       for (const p of primary) {
         const matching = bestByDiversity(offscreenCandidates.filter(item =>
           item.surface.w === p.w &&
@@ -6961,7 +10496,17 @@ if (VERBOSE) {
       return bestOffscreen ? bestOffscreen.surface : null;
     }
 
+    // An offscreen surface may only stand in for a primary that has content
+    // when it is the same size — that is a back buffer the app composes into
+    // and then presents, so it is the frame a moment early. A differently
+    // sized offscreen is a texture, and a texture atlas routinely carries more
+    // colours than the frame drawn with it: every Organic Art screensaver
+    // captured its leaf/marble sheet under the old colour-diversity rule and
+    // read as "renders a texture, never a scene" when the primary in fact held
+    // the rendered geometry. The browser presents the primary; so does this.
     if (bestOffscreen &&
+        bestOffscreen.surface.w === bestPrimary.surface.w &&
+        bestOffscreen.surface.h === bestPrimary.surface.h &&
         bestOffscreen.score.colors >= 16 &&
         bestOffscreen.score.colors >= Math.max(bestPrimary.score.colors + 8, bestPrimary.score.colors * 4)) {
       return bestOffscreen.surface;
@@ -6979,9 +10524,57 @@ if (VERBOSE) {
     return pngBuf.length;
   };
 
+  if (DUMP_IMAGE) {
+    const { mem, surfaces } = getDxSurfaceManifest();
+    const primary = surfaces.find(s => (s.flags & 1)) || surfaces[0];
+    const imgBase = instance.exports.get_image_base() >>> 0;
+    for (const spec of DUMP_IMAGE.split(',')) {
+      const [addrStr, wStr, hStr, pitchStr, bppStr, outPath] = spec.split(':');
+      const guest = parseInt(addrStr, 16) >>> 0;
+      const surface = {
+        dib: RegionMap.g2w(guest, imgBase),
+        w: parseInt(wStr, 10) | 0,
+        h: parseInt(hStr, 10) | 0,
+        pitch: parseInt(pitchStr, 10) | 0,
+        bpp: parseInt(bppStr, 10) | 0,
+        paletteWa: primary ? primary.paletteWa : 0,
+      };
+      if (!surface.w || !surface.h || !surface.pitch || !outPath) {
+        console.log(`[dump-image] bad spec "${spec}" — expected ADDR:W:H:PITCH:BPP:FILE.png`);
+        continue;
+      }
+      const bytes = writeRgbaPng(outPath, surface.w, surface.h, dxSurfaceToRgba(surface, mem));
+      console.log(`[dump-image] wrote ${outPath} (${bytes} bytes) from guest 0x${guest.toString(16)}` +
+        ` ${surface.w}x${surface.h} pitch=${surface.pitch} bpp=${surface.bpp}`);
+    }
+  }
+
+  if (DX_SURFACES) {
+    const { mem, surfaces } = getDxSurfaceManifest();
+    // Every 8bpp upload resolves its colours through the single primary-palette
+    // global, not through the per-surface palette printed below. When those two
+    // disagree the picture is drawn with somebody else's palette, so print both.
+    const globalPal = instance.exports.get_dx_primary_pal_wa
+      ? instance.exports.get_dx_primary_pal_wa() >>> 0 : 0;
+    console.log(`[dx-surfaces] ${surfaces.length} live surface(s)` +
+      ` primaryPal=0x${globalPal.toString(16)}`);
+    for (const s of surfaces) {
+      const score = dxSurfaceContentScore(s, mem);
+      console.log(`  slot=${s.slot} ${s.w}x${s.h} bpp=${s.bpp} pitch=${s.pitch}` +
+        ` flags=0x${s.flags.toString(16)} dib=0x${s.dib.toString(16)}` +
+        ` pal=0x${s.paletteWa.toString(16)} colors=${score.colors} nonZero=${score.nonZero}/${score.total}`);
+    }
+  }
+
   if (PNG_OUT && renderer) {
     const { mem, surfaces } = getDxSurfaceManifest();
-    const surface = PNG_CANVAS ? null : chooseDxPresentationSurface(surfaces, mem);
+    const wantSlot = DX_SLOT === null ? null : (parseInt(DX_SLOT, 10) | 0);
+    const surface = PNG_CANVAS ? null
+      : (wantSlot === null ? chooseDxPresentationSurface(surfaces, mem)
+        : (surfaces.find(s => s.slot === wantSlot) || null));
+    if (wantSlot !== null && !surface) {
+      console.log(`[dx-slot] no live surface in slot ${wantSlot} — falling back to the screen canvas`);
+    }
     if (surface) {
       const bytes = writeRgbaPng(PNG_OUT, surface.w, surface.h, dxSurfaceToRgba(surface, mem));
       console.log(`Wrote ${PNG_OUT} (${bytes} bytes, dx slot ${surface.slot} ${surface.w}x${surface.h})`);
@@ -7035,8 +10628,8 @@ if (VERBOSE) {
     fs.mkdirSync(DUMP_DDRAW, { recursive: true });
     const mem = new Uint8Array(memory.buffer);
     const dv = new DataView(memory.buffer);
-    const DX_BASE = 0x07FF0000;
-    const DX_SLOTS = 1024; // matches $DX_MAX in src/09a8-handlers-directx.wat
+    const DX_BASE = RegionMap.BASE.DX_OBJECTS;
+    const DX_SLOTS = 4096; // matches $DX_MAX in src/09a8-handlers-directx.wat
     const manifest = [];
     // Read the primary palette WASM addr by scanning palette-type entries in
     // the live DX table. Palette slots have type=3 and store their palette
@@ -7140,6 +10733,17 @@ if (VERBOSE) {
     fs.writeFileSync(path.join(DUMP_SDB, 'calls.log'), ctx.dumpSdb.log.join('\n') + '\n');
     console.log(`Dumped ${imgCount} StretchDIBits source DIBs and ${ctx.dumpSdb.log.length} call records to ${DUMP_SDB}/`);
   }
+
+  if (workerThreadHost) workerThreadHost.stop();
+  if (closeD3DRender) await closeD3DRender();
 }
 
-main().catch(e => console.error(e));
+main().catch(async e => {
+  console.error(e);
+  // Exit code deliberately unchanged; the threads have to be stopped either way
+  // or node waits on them forever and the error above never gets read.
+  if (workerThreadHost) workerThreadHost.stop();
+  if (closeD3DRender) {
+    try { await closeD3DRender(); } catch (error) { console.error('[render] retirement failed:',error); }
+  }
+});

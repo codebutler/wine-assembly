@@ -2,10 +2,27 @@
   ;;
   ;; The canonical 48-byte object record layout is:
   ;;   +0 handle, +4 type (3 bitmap), +8 width, +12 height, +16 bpp,
-  ;;   +20 flags (bit0 DIB, bit1 top-down), +24 canonical bits WA,
+  ;;   +20 flags, +24 canonical bits WA,
   ;;   +28 stride, +32 palette WA, +36 palette count, +40 surface id,
   ;;   +44 reserved.
   ;; These helpers do not allocate handles, surfaces, or pixels.
+  ;;
+  ;; The flags word has four live bits, and the two above bit1 are the ones a
+  ;; reader is most likely to forget, because neither is consulted anywhere
+  ;; near the code that sets it:
+  ;;   bit0 0x01  DIB -- +24 is publishable through bmBits (read 10e:418)
+  ;;   bit1 0x02  top-down -- forwarded to the host surface (10e:318)
+  ;;   bit2 0x04  this record OWNS its +24 block, so DeleteObject must return
+  ;;              it to the DIB arena. $gdi_object_delete_full is the only
+  ;;              reader (10e:2603) and $dib_free_wasm the only consequence;
+  ;;              there is no separate ownership table, so a dropped bit2 is a
+  ;;              permanent arena leak with nothing left to point at the run.
+  ;;   bit4 0x10  the +32 palette holds DIB_PAL_COLORS *logical palette
+  ;;              indices*, not RGBQUADs. Set only by the DIB pattern-brush
+  ;;              path (10a:681) and propagated by clone (10a:892); read only
+  ;;              by the pattern-brush pixel sampler (10g:808), which resolves
+  ;;              each index against the DC's selected palette. Dropping it
+  ;;              silently reinterprets indices as colours.
 
   (func $gdi_bitmap_record_valid (param $record i32) (result i32)
     (i32.and (i32.ne (local.get $record) (i32.const 0))
@@ -31,7 +48,17 @@
     (i32.store offset=8 (local.get $record) (local.get $width))
     (i32.store offset=12 (local.get $record) (local.get $height))
     (i32.store offset=16 (local.get $record) (local.get $bpp))
-    (i32.store offset=20 (local.get $record) (i32.and (local.get $flags) (i32.const 3)))
+    ;; Store the flags word verbatim, exactly as the production initializer
+    ;; does ($gdi_object_adopt, 10d:3994). This used to mask '& 3', which
+    ;; silently dropped bit2 (owns-its-DIB-block) and bit4 (DIB_PAL_COLORS
+    ;; indices) -- both of them live bits with real consumers, documented
+    ;; above. No production path reaches this function today (its only caller
+    ;; is the test_gdi_bitmap_record_init export), so the mask never leaked an
+    ;; arena run in a running app. That is precisely why it had to go: this
+    ;; helper's whole job is to be the oracle the record-layout tests check
+    ;; against, and an oracle that models the flags word differently from the
+    ;; allocator would certify a layout the emulator does not actually use.
+    (i32.store offset=20 (local.get $record) (local.get $flags))
     (i32.store offset=24 (local.get $record) (local.get $bits))
     (i32.store offset=28 (local.get $record) (local.get $stride))
     (i32.store offset=32 (local.get $record) (local.get $palette))
@@ -723,8 +750,8 @@
     (if (i32.or (i32.eqz (call $gdi_bitmap_record_valid (local.get $record)))
           (i32.lt_s (local.get $count) (i32.const 0)))
       (then (return (i32.const 0))))
-    (local.set $size (i32.mul (i32.load offset=28 (local.get $record))
-      (i32.load offset=12 (local.get $record))))
+    (local.set $size (i32.mul (load.field.memarg GdiBitmap stride (local.get $record))
+      (load.field.memarg GdiBitmap height (local.get $record))))
     (local.set $copied (local.get $count))
     (if (i32.gt_u (local.get $copied) (local.get $size))
       (then (local.set $copied (local.get $size))))
@@ -732,13 +759,13 @@
     (if (i32.eqz (local.get $buffer)) (then (return (i32.const 0))))
     (if (local.get $write)
       (then
-        (memory.copy (i32.load offset=24 (local.get $record))
+        (memory.copy (load.field.memarg GdiBitmap bits (local.get $record))
           (local.get $buffer) (local.get $copied))
-        (drop (call $host_gdi_surface_upload (i32.load offset=40 (local.get $record))
-          (i32.const 0) (i32.const 0) (i32.load offset=8 (local.get $record))
-          (i32.load offset=12 (local.get $record)))))
+        (drop (call $host_gdi_surface_upload (load.field.memarg GdiBitmap self_handle (local.get $record))
+          (i32.const 0) (i32.const 0) (load.field.memarg GdiBitmap width (local.get $record))
+          (load.field.memarg GdiBitmap height (local.get $record)))))
       (else (memory.copy (local.get $buffer)
-        (i32.load offset=24 (local.get $record)) (local.get $copied))))
+        (load.field.memarg GdiBitmap bits (local.get $record)) (local.get $copied))))
     (local.get $copied))
 
   ;; HINST_COMMCTRL names six standard toolbar strips that are owned by the
@@ -796,7 +823,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0)))
     (if (i32.eqz (local.get $handle)) (then (return (i32.const 0))))
     (local.set $record (call $gdi_object_record (local.get $handle)))
-    (local.set $bits (i32.load offset=24 (local.get $record)))
+    (local.set $bits (load.field.memarg GdiBitmap bits (local.get $record)))
     (call $gdi_common_toolbar_fill (local.get $bits) (local.get $stride)
       (i32.const 0) (i32.const 0) (local.get $width) (local.get $height)
       (i32.const 0x00C0C0C0))
@@ -833,10 +860,26 @@
       (then (return (i32.const 0))))
     (if (i32.gt_u (local.get $usage) (i32.const 1))
       (then (return (i32.const 0))))
+    ;; The colour table travels with the pixels, and only with them. Without
+    ;; CBM_INIT this call makes an *uninitialised* DDB compatible with hdc, and
+    ;; real GDI never looks at bmiColors on that path -- the bitmap gets the
+    ;; device's palette, which for a 1bpp request is plain {black, white}.
+    ;; Copying the caller's table anyway means adopting whatever bytes follow
+    ;; its BITMAPINFOHEADER, and a caller that passes only a header has not put
+    ;; anything there. Storm's SGdiTextOut does exactly that for its 320x320
+    ;; monochrome glyph atlas, so its two palette entries were uninitialised
+    ;; stack; white paper and black text then resolved against garbage and the
+    ;; sheet came back with the paper bit clear. Storm reads "not the paper
+    ;; value = ink", so every credit line printed as a solid bar.
+    ;; Leaving the pointer null makes the raster layer fall through to
+    ;; $gdi_raster_default_palette, which is our stand-in for that device
+    ;; palette.
     (call $gdi_bitmap_create_owned (global.get $GDI_BITMAP_PLAN) (local.get $pixels)
       (i32.and (i32.ne (local.get $init) (i32.const 0))
         (i32.ne (local.get $pixels) (i32.const 0)))
-      (i32.const 1) (i32.const 0) (local.get $usage)
+      (i32.and (i32.ne (local.get $init) (i32.const 0))
+        (i32.ne (local.get $pixels) (i32.const 0)))
+      (i32.const 0) (local.get $usage)
       (call $gdi_dc_selected_palette (local.get $hdc))))
 
   (func $gdi_bitmap_create_dib_section (param $hdc i32) (param $info i32)
@@ -858,22 +901,22 @@
       (then (return (i32.const 0))))
     (local.set $plan (global.get $GDI_BITMAP_PLAN))
     (memory.fill (local.get $plan) (i32.const 0) (i32.const 48))
-    (i32.store (local.get $plan) (i32.load offset=8 (local.get $record)))
-    (i32.store offset=4 (local.get $plan) (i32.load offset=12 (local.get $record)))
-    (i32.store offset=8 (local.get $plan) (i32.load offset=16 (local.get $record)))
+    (i32.store (local.get $plan) (load.field.memarg GdiBitmap width (local.get $record)))
+    (i32.store offset=4 (local.get $plan) (load.field.memarg GdiBitmap height (local.get $record)))
+    (i32.store offset=8 (local.get $plan) (load.field.memarg GdiBitmap bpp (local.get $record)))
     (i32.store offset=12 (local.get $plan)
-      (i32.and (i32.load offset=20 (local.get $record)) (i32.const 2)))
-    (i32.store offset=16 (local.get $plan) (i32.load offset=28 (local.get $record)))
-    (i32.store offset=20 (local.get $plan) (i32.load offset=32 (local.get $record)))
-    (i32.store offset=24 (local.get $plan) (i32.load offset=36 (local.get $record)))
+      (i32.and (load.field.memarg GdiBitmap flags (local.get $record)) (i32.const 2)))
+    (i32.store offset=16 (local.get $plan) (load.field.memarg GdiBitmap stride (local.get $record)))
+    (i32.store offset=20 (local.get $plan) (load.field.memarg GdiBitmap palette (local.get $record)))
+    (i32.store offset=24 (local.get $plan) (load.field.memarg GdiBitmap palette_count (local.get $record)))
     (i32.store offset=32 (local.get $plan)
-      (i32.mul (i32.load offset=28 (local.get $record))
-        (i32.load offset=12 (local.get $record))))
+      (i32.mul (load.field.memarg GdiBitmap stride (local.get $record))
+        (load.field.memarg GdiBitmap height (local.get $record))))
     (call $gdi_bitmap_create_owned (local.get $plan)
-      (i32.load offset=24 (local.get $record)) (i32.const 1) (i32.const 1)
-      (i32.and (i32.load offset=20 (local.get $record)) (i32.const 1))
+      (load.field.memarg GdiBitmap bits (local.get $record)) (i32.const 1) (i32.const 1)
+      (i32.and (load.field.memarg GdiBitmap flags (local.get $record)) (i32.const 1))
       (select (i32.const 3) (i32.const 0)
-        (i32.ne (i32.and (i32.load offset=20 (local.get $record)) (i32.const 0x10)) (i32.const 0)))
+        (i32.ne (i32.and (load.field.memarg GdiBitmap flags (local.get $record)) (i32.const 0x10)) (i32.const 0)))
       (i32.const 0)))
 
   (func $gdi_bitmap_wrap_pattern_brush (param $bitmap i32) (param $style i32) (result i32)
@@ -887,7 +930,7 @@
         (drop (call $gdi_object_delete_full (local.get $bitmap)))
         (return (i32.const 0))))
     (local.set $record (call $gdi_object_record (local.get $brush)))
-    (i32.store offset=24 (local.get $record) (local.get $bitmap))
+    (store.field.memarg GdiBrush pattern_bitmap (local.get $record) (local.get $bitmap))
     (local.get $brush))
 
   ;; Pattern brushes own a snapshot. Deleting or changing the caller's bitmap

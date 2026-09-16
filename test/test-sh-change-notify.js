@@ -9,11 +9,11 @@ const extraWat = String.raw`
   (func (export "test_call_SHChangeNotify")
     (param $event i32) (param $flags i32) (param $item1 i32) (param $item2 i32)
     (result i32)
-    (global.set $esp (i32.const 0x07000000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07000000))
     (call $handle_SHChangeNotify
       (local.get $event) (local.get $flags) (local.get $item1)
       (local.get $item2) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

@@ -199,4 +199,29 @@ for (const f of files) {
   if (out !== src) fs.writeFileSync(p, out);
 }
 
+// --tests also rewrites the inline WAT fragments that test/*.js hands to
+// bootRenderHarness via extraWat. They are compiled against src/, so a
+// fragment left in the old spelling fails to instantiate with
+// "Unknown global '$esp'" — a harness artifact that looks exactly like an
+// emulator bug. The rewriter is the same paren-aware one used on src/.
+if (process.argv.includes('--tests')) {
+  const TEST = path.join(__dirname, '..', 'test');
+  let touched = 0;
+  const skipped = [];
+  for (const f of fs.readdirSync(TEST).filter((f) => f.endsWith('.js')).sort()) {
+    const p = path.join(TEST, f);
+    const src = fs.readFileSync(p, 'utf8');
+    // The rewriter walks parens, and a .js file's own parens are not balanced
+    // the way a WAT fragment's are, so some files throw. transform() is pure
+    // and the write happens only after it returns, so a thrower is left
+    // untouched rather than half-rewritten; collect and report them.
+    let out;
+    try { out = transform(src, `test/${f}`); }
+    catch (err) { skipped.push(`${f}: ${err.message}`); continue; }
+    if (out !== src) { fs.writeFileSync(p, out); touched++; }
+  }
+  console.log(`test harness: rewrote inline WAT in ${touched} file(s), ${skipped.length} unparseable`);
+  for (const s of skipped) console.log(`  skipped ${s}`);
+}
+
 console.log(JSON.stringify(stats, null, 2));

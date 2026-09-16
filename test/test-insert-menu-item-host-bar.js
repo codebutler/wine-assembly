@@ -23,14 +23,14 @@ const extraWat = `
     (call $handle_CreateMenu
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_InsertMenuItemW")
       (param $hmenu i32) (param $item i32) (param $bypos i32) (param $mii i32) (result i32)
     (call $handle_InsertMenuItemW
       (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 let passed = 0;

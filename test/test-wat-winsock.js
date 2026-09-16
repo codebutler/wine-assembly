@@ -14,7 +14,9 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
-const { compileWat } = require('../lib/compile-wat');
+const { compileSrcWasm } = require('./compile-src');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const AF_INET = 2;
 const SOCK_STREAM = 1;
@@ -41,13 +43,14 @@ const GAME_PORT = 8035;
 
 async function main() {
   const root = path.join(__dirname, '..');
-  const wasm = await compileWat(file => fs.promises.readFile(path.join(root, 'src', file), 'utf8'));
+  const wasm = compileSrcWasm();
   const memory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
   const imports = createHostImports({ getMemory: () => memory.buffer, renderer: null, resourceJson: {} });
   Object.assign(imports.host, {
     memory,
     create_thread: () => 0,
     exit_thread: () => 0,
+    terminate_thread: () => 0,
     create_event: () => 0,
     set_event: () => 0,
     reset_event: () => 0,
@@ -61,7 +64,7 @@ async function main() {
   const imageBase = wat.get_image_base() >>> 0;
   let passed = 0;
 
-  const wa = ga => (ga - imageBase + 0x12000) >>> 0;
+  const wa = ga => RegionMap.g2w(ga, imageBase);
 
   function check(name, fn) {
     fn();
@@ -179,10 +182,21 @@ async function main() {
 
   wat.test_vsock_reset();
 
+  check('WSAIsBlocking reports no nested blocking hook', () => {
+    assert.strictEqual(wat.test_call_WSAIsBlocking() | 0, 0);
+  });
+
   check('htons/ntohs swap 16-bit values', () => {
     assert.strictEqual(wat.test_call_htons(8035) | 0, 0x631f);  // 0x1f63 swapped
     assert.strictEqual(wat.test_call_ntohs(0x6331) | 0, 0x3163);
-    assert.strictEqual(wat.test_call_htons(wat.test_call_ntohs(0x1234) | 0) | 0, 0x1234);
+    for (const value of [0, 1, 0xff, 0x1234, 0x8001, 0xffff]) {
+      const hostToNetwork = wat.test_call_htons(value) & 0xffff;
+      const networkToHost = wat.test_call_ntohs(value) & 0xffff;
+      assert.strictEqual(networkToHost, hostToNetwork,
+        `both directions use the same Intel/network byte swap for 0x${value.toString(16)}`);
+      assert.strictEqual(wat.test_call_ntohs(hostToNetwork) & 0xffff, value,
+        `ntohs reverses htons for 0x${value.toString(16)}`);
+    }
   });
 
   check('inet_addr parses dotted quads in network order', () => {
@@ -219,11 +233,12 @@ async function main() {
 
   // ---- socket creation and validation --------------------------------
 
-  check('socket rejects unsupported families and types', () => {
+  check('socket accepts UDP and rejects unsupported families and types', () => {
     wat.test_vsock_reset();
     assert.strictEqual(wat.test_call_socket(23, SOCK_STREAM, 0) | 0, INVALID_SOCKET);
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, WSAEAFNOSUPPORT);
-    assert.strictEqual(wat.test_call_socket(AF_INET, SOCK_DGRAM, 0) | 0, INVALID_SOCKET);
+    assert.notStrictEqual(wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0, INVALID_SOCKET);
+    assert.strictEqual(wat.test_call_socket(AF_INET, 3, 0) | 0, INVALID_SOCKET);
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, WSAESOCKTNOSUPPORT);
   });
 
@@ -582,6 +597,42 @@ async function main() {
     assert.strictEqual(wat.test_call_setsockopt(s, 6, 1, val, 4) | 0, 0, 'TCP_NODELAY');
     assert.strictEqual(wat.test_call_setsockopt(s, 0xffff, 0x1234, val, 4) | 0, SOCKET_ERROR);
     assert.strictEqual(wat.test_call_WSAGetLastError() | 0, 10042, 'WSAENOPROTOOPT');
+  });
+
+  check('setsockopt enables UDP broadcast', () => {
+    wat.test_vsock_reset();
+    const s = wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0;
+    const val = alloc(4);
+    new DataView(memory.buffer, wa(val), 4).setUint32(0, 1, true);
+    assert.strictEqual(
+      wat.test_call_setsockopt(s, 0xffff, 0x0020, val, 4) | 0,
+      0,
+      'SO_BROADCAST',
+    );
+  });
+
+  check('getsockopt reports the effective UDP receive buffer', () => {
+    wat.test_vsock_reset();
+    const s = wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0;
+    const val = alloc(4);
+    const len = alloc(4);
+    const valueView = new DataView(memory.buffer, wa(val), 4);
+    const lenView = new DataView(memory.buffer, wa(len), 4);
+    lenView.setUint32(0, 4, true);
+    assert.strictEqual(wat.test_call_getsockopt(s, 0xffff, 0x1002, val, len) | 0, 0);
+    assert.strictEqual(valueView.getUint32(0, true), 16384, 'SO_RCVBUF');
+    assert.strictEqual(lenView.getUint32(0, true), 4, 'integer option length');
+  });
+
+  check('getsockname reports a UDP socket bound to a wildcard address', () => {
+    wat.test_vsock_reset();
+    const s = wat.test_call_socket(AF_INET, SOCK_DGRAM, 17) | 0;
+    assert.strictEqual(wat.test_call_bind(s, sockaddr('0.0.0.0', 7787), 16) | 0, 0);
+    const name = alloc(16);
+    const len = alloc(4);
+    new DataView(memory.buffer, wa(len), 4).setUint32(0, 16, true);
+    assert.strictEqual(wat.test_call_getsockname(s, name, len) | 0, 0);
+    assert.deepStrictEqual(readSockaddr(name), { family: AF_INET, port: 7787, ip: ROOM_HOST });
   });
 
   check('ioctlsocket rejects unsupported commands', () => {

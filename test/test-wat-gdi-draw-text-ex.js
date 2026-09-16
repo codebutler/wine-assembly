@@ -4,34 +4,36 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const extraWat = String.raw`
   (func (export "test_call_DrawTextExA")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
     (call $handle_DrawTextExA
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_DrawTextExW")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
     (call $handle_DrawTextExW
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))`;
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))`;
 
 (async () => {
   const { exports: wat, memory, hostCtx } = await bootRenderHarness({ extraWat });
   const bytes = new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  const wa = guest => RegionMap.g2w(guest, imageBase);
   const allocZero = size => {
     const pointer = wat.guest_alloc(size) >>> 0;
     bytes.fill(0, wa(pointer), wa(pointer) + size);

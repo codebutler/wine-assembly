@@ -19,8 +19,10 @@ const tag = text => ((text.charCodeAt(0) << 24) | (text.charCodeAt(1) << 16) |
 (async () => {
   const { exports: wat, memory, hostCtx } = await bootRenderHarness();
   const bytes = new Uint8Array(memory.buffer);
-  const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  // The module's own $g2w, not image-relative arithmetic: a font load can
+  // exhaust the low heap window ($GUEST_HEAP_BASE), after which $heap_alloc
+  // spills to the sparse high arena, whose pointers only $g2w can resolve.
+  const wa = guest => wat.guest_to_wasm(guest) >>> 0;
 
   // The parser takes WASM linear-memory pointers, so the test places whole
   // font files in guest heap and passes their translated addresses.

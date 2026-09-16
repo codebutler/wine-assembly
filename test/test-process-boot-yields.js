@@ -9,8 +9,11 @@
 // the kind of bug that surfaces thousands of instructions later.
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const { mountLoadedDllFiles, stageAndLoadPe, readGuestCString,
   handleLoadLibraryYield, handleComDllYield } = require('../lib/process-boot');
+const { hasPageScript, indexSource } = require('./browser-runtime-scripts');
 
 function syntheticLargePe() {
   const bytes = Buffer.alloc(0x300);
@@ -27,7 +30,40 @@ function syntheticLargePe() {
   bytes.writeUInt32LE(0x1000, section + 12);
   bytes.writeUInt32LE(0x100, section + 16);
   bytes.writeUInt32LE(0x200, section + 20);
+  // Packer-style combined CODE/IDATA/UDATA flags. UDATA does not make the
+  // section BSS when PointerToRawData and SizeOfRawData describe real bytes.
+  bytes.writeUInt32LE(0xe00000e0, section + 36);
   for (let i = 0x200; i < bytes.length; i++) bytes[i] = i & 0xff;
+  return bytes;
+}
+
+function syntheticOverlayPe() {
+  const bytes = Buffer.alloc(0x4200);
+  bytes.writeUInt16LE(0x5a4d, 0);
+  bytes.writeUInt32LE(0x80, 0x3c);
+  bytes.writeUInt32LE(0x00004550, 0x80);
+  bytes.writeUInt16LE(2, 0x86);
+  bytes.writeUInt16LE(0xe0, 0x94);
+  bytes.writeUInt32LE(0x1000, 0x80 + 40);
+  bytes.writeUInt32LE(0x400000, 0x80 + 52);
+  bytes.writeUInt32LE(0x1000, 0x80 + 56); // SectionAlignment
+  bytes.writeUInt32LE(0x6000, 0x80 + 80); // Original SizeOfImage
+  const section = 0x80 + 24 + 0xe0;
+  bytes.write('.text\0\0\0', section, 'ascii');
+  bytes.writeUInt32LE(0x200, section + 8);
+  bytes.writeUInt32LE(0x1000, section + 12);
+  bytes.writeUInt32LE(0x200, section + 16);
+  bytes.writeUInt32LE(0x200, section + 20);
+  bytes.writeUInt32LE(0x60000020, section + 36);
+  const overlay = section + 40;
+  bytes.write('_zip_\0\0\0', overlay, 'ascii');
+  bytes.writeUInt32LE(0x3e00, overlay + 8);
+  bytes.writeUInt32LE(0x2000, overlay + 12);
+  bytes.writeUInt32LE(0x3e00, overlay + 16);
+  bytes.writeUInt32LE(0x400, overlay + 20);
+  bytes.writeUInt32LE(0x42000040, overlay + 36);
+  bytes.fill(0x5a, 0x200, 0x400);
+  bytes.fill(0xa5, 0x400);
   return bytes;
 }
 
@@ -51,6 +87,13 @@ function fakeGuest(name, { nameGetter }) {
 }
 
 (async () => {
+  const hostSource = fs.readFileSync(path.join(__dirname, '..', 'host.js'), 'utf8');
+  assert(hasPageScript('lib/process-boot.js'),
+    'the centrally versioned browser graph must include the shared loader');
+  assert(indexSource.includes("window.WINE_SOURCE_VERSION = String(window.WINE_BUILD || 'dev')") &&
+    hostSource.includes("static SOURCE_VERSION = String(globalThis.WINE_SOURCE_VERSION || 'dev')"),
+    'the page and browser host must consume the same build-info source version');
+
   const peBytes = syntheticLargePe();
   const peMemory = new ArrayBuffer(0x5000);
   const peMem = new Uint8Array(peMemory);
@@ -61,7 +104,7 @@ function fakeGuest(name, { nameGetter }) {
     load_pe: size => {
       assert.strictEqual(size, 0x240);
       assert.deepStrictEqual([...peMem.subarray(0x3040, 0x3080)], [...peBytes.subarray(0x240, 0x280)],
-        'section bytes beyond staging must exist before WAT processes imports/resources');
+        'mixed UDATA section bytes beyond staging must exist before WAT processes imports/resources');
       return 0x401000;
     },
   };
@@ -70,6 +113,60 @@ function fakeGuest(name, { nameGetter }) {
   assert.deepStrictEqual([...peMem.subarray(0x100, 0x140)], [...peBytes.subarray(0, 0x40)],
     'the bounded staging prefix is still copied normally');
   console.log('PASS  oversized PE section tails are prehydrated before WAT loading');
+
+  const overlayBytes = syntheticOverlayPe();
+  const overlayMemory = new ArrayBuffer(0x7000);
+  const overlayMem = new Uint8Array(overlayMemory);
+  const overlayLog = [];
+  const stagedOverlay = stageAndLoadPe({
+    get_staging: () => 0x3000,
+    get_staging_size: () => 0x240,
+    get_guest_base: () => 0x100,
+    load_pe: size => {
+      assert.strictEqual(size, 0x240);
+      assert.strictEqual(overlayMem[0x3000], 0x4d,
+        'the discardable overlay must not overwrite the staged MZ header');
+      const stagedView = new DataView(overlayMemory, 0x3000, 0x240);
+      const sectionTable = 0x80 + 24 + 0xe0;
+      assert.strictEqual(stagedView.getUint32(sectionTable + 40 + 8, true), 0,
+        'the WAT loader must not map the SFX overlay VirtualSize');
+      assert.strictEqual(stagedView.getUint32(sectionTable + 40 + 16, true), 0,
+        'the WAT loader must not copy the SFX overlay raw bytes');
+      assert.strictEqual(stagedView.getUint32(0x80 + 80, true), 0x2000,
+        'launcher SizeOfImage ends after the retained text section');
+      assert.strictEqual(overlayMem[0x1140], 0x5a,
+        'ordinary launcher section tails must still be prehydrated');
+      return 0x401000;
+    },
+  }, overlayMemory, overlayBytes, message => overlayLog.push(message));
+  assert.strictEqual(stagedOverlay.entry, 0x401000);
+  assert.strictEqual(overlayMem[0x2100], 0,
+    'the final discardable overlay remains available only through the VFS');
+  assert(overlayLog.some(message => message.includes('discardable SFX overlay bytes in the VFS')),
+    'the overlay-only launch path should identify itself');
+  console.log('PASS  oversized discardable PE self-extractor overlay stays in the VFS');
+
+  const neBytes = Buffer.alloc(0x300, 0xa5);
+  neBytes.writeUInt16LE(0x5a4d, 0);
+  neBytes.writeUInt32LE(0x80, 0x3c);
+  neBytes.writeUInt16LE(0x454e, 0x80);
+  const neMemory = new ArrayBuffer(0x1000);
+  const neMem = new Uint8Array(neMemory);
+  const neLog = [];
+  const stagedNe = stageAndLoadPe({
+    get_staging: () => 0x100,
+    get_staging_size: () => 0x240,
+    load_pe: size => {
+      assert.strictEqual(size, 0x240);
+      assert.deepStrictEqual([...neMem.subarray(0x100, 0x340)], [...neBytes.subarray(0, 0x240)]);
+      assert.strictEqual(neMem[0x340], 0, 'the appended self-extractor archive must not overflow staging');
+      return 0x87000123;
+    },
+  }, neMemory, neBytes, message => neLog.push(message));
+  assert.strictEqual(stagedNe.entry, 0x87000123);
+  assert(neLog.some(message => message.includes('appended self-extractor data stays in the VFS')),
+    'an oversized NE should take the Win16 overlay path instead of the PE parser');
+  console.log('PASS  oversized NE self-extractor stages safely without PE parsing');
 
   const dllVfs = { files: new Map() };
   const stockShell = Uint8Array.of(0x4d, 0x5a, 0x90, 0);

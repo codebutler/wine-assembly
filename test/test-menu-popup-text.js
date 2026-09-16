@@ -19,6 +19,8 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const MF_STRING = 0x000;
 const MF_SEPARATOR = 0x800;
@@ -31,7 +33,12 @@ function check(label, fn) {
 }
 
 (async () => {
-  const harness = await bootRenderHarness();
+  const harness = await bootRenderHarness({
+    extraWat: `
+    (func (export "test_dc_exists") (param $hdc i32) (result i32)
+      (i32.ne (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0))
+        (i32.const 0)))
+  ` });
   const wat = harness.exports;
   const bytes = () => new Uint8Array(harness.memory.buffer);
 
@@ -56,6 +63,7 @@ function check(label, fn) {
     { id: 102, text: 'Spectrum &Radar' },
     { id: 103, text: 'E&&xit\tCtrl+X' },
     { id: 104, text: 'Close Plug-in\t[Escape]' },
+    { id: 105, text: 'Extract files to specified destination folder\tCtrl+Shift+E' },
   ];
   for (const it of items) {
     assert.strictEqual(wat.test_call_AppendMenuA(hmenu, MF_STRING, it.id, strA(it.text)), 1);
@@ -72,7 +80,22 @@ function check(label, fn) {
     readAt(wat.menu_child_shortcut_ptr(0, 0, i), wat.menu_child_shortcut_len(0, 0, i));
 
   check('every appended item is in the popup', () => {
-    assert.strictEqual(wat.menu_child_count(0, 0), 5);
+    assert.strictEqual(wat.menu_child_count(0, 0), 6);
+  });
+
+  check('popup width grows to keep long labels and shortcuts in separate columns', () => {
+    const syntheticWindowDc = 0x40000; // old hwnd 0 + client-DC tag shortcut
+    assert.strictEqual(wat.test_dc_exists(syntheticWindowDc), 0,
+      'test started with an invented window DC');
+    const width = wat.menu_dropdown_width(0, 0) | 0;
+    assert(width > 180, `long popup stayed at the legacy 180px width (${width})`);
+    assert.strictEqual(wat.test_dc_exists(syntheticWindowDc), 0,
+      'a width query created state for an invented application window DC');
+    assert.strictEqual(wat.menu_hittest_dropdown(0, 0, 40, 40,
+      40 + width - 3, 43), 0,
+    'the widened painted area must also belong to the first menu item');
+    assert.strictEqual(wat.test_dc_exists(syntheticWindowDc), 0,
+      'hit testing created state for an invented application window DC');
   });
 
   check('an item shows the string it was appended with', () => {
@@ -99,7 +122,7 @@ function check(label, fn) {
   });
 
   check('the separator is marked as one', () => {
-    assert.strictEqual(wat.menu_child_flags(0, 0, 4) & 1, 1);
+    assert.strictEqual(wat.menu_child_flags(0, 0, 5) & 1, 1);
   });
 
   check('the mnemonic is the character after an un-doubled &', () => {
@@ -120,7 +143,7 @@ function check(label, fn) {
   // GetMenuString reads the same blob, so it used to hand back "#0065" too.
   check('GetMenuString returns the label, not the command id', () => {
     // menu_handle_copy_label writes to a WASM address, not a guest one.
-    const g2w = g => g - wat.get_image_base() + 0x12000;
+    const g2w = g => RegionMap.g2w(g, wat.get_image_base());
     const buf = wat.guest_alloc(64) >>> 0;
     const n = wat.menu_handle_copy_label(hmenu, 1, 0x400, g2w(buf), 64);
     assert.strictEqual(readAt(g2w(buf), n), 'Spectrum &Radar');

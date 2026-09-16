@@ -5,16 +5,18 @@
 const fs = require('fs');
 const path = require('path');
 const { createHostImports } = require(path.join(__dirname, '..', 'lib/host-imports'));
+// $GUEST_BASE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 async function main() {
   // Build if needed
   const ROOT = path.join(__dirname, '..');
-  const WASM_PATH = path.join(ROOT, 'build', 'wine-assembly.wasm');
+  const WASM_PATH = process.env.WINE_ASSEMBLY_WASM || path.join(ROOT, 'build', 'wine-assembly.wasm');
   const srcDir = path.join(ROOT, 'src');
   let wasmTime = 0;
   try { wasmTime = fs.statSync(WASM_PATH).mtimeMs; } catch (_) {}
   const watFiles = fs.readdirSync(srcDir).filter(f => f.endsWith('.wat'));
-  if (watFiles.some(f => fs.statSync(path.join(srcDir, f)).mtimeMs > wasmTime)) {
+  if (!process.env.WINE_ASSEMBLY_WASM && watFiles.some(f => fs.statSync(path.join(srcDir, f)).mtimeMs > wasmTime)) {
     console.log('Building...');
     require('child_process').execSync('bash tools/build.sh', { cwd: ROOT, stdio: 'inherit' });
   }
@@ -42,7 +44,7 @@ async function main() {
   e.load_pe(exeBytes.length);
 
   const imageBase = e.get_image_base();
-  const g2w = addr => addr - imageBase + 0x12000;
+  const g2w = addr => RegionMap.g2w(addr, imageBase);
 
   function le32(v) { return [v & 0xFF, (v >> 8) & 0xFF, (v >> 16) & 0xFF, (v >> 24) & 0xFF]; }
 
@@ -64,6 +66,16 @@ async function main() {
     if (e.get_eip() !== 0) {
       console.log(`  WARNING: code at +0x${(codeOffset-256).toString(16)} did not return (EIP=0x${e.get_eip().toString(16)})`);
     }
+    return codeAddr;
+  }
+
+  function rerunCachedCode(codeAddr, setup) {
+    const stackTop = imageBase + 0xD00000;
+    e.set_esp(stackTop);
+    dv.setUint32(g2w(stackTop), 0, true);
+    if (setup) setup();
+    e.set_eip(codeAddr);
+    e.run(100000);
   }
 
   let pass = 0, fail = 0;
@@ -104,6 +116,9 @@ async function main() {
   const scratch = imageBase + 0x8000;
   const scratchA = imageBase + 0x8100;
   const scratchB = imageBase + 0x8104;
+  const sseA = imageBase + 0x9000;
+  const sseB = imageBase + 0x9020;
+  const sseOut = imageBase + 0x9040;
 
   // ================================================================
   // Basic execution
@@ -113,6 +128,30 @@ async function main() {
 
   runCode([0x31, 0xC0]); // xor eax, eax
   test('xor eax, eax', e.get_eax(), 0);
+
+  // PREFETCH instructions are non-faulting hints. The decoder must accept
+  // them as NOPs while still consuming the complete ModRM/SIB/displacement.
+  runCode([
+    0x0F, 0x18, 0x84, 0x8D, ...le32(0x12345678), // prefetchnta [ebp+ecx*4+disp32]
+    0xB8, ...le32(0x51A7C0DE),                    // mov eax, sentinel
+  ]);
+  test('prefetchnta consumes its full effective-address encoding', e.get_eax(), 0x51A7C0DE);
+
+  // SFENCE orders non-temporal stores. Those are ordinary ordered stores in
+  // this interpreter, so the instruction has no register-visible effect, but
+  // its complete three-byte encoding must be consumed.
+  runCode([0x0F, 0xAE, 0xF8, 0xB8, ...le32(0x5F3EACE)]);
+  test('sfence is accepted and consumes its ModRM byte', e.get_eax(), 0x05F3EACE);
+
+  setBytes(sseA, [0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]);
+  setBytes(sseOut, new Array(8).fill(0));
+  runCode([
+    0x0F, 0x6F, 0x05, ...le32(sseA),   // movq mm0,[sseA]
+    0x0F, 0xE7, 0x05, ...le32(sseOut), // movntq [sseOut],mm0
+    0x0F, 0xAE, 0xF8,                  // sfence
+  ]);
+  testBytes('movntq stores all 64 bits before sfence', bytesAt(sseOut, 8),
+    [0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]);
 
   // MOVZX/MOVSX preserve EFLAGS. MFC relies on this exact sequence in its
   // WM_COMMAND routing: TEST button-id; MOVZX notification-code; JZ.
@@ -155,6 +194,24 @@ async function main() {
   ]);
   testBytes('FILD/FISTP m64 preserves raw qword bytes', bytesAt(scratchA, 8), fpuCopyBytes);
 
+  // Jazz's CPUID-selected memcpy overlaps two exact qword payloads on the x87
+  // stack and swaps them back into source order before storing. FXCH must move
+  // the raw-i64 shadows too; otherwise both stores round through f64's 53-bit
+  // significand and turn 0x0a0a0a0a0a0a0a0a into 0x0a0a0a0a0a0a0a00.
+  const fpuCopyA = new Array(8).fill(0x0A);
+  const fpuCopyB = [0x1B, 0x2C, 0x3D, 0x4E, 0x5F, 0x60, 0x71, 0x82];
+  setBytes(scratch, [...fpuCopyA, ...fpuCopyB]);
+  setBytes(scratchA, new Array(16).fill(0));
+  runCode([
+    0xDF, 0x2D, ...le32(scratch),      // fild qword ptr [scratch]
+    0xDF, 0x2D, ...le32(scratch + 8),  // fild qword ptr [scratch+8]
+    0xD9, 0xC9,                        // fxch st(1)
+    0xDF, 0x3D, ...le32(scratchA),     // fistp qword ptr [scratchA]
+    0xDF, 0x3D, ...le32(scratchA + 8), // fistp qword ptr [scratchA+8]
+  ]);
+  testBytes('FXCH preserves paired raw FILD/FISTP m64 payloads',
+    bytesAt(scratchA, 16), [...fpuCopyA, ...fpuCopyB]);
+
   // QuickBlackjack stores its $20,000 house limit as a real 80-bit extended
   // constant. FLD tword must decode the sign/exponent word, not treat the
   // first 8 bytes as an f64 payload.
@@ -175,6 +232,22 @@ async function main() {
   testBytes('FSTP m80 stores real 80-bit extended 20000.0',
     bytesAt(scratchA, 10),
     [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x9c, 0x0d, 0x40]);
+
+  // Half-Life's software renderer reaches this indexed stack form during its
+  // first active frame. Keep the exact D9 5C 35 DC encoding covered: the SIB
+  // index is ESI, the base is EBP, and the signed displacement is -0x24.
+  runCode([
+    0xD9, 0x44, 0x35, 0xE8, // fld  dword ptr [ebp+esi-0x18]
+    0xD9, 0x5C, 0x35, 0xDC, // fstp dword ptr [ebp+esi-0x24]
+  ], () => {
+    const frame = imageBase + 0xCFF000;
+    e.set_ebp(frame);
+    e.set_esi(1);
+    dv.setFloat32(g2w(frame + 1 - 0x18), 17.25, true);
+    dv.setFloat32(g2w(frame + 1 - 0x24), 0, true);
+  });
+  testFloat('x87 SIB stack FLD/FSTP preserves float32',
+    dv.getFloat32(g2w(imageBase + 0xCFF000 + 1 - 0x24), true), 17.25);
 
   // VBRUN100 checks FXAM's C1 sign bit before evaluating a negative base.
   // The condition-code mask is C3:C2:C1:C0 at status bits 14,10,9,8.
@@ -254,6 +327,27 @@ async function main() {
   // shld eax, edx, 1: eax = (0x80000000<<1) | (0x00000001>>31) = 0 | 0 = 0
   test('SHLD eax,edx,1', e.get_eax(), 0x00000000);
 
+  // The CL forms must read CL when the cached block executes, not when it is
+  // first decoded. Alpha Centauri's TQI bit reader revisits one SHLD EIP with
+  // a different bit offset on nearly every call.
+  const shldClCode = runCode([0x0F, 0xA5, 0xD0], () => {
+    e.set_eax(0x12345678); e.set_edx(0x9ABCDEF0); e.set_ecx(4);
+  });
+  test('SHLD eax,edx,cl first cached count', e.get_eax(), 0x23456789);
+  rerunCachedCode(shldClCode, () => {
+    e.set_eax(0x12345678); e.set_edx(0x9ABCDEF0); e.set_ecx(8);
+  });
+  test('SHLD eax,edx,cl rereads changed CL', e.get_eax(), 0x3456789A);
+
+  const shrdClCode = runCode([0x0F, 0xAD, 0xD0], () => {
+    e.set_eax(0x12345678); e.set_edx(0x9ABCDEF0); e.set_ecx(4);
+  });
+  test('SHRD eax,edx,cl first cached count', e.get_eax(), 0x01234567);
+  rerunCachedCode(shrdClCode, () => {
+    e.set_eax(0x12345678); e.set_edx(0x9ABCDEF0); e.set_ecx(8);
+  });
+  test('SHRD eax,edx,cl rereads changed CL', e.get_eax(), 0xF0123456);
+
   // Group-2 immediate shifts on absolute memory use a different threaded-op
   // layout from [base+disp]. WinHelp's drive scan depends on this exact word
   // form advancing 1 -> 2 -> ... -> 0x200 before its unsigned comparison.
@@ -294,6 +388,30 @@ async function main() {
   // ADC reg, reg with CF=1
   runCode([0xF9, 0x13, 0xD3], () => { e.set_edx(5); e.set_ebx(3); });
   test('ADC edx,ebx CF=1', e.get_edx(), 9);
+
+  // CLC/STC/CMC modify CF only. DOSBox's dynamic core uses this exact shape
+  // when it checks available CauseWay pages: cmp; stc; pushfd; jz. STC used to
+  // replace the entire lazy-flag state, turning the nonzero CMP into ZF=1.
+  runCode([
+    0xB8, ...le32(0),                    // mov eax,0 (failure result)
+    0xBA, ...le32(0xFFFFFFFF),           // mov edx,-1
+    0x81, 0xFA, ...le32(0),              // cmp edx,0 (ZF=0)
+    0xF9,                                // stc (must preserve ZF=0)
+    0x9C,                                // pushfd (must also preserve ZF)
+    0x74, 0x08,                          // jz failure
+    0x59,                                // pop ecx
+    0xB8, ...le32(1),                    // mov eax,1
+    0xEB, 0x06,                          // jmp done
+    0x59,                                // failure: pop ecx
+    0xB8, ...le32(0),                    // mov eax,0
+  ]);
+  test('CMP; STC; PUSHFD preserves clear ZF for JZ', e.get_eax(), 1);
+
+  runCode([0x39, 0xD2, 0xF8, 0x9C, 0x58], () => e.set_edx(7));
+  test('CLC preserves set ZF while clearing only CF', e.get_eax() & 0x41, 0x40);
+
+  runCode([0x39, 0xD2, 0xF5, 0x9C, 0x58], () => e.set_edx(7));
+  test('CMC preserves set ZF while toggling only CF', e.get_eax() & 0x41, 0x41);
 
   // ADC [mem], reg with CF=1
   setMem(scratchA, 0x10);
@@ -422,6 +540,45 @@ async function main() {
   ]);
   test('SAHF CF=0', e.get_eax(), 0);
 
+  runCode([
+    0xB4, 0x00,       // mov ah, 0x00 (PF=0)
+    0x9E,             // sahf
+    0x0F, 0x9A, 0xC0, // setp al
+  ], () => e.set_eax(0));
+  test('SAHF PF=0 is visible to JP/SETP', e.get_eax() & 0xFF, 0);
+
+  runCode([
+    0xB4, 0x04,       // mov ah, 0x04 (PF=1)
+    0x9E,             // sahf
+    0x0F, 0x9A, 0xC0, // setp al
+  ], () => e.set_eax(0));
+  test('SAHF PF=1 is visible to JP/SETP', e.get_eax() & 0xFF, 1);
+
+  runCode([
+    0xB4, 0x70,       // mov ah, 0x70 (ZF/TOP-like bits set, PF=0)
+    0x9E,             // sahf
+    0x0F, 0x9A, 0xC0, // setp al
+  ], () => e.set_eax(0));
+  test('SAHF PF=0 survives AH status bits', e.get_eax() & 0xFF, 0);
+
+  runCode([
+    0xB4, 0x40,       // mov ah, 0x40 (ZF=1, PF=0)
+    0x9E,             // sahf
+    0x0F, 0x94, 0xC0, // setz al
+    0x0F, 0x9A, 0xC1, // setp cl
+  ], () => { e.set_eax(0); e.set_ecx(0); });
+  test('SAHF ZF=1 is independent of PF', e.get_eax() & 0xFF, 1);
+  test('SAHF PF=0 is independent of ZF', e.get_ecx() & 0xFF, 0);
+
+  runCode([
+    0xB4, 0x04,       // mov ah, 0x04 (ZF=0, PF=1)
+    0x9E,             // sahf
+    0x0F, 0x94, 0xC0, // setz al
+    0x0F, 0x9A, 0xC1, // setp cl
+  ], () => { e.set_eax(0); e.set_ecx(0); });
+  test('SAHF ZF=0 is independent of PF', e.get_eax() & 0xFF, 0);
+  test('SAHF PF=1 is independent of ZF', e.get_ecx() & 0xFF, 1);
+
   // LAHF: store flags to AH
   runCode([
     0xF9,       // stc (CF=1)
@@ -494,6 +651,334 @@ async function main() {
   runCode([0x64, 0xA1, 0x00, 0x00, 0x00, 0x00]);
   test('addr16 moffs reads the same address as the 32-bit encoding',
     addr16Eax, e.get_eax());
+
+  // ================================================================
+  // EFLAGS round trip through pushfd/popfd
+  // ================================================================
+  //
+  // The interpreter models six flags lazily and used to synthesise EFLAGS from
+  // those alone, so every other bit read back as zero. That silently breaks the
+  // standard "do we have CPUID?" probe, which toggles bit 21 (ID), pushes the
+  // flags and compares: the toggle never survived, so programs concluded the
+  // CPU predates CPUID. Allegro does this, and it is why Liquid War never ran
+  // the cpuid its own binary contains.
+
+  // pushfd; pop eax; mov edx,eax; xor eax,0x200000; push eax; popfd;
+  // pushfd; pop eax; xor eax,edx  — nonzero iff the ID bit toggled.
+  runCode([0x9C, 0x58, 0x89, 0xC2, 0x35, ...le32(0x200000), 0x50, 0x9D,
+           0x9C, 0x58, 0x31, 0xD0]);
+  test('EFLAGS bit 21 (ID) survives a pushfd/popfd round trip',
+    e.get_eax() >>> 0, 0x200000);
+
+  // Same shape on an unmodelled bit that is not the ID bit: bit 18 (AC).
+  runCode([0x9C, 0x58, 0x89, 0xC2, 0x35, ...le32(0x40000), 0x50, 0x9D,
+           0x9C, 0x58, 0x31, 0xD0]);
+  test('EFLAGS bit 18 (AC) survives a pushfd/popfd round trip',
+    e.get_eax() >>> 0, 0x40000);
+
+  // Restoring flags must still restore the ones we do model: stc; pushfd;
+  // clc; popfd; setc al.
+  runCode([0xF9, 0x9C, 0xF8, 0x9D, 0x0F, 0x92, 0xC0]);
+  test('popfd restores CF from the pushed word', e.get_eax() & 0xFF, 1);
+
+  // ...and the arithmetic flags must not be frozen by the extra-bit store:
+  // popfd a word with ZF set, then add 1 to a non-zero register and check ZF
+  // reflects the add, not the popped word. mov eax,0x40; push eax; popfd;
+  // mov ecx,5; add ecx,1; setz al.
+  runCode([0xB8, ...le32(0x40), 0x50, 0x9D, 0xB9, ...le32(5), 0x83, 0xC1, 0x01,
+           0x0F, 0x94, 0xC0]);
+  test('a later ALU op still owns ZF after popfd', e.get_eax() & 0xFF, 0);
+
+  // PF is reported in the pushed word, and agrees with JP: 0x03 has two bits
+  // set, so parity is even. mov al,1; add al,2; pushfd; pop eax; and eax,4.
+  runCode([0xB0, 0x01, 0x04, 0x02, 0x9C, 0x58, 0x83, 0xE0, 0x04]);
+  test('pushfd reports PF (even parity)', e.get_eax() >>> 0, 4);
+
+  // 0x07 has three bits set — odd parity, PF clear.
+  runCode([0xB0, 0x01, 0x04, 0x06, 0x9C, 0x58, 0x83, 0xE0, 0x04]);
+  test('pushfd reports PF (odd parity)', e.get_eax() >>> 0, 0);
+
+  // ================================================================
+  // RDTSC and the CPUID feature word
+  // ================================================================
+  //
+  // RDTSC used to be decoded as mov eax,0 / mov edx,0. The value itself is not
+  // what matters -- the usual idiom is two reads subtracted, so a repeat is a
+  // divide-by-zero or an infinite calibration spin. These assert the counter
+  // moves, and that the feature word only claims instructions we execute.
+
+  // rdtsc; mov esi,eax; mov edi,edx; rdtsc — second read into eax/edx.
+  runCode([0x0F, 0x31, 0x89, 0xC6, 0x89, 0xD7, 0x0F, 0x31]);
+  const tsc1 = e.get_esi() >>> 0, tsc1hi = e.get_edi() >>> 0;
+  const tsc2 = e.get_eax() >>> 0, tsc2hi = e.get_edx() >>> 0;
+  test('rdtsc advances between two reads',
+    tsc2hi > tsc1hi || (tsc2hi === tsc1hi && tsc2 > tsc1), true);
+  test('rdtsc is non-zero', tsc1 !== 0 || tsc1hi !== 0, true);
+
+  // cpuid leaf 0 → "GenuineIntel" in EBX/EDX/ECX.
+  runCode([0x31, 0xC0, 0x0F, 0xA2]);
+  test('cpuid leaf 0 EBX = "Genu"', e.get_ebx() >>> 0, 0x756E6547);
+  test('cpuid leaf 0 EDX = "ineI"', e.get_edx() >>> 0, 0x49656E69);
+  test('cpuid leaf 0 ECX = "ntel"', e.get_ecx() >>> 0, 0x6C65746E);
+  test('cpuid leaf 0 reports leaf 1 as the max', e.get_eax() >>> 0, 1);
+
+  // cpuid leaf 1 → signature + features. Each asserted bit names something the
+  // interpreter implements; SSE stays clear so the MMX-extension opcodes we do
+  // not decode stay unreachable.
+  runCode([0xB8, ...le32(1), 0x0F, 0xA2]);
+  const feat = e.get_edx() >>> 0;
+  const family = (e.get_eax() >>> 8) & 0xF;
+  test('cpuid leaf 1 reports family 6 (CMOV is a family 6 addition)', family, 6);
+  test('cpuid advertises FPU', feat & 1, 1);
+  test('cpuid advertises TSC now that RDTSC is real', (feat >>> 4) & 1, 1);
+  test('cpuid advertises CX8 (CMPXCHG8B)', (feat >>> 8) & 1, 1);
+  test('cpuid advertises CMOV', (feat >>> 15) & 1, 1);
+  test('cpuid advertises MMX', (feat >>> 23) & 1, 1);
+  test('cpuid does not advertise SSE', (feat >>> 25) & 1, 0);
+  e.set_cpu_sse(1);
+  runCode([0xB8, ...le32(1), 0x0F, 0xA2]);
+  test('cpuid advertises SSE after the explicit per-app opt-in',
+    (e.get_edx() >>> 25) & 1, 1);
+  test('SSE personality identifies a Pentium III model',
+    (e.get_eax() >>> 4) & 0xF, 7);
+  e.set_cpu_sse(0);
+
+  // Extended leaves must stay absent — that is what denies 3DNow.
+  runCode([0xB8, ...le32(0x80000000), 0x0F, 0xA2]);
+  test('cpuid reports no extended leaves', e.get_eax() >>> 0, 0);
+
+  // ================================================================
+  // SSE base: MOVUPS/MOVAPS and XORPS
+  // ================================================================
+  // CPUID intentionally stays conservative above: SDL2 itself is compiled
+  // with these baseline operations even when it does not select an SSE path.
+  const sseBytesA = [
+    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+    0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+  ];
+  const sseBytesB = [
+    0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88,
+    0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00,
+  ];
+  setBytes(sseA, sseBytesA);
+  setBytes(sseB, sseBytesB);
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x10, 0x0d, ...le32(sseB),       // movups xmm1,[sseB]
+    0x0f, 0x57, 0xc1,                      // xorps xmm0,xmm1
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('MOVUPS + register XORPS preserves all 128 bits',
+    bytesAt(sseOut, 16), sseBytesA.map((v, i) => v ^ sseBytesB[i]));
+
+  setBytes(sseOut, new Array(16).fill(0xff));
+  runCode([
+    0x0f, 0x28, 0x05, ...le32(sseA),       // movaps xmm0,[sseA]
+    0x0f, 0x57, 0x05, ...le32(sseA),       // xorps xmm0,[sseA]
+    0x0f, 0x29, 0x05, ...le32(sseOut),     // movaps [sseOut],xmm0
+  ]);
+  testBytes('MOVAPS + memory XORPS clears all four lanes',
+    bytesAt(sseOut, 16), new Array(16).fill(0));
+
+  setBytes(sseOut, new Array(16).fill(0x7a));
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0xf3, 0x0f, 0x10, 0x05, ...le32(sseB), // movss xmm0,dword [sseB]
+    0xf3, 0x0f, 0x11, 0x05, ...le32(sseOut), // movss dword [sseOut],xmm0
+    0x0f, 0x11, 0x05, ...le32(sseOut + 16), // movups [sseOut+16],xmm0
+  ]);
+  testBytes('MOVSS absolute load/store changes only the low lane',
+    bytesAt(sseOut, 4), sseBytesB.slice(0, 4));
+  testBytes('MOVSS preserves the destination upper 96 bits',
+    bytesAt(sseOut + 20, 12), sseBytesA.slice(4));
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x10, 0x0d, ...le32(sseB),       // movups xmm1,[sseB]
+    0x0f, 0x14, 0xc1,                      // unpcklps xmm0,xmm1
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('UNPCKLPS interleaves the low two 32-bit lanes',
+    bytesAt(sseOut, 16), [
+      ...sseBytesA.slice(0, 4), ...sseBytesB.slice(0, 4),
+      ...sseBytesA.slice(4, 8), ...sseBytesB.slice(4, 8),
+    ]);
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x10, 0x0d, ...le32(sseB),       // movups xmm1,[sseB]
+    0x0f, 0xc6, 0xc1, 0x1b,                // shufps xmm0,xmm1,0x1b
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('SHUFPS register form selects lanes from both original operands',
+    bytesAt(sseOut, 16), [
+      ...sseBytesA.slice(12, 16), ...sseBytesA.slice(8, 12),
+      ...sseBytesB.slice(4, 8), ...sseBytesB.slice(0, 4),
+    ]);
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0xc6, 0x05, ...le32(sseB), 0xaa, // shufps xmm0,[sseB],0xaa
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('SHUFPS memory form consumes imm8 after the effective address',
+    bytesAt(sseOut, 16), [
+      ...sseBytesA.slice(8, 12), ...sseBytesA.slice(8, 12),
+      ...sseBytesB.slice(8, 12), ...sseBytesB.slice(8, 12),
+    ]);
+
+  [1, -2, 3.5, 4].forEach((v, i) => dv.setFloat32(g2w(sseA + i * 4), v, true));
+  [2, 3, -4, 0.5].forEach((v, i) => dv.setFloat32(g2w(sseB + i * 4), v, true));
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x10, 0x0d, ...le32(sseB),       // movups xmm1,[sseB]
+    0x0f, 0x58, 0xc1,                      // addps xmm0,xmm1
+    0x0f, 0x59, 0x05, ...le32(sseB),       // mulps xmm0,[sseB]
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  [6, 3, 2, 2.25].forEach((expected, i) =>
+    testFloat(`ADDPS register + MULPS memory lane ${i}`,
+      dv.getFloat32(g2w(sseOut + i * 4), true), expected));
+  setBytes(sseA, sseBytesA);
+  setBytes(sseB, sseBytesB);
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x16, 0x05, ...le32(sseB),       // movhps xmm0,qword [sseB]
+    0x0f, 0x17, 0x05, ...le32(sseOut),     // movhps qword [sseOut],xmm0
+    0x0f, 0x11, 0x05, ...le32(sseOut + 16), // movups [sseOut+16],xmm0
+  ]);
+  testBytes('MOVHPS memory load replaces and store selects the high 64 bits',
+    bytesAt(sseOut, 8), sseBytesB.slice(0, 8));
+  testBytes('MOVHPS preserves the destination low 64 bits',
+    bytesAt(sseOut + 16, 16), [...sseBytesA.slice(0, 8), ...sseBytesB.slice(0, 8)]);
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x12, 0x05, ...le32(sseB),       // movlps xmm0,qword [sseB]
+    0x0f, 0x13, 0x05, ...le32(sseOut),     // movlps qword [sseOut],xmm0
+    0x0f, 0x11, 0x05, ...le32(sseOut + 16), // movups [sseOut+16],xmm0
+  ]);
+  testBytes('MOVLPS memory load replaces and store selects the low 64 bits',
+    bytesAt(sseOut, 8), sseBytesB.slice(0, 8));
+  testBytes('MOVLPS preserves the destination high 64 bits',
+    bytesAt(sseOut + 16, 16), [...sseBytesB.slice(0, 8), ...sseBytesA.slice(8, 16)]);
+
+  [-2, 4, NaN, 8].forEach((v, i) => dv.setFloat32(g2w(sseA + i * 4), v, true));
+  [1, 4, 0, 9].forEach((v, i) => dv.setFloat32(g2w(sseB + i * 4), v, true));
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0xc2, 0x05, ...le32(sseB), 0x01, // cmpltps xmm0,[sseB]
+    0x0f, 0x50, 0xc8,                      // movmskps ecx,xmm0
+  ]);
+  test('CMPPS LT + MOVMSKPS produces the four-lane mask', e.get_ecx(), 0x9);
+  setBytes(sseA, sseBytesA);
+  setBytes(sseB, sseBytesB);
+
+  runCode([
+    0x0f, 0x10, 0x05, ...le32(sseA),       // movups xmm0,[sseA]
+    0x0f, 0x10, 0x0d, ...le32(sseB),       // movups xmm1,[sseB]
+    0x0f, 0x16, 0xc1,                      // movlhps xmm0,xmm1
+    0x0f, 0x11, 0x05, ...le32(sseOut),     // movups [sseOut],xmm0
+  ]);
+  testBytes('MOVLHPS copies the source low 64 bits into the destination high half',
+    bytesAt(sseOut, 16), [...sseBytesA.slice(0, 8), ...sseBytesB.slice(0, 8)]);
+
+  dv.setFloat32(g2w(sseA), 19.875, true);
+  dv.setFloat32(g2w(sseA + 4), -7.75, true);
+  runCode([
+    0x0f, 0x2c, 0x05, ...le32(sseA),       // cvttps2pi mm0,qword [sseA]
+    0x0f, 0x7f, 0x05, ...le32(sseOut),     // movq [sseOut],mm0
+    0xf3, 0x0f, 0x2c, 0x05, ...le32(sseA + 4), // cvttss2si eax,dword [sseA+4]
+  ]);
+  test('CVTTPS2PI truncates the low packed float', memAt(sseOut), 19);
+  test('CVTTPS2PI truncates the high packed float', memAt(sseOut + 4), -7);
+  test('CVTTSS2SI truncates a scalar float toward zero', e.get_eax(), -7);
+
+  // ================================================================
+  // Sized ALU with a memory operand — flags come from the operand width
+  // ================================================================
+  // The register forms mask the result to 8/16 bits before publishing flags;
+  // the memory forms used to hand the full 32-bit result to the lazy-flag
+  // machinery, so `add al,[edi]` never reported a carry out of the byte and
+  // reported ZF=0 for a result that was zero in AL. Each case below is chosen
+  // so the 32-bit answer and the sized answer disagree.
+  const flagBuf = imageBase + 0x8600;
+  const memByte = v => () => { e.set_edi(flagBuf); mem[g2w(flagBuf)] = v; };
+
+  runCode([
+    0xB0, 0xF0,             // mov al, 0xF0
+    0x02, 0x07,             // add al, [edi]
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], memByte(0x34));
+  test('add al,[edi] result', e.get_eax() & 0xFF, 0x24);
+  test('add al,[edi] sets CF on a byte carry', e.get_ecx() & 0xFF, 1);
+
+  runCode([
+    0xB0, 0xF0,             // mov al, 0xF0
+    0x02, 0x07,             // add al, [edi]
+    0x0F, 0x94, 0xC1,       // setz cl
+  ], memByte(0x10));
+  test('add al,[edi] wrapping to zero sets ZF', e.get_ecx() & 0xFF, 1);
+
+  runCode([
+    0xB0, 0x7F,             // mov al, 0x7F
+    0x02, 0x07,             // add al, [edi]
+    0x0F, 0x90, 0xC1,       // seto cl
+  ], memByte(0x01));
+  test('add al,[edi] sets OF on signed byte overflow', e.get_ecx() & 0xFF, 1);
+
+  runCode([
+    0xB0, 0x20,             // mov al, 0x20
+    0x00, 0x07,             // add [edi], al
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], memByte(0xF0));
+  test('add [edi],al stores the byte result', mem[g2w(flagBuf)], 0x10);
+  test('add [edi],al sets CF on a byte carry', e.get_ecx() & 0xFF, 1);
+
+  // A sign-extended imm8 must be compared as a byte, not as 0xFFFFFF80.
+  runCode([
+    0x80, 0x3F, 0x80,       // cmp byte [edi], 0x80
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], memByte(0x90));
+  test('cmp byte [edi],0x80 compares within the byte', e.get_ecx() & 0xFF, 0);
+
+  // ADC's carry has to come out of the operand width: 0xFF + CF does not wrap
+  // 32 bits, which is the only wrap $do_alu32 could see.
+  runCode([
+    0xF9,                   // stc
+    0xB0, 0x10,             // mov al, 0x10
+    0x12, 0x07,             // adc al, [edi]
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], memByte(0xFF));
+  test('adc al,[edi] result', e.get_eax() & 0xFF, 0x10);
+  test('adc al,[edi] sets CF when b+CF exceeds the byte', e.get_ecx() & 0xFF, 1);
+
+  runCode([
+    0xF9,                   // stc
+    0xB0, 0x00,             // mov al, 0
+    0x1A, 0x07,             // sbb al, [edi]
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], memByte(0xFF));
+  test('sbb al,[edi] result', e.get_eax() & 0xFF, 0x00);
+  test('sbb al,[edi] sets CF when b+CF exceeds a', e.get_ecx() & 0xFF, 1);
+
+  runCode([
+    0x66, 0xB8, 0x00, 0xF0, // mov ax, 0xF000
+    0x66, 0x03, 0x07,       // add ax, [edi]
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], () => { e.set_edi(flagBuf); dv.setUint16(g2w(flagBuf), 0x2000, true); });
+  test('add ax,[edi] result', e.get_eax() & 0xFFFF, 0x1000);
+  test('add ax,[edi] sets CF on a word carry', e.get_ecx() & 0xFF, 1);
+
+  runCode([
+    0xF9,                   // stc
+    0x66, 0xB8, 0x10, 0x00, // mov ax, 0x10
+    0x66, 0x13, 0x07,       // adc ax, [edi]
+    0x0F, 0x92, 0xC1,       // setc cl
+  ], () => { e.set_edi(flagBuf); dv.setUint16(g2w(flagBuf), 0xFFFF, true); });
+  test('adc ax,[edi] result', e.get_eax() & 0xFFFF, 0x0010);
+  test('adc ax,[edi] sets CF when b+CF exceeds the word', e.get_ecx() & 0xFF, 1);
 
   // ================================================================
   // Summary

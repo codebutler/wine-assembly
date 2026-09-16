@@ -6,6 +6,8 @@
 
 const assert = require('assert');
 const { Win98Renderer } = require('../lib/renderer');
+// $DI_MOUSE_INPUT_STATE, from the map declared in src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 const canvas = {
   getContext() {
@@ -19,6 +21,13 @@ const canvas = {
 };
 
 const r = new Win98Renderer(canvas);
+const directInputMemory = new WebAssembly.Memory({ initial: 2048, maximum: 2048, shared: true });
+r.wasmMemory = directInputMemory;
+const hitTestWasm = {
+  exports: {
+  },
+};
+r.wasm = hitTestWasm;
 r.windows[100] = {
   hwnd: 100,
   visible: true,
@@ -30,9 +39,15 @@ r.windows[100] = {
   hasCaption: false,
   style: 0,
   zOrder: 1,
+  wasm: hitTestWasm,
 };
 
 r.handleMouseDown(40, 60, 1);
+assert.deepStrictEqual(r.inputQueue.slice(0, 2).map(event =>
+  [event.hwnd, event.msg, event.wParam, event.lParam]), [
+  [100, 0x0084, 0, (60 << 16) | 40],
+  [100, 0x0201, 1, (50 << 16) | 30],
+], 'WM_NCHITTEST with screen coordinates should precede button-down in the same input queue');
 assert.strictEqual(r.peekAsyncKeyState(0x01), 0x8000, 'peekAsyncKeyState should report held left mouse without consuming press bit');
 assert.strictEqual(r.getAsyncKeyState(0x01), 0x8001, 'first GetAsyncKeyState after mousedown should include low press bit');
 assert.strictEqual(r.getAsyncKeyState(0x01), 0x8000, 'second GetAsyncKeyState while held should only include high held bit');
@@ -44,6 +59,69 @@ assert.strictEqual(move.wParam & 0x0001, 0x0001, 'drag move should include MK_LB
 
 r.handleMouseUp(80, 90, 1);
 assert.strictEqual(r.getAsyncKeyState(0x01), 0, 'GetAsyncKeyState after consumed mouseup should report not held');
+const directInputWords = new Int32Array(directInputMemory.buffer);
+const directInputBase = RegionMap.BASE.DI_MOUSE_INPUT_STATE >>> 2;
+// Ring words carry the edge type in the high nibble over the wall-clock
+// millisecond the edge was queued at.
+assert.deepStrictEqual([
+  Atomics.load(directInputWords, directInputBase + 2),
+  Atomics.load(directInputWords, directInputBase + 3),
+  Atomics.load(directInputWords, directInputBase + 4) >>> 28,
+  Atomics.load(directInputWords, directInputBase + 5) >>> 28,
+], [0, 2, 1, 2], 'renderer should retain mouse down and up as separate DirectInput edges');
+
+const orderedRenderer = new Win98Renderer(canvas);
+const orderedMemory = new WebAssembly.Memory({ initial: 2048, maximum: 2048, shared: true });
+orderedRenderer.wasmMemory = orderedMemory;
+orderedRenderer.windows[101] = {
+  hwnd: 101, visible: true, isChild: false,
+  x: 0, y: 0, w: 200, h: 160, hasCaption: false, style: 0, zOrder: 1,
+};
+orderedRenderer.handleMouseMove(10, 10);
+orderedRenderer.handleMouseMove(30, 40);
+orderedRenderer.handleMouseDown(30, 40, 0);
+orderedRenderer.handleMouseUp(30, 40, 0);
+const orderedWords = new Int32Array(orderedMemory.buffer);
+assert.deepStrictEqual([
+  Atomics.load(orderedWords, directInputBase + 2),
+  Atomics.load(orderedWords, directInputBase + 3),
+  Atomics.load(orderedWords, directInputBase + 4),
+  Atomics.load(orderedWords, directInputBase + 5),
+  Atomics.load(orderedWords, directInputBase + 6) >>> 28,
+  Atomics.load(orderedWords, directInputBase + 7) >>> 28,
+], [0, 4, (5 << 28) | 20, (6 << 28) | 30, 1, 2],
+'renderer should queue pointer motion before the click that follows it');
+
+// Safari can deliver a long run of coalesced DOM moves before a slow guest
+// gets another DirectInput poll. Motion may collapse, but it must retain the
+// full delta and leave room for both edges of the click at the final point.
+const burstRenderer = new Win98Renderer(canvas);
+const burstMemory = new WebAssembly.Memory({ initial: 2048, maximum: 2048, shared: true });
+burstRenderer.wasmMemory = burstMemory;
+burstRenderer.windows[102] = {
+  hwnd: 102, visible: true, isChild: false,
+  x: 0, y: 0, w: 640, h: 480, hasCaption: false, style: 0, zOrder: 1,
+};
+for (let i = 0; i < 100; i++) burstRenderer.handleMouseMove(100 + i, 100 + i);
+burstRenderer.handleMouseDown(199, 199, 0);
+burstRenderer.handleMouseUp(199, 199, 0);
+const burstWords = new Int32Array(burstMemory.buffer);
+const burstHead = Atomics.load(burstWords, directInputBase + 2) >>> 0;
+const burstTail = Atomics.load(burstWords, directInputBase + 3) >>> 0;
+const burstEvents = Array.from({ length: burstTail - burstHead }, (_, i) =>
+  Atomics.load(burstWords, directInputBase + 4 + ((burstHead + i) & 63)) >>> 0);
+const signedMotion = event => (event << 4) >> 4;
+assert.deepStrictEqual(burstEvents.slice(-4).map(event => event >>> 28), [5, 6, 1, 2],
+  'overflowed X/Y motion should flush immediately before the reserved click edges, ' +
+  'and a saturated motion queue must retain both click edges');
+// A button edge carries the wall-clock millisecond it was queued at.
+const burstStampedAt = Date.now() & 0x0FFFFFFF;
+for (const edge of burstEvents.slice(-2))
+  assert(((burstStampedAt - (edge & 0x0FFFFFFF)) & 0x0FFFFFFF) < 5000, 'click edges are stamped at queue time');
+assert.deepStrictEqual([
+  burstEvents.filter(event => (event >>> 28) === 5).reduce((sum, event) => sum + signedMotion(event), 0),
+  burstEvents.filter(event => (event >>> 28) === 6).reduce((sum, event) => sum + signedMotion(event), 0),
+], [99, 99], 'overflow coalescing should preserve the final pointer position');
 r.inputQueue.length = 0;
 r.handleMouseMove(90, 100);
 
@@ -98,8 +176,11 @@ delayedRenderer.windows[110] = {
 };
 delayedRenderer.handleMouseDown(40, 60, 1);
 delayedRenderer.handleMouseUp(40, 60, 1);
+const delayedHitTest = delayedRenderer.checkInput();
+assert.strictEqual(delayedHitTest.msg, 0x0084,
+  'queued delayed click should deliver WM_NCHITTEST before WM_LBUTTONDOWN');
 const delayedDown = delayedRenderer.checkInput();
-assert.strictEqual(delayedDown.msg, 0x0201, 'queued delayed click should deliver WM_LBUTTONDOWN first');
+assert.strictEqual(delayedDown.msg, 0x0201, 'queued delayed click should deliver WM_LBUTTONDOWN after its hit-test');
 assert.strictEqual(delayedRenderer.getAsyncKeyState(0x01), 0x8001, 'queued WM_LBUTTONDOWN should expose held button snapshot even if mouseup is already queued');
 delayedRenderer.setMousePosition(150, 120);
 assert.strictEqual(delayedRenderer.getMousePosition(), (120 << 16) | 150, 'SetCursorPos should supersede any active queued mouse snapshot');
@@ -190,7 +271,8 @@ disabledStyle = 0;
 disabledRenderer.handleMouseDown(40, 60, 0);
 disabledRenderer.handleMouseUp(40, 60, 0);
 assert.deepStrictEqual(disabledRenderer.inputQueue.filter(e => e.hwnd === 141).map(e => e.msg),
-  [0x0201, 0x0202], 'the same button must receive a normal click after EnableWindow');
+  [0x0084, 0x0201, 0x0202],
+  'the same button must receive an ordered hit-test and click after EnableWindow');
 
 const captionRenderer = new Win98Renderer(canvas);
 const captionWasm = {

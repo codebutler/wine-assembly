@@ -26,9 +26,14 @@ const elemStart = tbl.indexOf('(elem');
 const elemBlock = tbl.slice(elemStart);
 const elemCount = (elemBlock.match(/^\s*\$th_[A-Za-z0-9_]+/gm) || []).length;
 
-const guardMatch = cache.match(/i32\.ge_u \(local\.get \$fn\) \(i32\.const (\d+)\)\)[\s\S]{0,200}0xCAC4BAD0/);
-if (!guardMatch) { console.error('[check-handler-count] could not find CAC4BAD0 guard in 04-cache.wat'); process.exit(2); }
+const guardMatch = cache.match(/i32\.ge_u \(local\.get \$fn\) \(i32\.const (\d+)\)\)[\s\S]{0,240}(?:0xCAC4BAD0|return_call \$dispatch_bad)/);
+if (!guardMatch) { console.error('[check-handler-count] could not find dispatch-bad guard in 04-cache.wat'); process.exit(2); }
 const guardValue = +guardMatch[1];
+
+if (!/\(func \$dispatch_bad[\s\S]{0,240}0xCAC4BAD0/.test(cache)) {
+  console.error('[check-handler-count] could not find CAC4BAD0 recovery body in $dispatch_bad');
+  process.exit(2);
+}
 
 const ok = tableSize === elemCount && elemCount === guardValue;
 const line = `handler table=${tableSize} elem entries=${elemCount} cache guard=${guardValue}`;
@@ -38,11 +43,14 @@ if (!ok) {
   process.exit(1);
 }
 
-const header = fs.readFileSync(path.join(root, 'src/01-header.wat'), 'utf8');
+// The size globals below mirror regions, and since wave 3 a mirror is written
+// `(region.size $R)` rather than a literal — a literal mirror pins its region.
+// tools/wat-globals.js resolves both spellings against the placed layout.
+const watGlobals = require('./wat-globals.js').collect();
 function headerGlobal(name) {
-  const m = header.match(new RegExp(`\\(global \\$${name} i32 \\(i32\\.const (0x[0-9A-Fa-f]+|\\d+)\\)\\)`));
-  if (!m) { console.error(`[check-handler-count] could not find $${name} in src/01-header.wat`); process.exit(2); }
-  return Number(m[1]);
+  const g = watGlobals.get(name);
+  if (!g) { console.error(`[check-handler-count] could not find $${name} in src/`); process.exit(2); }
+  return g.value >>> 0;
 }
 const histCount = headerGlobal('HANDLER_HIST_COUNT');
 const pairSize = headerGlobal('HANDLER_PAIR_HIST_COUNTS_SIZE');

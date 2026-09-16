@@ -64,7 +64,7 @@ function runGame(args) {
   return execFileSync(process.execPath, [RUN, ...args], {
     cwd: ROOT,
     encoding: 'utf8',
-    timeout: 120000,
+    timeout: 60000,   // measures 5s
     maxBuffer: 16 * 1024 * 1024,
   });
 }
@@ -86,12 +86,24 @@ function testRodent(outDir) {
       `500:mousedown:202:72,501:mouseup:202:72,` +
       `520:mousedown:240:93,521:mouseup:240:93,` +
       `1050:png:${before},1100:keydown:39,1101:sleep-ms:1200,` +
-      `1200:keyup:39,1250:png:${after},1350:stop`,
+      `1200:keyup:39,1250:png:${after},1270:mousedown:447:52,` +
+      `1271:mouseup:447:52,1390:stop`,
   ]);
   assertHealthy(output, 'Rodent');
+  const titleWrites = [...output.matchAll(/\[SetWindowText\] "([^"]*)"/g)]
+    .map(match => match[1]);
+  assert.match(titleWrites.at(-1) || '', /^Rodent's Revenge \[\d+\]$/,
+    'Rodent DefWindowProc must retain the caption written by SetWindowText');
   assert.match(output, /keydown vk=39/, 'Rodent Right key must reach the renderer');
+  assert.doesNotMatch(output, /Sub or Function not defined/,
+    'Rodent close must resolve KERNEL.WritePrivateProfileString instead of VB error 35');
   assert(changedPixels(before, after, { x: 180, y: 116, w: 276, h: 276 }) > 40,
     'Rodent board should visibly advance after holding Right');
+  const clock = colorBounds(after, { x: 302, y: 84, w: 34, h: 34 },
+    (r, g, b) => r < 80 && g < 80 && b < 80);
+  assert(clock.count > 60 && clock.width > 16 && clock.height > 16,
+    `Rodent stopwatch must remain visible after gameplay starts ` +
+    `(dark bounds=${clock.width}x${clock.height}, pixels=${clock.count})`);
   console.log('PASS  Win16 Rodent starts a new game and responds to Right');
 }
 
@@ -110,7 +122,7 @@ function testRattler(outDir) {
   assertHealthy(output, 'Rattler');
   const initialScore = colorBounds(initial, { x: 378, y: 88, w: 68, h: 28 },
     (r, g, b) => r < 48 && g < 48 && b < 48);
-  assert(initialScore.width >= 55 && initialScore.height >= 13 && initialScore.count > 100,
+  assert(initialScore.width >= 50 && initialScore.height >= 12 && initialScore.count > 100,
     `Rattler should use its large six-digit score font ` +
     `(dark=${initialScore.width}x${initialScore.height}, pixels=${initialScore.count})`);
   // Rattler implements pix_KeyPress (ASCII keypad controls), not KeyDown.

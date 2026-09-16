@@ -37,8 +37,11 @@ const METRICS = [
 
 (async () => {
   const { exports: wat, memory } = await bootRenderHarness();
-  const imageBase = wat.get_image_base() >>> 0;
-  const wa = guest => (0x12000 + ((guest >>> 0) - imageBase)) >>> 0;
+  // The module's own $g2w, not image-relative arithmetic: this test loads
+  // ~5MB of fonts, which exhausts the low heap window ($GUEST_HEAP_BASE), and
+  // $heap_alloc then spills to the sparse high arena. Those pointers are only
+  // resolvable through the map $g2w consults.
+  const wa = guest => wat.guest_to_wasm(guest) >>> 0;
 
   const loadFont = relative => {
     const file = fs.readFileSync(path.join(REPO, 'fonts', relative));

@@ -1,0 +1,402 @@
+#!/usr/bin/env node
+
+'use strict';
+
+const crypto = require('crypto');
+const childProcess = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+const SRC = path.join(ROOT, 'src');
+const PRINT_PIN = process.argv.includes('--print-pin');
+const LIST = process.argv.includes('--list');
+const apiTable = JSON.parse(fs.readFileSync(path.join(SRC, 'api_table.json'), 'utf8'));
+const metadataStubs = new Set(apiTable
+  .filter(api => api.stub !== undefined)
+  .map(api => `handle_${api.name}`));
+
+function functions(source, prefix) {
+  const clean = source.replace(/;;.*$/gm, '');
+  const result = [];
+  for (let start = 0; (start = clean.indexOf(`(func $${prefix}`, start)) >= 0;) {
+    let depth = 0;
+    let end = start;
+    for (; end < clean.length; end++) {
+      if (clean[end] === '(') depth++;
+      if (clean[end] === ')' && --depth === 0) { end++; break; }
+    }
+    result.push(clean.slice(start, end));
+    start = end;
+  }
+  return result;
+}
+
+// A handler with no call, control-flow branch, fail-loud trap, or memory write
+// cannot delegate work or publish an output buffer. It may still read state and
+// mutate a global: that broader shape deliberately catches stateful-looking
+// no-ops such as SetFileApisToOEM/ANSI, which escaped the old exact matcher.
+const effectOrControl = /\((?:call(?:_indirect)?|return|unreachable|if|block|loop|br(?:_if|_table|_on_[A-Za-z0-9_]+)?|memory\.(?:fill|copy|init|grow)|table\.(?:set|fill|copy|init)|data\.drop|elem\.drop|(?:i32|i64|f32|f64|v128)\.(?:store\d*|atomic\.(?:store|rmw|cmpxchg|wait|notify)))\b/;
+// A write into the per-thread register file is CPU state, not a published
+// output buffer — it is the exact analogue of `global.set $eax`, which this
+// classifier has always treated as quiet. Neutralize just the store head so a
+// constant stub stays quiet; the stored VALUE is left in place, so a `call`
+// inside it still makes the handler loud.
+const stripRegFileStores = flat =>
+  flat.replace(/\(i32\.store offset=\d+ \(global\.get \$reg_base\)/g, '(regset');
+const isQuietHandler = flat =>
+  !effectOrControl.test(stripRegFileStores(flat)) && !/\bunreachable\b/.test(flat);
+
+function quietEntries(file, source) {
+  const entries = [];
+  for (const body of functions(source, 'handle_')) {
+    const flat = body.replace(/\s+/g, ' ');
+    const match = flat.match(/^\(func \$(handle_\S+)/);
+    if (match && isQuietHandler(flat)) {
+      entries.push({ name: `${file}:${match[1]}`, body: flat });
+    }
+  }
+  return entries;
+}
+
+for (const [label, flat, expected] of [
+  ['constant return', '(func $handle_X (global.set $eax (i32.const 1)))', true],
+  ['stateful no-op', '(func $handle_X (global.set $mode (i32.const 1)) (global.set $eax (i32.const 1)))', true],
+  ['delegating handler', '(func $handle_X (call $do_work))', false],
+  ['output store', '(func $handle_X (i32.store (local.get $p) (i32.const 1)))', false],
+  ['conditional behavior', '(func $handle_X (if (local.get $p) (then (nop))))', false],
+  ['fail loud', '(func $handle_X unreachable)', false],
+]) {
+  if (isQuietHandler(flat) !== expected) {
+    throw new Error(`quiet-handler classifier self-check failed: ${label}`);
+  }
+}
+
+const quiet = [];
+const seenMetadataStubs = new Set();
+for (const file of fs.readdirSync(SRC).filter(name => name.endsWith('.wat')).sort()) {
+  const source = fs.readFileSync(path.join(SRC, file), 'utf8');
+  for (const entry of quietEntries(file, source)) {
+    const handler = entry.name.slice(entry.name.indexOf(':') + 1);
+    if (file === '09b2-dispatch-table.generated.wat' && metadataStubs.has(handler)) {
+      seenMetadataStubs.add(handler);
+    } else {
+      quiet.push(entry);
+    }
+  }
+}
+
+for (const handler of metadataStubs) {
+  if (!seenMetadataStubs.has(handler)) {
+    throw new Error(`api_table metadata stub $${handler} is not a generated quiet handler`);
+  }
+}
+
+quiet.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+const digest = crypto.createHash('sha256')
+  .update(quiet.map(entry => `${entry.name}:${entry.body}`).join('\n'))
+  .digest('hex');
+// The inventory is a ratchet, not approval of its existing entries. Historical
+// count changes and their behavior rationale live in
+// docs/silent-handler-inventory.md; executable policy and the pin stay here.
+// 2026-08-31: 506 -> 505. Commit 34b4f08f ("Fix Win98 installer chain
+// launches") gave handle_CreateProcessA a real implementation, so it left the
+// quiet inventory. Ratchet only; nothing was added.
+// 2026-08-31: 505 -> 508. MSVCRT startup helpers _lock, _unlock, and
+// __lconv_init are documented compatibility no-ops for single-threaded CRT
+// initialization paths.
+// 2026-09-01: 508 -> 507. handle_IDirectDraw_WaitForVerticalBlank was the
+// textbook silent success -- it set EAX=0 and returned, so a game that used
+// the display as its clock was told the retrace had already happened. It now
+// parks on a real vblank (yield_reason 13). Ratchet only; nothing was added.
+// 2026-09-01: 507 -> 525. Minimal no-audio BASS compatibility handlers let
+// shareware games bundled with bass.dll continue to gameplay.
+// 2026-09-01: 525 -> 526. __mb_cur_max is a documented constant for the
+// emulator's single-byte ANSI CRT environment.
+// 2026-09-01: 526 -> 527. _cexit acknowledges CRT cleanup without process
+// termination; returning terminator callbacks need a separate future path.
+// 2026-09-01: 527 -> 528. _getdrive is a documented constant in the default
+// single-drive C: process environment.
+// 2026-09-01: 528 -> 529. _setmode acknowledges text/binary mode changes and
+// returns the previous text mode because stdio streams are not distinguished.
+// 2026-09-01: 529 -> 530. keybd_event is a legacy input-synthesis probe shim;
+// browser-side input injection remains host-owned.
+// 2026-09-01: 530 -> 531. joyGetPosEx mirrors joyGetPos for a no-joystick
+// Win98 environment so startup probes can keep keyboard/mouse input.
+// 2026-09-02: 531 -> 529. Legacy SetWindowsHookA/W now installs the same
+// process-local keyboard/CBT callbacks as the Ex path, and UnhookWindowsHook
+// removes only a matching installed procedure instead of always succeeding.
+// 2026-09-02: 529 -> 516. DirectPlay's bounded local session now retains
+// player/group identities, names, flags and memberships; its lifecycle and
+// four entity enumerators update or traverse that state instead of returning
+// success without work.
+// 2026-09-02: 516 -> 514. SetPlayerData and SetGroupData now retain copied
+// local/remote application data in the DirectPlay entity repository; their
+// matching getters implement the Win98 size-query and readback contract.
+// 2026-09-02: 514 -> 512. DirectPlayLobby EnumAddress now walks bounded
+// compound-address chunks through a cancellation-aware callback, while
+// EnumAddressTypes reports the local TCP/IP provider's required DPAID_INet.
+// 2026-09-02: 512 -> 511. EnumLocalApplications validates its required
+// callback and reserved flags, then truthfully enumerates the browser Win98
+// machine's empty set of registered lobby-aware applications.
+// 2026-09-02: 511 -> 502. Win32 DDEML now owns instance, copied HSZ,
+// registered-service, conversation and data-object state; invalid, stale and
+// cross-instance handles fail instead of fixed values succeeding silently.
+// 2026-09-02: 502 -> 500. Begin/EndDeferWindowPos now allocate, validate,
+// consume and free real bounded HDWP transactions; queued geometry remains
+// unchanged until End applies it through the SetWindowPos behavior path.
+// 2026-09-02: 500 -> 497. OpenClipboard/CloseClipboard now own an exclusive
+// USER transaction, and GetClipboardOwner reports ownership assigned by
+// EmptyClipboard instead of three fixed success/null answers.
+// 2026-09-02: 497 -> 494. GetSubMenu now resolves real popup ownership,
+// ModifyMenu mutates dynamic items, and DrawMenuBar validates and redraws the
+// target window's non-client menu chrome instead of fixed success/handles.
+// 2026-09-02: 494 -> 493. FindWindowA now searches the live top-level USER
+// tree by optional class atom/name and title instead of always returning NULL.
+// 2026-09-02: 493 -> 491. SetPriorityClass/GetPriorityClass now validate the
+// emulated process handle and retain one shared Win98 priority class.
+// 2026-09-02: 491 -> 489. GetThreadPriority/SetThreadPriority now validate
+// thread identity and retain the Win98 relative priority on the thread object.
+// 2026-09-02: 489 -> 488. SetErrorMode now atomically replaces and returns the
+// shared Win98 x86 process error mode instead of always returning zero.
+// 2026-09-02: 488 -> 483. COM/OLE initialization now owns per-thread apartment
+// model and nesting state; the dead duplicate OleInitialize body is gone.
+// 2026-09-02: 483 -> 482. TranslateMessage now distinguishes the four
+// virtual-key messages from unrelated MSGs instead of always returning TRUE.
+// 2026-09-02: 482 -> 480. SetThreadLocale and GetThreadLocale now retain real
+// per-thread LCID state and carry it into newly created threads.
+// 2026-09-02: 480 -> 479. BringWindowToTop now changes sibling/top-level
+// z-order and activation state instead of reporting unconditional success.
+// 2026-09-02: 479 -> 477. SetActiveWindow/GetActiveWindow now retain this
+// thread queue's active top-level and deliver real activation transitions.
+// 2026-09-02: 477 -> 476. UnregisterClassA/W now remove the matching owned
+// class only after its last window is gone instead of always returning TRUE.
+// 2026-09-02: 476 -> 473. Direct3D Device 1/2/3 GetStats now initializes all
+// five D3DSTATS counters and rejects a null output buffer.
+// 2026-09-02: 473 -> 472. ImageList_Destroy now validates and invalidates its
+// handle and releases both the image-list record and retained icon array.
+// 2026-09-02: 472 -> 471. CopyIcon now creates an independently owned copy of
+// bitmap-backed, resource-backed, and opaque system icon handles.
+// 2026-09-02: 471 -> 470. CopyImage now owns and resamples bitmap/icon/cursor
+// images, including RETURNORG/DELETEORG, monochrome, and DIB-section requests.
+// 2026-09-03: 470 -> 469. SHFileOperationA now delegates copy, move, rename,
+// wildcard, multi-destination, and recursive delete work to the shared VFS.
+// 2026-09-03: 469 -> 468. FlushFileBuffers now validates a live writable VFS
+// file handle and reports access/handle errors instead of unconditional TRUE.
+// 2026-09-03: 468 -> 469. Video for Windows added DrawDibOpen/Close (+2), while
+// GetLastActivePopup left the quiet inventory by retaining and validating
+// per-owner activation history (-1). The inventory records both changes.
+// 2026-09-03: 469 -> 467. DrawDibOpen/Close now own, validate, invalidate and
+// free distinct opaque drawing contexts instead of returning constant success.
+// 2026-09-03: 467 -> 466. GetLogicalDrives now queries the browser VFS's live
+// assignment mask instead of reporting a fixed C:/D: constant.
+// 2026-09-03: 466 -> 463. SetFileApisToOEM/ANSI now propagate their process
+// code-page choice to Kernel32 filenames, and AreFileApisANSI reads it back
+// from the same process-shared VFS state across guest thread instances.
+// 2026-09-03: 463 -> 462. DisableThreadLibraryCalls now validates loaded DLLs
+// and suppresses their future thread attach/detach notifications.
+// 2026-09-03: 462 -> 461. WinExec now delegates the real command line and
+// nCmdShow to the browser child-launch path and returns its success/error code.
+// 2026-09-03: 461 -> 460. GetWindowRgn now copies the window's retained USER
+// region into the caller's HRGN and returns its actual region complexity.
+// 2026-09-03: 460 -> 459. FreeConsole now tears down the process console
+// window, buffers, input queue, aliases, and attachment state.
+// 2026-09-03: 459 -> 458. SetConsoleCtrlHandler now owns a process handler
+// chain and delivers processed Ctrl+C/Ctrl+Break events through guest callbacks.
+// 2026-09-03: 458 -> 457. EnableScrollBar now retains per-window arrow state,
+// paints disabled arrows, and suppresses their input instead of always TRUE.
+// 2026-09-03: 457 -> 456. OpenIcon now sends WM_QUERYOPEN and restores the
+// guest and browser window state instead of returning unconditional success.
+// 2026-09-03: 456 -> 453. SetCapture/GetCapture/ReleaseCapture now validate
+// thread ownership and deliver synchronous WM_CAPTURECHANGED transitions.
+// 2026-09-03: 453 -> 452. GetMapMode now reads canonical per-DC state.
+// 2026-09-03: 452 -> 450. GetStockObject validates the Win98 selector set;
+// GetNearestColor now rejects invalid DCs instead of silently succeeding.
+// 2026-09-03: 450 -> 449. GetTextCharset now reports selected font state.
+// 2026-09-03: 449 -> 448. DestroyAcceleratorTable now validates repository
+// handles and releases only live tables instead of always returning success.
+// 2026-09-03: 448 -> 447. SHBrowseForFolderA now runs a classic modal shell
+// tree and returns the selected PIDL instead of silently reporting Cancel.
+// 2026-09-03: 447 -> 446. Shell_NotifyIconA now owns browser notification-
+// area add/modify/delete state and delivers Win98 mouse callback messages.
+// 2026-09-04: 443 -> 442. GetClipboardSequenceNumber now reads the shared
+// window-station serial advanced by successful clipboard mutations.
+// 2026-09-04: 442 -> 441. SetFileSecurityW now reports the Win98
+// ERROR_CALL_NOT_IMPLEMENTED result instead of claiming an ACL was persisted.
+// 2026-09-04: 441 -> 439. ExtractIconA and ExtractIconExA now enumerate and
+// materialize caller-owned PE/NE/ICO icons instead of returning fake success.
+// 2026-09-04: 439 -> 438. GetForegroundWindow now queries renderer-wide
+// top-level z-order instead of returning this process's main HWND.
+// 2026-09-05: 438 -> 437. The Win98 Shell32 ArrangeWindows ordinal now tiles
+// eligible renderer windows instead of returning an unconditional zero.
+// 2026-09-09: 437 -> 423. Seventeen D3D9 quiet setters/resource methods now
+// implement/delegate behavior or fail explicitly. Three legitimate additions:
+// fixed system UI locale, DirectXSetup's already-installed runtime result,
+// and buffer PreLoad (residency hint; Draw synchronously uploads canonical bytes).
+// Texture/Surface GetType constants now report their actual resource kinds.
+// Speculative DLL/proxy registration successes were removed, not blessed here.
+// 2026-09-09: 423 -> 411. BeginStateBlock now allocates real selective state.
+// Eleven existing quiet state setters now reject unsupported recording via
+// a shared guard. Their old non-recording stubs are NOT claimed implemented.
+// 2026-09-09: 411 -> 410. SetGammaRamp retains the per-device API ramp;
+// unsupported display gamma remains unadvertised. Get/default/copy tested.
+// 2026-09-10: 405 -> 404. GetNPatchMode returns the disabled-only backend's
+// FLOAT through x87 ST(0), not an unrelated EAX zero. Nonzero setters reject.
+// 2026-09-10: 404 -> 403. SetDepthStencilSurface now validates a same-device
+// surface, retains its binding, switches persistent depth identity, and retires
+// the previous binding; NULL disables depth. Reset remains separately pending.
+// 2026-09-10: 403 -> 401. Reset now preflights resource ownership and creates
+// replacement state/targets transactionally across the render fence;
+// TestCooperativeLevel reports native Reset-failure/recovery state.
+// 2026-09-10: 401 -> 359 manual. API metadata now owns 34 reviewed constant
+// compatibility stubs; mixer and common-control lifetime/behavior fixes remove
+// the remaining eight quiet handlers instead of blessing them as exceptions.
+// 2026-09-10 merge: 359 -> 357. DirectPlay Receive and Send now use the
+// owned local message queues; all 34 metadata compatibility stubs remain.
+// 2026-09-11: 348 -> 346. RegisterDragDrop/RevokeDragDrop now own one retained
+// IDropTarget per live HWND and report invalid, duplicate, and absent
+// registrations instead of returning unconditional success.
+// 2026-09-11: 346 -> 345. CoLockObjectExternal now retains one strong COM
+// reference per lock and releases exactly one per balanced unlock, including
+// DLL-private objects reached through the guest callback continuation.
+// 2026-09-11: 332 -> 331. keybd_event now synchronously enters the ordinary
+// hardware-input FIFO with Win98 keyboard-message state instead of succeeding
+// without generating input.
+// 2026-09-15: 283 -> 282. GetKeyboardType now rejects selector values outside
+// the documented 0..2 range instead of misreporting every one as an enhanced
+// keyboard-type query. The modeled US 101/102-key answers remain 4/0/12.
+// 2026-09-15: 282 -> 280. SetupDiCreateDeviceInfoList now allocates a real
+// empty, optionally class-associated device information set instead of always
+// failing, and SetupDiDestroyDeviceInfoList atomically consumes only a live
+// matching handle instead of reporting success for arbitrary/stale values.
+// 2026-09-15: 280 -> 279. DrawAnimatedRects now validates its HWND, legacy
+// Win98 animation selector and both readable RECTs, then schedules a clipped
+// client-coordinate wire-frame transition instead of reporting false success.
+// 2026-09-15: 279 -> 278. WriteFmtUserTypeStg now transactionally persists the
+// standard or registered clipboard format and Unicode user type in a valid
+// MS-OLEDS \1CompObj stream instead of returning S_OK without touching storage.
+// 2026-09-15: 278 -> 276. RegisterDeviceNotificationW now owns copied,
+// generation-tagged window/interface registrations and routes matching audio
+// topology changes as WM_DEVICECHANGE. UnregisterDeviceNotification consumes
+// only the exact live HDEVNOTIFY instead of accepting arbitrary handles.
+// 2026-09-15: 276 -> 273. D3D8 device-type, texture-format and multisample
+// capability queries now validate their complete COM argument tuples against
+// the exposed adapter and shared texture backend. The multisample query reads
+// its real final stack argument instead of mistaking Windowed for the mode.
+// 2026-09-15: 272 -> 271. D3D9 CheckDeviceMultiSampleType now validates the
+// complete tuple against the render/depth creators: only NONE and their stored
+// formats succeed, unsupported techniques fail, and quality count is written.
+// 2026-09-15: 269 -> 267. D3D9 CheckDeviceType and CheckDepthStencilMatch now
+// validate complete adapter/color/depth tuples against the formats advertised
+// and stored by the renderer instead of promising every combination works.
+// 2026-09-15: 267 -> 266. GetOutlineTextMetricsA/W now return selected
+// TrueType outline metrics and bounded name data instead of always failing.
+// 2026-09-15: 266 -> 265. D3D8/9 ValidateDevice now validates the current
+// one-pass pipeline and writes pNumPasses instead of returning false success.
+const EXPECTED_COUNT = 265;
+const EXPECTED_SHA256 = '3b13e70197d15c029b1bda93c27b9f100309dd1edf940a9ec1ed8c7807c4e7b0';
+
+const pinLines = () => [
+  `const EXPECTED_COUNT = ${quiet.length};`,
+  `const EXPECTED_SHA256 = '${digest}';`,
+];
+
+if (PRINT_PIN || LIST) {
+  if (LIST) for (const entry of quiet) console.log(`${entry.name}\n  ${entry.body}`);
+  for (const line of pinLines()) console.log(line);
+  process.exit(0);
+}
+
+if (quiet.length !== EXPECTED_COUNT || digest !== EXPECTED_SHA256) {
+  console.error(`Silent-handler inventory changed: count=${quiet.length}, sha256=${digest}`);
+  console.error('A new straight-line handler must implement behavior, delegate it, or fail loudly.');
+  console.error('If existing quiet handlers were fixed, review with --list and paste this pin:');
+  for (const line of pinLines()) console.error(line);
+  process.exit(1);
+}
+
+// On a clean Git checkout, reject the historical failure mode where one
+// commit changes handlers and a later commit merely catches the pin up. A
+// classifier change may legitimately establish a new baseline without a WAT
+// edit. Dirty development trees and source archives are handled by the normal
+// inventory comparison above; this commit-boundary audit is extra CI evidence.
+function git(args) {
+  return childProcess.spawnSync('git', args, {
+    cwd: ROOT,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
+function enforceSameCommitPin() {
+  const inside = git(['rev-parse', '--is-inside-work-tree']);
+  if (inside.status !== 0 || inside.stdout.trim() !== 'true') return;
+  const parent = git(['rev-parse', '--verify', 'HEAD^']);
+  if (parent.status !== 0) return;
+  // Do not compare HEAD while testing uncommitted handler/tool edits.
+  if (git(['diff', '--quiet', '--', 'src', 'tools/check-silent-stubs.js']).status !== 0) return;
+  if (git(['diff', '--cached', '--quiet', '--',
+    'src', 'tools/check-silent-stubs.js']).status !== 0) return;
+
+  const oldToolResult = git(['show', 'HEAD^:tools/check-silent-stubs.js']);
+  if (oldToolResult.status !== 0) return;
+  const oldTool = oldToolResult.stdout;
+  const newTool = fs.readFileSync(__filename, 'utf8');
+  const pinOnly = text => text.replace(
+    /^const EXPECTED_(?:COUNT|SHA256) = .*;$/gm, '');
+  const pinText = text => (text.match(
+    /^const EXPECTED_(?:COUNT|SHA256) = .*;$/gm) || []).join('\n');
+  if (pinText(oldTool) === pinText(newTool)) return;
+  if (pinOnly(oldTool) !== pinOnly(newTool)) return; // classifier/tool change
+
+  const changed = git(['diff', '--name-only', 'HEAD^', 'HEAD', '--', 'src']);
+  if (changed.status !== 0) return;
+  let inventoryChanged = false;
+  for (const relative of changed.stdout.trim().split('\n').filter(
+    name => name.endsWith('.wat'))) {
+    const file = path.basename(relative);
+    const oldResult = git(['show', `HEAD^:${relative}`]);
+    const oldEntries = oldResult.status === 0
+      ? quietEntries(file, oldResult.stdout) : [];
+    const currentPath = path.join(ROOT, relative);
+    const newEntries = fs.existsSync(currentPath)
+      ? quietEntries(file, fs.readFileSync(currentPath, 'utf8')) : [];
+    const serial = entries => entries
+      .map(entry => `${entry.name}:${entry.body}`).sort().join('\n');
+    if (serial(oldEntries) !== serial(newEntries)) {
+      inventoryChanged = true;
+      break;
+    }
+  }
+  if (!inventoryChanged) {
+    console.error('Silent-handler pin changed without an inventory or classifier change in this commit.');
+    console.error('Re-pin in the same commit that changes the handler inventory.');
+    process.exit(1);
+  }
+}
+
+enforceSameCommitPin();
+
+// D3D9 HRESULT success with an untouched output pointer is especially toxic:
+// it hands the guest NULL/stale resources and the eventual failure names an
+// unrelated call. Scalar-return getters are deliberately not in this set.
+const d3d9 = fs.readFileSync(path.join(SRC, '09ad-handlers-d3d9.wat'), 'utf8');
+const dangerous = [];
+for (const body of functions(d3d9, 'handle_IDirect3D')) {
+  const flat = body.replace(/\s+/g, ' ');
+  const match = flat.match(/^\(func \$(handle_\S+) (?:\(param [^)]+\) )*\(global\.set \$eax \(i32\.const 0\)\) \(global\.set \$esp \(i32\.add \(global\.get \$esp\) \(i32\.const ([^)]+)\)\)\)\)$/);
+  if (!match) continue;
+  const name = match[1];
+  if (/(?:_QueryInterface|_Create|_Lock)/.test(name) ||
+      /_Get(?:AdapterIdentifier|DeviceCaps|DisplayMode|GammaRamp|RenderTarget|DepthStencilSurface|Transform|Viewport|Material|Light|LightEnable|ClipPlane|RenderState|ClipStatus|Texture|TextureStageState|SamplerState|PaletteEntries|CurrentTexturePalette|ScissorRect|FVF|LevelDesc|SurfaceLevel|Desc)$/.test(name)) {
+    dangerous.push(name);
+  }
+}
+if (dangerous.length) {
+  console.error('D3D9 output/resource methods may not silently return D3D_OK:');
+  for (const name of dangerous) console.error(`  ${name}`);
+  process.exit(1);
+}
+
+console.log(`PASS  straight-line silent-handler inventory is pinned (${quiet.length} manual + ${metadataStubs.size} metadata)`);
+console.log('PASS  D3D9 resource/output stubs fail loudly');

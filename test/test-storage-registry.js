@@ -8,13 +8,16 @@ const IMAGE_BASE = 0x400000;
 const memory = new ArrayBuffer(0x20000);
 const mem = new Uint8Array(memory);
 const dv = new DataView(memory);
+const registryChanges = [];
 const ctx = {
   getMemory: () => memory,
   exports: {
     get_image_base: () => IMAGE_BASE,
   },
+  onRegistryValueChanged: change => registryChanges.push(change),
 };
 const storage = createStorageImports(ctx);
+const { VirtualFS } = require('../lib/filesystem');
 
 function writeGuestString(guestAddr, value) {
   const wa = g2w(guestAddr, IMAGE_BASE);
@@ -60,6 +63,7 @@ const valueGA = IMAGE_BASE + 0x1200;
 const outGA = IMAGE_BASE + 0x1300;
 const cbGA = IMAGE_BASE + 0x1400;
 const phkGA = IMAGE_BASE + 0x1500;
+const dispositionGA = IMAGE_BASE + 0x1510;
 const enumNameGA = IMAGE_BASE + 0x1900;
 const enumNameLenGA = IMAGE_BASE + 0x1A00;
 const enumTypeGA = IMAGE_BASE + 0x1B00;
@@ -75,14 +79,33 @@ writeGuestString(subKeyGA, 'Software\\WineAssemblyTest');
 writeGuestString(valueNameGA, 'PlayerName');
 writeGuestString(valueGA, 'Ada');
 
-assert.strictEqual(storage.reg_create_key(0x80000001, g2w(subKeyGA, IMAGE_BASE), phkGA, 0), 0);
+assert.strictEqual(storage.reg_create_key(
+  0x80000001, g2w(subKeyGA, IMAGE_BASE), phkGA, 0, dispositionGA), 0);
 const hKey = readGuestU32(phkGA);
 assert(hKey, 'reg_create_key should write a handle');
+assert.strictEqual(readGuestU32(dispositionGA), 1, 'new keys report REG_CREATED_NEW_KEY');
+assert.strictEqual(storage.reg_create_key(
+  0x80000001, g2w(subKeyGA, IMAGE_BASE), phkGA, 0, dispositionGA), 0);
+assert.strictEqual(readGuestU32(dispositionGA), 2,
+  'existing keys report REG_OPENED_EXISTING_KEY');
 
 assert.strictEqual(storage.reg_set_value(hKey, g2w(valueNameGA, IMAGE_BASE), 1, valueGA, 4, 0), 0);
+assert.deepStrictEqual(registryChanges.shift(), {
+  path: 'HKCU\\Software\\WineAssemblyTest',
+  name: 'PlayerName',
+  type: 1,
+  data: 'Ada',
+}, 'successful registry writes publish their canonical value to runtime policy');
 writeGuestU32(cbGA, 0);
 assert.strictEqual(storage.reg_query_value(hKey, g2w(valueNameGA, IMAGE_BASE), 0, 0, cbGA, 0), 0);
 assert.strictEqual(readGuestU32(cbGA), 4);
+
+// RegFlushKey: succeeds for an open handle and for a predefined root, and
+// reports ERROR_INVALID_HANDLE for anything else. Diablo flushes its Multi
+// Player key before starting a game, so a handle it just opened has to pass.
+assert.strictEqual(storage.reg_flush_key(hKey), 0);
+assert.strictEqual(storage.reg_flush_key(0x80000002), 0);
+assert.strictEqual(storage.reg_flush_key(0xDEADBEEF), 6);
 
 const rootHKey = storage.reg_open_key(0x80000001, 0, 0);
 assert(rootHKey, 'predefined registry roots should open without a materialized root record');
@@ -293,6 +316,26 @@ assert.deepStrictEqual(
   'win.ini should enumerate the media extensions backed by emulator MCI devices'
 );
 
+setIniValue('bw2.ini', 'Startup', 'Alpha', 'one');
+setIniValue('bw2.ini', 'Startup', 'Beta', 'two');
+writeGuestString(iniSectionGA, 'startup');
+writeGuestString(iniFileGA, 'BW2.INI');
+assert.strictEqual(storage.ini_get_section(
+  g2w(iniSectionGA, IMAGE_BASE), outGA, 128,
+  g2w(iniFileGA, IMAGE_BASE), 0
+), 'Alpha=one\0Beta=two\0'.length,
+'GetPrivateProfileSection should report all key=value characters except the final NUL');
+assert.deepStrictEqual(readGuestMultiString(outGA, false), ['Alpha=one', 'Beta=two'],
+  'GetPrivateProfileSection should preserve key spelling and values');
+mem.fill(0xcc, g2w(outGA, IMAGE_BASE), g2w(outGA, IMAGE_BASE) + 8);
+assert.strictEqual(storage.ini_get_section(
+  g2w(iniSectionGA, IMAGE_BASE), outGA, 8,
+  g2w(iniFileGA, IMAGE_BASE), 0
+), 6, 'a truncated private-profile section should return nSize - 2');
+assert.strictEqual(mem[g2w(outGA, IMAGE_BASE) + 6], 0);
+assert.strictEqual(mem[g2w(outGA, IMAGE_BASE) + 7], 0,
+  'a truncated private-profile section should remain double-NUL terminated');
+
 // COM formats GUIDs with lowercase hex while setup manifests commonly use
 // uppercase. The activation lookup must use the same case-insensitive key
 // semantics as RegOpenKeyEx.
@@ -361,6 +404,68 @@ console.log('PASS  setRegValue materializes parent registry keys');
 console.log('PASS  Win98 Explorer Shell Folders expose the program-group directory');
 console.log('PASS  registry roots, subkeys, and values enumerate with Win32 buffer semantics');
 console.log('PASS  RegQueryInfoKey-style registry metadata reports counts and max lengths');
+ctx.vfs = new VirtualFS();
+ctx.vfs.dirs.add('c:\\games');
+ctx.vfs.dirs.add('c:\\other');
+const sectionPath = 'c:\\games\\profile-section-test.ini';
+ctx.vfs.files.set(sectionPath, { data: Buffer.from('; keep\r\n[Alias]\r\nOld=gone\r\n[Other]\r\nKeep=yes\r\n'), attrs: 0x80 });
+writeGuestString(iniFileGA, sectionPath);
+writeGuestString(iniSectionGA, 'ALIAS');
+writeGuestString(valueGA, 'HD0:=C:\\Games\0CD2:=C:\\CD2\0\0');
+const sectionWrite = (strings, wide = 0) => storage.ini_write_section(
+  g2w(iniSectionGA, IMAGE_BASE), strings, g2w(iniFileGA, IMAGE_BASE), wide);
+assert.strictEqual(sectionWrite(g2w(valueGA, IMAGE_BASE)), 0);
+let sectionText = Buffer.from(ctx.vfs.files.get(sectionPath).data).toString('latin1');
+assert(sectionText.includes('; keep\r\n[Alias]\r\nHD0:=C:\\Games\r\nCD2:=C:\\CD2'));
+assert(!sectionText.includes('Old='));
+assert(sectionText.includes('[Other]\r\nKeep=yes'));
+writeGuestString(iniKeyGA, 'Extra');
+writeGuestString(valueGA, 'mixed');
+assert.strictEqual(storage.ini_write_string(g2w(iniSectionGA, IMAGE_BASE),
+  g2w(iniKeyGA, IMAGE_BASE), g2w(valueGA, IMAGE_BASE), g2w(iniFileGA, IMAGE_BASE), 0), 1);
+sectionText = Buffer.from(ctx.vfs.files.get(sectionPath).data).toString('latin1');
+assert(sectionText.includes('Extra=mixed'));
+assert(sectionText.includes('HD0:=C:\\Games'), 'single-key writes retain section-written keys');
+assert(sectionText.includes('[Other]\r\nKeep=yes'), 'single-key writes preserve unrelated sections');
+assert.strictEqual(sectionWrite(0), 0, 'NULL strings delete the entire section');
+sectionText = Buffer.from(ctx.vfs.files.get(sectionPath).data).toString('latin1');
+assert(!sectionText.includes('[Alias]'));
+assert(sectionText.includes('[Other]\r\nKeep=yes'));
+writeGuestString(valueGA, '');
+assert.strictEqual(sectionWrite(g2w(valueGA, IMAGE_BASE)), 0, 'empty strings retain an empty section');
+sectionText = Buffer.from(ctx.vfs.files.get(sectionPath).data).toString('latin1');
+assert(sectionText.includes('[ALIAS]'));
+assert(!sectionText.includes('Extra='));
+writeGuestString(iniFileGA, 'c:\\missing\\profile.ini');
+assert.strictEqual(sectionWrite(g2w(valueGA, IMAGE_BASE)), 3, 'missing parent directory is reported');
+assert(!ctx.vfs.files.has('c:\\missing\\profile.ini'));
+
+writeGuestString(iniFileGA, 'profile-section-new.ini');
+writeGuestString(iniSectionGA, 'New');
+writeGuestString(valueGA, 'One=1\0Two=2=3\0\0');
+assert.strictEqual(sectionWrite(g2w(valueGA, IMAGE_BASE)), 0);
+const createdPath = 'c:\\windows\\profile-section-new.ini';
+assert(ctx.vfs.files.has(createdPath), 'bare INI names are created in Windows');
+ctx.vfs.files.get(createdPath).attrs = 1;
+const readOnlyBytes = Buffer.from(ctx.vfs.files.get(createdPath).data);
+assert.strictEqual(sectionWrite(0), 5);
+assert.deepStrictEqual(Buffer.from(ctx.vfs.files.get(createdPath).data), readOnlyBytes);
+
+const unicodePath = 'c:\\other\\profile-section-test.ini';
+ctx.vfs.files.set(unicodePath, { data: Buffer.from('\ufeff[Unicode]\r\nOld=1\r\n', 'utf16le'), attrs: 0x80 });
+writeGuestStringW(iniFileGA, unicodePath);
+writeGuestStringW(iniSectionGA, 'Unicode');
+writeGuestStringW(valueGA, 'Name=\u03a9\0\0');
+assert.strictEqual(sectionWrite(g2w(valueGA, IMAGE_BASE), 1), 0);
+assert(Buffer.from(ctx.vfs.files.get(unicodePath).data).toString('utf16le').includes('Name=\u03a9'));
+assert.strictEqual(Buffer.from(ctx.vfs.files.get(sectionPath).data).toString('latin1'), sectionText,
+  'same basename in a different directory must not overwrite the first file');
+assert.strictEqual(storage.ini_write_section(0, 0, 0, 0), 0, 'all-NULL cache flush succeeds');
+assert.strictEqual(storage.ini_write_section(0, g2w(valueGA, IMAGE_BASE), g2w(iniFileGA, IMAGE_BASE), 1), 87);
+mem.fill(65, mem.length - 4);
+assert.strictEqual(sectionWrite(mem.length - 4, 1), 87, 'unterminated input fails without mutation');
+delete ctx.vfs;
+console.log('PASS  INI section/key writes persist through VFS, retain Unicode, and reject read-only writes');
 console.log('PASS  app startup INI values are visible to profile APIs');
 console.log('PASS  system.ini exposes supported MCI drivers with case-insensitive overrides');
 console.log('PASS  win.ini exposes the supported Media Player file extensions');

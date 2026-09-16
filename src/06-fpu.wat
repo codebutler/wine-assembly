@@ -129,14 +129,41 @@
 
   (func (export "set_fpu_trace") (param $on i32) (global.set $fpu_trace (local.get $on)))
 
+  ;; Physical access does not change TOP, tags, or the exact integer shadow.
+  (func $fpu_get_phys (param $p i32) (result f64)
+    (if (i32.eq (local.get $p) (i32.const 0)) (then (return (global.get $fpu_value0))))
+    (if (i32.eq (local.get $p) (i32.const 1)) (then (return (global.get $fpu_value1))))
+    (if (i32.eq (local.get $p) (i32.const 2)) (then (return (global.get $fpu_value2))))
+    (if (i32.eq (local.get $p) (i32.const 3)) (then (return (global.get $fpu_value3))))
+    (if (i32.eq (local.get $p) (i32.const 4)) (then (return (global.get $fpu_value4))))
+    (if (i32.eq (local.get $p) (i32.const 5)) (then (return (global.get $fpu_value5))))
+    (if (i32.eq (local.get $p) (i32.const 6)) (then (return (global.get $fpu_value6))))
+    (global.get $fpu_value7))
+
+  (func $fpu_set_phys (param $p i32) (param $v f64)
+    (if (i32.eq (local.get $p) (i32.const 0))
+      (then (global.set $fpu_value0 (local.get $v)) (return)))
+    (if (i32.eq (local.get $p) (i32.const 1))
+      (then (global.set $fpu_value1 (local.get $v)) (return)))
+    (if (i32.eq (local.get $p) (i32.const 2))
+      (then (global.set $fpu_value2 (local.get $v)) (return)))
+    (if (i32.eq (local.get $p) (i32.const 3))
+      (then (global.set $fpu_value3 (local.get $v)) (return)))
+    (if (i32.eq (local.get $p) (i32.const 4))
+      (then (global.set $fpu_value4 (local.get $v)) (return)))
+    (if (i32.eq (local.get $p) (i32.const 5))
+      (then (global.set $fpu_value5 (local.get $v)) (return)))
+    (if (i32.eq (local.get $p) (i32.const 6))
+      (then (global.set $fpu_value6 (local.get $v)) (return)))
+    (global.set $fpu_value7 (local.get $v)))
+
   (func $fpu_get (param $i i32) (result f64)
-    (f64.load (i32.add (i32.const 0x200)
-      (i32.shl (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)) (i32.const 3)))))
+    (call $fpu_get_phys (call $fpu_tag_phys
+      (i32.add (global.get $fpu_top) (local.get $i)))))
 
   (func $fpu_set (param $i i32) (param $v f64)
     (call $fpu_raw_clear (local.get $i))
-    (f64.store (i32.add (i32.const 0x200)
-      (i32.shl (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)) (i32.const 3)))
+    (call $fpu_set_phys (call $fpu_tag_phys (i32.add (global.get $fpu_top) (local.get $i)))
       (local.get $v))
     (call $fpu_mark_valid (local.get $i)))
 
@@ -222,25 +249,44 @@
 
   ;; FUCOMI / FUCOMIP: unordered compare. NaN (treated as QNaN) does NOT
   ;; raise IE — only the eflags are set to ZF=PF=CF=1.
+  ;;
+  ;; PF is not optional here, and getting it from the lazy arithmetic modes is
+  ;; not merely imprecise, it inverts the most common float test MSVC emits:
+  ;;
+  ;;     fucomip st,st(1) ; lahf ; test ah,0x44 ; jp not_equal
+  ;;
+  ;; On real hardware an EQUAL compare leaves ZF=1, PF=0, so `ah & 0x44` is
+  ;; 0x40 — one bit, odd parity, PF clear, and the JP is NOT taken. Deriving PF
+  ;; from flag_res the way modes 2 and 3 do makes PF the parity of the low byte
+  ;; of a synthetic result: equal stores flag_res = 0, whose parity is even, so
+  ;; PF comes out SET, `ah & 0x44` reads 0x44, and the JP is taken. Every
+  ;; `if (a == b)` on doubles then takes the not-equal branch. Black & White 2's
+  ;; land loader is where that showed up: the insert at 0x9cef29 is gated by
+  ;; exactly this sequence, it never ran, the list at [esp+0x50] stayed empty,
+  ;; and 0x9cef45 dereferenced NULL 53 million times.
+  ;;
+  ;; So publish the three flags x87 actually defines through the exact raw mode
+  ;; (flag_op 9), which carries CF in flag_a bit 0 and PF in flag_a bit 1
+  ;; independently of flag_res. OF/SF/AF are cleared by FCOMI on real hardware,
+  ;; which flag_b = 0 and a flag_res with bit 31 clear give us.
   (func $fpu_compare_eflags_unord (param $a f64) (param $b f64)
+    (global.set $flag_op (i32.const 9))
+    (global.set $flag_sign_shift (i32.const 31))
+    (global.set $flag_b (i32.const 0))  ;; OF = 0
     (if (f64.lt (local.get $a) (local.get $b))
-      (then
-        (global.set $flag_op (i32.const 2))
-        (global.set $flag_a (i32.const 0)) (global.set $flag_b (i32.const 1))
-        (global.set $flag_res (i32.const 0xFFFFFFFF)))
+      (then  ;; ZF=0 PF=0 CF=1
+        (global.set $flag_a (i32.const 1))
+        (global.set $flag_res (i32.const 1)))
       (else (if (f64.eq (local.get $a) (local.get $b))
-        (then
-          (global.set $flag_op (i32.const 3))
+        (then  ;; ZF=1 PF=0 CF=0
+          (global.set $flag_a (i32.const 0))
           (global.set $flag_res (i32.const 0)))
         (else (if (f64.gt (local.get $a) (local.get $b))
-          (then
-            (global.set $flag_op (i32.const 3))
+          (then  ;; ZF=0 PF=0 CF=0
+            (global.set $flag_a (i32.const 0))
             (global.set $flag_res (i32.const 1)))
-          (else
-            ;; Unordered: emulate x87 by setting ZF=CF=1 (PF support is partial
-            ;; in the lazy flag system; ZF+CF is what compilers actually test).
-            (global.set $flag_op (i32.const 2))
-            (global.set $flag_a (i32.const 0)) (global.set $flag_b (i32.const 1))
+          (else  ;; unordered: ZF=1 PF=1 CF=1
+            (global.set $flag_a (i32.const 3))
             (global.set $flag_res (i32.const 0)))))))))
 
   ;; Apply current FPU rounding-control (CW bits 10-11) to an f64.
@@ -449,7 +495,7 @@
       (call $fpu_store_m80
         (i32.add (local.get $addr)
           (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1))))
-        (f64.load (i32.add (i32.const 0x200) (i32.shl (local.get $i) (i32.const 3)))))
+        (call $fpu_get_phys (local.get $i)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $lp))))
 
@@ -461,7 +507,7 @@
       (br_if $done (i32.ge_u (local.get $i) (i32.const 8)))
       (local.set $slot (i32.add (local.get $base)
         (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1)))))
-      (f64.store (i32.add (i32.const 0x200) (i32.shl (local.get $i) (i32.const 3)))
+      (call $fpu_set_phys (local.get $i)
         (call $fpu_load_m80 (i32.add (local.get $addr)
           (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.shl (local.get $i) (i32.const 1))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -646,6 +692,8 @@
 
   (func $fpu_exec_reg (param $group i32) (param $reg i32) (param $rm i32)
     (local $v f64) (local $st0 f64)
+    (local $raw0 i64) (local $rawi i64)
+    (local $raw0_valid i32) (local $rawi_valid i32)
     (local.set $st0 (call $fpu_get (i32.const 0)))
     ;; Group 0 (D8): arith ST(0), ST(rm) — every reg value (0..7) is a valid op
     (if (i32.eq (local.get $group) (i32.const 0))
@@ -665,8 +713,23 @@
         (if (i32.eq (local.get $reg) (i32.const 1))
           (then
             (local.set $v (call $fpu_get (local.get $rm)))
+            ;; FXCH moves the exact 64-bit payload shadow along with the f64
+            ;; approximation. Optimized memcpy routines use two FILD m64s,
+            ;; FXCH, then two FISTP m64s; clearing these shadows here rounds
+            ;; arbitrary qwords to 53 bits and zeros the low byte of many
+            ;; eight-byte chunks.
+            (local.set $raw0_valid (call $fpu_raw_valid (i32.const 0)))
+            (local.set $rawi_valid (call $fpu_raw_valid (local.get $rm)))
+            (if (local.get $raw0_valid)
+              (then (local.set $raw0 (call $fpu_raw_get (i32.const 0)))))
+            (if (local.get $rawi_valid)
+              (then (local.set $rawi (call $fpu_raw_get (local.get $rm)))))
             (call $fpu_set (local.get $rm) (local.get $st0))
             (call $fpu_set (i32.const 0) (local.get $v))
+            (if (local.get $raw0_valid)
+              (then (call $fpu_raw_set (local.get $rm) (local.get $raw0))))
+            (if (local.get $rawi_valid)
+              (then (call $fpu_raw_set (i32.const 0) (local.get $rawi))))
             (return)))
         ;; reg=2: only D9 D0 (rm=0) is FNOP. D9 D1..D7 are reserved.
         (if (i32.eq (local.get $reg) (i32.const 2))
@@ -926,6 +989,39 @@
       (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF))
       (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (call $read_thread_word)))
     (return_call $next))
+
+  ;; 439: canonical x87 compare branch tail:
+  ;;   FNSTSW AX; TEST AH, imm8; Jcc
+  ;;
+  ;; MSVC emits this after FCOM/FCOMP because pre-P6 x87 comparisons publish
+  ;; C0/C2/C3 in the x87 status word rather than EFLAGS.  Keep every observable
+  ;; side effect of the three instructions, including TOP in the stored status
+  ;; word, the upper half of EAX, TEST's lazy flags, and the final EIP.  Folding
+  ;; the sequence saves two threaded dispatches at each scalar x87 comparison.
+  ;; op: imm8 in bits 0-7, condition code in bits 8-11. Words: fall, target.
+  (func $th_fnstsw_test_ah_jcc (param $op i32)
+    (local $r i32) (local $cc i32) (local $fall i32) (local $target i32)
+    (global.set $fpu_sw
+      (i32.or
+        (i32.and (global.get $fpu_sw) (i32.const 0xC7FF))
+        (i32.shl (global.get $fpu_top) (i32.const 11))))
+    (i32.store offset=0 (global.get $reg_base) (i32.or
+        (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000))
+        (global.get $fpu_sw)))
+    (local.set $r
+      (i32.and
+        (i32.and (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 8)) (i32.const 0xFF))
+        (i32.and (local.get $op) (i32.const 0xFF))))
+    (call $set_flags_logic (local.get $r))
+    (global.set $flag_sign_shift (i32.const 7))
+    (local.set $cc
+      (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 0xF)))
+    (local.set $fall (call $read_thread_word))
+    (local.set $target (call $read_thread_word))
+    (if (call $eval_cc (local.get $cc))
+      (then (global.set $eip (local.get $target)))
+      (else (global.set $eip (local.get $fall))))
+    (return_call $branch_end))
 
 (func $th_emms (param $op i32)
             (global.set $fpu_tag (i32.const 0)) (return_call $next))

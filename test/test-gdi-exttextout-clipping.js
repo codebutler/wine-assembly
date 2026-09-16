@@ -4,6 +4,9 @@
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
+// $GUEST_BASE and $DIB_BACKING_BASE, from the map declared in
+// src/00-regions.wat.
+const RegionMap = require('../lib/region-map.generated.js');
 
 (async () => {
   const { exports: wat, memory } = await bootRenderHarness();
@@ -25,7 +28,7 @@ const { bootRenderHarness } = require('./render-helper');
   const text = 'MMMMMMMMMMMM';
   const textGa = wat.guest_alloc(text.length + 1) >>> 0;
   const imageBase = wat.get_image_base() >>> 0;
-  const textWa = 0x12000 + (textGa - imageBase);
+  const textWa = RegionMap.g2w(textGa, imageBase);
   const bytes = new Uint8Array(memory.buffer);
   for (let i = 0; i < text.length; i++) bytes[textWa + i] = text.charCodeAt(i);
   bytes[textWa + text.length] = 0;
@@ -51,7 +54,7 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(wat.test_call_TextOutA(hdc, 50, 5, textGa, 1), 1);
 
   const bitsGa = wat.guest_read32(bitsOut) >>> 0;
-  const bitsWa = 0x1C000000 + (bitsGa - 0x50000000);
+  const bitsWa = RegionMap.BASE.DIB_BACKING_BASE + (bitsGa - 0x50000000);
   const rgb = (x, y) => {
     const p = bitsWa + (y * width + x) * 4;
     return [bytes[p + 2], bytes[p + 1], bytes[p]];
@@ -83,7 +86,26 @@ const { bootRenderHarness } = require('./render-helper');
   assert(greenBackgroundPixels > 0,
     'WAT must apply OPAQUE background color around glyph-mask pixels');
 
-  console.log('PASS  WAT text composition owns clipping, colors, and opaque backgrounds');
+  // Native Win98 oracle: gdi-exttextout-glyph, cases0..3. A missing optional
+  // rectangle does not suppress text or its TA_UPDATECP advance.
+  const beforeNullRect=new Uint8Array(bytes.slice(bitsWa,bitsWa+width*height*4));
+  wat.test_gdi_dc_set_field(hdc,32,1,0); // TA_UPDATECP
+  wat.test_gdi_dc_set_field(hdc,12,2,0);
+  wat.test_gdi_dc_set_field(hdc,16,2,0);
+  assert.strictEqual(wat.test_call_ExtTextOutA(hdc,0,0,0,0,textGa,1),1);
+  const expectedAdvance=wat.test_gdi_dc_get_field(hdc,12,0);
+  const expectedPixels=bytes.slice(bitsWa,bitsWa+width*height*4);
+  assert(expectedAdvance>2,'ordinary text advances current position');
+  for(const options of [2,4,6]) {
+    bytes.set(beforeNullRect,bitsWa);
+    wat.test_gdi_dc_set_field(hdc,12,2,0);
+    wat.test_gdi_dc_set_field(hdc,16,2,0);
+    assert.strictEqual(wat.test_call_ExtTextOutA(hdc,0,0,options,0,textGa,1),1);
+    assert.strictEqual(wat.test_gdi_dc_get_field(hdc,12,0),expectedAdvance);
+    assert.deepStrictEqual(bytes.slice(bitsWa,bitsWa+width*height*4),expectedPixels);
+  }
+
+  console.log('PASS  WAT text composition owns clipping, colors, opaque backgrounds and optional opaque rectangle');
 })().catch(error => {
   console.error(error);
   process.exit(1);

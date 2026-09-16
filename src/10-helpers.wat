@@ -17,6 +17,23 @@
   ;; dispatch with $paint_scratch_mark / $paint_scratch_reset: the inner frame's
   ;; slots are recycled on the way out, the outer frame's (allocated before the
   ;; mark) are not.
+  ;; A slot is a Win32 RECT and nothing else — $paint_rect below writes exactly
+  ;; these four in this order, and every reader takes them back the same way
+  ;; (e.g. $handle_InvalidateRgn feeds l/t/r/b straight into
+  ;; $update_invalidate_rect). The `16` in the address arithmetic above is this
+  ;; layout's size-of; the region comment in 01-header.wat calls PAINT_SCRATCH
+  ;; "a ring of 16 RECTs" for the same reason.
+  ;;
+  ;; Emulator-private, NOT a guest ABI: the address handed out is a WASM linear
+  ;; address. Call sites using one as a guest MSG out-buffer convert it through
+  ;; $w2g first; timer helpers consume the WASM address directly. Neither names
+  ;; a PaintRect field, so they are not sites of this layout.
+  (layout PaintRect
+    (field left   i32)   ;; +0
+    (field top    i32)   ;; +4
+    (field right  i32)   ;; +8
+    (field bottom i32))  ;; +12  ends at +16, the ring's per-slot stride
+
   (func $paint_scratch_take (result i32)
     (local $slot i32)
     (local.set $slot (global.get $paint_scratch_cursor))
@@ -30,10 +47,10 @@
   (func $paint_rect (param $l i32) (param $t i32) (param $r i32) (param $b i32) (result i32)
     (local $p i32)
     (local.set $p (call $paint_scratch_take))
-    (i32.store           (local.get $p) (local.get $l))
-    (i32.store offset=4  (local.get $p) (local.get $t))
-    (i32.store offset=8  (local.get $p) (local.get $r))
-    (i32.store offset=12 (local.get $p) (local.get $b))
+    (store.field PaintRect left (local.get $p) (local.get $l))
+    (store.field.memarg PaintRect top (local.get $p) (local.get $t))
+    (store.field.memarg PaintRect right (local.get $p) (local.get $r))
+    (store.field.memarg PaintRect bottom (local.get $p) (local.get $b))
     (local.get $p))
 
   (func $paint_scratch_mark (result i32) (global.get $paint_scratch_cursor))
@@ -78,10 +95,10 @@
     (if (i32.and
           (i32.and
             (i32.eq (i32.load16_u (local.get $hint_name_wa)) (i32.const 446))
-            (call $str_eq (local.get $name_wa) (i32.const 0x330))) ;; GetMessageA
-          (call $dll_name_match (local.get $dll_name_ga) (i32.const 0x325))) ;; USER32.dll
-      (then (return (call $lookup_api_id (i32.const 0x319))))) ;; MessageBoxA
-    (i32.const -1))
+            (call $str_eq (local.get $name_wa) "GetMessageA"))
+          (call $dll_name_match (local.get $dll_name_ga) "USER32.dll"))
+      (then (return (call $lookup_api_id "MessageBoxA"))))
+    (local.set $name_wa (call $shell_legacy_import_alias (local.get $dll_name_ga) (local.get $name_wa))) (local.get $name_wa))
 
   ;; Apply segment override to an address. FS=5 adds fs_base. GS=6 traps
   ;; (no Win32 use of GS in this emulator). Other segments treated flat.
@@ -120,7 +137,6 @@
   ;; decide whether it can dirty a display bitmap.
   (func $dib_alloc (param $size i32) (result i32)
     (local $pages i32) (local $page i32) (local $run i32) (local $start i32)
-    (local $i i32)
     (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))
     (local.set $pages
       (i32.shr_u (i32.add (local.get $size) (i32.const 0xFFF)) (i32.const 12)))
@@ -144,21 +160,16 @@
     (i32.store16
       (i32.add (global.get $DIB_PAGE_RUNS) (i32.shl (local.get $start) (i32.const 1)))
       (local.get $pages))
-    (local.set $i (i32.const 0))
-    (block $marked (loop $mark
-      (br_if $marked (i32.ge_u (local.get $i) (local.get $pages)))
-      (i32.store8
-        (i32.add (global.get $DIB_PAGE_USED) (i32.add (local.get $start) (local.get $i)))
-        (i32.const 1))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $mark)))
+    (memory.fill
+      (i32.add (global.get $DIB_PAGE_USED) (local.get $start))
+      (i32.const 1) (local.get $pages))
     (call $zero_memory
       (i32.add (global.get $DIB_BACKING_BASE) (i32.shl (local.get $start) (i32.const 12)))
       (i32.shl (local.get $pages) (i32.const 12)))
     (i32.add (global.get $DIB_GUEST_BASE) (i32.shl (local.get $start) (i32.const 12))))
 
   (func $dib_free_wasm (param $wa i32)
-    (local $page i32) (local $pages i32) (local $i i32)
+    (local $page i32) (local $pages i32)
     (if (i32.ge_u
           (i32.sub (local.get $wa) (global.get $DIB_BACKING_BASE))
           (global.get $DIB_BACKING_BASE_SIZE))
@@ -172,13 +183,9 @@
     (i32.store16
       (i32.add (global.get $DIB_PAGE_RUNS) (i32.shl (local.get $page) (i32.const 1)))
       (i32.const 0))
-    (block $done (loop $clear
-      (br_if $done (i32.ge_u (local.get $i) (local.get $pages)))
-      (i32.store8
-        (i32.add (global.get $DIB_PAGE_USED) (i32.add (local.get $page) (local.get $i)))
-        (i32.const 0))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $clear))))
+    (memory.fill
+      (i32.add (global.get $DIB_PAGE_USED) (local.get $page))
+      (i32.const 0) (local.get $pages)))
 
   ;; Fast path for the MSVC CRT small-block heap descriptor scan:
   ;;
@@ -245,13 +252,19 @@
                 (i32.eq (global.get $sbh_eip_b) (local.get $eip)))
       (then (return)))
     (if (i32.eqz (call $sbh_match_mode (call $g2w (local.get $eip)))) (then (return)))
+    ;; Block chaining resolves an SBH entry like any other target before this
+    ;; address becomes one, and its fast path does not repeat $branch_end's two
+    ;; $sbh_eip compares -- it relies on no live chain naming one. Bumping the
+    ;; epoch here is what makes that true: every chain patched before the
+    ;; pattern was recognised dies, and $branch_end's own early return keeps a
+    ;; new one from ever being written. See docs/block-chaining-design.md.
     (if (i32.eqz (global.get $sbh_eip_a))
-      (then (global.set $sbh_eip_a (local.get $eip)) (return)))
+      (then (global.set $sbh_eip_a (local.get $eip)) (call $chain_bump) (return)))
     (if (i32.eqz (global.get $sbh_eip_b))
-      (then (global.set $sbh_eip_b (local.get $eip)))))
+      (then (global.set $sbh_eip_b (local.get $eip)) (call $chain_bump))))
 
   (func $fast_msvc_sbh_scan (result i32)
-    (local $wa i32) (local $scan i32) (local $page i32)
+    (local $wa i32) (local $scan i32) (local $scan_wa i32) (local $page i32)
     (local $first i32) (local $mode i32) (local $match i32)
     (local.set $wa (call $g2w (global.get $eip)))
     (local.set $mode (call $sbh_match_mode (local.get $wa)))
@@ -279,10 +292,10 @@
           (global.set $eip (i32.add (global.get $eip) (i32.const 0x2E)))
           (return (i32.const 1))))
 
-      (local.set $first (i32.load (call $g2w (local.get $scan))))
+      (local.set $scan_wa (call $g2w (local.get $scan))) (local.set $first (i32.load (local.get $scan_wa)))
       (if (i32.and
             (i32.ge_s (local.get $first) (i32.load offset=12 (global.get $reg_base)))
-            (i32.gt_u (i32.load offset=4 (call $g2w (local.get $scan))) (i32.load offset=12 (global.get $reg_base))))
+            (i32.gt_u (i32.load offset=4 (local.get $scan_wa)) (i32.load offset=12 (global.get $reg_base))))
         (then
           (i32.store offset=0 (global.get $reg_base) (local.get $first))
           (if (i32.eq (local.get $mode) (i32.const 1))
@@ -300,52 +313,705 @@
       (br $scan_loop)))
     (i32.const 1))
 
+  ;; ---- Cross-instance mutex -------------------------------------------------
+  ;; Spin, never park. `memory.atomic.wait32` is illegal on a browser main
+  ;; thread, and the main thread does take these — so a lock that parks would
+  ;; either trap there or need two implementations. Spinning is affordable only
+  ;; because every critical section here is pure table arithmetic a few hundred
+  ;; instructions long, and it is the reason for rule 1 in the header comment:
+  ;; a section that called a host import could be parked in Atomics.wait waiting
+  ;; for the very thread that is spinning for its lock.
+  ;;
+  ;; Recursive by owner id, so a critical section that reaches another function
+  ;; taking the same lock deadlocks nothing. That is defence rather than a
+  ;; feature: nothing here nests deliberately.
+  (func $lock_owner_id (result i32)
+    ;; A shadow bridge can run concurrently with the guest using its metadata
+    ;; slot. Distinguish their lock identities so they cannot falsely recurse.
+    (i32.or (global.get $current_thread_id)
+      (select (i32.const 0x80000000) (i32.const 0) (global.get $host_shadow))))
+  (func $lock_acquire (param $lock i32)
+    (local $me i32) (local $spins i32)
+    (local.set $me (call $lock_owner_id))
+    (if (i32.eq (i32.atomic.load (local.get $lock)) (local.get $me))
+      (then
+        (i32.store (i32.add (local.get $lock) (i32.const 4))
+          (i32.add (i32.load (i32.add (local.get $lock) (i32.const 4))) (i32.const 1)))
+        (return)))
+    (block $held (loop $spin
+      (br_if $held
+        (i32.eqz
+          (i32.atomic.rmw.cmpxchg (local.get $lock) (i32.const 0) (local.get $me))))
+      (local.set $spins (i32.add (local.get $spins) (i32.const 1)))
+      ;; A holder that never releases is a bug we would otherwise experience as
+      ;; a silent hang with no stack. Name it once, then keep spinning: the
+      ;; alternative — breaking the lock — corrupts the table it protects.
+      (if (i32.eq (local.get $spins) (i32.const 10000000))
+        (then
+          (call $host_log_i32 (i32.const 0xDEAD10CC))
+          (call $host_log_i32 (local.get $lock))
+          (call $host_log_i32 (i32.atomic.load (local.get $lock)))))
+      (br $spin)))
+    (i32.store (i32.add (local.get $lock) (i32.const 4)) (i32.const 1)))
+
+  ;; The window/class/timer tables all take one lock, through this pair rather
+  ;; than at each site: they are claimed from three files, and a lock whose
+  ;; every use is spelled out by hand is a lock somebody eventually forgets to
+  ;; release. It also makes the negative control one edit — turn these into
+  ;; no-ops and test/test-wat-window-tables.js reports lost windows again.
+  (func $lock_wnd_acquire (call $lock_acquire (global.get $LOCK_WND)))
+  (func $lock_wnd_release (call $lock_release (global.get $LOCK_WND)))
+
+  (func $lock_release (param $lock i32)
+    (local $depth i32)
+    (local.set $depth
+      (i32.sub (i32.load (i32.add (local.get $lock) (i32.const 4))) (i32.const 1)))
+    (i32.store (i32.add (local.get $lock) (i32.const 4)) (local.get $depth))
+    (if (i32.le_s (local.get $depth) (i32.const 0))
+      (then
+        (i32.store (i32.add (local.get $lock) (i32.const 4)) (i32.const 0))
+        ;; The atomic store is the release: every plain write in the critical
+        ;; section is ordered before it, so the next holder sees a whole table.
+        (i32.atomic.store (local.get $lock) (i32.const 0)))))
+
   ;; The high guest-address allocator is process-wide. Mutable WAT globals are
   ;; per instance, so a worker can otherwise reserve from a stale top and
   ;; overlap a range already owned by the main instance. Keep the authoritative
   ;; downward cursor in shared memory at VIRTUAL_MAP_STATE+8.
+  ;; Lower the shared top to $guest if it is below it. A compare-and-swap loop
+  ;; rather than a lock: the whole operation is one word, so there is nothing for
+  ;; a lock to protect that the CAS does not, and no way to forget to release it.
   (func $virtual_shared_top_observe (param $guest i32)
-    (local $top i32)
-    (local.set $top
-      (i32.load (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8))))
-    (if (i32.or (i32.eqz (local.get $top))
-                (i32.lt_u (local.get $guest) (local.get $top)))
+    (local $cell i32) (local $top i32)
+    (local.set $cell (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8)))
+    (block $done (loop $retry
+      (local.set $top (i32.atomic.load (local.get $cell)))
+      (br_if $done
+        (i32.and (i32.ne (local.get $top) (i32.const 0))
+                 (i32.le_u (local.get $top) (local.get $guest))))
+      (br_if $done
+        (i32.eq (local.get $top)
+          (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $top) (local.get $guest))))
+      (br $retry))))
+
+  ;; Raise the shared downward cursor back to the lowest guest address still
+  ;; mapped, so a released reservation's ADDRESS SPACE is reusable and not only
+  ;; its backing.
+  ;;
+  ;; Without this the cursor is a one-way bump: Warcraft III's campaign load
+  ;; churns reserve/release at ~5MB of address space per second and walks the
+  ;; cursor from VIRTUAL_ALLOC_TOP_INIT down through 862MB in six minutes, so it
+  ;; hits VIRTUAL_ALLOC_MIN and starts failing allocations while only 68MB of
+  ;; the 316MB backing pool is in use. Backing exhaustion and address-space
+  ;; exhaustion look identical to the guest — both are a NULL VirtualAlloc.
+  ;;
+  ;; A MEM_RESERVE that was never committed has no map record, so it is
+  ;; invisible to the minimum $virtual_reserve_reclaim_locked takes and raising
+  ;; the cursor past it would hand its range out twice. They live in their own
+  ;; table rather than in VIRTUAL_MAP_TABLE, because a record there means
+  ;; "committed, backed and published" to five other scans.
+  ;;
+  ;; Warcraft III is why this is a table and not a single remembered floor: it
+  ;; reserves a range, commits PARTS of it, and holds hundreds of such
+  ;; reservations at once, so a scheme that waits for one commit to cover one
+  ;; reservation clears nothing and the cursor still walks to the floor.
+  ;;
+  ;; VIRTUAL_MAP_STATE+16 is the live entry count. +20 is the sticky floor for
+  ;; reservations this table had no room for: past that point the reclaim stops
+  ;; there forever, which costs address space rather than correctness.
+  ;; ---- Released-extent free list -------------------------------------------
+  ;; The backing pool is a bump allocator plus the extents releases leave
+  ;; behind. Those extents used to be re-derived from VIRTUAL_MAP_TABLE on every
+  ;; commit — candidate boundaries crossed with every record, O(records^2) — and
+  ;; that is affordable at a few hundred records and ruinous at several
+  ;; thousand. They are tracked directly instead: one entry per free extent,
+  ;; coalesced on insert, best-fit on take. The policy is unchanged (smallest
+  ;; fitting extent first, wilderness kept contiguous); only the cost is.
+  ;;
+  ;; An extent that will not fit in the table is dropped rather than recorded
+  ;; wrong: that loses the reuse of those bytes until the high-water mark
+  ;; rewinds past them, and never hands live backing out twice.
+  (func $virtual_hole_count (result i32)
+    (i32.load offset=12 (global.get $VIRTUAL_MAP_STATE)))
+
+  (func $virtual_hole_set_count (param $n i32)
+    (i32.store offset=12 (global.get $VIRTUAL_MAP_STATE) (local.get $n)))
+
+  (func $virtual_hole_drop (param $i i32)
+    (local $count i32) (local $ent i32) (local $last i32)
+    (local.set $count (call $virtual_hole_count))
+    (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (local.get $i) (i32.const 3))))
+    (local.set $last (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 3))))
+    (i32.store (local.get $ent) (i32.load (local.get $last)))
+    (i32.store offset=4 (local.get $ent) (i32.load offset=4 (local.get $last)))
+    (i32.store (local.get $last) (i32.const 0))
+    (i32.store offset=4 (local.get $last) (i32.const 0))
+    (call $virtual_hole_set_count (i32.sub (local.get $count) (i32.const 1))))
+
+  ;; Insert a free extent, absorbing any entry that touches it. Absorbing
+  ;; restarts the scan: merging two neighbours can make the merged extent touch
+  ;; a third, and leaving that unmerged is how a pool fragments into extents
+  ;; that are individually too small for a request the free space could serve.
+  (func $virtual_hole_add (param $base i32) (param $size i32)
+    (local $count i32) (local $i i32) (local $ent i32)
+    (local $hbase i32) (local $hsize i32) (local $end i32)
+    (if (i32.eqz (local.get $size)) (then (return)))
+    (block $merged (loop $again
+      (local.set $count (call $virtual_hole_count))
+      (local.set $end (i32.add (local.get $base) (local.get $size)))
+      (local.set $i (i32.const 0))
+      (block $scanned (loop $scan
+        (br_if $scanned (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3))))
+        (local.set $hbase (i32.load (local.get $ent)))
+        (local.set $hsize (i32.load offset=4 (local.get $ent)))
+        (if (i32.and
+              (i32.le_u (local.get $hbase) (local.get $end))
+              (i32.le_u (local.get $base)
+                (i32.add (local.get $hbase) (local.get $hsize))))
+          (then
+            (if (i32.lt_u (local.get $hbase) (local.get $base))
+              (then
+                (local.set $size (i32.add (local.get $size)
+                  (i32.sub (local.get $base) (local.get $hbase))))
+                (local.set $base (local.get $hbase))))
+            (if (i32.gt_u (i32.add (local.get $hbase) (local.get $hsize))
+                  (i32.add (local.get $base) (local.get $size)))
+              (then (local.set $size (i32.sub
+                (i32.add (local.get $hbase) (local.get $hsize))
+                (local.get $base)))))
+            (call $virtual_hole_drop (local.get $i))
+            (br $again)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+      (br $merged)))
+    (local.set $count (call $virtual_hole_count))
+    (if (i32.ge_u (local.get $count) (global.get $MAX_VIRTUAL_HOLES)) (then (return)))
+    (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (local.get $count) (i32.const 3))))
+    (i32.store (local.get $ent) (local.get $base))
+    (i32.store offset=4 (local.get $ent) (local.get $size))
+    (call $virtual_hole_set_count (i32.add (local.get $count) (i32.const 1))))
+
+  ;; Smallest extent that fits, or 0. The remainder goes back on the list.
+  (func $virtual_hole_take (param $size i32) (result i32)
+    (local $count i32) (local $i i32) (local $ent i32) (local $hsize i32)
+    (local $best i32) (local $best_size i32) (local $base i32)
+    (local.set $count (call $virtual_hole_count))
+    (local.set $best (i32.const -1))
+    (local.set $best_size (i32.const -1))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $hsize (i32.load offset=4
+        (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3)))))
+      (if (i32.and (i32.ge_u (local.get $hsize) (local.get $size))
+            (i32.lt_u (local.get $hsize) (local.get $best_size)))
+        (then
+          (local.set $best (local.get $i))
+          (local.set $best_size (local.get $hsize))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (if (i32.eq (local.get $best) (i32.const -1)) (then (return (i32.const 0))))
+    (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+      (i32.shl (local.get $best) (i32.const 3))))
+    (local.set $base (i32.load (local.get $ent)))
+    (call $virtual_hole_drop (local.get $best))
+    (if (i32.gt_u (local.get $best_size) (local.get $size))
+      (then (call $virtual_hole_add (i32.add (local.get $base) (local.get $size))
+        (i32.sub (local.get $best_size) (local.get $size)))))
+    (local.get $base))
+
+  ;; Everything at or above a rewound high-water mark is wilderness again, so
+  ;; drop it from the list rather than keep an extent nobody may hand out twice.
+  (func $virtual_hole_trim (param $high_water i32)
+    (local $i i32) (local $ent i32) (local $hbase i32) (local $hsize i32)
+    (block $done (loop $again
+      (local.set $i (i32.const 0))
+      (block $scanned (loop $scan
+        (br_if $scanned (i32.ge_u (local.get $i) (call $virtual_hole_count)))
+        (local.set $ent (i32.add (global.get $VIRTUAL_HOLE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3))))
+        (local.set $hbase (i32.load (local.get $ent)))
+        (local.set $hsize (i32.load offset=4 (local.get $ent)))
+        ;; Strictly above: an extent ending exactly at the mark is still a
+        ;; listed hole. Re-adding a truncated copy of one that merely straddles
+        ;; the mark leaves it ending exactly there, which is what stops this
+        ;; restart loop from finding the same entry again forever.
+        (if (i32.gt_u (i32.add (local.get $hbase) (local.get $hsize))
+              (local.get $high_water))
+          (then
+            (call $virtual_hole_drop (local.get $i))
+            (if (i32.lt_u (local.get $hbase) (local.get $high_water))
+              (then (call $virtual_hole_add (local.get $hbase)
+                (i32.sub (local.get $high_water) (local.get $hbase)))))
+            (br $again)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+      (br $done))))
+
+  ;; The base is 64KB-aligned, leaving its low protection bits free. Preserve
+  ;; the initial VirtualAlloc flProtect there so VirtualQuery can report the
+  ;; allocation contract even before any page in the reservation is committed.
+  (func $virtual_reserve_record
+      (param $guest i32) (param $size i32) (param $protect i32)
+    (local $count i32) (local $floor i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (if (i32.ge_u (local.get $count) (global.get $MAX_VIRTUAL_RESERVES))
       (then
-        (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8))
-          (local.get $guest)))))
+        (local.set $floor (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE)))
+        (if (i32.or (i32.eqz (local.get $floor))
+              (i32.lt_u (local.get $guest) (local.get $floor)))
+          (then (i32.store offset=20 (global.get $VIRTUAL_MAP_STATE) (local.get $guest)))))
+      (else
+        (i32.store
+          (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+            (i32.shl (local.get $count) (i32.const 3)))
+          (i32.or (local.get $guest)
+            (i32.and (local.get $protect) (global.get $GUEST_PTE_PROTECT_MASK))))
+        (i32.store offset=4
+          (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+            (i32.shl (local.get $count) (i32.const 3)))
+          (local.get $size))
+        (i32.store offset=16 (global.get $VIRTUAL_MAP_STATE)
+          (i32.add (local.get $count) (i32.const 1)))))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP)))
+
+  ;; MEM_RELEASE names the reservation base. Drop the entry by swapping the last
+  ;; one down, the same compaction the map table uses.
+  (func $virtual_reserve_forget_locked (param $guest i32)
+    (local $count i32) (local $i i32) (local $ent i32) (local $last i32)
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $ent (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (if (i32.eq
+            (i32.and (i32.load (local.get $ent)) (i32.const 0xFFFFF000))
+            (local.get $guest))
+        (then
+          (local.set $last (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+            (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 3))))
+          (i32.store (local.get $ent) (i32.load (local.get $last)))
+          (i32.store offset=4 (local.get $ent) (i32.load offset=4 (local.get $last)))
+          (i32.store (local.get $last) (i32.const 0))
+          (i32.store offset=4 (local.get $last) (i32.const 0))
+          (i32.store offset=16 (global.get $VIRTUAL_MAP_STATE)
+            (i32.sub (local.get $count) (i32.const 1)))
+          (br $done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  (func $virtual_reserve_reclaim_locked
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local $min i32) (local $cell i32) (local $top i32)
+    (local.set $min (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE)))
+    (if (i32.eqz (local.get $min))
+      (then (local.set $min (global.get $VIRTUAL_ALLOC_TOP_INIT))))
+    ;; Uncommitted reservations first: they are the ranges the map table cannot
+    ;; see, and the whole reason this cannot simply be min(record base).
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $res_done (loop $res
+      (br_if $res_done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $base (i32.and (i32.load
+        (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+          (i32.shl (local.get $i) (i32.const 3)))) (i32.const 0xFFFFF000)))
+      (if (i32.and (i32.ge_u (local.get $base) (call $virtual_alloc_min))
+            (i32.lt_u (local.get $base) (local.get $min)))
+        (then (local.set $min (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $res)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and (i32.ge_u (local.get $base) (call $virtual_alloc_min))
+            (i32.lt_u (local.get $base) (local.get $min)))
+        (then (local.set $min (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.set $cell (region.addr $VIRTUAL_MAP_STATE 8))
+    (block $settled (loop $retry
+      (local.set $top (i32.atomic.load (local.get $cell)))
+      ;; Only ever raise, and only to a boundary no live map sits below.
+      (br_if $settled (i32.ge_u (local.get $top) (local.get $min)))
+      (br_if $settled
+        (i32.eq (local.get $top)
+          (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $top) (local.get $min))))
+      (br $retry)))
+    (global.set $virtual_alloc_top (local.get $min)))
+
+  ;; The base of a live range overlapping [cand, cand+size), or 0 when nothing
+  ;; owns any of it. Both tables have a say: a committed map record, and an
+  ;; uncommitted MEM_RESERVE that no record describes. Caller holds the lock.
+  (func $virtual_range_blocker_locked (param $cand i32) (param $size i32) (result i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32)
+    (local.set $end (i32.add (local.get $cand) (local.get $size)))
+    ;; The excluded band is an owner like any other, and it is checked first
+    ;; because it is the only one that is never in a table: the DIB guest arena
+    ;; translates through its own affine range in $g2w and the static
+    ;; system-DLL handles are not memory at all. Reported as a blocker, the
+    ;; slide below steps over it exactly the way it steps over a live record.
+    (if (i32.and
+          (i32.lt_u (global.get $VIRTUAL_ALLOC_BAND_BASE) (local.get $end))
+          (i32.gt_u (global.get $VIRTUAL_ALLOC_BAND_END) (local.get $cand)))
+      (then (return (global.get $VIRTUAL_ALLOC_BAND_BASE))))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $base) (local.get $end))
+            (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+              (local.get $cand)))
+        (then (return (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.set $count (i32.load offset=16 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_RESERVE_TABLE)
+        (i32.shl (local.get $i) (i32.const 3))))
+      (local.set $base
+        (i32.and (i32.load (local.get $rec)) (i32.const 0xFFFFF000)))
+      (if (i32.and
+            (i32.lt_u (local.get $base) (local.get $end))
+            (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+              (local.get $cand)))
+        (then (return (local.get $base))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Place a reservation in a gap when the cursor cannot go any lower.
+  ;;
+  ;; The cursor is a one-way downward bump and the reclaim can only raise it as
+  ;; far as the lowest live range, so one long-lived allocation near the floor
+  ;; makes the whole arena above it unreachable however empty it is. Black &
+  ;; White 2 lands exactly there: after its abandoned growth steps are handed
+  ;; back, the one 121 MB buffer it kept sits at 0x164f0000 with 106 MB of
+  ;; address space under it and ~800 MB free above -- and the 191 MB step it
+  ;; asks for next is refused. So slide a candidate down from the ceiling past
+  ;; whatever it hits until it fits or runs out of arena. Each step starts below
+  ;; the range that blocked it, so the walk is monotone and cannot cycle.
+  (func $virtual_reserve_gap (param $size i32) (result i32)
+    (local $cand i32) (local $blocker i32) (local $steps i32)
+    ;; A reservation the reserve table had no room for is remembered only as the
+    ;; sticky floor at +20, which says "something down there is spoken for"
+    ;; without saying what. Placing into a gap needs every owner named, so once
+    ;; that has happened the arena is bump-only again.
+    (if (i32.load offset=20 (global.get $VIRTUAL_MAP_STATE))
+      (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $size)
+          (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (call $virtual_alloc_min)))
+      (then (return (i32.const 0))))
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $cand
+      (i32.and (i32.sub (global.get $VIRTUAL_ALLOC_TOP_INIT) (local.get $size))
+        (i32.const 0xFFFF0000)))
+    (block $done (loop $slide
+      (br_if $done (i32.lt_u (local.get $cand) (call $virtual_alloc_min)))
+      (br_if $done (i32.gt_u (local.get $cand) (global.get $VIRTUAL_ALLOC_TOP_INIT)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br_if $done (i32.gt_u (local.get $steps) (i32.const 20000)))
+      (local.set $blocker
+        (call $virtual_range_blocker_locked (local.get $cand) (local.get $size)))
+      (if (i32.eqz (local.get $blocker))
+        (then
+          (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+          (return (local.get $cand))))
+      ;; Below the range that blocked it. A blocker at or under the floor ends
+      ;; the walk rather than wrapping the subtraction.
+      (if (i32.lt_u (local.get $blocker) (local.get $size)) (then (br $done)))
+      (local.set $cand
+        (i32.and (i32.sub (local.get $blocker) (local.get $size))
+          (i32.const 0xFFFF0000)))
+      (br $slide)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (i32.const 0))
 
   (func $virtual_reserve_down (param $size i32) (result i32)
-    (local $top i32) (local $new_top i32)
-    (local.set $top
-      (i32.load (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8))))
-    (if (i32.eqz (local.get $top))
-      (then
-        (local.set $top (global.get $virtual_alloc_top))
-        (if (i32.eqz (local.get $top))
-          (then (local.set $top (global.get $VIRTUAL_ALLOC_TOP_INIT))))))
-    (local.set $new_top
-      (i32.and (i32.sub (local.get $top) (local.get $size))
-        (i32.const 0xFFFF0000)))
-    (if (i32.lt_u (local.get $new_top) (global.get $VIRTUAL_ALLOC_MIN))
-      (then (return (i32.const 0))))
-    (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8))
-      (local.get $new_top))
+    (local $cell i32) (local $top i32) (local $new_top i32) (local $seen i32)
+    (local.set $cell (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 8)))
+    ;; Reserve by CAS, and re-derive the new top from whatever the winner left
+    ;; behind. Reading the cursor, subtracting and storing would let two
+    ;; instances carve the same 64KB range out of one gap.
+    (block $done (loop $retry
+      (local.set $top (i32.atomic.load (local.get $cell)))
+      (if (i32.eqz (local.get $top))
+        (then
+          (local.set $top (global.get $virtual_alloc_top))
+          (if (i32.eqz (local.get $top))
+            (then (local.set $top (global.get $VIRTUAL_ALLOC_TOP_INIT))))
+          (local.set $seen (i32.const 0)))
+        (else (local.set $seen (local.get $top))))
+      (local.set $new_top
+        (i32.and (i32.sub (local.get $top) (local.get $size))
+          (i32.const 0xFFFF0000)))
+      ;; A size larger than the cursor wraps the subtraction into a high address
+      ;; that passes the floor test, so test the subtraction, not its result.
+      (if (i32.or (i32.lt_u (local.get $top) (local.get $size))
+                  (i32.lt_u (local.get $new_top) (call $virtual_alloc_min)))
+        (then (return (call $virtual_reserve_gap (local.get $size)))))
+      ;; Step the whole reservation below the excluded band rather than letting
+      ;; it straddle one. The cursor becomes the new base, so everything after
+      ;; this continues underneath the band and the test never fires again --
+      ;; the band costs one comparison per reservation and is crossed once.
+      (if (i32.and
+            (i32.lt_u (global.get $VIRTUAL_ALLOC_BAND_BASE)
+              (i32.add (local.get $new_top) (local.get $size)))
+            (i32.gt_u (global.get $VIRTUAL_ALLOC_BAND_END) (local.get $new_top)))
+        (then
+          (if (i32.lt_u (global.get $VIRTUAL_ALLOC_BAND_BASE) (local.get $size))
+            (then (return (call $virtual_reserve_gap (local.get $size)))))
+          (local.set $new_top
+            (i32.and (i32.sub (global.get $VIRTUAL_ALLOC_BAND_BASE) (local.get $size))
+              (i32.const 0xFFFF0000)))
+          (if (i32.lt_u (local.get $new_top) (call $virtual_alloc_min))
+            (then (return (call $virtual_reserve_gap (local.get $size)))))))
+      (br_if $done
+        (i32.eq (local.get $seen)
+          (i32.atomic.rmw.cmpxchg (local.get $cell) (local.get $seen) (local.get $new_top))))
+      (br $retry)))
     (global.set $virtual_alloc_top (local.get $new_top))
     (local.get $new_top))
 
   ;; Back a high guest VirtualAlloc commit with real WASM memory. Entries are
   ;; coalesced when the guest commits adjacent 64KB chunks in order, which keeps
   ;; g2w's sparse-map scan short for CRT small-block heap arenas.
+  ;; Writers serialise; readers do not, and must not — $g2w consults this table
+  ;; on every guest access that misses the direct window, millions of times a
+  ;; second, so a reader-side lock would be the most expensive instruction in
+  ;; the emulator. What makes the lock-free read safe is the publish order:
+  ;;
+  ;;   append:  fill the record → zero its backing → ATOMIC store count+1
+  ;;   extend:  zero the new tail → ATOMIC store the larger size
+  ;;
+  ;; In both cases the count or size a reader can observe only ever names memory
+  ;; that is already there. A reader that misses a just-published entry simply
+  ;; behaves as it did a microsecond earlier.
   (func $virtual_map_commit (param $guest i32) (param $size i32) (result i32)
+    (call $virtual_map_commit_protect
+      (local.get $guest) (local.get $size) (i32.const 0x40)))
+
+  (func $virtual_map_commit_protect
+      (param $guest i32) (param $size i32) (param $protect i32) (result i32)
+    (local $r i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $r (call $virtual_map_commit_locked
+      (local.get $guest) (local.get $size) (local.get $protect) (i32.const 1)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $r))
+
+  ;; One past the last byte of the extension backing window, or 0 when this
+  ;; host did not create a memory large enough to have one. The import declares
+  ;; a minimum of 8192 pages and a maximum of 16384, so both sizes are legal
+  ;; and only memory.size can say which one is underneath us. A host that made
+  ;; something in between is answered honestly: the window ends where its
+  ;; memory does.
+  ;; Where the extension window starts: one past the end of the declared map,
+  ;; which is $THREAD_RPC's end. It is not itself a region, because a region
+  ;; must fit inside the import's initial memory and this window does not
+  ;; exist at all on a host that created only the 8192-page minimum.
+  (func $virtual_backing_ext_base (result i32) (region.end $THREAD_RPC))
+
+  (func $virtual_backing_ext_end (result i32)
+    (local $bytes i32)
+    (local.set $bytes (i32.shl (memory.size) (i32.const 16)))
+    (if (i32.le_u (local.get $bytes) (call $virtual_backing_ext_base))
+      (then (return (i32.const 0))))
+    (local.get $bytes))
+
+  (func $virtual_backing_ext_cursor (result i32)
+    (local $cursor i32)
+    (local.set $cursor (i32.load offset=24 (global.get $VIRTUAL_MAP_STATE)))
+    (select (local.get $cursor) (call $virtual_backing_ext_base) (local.get $cursor)))
+
+  ;; The end of whichever backing window an address sits in. A released extent
+  ;; in the extension window is a perfectly good candidate, and measuring it
+  ;; against the primary pool's end threw it away -- after $virtual_hole_take
+  ;; had already dropped it from the list, so it was lost rather than deferred.
+  (func $virtual_backing_limit (param $backing i32) (result i32)
+    (if (i32.ge_u (local.get $backing) (call $virtual_backing_ext_base))
+      (then (return (call $virtual_backing_ext_end))))
+    (region.end $VIRTUAL_BACKING_BASE))
+
+  ;; The largest single commit any one backing window could ever hold. Not the
+  ;; sum: a commit lands on one window's contiguous bytes or it is split, so a
+  ;; request bigger than both windows is the only one that can never be served.
+  ;; The primary pool's size is the wrong bound on a host that created the 1GB
+  ;; memory -- Black & White 2's land loader asks for 430 MB in one piece, which
+  ;; fits the 512 MB extension window with room to spare and was refused before
+  ;; anything looked at it, as an unhandled bad_alloc at the land picker.
+  (func $virtual_backing_max_extent (result i32)
+    (local $ext i32)
+    (local.set $ext (call $virtual_backing_ext_end))
+    (if (i32.eqz (local.get $ext))
+      (then (return (global.get $VIRTUAL_BACKING_BASE_SIZE))))
+    (local.set $ext (i32.sub (local.get $ext) (call $virtual_backing_ext_base)))
+    (select (local.get $ext) (global.get $VIRTUAL_BACKING_BASE_SIZE)
+      (i32.gt_u (local.get $ext) (global.get $VIRTUAL_BACKING_BASE_SIZE))))
+
+  ;; Take $size bytes off the extension window, or 0 when there is none or it
+  ;; has no room. Wilderness first, which keeps the untouched tail contiguous
+  ;; for the next large request; only when the bump is spent does it look for a
+  ;; gap between live records.
+  ;;
+  ;; It used to be a pure bump with no reuse at all, on the reasoning that a
+  ;; guest which gets this far is growing rather than churning. Black & White 2
+  ;; is the counterexample: its land loader churns hundreds of megabytes here,
+  ;; and at the 191 MB step the extension held a single free extent of 243 MB
+  ;; that nothing could reach, while the primary pool's largest was 4 MB.
+  (func $virtual_backing_ext_take (param $size i32) (result i32)
+    (local $cursor i32) (local $end i32) (local $cand i32) (local $count i32)
+    (local $i i32) (local $rec i32) (local $k i32) (local $k_end i32)
+    (local.set $end (call $virtual_backing_ext_end))
+    (if (i32.eqz (local.get $end)) (then (return (i32.const 0))))
+    (local.set $cursor (call $virtual_backing_ext_cursor))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    ;; The bump is only wilderness while nothing live sits above it, and this
+    ;; cursor is not the only way an extension extent gets handed out: a released
+    ;; one goes on the hole list, and $virtual_hole_take gives it to the next
+    ;; commit that fits without ever advancing the cursor. So a hole reused at or
+    ;; above the cursor leaves the bump pointing at bytes that are now live, and
+    ;; the next request too large for the primary pool writes a second guest
+    ;; range onto them.
+    ;;
+    ;; Measured on Black & White 2's land load: at pick+95s the record table held
+    ;; 0x3797A000 of live mappings over only 0x2C2FA000 of distinct backing, with
+    ;; ten records overlapping and the first collision at 0x2202E000 -- the exact
+    ;; address the cursor had been left at. Two guest ranges on one extent is the
+    ;; failure this loader has produced before, and it is silent: a write through
+    ;; either address appears through the other.
+    ;;
+    ;; So ask the record table, which is the only authority, and on a collision
+    ;; fall through to the scan below rather than trusting the claim.
+    (if (i32.le_u (local.get $size) (i32.sub (local.get $end) (local.get $cursor)))
+      (then
+        (if (i32.eqz (call $virtual_backing_conflicts
+              (local.get $cursor) (local.get $size) (local.get $count)))
+          (then
+            (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
+              (i32.add (local.get $cursor) (local.get $size)))
+            (return (local.get $cursor))))))
+    ;; Spent, or the cursor was standing on something live. Slide a candidate up
+    ;; from the base past every live record; each collision moves it to that
+    ;; record's end, so the walk is monotone.
+    (local.set $cand (call $virtual_backing_ext_base))
+    (block $found (loop $gap
+      (if (i32.gt_u (local.get $size) (i32.sub (local.get $end) (local.get $cand)))
+        (then (return (i32.const 0))))
+      (br_if $found (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $k (i32.load offset=8 (local.get $rec)))
+      (local.set $k_end (i32.add (local.get $k) (i32.load offset=4 (local.get $rec))))
+      (if (i32.and (i32.lt_u (local.get $cand) (local.get $k_end))
+            (i32.gt_u (i32.add (local.get $cand) (local.get $size)) (local.get $k)))
+        (then (local.set $cand (local.get $k_end)) (local.set $i (i32.const 0)))
+        (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+      (br $gap)))
+    ;; A placement at or above the stale cursor makes the bump honest again:
+    ;; everything below the new cursor is either live or a hole the hole list
+    ;; already names, which is exactly what the wilderness claim means. Without
+    ;; this the cursor stays parked on a live record for the rest of the run and
+    ;; every later extension request pays the full scan.
+    (if (i32.ge_u (local.get $cand) (local.get $cursor))
+      (then (i32.store offset=24 (global.get $VIRTUAL_MAP_STATE)
+        (i32.add (local.get $cand) (local.get $size)))))
+    (local.get $cand))
+
+  ;; Does [backing, backing+size) intersect the backing of any live record?
+  ;; The record table is the only authority on what is in use -- the hole list
+  ;; and the bump cursor are both derived claims, and a stale one of either is
+  ;; how one extent gets handed out twice.
+  (func $virtual_backing_conflicts
+      (param $backing i32) (param $size i32) (param $count i32) (result i32)
+    (local $i i32) (local $rec i32) (local $k i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $k (i32.load offset=8 (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $backing)
+              (i32.add (local.get $k) (i32.load offset=4 (local.get $rec))))
+            (i32.gt_u (i32.add (local.get $backing) (local.get $size)) (local.get $k)))
+        (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $virtual_map_commit_locked
+      (param $guest i32) (param $size i32) (param $protect i32)
+      (param $coalesce i32) (result i32)
     (local $count i32) (local $backing_ptr i32) (local $guest_end i32)
     (local $i i32) (local $rec i32) (local $base i32) (local $map_size i32)
     (local $backing i32) (local $map_end i32) (local $backing_end i32)
-    (local $extended i32)
+    (local $extended i32) (local $high_water i32)
+    (local $candidate i32) (local $gap_end i32) (local $best i32)
+    (local $best_size i32) (local $j i32) (local $covered i32) (local $ext i32)
+    (if (i32.gt_u (local.get $size) (call $virtual_backing_max_extent))
+      (then (return (i32.const 0))))
     (local.set $guest_end (i32.add (local.get $guest) (local.get $size)))
+    (if (i32.lt_u (local.get $guest_end) (local.get $guest)) (then (return (i32.const 0))))
     (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (local.set $backing_ptr (i32.load (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))))
     (if (i32.eqz (local.get $backing_ptr))
       (then (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))))
+    (local.set $high_water (local.get $backing_ptr))
+
+    ;; Records the leak diagnostic kept past their MEM_RELEASE are address space
+    ;; the guest owns again, so the moment a commit wants any of that range back
+    ;; the leak has to end -- release for real, then commit as normal. Doing it
+    ;; here rather than in the overlap branches below is what makes the
+    ;; diagnostic safe: those branches split a request against an existing
+    ;; record and would otherwise give one guest range two backings, which
+    ;; corrupts whatever is built in it (measured: Storm's own MDLGENOBJECT
+    ;; check fires mid-load). The loop restarts because a release compacts the
+    ;; table. Off unless $virtual_leak_small_releases or the caller gate is set.
+    (block $unleaked (loop $unleak
+      (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+      (local.set $i (i32.const 0))
+      (block $none (loop $scan_marked
+        (br_if $none (i32.ge_u (local.get $i) (local.get $count)))
+        (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+          (i32.shl (local.get $i) (i32.const 4))))
+        (if (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x40000000))
+          (then
+            (local.set $base (i32.load (local.get $rec)))
+            (if (i32.and
+                  (i32.lt_u (local.get $base) (local.get $guest_end))
+                  (i32.gt_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+                    (local.get $guest)))
+              (then
+                (i32.store offset=12 (local.get $rec)
+                  (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0xBFFFFFFF)))
+                (drop (call $virtual_map_release_one (local.get $base)))
+                (br $unleak)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan_marked)))
+      (br $unleaked)))
+    ;; The releases above may have moved both of these.
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $backing_ptr (i32.load (region.addr $VIRTUAL_MAP_STATE 4)))
+    (if (i32.eqz (local.get $backing_ptr))
+      (then (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))))
+    (local.set $high_water (local.get $backing_ptr))
 
     (local.set $i (i32.const 0))
     (block $scan_done (loop $scan
@@ -359,7 +1025,20 @@
       (if (i32.and
             (i32.ge_u (local.get $guest) (local.get $base))
             (i32.le_u (local.get $guest_end) (local.get $map_end)))
-        (then (return (local.get $guest))))
+        (then
+          ;; A record the leak diagnostic kept past its MEM_RELEASE is still
+          ;; free address space as far as the guest is concerned, so a commit
+          ;; landing on it has to look like a fresh one: zero the range and
+          ;; drop the marker. Never set outside that diagnostic.
+          (if (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x40000000))
+            (then
+              (call $zero_memory
+                (i32.add (local.get $backing) (i32.sub (local.get $guest) (local.get $base)))
+                (local.get $size))
+              (i32.store offset=12 (local.get $rec)
+                (i32.and (i32.load offset=12 (local.get $rec))
+                  (i32.const 0xBFFFFFFF)))))
+          (return (local.get $guest))))
       ;; Commit APIs may repeat the reservation base with a larger size
       ;; (MSVBVM60), or start inside an existing committed run and extend past
       ;; its end (the MSVC small-block heap in Total Annihilation). Appending
@@ -374,20 +1053,35 @@
               (i32.lt_u (local.get $guest) (local.get $map_end)))
             (i32.gt_u (local.get $guest_end) (local.get $map_end)))
         (then
-          (local.set $extended (call $virtual_map_commit
-            (local.get $map_end) (i32.sub (local.get $guest_end) (local.get $map_end))))
+          (local.set $extended (call $virtual_map_commit_locked
+            (local.get $map_end) (i32.sub (local.get $guest_end) (local.get $map_end))
+            (local.get $protect) (local.get $coalesce)))
           (return (select (local.get $guest) (i32.const 0)
             (i32.ne (local.get $extended) (i32.const 0))))))
-      (if (i32.and
-            (i32.eq (local.get $guest) (local.get $map_end))
-            (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
+      (if (i32.and (local.get $coalesce) (i32.and
+            (i32.and (i32.eq (local.get $guest) (local.get $map_end))
+              (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
+            (i32.and
+              (i32.le_u (i32.add (local.get $backing_ptr) (local.get $size))
+                (region.end $VIRTUAL_BACKING_BASE))
+              ;; Growing onto the bump is only safe while the bump really is
+              ;; wilderness. If a live record already covers those bytes, fall
+              ;; through to the append path, which places this commit somewhere
+              ;; nothing else owns rather than aliasing two guest ranges.
+              (i32.eqz (call $virtual_backing_conflicts
+                (local.get $backing_ptr) (local.get $size) (local.get $count))))))
         (then
-          (if (i32.gt_u
-                (i32.add (local.get $backing_ptr) (local.get $size))
-                (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
-            (then (return (i32.const 0))))
           (call $zero_memory (local.get $backing_ptr) (local.get $size))
-          (i32.store (i32.add (local.get $rec) (i32.const 4))
+          ;; Publish translations before the larger record size. A reader can
+          ;; therefore never see a committed byte whose PTE names no backing.
+          ;; Publication failure rejects the commit before metadata is visible.
+          (if (i32.eqz (call $guest_page_publish_range
+                (local.get $guest) (local.get $size) (local.get $backing_ptr)
+                (local.get $protect)))
+            (then (return (i32.const 0))))
+          ;; Published last, atomically: a reader that sees the larger size is
+          ;; guaranteed the backing behind it exists and is zeroed.
+          (i32.atomic.store (i32.add (local.get $rec) (i32.const 4))
             (i32.add (local.get $map_size) (local.get $size)))
           (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
             (i32.add (local.get $backing_ptr) (local.get $size)))
@@ -397,29 +1091,680 @@
 
     (if (i32.ge_u (local.get $count) (global.get $MAX_VIRTUAL_MAPS))
       (then (return (i32.const 0))))
-    (if (i32.gt_u
-          (i32.add (local.get $backing_ptr) (local.get $size))
-          (i32.add (global.get $VIRTUAL_BACKING_BASE) (global.get $VIRTUAL_BACKING_BASE_SIZE)))
-      (then (return (i32.const 0))))
+    ;; Prefer the smallest released extent below the high-water mark. Keeping
+    ;; the untouched wilderness contiguous prevents short-lived allocations
+    ;; from needlessly destroying a later large fit. No live backing moves --
+    ;; the extent is handed out exactly as it was released.
+    (local.set $best (call $virtual_hole_take (local.get $size)))
+    (if (local.get $best) (then (local.set $backing_ptr (local.get $best))))
+    ;; A hole is only a hole while nothing live sits in it, and a bump cursor is
+    ;; only wilderness while nothing live sits above it. Both of those are
+    ;; bookkeeping claims about tables this function does not own alone, and
+    ;; when one of them is wrong the result is silent and catastrophic: two
+    ;; guest ranges published onto one extent, so a write through either address
+    ;; appears through the other. Black & White 2's land load is what that looks
+    ;; like from the outside -- guest 0x2e040000 and 0x2de00000 shared backing
+    ;; 0x18299000, so the loader's 128x128 spatial grid and the guest pool's
+    ;; free list of 32-byte blocks were the same bytes, and the grid query at
+    ;; 0x9e5272 read a free-list link as a vector length and scanned forever.
+    ;; The placement scan below already refuses to overlap a live record, so
+    ;; treat a conflicting candidate exactly like an exhausted pool and let it
+    ;; find somewhere real. Aliasing is never the cheaper answer.
+    (if (i32.or
+          (i32.gt_u
+            (i32.add (local.get $backing_ptr) (local.get $size))
+            (call $virtual_backing_limit (local.get $backing_ptr)))
+          (call $virtual_backing_conflicts
+            (local.get $backing_ptr) (local.get $size) (local.get $count)))
+      (then
+        ;; Released non-top extents are holes in the live map, not reusable
+        ;; bump space. Only on exhaustion, find a gap without moving any live
+        ;; backing or changing g2w's affine records. A collision advances the
+        ;; candidate and restarts the unsorted scan.
+        (local.set $backing_ptr (global.get $VIRTUAL_BACKING_BASE))
+        (local.set $i (i32.const 0))
+        (block $gap_found (loop $gap
+          (if (i32.gt_u (local.get $size)
+                (i32.sub (region.end $VIRTUAL_BACKING_BASE) (local.get $backing_ptr)))
+            (then
+              ;; The primary pool has no room for this request in one piece.
+              ;; Before halving it across two extents, spend the extension
+              ;; window if the host gave us one: a whole commit on contiguous
+              ;; backing is strictly better than a split, and on the hosts that
+              ;; have no extension this call returns 0 and nothing changes.
+              (local.set $ext (call $virtual_backing_ext_take (local.get $size)))
+              (if (local.get $ext)
+                (then (local.set $backing_ptr (local.get $ext)) (br $gap_found)))
+              (return (call $virtual_map_commit_split
+                (local.get $guest) (local.get $size) (local.get $protect)))))
+          (br_if $gap_found (i32.ge_u (local.get $i) (local.get $count)))
+          (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $i) (i32.const 4))))
+          (local.set $backing (i32.load offset=8 (local.get $rec)))
+          (local.set $backing_end (i32.add (local.get $backing) (i32.load offset=4 (local.get $rec))))
+          (if (i32.and (i32.lt_u (local.get $backing_ptr) (local.get $backing_end))
+                (i32.gt_u (i32.add (local.get $backing_ptr) (local.get $size)) (local.get $backing)))
+            (then (local.set $backing_ptr (local.get $backing_end)) (local.set $i (i32.const 0)))
+            (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+          (br $gap)))))
     (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE) (i32.shl (local.get $count) (i32.const 4))))
     (i32.store (local.get $rec) (local.get $guest))
     (i32.store (i32.add (local.get $rec) (i32.const 4)) (local.get $size))
     (i32.store (i32.add (local.get $rec) (i32.const 8)) (local.get $backing_ptr))
-    (i32.store (i32.add (local.get $rec) (i32.const 12)) (i32.const 0))
+    ;; AllocationProtect for the reservation. Per-page current protection lives
+    ;; in the PTE and may later diverge through VirtualProtect.
+    (i32.store (i32.add (local.get $rec) (i32.const 12)) (local.get $protect))
     (call $zero_memory (local.get $backing_ptr) (local.get $size))
-    (i32.store (global.get $VIRTUAL_MAP_STATE) (i32.add (local.get $count) (i32.const 1)))
-    (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
-      (i32.add (local.get $backing_ptr) (local.get $size)))
+    (if (i32.eqz (call $guest_page_publish_range
+          (local.get $guest) (local.get $size) (local.get $backing_ptr)
+          (local.get $protect)))
+      (then (return (i32.const 0))))
+    ;; The record is complete and its backing zeroed before the count that makes
+    ;; it visible. Reversing these two lines is the whole bug this ordering
+    ;; avoids: $g2w would map a guest address onto a record still being filled.
+    (i32.atomic.store (global.get $VIRTUAL_MAP_STATE) (i32.add (local.get $count) (i32.const 1)))
+    ;; The primary bump must keep naming a primary address: an extension
+    ;; placement has already advanced its own cursor, and writing an ext
+    ;; address here would tell every later commit -- and $virtual_backing_available
+    ;; -- that the 316MB pool was infinitely past its end.
+    (if (i32.eqz (local.get $ext))
+      (then (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
+        (select (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size))
+          (i32.gt_u (local.get $high_water) (i32.add (local.get $backing_ptr) (local.get $size)))))))
     (call $virtual_shared_top_observe (local.get $guest))
     (global.set $virtual_alloc_top (local.get $guest))
     (local.get $guest))
 
+  ;; Bytes the sparse pool can still commit. Every guest memory question --
+  ;; GlobalMemoryStatusEx's physical total, D3D9's available texture memory --
+  ;; is a question about this pool, because it is the only place a commit can
+  ;; come from. Answering with the whole linear memory promises bytes no
+  ;; VirtualAlloc will ever return.
+  ;;
+  ;; It reads the bump cursor, so released holes below the high-water mark go
+  ;; uncounted even though $virtual_map_commit_locked's best-fit pass can still
+  ;; place a request in one. That errs low, which is the safe direction for a
+  ;; number an app budgets its load against.
+  (func $virtual_backing_available (result i32)
+    (local $cursor i32) (local $free i32) (local $end i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $cursor (i32.load offset=4 (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $end (call $virtual_backing_ext_end))
+    (if (local.get $end)
+      (then (local.set $free (i32.sub (local.get $end) (call $virtual_backing_ext_cursor)))))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (if (i32.eqz (local.get $cursor))
+      (then (local.set $cursor (global.get $VIRTUAL_BACKING_BASE))))
+    (if (i32.lt_u (local.get $cursor) (region.end $VIRTUAL_BACKING_BASE))
+      (then (local.set $free (i32.add (local.get $free)
+        (i32.sub (region.end $VIRTUAL_BACKING_BASE) (local.get $cursor))))))
+    (local.get $free))
+
+  ;; Total bytes a guest commit can ever come from on this host: the primary
+  ;; pool always, plus the extension window when the host built a memory with
+  ;; one. This is the honest ullTotalPhys -- the rest of the linear memory is
+  ;; emulator-private and no VirtualAlloc can reach it.
+  (func $virtual_backing_capacity (result i32)
+    (local $end i32)
+    (local.set $end (call $virtual_backing_ext_end))
+    (if (i32.eqz (local.get $end)) (then (return (global.get $VIRTUAL_BACKING_BASE_SIZE))))
+    (i32.add (global.get $VIRTUAL_BACKING_BASE_SIZE)
+      (i32.sub (local.get $end) (call $virtual_backing_ext_base))))
+
+  ;; One guest commit does not need one backing extent. A guest range is
+  ;; translated per page through the page table, and every host-side bulk copy
+  ;; already asks $g2wSpan how far the current run reaches, precisely because
+  ;; adjacent guest maps have unrelated backings. So when the pool has the
+  ;; bytes but not in one piece, halve the request and place each half on its
+  ;; own extent rather than failing the allocation.
+  ;;
+  ;; This is the difference between Black & White 2 loading a level and not:
+  ;; its post-Continue commit asks for 10878976 bytes against a largest gap of
+  ;; 10678272 with 96387072 free in total, and the guest copies into the NULL
+  ;; it gets back without checking it.
+  ;;
+  ;; Records after the first carry bit 31 in their AllocationProtect word, so
+  ;; MEM_RELEASE — which names only the base — can walk the chain and free the
+  ;; whole allocation. Bits 0..10 hold the PAGE_* value; the flag never reaches
+  ;; a PTE, because publication happens per chunk with the caller's unmodified
+  ;; protect and the marking pass runs afterwards.
+  ;;
+  ;; Halving bottoms out at one 64KB granule, so recursion is bounded by
+  ;; log2(size/64KB). A half that cannot be placed rolls its siblings back:
+  ;; a VirtualAlloc that returns NULL must leave no backing committed.
+  (func $virtual_map_commit_split
+      (param $guest i32) (param $size i32) (param $protect i32) (result i32)
+    (local $half i32) (local $count_before i32)
+    (if (i32.le_u (local.get $size) (i32.const 0x10000))
+      (then (return (i32.const 0))))
+    (local.set $half
+      (i32.and (i32.shr_u (local.get $size) (i32.const 1)) (i32.const 0xFFFF0000)))
+    (if (i32.eqz (local.get $half))
+      (then (return (i32.const 0))))
+    (local.set $count_before (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (if (i32.eqz (call $virtual_map_commit_locked
+          (local.get $guest) (local.get $half) (local.get $protect) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $virtual_map_commit_locked
+          (i32.add (local.get $guest) (local.get $half))
+          (i32.sub (local.get $size) (local.get $half)) (local.get $protect)
+          (i32.const 0)))
+      (then
+        (call $virtual_map_rollback_since_locked
+          (local.get $count_before) (local.get $guest) (local.get $half))
+        (return (i32.const 0))))
+    (call $virtual_map_mark_continuations (local.get $guest) (local.get $size))
+    ;; Each half ran the commit tail, so the per-instance downward reservation
+    ;; cursor now names the second half's base. Put it back on the allocation's
+    ;; own base, or the next VirtualAlloc(NULL) carves out of a range this
+    ;; allocation already owns. (The shared cell only ever lowers, so it is
+    ;; already correct; observing again states that rather than assuming it.)
+    (call $virtual_shared_top_observe (local.get $guest))
+    (global.set $virtual_alloc_top (local.get $guest))
+    (local.get $guest))
+
+  ;; Flag every record of a split allocation except the one the guest holds.
+  (func $virtual_map_mark_continuations (param $guest i32) (param $size i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32)
+    (local.set $end (i32.add (local.get $guest) (local.get $size)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (if (i32.and
+            (i32.gt_u (local.get $base) (local.get $guest))
+            (i32.le_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
+              (local.get $end)))
+        (then
+          (i32.store offset=12 (local.get $rec)
+            (i32.or (i32.load offset=12 (local.get $rec)) (i32.const 0x80000000)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan))))
+
+  ;; Roll back only records appended by this split attempt. A range may already
+  ;; contain committed pages: VirtualAlloc(MEM_COMMIT) is idempotent over those
+  ;; pages, so deleting every record in the first half orphaned old allocations
+  ;; while leaving their reservation records alive. That is the exact state
+  ;; Storm later observed in StarCraft's small-block pool.
+  ;;
+  ;; Split children run with coalescing disabled, so every byte they add is in
+  ;; an appended record and the pre-call count is a complete transaction mark.
+  ;; Removing an overlapping speculative record clears its PTEs; republish the
+  ;; surviving maps afterwards so older committed pages retain their original
+  ;; translations.
+  (func $virtual_map_rollback_since_locked
+      (param $count_before i32) (param $guest i32) (param $size i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32) (local $map_size i32)
+    (local.set $end (i32.add (local.get $guest) (local.get $size)))
+    (block $removed (loop $remove
+      (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+      (br_if $removed (i32.le_u (local.get $count) (local.get $count_before)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 4))))
+      (drop (call $virtual_map_release_one (i32.load (local.get $rec))))
+      (br $remove)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $restore
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (local.set $map_size (i32.load offset=4 (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $base) (local.get $end))
+            (i32.gt_u (i32.add (local.get $base) (local.get $map_size))
+              (local.get $guest)))
+        (then
+          (drop (call $guest_page_publish_range
+            (local.get $base) (local.get $map_size)
+            (i32.load offset=8 (local.get $rec))
+            (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x7FF))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $restore))))
+
+  ;; MEM_DECOMMIT, honestly. Windows hands back zero-filled pages the next time
+  ;; a decommitted range is committed, and the MSVC small-block heap leans on
+  ;; that: it decommits 32KB groups whose free-list links are still written
+  ;; through them, then re-commits and reads the result as fresh memory. Our
+  ;; commit path returns an already-mapped range untouched -- which is right for
+  ;; re-committing pages that were never decommitted -- so unless the decommit
+  ;; clears the backing the guest gets its own stale free list back. Measured on
+  ;; Black & White 2: after the land click, the 128x128 spatial grid at
+  ;; guest 0x2e0d27e0 (16384 cells x 12 bytes) held 9639 zero cells and ~6700
+  ;; carrying an old 32-byte-granular free-list chain, so one cell read
+  ;; {count=0x2deb040a, data=NULL} and the set-union loop at 0x9e5272 scanned
+  ;; guest address `i*4` for 770 million iterations. Zeroing here rather than at
+  ;; the next commit is the same observable behaviour -- reading a decommitted
+  ;; page is an access violation on Windows, so nothing may see the difference
+  ;; -- and it costs nothing on the commit path.
+  (func $virtual_map_decommit_zero (param $guest i32) (param $size i32)
+    (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
+    (local $base i32) (local $rec_end i32) (local $lo i32) (local $hi i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (local.set $rec_end
+        (i32.add (local.get $base) (i32.load offset=4 (local.get $rec))))
+      ;; A zero size means "to the end of the allocation at this base", the only
+      ;; form Windows accepts for a decommit that does not name a length.
+      (local.set $end (select (local.get $rec_end)
+        (i32.add (local.get $guest) (local.get $size))
+        (i32.eqz (local.get $size))))
+      (local.set $lo (select (local.get $guest) (local.get $base)
+        (i32.gt_u (local.get $guest) (local.get $base))))
+      (local.set $hi (select (local.get $end) (local.get $rec_end)
+        (i32.lt_u (local.get $end) (local.get $rec_end))))
+      (if (i32.lt_u (local.get $lo) (local.get $hi))
+        (then (call $zero_memory
+          (i32.add (i32.load offset=8 (local.get $rec))
+            (i32.sub (local.get $lo) (local.get $base)))
+          (i32.sub (local.get $hi) (local.get $lo)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP)))
+
+  ;; Look up the record whose base is exactly this guest address.
+  (func $virtual_map_find_record (param $guest i32) (result i32)
+    (local $count i32) (local $i i32) (local $rec i32)
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (if (i32.eq (i32.load (local.get $rec)) (local.get $guest))
+        (then (return (local.get $rec))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Publish the process heap. Called by the PE loader on the instance that loads
+  ;; the image; every other instance picks the same values up from HEAP_SHARED in
+  ;; $init_thread, because a mutable global would give it a private copy.
+  (func $heap_init (param $base i32)
+    (global.set $heap_base (local.get $base))
+    (global.set $heap_ptr (i32.const 0))
+    (global.set $heap_end (i32.const 0))
+    (global.set $heap_arena_record (i32.const 0))
+    (i32.store (global.get $HEAP_SHARED) (local.get $base))
+    (i32.store (i32.add (global.get $HEAP_SHARED) (i32.const 4)) (local.get $base)))
+
+  ;; Top of everything the low heap has handed out, process-wide. 0 means the
+  ;; heap has not been touched yet. The DLL loader needs this to place an image
+  ;; clear of every arena; $heap_ptr would only tell it about one instance.
+  (func $heap_low_watermark (result i32)
+    (i32.atomic.load (global.get $HEAP_SHARED)))
+
+  ;; Declare that the low heap must not hand out anything below $addr — a DLL
+  ;; image now occupies that range. Only moves the cursor forward, so a DLL
+  ;; loaded below the watermark (fixed preferred base) costs nothing.
+  (func $heap_reserve_below (param $addr i32)
+    (local $cursor i32) (local $moved i32)
+    ;; Raise the cursor by CAS. A plain compare-then-store loses a concurrent
+    ;; reservation: two instances loading the same cursor both write their own
+    ;; value, and the loser's arena is handed out again by the winner.
+    (block $done (loop $retry
+      (local.set $cursor (i32.atomic.load (global.get $HEAP_SHARED)))
+      (br_if $done (i32.le_u (local.get $addr) (local.get $cursor)))
+      (if (i32.eq (local.get $cursor)
+            (i32.atomic.rmw.cmpxchg (global.get $HEAP_SHARED)
+              (local.get $cursor) (local.get $addr)))
+        (then (local.set $moved (i32.const 1)) (br $done)))
+      (br $retry)))
+    (if (local.get $moved)
+      (then
+        (i32.store (i32.add (global.get $HEAP_SHARED) (i32.const 4)) (local.get $addr))
+        (global.set $heap_base (local.get $addr))
+        ;; This instance's arena ended at the old cursor, so it cannot reach into
+        ;; the image — but drop it anyway rather than reason about that here.
+        (global.set $heap_ptr (i32.const 0))
+        (global.set $heap_end (i32.const 0)))))
+
+  ;; Register a reserved arena before publishing any allocations from it. Each
+  ;; record has one writer (the reserving instance); frees only read it. The
+  ;; allocated end, unlike the process reservation cursor, excludes unused tail
+  ;; bytes and DLL gaps. Records remain valid when that instance changes chunks.
+  ;;
+  ;; A slot $heap_arena_release_free emptied is available again, and it says so
+  ;; by leaving $HEAP_ARENA_RECYCLED in its live-bytes word -- a slot that was
+  ;; never used is all zeroes and stays untouched, so "the table is full" still
+  ;; means what it meant. Claiming is a CAS that takes the tag away, because the
+  ;; base is what makes the record visible to $heap_arena_find and has to be
+  ;; written last: two registrants racing for one dead slot would otherwise both
+  ;; fill it in and the loser's extent would be published under the winner's base.
+  (func $heap_arena_register (param $base i32) (param $end i32) (result i32)
+    (local $count i32) (local $rec i32) (local $i i32)
+    (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+    (if (i32.gt_u (local.get $count) (i32.const 1024))
+      (then (local.set $count (i32.const 1024))))
+    (block $reused (loop $slot
+      (br_if $reused (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
+      (if (i32.and (i32.eqz (i32.atomic.load (local.get $rec)))
+            (i32.eq (i32.atomic.rmw.cmpxchg offset=12 (local.get $rec)
+              (global.get $HEAP_ARENA_RECYCLED) (i32.const 0))
+              (global.get $HEAP_ARENA_RECYCLED)))
+        (then
+          (i32.store offset=4 (local.get $rec) (local.get $end))
+          (i32.atomic.store offset=8 (local.get $rec) (local.get $base))
+          (i32.atomic.store (local.get $rec) (local.get $base))
+          (return (local.get $rec))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $slot)))
+    (block $claimed (loop $retry
+      (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+      (if (i32.ge_u (local.get $count) (i32.const 1024))
+        (then (return (i32.const 0))))
+      (br_if $claimed (i32.eq (local.get $count)
+        (i32.atomic.rmw.cmpxchg (global.get $HEAP_ARENAS) (local.get $count)
+          (i32.add (local.get $count) (i32.const 1)))))
+      (br $retry)))
+    (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+      (i32.add (i32.const 16) (i32.mul (local.get $count) (i32.const 16)))))
+    (i32.store offset=4 (local.get $rec) (local.get $end))
+    (i32.atomic.store offset=12 (local.get $rec) (i32.const 0))
+    (i32.atomic.store offset=8 (local.get $rec) (local.get $base))
+    ;; Publishing base last makes a partially registered record invisible.
+    (i32.atomic.store (local.get $rec) (local.get $base))
+    (local.get $rec))
+
+  ;; Find the authoritative allocated extent containing this header. Never map
+  ;; or read an untrusted guest pointer until this succeeds.
+  (func $heap_arena_find (param $block i32) (result i32)
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (if (i32.and (local.get $block) (i32.const 7))
+      (then (return (i32.const 0))))
+    (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+    (if (i32.gt_u (local.get $count) (i32.const 1024))
+      (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
+      (local.set $base (i32.atomic.load (local.get $rec)))
+      (if (local.get $base) (then
+        (if (i32.and (i32.ge_u (local.get $block) (local.get $base))
+              (i32.lt_u (local.get $block) (i32.atomic.load offset=8 (local.get $rec))))
+          (then (return (local.get $rec))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  ;; Live allocated bytes in one arena, at +12. Every block $heap_alloc hands
+  ;; out adds its header size here and every $heap_free takes it back, so a
+  ;; retired arena reading zero is one whose memory nothing owns any more.
+  ;; Atomic because blocks cross instances: "ownership transfers to the freeing
+  ;; instance" is the rule $heap_free already states, and a thread that frees
+  ;; another thread's block must not lose the decrement.
+  (func $heap_arena_charge (param $rec i32) (param $delta i32)
+    (if (local.get $rec)
+      (then (drop (i32.atomic.rmw.add offset=12 (local.get $rec) (local.get $delta))))))
+
+  ;; Drop every free-list entry inside [base,end). The list is the only thing
+  ;; still naming this memory; a link left behind would hand out an address that
+  ;; no longer resolves. Only this instance's list is reachable from here —
+  ;; another instance's stale link is caught by the $heap_arena_find validation
+  ;; $heap_alloc already does on every link, which cuts its list rather than
+  ;; following one into released space.
+  (func $heap_free_list_purge (param $base i32) (param $end i32)
+    (local $cur i32) (local $prev_w i32) (local $next i32) (local $steps i32)
+    (local.set $cur (global.get $free_list))
+    (block $done (loop $walk
+      (br_if $done (i32.eqz (local.get $cur)))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br_if $done (i32.gt_u (local.get $steps) (i32.const 65536)))
+      ;; An unmappable link ends the walk the same way $heap_alloc's does.
+      (if (i32.eqz (call $heap_arena_find (local.get $cur)))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
+            (else (global.set $free_list (i32.const 0))))
+          (br $done)))
+      (local.set $next (i32.load offset=4 (call $g2w (local.get $cur))))
+      (if (i32.and (i32.ge_u (local.get $cur) (local.get $base))
+                   (i32.lt_u (local.get $cur) (local.get $end)))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (local.get $next)))
+            (else (global.set $free_list (local.get $next)))))
+        (else (local.set $prev_w (call $g2w (local.get $cur)))))
+      (local.set $cur (local.get $next))
+      (br $walk))))
+
+  ;; Give back every retired sparse arena nothing is living in.
+  ;;
+  ;; A free block may not be merged with the one in the arena next door, so an
+  ;; abandoned arena is dead weight: it holds guest address space the downward
+  ;; reserve cursor can never walk back over and backing the commit path can
+  ;; never re-use. Black & White 2's land loader grows one container by roughly
+  ;; 1.5x a step -- 1, 1.4, 2.2, 3.3, 4.8, 7.1, 10.7, 16, 24, 36, 54, 81, 121 MB,
+  ;; each step a HeapReAlloc that frees the step before it -- and every step got
+  ;; its own sparse arena. Measured at the 191 MB step: 390 map records, the
+  ;; reserve cursor 923 MB down from 0x50000000 and 315 of the backing pool's
+  ;; 316 MB spent, for a container 121 MB long. The allocation failed, the game
+  ;; threw std::bad_alloc and died. Handing the arenas back makes that series
+  ;; cost its largest two members instead of their sum.
+  ;;
+  ;; "Retired" is +8 == +4: $heap_arena_free_tail sets the allocated end to the
+  ;; reserved end when an instance moves off an arena, so an arena some instance
+  ;; is still bump-allocating from has room left and is never a candidate. Low
+  ;; arenas are excluded outright -- their address space is the direct window,
+  ;; which is not the reserve cursor's to hand back.
+  (func $heap_arena_release_free (result i32)
+    (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
+    (local $end i32) (local $freed i32)
+    (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
+    (if (i32.gt_u (local.get $count) (i32.const 1024))
+      (then (return (i32.const 0))))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $HEAP_ARENAS)
+        (i32.add (i32.const 16) (i32.mul (local.get $i) (i32.const 16)))))
+      (local.set $base (i32.atomic.load (local.get $rec)))
+      (local.set $end (i32.load offset=4 (local.get $rec)))
+      (if (i32.and
+            (i32.and
+              (i32.ge_u (local.get $base) (call $virtual_alloc_min))
+              (i32.eq (i32.atomic.load offset=8 (local.get $rec)) (local.get $end)))
+            (i32.and
+              (i32.eqz (i32.atomic.load offset=12 (local.get $rec)))
+              (i32.ne (local.get $rec) (global.get $heap_sparse_record))))
+        (then
+          (call $heap_free_list_purge (local.get $base) (local.get $end))
+          ;; Unpublish before the backing goes: a record with a zero base is
+          ;; invisible to $heap_arena_find, so nothing can validate a pointer
+          ;; into memory that is on its way back to the pool.
+          (i32.atomic.store (local.get $rec) (i32.const 0))
+          (i32.atomic.store offset=8 (local.get $rec) (i32.const 0))
+          (i32.store offset=4 (local.get $rec) (i32.const 0))
+          (i32.atomic.store offset=12 (local.get $rec)
+            (global.get $HEAP_ARENA_RECYCLED))
+          (drop (call $virtual_map_release (local.get $base)))
+          (local.set $freed (i32.add (local.get $freed)
+            (i32.sub (local.get $end) (local.get $base))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (local.get $freed))
+
+  ;; Retire the unused tail of an instance-owned arena after a replacement
+  ;; arena has been successfully registered. It was reserved exclusively for
+  ;; this instance, but never published as allocated, so first give it a valid
+  ;; block header and extend the authoritative allocated extent. Normal free
+  ;; validation then transfers it to this instance's private free list.
+  ;; A sub-minimum tail cannot hold a free block and remains padding.
+  (func $heap_arena_free_tail (param $ptr i32) (param $end i32) (param $record i32)
+    (local $size i32)
+    (if (i32.or (i32.eqz (local.get $ptr)) (i32.eqz (local.get $record)))
+      (then (return)))
+    (if (i32.gt_u (local.get $ptr) (local.get $end)) (then (return)))
+    (local.set $size (i32.sub (local.get $end) (local.get $ptr)))
+    (if (i32.or (i32.lt_u (local.get $size) (i32.const 16))
+      (i32.ne (i32.and (local.get $size) (i32.const 7)) (i32.const 0))) (then (return)))
+    ;; Reject stale or already-published tuples, including repeated retirement.
+    (if (i32.or (i32.eqz (i32.atomic.load (local.get $record)))
+      (i32.lt_u (local.get $ptr) (i32.atomic.load (local.get $record)))) (then (return)))
+    (if (i32.ne (i32.atomic.load offset=8 (local.get $record)) (local.get $ptr)) (then (return)))
+    (if (i32.ne (i32.load offset=4 (local.get $record)) (local.get $end)) (then (return)))
+    (i32.store (call $g2w (local.get $ptr)) (local.get $size))
+    (i32.atomic.store offset=8 (local.get $record) (local.get $end))
+    ;; The tail was never handed out, so charge it before freeing it: the live
+    ;; count is allocations minus frees, and an unmatched decrement would take
+    ;; the arena below zero and keep it out of $heap_arena_release_free forever.
+    (call $heap_arena_charge (local.get $record) (local.get $size))
+    (call $heap_free (i32.add (local.get $ptr) (i32.const 4))))
+
+  ;; Reserve this instance's next private chunk of the low guest heap window.
+  ;; The cursor is shared; the arena handed back is exclusively ours, so the
+  ;; per-allocation fast path in $heap_alloc needs no synchronization at all.
+  ;;
+  ;; The reservation is a compare-and-swap loop, so two instances allocating at
+  ;; the same instant get different chunks rather than the same one. No lock: one
+  ;; word, one CAS, and nothing to release on the early-return paths below.
+  (func $heap_low_reserve (param $need i32) (result i32)
+    (local $state i32) (local $cursor i32) (local $chunk i32) (local $seed i32)
+    (local $record i32)
+    (local.set $state (global.get $HEAP_SHARED))
+    (block $reserved (loop $retry
+      (local.set $cursor (i32.atomic.load (local.get $state)))
+      ;; Seed the process cursor on first use. $heap_init does this at PE load;
+      ;; harnesses that drive the exports without an image never get there, so
+      ;; fall back to the default heap base rather than failing every allocation.
+      ;; Seeding by CAS means the loser adopts the winner's base instead of
+      ;; overwriting it — two instances can disagree about what "no image" means.
+      (if (i32.eqz (local.get $cursor))
+        (then
+          (local.set $seed
+            (select (global.get $heap_base) (global.get $HEAP_DEFAULT_BASE)
+              (i32.ne (global.get $heap_base) (i32.const 0))))
+          (if (i32.eqz
+                (i32.atomic.rmw.cmpxchg (local.get $state) (i32.const 0) (local.get $seed)))
+            (then (i32.store (i32.add (local.get $state) (i32.const 4)) (local.get $seed))))
+          (if (i32.eqz (global.get $heap_base))
+            (then (global.set $heap_base
+              (i32.load (i32.add (local.get $state) (i32.const 4))))))
+          (br $retry)))
+      ;; One chunk must satisfy this allocation outright, so an oversized request
+      ;; takes an oversized chunk rather than failing against a 1MB granule.
+      (local.set $chunk (global.get $HEAP_ARENA_CHUNK))
+      (if (i32.gt_u (local.get $need) (local.get $chunk))
+        (then (local.set $chunk
+          (i32.and (i32.add (local.get $need) (i32.const 0xFFF)) (i32.const 0xFFFFF000)))))
+      ;; Overflow, and the end of the low heap's own region — either way the
+      ;; caller spills to the sparse high arena instead. This used to stop at
+      ;; $PAGE_INDEX_ARENA, i.e. at whatever the map happened to put next, which
+      ;; is how an AoE2 campaign heap once grew into the page indexes and turned
+      ;; valid block entries into zero. The extent is declared now
+      ;; (src/00-regions.wat), so the bound is the region's end and the two
+      ;; cannot drift apart no matter where the allocator puts either one.
+      ;; Compare in guest space against the known low-region boundary. Resolving
+      ;; an arbitrary request endpoint with g2w can return the unmapped sentinel,
+      ;; which is numerically below this region and would admit oversized chunks.
+      (if (i32.lt_u (i32.add (local.get $cursor) (local.get $chunk)) (local.get $cursor))
+        (then (return (i32.const 0))))
+      (if (i32.gt_u
+            (i32.add (local.get $cursor) (local.get $chunk))
+            (call $w2g (region.end $GUEST_HEAP_BASE)))
+        (then (return (i32.const 0))))
+      ;; Claim it, or lose the race and recompute against the winner's cursor.
+      (br_if $reserved
+        (i32.eq (local.get $cursor)
+          (i32.atomic.rmw.cmpxchg (local.get $state) (local.get $cursor)
+            (i32.add (local.get $cursor) (local.get $chunk)))))
+      (br $retry)))
+    (local.set $record (call $heap_arena_register
+      (local.get $cursor) (i32.add (local.get $cursor) (local.get $chunk))))
+    (if (i32.eqz (local.get $record))
+      (then (return (i32.const 0))))
+    (call $heap_arena_free_tail (global.get $heap_ptr) (global.get $heap_end)
+      (global.get $heap_arena_record))
+    (global.set $heap_arena_record (local.get $record))
+    (global.set $heap_ptr (local.get $cursor))
+    (global.set $heap_end (i32.add (local.get $cursor) (local.get $chunk)))
+    (local.get $cursor))
+
   ;; Remove an exact sparse mapping on VirtualFree(..., MEM_RELEASE). Compact
   ;; the live prefix so g2w's linear scan and MAX_VIRTUAL_MAPS bound keep their
-  ;; existing representation. Backing is a bump arena, therefore only the
-  ;; most recently committed extent can be reclaimed without a free list; all
-  ;; other releases still recover their map-table slot immediately.
+  ;; existing representation. A top release rewinds the bump cursor. Other
+  ;; releases recover their map slot immediately and leave a physical gap;
+  ;; virtual_map_commit_locked prefers the smallest fitting released gap.
   (func $virtual_map_release (param $guest i32) (result i32)
+    (local $result i32)
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $result (call $virtual_map_release_locked (local.get $guest)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $result))
+
+  ;; MEM_RELEASE names a base and no size, so the chunks a split commit placed
+  ;; on separate extents have to be found from the base: each one begins where
+  ;; the previous ended and carries the continuation flag. Releasing only the
+  ;; first would leak the rest of the allocation on every level reload.
+  (func $virtual_map_release_locked (param $guest i32) (result i32)
+    (local $rec i32) (local $size i32)
+    ;; DIAGNOSTIC ONLY, off by default. When a guest reads through a pointer
+    ;; into a region it has already released, the read returns 0 here and its
+    ;; own luck on real Windows -- where the freed page may still hold the old
+    ;; bytes, or the page may not be freed at all because a different heap
+    ;; layout left something live in it -- is not reproduced. Turning this on
+    ;; makes small releases leak instead, which answers "is that use-after-free
+    ;; the only thing in the way" without guessing. It is never a fix: it hands
+    ;; the guest memory it has given back.
+    (if (i32.or (global.get $virtual_leak_small_releases)
+                (global.get $virtual_leak_this_call))
+      (then
+        (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+        (if (local.get $rec)
+          (then (if (i32.or (global.get $virtual_leak_this_call)
+                      (i32.le_u (i32.load offset=4 (local.get $rec))
+                        (global.get $virtual_leak_small_releases)))
+            (then
+              ;; Mark it logically released. Storm frees a page and commits the
+              ;; same base again three instructions later, and Windows hands
+              ;; back ZERO-FILLED pages there; a leaked record would otherwise
+              ;; be re-committed with its old contents intact, which corrupts
+              ;; the next object built in it. The commit path zeroes and clears
+              ;; this bit, so the leak only affects reads through pointers the
+              ;; guest should no longer be holding.
+              (i32.store offset=12 (local.get $rec)
+                (i32.or (i32.load offset=12 (local.get $rec))
+                  (i32.const 0x40000000)))
+              (global.set $virtual_leak_hits
+                (i32.add (global.get $virtual_leak_hits) (i32.const 1)))
+              (return (i32.const 1))))))))
+    ;; A reservation the guest never committed has no record at all, so its
+    ;; release has to be handled before the record lookup gives up -- otherwise
+    ;; its entry sits in the reserve table forever and pins the reclaim floor.
+    (call $virtual_reserve_forget_locked (local.get $guest))
+    (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+    (if (i32.eqz (local.get $rec))
+      (then
+        (call $virtual_reserve_reclaim_locked)
+        (return (i32.const 0))))
+    (local.set $size (i32.load offset=4 (local.get $rec)))
+    (if (i32.eqz (call $virtual_map_release_one (local.get $guest)))
+      (then (return (i32.const 0))))
+    (block $done (loop $chain
+      (local.set $guest (i32.add (local.get $guest) (local.get $size)))
+      (local.set $rec (call $virtual_map_find_record (local.get $guest)))
+      (br_if $done (i32.eqz (local.get $rec)))
+      (br_if $done (i32.eqz
+        (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x80000000))))
+      (local.set $size (i32.load offset=4 (local.get $rec)))
+      (br_if $done (i32.eqz (call $virtual_map_release_one (local.get $guest))))
+      (br $chain)))
+    (i32.const 1))
+
+  (func $virtual_map_release_one (param $guest i32) (result i32)
     (local $count i32) (local $i i32) (local $rec i32) (local $last i32)
     (local $last_rec i32) (local $size i32) (local $backing i32)
     (local $backing_ptr i32)
@@ -434,14 +1779,28 @@
         (then
           (local.set $size (i32.load (i32.add (local.get $rec) (i32.const 4))))
           (local.set $backing (i32.load (i32.add (local.get $rec) (i32.const 8))))
+          ;; Retire translations before the record disappears or its
+          ;; backing becomes reusable. Page-table readers then see either the
+          ;; old valid PTE or an unmapped page, never a recycled alias.
+          (call $guest_page_clear_range (local.get $guest) (local.get $size))
           (local.set $backing_ptr
             (i32.load (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))))
           (if (i32.eq
                 (i32.add (local.get $backing) (local.get $size))
                 (local.get $backing_ptr))
             (then
+              ;; The top extent: the bump cursor takes it back, and any free
+              ;; extent that now sits at or above the rewound mark is
+              ;; wilderness again rather than a listed hole.
               (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
-                (local.get $backing))))
+                (local.get $backing))
+              (call $virtual_hole_trim (local.get $backing)))
+            ;; Not the top extent, so this release punches a hole the bump
+            ;; cursor cannot recover. It goes on the free list, where the next
+            ;; commit's best-fit finds it in one pass over the holes instead of
+            ;; re-deriving every gap from the record table.
+            (else
+              (call $virtual_hole_add (local.get $backing) (local.get $size))))
           (local.set $last (i32.sub (local.get $count) (i32.const 1)))
           (local.set $last_rec
             (i32.add (global.get $VIRTUAL_MAP_TABLE)
@@ -457,16 +1816,69 @@
           (i32.store offset=8 (local.get $last_rec) (i32.const 0))
           (i32.store offset=12 (local.get $last_rec) (i32.const 0))
           (i32.store (global.get $VIRTUAL_MAP_STATE) (local.get $last))
+          ;; An empty table owns no backing at all, so the whole pool is
+          ;; wilderness again: rewind the bump cursor and forget every listed
+          ;; extent, whatever the two had drifted to. Without this a teardown
+          ;; leaves the pool looking as fragmented as its busiest moment.
+          (if (i32.eqz (local.get $last))
+            (then
+              (i32.store offset=4 (global.get $VIRTUAL_MAP_STATE)
+                (global.get $VIRTUAL_BACKING_BASE))
+              (call $virtual_hole_set_count (i32.const 0))))
+          (call $virtual_reserve_reclaim_locked)
           (return (i32.const 1))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const 0))
 
+  ;; Apply VirtualProtect only when the page-rounded range lies wholly inside
+  ;; one committed sparse map. Hold the map lock across both PTE passes so a
+  ;; concurrent release cannot turn an all-or-nothing update into a partial one.
+  ;; Return -1 on failure, otherwise the first page's previous PAGE_* value.
+  (func $virtual_map_protect
+      (param $guest i32) (param $size i32) (param $protect i32) (result i32)
+    (local $page_base i32) (local $raw_end i32) (local $page_end i32)
+    (local $count i32) (local $i i32) (local $rec i32)
+    (local $map_base i32) (local $map_size i32) (local $old i32)
+    (local.set $old (i32.const -1))
+    (local.set $page_base
+      (i32.and (local.get $guest) (i32.const 0xFFFFF000)))
+    (local.set $raw_end (i32.add (local.get $guest) (local.get $size)))
+    (if (i32.or
+          (i32.le_u (local.get $raw_end) (local.get $guest))
+          (i32.gt_u (local.get $raw_end) (i32.const 0xFFFFF000)))
+      (then (return (local.get $old))))
+    (local.set $page_end
+      (i32.and (i32.add (local.get $raw_end) (i32.const 0xFFF))
+        (i32.const 0xFFFFF000)))
+    (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
+    (local.set $count (i32.atomic.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec
+        (i32.add (global.get $VIRTUAL_MAP_TABLE)
+          (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $map_base (i32.load (local.get $rec)))
+      (local.set $map_size (i32.load (i32.add (local.get $rec) (i32.const 4))))
+      (if (i32.and
+            (i32.ge_u (local.get $page_base) (local.get $map_base))
+            (i32.le_u (local.get $page_end)
+              (i32.add (local.get $map_base) (local.get $map_size))))
+        (then
+          (local.set $old (call $guest_page_protect_range
+            (local.get $guest) (local.get $size) (local.get $protect)))
+          (br $done)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
+    (local.get $old))
+
   ;; HeapAlloc starts in the low direct guest window for compatibility, then
   ;; spills to sparse high guest chunks when that window reaches emulator-private
   ;; memory. This keeps Windows heap pointers valid without moving code caches.
   (func $heap_sparse_alloc (param $need i32) (result i32)
-    (local $chunk i32) (local $new_top i32) (local $ptr i32)
+    (local $chunk i32) (local $new_top i32) (local $ptr i32) (local $record i32)
     (if (i32.or
           (i32.eqz (global.get $heap_sparse_ptr))
           (i32.gt_u
@@ -483,16 +1895,148 @@
           (i32.and
             (i32.add (local.get $chunk) (i32.const 0xFFFF))
             (i32.const 0xFFFF0000)))
+        ;; Out of address space, or out of backing: before either becomes the
+        ;; guest's problem, hand back the arenas nothing lives in any more and
+        ;; ask once more. This is the only caller, because the scan walks every
+        ;; arena and this instance's whole free list — affordable when the
+        ;; alternative is returning NULL, not on every spill.
         (local.set $new_top (call $virtual_reserve_down (local.get $chunk)))
-        (if (i32.eqz (local.get $new_top)) (then (return (i32.const 0))))
+        (if (i32.eqz (local.get $new_top))
+          (then
+            (if (call $heap_arena_release_free)
+              (then (local.set $new_top (call $virtual_reserve_down (local.get $chunk)))))))
+        (if (i32.eqz (local.get $new_top))
+          (then
+            (call $host_heap_oom_trace (local.get $chunk) (i32.const 2))
+            (return (i32.const 0))))
         (if (i32.eqz (call $virtual_map_commit (local.get $new_top) (local.get $chunk)))
-          (then (return (i32.const 0))))
+          (then
+            (if (i32.eqz (call $heap_arena_release_free))
+              (then
+                (call $host_heap_oom_trace (local.get $chunk) (i32.const 3))
+                (return (i32.const 0))))
+            (if (i32.eqz (call $virtual_map_commit (local.get $new_top) (local.get $chunk)))
+              (then
+                (call $host_heap_oom_trace (local.get $chunk) (i32.const 3))
+                (return (i32.const 0))))))
+        (local.set $record (call $heap_arena_register
+          (local.get $new_top) (i32.add (local.get $new_top) (local.get $chunk))))
+        (if (i32.eqz (local.get $record))
+          (then
+            (call $host_heap_oom_trace (local.get $chunk) (i32.const 4))
+            (return (i32.const 0))))
+        (call $heap_arena_free_tail (global.get $heap_sparse_ptr) (global.get $heap_sparse_end)
+          (global.get $heap_sparse_record))
+        (global.set $heap_sparse_record (local.get $record))
         (global.set $heap_sparse_ptr (local.get $new_top))
         (global.set $heap_sparse_end (i32.add (local.get $new_top) (local.get $chunk)))))
     (local.set $ptr (global.get $heap_sparse_ptr))
     (global.set $heap_sparse_ptr (i32.add (global.get $heap_sparse_ptr) (local.get $need)))
     (i32.store (call $g2w (local.get $ptr)) (local.get $need))
+    (call $heap_arena_charge (global.get $heap_sparse_record) (local.get $need))
+    (i32.atomic.store offset=8 (global.get $heap_sparse_record) (global.get $heap_sparse_ptr))
     (local.get $ptr))
+
+  ;; Is this free-list entry's own header self-consistent? Same extent rules
+  ;; $heap_free applies before linking a block, re-checked at allocation time
+  ;; because a guest that overruns a live block rewrites the header of the free
+  ;; block behind it after the link happened. Returns 1 for "do not serve this".
+  (func $heap_block_bad (param $cur i32) (param $bsz i32) (result i32)
+    (local $end i32) (local $rec i32)
+    ;; Header must be an aligned allocation extent, never smaller than a block.
+    (if (i32.or
+          (i32.lt_u (local.get $bsz) (i32.const 16))
+          (i32.ne (i32.and (local.get $bsz) (i32.const 7)) (i32.const 0)))
+      (then (return (i32.const 1))))
+    (local.set $end (i32.add (local.get $cur) (local.get $bsz)))
+    (if (i32.lt_u (local.get $end) (local.get $cur)) (then (return (i32.const 1))))
+    (local.set $rec (call $heap_arena_find (local.get $cur)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 1))))
+    (i32.or
+      (i32.gt_u (local.get $end) (i32.atomic.load offset=8 (local.get $rec)))
+      (i32.gt_u (local.get $end) (i32.load offset=4 (local.get $rec)))))
+
+  ;; Trusted heap-pointer size accessors. Global allocations reserve bit zero
+  ;; of the aligned header for provenance, so no allocator consumer may treat
+  ;; the raw dword as an extent. Callers that accept untrusted handles must use
+  ;; an arena/boundary validator before reaching these unchecked helpers.
+  (func $heap_block_size_unchecked (param $guest_ptr i32) (result i32)
+    (i32.and
+      (call $gl32 (i32.sub (local.get $guest_ptr) (i32.const 4)))
+      (i32.const -8)))
+
+  (func $heap_payload_size_unchecked (param $guest_ptr i32) (result i32)
+    (i32.sub (call $heap_block_size_unchecked (local.get $guest_ptr)) (i32.const 4)))
+
+  ;; GlobalAlloc uses the otherwise spare low bit of its aligned size header
+  ;; as process-wide provenance. The bit is not enough by itself: an aligned
+  ;; pointer into an application's payload can have any four bytes planted in
+  ;; front of it. Start at the authoritative arena base and follow every block
+  ;; extent, so only an exact allocation boundary can be accepted. $claim
+  ;; atomically clears the bit at that boundary; this is GlobalFree's
+  ;; cross-instance single-winner invalidation step.
+  ;;
+  ;; Returns the aligned block size (including its four-byte header), or zero
+  ;; for NULL, forged, malformed, non-Global, freed, or concurrently freed
+  ;; pointers. No untrusted guest address reaches g2w before heap_arena_find has
+  ;; proved that the containing arena is still resident.
+  (func $heap_global_block_size (param $guest_ptr i32) (param $claim i32) (result i32)
+    (local $block i32) (local $rec i32) (local $cur i32)
+    (local $allocated_end i32) (local $reserved_end i32)
+    (local $wa i32) (local $raw i32) (local $size i32) (local $next i32)
+    (if (i32.or
+          (i32.lt_u (local.get $guest_ptr) (i32.const 4))
+          (i32.ne (i32.and (local.get $guest_ptr) (i32.const 7)) (i32.const 4)))
+      (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (local.set $cur (i32.atomic.load (local.get $rec)))
+    (local.set $reserved_end (i32.load offset=4 (local.get $rec)))
+    (local.set $allocated_end (i32.atomic.load offset=8 (local.get $rec)))
+    (block $invalid
+      (loop $walk
+        (br_if $invalid (i32.ge_u (local.get $cur) (local.get $allocated_end)))
+        (br_if $invalid (i32.gt_u (local.get $cur) (local.get $block)))
+        (local.set $wa (call $g2w (local.get $cur)))
+        (local.set $raw (i32.atomic.load (local.get $wa)))
+        ;; Bit zero is GLOBAL_LIVE. Bits 1..2 remain reserved and therefore
+        ;; make a header malformed rather than being silently masked away.
+        (br_if $invalid (i32.and (local.get $raw) (i32.const 6)))
+        (local.set $size (i32.and (local.get $raw) (i32.const -8)))
+        (br_if $invalid (i32.lt_u (local.get $size) (i32.const 16)))
+        (local.set $next (i32.add (local.get $cur) (local.get $size)))
+        (br_if $invalid (i32.le_u (local.get $next) (local.get $cur)))
+        (br_if $invalid (i32.gt_u (local.get $next) (local.get $allocated_end)))
+        (br_if $invalid (i32.gt_u (local.get $next) (local.get $reserved_end)))
+        (if (i32.eq (local.get $cur) (local.get $block))
+          (then
+            (if (i32.eqz (i32.and (local.get $raw) (i32.const 1)))
+              (then (return (i32.const 0))))
+            (if (local.get $claim)
+              (then
+                (if (i32.ne
+                      (i32.atomic.rmw.cmpxchg (local.get $wa)
+                        (local.get $raw) (local.get $size))
+                      (local.get $raw))
+                  (then (return (i32.const 0))))))
+            (return (local.get $size))))
+        (br_if $invalid (i32.gt_u (local.get $next) (local.get $block)))
+        (local.set $cur (local.get $next))
+        (br $walk)))
+    (i32.const 0))
+
+  ;; Mark a freshly allocated block before its pointer is published by a
+  ;; Global* handler. The pointer came from heap_alloc/heap_realloc, but retain
+  ;; the arena check so a future caller cannot turn this helper into an unsafe
+  ;; g2w shortcut.
+  (func $heap_global_mark (param $guest_ptr i32)
+    (local $block i32)
+    (if (i32.eqz (local.get $guest_ptr)) (then (return)))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (if (call $heap_arena_find (local.get $block))
+      (then
+        (drop (i32.atomic.rmw.or (call $g2w (local.get $block)) (i32.const 1))))))
 
   ;; Free-list allocator. Each allocated block has a 4-byte size header at ptr-4.
   ;; Free blocks: [size:4][next_guest_ptr:4][...]. Min block = 16 bytes.
@@ -500,22 +2044,68 @@
   (func $heap_alloc (param $size i32) (result i32)
     (local $need i32) (local $ptr i32)
     (local $prev_w i32) (local $cur i32) (local $cur_w i32)
-    (local $bsz i32) (local $rem i32)
+    (local $bsz i32) (local $rem i32) (local $steps i32) (local $from_free i32)
+    (local $cur_rec i32)
     ;; Refuse huge/overflowing allocations before adding the block header.
     (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))
-      (then (return (i32.const 0))))
+      (then
+        (call $host_heap_oom_trace (local.get $size) (i32.const 5))
+        (return (i32.const 0))))
     ;; need = align8(size + 4 header), minimum 16
     (local.set $need (i32.and (i32.add (i32.add (local.get $size) (i32.const 4)) (i32.const 7)) (i32.const 0xFFFFFFF8)))
     (if (i32.lt_u (local.get $need) (local.get $size))
-      (then (return (i32.const 0))))
+      (then
+        (call $host_heap_oom_trace (local.get $size) (i32.const 5))
+        (return (i32.const 0))))
     (if (i32.lt_u (local.get $need) (i32.const 16)) (then (local.set $need (i32.const 16))))
     ;; Walk free list (guest pointers)
     (local.set $prev_w (i32.const 0)) ;; 0 = scanning from head
     (local.set $cur (global.get $free_list))
     (block $found (block $scan (loop $fl
       (br_if $scan (i32.eqz (local.get $cur)))
+      ;; A free list is only ever reached by following guest-owned next links,
+      ;; so a cycle in it is an unbounded loop inside one WASM call: no block
+      ;; budget bounds it, no host import escapes it, and the whole emulator
+      ;; wedges with nothing in any log. WordPad's shutdown reaches exactly
+      ;; that -- a block freed twice leaves A->B->A -- so bound the walk the
+      ;; same way $d3d_render_list_tail bounds its own, and cut the list here
+      ;; on the way out so the next allocation cannot walk into it again.
+      ;; Everything past the cut is leaked, which is strictly better than a
+      ;; hang, and bump allocation still serves this request.
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (if (i32.gt_u (local.get $steps) (i32.const 65536))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
+            (else (global.set $free_list (i32.const 0))))
+          (br $scan)))
+      ;; Validate the link before reading its header through g2w. The record it
+      ;; resolves to is also the one a block taken from here is charged against,
+      ;; so the accounting costs no extra scan.
+      (local.set $cur_rec (call $heap_arena_find (local.get $cur)))
+      (if (i32.eqz (local.get $cur_rec))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (i32.const 0)))
+            (else (global.set $free_list (i32.const 0))))
+          (br $scan)))
       (local.set $cur_w (call $g2w (local.get $cur)))
       (local.set $bsz (i32.load (local.get $cur_w)))
+      ;; A free block has to fit inside the arena it claims to live in. Serving
+      ;; one that does not is far worse than losing the list: Pawn reaches a
+      ;; header reading 0x03d09020, and a 64 MB "fit" is split, handed back as
+      ;; a low pointer, and then zeroed by HEAP_ZERO_MEMORY straight through
+      ;; the thread cache and everything else the emulator keeps in linear
+      ;; memory -- which is why it dies decoding a block of zeros rather than
+      ;; anywhere near the heap. The chain's next pointer sits in the same
+      ;; block we just decided to distrust, so stop the walk here and bump
+      ;; allocate instead of following it.
+      (if (call $heap_block_bad (local.get $cur) (local.get $bsz))
+        (then
+          (if (local.get $prev_w)
+            (then (i32.store (i32.add (local.get $prev_w) (i32.const 4)) (i32.const 0)))
+            (else (global.set $free_list (i32.const 0))))
+          (br $scan)))
       (if (i32.ge_u (local.get $bsz) (local.get $need))
         (then
           ;; Found a fit. Split if remainder >= 16, else use whole block.
@@ -535,82 +2125,149 @@
                   (i32.load (i32.add (local.get $cur_w) (i32.const 4)))))
                 (else (global.set $free_list
                   (i32.load (i32.add (local.get $cur_w) (i32.const 4))))))))
+          (call $heap_arena_charge (local.get $cur_rec)
+            (i32.load (call $g2w (local.get $ptr))))
+          (local.set $from_free (i32.const 1))
           (br $found)))
       (local.set $prev_w (local.get $cur_w))
       (local.set $cur (i32.load (i32.add (local.get $cur_w) (i32.const 4))))
       (br $fl)))
-      ;; No free block found — bump allocate.
-      ;; OOM guard: refuse if the next heap byte would escape low guest
-      ;; memory and land in emulator-private decoded-code/cache regions.
-      ;; Pawn-style chess engines ask for 64 MB transposition tables that
-      ;; could trip this; return 0 so the app handles OOM. VirtualAlloc
-      ;; reservations are sparse address-space claims in this emulator and do
-      ;; not cap HeapAlloc growth until they commit into real low memory.
-      (if (i32.lt_u
-            (i32.add (global.get $heap_ptr) (local.get $need))
-            (global.get $heap_ptr))
+      ;; No free block found — bump allocate inside this instance's arena.
+      ;; When the arena is exhausted (or was never reserved) take another chunk
+      ;; from the shared cursor. If the low window itself is spent, spill to the
+      ;; sparse high arena: low guest memory must not run into the emulator's own
+      ;; decoded-code cache. Pawn-style chess engines ask for 64 MB transposition
+      ;; tables that land here; returning 0 lets the app handle OOM.
+      (if (i32.or
+            (i32.eqz (global.get $heap_ptr))
+            (i32.or
+              ;; overflow of ptr + need
+              (i32.lt_u
+                (i32.add (global.get $heap_ptr) (local.get $need))
+                (global.get $heap_ptr))
+              (i32.gt_u
+                (i32.add (global.get $heap_ptr) (local.get $need))
+                (global.get $heap_end))))
         (then
-          (local.set $ptr (call $heap_sparse_alloc (local.get $need)))
-          (if (local.get $ptr) (then (br $found)) (else (return (i32.const 0))))))
-      (if (i32.gt_u
-            (call $g2w (i32.add (global.get $heap_ptr) (local.get $need)))
-            (global.get $THREAD_CACHE_BASE))
-        (then
-          (local.set $ptr (call $heap_sparse_alloc (local.get $need)))
-          (if (local.get $ptr) (then (br $found)) (else (return (i32.const 0))))))
+          (if (i32.eqz (call $heap_low_reserve (local.get $need)))
+            (then
+              (local.set $ptr (call $heap_sparse_alloc (local.get $need)))
+              (if (local.get $ptr)
+                (then (br $found))
+                (else
+                  (call $host_heap_oom_trace (local.get $need) (i32.const 1))
+                  (return (i32.const 0))))))))
       (local.set $ptr (global.get $heap_ptr))
       (i32.store (call $g2w (local.get $ptr)) (local.get $need))
-      (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need))))
+      (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need)))
+      (call $heap_arena_charge (global.get $heap_arena_record) (local.get $need))
+      (i32.atomic.store offset=8 (global.get $heap_arena_record) (global.get $heap_ptr)))
+    ;; A recycled block still holds whatever the last owner left in it -- and,
+    ;; at offset 4, this allocator's own free-list next pointer. Bump space is
+    ;; zero because every arena chunk is committed zeroed, so before this the
+    ;; same HeapAlloc handed back zeros early in a process and stale bytes once
+    ;; the free list filled up. Programs are written against the second half of
+    ;; that never happening: a Windows process that asks for a large block gets
+    ;; fresh committed pages, so a structure that is only written where it is
+    ;; used reads zero everywhere else. Black & White 2's land loader is one --
+    ;; its 128x128 spatial grid (16384 cells x 12 bytes) is populated lazily and
+    ;; never cleared, and served from recycled memory 2208 of its cells came
+    ;; back holding a free-list link where a NULL vector should be, after which
+    ;; the query at 0x9e5272 scanned guest address i*4 forever. Repairing those
+    ;; cells in a live wedged process moved EIP straight out of that loop, which
+    ;; is what makes this the fix rather than a guess.
+    (if (local.get $from_free)
+      (then (call $zero_memory
+        (i32.add (call $g2w (local.get $ptr)) (i32.const 4))
+        (i32.sub (local.get $need) (i32.const 4)))))
     ;; Return guest pointer past the size header
     (i32.add (local.get $ptr) (i32.const 4)))
 
-  ;; heap_free: return block to free list
-  (func $heap_free (param $guest_ptr i32)
-    (local $block i32) (local $w i32) (local $size i32) (local $end i32)
-    (local $direct i32)
-    (if (i32.eqz (local.get $guest_ptr)) (then (return)))
-    ;; Only free blocks owned by this allocator. The old lower-bound-only
-    ;; check accepted every high foreign value as a heap pointer. A stale
-    ;; per-window title slot containing the bytes "ACTR" therefore installed
-    ;; 0x52544341 as the free-list head, and the next small allocation walked
-    ;; arbitrary guest memory forever.
-    (if (i32.lt_u (local.get $guest_ptr)
-          (i32.add (global.get $heap_base) (i32.const 4)))
-      (then (return)))
-    (local.set $direct
-      (i32.lt_u (local.get $guest_ptr) (global.get $heap_ptr)))
-    (if (i32.eqz (local.get $direct))
-      (then
-        ;; Sparse heap blocks live in the high reserved arena. This bounded
-        ;; range also rejects arbitrary high handles/FOURCCs without disabling
-        ;; frees from the current sparse chunk.
-        (if (i32.or
-              (i32.eqz (global.get $heap_sparse_ptr))
-              (i32.or
-                (i32.lt_u (local.get $guest_ptr) (global.get $virtual_alloc_top))
-                (i32.ge_u (local.get $guest_ptr) (global.get $heap_sparse_ptr))))
-          (then (return)))))
-    ;; Block starts 4 bytes before the user pointer
+  ;; Shrink a live allocation in place without allocating or moving its prefix.
+  ;; Internal callers use this after constructing a bounded worst-case buffer.
+  ;; Returns the original guest pointer, or zero for an invalid block/growth.
+  ;; The original arena still covers both headers; only the unused suffix moves
+  ;; to this instance's free list. Sub-minimum suffixes remain padding.
+  (func $heap_shrink (param $guest_ptr i32) (param $size i32) (result i32)
+    (local $block i32) (local $wa i32) (local $old i32) (local $need i32)
+    (local $tail i32) (local $remaining i32)
+    (if (i32.or (i32.eqz (local.get $guest_ptr))
+      (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))) (then (return (i32.const 0))))
     (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
-    (local.set $w (call $g2w (local.get $block)))
-    ;; Every block header is an aligned allocation extent. Validate it before
-    ;; linking the block so even an in-range stale pointer cannot corrupt the
-    ;; list or manufacture a cycle.
-    (local.set $size (i32.load (local.get $w)))
-    (if (i32.or
-          (i32.lt_u (local.get $size) (i32.const 16))
-          (i32.ne (i32.and (local.get $size) (i32.const 7)) (i32.const 0)))
-      (then (return)))
-    (local.set $end (i32.add (local.get $block) (local.get $size)))
-    (if (i32.lt_u (local.get $end) (local.get $block)) (then (return)))
-    (if (local.get $direct)
+    (if (i32.eqz (call $heap_arena_find (local.get $block))) (then (return (i32.const 0))))
+    (local.set $wa (call $g2w (local.get $block)))
+    (local.set $old (i32.load (local.get $wa)))
+    (if (call $heap_block_bad (local.get $block) (local.get $old)) (then (return (i32.const 0))))
+    (local.set $need (i32.and (i32.add (local.get $size) (i32.const 11)) (i32.const -8)))
+    (if (i32.lt_u (local.get $need) (i32.const 16)) (then (local.set $need (i32.const 16))))
+    (if (i32.gt_u (local.get $need) (local.get $old)) (then (return (i32.const 0))))
+    (local.set $remaining (i32.sub (local.get $old) (local.get $need)))
+    (if (i32.ge_u (local.get $remaining) (i32.const 16)) (then
+      (local.set $tail (i32.add (local.get $block) (local.get $need)))
+      (i32.store (local.get $wa) (local.get $need))
+      (i32.store (call $g2w (local.get $tail)) (local.get $remaining))
+      (call $heap_free (i32.add (local.get $tail) (i32.const 4)))))
+    (local.get $guest_ptr))
+
+  ;; Return a block to this instance's free list. require_global uses the exact
+  ;; arena walk above and atomically claims GLOBAL_LIVE before mutating the
+  ;; list, so two workers cannot both successfully GlobalFree the same handle.
+  (func $heap_free_impl (param $guest_ptr i32) (param $require_global i32) (result i32)
+    (local $block i32) (local $w i32) (local $raw i32) (local $size i32)
+    (local $cur i32) (local $steps i32) (local $rec i32)
+    (if (i32.eqz (local.get $guest_ptr)) (then (return (i32.const 0))))
+    (local.set $block (i32.sub (local.get $guest_ptr) (i32.const 4)))
+    (if (local.get $require_global)
       (then
-        (if (i32.gt_u (local.get $end) (global.get $heap_ptr)) (then (return))))
-      (else
-        (if (i32.gt_u (local.get $end) (global.get $heap_sparse_ptr)) (then (return)))))
+        (local.set $size
+          (call $heap_global_block_size (local.get $guest_ptr) (i32.const 1)))
+        (if (i32.eqz (local.get $size)) (then (return (i32.const 0))))))
+    (local.set $rec (call $heap_arena_find (local.get $block)))
+    (if (i32.eqz (local.get $rec)) (then (return (i32.const 0))))
+    (local.set $w (call $g2w (local.get $block)))
+    (if (i32.eqz (local.get $require_global))
+      (then
+        (local.set $raw (i32.atomic.load (local.get $w)))
+        ;; Generic frees retain the allocator's original strict aligned-size
+        ;; contract. A tagged block must be claimed through heap_global_free;
+        ;; otherwise an arbitrary corrupted odd size would become a plausible
+        ;; Global marker and bypass the malformed-header protection.
+        (if (i32.and (local.get $raw) (i32.const 7))
+          (then (return (i32.const 0))))
+        (local.set $size (local.get $raw))))
+    (if (call $heap_block_bad (local.get $block) (local.get $size))
+      (then (return (i32.const 0))))
+    ;; Linking a block that is already on the list is what makes the list
+    ;; cyclic: free(B) with head A, then free(A) again, and A->B->A. Real
+    ;; programs do it -- WordPad's shutdown does -- so refuse the second link
+    ;; instead of building the cycle. The scan is bounded because the duplicate
+    ;; is always near the head in practice (the two frees are close together);
+    ;; a deeper one still cannot hang, because $heap_alloc's walk is bounded
+    ;; and cuts the list when it trips.
+    (local.set $cur (global.get $free_list))
+    (block $checked (loop $scan
+      (br_if $checked (i32.eqz (local.get $cur)))
+      (br_if $checked (i32.gt_u (local.get $steps) (i32.const 64)))
+      (if (i32.eq (local.get $cur) (local.get $block))
+        (then (return (i32.const 0))))
+      (if (i32.eqz (call $heap_arena_find (local.get $cur))) (then (br $checked)))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (br $scan)))
+    ;; Ownership transfers to the freeing instance. The producer's bump cursor
+    ;; already passed this block; its private free list never contained it.
     ;; Prepend to free list: store next = old head
     (i32.store (i32.add (local.get $w) (i32.const 4)) (global.get $free_list))
-    (global.set $free_list (local.get $block)))
+    (global.set $free_list (local.get $block))
+    (call $heap_arena_charge (local.get $rec) (i32.sub (i32.const 0) (local.get $size)))
+    (i32.const 1))
+
+  ;; Existing internal callers keep the same void, lock-free API.
+  (func $heap_free (param $guest_ptr i32)
+    (drop (call $heap_free_impl (local.get $guest_ptr) (i32.const 0))))
+
+  (func $heap_global_free (param $guest_ptr i32) (result i32)
+    (call $heap_free_impl (local.get $guest_ptr) (i32.const 1)))
 
 ;; DC record offsets: hdc, pen, brush, pos x/y, text/bk colors, bk mode,
   ;; text align, map mode, window origin/extents, viewport origin/extents,
@@ -649,7 +2306,8 @@
   ;; Returns new guest pointer (or 0 on failure). Copies old data, frees old block.
   ;; flags: bit 6 = LMEM_ZEROINIT/GMEM_ZEROINIT
   (func $heap_realloc (param $old_ptr i32) (param $new_size i32) (param $flags i32) (result i32)
-    (local $new_ptr i32) (local $old_block_size i32) (local $old_data_size i32) (local $copy_size i32)
+    (local $new_ptr i32) (local $new_wa i32) (local $old_header i32)
+    (local $old_block_size i32) (local $old_data_size i32) (local $copy_size i32)
     ;; If old_ptr is NULL, just allocate
     (if (i32.eqz (local.get $old_ptr))
       (then
@@ -659,26 +2317,30 @@
             (then (call $zero_memory (call $g2w (local.get $new_ptr)) (local.get $new_size))))))
         (return (local.get $new_ptr))))
     ;; Read old block size from header at [ptr-4] (includes 4-byte header)
-    (local.set $old_block_size (call $gl32 (i32.sub (local.get $old_ptr) (i32.const 4))))
+    (local.set $old_header
+      (call $gl32 (i32.sub (local.get $old_ptr) (i32.const 4))))
+    (local.set $old_block_size (i32.and (local.get $old_header) (i32.const -8)))
     (local.set $old_data_size (i32.sub (local.get $old_block_size) (i32.const 4)))
     ;; If already big enough, return same pointer
     (if (i32.le_u (local.get $new_size) (local.get $old_data_size))
       (then (return (local.get $old_ptr))))
     ;; Allocate new block
     (local.set $new_ptr (call $heap_alloc (local.get $new_size)))
-    (if (i32.eqz (local.get $new_ptr)) (then (return (i32.const 0))))
+    (if (i32.eqz (local.get $new_ptr)) (then (return (i32.const 0)))) (local.set $new_wa (call $g2w (local.get $new_ptr)))
     ;; Copy old data
     (local.set $copy_size (local.get $old_data_size))
     (if (i32.gt_u (local.get $copy_size) (local.get $new_size))
       (then (local.set $copy_size (local.get $new_size))))
-    (call $memcpy (call $g2w (local.get $new_ptr)) (call $g2w (local.get $old_ptr)) (local.get $copy_size))
+    (call $memcpy (local.get $new_wa) (call $g2w (local.get $old_ptr)) (local.get $copy_size))
     ;; Zero new portion if ZEROINIT flag set
     (if (i32.and (local.get $flags) (i32.const 0x40))
       (then (call $zero_memory
-        (i32.add (call $g2w (local.get $new_ptr)) (local.get $copy_size))
+        (i32.add (local.get $new_wa) (local.get $copy_size))
         (i32.sub (local.get $new_size) (local.get $copy_size)))))
     ;; Free old block
-    (call $heap_free (local.get $old_ptr))
+    (if (i32.and (local.get $old_header) (i32.const 1))
+      (then (drop (call $heap_global_free (local.get $old_ptr))))
+      (else (call $heap_free (local.get $old_ptr))))
     (local.get $new_ptr))
 
   ;; Active resource-lookup base/RVA. During a Load*/FindResource* handler call
@@ -1020,71 +2682,263 @@
 
   ;; Optional extra args appended after the exe name. JS sets these via
   ;; (export "set_extra_cmdline") before the first GetCommandLineA call.
-  ;; Buffer lives in low scratch memory at 0x300 (256 bytes), separate from
-  ;; the exe_name buffer at $exe_name_wa.
+  ;; Keep this mutable staging area out of the low static-string block. The old
+  ;; 0x300 buffer overwrote names and labels through 0x3C7 when a long installer
+  ;; command line was supplied, including the optional uxtheme.dll name.
+  (global $EXTRA_CMDLINE_BUFFER i32 (region.addr $EXTRA_CMDLINE_BUFFER 0))
+  (global $EXTRA_CMDLINE_BUFFER_SIZE i32 (region.size $EXTRA_CMDLINE_BUFFER))
   (global $extra_cmdline_len (mut i32) (i32.const 0))
   (func (export "set_extra_cmdline") (param $waddr i32) (param $len i32)
-    (local $i i32)
     (if (i32.gt_u (local.get $len) (i32.const 200))
       (then (local.set $len (i32.const 200))))
     (global.set $extra_cmdline_len (local.get $len))
-    (block $done (loop $copy
-      (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
-      (i32.store8 (i32.add (i32.const 0x300) (local.get $i))
-        (i32.load8_u (i32.add (local.get $waddr) (local.get $i))))
+    (memory.copy (global.get $EXTRA_CMDLINE_BUFFER) (local.get $waddr) (local.get $len)))
+
+  ;; Build the ANSI CRT view of the command line beside GetCommandLineA's
+  ;; immutable string. Layout within the allocation is:
+  ;;   +0    raw command line              +500  __argv pointer cell
+  ;;   +504  _acmdln pointer cell          +508  argc
+  ;;   +512  token storage
+  ;;   +1024 argv pointers                 +1532 empty envp
+  ;; Extra arguments are split on spaces/tabs except inside double quotes.
+  (func $exe_path_needs_quotes (result i32)
+    (local $i i32) (local $ch i32)
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $exe_name_len)))
+      (local.set $ch
+        (i32.load8_u (i32.add (global.get $exe_name_wa) (local.get $i))))
+      (if (i32.or
+            (i32.eq (local.get $ch) (i32.const 0x20))
+            (i32.eq (local.get $ch) (i32.const 0x09)))
+        (then (return (i32.const 1))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $copy))))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $store_fake_argv_a (param $cmd i32) (param $path_len i32) (param $path_off i32)
+    (local $dst i32) (local $argv i32) (local $argc i32)
+    (local $i i32) (local $ch i32) (local $quoted i32)
+    (local.set $dst (i32.add (local.get $cmd) (i32.const 512)))
+    (local.set $argv (i32.add (local.get $cmd) (i32.const 1024)))
+    ;; argv[0] is the same full path prefix exposed by GetCommandLineA.
+    (call $gs32 (local.get $argv) (local.get $dst))
+    (block $path_done (loop $path_copy
+      (br_if $path_done (i32.ge_u (local.get $i) (local.get $path_len)))
+      (call $gs8 (local.get $dst) (call $gl8
+        (i32.add (local.get $cmd) (i32.add (local.get $path_off) (local.get $i)))))
+      (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $path_copy)))
+    (call $gs8 (local.get $dst) (i32.const 0))
+    (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
+    (local.set $argc (i32.const 1))
+    (local.set $i (i32.const 0))
+    (block $args_done (loop $next_arg
+      ;; Skip unquoted separators between arguments.
+      (block $have_arg (loop $skip_space
+        (br_if $args_done (i32.ge_u (local.get $i) (global.get $extra_cmdline_len)))
+        (local.set $ch (i32.load8_u
+          (i32.add (global.get $EXTRA_CMDLINE_BUFFER) (local.get $i))))
+        (br_if $have_arg
+          (i32.and (i32.ne (local.get $ch) (i32.const 0x20))
+                   (i32.ne (local.get $ch) (i32.const 0x09))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $skip_space)))
+      ;; At most 126 arguments plus the terminating NULL fit in the table.
+      (br_if $args_done (i32.ge_u (local.get $argc) (i32.const 126)))
+      (call $gs32
+        (i32.add (local.get $argv) (i32.shl (local.get $argc) (i32.const 2)))
+        (local.get $dst))
+      (local.set $argc (i32.add (local.get $argc) (i32.const 1)))
+      (local.set $quoted (i32.const 0))
+      (block $arg_done (loop $copy_arg
+        (br_if $arg_done (i32.ge_u (local.get $i) (global.get $extra_cmdline_len)))
+        (local.set $ch (i32.load8_u
+          (i32.add (global.get $EXTRA_CMDLINE_BUFFER) (local.get $i))))
+        (if (i32.eq (local.get $ch) (i32.const 0x22))
+          (then
+            (local.set $quoted (i32.eqz (local.get $quoted)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $copy_arg)))
+        (br_if $arg_done
+          (i32.and (i32.eqz (local.get $quoted))
+            (i32.or (i32.eq (local.get $ch) (i32.const 0x20))
+                    (i32.eq (local.get $ch) (i32.const 0x09)))))
+        (call $gs8 (local.get $dst) (local.get $ch))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy_arg)))
+      (call $gs8 (local.get $dst) (i32.const 0))
+      (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
+      (br $next_arg)))
+    (call $gs32
+      (i32.add (local.get $argv) (i32.shl (local.get $argc) (i32.const 2)))
+      (i32.const 0))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 500)) (local.get $argv))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 504)) (local.get $cmd))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 508)) (local.get $argc))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 1532)) (i32.const 0)))
+
+  (func $resolve_msvcrt_data_import_a (param $name_wa i32) (result i32)
+    (if (i32.eqz (global.get $fake_cmdline_addr))
+      (then (call $store_fake_cmdline)))
+    ;; msvcrt exports _acmdln as a char * data symbol, __argc as an int data
+    ;; symbol, and __argv as a char ** data symbol. PE IAT entries need the
+    ;; address of each exported cell, not a callable API thunk. Keep _acmdln on
+    ;; the same cell returned by __p__acmdln and dynamic GetProcAddress.
+    (if (i32.and
+          (i32.eq (i32.load (local.get $name_wa)) (i32.const 0x6d63615f)) ;; "_acm"
+          (i32.eq (i32.load (i32.add (local.get $name_wa) (i32.const 4)))
+            (i32.const 0x006e6c64))) ;; "dln\0"
+      (then (return (i32.add (global.get $fake_cmdline_addr) (i32.const 504)))))
+    (if (i32.and
+          (i32.and
+            (i32.eq (i32.load (local.get $name_wa)) (i32.const 0x72615f5f)) ;; "__ar"
+            (i32.eq (i32.load16_u (i32.add (local.get $name_wa) (i32.const 4))) (i32.const 0x6367))) ;; "gc"
+          (i32.eqz (i32.load8_u (i32.add (local.get $name_wa) (i32.const 6)))))
+      (then (return (i32.add (global.get $fake_cmdline_addr) (i32.const 508)))))
+    (if (i32.and
+          (i32.and
+            (i32.eq (i32.load (local.get $name_wa)) (i32.const 0x72615f5f)) ;; "__ar"
+            (i32.eq (i32.load16_u (i32.add (local.get $name_wa) (i32.const 4))) (i32.const 0x7667))) ;; "gv"
+          (i32.eqz (i32.load8_u (i32.add (local.get $name_wa) (i32.const 6)))))
+      (then (return (i32.add (global.get $fake_cmdline_addr) (i32.const 500)))))
+    (i32.const 0))
 
   (func $store_fake_cmdline
-    (local $ptr i32) (local $dst i32) (local $i i32) (local $len i32) (local $extra i32)
-    (local.set $ptr (call $heap_alloc (i32.const 512)))
+    (local $ptr i32) (local $dst i32) (local $len i32) (local $path_len i32)
+    (local $extra i32) (local $quoted i32)
+    (local.set $ptr (call $heap_alloc (i32.const 1536)))
     (global.set $fake_cmdline_addr (local.get $ptr))
-    ;; Write "C:\<exe_name>" — full path matching GetModuleFileNameA
+    (global.set $msvcrt_acmdln_ptr (local.get $ptr))
+    ;; Write the full path matching GetModuleFileNameA. Windows quotes argv[0]
+    ;; in the raw command line when it contains whitespace; installers parse
+    ;; this string themselves and otherwise mistake the remainder for args.
     (local.set $dst (call $g2w (local.get $ptr)))
-    (i32.store8 (local.get $dst) (i32.const 0x43))  ;; 'C'
+    (local.set $quoted (call $exe_path_needs_quotes))
+    (if (local.get $quoted)
+      (then
+        (i32.store8 (local.get $dst) (i32.const 0x22))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 1)))))
+    (i32.store8 (local.get $dst) (global.get $exe_drive))
     (i32.store8 (i32.add (local.get $dst) (i32.const 1)) (i32.const 0x3A))  ;; ':'
     (i32.store8 (i32.add (local.get $dst) (i32.const 2)) (i32.const 0x5C))  ;; '\'
     (local.set $len (global.get $exe_name_len))
-    (block $done (loop $copy
-      (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
-      (i32.store8 (i32.add (local.get $dst) (i32.add (local.get $i) (i32.const 3)))
-        (i32.load8_u (i32.add (global.get $exe_name_wa) (local.get $i))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
-      (br $copy)))
-    (local.set $len (i32.add (local.get $len) (i32.const 3)))
+    (memory.copy (i32.add (local.get $dst) (i32.const 3))
+      (global.get $exe_name_wa) (local.get $len))
+    (local.set $path_len (i32.add (local.get $len) (i32.const 3)))
+    (local.set $len (local.get $path_len))
+    (if (local.get $quoted)
+      (then
+        (i32.store8 (i32.add (local.get $dst) (local.get $len)) (i32.const 0x22))
+        (local.set $len (i32.add (local.get $len) (i32.const 2)))))
+    ;; $dst was advanced past the opening quote for the path copy. Raw-line
+    ;; offsets below are relative to the allocation itself.
+    (local.set $dst (call $g2w (local.get $ptr)))
     ;; If extra args were set via $set_extra_cmdline, append " <args>".
     (local.set $extra (global.get $extra_cmdline_len))
     (if (i32.gt_u (local.get $extra) (i32.const 0))
       (then
         (i32.store8 (i32.add (local.get $dst) (local.get $len)) (i32.const 0x20)) ;; ' '
         (local.set $len (i32.add (local.get $len) (i32.const 1)))
-        (local.set $i (i32.const 0))
-        (block $done2 (loop $copy2
-          (br_if $done2 (i32.ge_u (local.get $i) (local.get $extra)))
-          (i32.store8 (i32.add (local.get $dst) (i32.add (local.get $len) (local.get $i)))
-            (i32.load8_u (i32.add (i32.const 0x300) (local.get $i))))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
-          (br $copy2)))
+        (memory.copy (i32.add (local.get $dst) (local.get $len))
+          (global.get $EXTRA_CMDLINE_BUFFER) (local.get $extra))
         (local.set $len (i32.add (local.get $len) (local.get $extra)))))
-    (i32.store8 (i32.add (local.get $dst) (local.get $len)) (i32.const 0)))
+    (i32.store8 (i32.add (local.get $dst) (local.get $len)) (i32.const 0))
+    (call $store_fake_argv_a (local.get $ptr) (local.get $path_len) (local.get $quoted)))
+
+  (func $store_fake_argv_w (param $cmd i32) (param $path_len i32) (param $path_off i32)
+    (local $dst i32) (local $argv i32) (local $argc i32)
+    (local $i i32) (local $ch i32) (local $quoted i32)
+    (local.set $dst (i32.add (local.get $cmd) (i32.const 1024)))
+    (local.set $argv (i32.add (local.get $cmd) (i32.const 1536)))
+    (call $gs32 (local.get $argv) (local.get $dst))
+    (block $path_done (loop $path_copy
+      (br_if $path_done (i32.ge_u (local.get $i) (local.get $path_len)))
+      (call $gs16
+        (local.get $dst)
+        (call $gl16 (i32.add (local.get $cmd)
+          (i32.shl (i32.add (local.get $path_off) (local.get $i)) (i32.const 1)))))
+      (local.set $dst (i32.add (local.get $dst) (i32.const 2)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $path_copy)))
+    (call $gs16 (local.get $dst) (i32.const 0))
+    (local.set $dst (i32.add (local.get $dst) (i32.const 2)))
+    (local.set $argc (i32.const 1))
+    (local.set $i (i32.const 0))
+    (block $args_done (loop $next_arg
+      (block $have_arg (loop $skip_space
+        (br_if $args_done (i32.ge_u (local.get $i) (global.get $extra_cmdline_len)))
+        (local.set $ch (i32.load8_u
+          (i32.add (global.get $EXTRA_CMDLINE_BUFFER) (local.get $i))))
+        (br_if $have_arg
+          (i32.and (i32.ne (local.get $ch) (i32.const 0x20))
+                   (i32.ne (local.get $ch) (i32.const 0x09))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $skip_space)))
+      (br_if $args_done (i32.ge_u (local.get $argc) (i32.const 126)))
+      (call $gs32
+        (i32.add (local.get $argv) (i32.shl (local.get $argc) (i32.const 2)))
+        (local.get $dst))
+      (local.set $argc (i32.add (local.get $argc) (i32.const 1)))
+      (local.set $quoted (i32.const 0))
+      (block $arg_done (loop $copy_arg
+        (br_if $arg_done (i32.ge_u (local.get $i) (global.get $extra_cmdline_len)))
+        (local.set $ch (i32.load8_u
+          (i32.add (global.get $EXTRA_CMDLINE_BUFFER) (local.get $i))))
+        (if (i32.eq (local.get $ch) (i32.const 0x22))
+          (then
+            (local.set $quoted (i32.eqz (local.get $quoted)))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $copy_arg)))
+        (br_if $arg_done
+          (i32.and (i32.eqz (local.get $quoted))
+            (i32.or (i32.eq (local.get $ch) (i32.const 0x20))
+                    (i32.eq (local.get $ch) (i32.const 0x09)))))
+        (call $gs16 (local.get $dst) (local.get $ch))
+        (local.set $dst (i32.add (local.get $dst) (i32.const 2)))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $copy_arg)))
+      (call $gs16 (local.get $dst) (i32.const 0))
+      (local.set $dst (i32.add (local.get $dst) (i32.const 2)))
+      (br $next_arg)))
+    (call $gs32
+      (i32.add (local.get $argv) (i32.shl (local.get $argc) (i32.const 2)))
+      (i32.const 0))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 772)) (local.get $argc))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 776)) (local.get $argv))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 784))
+      (i32.add (local.get $cmd) (i32.const 2040)))
+    (call $gs32 (i32.add (local.get $cmd) (i32.const 2040)) (i32.const 0)))
 
   (func $store_fake_wcmdline
-    (local $ptr i32) (local $i i32) (local $len i32) (local $extra i32)
-    (local.set $ptr (call $heap_alloc (i32.const 1024)))
+    (local $ptr i32) (local $i i32) (local $len i32) (local $path_len i32)
+    (local $extra i32) (local $quoted i32) (local $base i32)
+    (local.set $ptr (call $heap_alloc (i32.const 2048)))
     (global.set $msvcrt_wcmdln_ptr (local.get $ptr))
-    ;; Write L"C:\<exe_name>" and mirror set_extra_cmdline as UTF-16.
-    (call $gs16 (local.get $ptr) (i32.const 0x43))  ;; 'C'
-    (call $gs16 (i32.add (local.get $ptr) (i32.const 2)) (i32.const 0x3A))  ;; ':'
-    (call $gs16 (i32.add (local.get $ptr) (i32.const 4)) (i32.const 0x5C))  ;; '\'
+    ;; Mirror the ANSI command line, including argv[0] quotes, as UTF-16.
+    (local.set $quoted (call $exe_path_needs_quotes))
+    (if (local.get $quoted)
+      (then (call $gs16 (local.get $ptr) (i32.const 0x22))))
+    (local.set $base (i32.add (local.get $ptr) (i32.shl (local.get $quoted) (i32.const 1))))
+    (call $gs16 (local.get $base) (global.get $exe_drive))
+    (call $gs16 (i32.add (local.get $base) (i32.const 2)) (i32.const 0x3A))  ;; ':'
+    (call $gs16 (i32.add (local.get $base) (i32.const 4)) (i32.const 0x5C))  ;; '\'
     (local.set $len (global.get $exe_name_len))
     (block $done (loop $copy
       (br_if $done (i32.ge_u (local.get $i) (local.get $len)))
       (call $gs16
-        (i32.add (local.get $ptr) (i32.shl (i32.add (local.get $i) (i32.const 3)) (i32.const 1)))
+        (i32.add (local.get $base) (i32.shl (i32.add (local.get $i) (i32.const 3)) (i32.const 1)))
         (i32.load8_u (i32.add (global.get $exe_name_wa) (local.get $i))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $copy)))
-    (local.set $len (i32.add (local.get $len) (i32.const 3)))
+    (local.set $path_len (i32.add (local.get $len) (i32.const 3)))
+    (local.set $len (local.get $path_len))
+    (if (local.get $quoted)
+      (then
+        (call $gs16 (i32.add (local.get $base) (i32.shl (local.get $len) (i32.const 1)))
+          (i32.const 0x22))
+        (local.set $len (i32.add (local.get $len) (i32.const 2)))))
     (local.set $extra (global.get $extra_cmdline_len))
     (if (i32.gt_u (local.get $extra) (i32.const 0))
       (then
@@ -1095,16 +2949,14 @@
           (br_if $done2 (i32.ge_u (local.get $i) (local.get $extra)))
           (call $gs16
             (i32.add (local.get $ptr) (i32.shl (i32.add (local.get $len) (local.get $i)) (i32.const 1)))
-            (i32.load8_u (i32.add (i32.const 0x300) (local.get $i))))
+            (i32.load8_u (i32.add (global.get $EXTRA_CMDLINE_BUFFER) (local.get $i))))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $copy2)))
         (local.set $len (i32.add (local.get $len) (local.get $extra)))))
     (call $gs16 (i32.add (local.get $ptr) (i32.shl (local.get $len) (i32.const 1))) (i32.const 0))
     ;; Scratch records used by __p__wcmdln and __wgetmainargs.
     (call $gs32 (i32.add (local.get $ptr) (i32.const 768)) (local.get $ptr))
-    (call $gs32 (i32.add (local.get $ptr) (i32.const 776)) (local.get $ptr))
-    (call $gs32 (i32.add (local.get $ptr) (i32.const 780)) (i32.const 0))
-    (call $gs32 (i32.add (local.get $ptr) (i32.const 784)) (i32.const 0)))
+    (call $store_fake_argv_w (local.get $ptr) (local.get $path_len) (local.get $quoted)))
   (func $guest_strlen (param $gp i32) (result i32)
     (local $len i32)
     (block $d (loop $l
@@ -1308,6 +3160,23 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
     (i32.const 0))
 
+  ;; Wide case-sensitive compare. Keep guest addresses intact and use gl16 for
+  ;; each code unit so a string may cross from the direct window into any
+  ;; translated guest page without assuming affine WASM backing.
+  (func $guest_wcscmp (param $s1 i32) (param $s2 i32) (result i32)
+    (local $i i32) (local $a i32) (local $b i32)
+    (block $d (loop $l
+      (local.set $a (call $gl16
+        (i32.add (local.get $s1) (i32.shl (local.get $i) (i32.const 1)))))
+      (local.set $b (call $gl16
+        (i32.add (local.get $s2) (i32.shl (local.get $i) (i32.const 1)))))
+      (if (i32.ne (local.get $a) (local.get $b))
+        (then (return (i32.sub (local.get $a) (local.get $b)))))
+      (br_if $d (i32.eqz (local.get $a)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.const 0))
+
   ;; Compare a UTF-16LE string at WASM addr $wide_wa with a NUL-terminated
   ;; ASCII string at WASM addr $ascii_wa, case-insensitive.
   (func $wide_ascii_eq (param $wide_wa i32) (param $ascii_wa i32) (result i32)
@@ -1340,7 +3209,10 @@
       (br $scan)))
     (i32.const 0))
 
-  ;; DLL name compare: compare guest ANSI string at $name_ptr with WASM string at $cmp_ptr (case-insensitive)
+  ;; DLL name compare: compare guest ANSI string at $name_ptr with WASM string
+  ;; at $cmp_ptr (case-insensitive). Treat the conventional ".dll" suffix as
+  ;; optional: UE1 asks LoadLibraryA for absolute extensionless paths such as
+  ;; "C:\\Core", while the mapped PE export directory names itself Core.dll.
   (func $dll_name_match (param $name_ptr i32) (param $cmp_ptr i32) (result i32)
     (local $a i32) (local $b i32) (local $i i32) (local $scan i32) (local $start i32)
     ;; LoadLibrary often receives a path ("C:\Plugins\foo.dll"), while PE
@@ -1359,6 +3231,16 @@
       (local.set $a (call $tolower (call $gl8
         (i32.add (local.get $name_ptr) (i32.add (local.get $start) (local.get $i))))))
       (local.set $b (call $tolower (i32.load8_u (i32.add (local.get $cmp_ptr) (local.get $i)))))
+      (if (i32.and (i32.eqz (local.get $a)) (i32.eq (local.get $b) (i32.const 0x2e)))
+        (then
+          (if (i32.and
+                (i32.and
+                  (i32.eq (call $tolower (i32.load8_u (i32.add (local.get $cmp_ptr) (i32.add (local.get $i) (i32.const 1))))) (i32.const 0x64))
+                  (i32.eq (call $tolower (i32.load8_u (i32.add (local.get $cmp_ptr) (i32.add (local.get $i) (i32.const 2))))) (i32.const 0x6c)))
+                (i32.and
+                  (i32.eq (call $tolower (i32.load8_u (i32.add (local.get $cmp_ptr) (i32.add (local.get $i) (i32.const 3))))) (i32.const 0x6c))
+                  (i32.eqz (i32.load8_u (i32.add (local.get $cmp_ptr) (i32.add (local.get $i) (i32.const 4)))))))
+            (then (return (i32.const 1))))))
       (br_if $no (i32.ne (local.get $a) (local.get $b)))
       (if (i32.eqz (local.get $a)) (then (return (i32.const 1)))) ;; both null = match
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
@@ -1384,6 +3266,21 @@
         (then (return (i32.sub (local.get $a) (local.get $b)))))
       (br_if $d (i32.eqz (local.get $a))) ;; both null → equal
       (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))
+    (i32.const 0))
+
+  ;; Case-insensitive equality between a guest ANSI string and one that is
+  ;; already in WASM memory. Window titles come back from TITLE_TABLE as WASM
+  ;; pointers while the string a caller hands FindWindowEx is a guest pointer,
+  ;; so neither $guest_stricmp nor a plain memcmp can compare the two.
+  (func $guest_ansi_eq_wasm_ci (param $guest i32) (param $wa i32) (result i32)
+    (local $i i32) (local $a i32) (local $b i32)
+    (block $no (loop $l
+      (local.set $a (call $tolower (call $gl8 (i32.add (local.get $guest) (local.get $i)))))
+      (local.set $b (call $tolower (i32.load8_u (i32.add (local.get $wa) (local.get $i)))))
+      (br_if $no (i32.ne (local.get $a) (local.get $b)))
+      (if (i32.eqz (local.get $a)) (then (return (i32.const 1))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
     (i32.const 0))
 
   ;; FlatSB entry points are optional comctl32 helpers. The loaded Win9x
@@ -1469,10 +3366,55 @@
           (then (i32.store offset=12 (local.get $p) (local.get $b))))))
     (i32.store8 (call $update_flag_addr_for_slot (local.get $slot)) (i32.const 1)))
 
+  ;; Client size for the paint paths: the recorded client rect when there is
+  ;; one, and only then the host. Same reasoning as $client_rect_wh_packed —
+  ;; get_window_client_size answers by calling back into this module — but these
+  ;; callers need a usable size rather than "0 = not recorded", so the fallback
+  ;; lives here instead of at each site.
+  (func $wnd_client_size_or_host (param $hwnd i32) (result i32)
+    (local $wh i32)
+    (local.set $wh (call $client_rect_wh_packed (local.get $hwnd)))
+    (if (local.get $wh) (then (return (local.get $wh))))
+    (call $host_get_window_client_size (local.get $hwnd)))
+
+  ;; Win32 GetClientRect's canonical size calculation. WAT-native controls
+  ;; own their geometry outright; generic WS_CHILD windows first refresh the
+  ;; recorded non-client split; only top-level windows ask the browser host.
+  ;; Keep this in one helper so APIs such as comctl32's
+  ;; GetEffectiveClientRect start from exactly the rectangle GetClientRect
+  ;; would have returned instead of inventing a desktop-sized fallback.
+  (func $wnd_get_client_size_packed (param $hwnd i32) (result i32)
+    (local $style i32) (local $cw i32) (local $ch i32)
+    (if (call $ctrl_table_get_class (local.get $hwnd))
+      (then (return (call $ctrl_get_wh_packed (local.get $hwnd)))))
+    (local.set $style (call $wnd_get_style (local.get $hwnd)))
+    (if (i32.and
+          (i32.ne (call $wnd_get_parent (local.get $hwnd)) (i32.const 0))
+          (i32.ne (i32.and (local.get $style) (i32.const 0x40000000)) (i32.const 0)))
+      (then
+        (call $defwndproc_do_nccalcsize (local.get $hwnd))
+        (local.set $cw
+          (i32.sub
+            (call $client_rect_get_r (local.get $hwnd))
+            (call $client_rect_get_l (local.get $hwnd))))
+        (local.set $ch
+          (i32.sub
+            (call $client_rect_get_b (local.get $hwnd))
+            (call $client_rect_get_t (local.get $hwnd))))
+        (if (i32.or
+              (i32.le_s (local.get $cw) (i32.const 0))
+              (i32.le_s (local.get $ch) (i32.const 0)))
+          (then (return (call $ctrl_get_wh_packed (local.get $hwnd)))))
+        (return
+          (i32.or
+            (i32.and (local.get $cw) (i32.const 0xFFFF))
+            (i32.shl (local.get $ch) (i32.const 16))))))
+    (call $host_get_window_client_size (local.get $hwnd)))
+
   (func $update_invalidate_full (param $hwnd i32)
     (local $cs i32) (local $wh i32) (local $w i32) (local $h i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
-    (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
+    (local.set $cs (call $wnd_client_size_or_host (local.get $hwnd)))
     (local.set $w (i32.and (local.get $cs) (i32.const 0xFFFF)))
     (local.set $h (i32.shr_u (local.get $cs) (i32.const 16)))
     (if (i32.or (i32.eqz (local.get $w)) (i32.eqz (local.get $h)))
@@ -1566,14 +3508,36 @@
   ;; this the license text and the options checkboxes stayed on screen
   ;; underneath the Installing Files page.
   (func $wnd_uncover_parent (param $hwnd i32)
-    (local $parent i32)
+    (local $parent i32) (local $xy i32) (local $wh i32)
+    (local $x i32) (local $y i32) (local $w i32) (local $h i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd))) (then (return)))
     (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
     (if (i32.eqz (local.get $parent)) (then (return)))
     (if (i32.eq (call $wnd_table_find (local.get $parent)) (i32.const -1)) (then (return)))
     (call $nc_flags_set (local.get $parent) (i32.const 2))
-    (call $invalidate_hwnd (local.get $parent)))
+    ;; Only the rectangle formerly owned by the child is newly exposed. A
+    ;; full-parent invalidation erases unrelated siblings and is especially
+    ;; destructive for animated page swaps: Half-Life alternates two 640x100
+    ;; logo children and would blank/rebuild the entire menu every frame.
+    (local.set $xy (call $ctrl_get_xy_packed (local.get $hwnd)))
+    (local.set $wh (call $ctrl_get_wh_packed (local.get $hwnd)))
+    (local.set $x (i32.extend16_s (local.get $xy)))
+    (local.set $y (i32.shr_s (local.get $xy) (i32.const 16)))
+    (local.set $w (i32.and (local.get $wh) (i32.const 0xFFFF)))
+    (local.set $h (i32.shr_u (local.get $wh) (i32.const 16)))
+    (if (i32.and (i32.gt_s (local.get $w) (i32.const 0))
+                 (i32.gt_s (local.get $h) (i32.const 0)))
+      (then
+        (call $update_invalidate_rect (local.get $parent)
+          (local.get $x) (local.get $y)
+          (i32.add (local.get $x) (local.get $w))
+          (i32.add (local.get $y) (local.get $h)))
+        (if (i32.eq (local.get $parent) (global.get $main_hwnd))
+          (then (global.set $paint_pending (i32.const 1)))
+          (else (call $paint_flag_set (local.get $parent))))
+        (call $host_invalidate (local.get $parent)))
+      (else (call $invalidate_hwnd (local.get $parent)))))
 
   ;; Paint flags table — 1 byte per WND slot at $PAINT_FLAGS. This mirrors
   ;; how real Win32 tracks paint state: a per-window pending bit, not a
@@ -1592,6 +3556,18 @@
   ;; this for WAT-internal paint triggers that don't go through Win32
   ;; InvalidateRect; using $paint_flag_set alone leaves the rgn empty and the
   ;; region pump silently drops the paint.
+  ;; The erase does NOT come with it. USER can mark a system-driven
+  ;; invalidation for erase because there every window owns its own surface;
+  ;; here children share the top-level back-canvas, so a queued erase that is
+  ;; handed out after the children have already painted floods the class brush
+  ;; straight over their pixels and nothing repaints them. WordPad's two
+  ;; toolbars and its status bar came out as bare COLOR_BTNFACE bands that way
+  ;; (test-wordpad-toolbar 21/23: no bitmap icons, no sunken edge on the
+  ;; checked button), and the native-control drain also defers any child whose
+  ;; ancestor has the bit set, which cost test-nested-child-paint its
+  ;; grandchild and test-parent-child-paint-order its child paint entirely.
+  ;; Erase stays with the invalidations that are paired with a paint:
+  ;; CreateWindowExA's initial seed and an app's own InvalidateRect(..., TRUE).
   (func $paint_flag_set_inv (param $hwnd i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
     (call $paint_flag_set (local.get $hwnd))
@@ -1603,6 +3579,15 @@
   ;; chance to get a background.
   (func $paint_flag_test_hwnd (param $hwnd i32) (result i32)
     (local $idx i32)
+    ;; Main-window invalidations use the historical global until the unified
+    ;; selector mirrors it into PAINT_FLAGS. The erase scan runs before that
+    ;; selector, so ignoring the global makes it hand WM_ERASEBKGND out ahead
+    ;; of the paint it belongs to. Hearts then clears the entire table through
+    ;; the compatibility erase HDC before its partial WM_PAINT can redraw it.
+    (if (i32.and
+          (i32.eq (local.get $hwnd) (global.get $main_hwnd))
+          (i32.ne (global.get $paint_pending) (i32.const 0)))
+      (then (return (i32.const 1))))
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1)) (then (return (i32.const 0))))
     (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $idx))))
@@ -1618,10 +3603,16 @@
   ;; carry WS_VISIBLE. Hidden dialog pages keep child WS_VISIBLE bits, but
   ;; USER's visible-region walk still suppresses their paint and hit testing.
   (func $wnd_is_effectively_visible (param $hwnd i32) (result i32)
-    (local $cur i32) (local $style i32)
+    (local $cur i32) (local $style i32) (local $depth i32)
     (local.set $cur (local.get $hwnd))
     (block $done (loop $walk
       (if (i32.eqz (local.get $cur)) (then (return (i32.const 1))))
+      ;; A corrupt or transiently inconsistent parent graph must not pin the
+      ;; main thread inside message retrieval. A valid tree cannot be deeper
+      ;; than the window table.
+      (if (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS))
+        (then (return (i32.const 0))))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
       (local.set $style (call $wnd_get_style (local.get $cur)))
       (if (i32.eqz (i32.and (local.get $style) (i32.const 0x10000000)))
         (then (return (i32.const 0))))
@@ -1633,10 +3624,13 @@
   ;; will not let a child's pixels become durable under a later parent erase;
   ;; defer WAT-native control paints until the ancestor erase has drained.
   (func $wnd_has_pending_ancestor_erase (param $hwnd i32) (result i32)
-    (local $cur i32)
+    (local $cur i32) (local $depth i32)
     (local.set $cur (call $wnd_get_parent (local.get $hwnd)))
     (block $done (loop $walk
       (if (i32.eqz (local.get $cur)) (then (return (i32.const 0))))
+      (if (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS))
+        (then (return (i32.const 0))))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
       (if (i32.and (call $nc_flags_test (local.get $cur)) (i32.const 2))
         (then (return (i32.const 1))))
       (local.set $cur (call $wnd_get_parent (local.get $cur)))
@@ -1649,10 +3643,13 @@
   ;; consumes every dirty ancestor; the parent-selection path then propagates
   ;; its update region back down to the child before the next native drain.
   (func $wnd_has_pending_ancestor_paint (param $hwnd i32) (result i32)
-    (local $cur i32) (local $slot i32)
+    (local $cur i32) (local $slot i32) (local $depth i32)
     (local.set $cur (call $wnd_get_parent (local.get $hwnd)))
     (block $done (loop $walk
       (if (i32.eqz (local.get $cur)) (then (return (i32.const 0))))
+      (if (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS))
+        (then (return (i32.const 0))))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
       (if (i32.and
             (i32.eq (local.get $cur) (global.get $main_hwnd))
             (i32.ne (global.get $paint_pending) (i32.const 0)))
@@ -1751,7 +3748,7 @@
               (if (i32.eq (local.get $hwnd) (global.get $main_hwnd))
                 (then (global.set $paint_pending (i32.const 0)))))
             (else
-              (local.set $cs (call $host_get_window_client_size (local.get $hwnd)))
+              (local.set $cs (call $wnd_client_size_or_host (local.get $hwnd)))
               (if (i32.and
                     (i32.or
                       (i32.eqz (i32.and (local.get $cs) (i32.const 0xFFFF)))
@@ -1793,10 +3790,10 @@
     (local.set $rect (call $paint_scratch_take))
     (if (i32.eqz (call $update_get_rect (local.get $parent) (local.get $rect)))
       (then (return (i32.const 0))))
-    (local.set $pl (i32.load (local.get $rect)))
-    (local.set $pt (i32.load offset=4 (local.get $rect)))
-    (local.set $pr (i32.load offset=8 (local.get $rect)))
-    (local.set $pb (i32.load offset=12 (local.get $rect)))
+    (local.set $pl (load.field PaintRect left (local.get $rect)))
+    (local.set $pt (load.field.memarg PaintRect top (local.get $rect)))
+    (local.set $pr (load.field.memarg PaintRect right (local.get $rect)))
+    (local.set $pb (load.field.memarg PaintRect bottom (local.get $rect)))
     (local.set $slot (i32.const 0))
     (block $done (loop $scan
       (local.set $slot (call $wnd_next_child_slot (local.get $parent) (local.get $slot)))
@@ -1846,6 +3843,7 @@
   ;; even though they paint through host GDI primitives without BeginPaint.
   (func $paint_drain_native_control_paints (result i32)
     (local $i i32) (local $hwnd i32) (local $n i32) (local $guard i32) (local $progress i32)
+    (local $native_status i32)
     (block $done (loop $again
       (br_if $done (i32.ge_u (local.get $guard) (global.get $MAX_WINDOWS)))
       (local.set $progress (i32.const 0))
@@ -1855,19 +3853,26 @@
         (if (i32.load8_u (i32.add (global.get $PAINT_FLAGS) (local.get $i)))
           (then
             (local.set $hwnd (i32.load (call $wnd_record_addr (local.get $i))))
-            (if (i32.eqz (call $ctrl_table_get_class (local.get $hwnd)))
+            (local.set $native_status (call $statusbar_native_is (local.get $hwnd)))
+            (if (i32.and
+                  (i32.eqz (call $ctrl_table_get_class (local.get $hwnd)))
+                  (i32.eqz (local.get $native_status)))
               (then
                 ;; Dirty, but this drain only paints WAT-native controls, so a
                 ;; window whose CONTROL_TABLE class never got set is passed over
                 ;; in silence however often it is invalidated.
                 (call $ctrl_paint_trace_emit
                   (local.get $hwnd) (i32.const 0) (i32.const 4))))
-            ;; A subclassed control paints from its own WNDPROC. Leave its
-            ;; PAINT_FLAGS bit set so $paint_select_next_dirty hands the
-            ;; WM_PAINT to the pump, which dispatches it to that proc.
-            (if (i32.and
-                  (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0))
-                  (i32.eqz (call $ctrl_is_subclassed (local.get $hwnd))))
+            ;; A native status bar deliberately keeps class=0 so its guest
+            ;; COMCTL32 wndproc remains authoritative for layout. Its shared-
+            ;; surface WM_PAINT is nevertheless WAT-owned, exactly like the
+            ;; native-status interception in $wnd_send_message. Other
+            ;; subclassed controls stay queued for their own WNDPROC.
+            (if (i32.or
+                  (local.get $native_status)
+                  (i32.and
+                    (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0))
+                    (i32.eqz (call $ctrl_is_subclassed (local.get $hwnd)))))
               (then
                 (if (i32.or
                       (call $wnd_has_pending_ancestor_erase (local.get $hwnd))
@@ -1892,9 +3897,15 @@
                     (drop (call $paint_seed_child_paints (local.get $hwnd)))
                     (call $paint_flag_clear_hwnd (local.get $hwnd))
                     (call $update_clear_hwnd (local.get $hwnd))
-                    (drop (call $control_wndproc_dispatch
-                      (local.get $hwnd) (i32.const 0x000F)
-                      (i32.const 0) (i32.const 0)))
+                    (if (local.get $native_status)
+                      (then
+                        (drop (call $statusbar_wndproc
+                          (local.get $hwnd) (i32.const 0x000F)
+                          (i32.const 0) (i32.const 0))))
+                      (else
+                        (drop (call $control_wndproc_dispatch
+                          (local.get $hwnd) (i32.const 0x000F)
+                          (i32.const 0) (i32.const 0)))))
                     (local.set $n (i32.add (local.get $n) (i32.const 1)))
                     (local.set $progress (i32.const 1))
                     (local.set $guard (i32.add (local.get $guard) (i32.const 1)))
@@ -2398,7 +4409,7 @@
   ;; clears the slot.
   (func $title_table_set (param $hwnd i32) (param $wa_ptr i32) (param $len i32)
     (local $idx i32) (local $rec i32) (local $old_ptr i32)
-    (local $buf i32) (local $i i32)
+    (local $buf i32) (local $buf_wa i32) (local $i i32)
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1)) (then (return)))
     (local.set $rec (i32.add (global.get $TITLE_TABLE) (i32.mul (local.get $idx) (i32.const 8))))
@@ -2413,10 +4424,10 @@
     (if (i32.gt_u (local.get $len) (i32.const 255))
       (then (local.set $len (i32.const 255))))
     (local.set $buf (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
-    (if (i32.eqz (local.get $buf)) (then (return)))
+    (if (i32.eqz (local.get $buf)) (then (return))) (local.set $buf_wa (call $g2w (local.get $buf)))
     ;; $buf is a guest pointer; convert to WASM for memory.copy.
-    (memory.copy (call $g2w (local.get $buf)) (local.get $wa_ptr) (local.get $len))
-    (i32.store8 (i32.add (call $g2w (local.get $buf)) (local.get $len)) (i32.const 0))
+    (memory.copy (local.get $buf_wa) (local.get $wa_ptr) (local.get $len))
+    (i32.store8 (i32.add (local.get $buf_wa) (local.get $len)) (i32.const 0))
     (i32.store         (local.get $rec) (local.get $buf))
     (i32.store offset=4 (local.get $rec) (local.get $len)))
 
@@ -2482,7 +4493,7 @@
   ;; persistent bit so later MoveWindow/SetWindowPos NCCALCSIZE does not
   ;; overwrite their whole-surface client rect with standard caption offsets.
   (func $wnd_region_reset_slot (param $slot i32)
-    (local $addr i32) (local $mask i32)
+    (local $addr i32) (local $mask i32) (local $hrgn i32)
     (if (i32.or
           (i32.lt_s (local.get $slot) (i32.const 0))
           (i32.ge_s (local.get $slot) (global.get $MAX_WINDOWS)))
@@ -2496,12 +4507,31 @@
     (i32.store8 (local.get $addr)
       (i32.and
         (i32.load8_u (local.get $addr))
-        (i32.xor (local.get $mask) (i32.const -1)))))
+        (i32.xor (local.get $mask) (i32.const -1))))
+    ;; USER owns a successfully installed region. Releasing the window slot
+    ;; therefore releases the canonical HRGN and its lazy JS presentation.
+    (local.set $hrgn (call $gdi_rgn_window_owned_handle (local.get $slot)))
+    (if (local.get $hrgn)
+      (then (drop (call $gdi_rgn_delete (local.get $hrgn))))))
 
   (func $wnd_region_set (param $hwnd i32) (param $val i32)
-    (local $idx i32) (local $addr i32) (local $mask i32)
+    (local $idx i32) (local $addr i32) (local $mask i32) (local $old i32)
     (local.set $idx (call $wnd_table_find (local.get $hwnd)))
     (if (i32.eq (local.get $idx) (i32.const -1)) (then (return)))
+    (if (i32.and
+          (i32.ne (local.get $val) (i32.const 0))
+          (i32.eqz (call $gdi_rgn_record (local.get $val))))
+      (then (return)))
+    (local.set $old (call $gdi_rgn_window_owned_handle (local.get $idx)))
+    (if (i32.and
+          (i32.ne (local.get $val) (i32.const 0))
+          (i32.eq (local.get $old) (local.get $val)))
+      (then (return)))
+    (if (local.get $old)
+      (then (drop (call $gdi_rgn_delete (local.get $old)))))
+    (if (local.get $val)
+      (then
+        (drop (call $gdi_rgn_window_owner_set (local.get $val) (local.get $idx)))))
     (local.set $addr
       (i32.add (global.get $WINDOW_REGION_BITS)
                (i32.shr_u (local.get $idx) (i32.const 3))))
@@ -2530,6 +4560,13 @@
         (i32.load8_u (local.get $addr))
         (i32.and (local.get $idx) (i32.const 7)))
       (i32.const 1)))
+
+  (func $wnd_region_handle_get (param $hwnd i32) (result i32)
+    (local $idx i32)
+    (local.set $idx (call $wnd_table_find (local.get $hwnd)))
+    (if (i32.eq (local.get $idx) (i32.const -1))
+      (then (return (i32.const 0))))
+    (call $gdi_rgn_window_owned_handle (local.get $idx)))
 
   ;; WAT-owned absolute HWND geometry. JS owns only top-level canvas placement;
   ;; child HWND origins/parent walks stay here so GDI target offsets, clipping,
@@ -2690,6 +4727,77 @@
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 20)) (local.get $x))
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 24)) (local.get $y)))
 
+  ;; USER's ChildWindowFromPoint family searches only immediate children and
+  ;; resolves overlaps in child Z order. $px/$py are parent-client coordinates;
+  ;; flags are CWP_SKIPINVISIBLE(1), CWP_SKIPDISABLED(2), and
+  ;; CWP_SKIPTRANSPARENT(4). With no matching child, a point inside the client
+  ;; area returns the parent itself; an invalid parent or outside point returns
+  ;; NULL. This API geometry is deliberately separate from the deep input
+  ;; router below, whose class-specific click-through rules are not USER state.
+  (func $wnd_child_from_point_immediate
+      (param $parent i32) (param $px i32) (param $py i32) (param $flags i32)
+      (result i32)
+    (local $slot i32) (local $ch i32) (local $style i32)
+    (local $sx i32) (local $sy i32) (local $x i32) (local $y i32)
+    (local $w i32) (local $h i32) (local $rank i32)
+    (local $best i32) (local $best_rank i32)
+    (if (i32.lt_s (call $wnd_table_find (local.get $parent)) (i32.const 0))
+      (then (return (i32.const 0))))
+    (if (i32.or
+          (i32.or (i32.lt_s (local.get $px) (i32.const 0))
+                  (i32.lt_s (local.get $py) (i32.const 0)))
+          (i32.or
+            (i32.ge_s (local.get $px) (call $wnd_client_w_for_clip (local.get $parent)))
+            (i32.ge_s (local.get $py) (call $wnd_client_h_for_clip (local.get $parent)))))
+      (then (return (i32.const 0))))
+    (local.set $sx
+      (i32.add (call $wnd_client_screen_x (local.get $parent)) (local.get $px)))
+    (local.set $sy
+      (i32.add (call $wnd_client_screen_y (local.get $parent)) (local.get $py)))
+    (local.set $slot (i32.const 0))
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $parent) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (local.set $ch (call $wnd_slot_hwnd (local.get $slot)))
+      (local.set $style (call $wnd_get_style (local.get $ch)))
+      (if (i32.or
+            (i32.or
+              (i32.and
+                (i32.ne (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
+                (i32.eqz (i32.and (local.get $style) (i32.const 0x10000000))))
+              (i32.and
+                (i32.ne (i32.and (local.get $flags) (i32.const 2)) (i32.const 0))
+                (i32.ne (i32.and (local.get $style)
+                          (i32.shl (i32.const 1) (i32.const 27))) (i32.const 0))))
+            (i32.and
+              (i32.ne (i32.and (local.get $flags) (i32.const 4)) (i32.const 0))
+              (i32.ne
+                (i32.and (call $ctrl_get_ex_style (local.get $ch)) (i32.const 0x20))
+                (i32.const 0))))
+        (then
+          (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+          (br $scan)))
+      (local.set $x (call $wnd_window_screen_x (local.get $ch)))
+      (local.set $y (call $wnd_window_screen_y (local.get $ch)))
+      (local.set $w (call $wnd_screen_w (local.get $ch)))
+      (local.set $h (call $wnd_screen_h (local.get $ch)))
+      (if (i32.and
+            (i32.and (i32.ge_s (local.get $sx) (local.get $x))
+                     (i32.lt_s (local.get $sx) (i32.add (local.get $x) (local.get $w))))
+            (i32.and (i32.ge_s (local.get $sy) (local.get $y))
+                     (i32.lt_s (local.get $sy) (i32.add (local.get $y) (local.get $h)))))
+        (then
+          (local.set $rank (call $wnd_z_get (local.get $ch)))
+          (if (i32.or
+                (i32.eqz (local.get $best))
+                (i32.gt_s (local.get $rank) (local.get $best_rank)))
+            (then
+              (local.set $best (local.get $ch))
+              (local.set $best_rank (local.get $rank))))))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (select (local.get $best) (local.get $parent) (local.get $best)))
+
   ;; Deep child WindowFromPoint helper. JS supplies only the browser point and
   ;; current top-level candidate; USER-style child visibility/geometry/class
   ;; filtering stays in WAT with the rest of the HWND tree.
@@ -2780,7 +4888,7 @@
     (i32.const 0))
 
   (func $dialog_first_default_button (param $dlg i32) (result i32)
-    (local $slot i32) (local $ch i32) (local $st i32) (local $state i32)
+    (local $slot i32) (local $ch i32) (local $st i32) (local $state ptr<ButtonState>)
     (local.set $slot (i32.const 0))
     (block $done (loop $scan
       (local.set $slot (call $wnd_next_child_slot (local.get $dlg) (local.get $slot)))
@@ -2793,8 +4901,8 @@
           (local.set $st (call $wnd_get_state_ptr (local.get $ch)))
           (if (local.get $st)
             (then
-              (local.set $state (call $g2w (local.get $st)))
-              (if (i32.and (i32.load offset=8 (local.get $state)) (i32.const 0x04))
+              (local.set $state (cast ptr<ButtonState> (call $g2w (local.get $st))))
+              (if (i32.and (load.field ButtonState flags (local.get $state)) (i32.const 0x04))
                 (then (return (local.get $ch))))))
           (if (i32.eq (i32.and (call $wnd_get_style (local.get $ch)) (i32.const 0x0F)) (i32.const 1))
             (then (return (local.get $ch))))))
@@ -2814,7 +4922,8 @@
       (if (i32.and
             (i32.and
               (i32.ne (call $wnd_is_effectively_visible (local.get $ch)) (i32.const 0))
-              (i32.eqz (i32.and (local.get $style) (i32.const 0x08000000)))) ;; !WS_DISABLED
+              (i32.eqz (i32.and (local.get $style)
+                         (i32.shl (i32.const 1) (i32.const 27))))) ;; !WS_DISABLED
             (i32.ne (i32.and (local.get $style) (i32.const 0x00010000)) (i32.const 0))) ;; WS_TABSTOP
         (then
           (if (i32.eqz (local.get $first)) (then (local.set $first (local.get $ch))))
@@ -2835,6 +4944,100 @@
     (if (i32.gt_s (local.get $dir) (i32.const 0))
       (then (return (select (local.get $first) (local.get $last) (local.get $first)))))
     (select (local.get $last) (local.get $first) (local.get $last)))
+
+  ;; Child #idx of a dialog in creation order, or 0 past the end. Arrow-key
+  ;; traversal needs to look both ways from the focused control and to know
+  ;; where the enclosing WS_GROUP run starts and ends, and a one-directional
+  ;; slot walk cannot answer that; indexing can, and dialogs hold few enough
+  ;; children that rescanning per step costs nothing.
+  (func $dlg_child_at (param $dlg i32) (param $idx i32) (result i32)
+    (local $slot i32) (local $i i32)
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $dlg) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (if (i32.eq (local.get $i) (local.get $idx))
+        (then (return (call $wnd_slot_hwnd (local.get $slot)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
+
+  (func $dlg_child_count (param $dlg i32) (result i32)
+    (local $slot i32) (local $i i32)
+    (block $done (loop $scan
+      (local.set $slot (call $wnd_next_child_slot (local.get $dlg) (local.get $slot)))
+      (br_if $done (i32.lt_s (local.get $slot) (i32.const 0)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
+      (br $scan)))
+    (local.get $i))
+
+  ;; GetNextDlgGroupItem: the arrow-key walk. Unlike the Tab walk this ignores
+  ;; WS_TABSTOP entirely and stays inside one WS_GROUP run -- the run that
+  ;; begins at the nearest control at or before the focused one carrying
+  ;; WS_GROUP, and ends before the next one that does. A dialog whose template
+  ;; sets WS_GROUP nowhere is therefore one group, which is exactly Diablo's
+  ;; menus: its five ownerdrawn buttons are the only enabled children, so
+  ;; skipping disabled and invisible controls leaves the arrow keys cycling
+  ;; through the menu items and nothing else.
+  (func $dialog_next_group_item (param $dlg i32) (param $focus i32) (param $dir i32) (result i32)
+    (local $n i32) (local $i i32) (local $fi i32)
+    (local $start i32) (local $end i32) (local $ch i32) (local $style i32)
+    (local $steps i32)
+    (local.set $n (call $dlg_child_count (local.get $dlg)))
+    (if (i32.eqz (local.get $n)) (then (return (i32.const 0))))
+    ;; Index of the focused child; an unrelated focus starts the walk at 0.
+    (local.set $fi (i32.const -1))
+    (block $found (loop $scan
+      (br_if $found (i32.ge_s (local.get $i) (local.get $n)))
+      (if (i32.eq (call $dlg_child_at (local.get $dlg) (local.get $i)) (local.get $focus))
+        (then (local.set $fi (local.get $i)) (br $found)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (if (i32.lt_s (local.get $fi) (i32.const 0)) (then (local.set $fi (i32.const 0))))
+    ;; Group bounds around $fi.
+    (local.set $start (i32.const 0))
+    (local.set $i (local.get $fi))
+    (block $done_back (loop $back
+      (br_if $done_back (i32.lt_s (local.get $i) (i32.const 0)))
+      (if (i32.and
+            (call $wnd_get_style (call $dlg_child_at (local.get $dlg) (local.get $i)))
+            (i32.const 0x00020000))  ;; WS_GROUP
+        (then (local.set $start (local.get $i)) (br $done_back)))
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+      (br $back)))
+    (local.set $end (i32.sub (local.get $n) (i32.const 1)))
+    (local.set $i (i32.add (local.get $fi) (i32.const 1)))
+    (block $done_fwd (loop $fwd
+      (br_if $done_fwd (i32.gt_s (local.get $i) (local.get $end)))
+      (if (i32.and
+            (call $wnd_get_style (call $dlg_child_at (local.get $dlg) (local.get $i)))
+            (i32.const 0x00020000))
+        (then (local.set $end (i32.sub (local.get $i) (i32.const 1))) (br $done_fwd)))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $fwd)))
+    ;; Step within [start, end], wrapping, until a control that can take the
+    ;; focus turns up. Bounded by the group size so a group of only disabled
+    ;; controls returns the focus unchanged instead of spinning.
+    (local.set $i (local.get $fi))
+    (block $give_up (loop $step
+      (br_if $give_up (i32.gt_s (local.get $steps)
+                                (i32.sub (local.get $end) (local.get $start))))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (local.set $i (i32.add (local.get $i)
+        (select (i32.const 1) (i32.const -1) (i32.gt_s (local.get $dir) (i32.const 0)))))
+      (if (i32.gt_s (local.get $i) (local.get $end)) (then (local.set $i (local.get $start))))
+      (if (i32.lt_s (local.get $i) (local.get $start)) (then (local.set $i (local.get $end))))
+      (local.set $ch (call $dlg_child_at (local.get $dlg) (local.get $i)))
+      (br_if $give_up (i32.eqz (local.get $ch)))
+      (local.set $style (call $wnd_get_style (local.get $ch)))
+      (if (i32.and
+            (i32.ne (call $wnd_is_effectively_visible (local.get $ch)) (i32.const 0))
+            (i32.eqz (i32.and (local.get $style)
+                       (i32.shl (i32.const 1) (i32.const 27)))))  ;; !WS_DISABLED
+        (then (return (local.get $ch))))
+      (br $step)))
+    (local.get $focus))
 
   (func $dialog_handle_key (param $dlg i32) (param $vk i32) (param $shift i32) (result i32)
     (local $focus i32) (local $target i32) (local $id i32) (local $style i32)
@@ -3015,8 +5218,8 @@
               (then (i32.const 1))
               (else (i32.const 0))))))
       (if (i32.ne
-            (call $gl8 (i32.add (local.get $gp) (local.get $i)))
-            (call $clipboard_rtf_name_char (local.get $i)))
+            (call $tolower (call $gl8 (i32.add (local.get $gp) (local.get $i))))
+            (call $tolower (call $clipboard_rtf_name_char (local.get $i))))
         (then (return (i32.const 0))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
@@ -3074,10 +5277,8 @@
         (global.set $clipboard_fmt_counter
           (i32.add (global.get $clipboard_fmt_counter) (i32.const 1)))
         (return (i32.add (i32.const 0xC000) (global.get $clipboard_fmt_counter)))))
-    (local.set $copy (call $heap_alloc
-      (i32.add (call $guest_strlen (local.get $name_g)) (i32.const 1))))
+    (local.set $copy (call $guest_strdup (local.get $name_g)))
     (if (i32.eqz (local.get $copy)) (then (return (i32.const 0))))
-    (call $guest_strcpy (local.get $copy) (local.get $name_g))
     (global.set $clipboard_fmt_counter
       (i32.add (global.get $clipboard_fmt_counter) (i32.const 1)))
     (i32.store (local.get $e) (local.get $copy))
@@ -3099,27 +5300,28 @@
       (br $scan)))
     (i32.const 0))
 
-  (func $clipboard_register_format_a (param $name_g i32) (result i32)
-    (local $id i32)
-    (local.set $id (call $clipfmt_intern (local.get $name_g)))
+  (func $clipboard_register_format (param $name_g i32) (param $wide i32) (result i32)
+    (local $ansi_g i32) (local $id i32)
+    (if (i32.eqz (local.get $name_g)) (then (return (i32.const 0))))
+    (if (local.get $wide)
+      (then
+        (local.set $ansi_g (call $clipfmt_wide_to_ansi (local.get $name_g)))
+        (if (i32.eqz (local.get $ansi_g)) (then (return (i32.const 0)))))
+      (else (local.set $ansi_g (local.get $name_g))))
+    (local.set $id (call $clipfmt_intern (local.get $ansi_g)))
     ;; The RTF payload has its own storage and its own id global; keep that
     ;; global pointing at the interned value so both agree.
     (if (i32.and (i32.ne (local.get $id) (i32.const 0))
-                 (call $guest_str_is_rich_text_format_a (local.get $name_g)))
+                 (call $guest_str_is_rich_text_format_a (local.get $ansi_g)))
       (then (global.set $clipboard_rtf_format_id (local.get $id))))
+    (if (local.get $wide) (then (call $heap_free (local.get $ansi_g))))
     (local.get $id))
 
+  (func $clipboard_register_format_a (param $name_g i32) (result i32)
+    (call $clipboard_register_format (local.get $name_g) (i32.const 0)))
+
   (func $clipboard_register_format_w (param $name_g i32) (result i32)
-    (local $ansi i32) (local $id i32)
-    (if (call $guest_str_is_rich_text_format_w (local.get $name_g))
-      (then (return (call $clipboard_get_rtf_format_id))))
-    ;; Intern through the same ANSI table: a W registration and an A
-    ;; registration of the same name must produce the same id.
-    (local.set $ansi (call $clipfmt_wide_to_ansi (local.get $name_g)))
-    (if (i32.eqz (local.get $ansi)) (then (return (i32.const 0))))
-    (local.set $id (call $clipfmt_intern (local.get $ansi)))
-    (call $heap_free (local.get $ansi))
-    (local.get $id))
+    (call $clipboard_register_format (local.get $name_g) (i32.const 1)))
 
   ;; NUL-terminated UTF-16 to a freshly allocated ANSI copy. Format names are
   ;; ASCII in every app we have met; a character above 0xFF becomes '?'.
@@ -3172,7 +5374,7 @@
     (local $size i32) (local $dst i32)
     (if (i32.or (i32.eqz (local.get $fmt)) (i32.eqz (local.get $src_g)))
       (then (return (i32.const 0))))
-    (local.set $size (i32.sub (call $gl32 (i32.sub (local.get $src_g) (i32.const 4))) (i32.const 4)))
+    (local.set $size (call $heap_payload_size_unchecked (local.get $src_g)))
     (local.set $dst (call $heap_alloc (local.get $size)))
     (if (i32.eqz (local.get $dst)) (then (return (i32.const 0))))
     (memory.copy (call $g2w (local.get $dst)) (call $g2w (local.get $src_g)) (local.get $size))
@@ -3579,9 +5781,7 @@
         (global.set $clipboard_binary_format (i32.const 8))
         (global.set $clipboard_binary_ptr (local.get $saved_dib))
         (global.set $clipboard_binary_len
-          (i32.sub
-            (call $gl32 (i32.sub (local.get $saved_dib) (i32.const 4)))
-            (i32.const 4)))
+          (call $heap_payload_size_unchecked (local.get $saved_dib)))
         (local.set $saved_dib (i32.const 0))))
     (if (local.get $saved_dib) (then (call $heap_free (local.get $saved_dib))))
     (call $heap_free (local.get $text_g))
@@ -3949,21 +6149,55 @@
     (local $style i32) (local $parent i32) (local $myxy i32) (local $myx i32) (local $myy i32)
     (local $slot i32) (local $my_slot i32) (local $my_z i32) (local $sib i32)
     (local $xy i32) (local $wh i32) (local $sx i32) (local $sy i32) (local $sw i32) (local $sh i32)
+    (local $clip_sibling i32) (local $win16_frame i32)
     (local.set $style (call $wnd_get_style (local.get $hwnd)))
-    (if (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000))) ;; WS_CLIPSIBLINGS
-      (then (return)))
     (local.set $parent (call $wnd_get_parent (local.get $hwnd)))
     (if (i32.eqz (local.get $parent)) (then (return)))
+    ;; USER's dialog manager preserves the visible region of an earlier
+    ;; (higher) template item even when the resource did not spell out
+    ;; WS_CLIPSIBLINGS. Outside a dialog, retain the explicit-style contract.
+    ;; Without this, repainting CD Player's later CS_OWNDC LED covers the left
+    ;; half of its earlier overlapping owner-draw Play button every second.
+    (if (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000))) ;; WS_CLIPSIBLINGS
+      (then
+        ;; Native controls obey the explicit style, in both Win16 and Win32.
+        ;; Pinball intentionally overlays an EDIT on its static score label;
+        ;; implicit sibling clipping leaves only three rows of the edit and
+        ;; hides all typed glyphs. Custom painters retain the dialog exception
+        ;; needed by CD Player's LED and WEPUTIL's decorative frame.
+        (if (i32.ne (call $ctrl_table_get_class (local.get $hwnd)) (i32.const 0))
+          (then (return)))
+        (if (i32.and
+              (i32.ne (call $wnd_table_get (local.get $parent)) (global.get $WNDPROC_DIALOG))
+              (i32.eqz (call $wnd_class_is_dialog (local.get $parent))))
+          (then (return)))))
     (local.set $my_slot (call $wnd_table_find (local.get $hwnd)))
     (if (i32.lt_s (local.get $my_slot) (i32.const 0)) (then (return)))
     (local.set $my_z (call $wnd_z_get (local.get $hwnd)))
     (local.set $myx (call $ctrl_get_x_s (local.get $hwnd)))
     (local.set $myy (call $ctrl_get_y_s (local.get $hwnd)))
+    (local.set $win16_frame (i32.and (global.get $is_win16)
+      (i32.eqz (i32.and (local.get $style) (i32.const 0x04000000)))))
     (local.set $slot (i32.const 0))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $slot) (global.get $MAX_WINDOWS)))
       (local.set $sib (call $wnd_slot_hwnd (local.get $slot)))
-      (if (call $wnd_z_is_above_sibling (local.get $hwnd) (local.get $sib))
+      (local.set $clip_sibling (call $wnd_z_is_above_sibling (local.get $hwnd) (local.get $sib)))
+      (if (local.get $win16_frame)
+        (then
+          ;; A Win16 decorative custom painter must leave native labels
+          ;; visible regardless of template ordering. An exactly coincident
+          ;; custom frame is the label's own border, however, and must draw.
+          (local.set $clip_sibling
+            (i32.and
+              (i32.and (i32.ne (call $ctrl_table_get_class (local.get $sib)) (i32.const 0))
+                (i32.eq (call $wnd_get_parent (local.get $sib)) (local.get $parent)))
+              (i32.and
+                (i32.ne (i32.and (call $wnd_get_style (local.get $sib)) (i32.const 0x10000000)) (i32.const 0))
+                (i32.eqz (i32.and
+                  (i32.eq (call $ctrl_get_xy_packed (local.get $sib)) (call $ctrl_get_xy_packed (local.get $hwnd)))
+                  (i32.eq (call $ctrl_get_wh_packed (local.get $sib)) (call $ctrl_get_wh_packed (local.get $hwnd))))))))))
+      (if (local.get $clip_sibling)
         (then
           (local.set $wh (call $ctrl_get_wh_packed (local.get $sib)))
           (local.set $sx (call $ctrl_get_x_s (local.get $sib)))
@@ -4016,7 +6250,165 @@
     (if (i32.eq (local.get $idx) (i32.const 24)) (then (return (i32.const 0x00E1FFFF)))) ;; INFOBK
     (i32.const 0x00C0C0C0))
 
-  (func $dc_apply_client_clip (param $hdc i32) (param $hwnd i32)
+  ;; LockWindowUpdate is USER state, shared by every guest thread/instance.
+  ;; It covers the selected HWND and WS_CHILD descendants, but not owned
+  ;; top-level popups whose GetParent-style owner happens to use the same
+  ;; table field. The -1 value serializes the small unlock/clip-refresh window.
+  (func $window_update_lock_covers (param $hwnd i32) (result i32)
+    (local $locked i32) (local $cur i32) (local $depth i32)
+    (local.set $locked (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
+    (if (i32.or (i32.eqz (local.get $locked))
+          (i32.eq (local.get $locked) (i32.const -1)))
+      (then (return (i32.const 0))))
+    (local.set $cur (local.get $hwnd))
+    (block $done (loop $walk
+      (if (i32.eq (local.get $cur) (local.get $locked))
+        (then (return (i32.const 1))))
+      (if (i32.or
+            (i32.eqz (local.get $cur))
+            (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS)))
+        (then (return (i32.const 0))))
+      ;; Owners are not child windows. Stop before following that relation.
+      (if (i32.eqz
+            (i32.and (call $wnd_get_style (local.get $cur))
+              (i32.const 0x40000000))) ;; WS_CHILD
+        (then (return (i32.const 0))))
+      (local.set $cur (call $wnd_get_parent (local.get $cur)))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (i32.const 0))
+
+  ;; Serialize the tiny shared damage record. Drawing can come from several
+  ;; guest Workers, while unlock has to consume one coherent rectangle.
+  (func $window_update_damage_guard_acquire
+    (block $acquired (loop $retry
+      (br_if $acquired
+        (i32.eqz (i32.atomic.rmw.cmpxchg offset=4
+          (global.get $WINDOW_UPDATE_LOCK) (i32.const 0) (i32.const 1))))
+      (br $retry))))
+
+  (func $window_update_damage_guard_release
+    (i32.atomic.store offset=4 (global.get $WINDOW_UPDATE_LOCK) (i32.const 0)))
+
+  ;; Record one attempted device-space output rectangle. Coordinates arrive in
+  ;; the target DC's own device space; translate them to the locked window's
+  ;; client coordinates before unioning. +8 is the nonempty flag and +12..+24
+  ;; are left/top/right/bottom. Returning 1 means the retained NULLREGION came
+  ;; from LockWindowUpdate, so a caller that bypasses normal clipping must not
+  ;; write pixels. DCX_LOCKWINDOWUPDATE retains an ordinary system clip and
+  ;; therefore returns 0 without contributing deferred damage.
+  (func $window_update_damage_hdc_rect
+        (param $hdc i32) (param $left_in i32) (param $top_in i32)
+        (param $right_in i32) (param $bottom_in i32) (result i32)
+    (local $locked i32) (local $dc i32) (local $binding i32)
+    (local $hwnd i32) (local $cur i32) (local $clip i32)
+    (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
+    (local $swap i32) (local $ox i32) (local $oy i32) (local $depth i32)
+    ;; This is the only cost on the overwhelmingly common unlocked path.
+    (local.set $locked (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK)))
+    (if (i32.or (i32.eqz (local.get $locked))
+          (i32.eq (local.get $locked) (i32.const -1)))
+      (then (return (i32.const 0))))
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
+    (local.set $binding (load.field.memarg GdiDcState window_binding (local.get $dc)))
+    (local.set $hwnd (i32.and (local.get $binding) (i32.const 0x7FFFFFFF)))
+    (if (i32.eqz (call $window_update_lock_covers (local.get $hwnd)))
+      (then (return (i32.const 0))))
+    (local.set $clip (call $gdi_dc_system_clip_handle (local.get $hdc)))
+    (if (i32.or
+          (i32.eqz (local.get $clip))
+          (i32.ne (call $gdi_rgn_get_box (local.get $clip) (i32.const 0))
+            (i32.const 1))) ;; NULLREGION
+      (then (return (i32.const 0))))
+
+    (local.set $left (local.get $left_in))
+    (local.set $top (local.get $top_in))
+    (local.set $right (local.get $right_in))
+    (local.set $bottom (local.get $bottom_in))
+    (if (i32.gt_s (local.get $left) (local.get $right))
+      (then
+        (local.set $swap (local.get $left))
+        (local.set $left (local.get $right))
+        (local.set $right (local.get $swap))))
+    (if (i32.gt_s (local.get $top) (local.get $bottom))
+      (then
+        (local.set $swap (local.get $top))
+        (local.set $top (local.get $bottom))
+        (local.set $bottom (local.get $swap))))
+    (if (i32.or
+          (i32.le_s (local.get $right) (local.get $left))
+          (i32.le_s (local.get $bottom) (local.get $top)))
+      (then (return (i32.const 0))))
+
+    ;; A client DC starts at its HWND's client origin; a window DC starts at
+    ;; the window origin. Walk only WS_CHILD ancestry already proven by
+    ;; $window_update_lock_covers, so top-level host geometry cancels out and
+    ;; no Worker RPC is needed while accumulating damage.
+    (if (i32.ge_s (local.get $binding) (i32.const 0))
+      (then
+        (local.set $ox (call $client_rect_get_l (local.get $hwnd)))
+        (local.set $oy (call $client_rect_get_t (local.get $hwnd)))))
+    (local.set $cur (local.get $hwnd))
+    (block $at_locked (loop $walk
+      (br_if $at_locked (i32.eq (local.get $cur) (local.get $locked)))
+      (if (i32.ge_u (local.get $depth) (global.get $MAX_WINDOWS))
+        (then (return (i32.const 0))))
+      (local.set $ox (i32.add (local.get $ox) (call $ctrl_get_x_s (local.get $cur))))
+      (local.set $oy (i32.add (local.get $oy) (call $ctrl_get_y_s (local.get $cur))))
+      (local.set $cur (call $wnd_get_parent (local.get $cur)))
+      (if (i32.eqz (local.get $cur)) (then (return (i32.const 0))))
+      (local.set $ox (i32.add (local.get $ox) (call $client_rect_get_l (local.get $cur))))
+      (local.set $oy (i32.add (local.get $oy) (call $client_rect_get_t (local.get $cur))))
+      (local.set $depth (i32.add (local.get $depth) (i32.const 1)))
+      (br $walk)))
+    (local.set $ox (i32.sub (local.get $ox) (call $client_rect_get_l (local.get $locked))))
+    (local.set $oy (i32.sub (local.get $oy) (call $client_rect_get_t (local.get $locked))))
+    (local.set $left (i32.add (local.get $left) (local.get $ox)))
+    (local.set $right (i32.add (local.get $right) (local.get $ox)))
+    (local.set $top (i32.add (local.get $top) (local.get $oy)))
+    (local.set $bottom (i32.add (local.get $bottom) (local.get $oy)))
+
+    (call $window_update_damage_guard_acquire)
+    ;; Unlock first publishes -1, then waits for this guard. Recheck after
+    ;; acquiring it so a draw that raced that transition cannot appear in the
+    ;; next lock transaction.
+    (if (i32.ne
+          (i32.atomic.load (global.get $WINDOW_UPDATE_LOCK))
+          (local.get $locked))
+      (then
+        (call $window_update_damage_guard_release)
+        (return (i32.const 0))))
+    (if (i32.eqz (i32.atomic.load offset=8 (global.get $WINDOW_UPDATE_LOCK)))
+      (then
+        (i32.atomic.store offset=12 (global.get $WINDOW_UPDATE_LOCK) (local.get $left))
+        (i32.atomic.store offset=16 (global.get $WINDOW_UPDATE_LOCK) (local.get $top))
+        (i32.atomic.store offset=20 (global.get $WINDOW_UPDATE_LOCK) (local.get $right))
+        (i32.atomic.store offset=24 (global.get $WINDOW_UPDATE_LOCK) (local.get $bottom))
+        (i32.atomic.store offset=8 (global.get $WINDOW_UPDATE_LOCK) (i32.const 1)))
+      (else
+        (if (i32.lt_s (local.get $left)
+              (i32.atomic.load offset=12 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=12
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $left))))
+        (if (i32.lt_s (local.get $top)
+              (i32.atomic.load offset=16 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=16
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $top))))
+        (if (i32.gt_s (local.get $right)
+              (i32.atomic.load offset=20 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=20
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $right))))
+        (if (i32.gt_s (local.get $bottom)
+              (i32.atomic.load offset=24 (global.get $WINDOW_UPDATE_LOCK)))
+          (then (i32.atomic.store offset=24
+            (global.get $WINDOW_UPDATE_LOCK) (local.get $bottom))))))
+    (call $window_update_damage_guard_release)
+    (i32.const 1))
+
+  ;; The ordinary USER visible-region calculation, without a window-update
+  ;; lock. GetDCEx uses this entry for DCX_LOCKWINDOWUPDATE.
+  (func $dc_apply_client_clip_unlocked (param $hdc i32) (param $hwnd i32)
     (local $w i32) (local $h i32)
     (if (i32.eqz (call $gdi_dc_system_clip_reset (local.get $hdc))) (then (return)))
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd)))
@@ -4033,9 +6425,29 @@
           (local.get $hdc) (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
           (i32.const 1)))))
     (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
-    (call $dc_exclude_children_for_clip
-      (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))
+    ;; Win16/VBRUN can present AutoRedraw content from a parent legacy client
+    ;; DC into areas occupied by child picture controls. Keep that exception
+    ;; narrow: non-VB Win16 games still rely on WS_CLIPCHILDREN to stop parent
+    ;; drawing from covering their child controls and custom panes.
+    (if (i32.or
+          (i32.eqz (global.get $code16))
+          (i32.or
+            (i32.eqz (call $win16_vbrun100_loaded))
+            (i32.or
+              (i32.lt_u (local.get $hdc) (i32.const 0x00050000))
+              (i32.ge_u (local.get $hdc) (i32.const 0x000D0000)))))
+      (then
+        (call $dc_exclude_children_for_clip
+          (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
+
+  (func $dc_apply_client_clip (param $hdc i32) (param $hwnd i32)
+    (call $dc_apply_client_clip_unlocked (local.get $hdc) (local.get $hwnd))
+    (if (call $window_update_lock_covers (local.get $hwnd))
+      (then
+        (drop (call $gdi_dc_system_clip_rect (local.get $hdc)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 1))))))
 
   (func $dc_apply_client_erase_clip (param $hdc i32) (param $hwnd i32)
     (local $w i32) (local $h i32)
@@ -4054,11 +6466,12 @@
           (local.get $hdc) (i32.const 0) (i32.const 0) (local.get $w) (local.get $h)
           (i32.const 1)))))
     (call $dc_clip_to_parent_client (local.get $hdc) (local.get $hwnd))
-    (call $dc_exclude_visible_children_for_erase
-      (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))
+    (if (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x02000000)) ;; WS_CLIPCHILDREN
+      (then (call $dc_exclude_visible_children_for_erase
+        (local.get $hdc) (local.get $hwnd) (i32.const 0) (i32.const 0))))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
 
-  (func $dc_apply_window_clip (param $hdc i32) (param $hwnd i32)
+  (func $dc_apply_window_clip_unlocked (param $hdc i32) (param $hwnd i32)
     (local $style i32) (local $wh i32)
     (if (i32.eqz (call $gdi_dc_system_clip_reset (local.get $hdc))) (then (return)))
     (if (i32.eqz (call $wnd_is_effectively_visible (local.get $hwnd)))
@@ -4084,6 +6497,14 @@
       (call $client_rect_get_l (local.get $hwnd))
       (call $client_rect_get_t (local.get $hwnd)))
     (call $dc_exclude_siblings_for_clip (local.get $hdc) (local.get $hwnd)))
+
+  (func $dc_apply_window_clip (param $hdc i32) (param $hwnd i32)
+    (call $dc_apply_window_clip_unlocked (local.get $hdc) (local.get $hwnd))
+    (if (call $window_update_lock_covers (local.get $hwnd))
+      (then
+        (drop (call $gdi_dc_system_clip_rect (local.get $hdc)
+          (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+          (i32.const 1))))))
 
   ;; A window DC may outlive the visibility state under which GetDC created
   ;; its USER clip. Rebuild all retained window clips when WS_VISIBLE changes;
@@ -4135,34 +6556,76 @@
           (local.get $cr_l) (local.get $cr_t)
           (local.get $cr_r) (local.get $cr_b) (i32.const 4))))))
 
-  ;; $post_queue_push(hwnd, msg, wParam, lParam): append to the ring at 0x400.
-  ;; Same layout as PostMessageA. Returns 1 on success, 0 if full.
+  ;; Every WASM instance owns its count and its corresponding thread partition.
+  (func $post_queue_base (result i32)
+    (if (i32.ge_u (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 16))
+      (then (unreachable)))
+    (i32.add (global.get $LOCAL_POST_QUEUES)
+      (i32.mul (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 1024))))
+
+  (func $post_queue_remove_at (param $index i32) (result i32)
+    (local $slot i32)
+    (if (i32.ge_u (local.get $index) (global.get $post_queue_count))
+      (then (return (i32.const 0))))
+    (local.set $slot (i32.add (call $post_queue_base)
+      (i32.mul (local.get $index) (i32.const 16))))
+    (global.set $post_queue_count
+      (i32.sub (global.get $post_queue_count) (i32.const 1)))
+    (if (i32.lt_u (local.get $index) (global.get $post_queue_count))
+      (then
+        (call $memcpy
+          (local.get $slot)
+          (i32.add (local.get $slot) (i32.const 16))
+          (i32.mul
+            (i32.sub (global.get $post_queue_count) (local.get $index))
+            (i32.const 16)))))
+    (i32.const 1))
+
+  (func $post_queue_total_count (result i32)
+    (global.get $post_queue_count))
+
+  (func $post_queue_peek_field (param $index i32) (param $field i32) (result i32)
+    (if (i32.ge_u (local.get $index) (global.get $post_queue_count))
+      (then (return (i32.const 0))))
+    (if (i32.ge_u (local.get $field) (i32.const 4))
+      (then (return (i32.const 0))))
+    (i32.load (i32.add
+      (i32.add (call $post_queue_base)
+        (i32.mul (local.get $index) (i32.const 16)))
+      (i32.shl (local.get $field) (i32.const 2)))))
+
+  (func $post_queue_reset
+    (global.set $post_queue_count (i32.const 0)))
+
+  ;; $post_queue_push(hwnd, msg, wParam, lParam): append to the target thread's
+  ;; one process-shared USER queue. Same-thread and cross-Worker producers must
+  ;; meet at this exact serialization point or Peek/GetMessage can reorder them
+  ;; and an unbounded private prefix can starve an older cross-thread post.
   (func $post_queue_push
         (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
         (result i32)
-    (local $slot i32)
-    (if (i32.ge_u (global.get $post_queue_count) (i32.const 64))
+    (local $owner i32) (local $ok i32)
+    (if (local.get $hwnd)
+      (then (local.set $owner (call $wnd_get_thread (local.get $hwnd)))))
+    ;; An idle host shadow has no guest thread queue of its own. It may only
+    ;; route a message whose live HWND names the actual owning queue.
+    (if (i32.and (global.get $host_shadow) (i32.eqz (local.get $owner)))
       (then (return (i32.const 0))))
-    (local.set $slot (i32.add (i32.const 0x400)
-      (i32.mul (global.get $post_queue_count) (i32.const 16))))
-    (i32.store          (local.get $slot) (local.get $hwnd))
-    (i32.store offset=4  (local.get $slot) (local.get $msg))
-    (i32.store offset=8  (local.get $slot) (local.get $wParam))
-    (i32.store offset=12 (local.get $slot) (local.get $lParam))
-    (global.set $post_queue_count (i32.add (global.get $post_queue_count) (i32.const 1)))
+    (local.set $ok (call $shared_post_queue_enqueue
+      (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
     ;; --trace-win16 shows every posted message going in, which is the other
     ;; half of the dlg-pump/task-loop lines showing them come out. A message
     ;; delivered twice is either pushed twice or popped twice, and only both
     ;; halves together say which.
-    (if (global.get $win16_trace)
+    (if (i32.and (local.get $ok) (global.get $win16_trace))
       (then
         (call $host_log_i32 (i32.const 0xCA16A9EC))
         (call $host_log_i32 (local.get $hwnd))
         (call $host_log_i32 (local.get $msg))
         (call $host_log_i32 (local.get $wParam))
         (call $host_log_i32 (local.get $lParam))
-        (call $host_log_i32 (global.get $post_queue_count))))
-    (i32.const 1))
+        (call $host_log_i32 (call $shared_post_queue_total_count))))
+    (local.get $ok))
 
   ;; $post_queue_purge_hwnd(hwnd): drop every queued message aimed at a window
   ;; that is going away. USER discards a destroyed window's queued messages;
@@ -4174,23 +6637,14 @@
     (if (i32.eqz (local.get $hwnd)) (then (return)))
     (block $done (loop $scan
       (br_if $done (i32.ge_u (local.get $i) (global.get $post_queue_count)))
-      (local.set $slot (i32.add (i32.const 0x400)
+      (local.set $slot (i32.add (call $post_queue_base)
         (i32.mul (local.get $i) (i32.const 16))))
       (if (i32.eq (i32.load (local.get $slot)) (local.get $hwnd))
         (then
-          (global.set $post_queue_count
-            (i32.sub (global.get $post_queue_count) (i32.const 1)))
-          (if (i32.lt_u (local.get $i) (global.get $post_queue_count))
-            (then
-              (call $memcpy
-                (local.get $slot)
-                (i32.add (local.get $slot) (i32.const 16))
-                (i32.mul
-                  (i32.sub (global.get $post_queue_count) (local.get $i))
-                  (i32.const 16))))))
+          (drop (call $post_queue_remove_at (local.get $i))))
         (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
       (br $scan)))
-  )
+    (call $shared_post_queue_purge_hwnd (local.get $hwnd)))
 
   ;; Skip a DLGTEMPLATE variable-length field (OrdOrString):
   ;;   0x0000 → null (skip 2 bytes)
@@ -4330,7 +6784,7 @@
   (global $dlg_text_ptr (mut i32) (i32.const 0))
   (global $dlg_text_wa  (mut i32) (i32.const 0))
   (func $dlg_read_text (param $wa i32)
-    (local $ch i32) (local $len i32) (local $start i32) (local $buf i32) (local $j i32)
+    (local $ch i32) (local $len i32) (local $start i32) (local $buf i32) (local $buf_wa i32) (local $j i32)
     (local.set $ch (i32.load16_u (local.get $wa)))
     ;; null → skip 2 bytes, return 0
     (if (i32.eqz (local.get $ch))
@@ -4355,16 +6809,16 @@
     (local.set $wa (i32.add (local.get $wa) (i32.const 2))) ;; skip null
     (global.set $dlg_text_wa (local.get $wa))
     ;; Allocate guest buffer and convert to ASCII
-    (local.set $buf (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+    (local.set $buf (call $heap_alloc (i32.add (local.get $len) (i32.const 1)))) (local.set $buf_wa (call $g2w (local.get $buf)))
     (local.set $j (i32.const 0))
     (block $c_done (loop $c_loop
       (br_if $c_done (i32.ge_u (local.get $j) (local.get $len)))
-      (i32.store8 (call $g2w (i32.add (local.get $buf) (local.get $j)))
+      (i32.store8 (i32.add (local.get $buf_wa) (local.get $j))
         (i32.and (i32.load16_u (i32.add (local.get $start)
           (i32.mul (local.get $j) (i32.const 2)))) (i32.const 0xFF)))
       (local.set $j (i32.add (local.get $j) (i32.const 1)))
       (br $c_loop)))
-    (i32.store8 (call $g2w (i32.add (local.get $buf) (local.get $len))) (i32.const 0))
+    (i32.store8 (i32.add (local.get $buf_wa) (local.get $len)) (i32.const 0))
     (global.set $dlg_text_ptr (local.get $buf)))
 
   ;; ---- WND_DLG_RECORDS accessors ----
@@ -4420,7 +6874,8 @@
       (local.set $style (call $wnd_get_style (local.get $ch)))
       (if (i32.and
             (i32.and (i32.ne (i32.and (local.get $style) (i32.const 0x10000000)) (i32.const 0))   ;; WS_VISIBLE
-                     (i32.eqz (i32.and (local.get $style) (i32.const 0x08000000))))             ;; !WS_DISABLED
+                     (i32.eqz (i32.and (local.get $style)
+                                (i32.shl (i32.const 1) (i32.const 27)))))                       ;; !WS_DISABLED
             (i32.ne (i32.and (local.get $style) (i32.const 0x00010000)) (i32.const 0)))         ;; WS_TABSTOP
         (then
           (call $set_focus (local.get $ch))
@@ -4428,12 +6883,12 @@
       (local.set $slot (i32.add (local.get $slot) (i32.const 1)))
       (br $walk))))
 
-  ;; $dlg_load(dlg_hwnd, dlg_id) → ctrl_count
+  ;; $dlg_load_impl(dlg_hwnd, dlg_id, wide) → ctrl_count
   ;;
   ;; Single entry point for building a dialog from an RT_DIALOG template.
-  ;; Walks the PE resource (via $find_resource — handles both integer IDs
-  ;; and guest string pointers for named entries like freecell's
-  ;; "STATISTICS"), stores the header fields in WND_DLG_RECORDS[slot],
+  ;; Walks the PE resource using the caller's ANSI/UTF-16 named-resource
+  ;; encoding (integer IDs are identical), stores the header fields in
+  ;; WND_DLG_RECORDS[slot],
   ;; allocates one HWND per control with $next_hwnd, fills CONTROL_TABLE,
   ;; sets CONTROL_GEOM, and sends WM_CREATE with a synthesised
   ;; CREATESTRUCT so native control wndprocs initialise their state.
@@ -4442,18 +6897,19 @@
   ;; The caller is expected to have already registered $dlg_hwnd in
   ;; WND_RECORDS via $wnd_table_set — $dlg_load uses the slot index as
   ;; the key into WND_DLG_RECORDS.
-  (func $dlg_load (param $dlg_hwnd i32) (param $dlg_id i32) (result i32)
+  (func $dlg_load_impl
+      (param $dlg_hwnd i32) (param $dlg_id i32) (param $wide i32) (result i32)
     (local $data_entry i32) (local $rva i32) (local $wa i32) (local $p i32)
     (local $style i32) (local $ex_style i32) (local $ctrl_count i32)
     (local $dlg_x i32) (local $dlg_y i32) (local $dlg_cx i32) (local $dlg_cy i32)
-    (local $title_ptr i32) (local $menu_key i32)
+    (local $title_ptr i32) (local $title_wa i32) (local $menu_key i32) (local $dialog_class_ptr i32)
     (local $dlg_slot i32) (local $dlg_rec i32) (local $dlg_key i32)
     (local $i i32) (local $ctrl_hwnd i32) (local $ctrl_slot i32) (local $ctrl_rec i32)
     (local $cx i32) (local $cy i32) (local $cw i32) (local $ch i32)
     (local $is_ex i32) (local $ctrl_style i32) (local $ctrl_ex i32) (local $ctrl_id i32)
-    (local $class_val i32) (local $class_enum i32) (local $class_ptr i32)
+    (local $class_val i32) (local $class_enum i32) (local $class_ptr i32) (local $class_wa i32)
     (local $custom_wndproc i32) (local $native_tab i32)
-    (local $text_ptr i32) (local $text_ord i32) (local $cs i32)
+    (local $text_ptr i32) (local $text_wa i32) (local $text_ord i32) (local $cs i32) (local $cs_wa i32)
     (local $base_x i32) (local $base_y i32)
     ;; Win16 USER uses the classic 8x16 SYSTEM_FONT dialog base. Win32
     ;; dialogs in this runtime use the measured 8pt MS Sans Serif 6x13 base.
@@ -4471,8 +6927,14 @@
         (local.set $wa (call $g2w (global.get $dlg_indirect_template_ptr)))
         (global.set $dlg_indirect_template_ptr (i32.const 0)))
       (else
-        ;; Walk PE directory; also captures $rsrc_matched_eid for named entries
-        (local.set $data_entry (call $find_resource (i32.const 5) (local.get $dlg_id)))
+        ;; Walk PE directory; also captures $rsrc_matched_eid for named entries.
+        (if (local.get $wide)
+          (then
+            (local.set $data_entry
+              (call $find_resource_w (i32.const 5) (local.get $dlg_id))))
+          (else
+            (local.set $data_entry
+              (call $find_resource (i32.const 5) (local.get $dlg_id)))))
         (if (i32.eqz (local.get $data_entry)) (then (return (i32.const 0))))
         (local.set $dlg_key (global.get $rsrc_matched_eid))
         ;; Read RVA from data entry → WASM linear address of template
@@ -4506,8 +6968,27 @@
     (call $dlg_read_menu_or_class (local.get $p))
     (local.set $menu_key (global.get $dlg_text_ptr))
     (local.set $p (global.get $dlg_text_wa))
-    ;; Class (OrdOrString) — ignored for dialogs, but must skip
-    (local.set $p (call $dlg_skip_ord_or_sz (local.get $p)))
+    ;; Class (OrdOrString). A named custom dialog class inherits the same
+    ;; registered-class state as a window created through CreateWindowExA.
+    ;; GoldSrc's HalfLifeLauncher class supplies application-owned dialog
+    ;; state. Skipping it made resize helpers treat the owner-drawn menu as a
+    ;; default dialog and overwrite its painted background with COLOR_BTNFACE.
+    (call $dlg_read_menu_or_class (local.get $p))
+    (local.set $dialog_class_ptr (global.get $dlg_text_ptr))
+    (local.set $p (global.get $dlg_text_wa))
+    ;; Ordinal class atoms fit below the guest heap. Only named classes can
+    ;; participate in the registered-class lookup helpers.
+    (if (i32.ge_u (local.get $dialog_class_ptr) (i32.const 0x10000))
+      (then
+        (call $wnd_set_class_bg_brush_from_name
+          (local.get $dlg_hwnd) (local.get $dialog_class_ptr))
+        (call $wnd_set_class_cursor_from_name
+          (local.get $dlg_hwnd) (local.get $dialog_class_ptr))
+        (call $wnd_set_class_slot_from_name
+          (local.get $dlg_hwnd) (local.get $dialog_class_ptr))
+        (call $wnd_set_own_dc_from_name
+          (local.get $dlg_hwnd) (local.get $dialog_class_ptr))
+        (call $heap_free (local.get $dialog_class_ptr))))
     ;; Title (UTF-16 sz)
     (call $dlg_read_text (local.get $p))
     (local.set $title_ptr (global.get $dlg_text_ptr))
@@ -4527,9 +7008,10 @@
     ;; Also publish the title so $defwndproc_do_ncpaint can draw it in the
     ;; caption bar. $title_ptr is a guest heap pointer from $dlg_read_text.
     (if (local.get $title_ptr)
-      (then (call $title_table_set (local.get $dlg_hwnd)
-              (call $g2w (local.get $title_ptr))
-              (call $strlen (call $g2w (local.get $title_ptr))))))
+      (then
+        (local.set $title_wa (call $g2w (local.get $title_ptr)))
+        (call $title_table_set (local.get $dlg_hwnd)
+          (local.get $title_wa) (call $strlen (local.get $title_wa)))))
     ;; Stash header in WND_DLG_RECORDS[slot]
     (i32.store         (local.get $dlg_rec) (local.get $dlg_key))
     (i32.store offset=4  (local.get $dlg_rec) (local.get $style))
@@ -4572,6 +7054,7 @@
           (i32.eqz (i32.and (local.get $style) (i32.const 0x40000000))))))
     ;; Allocate one CREATESTRUCT on the heap, reused for every control
     (local.set $cs (call $heap_alloc (i32.const 48)))
+    (local.set $cs_wa (call $g2w (local.get $cs)))
     ;; Iterate DLGITEMTEMPLATE entries
     (local.set $i (i32.const 0))
     (block $done (loop $ctrl_loop
@@ -4621,29 +7104,29 @@
         (else
           ;; UTF-16 string classes. Templates may name both builtin classes
           ;; ("ListBox") and common controls ("msctls_progress32").
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x3100))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x000))
             (then (local.set $class_enum (i32.const 1))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x3108))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x008))
             (then (local.set $class_enum (i32.const 2))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x310D))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x00D))
             (then (local.set $class_enum (i32.const 3))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x3114))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x014))
             (then (local.set $class_enum (i32.const 4))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x311C))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x01C))
             (then (local.set $class_enum (i32.const 7))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x3126))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x026))
             (then (local.set $class_enum (i32.const 5))))
-          (if (call $wide_ascii_prefix_eq (local.get $p) (i32.const 0x312F))
+          (if (call $wide_ascii_prefix_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x02F))
             (then (local.set $class_enum (i32.const 17))))
-          (if (call $wide_ascii_prefix_eq (local.get $p) (i32.const 0x316A)) ;; SysTreeView32
+          (if (call $wide_ascii_prefix_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x06A)) ;; SysTreeView32
             (then (local.set $class_enum (i32.const 8))))
-          (if (call $wide_ascii_prefix_eq (local.get $p) (i32.const 0x3141))
+          (if (call $wide_ascii_prefix_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x041))
             (then (local.set $class_enum (i32.const 18))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x3150))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x050))
             (then (local.set $class_enum (i32.const 19))))
-          (if (call $wide_ascii_prefix_eq (local.get $p) (i32.const 0x3158))
+          (if (call $wide_ascii_prefix_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x058))
             (then (local.set $class_enum (i32.const 19))))
-          (if (call $wide_ascii_eq (local.get $p) (i32.const 0x3178))
+          (if (call $wide_ascii_eq (local.get $p) (region.addr $CLASS_NAME_STRINGS 0x078))
             (then (local.set $class_enum (i32.const 28))))
           ;; "RichEdit", "RichEdit20A", etc. Compare the first four chars
           ;; case-insensitively: r i c h.
@@ -4661,6 +7144,7 @@
           ;; native-control sentinel suppresses their real WM_CREATE/WM_PAINT.
           (call $dlg_read_text (local.get $p))
           (local.set $class_ptr (global.get $dlg_text_ptr))
+          (local.set $class_wa (call $g2w (local.get $class_ptr)))
           (local.set $p (global.get $dlg_text_wa))
           ;; Dialog-template common controls bypass CreateWindowExA. Preserve
           ;; the registered COMCTL32 SysTabControl32 proc, but mark the HWND so
@@ -4669,10 +7153,10 @@
                 (i32.ge_u (local.get $class_ptr) (i32.const 0x10000))
                 (i32.and
                   (i32.eq
-                    (i32.or (i32.load (call $g2w (local.get $class_ptr))) (i32.const 0x20202020))
+                    (i32.or (i32.load (local.get $class_wa)) (i32.const 0x20202020))
                     (i32.const 0x74737973)) ;; "syst"
                   (i32.eq
-                    (i32.or (i32.load offset=4 (call $g2w (local.get $class_ptr))) (i32.const 0x20202020))
+                    (i32.or (i32.load offset=4 (local.get $class_wa)) (i32.const 0x20202020))
                     (i32.const 0x6f636261)))) ;; "abco"
             (then (local.set $native_tab (i32.const 1))))
           (if (i32.and
@@ -4703,6 +7187,33 @@
           (local.get $custom_wndproc)))
       (drop (call $wnd_set_style (local.get $ctrl_hwnd) (local.get $ctrl_style)))
       (call $wnd_set_parent (local.get $ctrl_hwnd) (local.get $dlg_hwnd))
+      ;; The dialog manager keeps resource order as front-to-back tab/z
+      ;; order: the first item is above later overlapping items. A normal
+      ;; CreateWindow call inserts each new child at HWND_TOP, so explicitly
+      ;; append template children at HWND_BOTTOM instead. CD Player depends on
+      ;; this for its wide owner-draw Play button, which overlaps the LED
+      ;; control declared eight items later in the resource.
+      (call $wnd_z_set_after (local.get $ctrl_hwnd) (i32.const 1)) ;; HWND_BOTTOM
+      ;; A named control in a dialog template is still a real window of its
+      ;; registered class. CreateWindowExA resolves these per-window class
+      ;; properties before WM_CREATE; the template path must do the same.
+      ;; CD Player's SJE_LEDClass is CS_OWNDC and selects its font/text colour
+      ;; once from WM_CREATE. Losing that private DC makes every later time
+      ;; display draw with the default black text on its black background.
+      ;; SJE_TextClass likewise relies on its class brush to erase an older,
+      ;; longer title before repainting a shorter one.
+      (if (i32.and
+            (i32.ne (local.get $custom_wndproc) (i32.const 0))
+            (i32.ge_u (local.get $class_ptr) (i32.const 0x10000)))
+        (then
+          (call $wnd_set_class_bg_brush_from_name
+            (local.get $ctrl_hwnd) (local.get $class_ptr))
+          (call $wnd_set_class_cursor_from_name
+            (local.get $ctrl_hwnd) (local.get $class_ptr))
+          (call $wnd_set_class_slot_from_name
+            (local.get $ctrl_hwnd) (local.get $class_ptr))
+          (call $wnd_set_own_dc_from_name
+            (local.get $ctrl_hwnd) (local.get $class_ptr))))
       (local.set $ctrl_slot (call $wnd_table_find (local.get $ctrl_hwnd)))
       (if (i32.ge_s (local.get $ctrl_slot) (i32.const 0))
         (then
@@ -4745,33 +7256,46 @@
       ;; cs+16 (cy) to size its dropped listbox, and pinball's Player Controls
       ;; supplied raw DLU ch=22 (≈38 px) so the listbox dropped area was only
       ;; ~17 px tall, clipping to ~2 visible items.
-      (i32.store         (call $g2w (local.get $cs)) (i32.const 0))
-      (i32.store offset=4  (call $g2w (local.get $cs)) (i32.const 0))
-      (i32.store offset=8  (call $g2w (local.get $cs)) (local.get $ctrl_id))
-      (i32.store offset=12 (call $g2w (local.get $cs)) (local.get $dlg_hwnd))
-      (i32.store offset=16 (call $g2w (local.get $cs)) (i32.div_u (i32.add (i32.mul (local.get $ch) (local.get $base_y)) (i32.const 4)) (i32.const 8)))
-      (i32.store offset=20 (call $g2w (local.get $cs)) (i32.div_u (i32.mul (local.get $cw) (local.get $base_x)) (i32.const 4)))
-      (i32.store offset=24 (call $g2w (local.get $cs)) (i32.div_u (i32.add (i32.mul (local.get $cy) (local.get $base_y)) (i32.const 4)) (i32.const 8)))
-      (i32.store offset=28 (call $g2w (local.get $cs)) (i32.div_u (i32.mul (local.get $cx) (local.get $base_x)) (i32.const 4)))
-      (i32.store offset=32 (call $g2w (local.get $cs)) (local.get $ctrl_style))
-      (i32.store offset=36 (call $g2w (local.get $cs))
+      (i32.store         (local.get $cs_wa) (i32.const 0))
+      (i32.store offset=4  (local.get $cs_wa) (i32.const 0))
+      (i32.store offset=8  (local.get $cs_wa) (local.get $ctrl_id))
+      (i32.store offset=12 (local.get $cs_wa) (local.get $dlg_hwnd))
+      (i32.store offset=16 (local.get $cs_wa) (i32.div_u (i32.add (i32.mul (local.get $ch) (local.get $base_y)) (i32.const 4)) (i32.const 8)))
+      (i32.store offset=20 (local.get $cs_wa) (i32.div_u (i32.mul (local.get $cw) (local.get $base_x)) (i32.const 4)))
+      (i32.store offset=24 (local.get $cs_wa) (i32.div_u (i32.add (i32.mul (local.get $cy) (local.get $base_y)) (i32.const 4)) (i32.const 8)))
+      (i32.store offset=28 (local.get $cs_wa) (i32.div_u (i32.mul (local.get $cx) (local.get $base_x)) (i32.const 4)))
+      (i32.store offset=32 (local.get $cs_wa) (local.get $ctrl_style))
+      (i32.store offset=36 (local.get $cs_wa)
         (select
           (local.get $text_ord)
           (local.get $text_ptr)
           (i32.and
             (i32.eq (local.get $class_enum) (i32.const 3))
             (i32.ne (local.get $text_ord) (i32.const 0)))))
-      (i32.store offset=40 (call $g2w (local.get $cs)) (local.get $class_ptr))
-      (i32.store offset=44 (call $g2w (local.get $cs)) (i32.const 0))
+      (i32.store offset=40 (local.get $cs_wa) (local.get $class_ptr))
+      (i32.store offset=44 (local.get $cs_wa) (i32.const 0))
       ;; USER owns the initial window text independently of any class-specific
       ;; state. Registered custom controls commonly query it during WM_PAINT;
       ;; native controls continue to keep their own state copy as well.
       (if (local.get $text_ptr)
         (then
+          (local.set $text_wa (call $g2w (local.get $text_ptr)))
           (call $title_table_set (local.get $ctrl_hwnd)
-            (call $g2w (local.get $text_ptr))
-            (call $strlen (call $g2w (local.get $text_ptr))))))
+            (local.get $text_wa) (call $strlen (local.get $text_wa)))))
       (drop (call $wnd_send_message (local.get $ctrl_hwnd) (i32.const 0x0001) (i32.const 0) (local.get $cs)))
+      ;; DS_SETFONT makes the dialog manager install its dialog font on every
+      ;; control.  Resource dialogs here already use the measured Win98 8pt
+      ;; MS Sans Serif base above, so give native COMCTL32 tabs that same
+      ;; canonical stock font.  Otherwise the real tab wndproc sizes and hit
+      ;; tests items with the taller SYSTEM_FONT while the shared-surface
+      ;; painter draws DEFAULT_GUI_FONT, making clicks select the next page.
+      (if (i32.and
+            (i32.ne (i32.and (local.get $style) (i32.const 0x40)) (i32.const 0))
+            (i32.ne (local.get $native_tab) (i32.const 0)))
+        (then
+          (drop (call $wnd_send_message
+            (local.get $ctrl_hwnd) (i32.const 0x0030)
+            (i32.const 0x30021) (i32.const 0)))))
       ;; Control wndproc has copied text into its own state struct;
       ;; free the template-side copy to avoid leaking per dialog open.
       (if (local.get $text_ptr) (then (call $heap_free (local.get $text_ptr))))
@@ -4783,6 +7307,120 @@
     (call $dlg_seed_focus (local.get $dlg_hwnd))
     (return (local.get $ctrl_count)))
 
+  ;; Keep every existing ANSI dialog caller on its historical entry point.
+  ;; Unicode property pages use the same parser after selecting UTF-16 named
+  ;; resource lookup; RT_DIALOG payloads themselves are always Unicode.
+  (func $dlg_load (param $dlg_hwnd i32) (param $dlg_id i32) (result i32)
+    (call $dlg_load_impl
+      (local.get $dlg_hwnd) (local.get $dlg_id) (i32.const 0)))
+
+  (func $dlg_load_w (param $dlg_hwnd i32) (param $dlg_id i32) (result i32)
+    (call $dlg_load_impl
+      (local.get $dlg_hwnd) (local.get $dlg_id) (i32.const 1)))
+
+  ;; $dlg_place_owner_relative(dlg_hwnd)
+  ;;
+  ;; A DLGTEMPLATE's x/y are dialog units measured from the upper-left corner
+  ;; of the OWNER window's *client* area, not from the screen — unless the
+  ;; template sets DS_ABSALIGN, which is the one case where they are screen
+  ;; coordinates. Nothing applied that offset, so an owned dialog whose
+  ;; template names a non-zero origin opened that far from the desktop corner
+  ;; instead of that far into its owner. XP winmine's "enter your name" dialog
+  ;; (RT_DIALOG 600, x=0 y=28) therefore appeared at screen (0, 45), in the
+  ;; top-left of the desktop, with the minesweeper board it belongs to
+  ;; somewhere off to the right.
+  ;;
+  ;; Call this once the caller has established the owner link and the host has
+  ;; mirrored the window ($host_dialog_loaded). It works entirely in pixels off
+  ;; the two window rects, so the dialog-unit conversion stays in one place —
+  ;; the $ctrl_geom_set above, whose result is what the window rect already
+  ;; reports here as a template-relative origin.
+  (func $dlg_place_owner_relative (param $dlg_hwnd i32)
+    (local $slot i32) (local $tmpl_style i32) (local $owner i32)
+    (local $rect i32)
+    (local $dx i32) (local $dy i32) (local $dw i32) (local $dh i32)
+    (local $ox i32) (local $oy i32) (local $ow i32) (local $oh i32)
+    (local $nx i32) (local $ny i32) (local $screen i32)
+    (if (i32.eqz (local.get $dlg_hwnd)) (then (return)))
+    ;; Child dialog pages are laid out inside their container's client area by
+    ;; whoever hosts them; their template origin is already parent-relative.
+    (if (i32.and (call $wnd_get_style (local.get $dlg_hwnd)) (i32.const 0x40000000))
+      (then (return)))
+    (local.set $owner (call $wnd_get_owner (local.get $dlg_hwnd)))
+    (if (i32.eqz (local.get $owner)) (then (return)))
+    (local.set $slot (call $wnd_table_find (local.get $dlg_hwnd)))
+    (if (i32.lt_s (local.get $slot) (i32.const 0)) (then (return)))
+    ;; The DS_* half of the template style word, as stored by $dlg_load.
+    (local.set $tmpl_style (i32.load offset=4 (call $dlg_record_addr (local.get $slot))))
+    (if (i32.and (local.get $tmpl_style) (i32.const 0x0001)) ;; DS_ABSALIGN
+      (then (return)))
+    (local.set $rect (call $paint_scratch_take))
+    (call $host_get_window_rect (local.get $dlg_hwnd) (local.get $rect))
+    (local.set $dx (load.field.memarg PaintRect left (local.get $rect)))
+    (local.set $dy (load.field.memarg PaintRect top (local.get $rect)))
+    (local.set $dw (i32.sub (load.field.memarg PaintRect right (local.get $rect))
+                            (local.get $dx)))
+    (local.set $dh (i32.sub (load.field.memarg PaintRect bottom (local.get $rect))
+                            (local.get $dy)))
+    (local.set $rect (call $paint_scratch_take))
+    (call $host_get_window_rect (local.get $owner) (local.get $rect))
+    (local.set $ox (load.field.memarg PaintRect left (local.get $rect)))
+    (local.set $oy (load.field.memarg PaintRect top (local.get $rect)))
+    (local.set $ow (i32.sub (load.field.memarg PaintRect right (local.get $rect))
+                            (local.get $ox)))
+    (local.set $oh (i32.sub (load.field.memarg PaintRect bottom (local.get $rect))
+                            (local.get $oy)))
+    (if (i32.or (i32.le_s (local.get $ow) (i32.const 0))
+                (i32.le_s (local.get $oh) (i32.const 0)))
+      (then (return)))
+    (if (i32.or (i32.le_s (local.get $dw) (i32.const 0))
+                (i32.le_s (local.get $dh) (i32.const 0)))
+      (then (return)))
+    ;; DS_CENTER, plus the modal-template-at-origin case USER's dialog manager
+    ;; centres for a frame whose template never names a position. This used to
+    ;; live in lib/renderer.js's createDialog; it is window placement, so it
+    ;; belongs on this side of the seam.
+    (if (i32.or
+          (i32.ne (i32.and (local.get $tmpl_style) (i32.const 0x0800)) (i32.const 0)) ;; DS_CENTER
+          (i32.and
+            (i32.ne (i32.and (local.get $tmpl_style) (i32.const 0x0080)) (i32.const 0)) ;; DS_MODALFRAME
+            (i32.and (i32.eqz (local.get $dx)) (i32.eqz (local.get $dy)))))
+      (then
+        (local.set $nx (i32.add (local.get $ox)
+          (i32.div_s (i32.sub (local.get $ow) (local.get $dw)) (i32.const 2))))
+        (local.set $ny (i32.add (local.get $oy)
+          (i32.div_s (i32.sub (local.get $oh) (local.get $dh)) (i32.const 2)))))
+      (else
+        (local.set $nx (i32.add (local.get $dx)
+          (i32.add (local.get $ox) (call $client_rect_get_l (local.get $owner)))))
+        (local.set $ny (i32.add (local.get $dy)
+          (i32.add (local.get $oy) (call $client_rect_get_t (local.get $owner)))))))
+    ;; Keep the whole frame on the desktop when the owner sits near an edge.
+    (local.set $screen (call $host_get_screen_size))
+    (if (i32.gt_s (i32.and (local.get $screen) (i32.const 0xFFFF)) (i32.const 0))
+      (then
+        (if (i32.gt_s (i32.add (local.get $nx) (local.get $dw))
+                      (i32.and (local.get $screen) (i32.const 0xFFFF)))
+          (then (local.set $nx (i32.sub (i32.and (local.get $screen) (i32.const 0xFFFF))
+                                        (local.get $dw)))))))
+    (if (i32.gt_s (i32.shr_u (local.get $screen) (i32.const 16)) (i32.const 0))
+      (then
+        (if (i32.gt_s (i32.add (local.get $ny) (local.get $dh))
+                      (i32.shr_u (local.get $screen) (i32.const 16)))
+          (then (local.set $ny (i32.sub (i32.shr_u (local.get $screen) (i32.const 16))
+                                        (local.get $dh)))))))
+    (if (i32.lt_s (local.get $nx) (i32.const 0)) (then (local.set $nx (i32.const 0))))
+    (if (i32.lt_s (local.get $ny) (i32.const 0)) (then (local.set $ny (i32.const 0))))
+    (if (i32.and (i32.eq (local.get $nx) (local.get $dx))
+                 (i32.eq (local.get $ny) (local.get $dy)))
+      (then (return)))
+    (call $ctrl_geom_set (local.get $slot)
+      (local.get $nx) (local.get $ny) (local.get $dw) (local.get $dh))
+    ;; SWP_NOSIZE — this is a move, and the size is the template's.
+    (call $host_move_window (local.get $dlg_hwnd)
+      (local.get $nx) (local.get $ny) (local.get $dw) (local.get $dh)
+      (i32.const 1)))
+
   ;; ============================================================
   ;; Process environment block
   ;; ============================================================
@@ -4793,17 +7431,28 @@
   ;; ones widen on the way out and narrow on the way in.
 
   (func $env_ensure
-    (local $i i32) (local $ch i32) (local $prev i32)
+    (local $i i32) (local $j i32) (local $ch i32) (local $prev i32)
     (if (global.get $env_block) (then (return)))
     (global.set $env_block (call $heap_alloc (global.get $env_cap)))
     (local.set $prev (i32.const 1))
     (block $done (loop $copy
-      (local.set $ch (i32.load8_u (i32.add (i32.const 0x3390) (local.get $i))))
+      (local.set $ch (i32.load8_u (i32.add (region.addr $ENV_DEFAULTS 0x000) (local.get $i))))
       (call $gs8 (i32.add (global.get $env_block) (local.get $i)) (local.get $ch))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br_if $done (i32.and (i32.eqz (local.get $ch)) (i32.eqz (local.get $prev))))
       (local.set $prev (local.get $ch))
-      (br $copy))))
+      (br $copy)))
+    ;; The base copy ended just past its second NUL. Replace that final NUL
+    ;; with the queued entries and their own block terminator.
+    (if (global.get $launch_env_len)
+      (then
+        (local.set $i (i32.sub (local.get $i) (i32.const 1)))
+        (block $launch_done (loop $launch_copy
+          (br_if $launch_done (i32.gt_u (local.get $j) (global.get $launch_env_len)))
+          (call $gs8 (i32.add (global.get $env_block) (i32.add (local.get $i) (local.get $j)))
+            (i32.load8_u (i32.add (region.addr $LAUNCH_ENV_OVERRIDES 0x000) (local.get $j))))
+          (local.set $j (i32.add (local.get $j) (i32.const 1)))
+          (br $launch_copy))))))
 
   ;; Total bytes in the block, including both terminating NULs.
   (func $env_size (result i32)
@@ -4868,9 +7517,14 @@
       (br $copy)))
     (local.get $len))
 
-  ;; Length of the NAME part of an entry, i.e. the offset of its '='.
+  ;; Length of the NAME part of an entry, i.e. the offset of its separator
+  ;; '='. Win9x keeps each drive's current directory in a hidden entry such as
+  ;; "=C:=C:\\"; its leading '=' is part of the name, so the separator is the
+  ;; second '='. FAR reads these variables when populating its file panels.
   (func $env_name_len (param $p i32) (result i32)
     (local $i i32) (local $ch i32)
+    (if (i32.eq (call $gl8 (local.get $p)) (i32.const 0x3D))
+      (then (local.set $i (i32.const 1))))
     (block $done (loop $scan
       (local.set $ch (call $gl8 (i32.add (local.get $p) (local.get $i))))
       (br_if $done (i32.or (i32.eqz (local.get $ch)) (i32.eq (local.get $ch) (i32.const 0x3D))))
@@ -5079,3 +7733,28 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $copy)))
     (local.get $out))
+
+  ;; Win95/98 SHELL32 exported these folder APIs without the A suffix as well
+  ;; as through the SDK's encoding aliases. Old Delphi import units bind the
+  ;; unsuffixed names directly; keep one implementation and canonical API id.
+  (func $shell_legacy_import_alias
+      (param $dll_name_ga i32) (param $name_wa i32) (result i32)
+    (if (call $dll_name_match (local.get $dll_name_ga) "SHELL32.dll")
+      (then
+        (if (call $str_eq (local.get $name_wa) "SHGetPathFromIDList")
+          (then (return (call $lookup_api_id "SHGetPathFromIDListA"))))
+        (if (call $str_eq (local.get $name_wa) "SHBrowseForFolder")
+          (then (return (call $lookup_api_id "SHBrowseForFolderA"))))))
+    (i32.const -1))
+
+  ;; Own an ANSI guest string beyond the caller's buffer lifetime. Both the
+  ;; source and result are guest addresses; HeapAlloc failure and NULL input
+  ;; preserve the ordinary Win32 NULL result.
+  (func $guest_strdup (param $src i32) (result i32)
+    (local $copy i32) (local $len i32)
+    (if (i32.eqz (local.get $src)) (then (return (i32.const 0))))
+    (local.set $len (call $guest_strlen (local.get $src)))
+    (local.set $copy (call $heap_alloc (i32.add (local.get $len) (i32.const 1))))
+    (if (local.get $copy)
+      (then (call $guest_strcpy (local.get $copy) (local.get $src))))
+    (local.get $copy))

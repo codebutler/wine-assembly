@@ -86,6 +86,96 @@ are the ones worth having; "broad" fusions have already lost once.
 `--handler-hist-thread=0`, (b) pixel identity via `tools/png-diff.js`, and
 (c) a timing measurement on a quiet box. (a) and (b) alone are not enough.
 
+### The workload — and why "run caesar3" is not it
+
+Every number on this page comes from **one** command, the drive-into-the-city
+sequence `test/test-caesar3-gameplay.js` runs, with the histogram armed:
+
+```sh
+node test/run.js --app=caesar3_demo --screen=800x600 --batch-size=50000 \
+  --max-batches=3400 --repaint-every=50 --handler-hist-thread=0 \
+  --input='700:mousemove:400:300,760:mousedown:400:300,800:mouseup:400:300,1000:mousemove:400:172,1040:mousedown:400:172,1080:mouseup:400:172,1500:mousemove:548:320,1540:mousedown:548:320,1580:mouseup:548:320,2600:mousemove:613:502,2640:mousedown:613:502,2680:mouseup:613:502' \
+  --png=out.png
+```
+
+Writing this down is not bookkeeping. `--app=caesar3_demo --max-batches=3400`
+*without* the input script looks like the same experiment and is not: the game
+sits on its title screen and dispatches **16,664,328** ops against the gameplay
+run's ~509M, a 31x difference, and it makes 289 API calls against 23,704. A
+fusion aimed at the blitters would measure as nearly nothing there. Four separate
+agents were nearly sent down that path by a baseline command quoted without its
+input script; the command belongs next to the numbers it produced.
+
+The clicks must be `mousedown`, a gap of batches, `mouseup` — Caesar samples the
+button once per frame, so `run.js`'s `click` (both events in one batch) is
+invisible to it. `--screen=800x600` matches the DirectDraw exclusive mode so
+cursor coordinates need no scaling.
+
+### It is not "mostly gameplay", and only ~4/5 of it is the interpreter
+
+Two things worth knowing before reading any speedup claim on this page as a
+speedup of *Caesar III*.
+
+**The workload is not gameplay-dominated.** CPU time is close to linear in
+`--max-batches`, so prefixes of the run give the phase split directly:
+
+| `--max-batches` | user CPU | phase reached |
+|---|---|---|
+| 1 | 0.10s | process start |
+| 700 | 2.35s | title screen |
+| 1500 | 5.22s | main menu |
+| 2700 | 8.55s | mission briefing |
+| 3400 | 11.16s | city view |
+
+Startup is ~1%; the rest is roughly **title 21% / menu 25% / briefing 29% /
+city 23%**. So a change that only helps the isometric city renderer is being
+graded on a run that is three-quarters *not* the city, and a change that helps
+the menu blitters gets credit that would not survive a longer session. This is
+the same trap as the missing input script, one level down: the command is right,
+but its name ("gameplay") oversells what it spends its time on.
+
+**~15% of it is CLI-only JS rasterization no dispatch change can touch.**
+`node --prof` on the same command: 91.8% of ticks are JavaScript, and inside
+that, wasm accounts for 6350 ticks against 1457 in host JS — **wasm is 81.3%**.
+The top non-wasm entries are all `lib/raster-canvas.js`: `drawImage`
+(`lib/raster-canvas.js:273`) at **11.8% of total ticks**, `putImageData` 2.0%,
+`fillRect` 1.4%. That path exists only in the headless CLI; the browser hands
+those to the real canvas. It is a fixed ~15% tax on every measurement taken this
+way, and it caps what any dispatch reduction can show: `fuse-cmp-jcc`'s −8.43%
+op reduction has at most ~85% of the run to act on even before the ops it removes
+turn out to be the cheap ones.
+
+**Corrected 2026-08-23 — the earlier version of this paragraph named the wrong
+functions.** It reported `$gl32` (6.2%), `$gl16` (5.2%), `$gs8` (3.3%) and
+`$th_store8_sib` (3.0%) and concluded "memory accessors, not dispatch". Those
+names came from `tools/func-index.js`, which was counting 8 wrapped imports as
+definitions and so resolved every index 8 too low (fixed in `61dbb724`;
+`tools/wasm-func-name.js` was right all along). Re-taken on the same command:
+
+| ticks | % of total | % of wasm | function |
+|---|---|---|---|
+| 1265 | 14.1% | 26.2% | `$next` |
+| 848 | 9.4% | 17.6% | `$run` |
+| 392 | 4.4% | 8.1% | `$get_reg` |
+| 358 | 4.0% | 7.4% | `$set_reg` |
+| 281 | 3.1% | 5.8% | `$g2w` |
+| 119 | 1.3% | 2.5% | `$do_alu32` |
+| 114 | 1.3% | 2.4% | `$do_alu_sized` |
+
+Wasm is 4823 of 8981 ticks (53.7%) in this run. **The conclusion inverts.**
+Dispatch and the run loop are the top two costs and together are 43.8% of all
+wasm time; the register file (`$get_reg` + `$set_reg`) is another 15.5%, and
+address translation 5.8%. No handler body is above 2.5%. The cost is *not*
+spread across what the handlers do — it is concentrated in getting to them and
+in reading and writing registers on the way.
+
+This does not resurrect the four dispatch variants: their measured op reductions
+are still 5–8% against a noise floor of 41.9% on this box (below), and earlier
+work already measured both tail calls and branch-stripping inside `$next` at
+zero — fewer dispatches did not mean faster. It does say the *target* was right
+and the attempts were the wrong shape — the 26.2% is the mispredicted indirect
+call itself, which fewer or cheaper dispatch branches do not remove.
+
 ### The 361 cap: fusions flatter themselves 2x
 
 **Fixed 2026-08-23.** `$HANDLER_HIST_COUNT` is now **512**, the matrix is 1MB at
@@ -130,9 +220,53 @@ existed above the cap and were never in it. That does not weaken the three-way
 A/B — all three builds had the identical blind spot and the identical total — but
 it is not a whole-program op count.
 
+## Re-measured against main @ `eb080a99`
+
+All four experiments were rebased onto current main and re-run with the fixed
+512-wide histogram and the workload above, so these supersede every number
+further down this page. **Baseline: 509,494,254 dispatches.** (Not 518,446,380
+and not 520,284,956 — both predate six commits of main, including ~460 lines of
+`07-decoder.wat` and ten new fused handlers at ids 400-409, which is most of the
+difference. Three independent captures of the rebased baseline agreed to the
+digit.)
+
+```text
+branch                          total          delta          op delta
+main @ eb080a99             509,494,254            —             —
+perf/fuse-cmp-jcc           466,521,428  -42,972,826        -8.43%
+perf/fuse-sib-store         483,528,414  -25,965,840        -5.10%
+perf/reg-specialised-...    509,494,254            0          0.00%
+perf/reg-file-in-memory     509,494,254            0          0.00%
+```
+
+Every branch is pixel-identical to the baseline capture (`0 of 480000 pixels
+differ`) and passes `test-x86-ops`, `test-shift-equivalence`,
+`test-wat-decoder-runaway`, `test-win16-exec` and `test-caesar3-gameplay`.
+
+The two zeros are not failures, they are the metric being the wrong instrument.
+Both register experiments move work *inside* a dispatch — specialising a handler
+per register, or moving the register file into linear memory — and remove no
+dispatches at all, so op count is structurally blind to them and can neither
+confirm nor refute either. Both are decidable only by a timing run on a quiet
+box; the register-file branch additionally carries +4.73% code size
+(860,196 → 900,879 bytes) into a loop that already thrashes icache.
+
+The two fusions compose rather than compete: the `Jcc` fusion's three handlers
+kept their exact pre-rebase counts after main's own 404/407 fusions landed
+(different `if` arms of the same decoder decision — mod=3 register forms versus
+memory forms, mutually exclusive by construction), and every handler not involved
+in either fusion has a bit-identical count across all captures.
+
+**None of the four is merge-ready.** Op count proves equal work, never speed, and
+this box sat at load 250-360 throughout, so no timing was taken.
+
 ## Result: fusing `compute_ea_sib` into `store32`
 
-Measured 2026-08-23, branch `perf/fuse-sib-store`. New handler
+Measured 2026-08-23, branch `perf/fuse-sib-store`. **Re-measured after rebase:
+-25,965,840 of 509,494,254 = -5.10%** — the same absolute reduction as below,
+against the corrected baseline. Handler id is now **410**, and the handler was
+rewritten onto main's `$sib_ea` helper and reports itself to the SIB consumer
+histogram, matching the shape of main's 400-402. New handler
 `$th_store32_sib`, emitted by `$emit_store32` for 32-bit non-absolute EAs;
 absolute and 16-bit segmented forms keep the generic two-dispatch encoding. The
 EA math is fully general (base/index/scale/disp, `0xF` = absent) — no register
@@ -169,7 +303,11 @@ give it back.
 
 ## Result: fusing flag producers with the `Jcc` that reads them
 
-Measured 2026-08-23, branch `perf/fuse-cmp-jcc`. Three fused handlers —
+Measured 2026-08-23, branch `perf/fuse-cmp-jcc`. **Re-measured after rebase:
+466,521,428 vs 509,494,254 = -42,972,826 = -8.43%**, with handler ids 410-412.
+The delta equals the three fused handlers' hit counts summed, to the unit, and
+every uninvolved handler's count is bit-identical across the two runs — a
+stronger identity check than the sum arithmetic used below. Three fused handlers —
 `$th_cmp_r_i32_jcc`, `$th_alu_r8_i8_jcc`, `$th_alu_r16_i16_jcc` — plus decoder
 lookahead (`$jcc_lookahead_cc`) that folds a following `Jcc` into the producer
 at emit time.
@@ -205,7 +343,16 @@ revert remains the standing warning.
 
 ## Result: register file in linear memory (built, unmeasured)
 
-Branch `perf/reg-file-in-memory`. All 12,813 direct `global.get/set $eax..$edi`
+Branch `perf/reg-file-in-memory`. **Re-measured after rebase: 509,494,254,
+identical to main to the digit, with per-handler histogram bodies identical line
+for line.** The transform is re-run over the tree after every merge rather than
+merged by hand, which is safe because `lib/compile-wat.js` *hard-fails* on an
+unknown global (unlike an unknown function, which only warns) — a site the
+transform misses cannot compile. Verified with a negative control:
+`(global.set $eax …)` injected into `06-fpu.wat` gives
+`Error: compile-wat: unknown global: $eax`.
+
+All 12,813 direct `global.get/set $eax..$edi`
 sites plus the 325 `$get_reg`/`$set_reg` calls rewritten to
 `i32.load/store offset=N (global.get $reg_base)`, per-thread partitioned at
 `REGFILE_BASE + tid*64` (a full cache line, so no false sharing).
@@ -229,7 +376,54 @@ on them. The guest stack and the GDI tables already carry that exposure, so it i
 consistent with the layout rather than new in kind — but it is strictly worse
 than per-instance globals.
 
+## Result: register-specialised hot handlers (built, unmeasurable by op count)
+
+Branch `perf/reg-specialised-handlers`, ids 410-449. Forty handlers: eight
+register variants each of `add_r_i32`, `sub_r_i32`, `cmp_r_i32`, `load32` and
+`alu_r16_i16`, so the hot ones read and write a fixed register instead of calling
+`$get_reg`/`$set_reg`. **Op count is exactly unchanged (509,494,254)** — the
+change moves traffic between handlers and removes no dispatches — and each family
+sums to its generic predecessor's count to within the print cutoff:
+
+```text
+family            specialised     generic on main
+add   410-417      29,470,685     H3   29,470,685
+sub   418-425      12,400,769     H8   12,400,769
+cmp   426-433      18,806,152     H10  18,806,717
+load32 434-441     12,820,153     H20  12,820,376
+alu16 442-449      26,573,690     H207 26,573,690
+```
+
+That removes **141.9M-195.1M** dynamic `get_reg`/`set_reg` calls (the range is
+the CMP-vs-non-CMP split in the alu16 family, still unmeasured). Static call
+counts are unchanged — the win is reachability, not text. It composes with main's
+own run handlers (405/406/408), which take their bite first at the `$emit_load32`
+tail: they had already absorbed 11% of load32 traffic (14,414,944 → 12,820,376)
+independently of this change, and there is no further loss from stacking.
+
+The load32 family is the weakest of the five — 12.8M over eight handlers, with
+only five registers carrying real traffic (ecx 5.07M, edx 4.17M, eax 3.39M) — and
+is the block to trim if handler count matters.
+
 ## Levers that remain
+
+The 512-wide histogram moved the cut line, and the three candidates it exposed
+were all invisible under the old 361 cap or below the top-24 print slice:
+
+1. **`H344`/`H345 $th_load32_ro_base_{ebp,esi}` — 21.2M + 30.8M = 52.0M
+   dispatches**, each still calling `$set_reg` for its destination. That is the
+   largest single remaining `set_reg` source in the profile, larger than any
+   family specialised so far. Full specialisation is 8 dst x N bases, but the
+   pair data (`H21->H345` 23.9M, `H345->H149` 25.6M) says a handful of
+   (dst, base) combinations carry nearly all of it.
+2. **`H154 $th_alu_r8_i8` — 17,236,577 (3.38%)**, routed through
+   `$get_reg8`/`$set_reg8`, which are built on `$get_reg`/`$set_reg`. Bigger than
+   both the sub (12.4M) and load32 (12.8M) families that *were* specialised.
+3. **The 16-bit cluster** `H166` 12.75M / `H165` 12.18M / `H206` 8.76M /
+   `H210` 8.76M / `H193` 8.76M, all `get_reg16`/`set_reg16` users and tightly
+   chained (`H193->H206->H165`, `H166->H442->H311`).
+
+The table below is the older ranking, kept for the pair data.
 
 Ordered by measured promise, from the Caesar III gameplay histogram
 (518,446,380 dispatches):
@@ -290,12 +484,69 @@ A register array at a fixed address would give every thread one register file.
 Follow the `$THREAD_BASE = 0x05000000 + tid*0x400000` pattern, via a per-instance
 base global.
 
+## Timing: attempted four ways, resolved nothing (`tools/ab-time.js`)
+
+All four experiments were blocked on "needs a timing run". Four passes were made
+over the five worktrees (`main`, `jccfuse`, `sibfuse`, `regspec`, `regarray`),
+each interleaved, each quoting minima. None of them resolved a difference,
+and the failures are worth recording because each one looked like a result.
+
+| pass | metric | result |
+|---|---|---|
+| 1 (n=6, load 4-7) | wall clock | main alone spanned 9094-13410ms — a 47% spread on **one** binary, larger than any between-variant gap |
+| 2 (n=10, load 4-15) | wall clock, minima | jccfuse −0.09%, sibfuse +1.51%, regspec +7.74%, regarray −0.08% — all inside noise |
+| 3 (n=8, load 4-8) | **CPU** time, fixed order | jccfuse −6.6%, sibfuse −7.3%, regspec −7.1%, regarray −11.3% |
+| 4 (n=10, load 4-9) | CPU time, **rotated** order | jccfuse +3.3%, sibfuse **+17.5%**, regspec −0.9%, regarray −8.4% |
+
+Pass 3 is the instructive one. Every variant beat `main` by 6-11%, *including*
+`regarray`, whose dispatch count is bit-identical to main's — that is not four
+speedups, it is `main` always running in slot 1 of the round and paying for the
+previous round's tail. Interleaving removes drift between variants but not
+between *positions*; `ab-time.js` now rotates the order each round. Pass 4, same
+binaries, flips `sibfuse` from −7.3% to +17.5%.
+
+The CPU-time switch also did not buy what it promised: `/usr/bin/time` user+sys
+tracked elapsed almost exactly (13240c/13899w), because SMT contention and
+frequency scaling are billed to the process. Measured noise floor (worst
+min→median spread) was **24.5%** in pass 3 and **41.9%** in pass 4, against
+effects of 5-8%.
+
+**Conclusion: this box cannot time these changes, and no amount of statistics
+fixes that** — the box has run at load 4-30 with several agent sessions
+sweeping the corpus for the entire investigation. Do not merge any of the four
+on the strength of a timing run taken here. What would settle it: a quiet
+machine, or an in-process metric that is not wall-clock (a cycle counter around
+`$run`, or `--cpu-prof` self-time on the interpreter functions specifically,
+which is how `opus5-rct` got a defensible 64.5% figure for `$invalidate_page`).
+
+Note also that the biggest measured interpreter win found during this work came
+from none of these: it was `$invalidate_page`'s O(CACHE_SIZE) sweep per guest
+write, 64.5% of total CPU on RollerCoaster Tycoon, fixed by per-page version
+counters for a 5.4x wall-clock win with a bit-identical dispatch count
+(`opus5-rct`). A dispatch-count investigation is structurally blind to that
+class of bug — the cost sat entirely in the **store** path, not in a handler,
+and the histogram this page is built on only counts handlers.
+
+Two corollaries from that work worth carrying here:
+
+- **A single-profile self-time reading beats an A/B when the effect is large.**
+  "`$invalidate_page` is 51,348ms of a 79,571ms run" needs no comparison run at
+  all, so none of the position/drift/contention failures above can touch it.
+  Reach for `--cpu-prof` before reaching for a stopwatch.
+- **Pick the batch count from the phase you mean to measure.** RCT runs at 36M
+  ops/s for its first ~2500 batches and 2.9M after — a 12x cliff. Any RCT
+  measurement under 2500 batches sees only the fast half. Same failure mode as
+  the caesar3 title-screen trap above, one level down.
+
 ## Method notes
 
 - Primary metric on a loaded box is the op count, not the clock. State the load
   average when quoting any timing; `uptime` before and after.
 - Interleave A/B/C samples in one loop rather than running all of A then all of
   B — background load drifts on the scale of minutes.
+- Rotate the order *within* the round too. A fixed round-robin gives each
+  variant a fixed slot, and slot 1 is measurably penalised; see pass 3 above,
+  where that alone manufactured four 6-11% "speedups".
 - Quote minima, not means, when the noise is one-sided (contention only ever
   makes a run slower).
 - `tools/png-diff.js` against a baseline capture is the cheap correctness gate;

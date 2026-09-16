@@ -11,7 +11,7 @@
   ;; For byte regs: 0=al,1=cl,2=dl,3=bl,4=ah,5=ch,6=dh,7=bh
 
   (type $handler_t (func (param i32)))
-  (table $handlers 410 funcref)
+  (table $handlers 465 funcref)
 
   (elem (i32.const 0)
     ;; -- Core --
@@ -466,4 +466,67 @@
     $th_alu_m32_i_jcc         ;; 407: ALU dword [base+disp], imm + Jcc
     $th_load32_base_run       ;; 408: 2-4 back-to-back mov reg,[base+disp]
     $th_unary_alu_m32_ro      ;; 409: inc/dec [base+disp] + ALU [base+disp], imm
+    $th_not_r16               ;; 410: NOT r16 (0x66 F7 /2, mod=3) — low half only
+    $th_neg_r16               ;; 411: NEG r16 (0x66 F7 /3, mod=3) — low half only
+    $th_movzx_r16_r8          ;; 412: MOVZX r16, r8 (0x66 0F B6, mod=3) — op=dst<<4|src
+    $th_movsx_r16_r8          ;; 413: MOVSX r16, r8 (0x66 0F BE, mod=3) — op=dst<<4|src
+    $th_movzx_r16_m8          ;; 414: MOVZX r16, byte [addr] (op=dst, addr in next word)
+    $th_movsx_r16_m8          ;; 415: MOVSX r16, byte [addr]
+    $th_movzx_r16_m8_ro       ;; 416: MOVZX r16, byte [base+disp] (op=dst<<4|base, disp in word)
+    $th_movsx_r16_m8_ro       ;; 417: MOVSX r16, byte [base+disp]
+    $th_lut_run               ;; 418: whole LUT_RUN loop (src/07b-loop-match.wat)
+    $th_copy_run              ;; 419: whole COPY_RUN loop (src/07b-loop-match.wat)
+    $th_store32_sib           ;; 420: MOV dword [base+index*scale+disp], r32
+    $th_copy32_ro_to_sib      ;; 421: MOV r32,[base+disp] + MOV [base+idx*s+disp],r32
+    ;; -- MMX (src/06c-mmx.wat) --
+    $th_mmx_rr                ;; 422: mm, mm      operand = sub<<8 | dst<<4 | src
+    $th_mmx_rm                ;; 423: mm, m64     operand = sub<<8 | dst<<4 ; addr word follows
+    $th_mmx_mr                ;; 424: m64, mm     operand = sub<<8 | src<<4 ; addr word follows
+    $th_mmx_ri                ;; 425: mm, imm8    operand = sub<<12 | dst<<8 | imm8
+    $th_rdtsc                 ;; 426: RDTSC -> EDX:EAX
+    $th_rect_run              ;; 427: a whole unrolled rows x cols dword rect copy
+    $th_case_chain            ;; 428: a whole cmp al,imm8 / jz ladder (a switch)
+    $th_rle_run               ;; 429: a whole run-length sprite blit row
+    $th_load_far_ptr32        ;; 430: LES/LDS r32, m16:32 in a flat task
+    $th_lut_span              ;; 431: fixed unrolled LUT/blend span
+    ;; -- SSE base (src/06c-mmx.wat) --
+    $th_sse_rr                ;; 432: xmm,xmm (op=sub<<8|dst<<4|src)
+    $th_sse_rm                ;; 433: xmm,m128 (address word follows)
+    $th_sse_mr                ;; 434: m128,xmm (address word follows)
+    $th_packed_avg_run        ;; 435: packed two-source average loop
+    $th_rgb565_alpha_run      ;; 436: MW3 bound-derived RGB565 alpha row
+    $th_aoe_grid_fill         ;; 437: AoE byte-grid row fill loop
+    $th_aoe_span_prefix       ;; 438: parameterized AoE I/II span prefix
+    $th_fnstsw_test_ah_jcc    ;; 439: FNSTSW AX + TEST AH,imm8 + Jcc
+    $th_rgb565_colorkey_run   ;; 440: MW3 counted RGB565 color-key row
+    $th_mw3_grid_filter_run   ;; 441: MW3 in-place 16-bit terrain/grid filter row
+    $th_lar                   ;; 442: LAR r16/32,r/m16 (selector access rights)
+    $th_colorkey8_run         ;; 443: byte color-key replacement row
+    $th_add_edx_eax2_disp     ;; 444: ADD EDX,[EAX*2+disp32]
+    $th_add_ebp_eax2_disp     ;; 445: ADD EBP,[EAX*2+disp32]
+    $th_add_esi_eax2_disp     ;; 446: ADD ESI,[EAX*2+disp32]
+    $th_verr                  ;; 447: VERR r/m16 (selector readability -> ZF)
+    $th_store32_base_span     ;; 448: contiguous MOV [base+disp],same-r32 span
+    $th_x87_pipeline4         ;; 449: bounded straight-line x87 expression region
+    $th_x87_tree4             ;; 450: balanced FLD + FLD + arithmetic-pop + FSTP
+    $th_x87_island            ;; 451: contiguous x87 micro-op island
+    $th_x87_affine_prepare    ;; 452: compiled affine x87 prefix
+    $th_x87_affine_finish     ;; 453: compiled affine x87 suffix
+    ;; 454 and 458 are THE SAME FUNCTION. There is one region executor and one
+    ;; descriptor format: a self-loop fold is a 1-block region with a back edge,
+    ;; a plain block is a 1-block region whose terminator stayed threaded, and a
+    ;; region is N blocks. 454 survives as an alias so the loop matcher's
+    ;; installs, $region_try_install and every recorded histogram keep their
+    ;; identity; new installs from the block matcher emit 458.
+    $th_block_exec            ;; 454: alias of 458 (was $th_tree_fold)
+    $th_ck_lut16_run          ;; 455: a whole colour-keyed LUT16 sprite row
+    $th_ck_blend16_run        ;; 456: a whole alpha-blended RGB565 sprite row
+    $th_ck_shadow16_run       ;; 457: a keyed sprite row with a dest-indexed arm
+    $th_block_exec            ;; 458: a region descriptor, registers in locals
+    $th_bx_resume             ;; 459: the fallback resume trampoline (empty)
+    $th_ck_copy8_run          ;; 460: a colour-keyed 8bpp->8bpp sprite row
+    $th_smk_tree_walk         ;; 461: a whole Smacker one-bit Huffman descent
+    $th_pcx_run               ;; 462: a whole Quake II PCX/WAL run expansion
+    $th_block_exec_leaf       ;; 463: a ONE-block descriptor, no region machinery
+    $th_block_exec_leaf_fb    ;; 464: the same leaf, but it may fall back
   )

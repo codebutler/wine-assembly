@@ -3,10 +3,14 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { ThreadManager } = require('../lib/thread-manager');
+const { readWatSourceClosure } = require('./wat-source-closure');
 
-const handlersWat = fs.readFileSync(path.join(__dirname, '..', 'src', '09a-handlers.wat'), 'utf8');
-assert(!handlersWat.includes('(call $host_log_i32 (global.get $eax))'),
+const handlersWat = readWatSourceClosure();
+const headerWat = fs.readFileSync(path.join(__dirname, '..', 'src', '01-header.wat'), 'utf8');
+assert(!handlersWat.includes('(call $host_log_i32 (i32.load offset=0 (global.get $reg_base)))'),
   'synchronization handlers must not cross to the host solely to print return values');
+assert(headerWat.includes('(global $MAX_SYNC_OBJECTS i32 (i32.const 4096))'),
+  'the WAT synchronization table must match the host manager capacity');
 
 function makeThreadManager(opts) {
   return makeThreadManagerWithMemory(new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }), opts);
@@ -25,17 +29,30 @@ function makeThreadManagerWithMemory(memory, opts) {
   return tm;
 }
 
+const idTm = makeThreadManager();
+const threadIdWa = 0x100;
+const idView = new DataView(idTm.memory.buffer);
+idView.setUint32(threadIdWa, 0xdeadbeef, true);
+const idHandle = idTm.createThread(0x5000, 0, 0, 0, threadIdWa);
+assert.strictEqual(idHandle, 0xE1000,
+  'CreateThread still returns the independently allocated kernel handle');
+assert.strictEqual(idView.getUint32(threadIdWa, true), 2,
+  'lpThreadId receives the worker current_thread_id, not the kernel handle');
+assert.notStrictEqual(idHandle, idView.getUint32(threadIdWa, true),
+  'thread HANDLE and thread id remain distinct Win32 namespaces');
+
 const tm = makeThreadManager();
 const handles = [];
 
-for (let i = 0; i < 7; i++) {
+for (let i = 0; i < tm._maxWorkerThreads; i++) {
   const handle = tm.createThread(0x1000 + i, 0, 0);
   assert(handle, `worker slot ${i + 1} should allocate`);
   handles.push(handle);
 }
 
 assert.strictEqual(tm.createThread(0x2000, 0, 0), 0, 'all pending slots should block another worker');
-assert.deepStrictEqual(tm._pendingThreads.map(p => p.tid), [1, 2, 3, 4, 5, 6, 7]);
+assert.deepStrictEqual(tm._pendingThreads.map(p => p.tid),
+  Array.from({ length: tm._maxWorkerThreads }, (_, index) => index + 1));
 
 for (const pending of tm._pendingThreads) {
   tm.threads.set(pending.handle, { tid: pending.tid, state: 'active' });
@@ -63,13 +80,35 @@ assert.strictEqual(suspendTm.resumeThread(suspendedHandle), 0, 'resuming a runni
 assert.strictEqual(suspendTm.suspendThread(0xdeadbeef), 0xFFFFFFFF, 'invalid suspend handle fails');
 assert.strictEqual(suspendTm.resumeThread(0xdeadbeef), 0xFFFFFFFF, 'invalid resume handle fails');
 
+const selfSuspendTm = makeThreadManager();
+const selfSuspendHandle = selfSuspendTm.createThread(0x6080, 0, 0, 0);
+selfSuspendTm._runningThreadHandle = selfSuspendHandle;
+assert.strictEqual(selfSuspendTm.suspendThread(selfSuspendHandle), 0x80000000,
+  'a worker self-suspend privately tags the zero previous count for the WAT dispatcher');
+assert.strictEqual(selfSuspendTm._pendingThreads[0].suspendCount, 1,
+  'self-suspend increments exactly once before the guest slice yields');
+selfSuspendTm._runningThreadHandle = 0;
+assert.strictEqual(selfSuspendTm.resumeThread(selfSuspendHandle), 1,
+  'another thread observes and releases the ordinary Win32 suspend count');
+assert(handlersWat.includes('(global.set $yield_reason (i32.const 11))'),
+  'SuspendThread self-calls park the current guest slice before it can suspend again');
+
 const duplicateTm = makeThreadManager();
+assert.strictEqual(duplicateTm.getThreadPriority(0xfffffffe, 1), 0,
+  'the main thread starts at THREAD_PRIORITY_NORMAL');
+assert.strictEqual(duplicateTm.setThreadPriority(0xfffffffe, 2, 1), 1,
+  'the current-thread pseudo handle sets main-thread priority');
 const duplicatedMainA = duplicateTm.duplicateCurrentThread(1);
 const duplicatedMainB = duplicateTm.duplicateCurrentThread(1);
 assert(duplicatedMainA && duplicatedMainB && duplicatedMainA !== duplicatedMainB,
   'each DuplicateHandle call returns a distinct real current-thread handle');
 assert.notStrictEqual(duplicatedMainA >>> 0, 0xfffffffe,
   'a duplicated current-thread handle must not preserve the contextual pseudo handle');
+assert.strictEqual(duplicateTm.getThreadPriority(duplicatedMainA, 77), 2,
+  'a durable duplicate observes the underlying main-thread priority');
+assert.strictEqual(duplicateTm.setThreadPriority(duplicatedMainB, -1, 77), 1);
+assert.strictEqual(duplicateTm.getThreadPriority(0xfffffffe, 1), -1,
+  'pseudo and duplicated handles mutate one main-thread object');
 assert.strictEqual(duplicateTm.suspendThread(duplicatedMainA), 0,
   'the first duplicated-handle suspend returns the previous main-thread count');
 assert.strictEqual(duplicateTm.isMainThreadSuspended(), true,
@@ -92,6 +131,19 @@ assert.strictEqual(duplicateTm.resumeThread(duplicatedMainB), 1);
 duplicateTm.createThread(0x6200, 0, 0, 0);
 const duplicatedWorker = duplicateTm.duplicateCurrentThread(2);
 assert(duplicatedWorker, 'a worker can duplicate its own current-thread pseudo handle');
+const priorityWorkerHandle = duplicateTm._pendingThreads[0].handle;
+assert.strictEqual(duplicateTm.getThreadPriority(priorityWorkerHandle, 1), 0,
+  'a newly created pending thread starts at THREAD_PRIORITY_NORMAL');
+assert.strictEqual(duplicateTm.setThreadPriority(priorityWorkerHandle, 15, 1), 1,
+  'a CreateThread handle can set priority before worker instantiation');
+assert.strictEqual(duplicateTm.getThreadPriority(0xfffffffe, 2), 15,
+  'the worker contextual pseudo handle resolves the same pending object');
+assert.strictEqual(duplicateTm.getThreadPriority(duplicatedWorker, 1), 15,
+  'a pending worker duplicate shares the retained priority');
+assert.strictEqual(duplicateTm.getThreadPriority(0xdeadbeef, 1), 0x7fffffff,
+  'an invalid handle returns THREAD_PRIORITY_ERROR_RETURN');
+assert.strictEqual(duplicateTm.setThreadPriority(0xdeadbeef, 0, 1), 0,
+  'an invalid handle cannot mutate thread-priority state');
 assert.strictEqual(duplicateTm.suspendThread(duplicatedWorker), 0,
   'the duplicated worker handle shares its pending thread suspend state');
 assert.strictEqual(duplicateTm._pendingThreads[0].suspendCount, 1);
@@ -119,6 +171,21 @@ assert.strictEqual(
   0x103,
   'GetExitCodeThread reports a pending worker as STILL_ACTIVE'
 );
+assert.strictEqual(
+  pendingWaitTm.terminateThread(pendingWaitHandle, 0x2a),
+  1,
+  'TerminateThread reports success for a known worker handle'
+);
+assert.strictEqual(
+  pendingWaitTm.getExitCodeThread(pendingWaitHandle),
+  0x2a,
+  'TerminateThread stores the requested exit code'
+);
+assert.strictEqual(
+  pendingWaitTm.terminateThread(0xdeadbeef, 7),
+  1,
+  'TerminateThread treats stale installer helper handles as successful no-ops'
+);
 
 const currentProcessTm = makeThreadManager();
 assert.strictEqual(currentProcessTm.waitSingle(0x000E23E8, 0), 0x102,
@@ -128,10 +195,11 @@ assert.strictEqual(currentProcessTm.waitSingle(0x000E23E8, 0xFFFFFFFF), 0xFFFF,
 
 const syncLifecycleTm = makeThreadManager();
 const syncHandles = [];
-for (let i = 0; i < 64; i++) {
+for (let i = 0; i < 4096; i++) {
   syncHandles.push(syncLifecycleTm.createEvent(false, false));
 }
-assert(syncHandles.every(Boolean), 'all 64 synchronization slots should allocate');
+assert(syncHandles.every(Boolean),
+  'all 4096 synchronization slots should allocate, leaving room beyond Warcraft III\'s startup event pool');
 assert.strictEqual(syncLifecycleTm.createEvent(false, false), 0, 'the full synchronization table rejects another event');
 assert.strictEqual(syncLifecycleTm.closeSyncHandle(syncHandles[17]), true, 'CloseHandle should release an event slot');
 const staleEvent = syncHandles[17];
@@ -140,6 +208,11 @@ assert.strictEqual(
   syncLifecycleTm._getSyncIdx(replacementEvent),
   17,
   'the next event should reuse the released table slot with a new identity'
+);
+assert.strictEqual(
+  Atomics.load(syncLifecycleTm.syncView, 17 * 4) >>> 0,
+  replacementEvent >>> 0,
+  'the shared synchronization slot mirrors the exact current event handle'
 );
 assert.notStrictEqual(replacementEvent, staleEvent,
   'a recycled synchronization slot must advance its handle generation');
@@ -164,6 +237,8 @@ assert.strictEqual(syncLifecycleTm.closeSyncHandle(syncHandles[18]), true, 'sema
 const reusedSemaphore = syncLifecycleTm.createSemaphore(2, 4);
 assert.strictEqual(syncLifecycleTm._getSyncIdx(reusedSemaphore), 18,
   'semaphores should share and reuse synchronization slots with a new identity');
+assert.strictEqual(Atomics.load(syncLifecycleTm.syncView, 18 * 4) >>> 0, reusedSemaphore >>> 0,
+  'the shared synchronization slot mirrors the exact current semaphore handle');
 assert.notStrictEqual(reusedSemaphore, syncHandles[18],
   'a recycled semaphore slot must also advance its handle generation');
 assert.strictEqual(syncLifecycleTm.closeSyncHandle(reusedSemaphore), true, 'CloseHandle should release a semaphore slot');
@@ -177,8 +252,11 @@ assert.strictEqual(namedEventTm.openEvent('starcraftsetupevent'), 0,
   'named kernel objects use case-sensitive names');
 assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), namedEvent,
   'OpenEvent finds the existing named event');
-assert.strictEqual(namedEventTm.createEvent(true, true, 'StarcraftSetupEvent'), namedEvent,
-  'CreateEvent returns the existing object when its name already exists');
+assert.strictEqual(
+  namedEventTm.createEvent(true, true, 'StarcraftSetupEvent') >>> 0,
+  (namedEvent | 0x80000000) >>> 0,
+  'CreateEvent tags the existing object so the WAT API can report ERROR_ALREADY_EXISTS'
+);
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true,
   'closing one named-event reference succeeds');
 assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), namedEvent,
@@ -186,6 +264,49 @@ assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), namedEvent,
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true);
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true);
 assert.strictEqual(namedEventTm.closeSyncHandle(namedEvent), true);
+
+const namedSemaphoreTm = makeThreadManager();
+assert.strictEqual(namedSemaphoreTm.openSemaphore('DXBallInstanceSemaphore'), 0,
+  'OpenSemaphore reports a missing process-local name');
+const namedSemaphore = namedSemaphoreTm.createSemaphore(1, 2, 'DXBallInstanceSemaphore');
+assert(namedSemaphore, 'CreateSemaphore allocates a named semaphore');
+assert.strictEqual(
+  namedSemaphoreTm.createSemaphore(-1, 0, 'DXBallInstanceSemaphore') >>> 0,
+  (namedSemaphore | 0x80000000) >>> 0,
+  'an existing same-name semaphore is opened before replacement counts are validated'
+);
+assert.strictEqual(namedSemaphoreTm.openSemaphore('dxballinstancesemaphore'), 0,
+  'named semaphore lookup is case-sensitive');
+assert.strictEqual(namedSemaphoreTm.openSemaphore('DXBallInstanceSemaphore'), namedSemaphore,
+  'OpenSemaphore returns the shared object');
+assert.strictEqual(namedSemaphoreTm.waitSingle(namedSemaphore, 0), 0);
+assert.strictEqual(namedSemaphoreTm.waitSingle(namedSemaphore, 0), 0x102,
+  'all named handles observe the same count');
+assert.strictEqual(namedSemaphoreTm.releaseSemaphore(namedSemaphore, 2, 0), 1,
+  'the original maximum count survives a duplicate CreateSemaphore');
+assert.strictEqual(namedSemaphoreTm.releaseSemaphore(namedSemaphore, 1, 0), 0,
+  'the retained maximum rejects an overflowing release');
+assert.strictEqual(namedSemaphoreTm.closeSyncHandle(namedSemaphore), true);
+assert.strictEqual(namedSemaphoreTm.closeSyncHandle(namedSemaphore), true);
+assert.strictEqual(namedSemaphoreTm.closeSyncHandle(namedSemaphore), true);
+assert.strictEqual(namedSemaphoreTm.openSemaphore('DXBallInstanceSemaphore'), 0,
+  'the name disappears with the final reference');
+
+const sharedNamespaceTm = makeThreadManager();
+const sharedEvent = sharedNamespaceTm.createEvent(false, false, 'SharedKernelName');
+assert(sharedEvent);
+assert.strictEqual(
+  sharedNamespaceTm.createSemaphore(0, 1, 'SharedKernelName') >>> 0,
+  0x80000000,
+  'a bare private tag reports an event/semaphore name collision'
+);
+assert.strictEqual(sharedNamespaceTm.openSemaphore('SharedKernelName') >>> 0, 0x80000000,
+  'opening a name owned by another synchronization type is distinguished from not-found');
+assert.strictEqual(sharedNamespaceTm.closeSyncHandle(sharedEvent), true);
+const sharedSemaphore = sharedNamespaceTm.createSemaphore(0, 1, 'SharedKernelName');
+assert(sharedSemaphore);
+assert.strictEqual(sharedNamespaceTm.createMutex(false, 'SharedKernelName') >>> 0, 0x80000000,
+  'mutexes and semaphores use the same named-object namespace');
 assert.strictEqual(namedEventTm.openEvent('StarcraftSetupEvent'), 0,
   'the name disappears after the final reference closes');
 
@@ -301,6 +422,20 @@ assert.strictEqual(mainSleepTm.checkMainYield(), false,
   'main-thread Sleep resumes when the full timeout has elapsed');
 assert.strictEqual(mainSleepTm._mainSleepUntil, 0);
 
+let waitClock = 100, wallClock = 9000, splitSleepPending = 1;
+const splitClockTm = makeThreadManager({ now: () => wallClock, waitNow: () => waitClock });
+splitClockTm.mainInstance.exports = {
+  get_sleep_yielded: () => { const v = splitSleepPending; splitSleepPending = 0; return v; },
+  get_sleep_timeout: () => 16,
+  get_yield_reason: () => 0,
+};
+assert.strictEqual(splitClockTm.checkMainYield(), true);
+assert.strictEqual(splitClockTm._mainSleepUntil, 116, 'Sleep deadline uses guest wait time');
+wallClock += 60000;
+assert.strictEqual(splitClockTm.checkMainYield(), true, 'wall time cannot expire a frozen Sleep');
+waitClock = 116;
+assert.strictEqual(splitClockTm.checkMainYield(), false, 'guest steps expire Sleep without wall delay');
+
 function createSyncObjects(traceThread) {
   const syncTm = makeThreadManager({ traceThread });
   const emitted = [];
@@ -333,13 +468,16 @@ assert.strictEqual(lifecycleEvents[0].suspendCount, 1, 'create event records the
 assert.strictEqual(lifecycleEvents[2].previousSuspendCount, 2, 'resume event records the previous count');
 assert.strictEqual(lifecycleEvents[3].suspendCount, 0, 'final resume event records runnable state');
 
-const fullMemory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true });
-const cacheTm = makeThreadManagerWithMemory(fullMemory);
-const worker1CacheIndex = 0x07152000 + 0x8000;
-const cacheBytes = new Uint8Array(fullMemory.buffer, worker1CacheIndex, 0x8000);
-cacheBytes.fill(0x7f);
-cacheTm._clearWorkerCacheSlot(1);
-assert(cacheBytes.every(byte => byte === 0), 'reused worker slot should clear its decoded-block index');
+// The host-side block-cache-index clear is GONE, deliberately. It zeroed
+// `0x07152000 + tid * 0x8000` — a hand-copied literal of the retired
+// CACHE_INDEX region, an address the region allocator now hands to
+// $PE_STAGING, so the clear had turned into a 32KB scribble on the PE staging
+// arena at every worker spawn. `init_thread` does the real per-slot
+// invalidation in WAT. This asserts nobody puts it back.
+const cacheTm = makeThreadManagerWithMemory(
+  new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared: true }));
+assert.strictEqual(typeof cacheTm._clearWorkerCacheSlot, 'undefined',
+  'host must not clear worker cache slots by address; init_thread does it in WAT');
 
 function makeRunnableThread(tid, onRun) {
   let heapPtr = 0;
@@ -367,25 +505,12 @@ function makeRunnableThread(tid, onRun) {
   };
 }
 
-const allocatorTm = makeThreadManager();
-let mainFreeList = 0x650000;
-allocatorTm.mainInstance.exports.get_free_list = () => mainFreeList;
-allocatorTm.mainInstance.exports.set_free_list = value => { mainFreeList = value >>> 0; };
-const allocatorWorker = makeRunnableThread(1, () => {
-  assert.strictEqual(
-    allocatorWorker.instance.exports.get_free_list(),
-    0x650000,
-    'worker should begin its slice with the process free-list head'
-  );
-  allocatorWorker.instance.exports.set_free_list(0x651000);
-});
-allocatorTm.threads.set(0xe1000, allocatorWorker);
-allocatorTm.runSlice(100);
-assert.strictEqual(
-  mainFreeList,
-  0x651000,
-  'main should receive the worker free-list head after its slice'
-);
+// The free-list head is no longer marshalled between instances around a slice.
+// That only ever worked because exactly one instance ran at a time and JS got a
+// turn in between — neither holds with real threads. Each instance now carves a
+// private arena from a shared-memory cursor ($heap_low_reserve), so there is no
+// per-slice hand-off left to assert. Cross-instance disjointness is covered by
+// test-virtual-map-cross-instance.js.
 
 const suspendedRunTm = makeThreadManager();
 let suspendedRuns = 0;
@@ -400,8 +525,45 @@ assert.strictEqual(suspendedRunTm.hasActiveThreads(), true, 'the final resume ma
 suspendedRunTm.runSlice(100);
 assert.strictEqual(suspendedRuns, 1, 'scheduler executes the worker after its final resume');
 
+const vblankTm = makeThreadManager();
+let vblankYield = 13;
+let vblankClears = 0;
+let vblankRuns = 0;
+const vblankThread = makeRunnableThread(1, () => { vblankRuns++; });
+vblankThread.instance.exports.get_yield_reason = () => vblankYield;
+vblankThread.instance.exports.clear_yield = () => {
+  vblankYield = 0;
+  vblankClears++;
+};
+vblankTm.threads.set(0xe1000, vblankThread);
+vblankTm.runSlice(100);
+assert.strictEqual(vblankClears, 1,
+  'a cooperative guest thread clears a parked vblank on its next turn');
+assert.strictEqual(vblankRuns, 0,
+  'clearing a vblank park yields the current turn so the display can advance');
+vblankTm.runSlice(100);
+assert.strictEqual(vblankRuns, 1,
+  'the following cooperative slice re-enters and resumes the parked thread');
+
+let workerGuestNow = 200, workerWallNow = 1000, workerSleepPending = 0, splitWorkerRuns = 0;
+const splitWorkerTm = makeThreadManager({ now: () => workerWallNow, waitNow: () => workerGuestNow });
+const splitWorker = makeRunnableThread(1, () => { splitWorkerRuns++; workerSleepPending = 1; });
+splitWorker.instance.exports.get_sleep_yielded = () => {
+  const v = workerSleepPending; workerSleepPending = 0; return v;
+};
+splitWorker.instance.exports.get_sleep_timeout = () => 16;
+splitWorkerTm.threads.set(0xe1000, splitWorker);
+splitWorkerTm.runSlice(100);
+assert.strictEqual(splitWorker.sleepUntil, 216, 'worker Sleep uses guest time');
+workerWallNow += 60000;
+splitWorkerTm.runSlice(100);
+assert.strictEqual(splitWorkerRuns, 1, 'worker stays asleep while frozen guest time is unchanged');
+workerGuestNow = 216;
+splitWorkerTm.runSlice(100);
+assert.strictEqual(splitWorkerRuns, 2, 'worker wakes when stepped guest time reaches its deadline');
+
 let now = 0;
-const budgetTm = makeThreadManager();
+const budgetTm = makeThreadManager({ waitNow: () => 123 });
 budgetTm._now = () => now;
 let budgetRuns = 0;
 budgetTm.threads.set(0xe1000, makeRunnableThread(1, steps => {
@@ -421,6 +583,30 @@ messageTm.threads.set(0xe1000, makeRunnableThread(1, () => { messageRuns++; }));
 const messageStats = messageTm.runBudgeted({ quantumSteps: 100, maxTotalSteps: 1000, maxWallMs: 5, stopIfMessagePending: true });
 assert.strictEqual(messageRuns, 0, 'budgeted scheduler should not run workers when main messages are pending');
 assert.strictEqual(messageStats.stoppedForMessage, true, 'budgeted scheduler should report message stops');
+
+const win32PriorityTm = makeThreadManager();
+win32PriorityTm._now = () => now;
+now = 0;
+const win32PriorityRuns = [];
+const lowPriorityThread = makeRunnableThread(1, () => {
+  win32PriorityRuns.push('low');
+  now += 10;
+});
+lowPriorityThread.priority = -2;
+const highPriorityThread = makeRunnableThread(2, () => {
+  win32PriorityRuns.push('high');
+  now += 10;
+});
+highPriorityThread.priority = 2;
+win32PriorityTm.threads.set(0xe1000, lowPriorityThread);
+win32PriorityTm.threads.set(0xe1001, highPriorityThread);
+win32PriorityTm.runBudgeted({
+  quantumSteps: 100,
+  maxTotalSteps: 1000,
+  maxWallMs: 5,
+});
+assert.deepStrictEqual(win32PriorityRuns, ['high'],
+  'a bounded cooperative browser slice runs the higher-priority thread first');
 
 const priorityTm = makeThreadManager();
 priorityTm._now = () => now;
@@ -451,15 +637,32 @@ priorityTm.runBudgeted({
 assert.strictEqual(priorityRuns[0], 'visualizer', 'budgeted scheduler should alternate priority so hot audio cannot starve visual workers');
 
 const exitNotifications = [];
+const exitedWindowThreads = [];
+const exitedQueueThreads = [];
 const exitTm = makeThreadManager({
   onThreadExit: info => exitNotifications.push(info),
 });
+exitTm.mainInstance.exports.reset_thread_message_queue = tid => exitedQueueThreads.push(tid);
 exitTm.markAudioThread(3, 1000);
-const exitThread = { tid: 3, state: 'active', startAddr: 0x440330, param: 0x458060 };
+const exitThread = {
+  tid: 3,
+  state: 'active',
+  startAddr: 0x440330,
+  param: 0x458060,
+  instance: {
+    exports: {
+      wnd_destroy_thread_windows: tid => exitedWindowThreads.push(tid),
+    },
+  },
+};
 exitTm.threads.set(0xe1007, exitThread);
 exitTm._markThreadExited(0xe1007, exitThread, 7, 'test');
 exitTm._markThreadExited(0xe1007, exitThread, 8, 'duplicate');
 assert.strictEqual(exitNotifications.length, 1, 'thread exit callback should fire once');
+assert.deepStrictEqual(exitedWindowThreads, [4],
+  'thread exit should destroy its Win32 thread id windows exactly once');
+assert.deepStrictEqual(exitedQueueThreads, [4],
+  'thread exit should reclaim its shared USER queue exactly once');
 assert.deepStrictEqual(exitNotifications[0], {
   handle: 0xe1007,
   tid: 3,
@@ -488,6 +691,24 @@ assert.strictEqual(
 assert.strictEqual(cooperativeRuns, 1, 'nested infinite wait should wake and run its sleeping target worker');
 assert.strictEqual(cooperativeThread.sleepUntil, 0, 'nested infinite wait should clear the target sleep gate');
 
+const duplicateWaitTm = makeThreadManager();
+const duplicateWaitHandle = 0xe1014;
+let duplicateWaitRuns = 0;
+const duplicateWaitThread = makeRunnableThread(1, () => {
+  duplicateWaitRuns++;
+  duplicateWaitTm._markThreadExited(
+    duplicateWaitHandle, duplicateWaitThread, 0, 'duplicated cooperative wait test');
+});
+duplicateWaitTm.threads.set(duplicateWaitHandle, duplicateWaitThread);
+const duplicateAlias = duplicateWaitTm.duplicateCurrentThread(2);
+assert.strictEqual(
+  duplicateWaitTm.waitSingleCooperative(duplicateAlias, 0xFFFFFFFF),
+  0,
+  'a nested wait through a duplicated handle runs the underlying worker'
+);
+assert.strictEqual(duplicateWaitRuns, 1,
+  'duplicated handle selection resolves to the canonical scheduler handle');
+
 const finiteWaitTm = makeThreadManager();
 let finiteRuns = 0;
 finiteWaitTm.threads.set(0xe1011, makeRunnableThread(1, () => { finiteRuns++; }));
@@ -497,6 +718,49 @@ assert.strictEqual(
   'finite waits should retain normal cooperative scheduler semantics'
 );
 assert.strictEqual(finiteRuns, 0, 'finite waits should not synchronously pump workers');
+
+// The browser's isolated-Worker main thread uses resolveMainWorkerWait rather
+// than checkMainYield. Keep a short guest-clock timeout from winning after only
+// one worker slice while another runnable guest thread can still signal it.
+// Storm uses this exact 255ms shape for MPQ decompression completion; returning
+// WAIT_TIMEOUT here lets it consume a partial buffer and D2CMP fails later.
+let workerWaitNow = 1000;
+const workerWaitTm = makeThreadManager({ now: () => workerWaitNow });
+const workerWaitEvent = workerWaitTm.createEvent(0, 0);
+workerWaitTm.threads.set(0xe1013, makeRunnableThread(1, () => {}));
+const workerWait = {
+  waitHandle: workerWaitEvent,
+  waitHandlesPtr: 0,
+  waitAll: false,
+  waitTimeout: 255,
+  waitStackBytes: 12,
+};
+assert.strictEqual(workerWaitTm.resolveMainWorkerWait(workerWait), null,
+  'isolated main wait parks while its worker is still runnable');
+workerWaitNow += 1000;
+assert.strictEqual(workerWaitTm.resolveMainWorkerWait(workerWait), null,
+  'guest-clock expiry alone must not truncate runnable Worker work');
+workerWaitTm.setEvent(workerWaitEvent);
+assert.deepStrictEqual(workerWaitTm.resolveMainWorkerWait(workerWait), {
+  result: 0,
+  waitStackBytes: 12,
+}, 'isolated main wait completes as soon as its worker signals');
+
+let cappedWaitNow = 1000;
+const cappedWaitTm = makeThreadManager({ now: () => 9000, waitNow: () => cappedWaitNow });
+const cappedWaitEvent = cappedWaitTm.createEvent(0, 0);
+cappedWaitTm.threads.set(0xe1014, makeRunnableThread(1, () => {}));
+const cappedWait = { ...workerWait, waitHandle: cappedWaitEvent };
+assert.strictEqual(cappedWaitTm.resolveMainWorkerWait(cappedWait), null);
+cappedWaitNow += 1000;
+for (let poll = 1; poll < 255; poll++) {
+  assert.strictEqual(cappedWaitTm.resolveMainWorkerWait(cappedWait), null,
+    `isolated bounded wait must remain parked through poll ${poll}`);
+}
+assert.deepStrictEqual(cappedWaitTm.resolveMainWorkerWait(cappedWait), {
+  result: 0x102,
+  waitStackBytes: 12,
+}, 'an unsignalled isolated bounded wait still times out at its poll ceiling');
 
 const reentrantWaitTm = makeThreadManager();
 let reentrantRuns = 0;
@@ -509,8 +773,35 @@ assert.strictEqual(
 );
 assert.strictEqual(reentrantRuns, 0, 'reentrant nested wait should not run the worker again');
 
+// A worker's hwnds have to come out of its own app's slice. They used to be
+// derived from the thread id alone (0x10001 + tid * 0x10000), which put every
+// worker window outside the range the shell prunes when that app stops -- so a
+// window a worker had put up survived its guest forever, and the repaint after
+// the stop handed the display back to a dead app. Whether it happened at all
+// depended on whether the app ever created a window off a worker thread, which
+// is exactly the "sometimes works, sometimes doesn't" shape. The second app's
+// range also collided with the first app's T1 outright.
+for (const appBase of [0x10001, 0x20001, 0x70001]) {
+  const scoped = makeThreadManager({ hwndBase: () => appBase });
+  const seen = new Set();
+  for (let tid = 1; tid <= scoped._maxWorkerThreads; tid++) {
+    const base = scoped.workerHwndBase(tid);
+    assert(base > appBase && base < appBase + 0x10000,
+      `worker ${tid} of the app at ${appBase.toString(16)} must stay inside its own slice, got ${base.toString(16)}`);
+    assert(!seen.has(base), `worker ${tid} must not share a base with another worker`);
+    seen.add(base);
+  }
+  // Main gets the whole bottom half, so a lifetime of dialogs and controls
+  // cannot walk into T1's numbers.
+  assert.strictEqual(scoped.workerHwndBase(1) - appBase, 0x8000,
+    'the main thread keeps the bottom half of the slice');
+}
+// Defaulting matters too: the CLI host constructs the manager with no base.
+assert.strictEqual(makeThreadManager().workerHwndBase(1), 0x10001 + 0x8000,
+  'with no app base the manager still lands inside the first app slice');
+
 console.log('PASS  ThreadManager reuses exited worker cache slots');
-console.log('PASS  ThreadManager hands allocator free-list ownership between instances');
+console.log('PASS  ThreadManager schedules, suspends and resumes worker slices');
 console.log('PASS  ThreadManager supports wall-budgeted worker slices');
 console.log('PASS  ThreadManager prioritizes hot audio threads');
 console.log('PASS  ThreadManager notifies thread exits once');
@@ -520,3 +811,4 @@ console.log('PASS  ThreadManager recycles closed event and semaphore handles');
 console.log('PASS  ThreadManager preserves and atomically consumes wait-all state');
 console.log('PASS  ThreadManager keeps main wait completion logs trace-only');
 console.log('PASS  ThreadManager keeps synchronization-object creation logs trace-only');
+console.log('PASS  ThreadManager keeps every worker hwnd inside its own app slice');
