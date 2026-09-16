@@ -16,6 +16,7 @@ const ROOT = path.join(__dirname, '..');
 const CHROME = process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const EXE = path.join(ROOT, 'test/binaries/candidates/quake-2-demo-installer/installed-extracted/Install/Data/quake2.exe');
 const OUT = path.join(ROOT, 'scratch', 'quake2-gl-web');
+const THREADED = process.env.QUAKE2_WEB_THREADS === '1';
 
 if (!fs.existsSync(CHROME) || !fs.existsSync(EXE)) {
   console.log('SKIP Chrome or local Quake II payload is absent');
@@ -23,7 +24,7 @@ if (!fs.existsSync(CHROME) || !fs.existsSync(EXE)) {
 }
 
 function server() {
-  return startSharedStaticServer({ root: ROOT });
+  return startSharedStaticServer({ root: ROOT, crossOriginIsolated: THREADED });
 }
 
 async function frame(page) {
@@ -87,6 +88,9 @@ function save(value, file) {
   const errors = [];
   try {
     const page = await browser.newPage();
+    await page.evaluateOnNewDocument(threaded => {
+      localStorage.setItem('wine-assembly.threads', threaded ? '1' : '0');
+    }, THREADED);
     await page.setViewport({ width: 900, height: 700, deviceScaleFactor: 1 });
     page.on('pageerror', error => errors.push(error.stack || String(error)));
     page.on('console', message => {
@@ -98,6 +102,8 @@ function save(value, file) {
       { waitUntil: 'domcontentloaded', timeout: 120000 });
     await page.waitForFunction(() => typeof launchApp === 'function' && apps.quake2_demo,
       { timeout: 30000 });
+    assert.strictEqual(await page.evaluate(() => typeof GLCommandStream.Encoder), 'undefined',
+      'production browser must not load the test-only JavaScript encoder');
     await page.evaluate(() => {
       window.__q2GlFault = null;
       const original = OpenGLCompat.OpenGLHostBridge.prototype.call;
@@ -145,6 +151,12 @@ function save(value, file) {
     await page.waitForFunction(() => Object.values(sharedRenderer.windows || {}).some(value =>
       value && /Quake 2/i.test(value.title || '') && value._gpuFrameLayer &&
       value._gpuFrameLayer.writeSeq > 1), { timeout: 180000, polling: 250 });
+    const backend = await page.evaluate(() => {
+      const app = runningApps.find(value => value && value.name === 'quake2_demo');
+      return app && app.wine.threadManager && app.wine.threadManager.backend;
+    });
+    assert.strictEqual(backend, THREADED ? 'worker' : 'cooperative',
+      'requested execution backend must actually be running');
     // Drive Quake's ordinary menu, but do not send input while the textured
     // startup console happens to satisfy the first-present gate. The menu's
     // large neutral-grey metal buttons occupy thousands of pixels in the
@@ -263,7 +275,7 @@ function save(value, file) {
     assert(perf.guestFps > 0,
       `GPU presents did not reach guest FPS accounting: ${JSON.stringify(perf)}`);
     assert.strictEqual(errors.length, 0, errors.join('\n'));
-    console.log(`PASS Quake II ref_gl gameplay ${before.width}x${before.height}, ` +
+    console.log(`PASS Quake II native GL ${backend} gameplay ${before.width}x${before.height}, ` +
       `${first.colors} colors, ${motion} moved pixels, ${perf.guestFps.toFixed(1)} guest fps`);
   } finally {
     await browser.close(); web.close();

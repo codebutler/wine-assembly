@@ -54,17 +54,18 @@ spelling must both observe this ordering.
 
 ## Compatibility and validation
 
-The JavaScript encoder remains the reference implementation for parity tests.
+The JavaScript encoder exists only in
+`test/helpers/gl-reference-encoder.js` as the reference for parity tests.
 The production replay and GL renderer continue to consume the same records.
 Parity must include record bytes, barrier return values, guest output memory,
 context changes, and capacity-triggered submissions.
 
-The CLI selects the reference path with `--gl-encoder=js`; `--gl-encoder=wat`
-selects the native path. Selection happens before DLL initialization and is
-inherited by guest workers. The encoder locks that selection at its first call,
-because changing encoders mid-context would discard current attribute state.
+Production has one encoder: WAT. The CLI rejects the removed `--gl-encoder`
+option, WASM exports no fallback selector, and both cooperative and Worker host
+imports reject direct guest GL calls. JavaScript retains ABI metadata and batch
+replay; the browser and guest workers never import the test reference.
 
-The native path is the default. Each instance lazily allocates a 2 MiB command
+Each instance lazily allocates a 2 MiB command
 buffer and a growing immediate-vertex buffer. Allocations are checked for
 contiguous linear-memory backing before use; fragmented backing or allocation
 failure traps instead of overwriting unrelated memory. Context snapshots and
@@ -104,9 +105,14 @@ to catch unused-component reads.
 `test/test-opengl-command-stream.js` also exercises the worker producer and
 broker together: the handoff contains only offset/length, and results and guest
 output writes are visible before the producer resumes. SwapBuffers ordering
-and worker encoder-selection inheritance have separate regressions.
+has a separate regression. `test/test-opengl-wat-worker.js` uses a real Node
+worker thread and delayed broker responses to verify two actual `Atomics.wait`
+barriers, query output visibility, ordering, and safe reuse of the same range.
+The browser gameplay test can also run with `QUAKE2_WEB_THREADS=1`; it asserts
+that the requested backend is active and that no JS encoder is loaded.
 
-Headless comparisons use a pinned WASM artifact and a fixed batch limit:
+The initial port's headless comparisons used a pinned WASM artifact and a fixed
+batch limit, before the production reference switch was removed:
 
 | Workload | Frames | JS host calls/frame | WAT host calls/frame | Evidence |
 | --- | ---: | ---: | ---: | --- |
@@ -117,10 +123,59 @@ Headless comparisons use a pinned WASM artifact and a fixed batch limit:
 These counts include startup work. They establish fewer WASM-to-JavaScript
 crossings, not an FPS improvement or full gameplay acceptance.
 
-For reproduction, preload `tools/gl-stats-preload.js` in `test/run.js`, use
+To reproduce those historical A/B results, check out `8fda9913`, preload
+`tools/gl-stats-preload.js` in `test/run.js`, and use
 `--headless-gl --gl-encoder=js` and `--gl-encoder=wat` with the same pinned
 `--no-build --wasm=PATH`, and compare the whole-run counters. Quake II uses
 `--app=quake2_demo --args='+set vid_ref gl +map demo1' --max-batches=30000`;
 Warcraft III uses `--app=warcraft3_demo --max-batches=40000`.
 SimGolf uses `--app=simgolf_demo --max-batches=301180
 --tick-ms-per-batch=37 --stuck-after=100000000 --control=8179`.
+
+Current counter probes read WAT exports instead of the retired JS counters.
+Page probes report unavailable guest-call counts for real Worker instances;
+executor draw counters remain available for both backends.
+
+### Native-only validation (2026-09-15)
+
+The clean `eca7b11a` baseline and a separate checkout containing only this
+retirement patch both passed the full build, including canonical/compat WASM
+compilation and data-segment overlap checks. Native parity, real Node Worker
+transport, SwapBuffers ordering, client arrays, multitexture, fixed-function
+rendering, and D3D async-protocol regressions passed.
+
+Browser validation found and fixed a real compatibility issue: a page may have
+shared WASM memory while its `SharedArrayBuffer` constructor is hidden.
+`memoryBatch` now validates the buffer's internal slot through `DataView`,
+which also accepts buffers from another realm and rejects fake buffer-shaped
+objects. The native-only cooperative browser test passed without isolation
+headers: 640x480 textured Quake II gameplay, 6,372 colors, and 127,767 changed
+pixels after normal keyboard movement.
+The real browser Worker run also passed, with 6,340 colors and 220,901 changed
+pixels. Both runs asserted the execution backend and absence of a production
+JS encoder.
+
+Four alternating headful Chrome samples on the pinned pre-retirement baseline
+used the same `demo1` scene, 10,000-block slices, five-second warmup, and
+20-second CPU-profile windows. The harness did not capture pixels during
+sampling; normal renderer readbacks remained enabled.
+
+| Encoder | GL presentations/s | Mean interval (ms) | Host load before/after |
+| --- | ---: | ---: | --- |
+| JS | 18.91 | 52.87 | 16.8 / 16.3 |
+| WAT | 16.74 | 59.74 | 16.4 / 15.2 |
+| WAT | 23.22 | 43.06 | 18.2 / 19.2 |
+| JS | 20.48 | 48.83 | 17.3 / 17.2 |
+
+There is **no established frame-rate improvement**: WAT samples fall on either
+side of the JS samples, and machine load exceeded the project's
+validity threshold of four throughout. JS encoder self samples were about
+3.0 ms per GL presentation; samples attributed to native `$gl_*` functions
+were about 1.0 ms. These are sampled self times, not inclusive CPU costs;
+shared helpers are charged elsewhere and the dynamic scenes are not identical.
+Profiles and screenshots are in `/private/tmp/gl-browser-bench/`; the harness
+is `/private/tmp/gl-browser-bench.js` and the pinned checkout is
+`/private/tmp/wa-gl-validation`.
+
+The real-phone probe received no device response, so iPhone gameplay remains
+unverified. Desktop browser results are not a substitute for that check.

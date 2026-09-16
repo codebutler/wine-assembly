@@ -5,7 +5,7 @@
 // encoder remains the deliberately separate reference implementation.
 
 const assert = require('assert');
-const Stream = require('../lib/gl-command-stream');
+const Stream = require('./helpers/gl-reference-encoder');
 const { compileSrcWasm } = require('./compile-src');
 const RegionMap = require('../lib/region-map.generated');
 
@@ -177,27 +177,22 @@ async function main() {
   assert.throws(() => Stream.replay(Stream.memoryBatch(memory, transportAt, 44), () => 0), RangeError);
   console.log('PASS shared-offset host/worker handoff rejects malformed ranges and records');
   let activeSubmissions = [];
-  const directCalls = [];
   let translateGuest = pointer => pointer;
   const imports = { host: { memory } };
   for (const imp of WebAssembly.Module.imports(module_)) {
     if (imp.kind === 'function') (imports[imp.module] ||= {})[imp.name] = () => 0;
   }
   imports.host.gpu_gl_call = (opcode, streamWa, byteLength) => {
-    if ((opcode >>> 0) !== STREAM_CALL) {
-      directCalls.push([opcode | 0, streamWa >>> 0, byteLength >>> 0]);
-      return 0;
-    }
+    assert.strictEqual(opcode >>> 0, STREAM_CALL,
+      'production GL crosses the host boundary only as a native WAT stream');
     const bytes = Buffer.from(new Uint8Array(memory.buffer, streamWa >>> 0, byteLength >>> 0));
     activeSubmissions.push(bytes);
     return submissionResult(bytes, memory, translateGuest);
   };
   const a = new WebAssembly.Instance(module_, imports).exports;
   const b = new WebAssembly.Instance(module_, imports).exports;
-  const oracleInstance = new WebAssembly.Instance(module_, imports).exports;
   a.init_thread(0, 0x400000, 0, 0, 0, 0, 0);
   b.init_thread(1, 0x400000, 0, 0, 0, 0, 0);
-  oracleInstance.init_thread(2, 0x400000, 0, 0, 0, 0, 0);
   a.heap_init(0x420000);
   translateGuest = pointer => pointer === 0xFFF0000C ? memory.buffer.byteLength - 12
     : pointer === 0xFFF00008 ? memory.buffer.byteLength - 8
@@ -210,15 +205,10 @@ async function main() {
   }
   const capacity = a.gl_wat_stream_capacity() >>> 0;
   assert(capacity >= 256, 'production stream publishes a usable capacity');
-  assert.strictEqual(a.gl_wat_encoder_enabled(), 1, 'native encoder is the production default');
-  oracleInstance.gl_wat_encoder_set_enabled(0);
-  writeArgs(memory, [0x0BE2]);
-  oracleInstance.gl_wat_encoder_call(10, STACK, 0x55);
-  assert.deepStrictEqual(directCalls.pop(), [10, STACK, 0x55],
-    'oracle switch routes the unchanged legacy host call for corpus A/B runs');
-  oracleInstance.gl_wat_encoder_set_enabled(1);
-  assert.strictEqual(oracleInstance.gl_wat_encoder_enabled(), 0,
-    'encoder selection is immutable after the first GL call');
+  assert.strictEqual(a.gl_wat_encoder_set_enabled, undefined,
+    'production exposes no runtime JS encoder selector');
+  assert.strictEqual(a.gl_wat_encoder_enabled, undefined,
+    'production GL encoding is native-only');
 
   function parity(label, sequence) {
     const section = label.split(':', 1)[0];

@@ -2,7 +2,7 @@
 'use strict';
 
 const assert = require('assert');
-const Stream = require('../lib/gl-command-stream');
+const Stream = require('./helpers/gl-reference-encoder');
 const { CALL_INDEX } = require('../lib/gl-compat');
 const apis = require('../src/api_table.json');
 

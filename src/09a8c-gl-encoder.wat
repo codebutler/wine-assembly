@@ -3,11 +3,9 @@
   ;; ============================================================
   ;; Records deliberately match lib/gl-command-stream.js byte-for-byte.  The
   ;; host endpoint (opcode 0x10001) consumes a bounded span in linear memory.
-  ;; Buffers are allocated lazily from the guest heap so this optional frontend
+  ;; Buffers are allocated lazily from the guest heap so the frontend
   ;; does not permanently enlarge every instance's static memory map.
 
-  (global $gl_wat_enabled (mut i32) (i32.const 1))
-  (global $gl_wat_selector_locked (mut i32) (i32.const 0))
   (global $gl_stream_wa (mut i32) (i32.const 0))
   (global $gl_stream_used_bytes (mut i32) (i32.const 0))
   (global $gl_stream_command_count (mut i32) (i32.const 0))
@@ -479,10 +477,7 @@
 
   (func $gl_wat_encode_call (param $op i32) (param $stack i32) (param $aux i32) (result i32)
     (local $spec i64) (local $ptr i32) (local $len i32) (local $borrow i32) (local $result i32)
-    (global.set $gl_wat_selector_locked (i32.const 1))
     (global.set $gl_wat_stat_calls (i64.add (global.get $gl_wat_stat_calls) (i64.const 1)))
-    (if (i32.eqz (global.get $gl_wat_enabled))
-      (then (return (call $host_gpu_gl_call (local.get $op) (local.get $stack) (local.get $aux)))))
     (if (i32.eqz (call $gl_wat_init)) (then (unreachable)))
     (if (call $gl_state_intercept (local.get $op) (local.get $stack))
       (then (return (i32.const 0))))
@@ -555,5 +550,4 @@
     (global.set $gl_immediate_floats (i32.const 0))
     (global.set $gl_immediate_mode (i32.const -1))
     (call $gl_state_reset)
-    (global.set $gl_current_context (i32.const 0))
-    (global.set $gl_wat_selector_locked (i32.const 0)))
+    (global.set $gl_current_context (i32.const 0)))

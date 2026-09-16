@@ -15,7 +15,7 @@
 // photographs as buttons with no labels while the shadow alone is on screen.
 
 const assert = require('assert');
-const Stream = require('../lib/gl-command-stream');
+const Stream = require('./helpers/gl-reference-encoder');
 const { CALL_INDEX, FixedFunctionGL, constants: C } = require('../lib/gl-compat');
 
 const GL_TEXTURE0_ARB = 0x84C0;

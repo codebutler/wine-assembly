@@ -2,12 +2,34 @@
 'use strict';
 
 const assert = require('assert');
-const Stream = require('../lib/gl-command-stream');
+const vm = require('vm');
+const Stream = require('./helpers/gl-reference-encoder');
 const RPC = require('../lib/guest-rpc');
 const { OpenGLHostBridge } = require('../lib/gl-compat');
 
 const memory = new ArrayBuffer(64 * 1024);
 const dv = new DataView(memory);
+
+// Runtime validation must use the buffer's internal slot. Browsers can expose
+// a genuine shared WebAssembly memory while hiding SharedArrayBuffer because
+// the page is not cross-origin isolated, and instanceof rejects other realms.
+const sharedMemory = new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true });
+const savedSharedArrayBuffer = global.SharedArrayBuffer;
+try {
+  global.SharedArrayBuffer = undefined;
+  assert.strictEqual(Stream.memoryBatch(sharedMemory, 0, 32).buffer,
+    sharedMemory.buffer, 'shared WASM memory works when its constructor is hidden');
+} finally {
+  global.SharedArrayBuffer = savedSharedArrayBuffer;
+}
+const crossRealmBuffer = vm.runInNewContext('new ArrayBuffer(64)');
+assert.strictEqual(Stream.memoryBatch(crossRealmBuffer, 0, 32).buffer,
+  crossRealmBuffer, 'cross-realm ArrayBuffer passes internal-slot validation');
+assert.throws(() => Stream.memoryBatch({ byteLength: 64 }, 0, 32),
+  /not an ArrayBuffer/, 'an object shaped like a buffer is rejected');
+assert.throws(() => Stream.memoryBatch({ buffer: { byteLength: 64 } }, 0, 32),
+  /not an ArrayBuffer/, 'an object with a fake memory buffer is rejected');
+
 const stack = 0x100;
 const submissions = [];
 const executed = [];
@@ -332,7 +354,9 @@ const rpcMemory = new WebAssembly.Memory({ initial: 8192, maximum: 8192, shared:
 const rpcView = RPC.views(rpcMemory, 0).i32;
 const brokerOps = [];
 const broker = RPC.createMainBroker(rpcMemory, {
-  gpu_gl_batch: batch => Stream.replay(batch, opcode => { brokerOps.push(opcode); return 77; }),
+  gpu_gl_batch: batch => Stream.replay(
+    Stream.memoryBatch(rpcMemory, batch.memoryOffset, batch.bytes),
+    opcode => { brokerOps.push(opcode); return 77; }),
 }, {});
 let brokerBatch = null;
 const brokerEncoder = new Stream.Encoder({
@@ -344,7 +368,12 @@ const brokerEncoder = new Stream.Encoder({
 brokerEncoder.call(10, stack, 0);
 brokerEncoder.call(12, stack, 0);
 Atomics.store(rpcView, RPC.SLOT.STATUS, RPC.STATUS_REQ);
-assert.strictEqual(broker.serveGlBatch({ slot: 0, batch: brokerBatch }), true);
+const brokerOffset = 0x10000;
+new Uint8Array(rpcMemory.buffer, brokerOffset, brokerBatch.bytes)
+  .set(new Uint8Array(brokerBatch.buffer, 0, brokerBatch.bytes));
+assert.strictEqual(broker.serveGlBatch({
+  slot: 0, memoryOffset: brokerOffset, bytes: brokerBatch.bytes,
+}), true);
 assert.deepStrictEqual(brokerOps, [10, 12], 'main broker replays one ordered GL batch');
 assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.RESULT), 77);
 assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.STATUS), RPC.STATUS_RESP,
@@ -376,7 +405,7 @@ const nativeWorker = RPC.createWorkerImports(rpcMemory, {
 }, message => {
   nativeMessages.push(message);
   nativeBroker.serveGlBatch(message);
-}, { guestToWasm: pointer => pointer });
+}, {});
 assert.strictEqual(nativeWorker.imports.host.gpu_gl_call(Stream.WAT_STREAM_FLUSH_OPCODE,
   nativeOffset, brokerBatch.bytes), 91);
 assert.deepStrictEqual(nativeOps, [10, 12]);

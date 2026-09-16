@@ -9,12 +9,11 @@
 // whole-run totals. A frame is one glFlush or SwapBuffers reaching the
 // executor (frontFlushes + presents); SimGolf ends frames with glFlush.
 //
-// Renderer counters are module-level in lib/gl-command-stream.js and
-// lib/gl-compat.js, so they are the same objects run.js's host imports use:
+// Renderer counters are module-level in lib/gl-compat.js,
+// so they are the same objects run.js's host imports use:
 // require() caches one instance per process. All values are counts, so they
 // are load-immune. Columns:
-//   calls    GL host-import crossings (one per batch with the WAT encoder)
-//   jsSpans  glBegin/glEnd spans closed by the reference JS encoder only
+//   calls    GL host-import crossings (one per batch)
 //   batches  WAT command submissions
 //   enq      packed spans handed to the executor
 //   draws    WebGL draws actually issued (enq/draws = how well spans merge)
@@ -38,14 +37,22 @@ hostImports.createHostImports = function (...args) {
     }
     return call.apply(this, arguments);
   };
+  // Real Workers reach the main-thread broker endpoint directly, without
+  // calling the main instance's gpu_gl_call import.
+  const batch = imports.host.gpu_gl_batch;
+  imports.host.gpu_gl_batch = function (commands, owner) {
+    crossings.calls++;
+    crossings.batches++;
+    crossings.bytes += commands.bytes >>> 0;
+    return batch.apply(this, arguments);
+  };
   return imports;
 };
 
 const EVERY_MS = parseInt(process.env.GL_STATS_EVERY_MS || '10000', 10);
 const snap = () => ({
-  calls: crossings.calls, spans: stream.stats.spans,
+  calls: crossings.calls,
   batches: crossings.batches, bytes: crossings.bytes,
-  byOpcode: Array.from(stream.stats.byOpcode),
   enq: compat.stats.enqueued, draws: compat.stats.draws,
   verts: compat.stats.drawVertices,
   frames: compat.stats.frontFlushes + compat.stats.presents,
@@ -55,19 +62,11 @@ const line = (label, now, then) => {
   const frames = now.frames - then.frames;
   const per = v => (frames ? (v / frames).toFixed(1) : '-');
   const d = k => now[k] - then[k];
-  const ops = [];
-  for (let i = 0; i < now.byOpcode.length; i++) {
-    const n = now.byOpcode[i] - then.byOpcode[i];
-    if (n) ops.push([compat.CALLS[i] || `op${i}`, n]);
-  }
-  ops.sort((a, b) => b[1] - a[1]);
-  const top = ops.slice(0, 8).map(([name, n]) => `${name}=${per(n)}`).join(' ');
   const merge = d('draws') ? (d('enq') / d('draws')).toFixed(2) : '-';
   console.log(`[gl-stats] ${label} frames=${frames} per-frame: calls=${per(d('calls'))}`
-    + ` jsSpans=${per(d('spans'))} batches=${per(d('batches'))}`
+    + ` batches=${per(d('batches'))}`
     + ` bytes=${per(d('bytes'))} enq=${per(d('enq'))} draws=${per(d('draws'))}`
     + ` verts=${per(d('verts'))} spans/draw=${merge}`);
-  if (top) console.log(`[gl-stats] ${label} top JS-encoded calls/frame: ${top}`);
 };
 
 // Reachable from a --control session's `eval`, so a stepped/frozen run can

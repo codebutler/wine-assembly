@@ -133,7 +133,7 @@ bridge.contexts.set(1, { frontend: {
   backend,
 }, backend: { present() {} }, layer: { writeSeq: 0 } });
 assert.throws(() => bridge.call(CALL_INDEX.glVertex3fv, stack, 0),
-  /must pass through GLCommandStream\.Encoder/,
+  /must be compiled by the native WAT GL encoder/,
   'raw immediate vertices cannot bypass the mandatory buffered state layer');
 bridgeView.setFloat32(stack + 4, -1, true);
 bridgeView.setFloat32(stack + 8, -2, true);
