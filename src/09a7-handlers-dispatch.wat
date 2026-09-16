@@ -1102,9 +1102,9 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
   )
 
-  ;; SHGetDesktopFolder(ppshf) — installer-scoped desktop namespace shim.
-  ;; It exposes an empty IShellFolder/IEnumIDList so path-edit controls remain
-  ;; usable without pretending to implement Explorer's PIDL namespace.
+  ;; SHGetDesktopFolder(ppshf) — bounded desktop namespace shim.  The folder
+  ;; exposes only the virtual roots for which this runtime has canonical PIDL,
+  ;; name and attribute support: My Computer and Network Neighborhood.
   (func $handle_SHGetDesktopFolder (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $vtbl i32) (local $obj i32)
     (if (i32.eqz (local.get $arg0))
@@ -1385,17 +1385,33 @@
           (i32.and (local.get $attributes) (local.get $actual)))))
     (global.set $eax (i32.const 0))) ;; S_OK
   (func $handle_IShellFolder_EnumObjects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (local $vtbl i32) (local $obj i32)
-    (if (i32.eqz (local.get $arg3))
+    (local $vtbl i32) (local $obj i32) (local $entry i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (if (i32.eqz (call $shell_guest_range_mapped (local.get $arg3) (i32.const 4)))
       (then
         (global.set $eax (i32.const 0x80004003))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
         (return)))
+    (call $gs32 (local.get $arg3) (i32.const 0))
+    ;; EnumObjects is a method on the one desktop-folder object kind.  Reject a
+    ;; stale/cross-interface pointer before $dx_from_this can turn its wrapper
+    ;; slot into plausible enumeration state.
+    (if (i32.eqz (call $shell_guest_range_mapped (local.get $arg0) (i32.const 8)))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (local.set $entry (call $dx_from_this (local.get $arg0)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 32))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
     (local.set $vtbl (call $init_com_vtable (i32.const 2495) (i32.const 7)))
     (local.set $obj (call $dx_create_com_obj (i32.const 33) (local.get $vtbl)))
+    (if (i32.eqz (local.get $obj))
+      (then (global.set $eax (i32.const 0x8007000E)) (return)))
+    ;; Type-33 owns these two fields: misc0 is the requested SHCONTF word and
+    ;; misc1 is the next supported desktop child (0..2).  Each EnumObjects call
+    ;; therefore has an independent cursor even when callers interleave them.
+    (local.set $entry (call $dx_from_this (local.get $obj)))
+    (store.field DxObject misc0 (local.get $entry) (local.get $arg2))
+    (store.field DxObject misc1 (local.get $entry) (i32.const 0))
     (call $gs32 (local.get $arg3) (local.get $obj))
-    (global.set $eax (select (i32.const 0) (i32.const 0x8007000E) (i32.ne (local.get $obj) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (global.set $eax (i32.const 0)))
   (func $handle_IShellFolder_BindToObject (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 0))))
     (global.set $eax (i32.const 0x80004001))
@@ -1740,17 +1756,130 @@
     (call $handle_dx_com_release_basic
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
+  (func $shell_enum_entry (param $object i32) (result i32)
+    (local $entry i32)
+    (if (i32.eqz (call $shell_guest_range_mapped (local.get $object) (i32.const 8)))
+      (then (return (i32.const 0))))
+    (local.set $entry (call $dx_from_this (local.get $object)))
+    (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 33))
+      (then (return (i32.const 0))))
+    (local.get $entry))
   (func $handle_IEnumIDList_Next (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
-    (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 1)) ;; S_FALSE: empty namespace
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (local $entry i32) (local $cursor i32) (local $start i32)
+    (local $fetched i32) (local $pidl i32) (local $i i32) (local $slot i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (local.set $entry (call $shell_enum_entry (local.get $arg0)))
+    (if (i32.eqz (local.get $entry))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
+    ;; pceltFetched may be NULL only for the one-element convenience form.
+    (if (local.get $arg3)
+      (then
+        (if (i32.eqz
+              (call $shell_guest_range_mapped (local.get $arg3) (i32.const 4)))
+          (then (global.set $eax (i32.const 0x80004003)) (return)))
+        (call $gs32 (local.get $arg3) (i32.const 0)))
+      (else
+        (if (i32.ne (local.get $arg1) (i32.const 1))
+          (then (global.set $eax (i32.const 0x80004003)) (return)))))
+    ;; A zero request retrieves its full requested count (zero) and needs no
+    ;; rgelt storage.  This also avoids treating a zero-length affine span as a
+    ;; pointer failure.
+    (if (i32.eqz (local.get $arg1))
+      (then (global.set $eax (i32.const 0)) (return)))
+    (if (i32.or
+          (i32.gt_u (local.get $arg1) (i32.const 0x3fffffff))
+          (i32.eqz
+            (call $shell_guest_range_mapped
+              (local.get $arg2) (i32.shl (local.get $arg1) (i32.const 2)))))
+      (then (global.set $eax (i32.const 0x80004003)) (return)))
+    (local.set $cursor (load.field DxObject misc1 (local.get $entry)))
+    (if (i32.gt_u (local.get $cursor) (i32.const 2))
+      (then (local.set $cursor (i32.const 2))))
+    (local.set $start (local.get $cursor))
+    ;; SHCONTF_FOLDERS (0x20) is the only class represented by the two virtual
+    ;; roots.  NONFOLDERS and unrelated flags truthfully enumerate no items.
+    (if (i32.ne
+          (i32.and (load.field DxObject misc0 (local.get $entry)) (i32.const 0x20))
+          (i32.const 0))
+      (then
+        (block $complete
+          (loop $items
+            (br_if $complete (i32.ge_u (local.get $fetched) (local.get $arg1)))
+            (br_if $complete (i32.ge_u (local.get $cursor) (i32.const 2)))
+            (local.set $pidl
+              (call $shell_virtual_pidl_from_csidl
+                (select (i32.const 0x11) (i32.const 0x12)
+                  (i32.eqz (local.get $cursor)))))
+            (if (i32.eqz (local.get $pidl))
+              (then
+                ;; A failed COM call publishes no valid entries.  Roll back
+                ;; every PIDL allocated by this call and leave the cursor at
+                ;; its entry value so the caller can retry.
+                (local.set $i (i32.const 0))
+                (block $rolled_back
+                  (loop $rollback
+                    (br_if $rolled_back (i32.ge_u (local.get $i) (local.get $fetched)))
+                    (local.set $slot
+                      (i32.add (local.get $arg2)
+                        (i32.shl (local.get $i) (i32.const 2))))
+                    (call $heap_free (call $gl32 (local.get $slot)))
+                    (call $gs32 (local.get $slot) (i32.const 0))
+                    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                    (br $rollback)))
+                (if (local.get $arg3)
+                  (then (call $gs32 (local.get $arg3) (i32.const 0))))
+                (store.field DxObject misc1 (local.get $entry) (local.get $start))
+                (global.set $eax (i32.const 0x8007000E))
+                (return)))
+            (call $gs32
+              (i32.add (local.get $arg2)
+                (i32.shl (local.get $fetched) (i32.const 2)))
+              (local.get $pidl))
+            (local.set $fetched (i32.add (local.get $fetched) (i32.const 1)))
+            (local.set $cursor (i32.add (local.get $cursor) (i32.const 1)))
+            (br $items)))))
+    (store.field DxObject misc1 (local.get $entry) (local.get $cursor))
+    (if (local.get $arg3)
+      (then (call $gs32 (local.get $arg3) (local.get $fetched))))
+    ;; S_OK is reserved for the full requested count.  A non-empty partial
+    ;; result remains owned by the caller but reports end-of-enumeration.
+    (global.set $eax
+      (select (i32.const 0) (i32.const 1)
+        (i32.eq (local.get $fetched) (local.get $arg1)))))
   (func $handle_IEnumIDList_Skip (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (local $entry i32) (local $cursor i32) (local $remaining i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (local.set $entry (call $shell_enum_entry (local.get $arg0)))
+    (if (i32.eqz (local.get $entry))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (if (i32.eqz (local.get $arg1))
+      (then (global.set $eax (i32.const 0)) (return)))
+    (local.set $cursor (load.field DxObject misc1 (local.get $entry)))
+    (if (i32.gt_u (local.get $cursor) (i32.const 2))
+      (then (local.set $cursor (i32.const 2))))
+    (if (i32.eqz
+          (i32.and (load.field DxObject misc0 (local.get $entry)) (i32.const 0x20)))
+      (then
+        (store.field DxObject misc1 (local.get $entry) (local.get $cursor))
+        (global.set $eax (i32.const 1))
+        (return)))
+    (local.set $remaining (i32.sub (i32.const 2) (local.get $cursor)))
+    (if (i32.le_u (local.get $arg1) (local.get $remaining))
+      (then
+        (store.field DxObject misc1 (local.get $entry)
+          (i32.add (local.get $cursor) (local.get $arg1)))
+        (global.set $eax (i32.const 0)))
+      (else
+        (store.field DxObject misc1 (local.get $entry) (i32.const 2))
+        (global.set $eax (i32.const 1)))))
   (func $handle_IEnumIDList_Reset (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (local $entry i32)
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (local.set $entry (call $shell_enum_entry (local.get $arg0)))
+    (if (i32.eqz (local.get $entry))
+      (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (store.field DxObject misc1 (local.get $entry) (i32.const 0))
+    (global.set $eax (i32.const 0)))
   (func $handle_IEnumIDList_Clone (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
     (global.set $eax (i32.const 0x80004001))

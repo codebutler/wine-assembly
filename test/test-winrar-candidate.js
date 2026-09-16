@@ -225,7 +225,9 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       '--no-build',
       '--quiet-api',
       '--quiet-blocks',
-      '--trace-api=EnableWindow,DestroyWindow,SystemParametersInfoA',
+      '--trace-api=EnableWindow,DestroyWindow,SystemParametersInfoA,' +
+        'IShellFolder_EnumObjects,IEnumIDList_Next,' +
+        'IShellFolder_GetAttributesOf,IShellFolder_GetDisplayNameOf',
       '--max-batches=120',
       '--batch-size=50000',
       `--input=1:wait-title:Please_register:2000,2:dlg-click:1,5:dump-windows:registration-closed,` +
@@ -266,6 +268,15 @@ function titleBlueCountInRect(png, left, top, right, bottom) {
       `WinRAR did not issue its newer-sized ANSI icon-title LOGFONT query\n${installedOutput.slice(-8000)}`);
     assert(installedOutput.includes('[SetWindowText] "c:\\ - WinRAR (evaluation copy)"'),
       `installed WinRAR never reached its live file panel\n${installedOutput.slice(-8000)}`);
+    assert(/IShellFolder_EnumObjects\(0x[0-9a-f]+, 0x00010003, 0x00000020, 0x[0-9a-f]+\)/i.test(installedOutput),
+      `WinRAR did not request desktop SHCONTF_FOLDERS for its navigation control\n${installedOutput.slice(-8000)}`);
+    const enumNextCalls = installedOutput.match(/IEnumIDList_Next\(/g) || [];
+    const enumAttributeCalls = installedOutput.match(/IShellFolder_GetAttributesOf\(/g) || [];
+    const enumDisplayCalls = installedOutput.match(/IShellFolder_GetDisplayNameOf\(/g) || [];
+    assert(enumNextCalls.length >= 3 && enumAttributeCalls.length >= 2 && enumDisplayCalls.length >= 2,
+      `WinRAR did not consume two enumerated desktop roots into visible navigation ` +
+        `(${enumNextCalls.length} Next, ${enumAttributeCalls.length} attributes, ` +
+        `${enumDisplayCalls.length} display-name calls)\n${installedOutput.slice(-8000)}`);
     const modalDisable = installedOutput.match(
       /\[API #[^\]]+\] EnableWindow\((0x[0-9a-f]+), 0x00000000\)/i);
     assert(modalDisable,
