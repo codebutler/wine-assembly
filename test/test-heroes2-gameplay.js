@@ -41,18 +41,22 @@ const INPUT = [
 
 let stdout = '';
 if (!ANALYZE_ONLY) {
-  const cmd = `node "${RUN}" --app=heroes2_demo --batch-size=20000 --max-batches=2600`
+  // The scenario opens at batch 1200; 1700 leaves 500 batches of live map
+  // presentation while avoiding the long, redundant tail of the old run.
+  const cmd = `node "${RUN}" --app=heroes2_demo --batch-size=20000 --max-batches=1700 --max-seconds=75`
     + ` --no-close --repaint-every=50 --quiet-api --trace-dx --input='${INPUT}' --png="${OUT}"`;
   console.log('$', cmd);
   try {
-    // The drive above measures 5s. A cap 180x that does not protect anything --
-    // it just means a hang burns fifteen minutes before anyone sees it.
-    stdout = execSync(cmd, { encoding: 'utf-8', timeout: 60000, cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    // The in-process guard exits between batches with diagnostics. The outer
+    // cap only catches a single batch that never returns to that guard.
+    stdout = execSync(cmd, { encoding: 'utf-8', timeout: 90000, cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) {
     const out = (e.stdout || '').toString() + (e.stderr || '').toString();
     console.error(out.split('\n').slice(-40).join('\n'));
     throw new Error('the Heroes II run did not finish');
   }
+  assert.match(stdout, /Stats: .* 1700 batches in /,
+    'the run must finish all 1700 batches rather than stop at its time guard');
   assert.ok(fs.existsSync(OUT), 'the run wrote no PNG');
 }
 
