@@ -279,8 +279,11 @@ const digest = crypto.createHash('sha256')
 // 2026-09-15: 272 -> 271. D3D9 CheckDeviceMultiSampleType now validates the
 // complete tuple against the render/depth creators: only NONE and their stored
 // formats succeed, unsupported techniques fail, and quality count is written.
-const EXPECTED_COUNT = 269;
-const EXPECTED_SHA256 = '5fbdfe2d57fe8787425a92ea1a82b64a3f9c39af846cf499f23b179200d670c1';
+// 2026-09-15: 269 -> 267. D3D9 CheckDeviceType and CheckDepthStencilMatch now
+// validate complete adapter/color/depth tuples against the formats advertised
+// and stored by the renderer instead of promising every combination works.
+const EXPECTED_COUNT = 267;
+const EXPECTED_SHA256 = 'cb9b6302c37cd9c007c8ba43f2b26fe3b6ab554c1bc15d669d13f46f3c35b53a';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,
