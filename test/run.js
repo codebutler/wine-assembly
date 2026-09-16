@@ -470,6 +470,19 @@ if (process.send) {
 }
 const TIME_SCALE = parseFloat(getArg('time-scale', '1')) || 1;  // --time-scale=10: guest clock runs 10x
 const REAL_TICKS = hasFlag('real-ticks'); // --real-ticks: GetTickCount from the wall clock, not the batch counter
+// --wall-clock-ms=N: pin the CALENDAR clock (GetLocalTime/GetSystemTime/
+// GetSystemTimeAsFileTime, i.e. the `wall_clock` import) to a fixed epoch
+// millisecond. The elapsed-time clock is already batch-driven and reproducible,
+// but the calendar one is deliberately real, so a guest that seeds itself from
+// the time of day makes an otherwise identical A/B pair diverge. Pin it and the
+// two arms see the same calendar, which is what an A/B needs; leave it off and
+// nothing changes. `0` is not a valid pin (it is falsy, and a 1970 calendar is
+// not what anyone means) — the flag takes a real epoch value.
+const WALL_CLOCK_MS_ARG = getArg('wall-clock-ms', '');
+const WALL_CLOCK_MS = WALL_CLOCK_MS_ARG === '' ? 0 : Number(WALL_CLOCK_MS_ARG);
+if (WALL_CLOCK_MS_ARG !== '' && !(Number.isFinite(WALL_CLOCK_MS) && WALL_CLOCK_MS > 0)) {
+  throw new Error(`--wall-clock-ms=${WALL_CLOCK_MS_ARG}: expected a positive epoch millisecond`);
+}
 if (CONTROL_FROZEN_START && !(CONTROL || CONTROL_STDIN)) {
   throw new Error('--frozen needs --control or --control-stdin');
 }
@@ -2169,6 +2182,8 @@ async function main() {
     // The guest clock. --time-scale runs it faster than the wall clock, which
     // separates "waiting for time to pass" from "doing work" in a slow run.
     guestNowMs: () => CLOCK_ORIGIN + (Date.now() - CLOCK_ORIGIN) * TIME_SCALE,
+    // The calendar clock, pinned only when --wall-clock-ms= asked for it.
+    wallNowMs: WALL_CLOCK_MS ? () => WALL_CLOCK_MS : undefined,
     // The room segment, when this process was launched into one. Without it
     // the guest's sockets still work; the room is just this process alone.
     vlanWire: VLAN_WIRE ? new (require('../lib/vlan-wire').ProcessWire)(process) : null,

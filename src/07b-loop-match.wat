@@ -1787,11 +1787,33 @@
       (then (call $te_raw (local.get $stack_disp))))
     (i32.const 1))
 
+  ;; Is this register one of the block's cursors -- an inc/dec target that is
+  ;; not the trip counter? Roles are assigned by evidence in pass 2, and this
+  ;; is the membership test both cursor decisions are made with.
+  (func $loop_is_cursor (param $reg i32) (param $mask i32) (param $ctr i32) (result i32)
+    (i32.and
+      (i32.ne
+        (i32.and (local.get $mask) (i32.shl (i32.const 1) (local.get $reg)))
+        (i32.const 0))
+      (i32.ne (local.get $reg) (local.get $ctr))))
+
+  ;; A spill of a cursor records whatever that cursor held at that point in the
+  ;; body; the super-op writes it once, at exit, from the final value, so a
+  ;; spill that ran before the bump is one stride behind.
+  (func $loop_cursor_adj (param $mreg i32) (param $midx i32)
+        (param $creg i32) (param $cstride i32) (param $cidx i32) (result i32)
+    (select (i32.sub (i32.const 0) (local.get $cstride)) (i32.const 0)
+      (i32.and (i32.eq (local.get $mreg) (local.get $creg))
+               (i32.lt_u (local.get $midx) (local.get $cidx)))))
+
   (func $loop_try_lut (param $start_eip i32) (param $tstart i32) (result i32)
     (local $i i32) (local $n i32) (local $p i32) (local $fn i32) (local $op i32)
     (local $role i32)
-    (local $iv_reg i32) (local $iv_stride i32) (local $iv_idx i32) (local $iv_cnt i32)
-    (local $ctr_reg i32) (local $ctr_step i32) (local $ctr_idx i32) (local $ctr_cnt i32)
+    (local $iv_reg i32) (local $iv_stride i32) (local $iv_idx i32)
+    (local $dst_reg i32) (local $dst_stride i32) (local $dst_idx i32)
+    (local $ctr_reg i32) (local $ctr_step i32) (local $ctr_idx i32)
+    (local $addi_cnt i32) (local $addi_mask i32) (local $other_cnt i32)
+    (local $res_reg i32) (local $hoist i32) (local $m0_adj i32) (local $m1_adj i32)
     (local $acc_reg i32) (local $zero_cnt i32)
     (local $ld_reg i32) (local $ld_base i32) (local $ld_disp i32) (local $ld_idx i32) (local $ld_cnt i32)
     (local $ald_reg i32) (local $ald_base i32) (local $ald_disp i32) (local $ald_idx i32)
@@ -1829,28 +1851,33 @@
         (if (i32.eq (local.get $role) (global.get $LR_MEMCTR))
           (then (return (i32.const 0))))
 
+        ;; Roles this matcher does not model. They are counted rather than
+        ;; declined outright because an in-block zero redefines the whole
+        ;; accumulator, making anything before it irrelevant; without one, the
+        ;; accumulator's high bits must be provably untouched, so pass 2
+        ;; requires this count to be zero.
+        (if (i32.or (i32.eq (local.get $role) (global.get $LR_CMP))
+              (i32.or (i32.eq (local.get $role) (global.get $LR_SHIFT))
+                      (i32.eq (local.get $role) (global.get $LR_ADD))))
+          (then (local.set $other_cnt (i32.add (local.get $other_cnt) (i32.const 1)))))
+
         (if (i32.eq (local.get $role) (global.get $LR_ADDI))
           (then
             ;; inc (64) / dec (65): operand is the register, step is +1 / -1.
             (local.set $written (i32.or (local.get $written)
               (i32.shl (i32.const 1) (i32.and (local.get $op) (i32.const 0xF)))))
-            ;; The first ADDI whose register also appears as a memory base is
-            ;; the induction variable; that is decided in pass 2, so record
-            ;; both candidates here.
-            (if (i32.eqz (local.get $iv_cnt))
-              (then
-                (local.set $iv_reg (i32.and (local.get $op) (i32.const 0xF)))
-                (local.set $iv_stride
-                  (select (i32.const 1) (i32.const -1) (i32.eq (local.get $fn) (i32.const 64))))
-                (local.set $iv_idx (local.get $i))
-                (local.set $iv_cnt (i32.const 1)))
-              (else
-                (if (i32.ne (local.get $ctr_cnt) (i32.const 0)) (then (return (i32.const 0))))
-                (local.set $ctr_reg (i32.and (local.get $op) (i32.const 0xF)))
-                (local.set $ctr_step
-                  (select (i32.const 1) (i32.const -1) (i32.eq (local.get $fn) (i32.const 64))))
-                (local.set $ctr_idx (local.get $i))
-                (local.set $ctr_cnt (i32.const 1))))))
+            (local.set $addi_mask (i32.or (local.get $addi_mask)
+              (i32.shl (i32.const 1) (i32.and (local.get $op) (i32.const 0xF)))))
+            (local.set $addi_cnt (i32.add (local.get $addi_cnt) (i32.const 1)))
+            ;; Which ADDI is the counter and which are the cursors is decided
+            ;; by evidence in pass 2, never by arrival order. The one thing
+            ;; position does settle is the counter: only the LAST ADDI can be
+            ;; the flag-setter the exit test reads, so record it here and let
+            ;; pass 2 rescan for the cursors it names.
+            (local.set $ctr_reg (i32.and (local.get $op) (i32.const 0xF)))
+            (local.set $ctr_step
+              (select (i32.const 1) (i32.const -1) (i32.eq (local.get $fn) (i32.const 64))))
+            (local.set $ctr_idx (local.get $i))))
 
         (if (i32.eq (local.get $role) (global.get $LR_ZERO))
           (then
@@ -1875,11 +1902,13 @@
                 (local.set $ald_disp (i32.load offset=8 (local.get $p)))
                 (local.set $ald_idx (local.get $i))))
             (local.set $ld_cnt (i32.add (local.get $ld_cnt) (i32.const 1)))
-            ;; A byte load writes only the low 8 bits, but the accumulator is
-            ;; required to have been zeroed in-block, so the whole register is
-            ;; defined here.
+            ;; A byte load writes only the low 8 bits, but either the
+            ;; accumulator was zeroed in-block or pass 2 proves its high bits
+            ;; loop-invariant, so the register is defined here either way.
+            ;; This is the destination of THIS load: reading $ld_reg here would
+            ;; re-mark the first load's register and leave the second's out.
             (local.set $written (i32.or (local.get $written)
-              (i32.shl (i32.const 1) (local.get $ld_reg))))))
+              (i32.shl (i32.const 1) (i32.shr_u (local.get $op) (i32.const 4)))))))
 
         (if (i32.eq (local.get $role) (global.get $LR_LOAD8S))
           (then
@@ -1935,9 +1964,21 @@
         (br $p1)))
 
     ;; ---- pass 2: the predicate ----
-    (if (i32.ne (local.get $iv_cnt) (i32.const 1)) (then (return (i32.const 0))))
-    (if (i32.ne (local.get $ctr_cnt) (i32.const 1)) (then (return (i32.const 0))))
-    (if (i32.ne (local.get $zero_cnt) (i32.const 1)) (then (return (i32.const 0))))
+    ;; Two or three inc/dec: a counter, plus either one cursor used for both
+    ;; streams or a separate source and destination cursor.
+    (if (i32.lt_u (local.get $addi_cnt) (i32.const 2)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $addi_cnt) (i32.const 3)) (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $zero_cnt) (i32.const 1)) (then (return (i32.const 0))))
+    ;; A zero hoisted out of the loop is admissible, and is better than a
+    ;; runtime guard: within the body the accumulator is written only by the
+    ;; streamed byte load, so its high bits are loop-invariant and fold into
+    ;; the table base once at entry, leaving the per-iteration index in 0..255.
+    ;; That only holds if every op in the block is one this matcher models --
+    ;; a shift or an add on the accumulator would move those bits.
+    (if (i32.eqz (local.get $zero_cnt))
+      (then
+        (local.set $hoist (i32.const 1))
+        (if (local.get $other_cnt) (then (return (i32.const 0))))))
     ;; Most loops decode the table read as fused SIB LOAD8S. Jazz's hottest
     ;; palette loop uses `mov dl,[edx+absolute]`, whose simple-base decoder form
     ;; is a second LOAD8. Prove that exact dataflow and feed it to the same H418
@@ -1945,32 +1986,44 @@
     (if (i32.and (i32.eq (local.get $ld_cnt) (i32.const 2))
                   (i32.eqz (local.get $lut_cnt)))
       (then
-        (if (i32.and (i32.eq (local.get $ld_base) (local.get $iv_reg))
-                      (i32.eq (local.get $ald_base) (local.get $acc_reg)))
+        ;; Which of the two loads streams the source is decided by its base
+        ;; being a cursor, not by an accumulator the zero op named -- there may
+        ;; not be one. The other load's base must then be the first's
+        ;; destination, which is what makes it a table read.
+        (if (call $loop_is_cursor (local.get $ld_base) (local.get $addi_mask)
+              (local.get $ctr_reg))
           (then
-            (if (i32.ne (local.get $ald_reg) (local.get $acc_reg))
+            (if (i32.ne (local.get $ald_base) (local.get $ld_reg))
               (then (return (i32.const 0))))
             (local.set $lut_idx (local.get $ald_idx))
-            (local.set $abs_table (local.get $ald_disp)))
+            (local.set $abs_table (local.get $ald_disp))
+            (local.set $res_reg (local.get $ald_reg)))
           (else
-            (if (i32.and (i32.eq (local.get $ald_base) (local.get $iv_reg))
-                          (i32.eq (local.get $ld_base) (local.get $acc_reg)))
-              (then
-                (if (i32.ne (local.get $ld_reg) (local.get $acc_reg))
-                  (then (return (i32.const 0))))
-                (local.set $lut_idx (local.get $ld_idx))
-                (local.set $abs_table (local.get $ld_disp))
-                (local.set $ld_reg (local.get $ald_reg))
-                (local.set $ld_base (local.get $ald_base))
-                (local.set $ld_disp (local.get $ald_disp))
-                (local.set $ld_idx (local.get $ald_idx)))
-              (else (return (i32.const 0))))))
+            (if (i32.eqz (call $loop_is_cursor (local.get $ald_base)
+                           (local.get $addi_mask) (local.get $ctr_reg)))
+              (then (return (i32.const 0))))
+            (if (i32.ne (local.get $ld_base) (local.get $ald_reg))
+              (then (return (i32.const 0))))
+            (local.set $lut_idx (local.get $ld_idx))
+            (local.set $abs_table (local.get $ld_disp))
+            (local.set $res_reg (local.get $ld_reg))
+            (local.set $ld_reg (local.get $ald_reg))
+            (local.set $ld_base (local.get $ald_base))
+            (local.set $ld_disp (local.get $ald_disp))
+            (local.set $ld_idx (local.get $ald_idx))))
         (local.set $abs_lut (i32.const 1)))
       (else
         (if (i32.ne (local.get $ld_cnt) (i32.const 1))
           (then (return (i32.const 0))))
         (if (i32.ne (local.get $lut_cnt) (i32.const 1))
-          (then (return (i32.const 0))))))
+          (then (return (i32.const 0))))
+        ;; The fused SIB load's destination is its own operand's low 3 bits.
+        (local.set $res_reg
+          (i32.and (load.field.memarg LoopOp operand (call $loop_op_at (local.get $lut_idx)))
+                   (i32.const 7)))))
+    ;; With no in-block zero, the source load names the accumulator.
+    (if (local.get $hoist) (then (local.set $acc_reg (local.get $ld_reg))))
+    (local.set $iv_reg (local.get $ld_base))
     (if (i32.ne (local.get $st_cnt) (i32.const 1)) (then (return (i32.const 0))))
 
     ;; The counter must be the register the exit test reads, and must not be
@@ -2009,21 +2062,79 @@
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
             (br $tail)))))
 
-    ;; Source and destination must both stream off the cursor.
-    (if (i32.ne (local.get $ld_base) (local.get $iv_reg)) (then (return (i32.const 0))))
-    (if (i32.ne (local.get $st_base) (local.get $iv_reg)) (then (return (i32.const 0))))
-    ;; The accumulator is zeroed, loaded from the source, used as the table
-    ;; index and stored to the destination -- one register throughout.
+    ;; Source and destination each stream off a cursor. They may be the same
+    ;; register -- that is the one-cursor form this used to require -- or two
+    ;; different ones, which the executor already carries as separate
+    ;; src_reg/dst_reg descriptor fields.
+    (local.set $dst_reg (local.get $st_base))
+    (if (i32.eqz (call $loop_is_cursor (local.get $iv_reg) (local.get $addi_mask)
+                   (local.get $ctr_reg)))
+      (then (return (i32.const 0))))
+    (if (i32.eqz (call $loop_is_cursor (local.get $dst_reg) (local.get $addi_mask)
+                   (local.get $ctr_reg)))
+      (then (return (i32.const 0))))
+    ;; Every inc/dec must have a role: counter, source cursor, destination
+    ;; cursor. A stray one would be dropped by the fold.
+    (if (i32.ne (local.get $addi_cnt)
+                (select (i32.const 3) (i32.const 2)
+                        (i32.ne (local.get $iv_reg) (local.get $dst_reg))))
+      (then (return (i32.const 0))))
+    ;; Rescan for each cursor's own stride and position; the counter was the
+    ;; last inc/dec and is excluded by index.
+    (local.set $iv_idx (i32.const -1))
+    (local.set $dst_idx (i32.const -1))
+    (local.set $i (i32.const 0))
+    (block $addi_done
+      (loop $addi_scan
+        (br_if $addi_done (i32.ge_u (local.get $i) (local.get $n)))
+        (local.set $p (call $loop_op_at (local.get $i)))
+        (local.set $fn (load.field LoopOp handler (local.get $p)))
+        (local.set $op (load.field.memarg LoopOp operand (local.get $p)))
+        (if (i32.and
+              (i32.eq (call $loop_role (local.get $fn) (local.get $op))
+                      (global.get $LR_ADDI))
+              (i32.ne (local.get $i) (local.get $ctr_idx)))
+          (then
+            (local.set $x (i32.and (local.get $op) (i32.const 0xF)))
+            (local.set $b (select (i32.const 1) (i32.const -1)
+                            (i32.eq (local.get $fn) (i32.const 64))))
+            (if (i32.eq (local.get $x) (local.get $iv_reg))
+              (then
+                (if (i32.ne (local.get $iv_idx) (i32.const -1))
+                  (then (return (i32.const 0))))
+                (local.set $iv_stride (local.get $b))
+                (local.set $iv_idx (local.get $i))))
+            (if (i32.eq (local.get $x) (local.get $dst_reg))
+              (then
+                (if (i32.ne (local.get $dst_idx) (i32.const -1))
+                  (then (return (i32.const 0))))
+                (local.set $dst_stride (local.get $b))
+                (local.set $dst_idx (local.get $i))))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $addi_scan)))
+    (if (i32.eq (local.get $iv_idx) (i32.const -1)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $dst_idx) (i32.const -1)) (then (return (i32.const 0))))
+    ;; The accumulator is loaded from the source and used as the table index;
+    ;; the table's byte lands in the result register, which is what the store
+    ;; writes. They are the same register in the classic form and different in
+    ;; the two-register form -- both are proved, neither is assumed.
     (if (i32.ne (local.get $ld_reg) (local.get $acc_reg)) (then (return (i32.const 0))))
-    (if (i32.ne (local.get $st_reg) (local.get $acc_reg)) (then (return (i32.const 0))))
+    (if (i32.ne (local.get $st_reg) (local.get $res_reg)) (then (return (i32.const 0))))
     ;; Byte-register indices above 3 name AH/CH/DH/BH, which are not the low
     ;; byte of the register the xor zeroed. Decline rather than model them.
     (if (i32.gt_u (local.get $acc_reg) (i32.const 3)) (then (return (i32.const 0))))
-    ;; The universal executor publishes the accumulator, cursors and terminator
-    ;; once at the block boundary. Aliasing those architectural roles would make
-    ;; their original per-instruction write order observable, so decline it.
+    (if (i32.gt_u (local.get $res_reg) (i32.const 3)) (then (return (i32.const 0))))
+    ;; The universal executor publishes the accumulator, result, cursors and
+    ;; terminator once at the block boundary. Aliasing those architectural roles
+    ;; would make their original per-instruction write order observable, so
+    ;; decline it.
     (if (i32.or (i32.eq (local.get $acc_reg) (local.get $iv_reg))
-                (i32.eq (local.get $acc_reg) (local.get $ctr_reg)))
+                (i32.or (i32.eq (local.get $acc_reg) (local.get $dst_reg))
+                        (i32.eq (local.get $acc_reg) (local.get $ctr_reg))))
+      (then (return (i32.const 0))))
+    (if (i32.or (i32.eq (local.get $res_reg) (local.get $iv_reg))
+                (i32.or (i32.eq (local.get $res_reg) (local.get $dst_reg))
+                        (i32.eq (local.get $res_reg) (local.get $ctr_reg))))
       (then (return (i32.const 0))))
     (if (i32.eqz (local.get $abs_lut))
       (then
@@ -2038,7 +2149,7 @@
                         (global.get $LR_LOAD8S))
               (then
                 (if (i32.ne (i32.and (i32.load offset=4 (local.get $x)) (i32.const 7))
-                            (local.get $acc_reg))
+                            (local.get $res_reg))
                   (then (return (i32.const 0))))
                 (local.set $info (i32.load offset=8 (local.get $x)))
                 (local.set $b (i32.and (local.get $info) (i32.const 0xF)))
@@ -2067,23 +2178,41 @@
     ;; its displacement; an access before the bump already agrees.
     (if (i32.lt_u (local.get $iv_idx) (local.get $ld_idx))
       (then (local.set $ld_disp (i32.add (local.get $ld_disp) (local.get $iv_stride)))))
-    (if (i32.lt_u (local.get $iv_idx) (local.get $st_idx))
-      (then (local.set $st_disp (i32.add (local.get $st_disp) (local.get $iv_stride)))))
+    (if (i32.lt_u (local.get $dst_idx) (local.get $st_idx))
+      (then (local.set $st_disp (i32.add (local.get $st_disp) (local.get $dst_stride)))))
 
-    ;; A mirror whose register the body writes, other than the cursor, would
+    ;; A mirror whose register the body writes, other than a cursor, would
     ;; need its own per-iteration value; decline instead of guessing.
     (if (i32.ne (local.get $m0_addr) (i32.const 0))
       (then
         (if (i32.and (i32.and (local.get $written)
                        (i32.shl (i32.const 1) (local.get $m0_reg)))
-                     (i32.ne (local.get $m0_reg) (local.get $iv_reg)))
+                     (i32.and (i32.ne (local.get $m0_reg) (local.get $iv_reg))
+                              (i32.ne (local.get $m0_reg) (local.get $dst_reg))))
           (then (return (i32.const 0))))))
     (if (i32.ne (local.get $m1_addr) (i32.const 0))
       (then
         (if (i32.and (i32.and (local.get $written)
                        (i32.shl (i32.const 1) (local.get $m1_reg)))
-                     (i32.ne (local.get $m1_reg) (local.get $iv_reg)))
+                     (i32.and (i32.ne (local.get $m1_reg) (local.get $iv_reg))
+                              (i32.ne (local.get $m1_reg) (local.get $dst_reg))))
           (then (return (i32.const 0))))))
+    ;; A spill of a cursor is one stride behind when it ran before that
+    ;; cursor's bump. With two cursors the adjustment is per cursor.
+    (local.set $m0_adj
+      (select
+        (call $loop_cursor_adj (local.get $m0_reg) (local.get $m0_idx)
+          (local.get $iv_reg) (local.get $iv_stride) (local.get $iv_idx))
+        (call $loop_cursor_adj (local.get $m0_reg) (local.get $m0_idx)
+          (local.get $dst_reg) (local.get $dst_stride) (local.get $dst_idx))
+        (i32.eq (local.get $m0_reg) (local.get $iv_reg))))
+    (local.set $m1_adj
+      (select
+        (call $loop_cursor_adj (local.get $m1_reg) (local.get $m1_idx)
+          (local.get $iv_reg) (local.get $iv_stride) (local.get $iv_idx))
+        (call $loop_cursor_adj (local.get $m1_reg) (local.get $m1_idx)
+          (local.get $dst_reg) (local.get $dst_stride) (local.get $dst_idx))
+        (i32.eq (local.get $m1_reg) (local.get $iv_reg))))
 
     ;; ---- emit ----
     (global.set $loop_matched_blocks
@@ -2110,12 +2239,22 @@
     (call $te_raw (local.get $iv_reg))
     (call $te_raw (local.get $iv_stride))
     (call $te_raw (local.get $ld_disp))
-    (call $te_raw (local.get $iv_reg))
-    (call $te_raw (local.get $iv_stride))
+    (call $te_raw (local.get $dst_reg))
+    (call $te_raw (local.get $dst_stride))
     (call $te_raw (local.get $st_disp))
     (call $te_raw (select (local.get $abs_table) (local.get $tbl_reg)
       (local.get $abs_lut)))
-    (call $te_raw (local.get $acc_reg))
+    ;; The accumulator word carries three fields, because every other emitter
+    ;; of this descriptor writes a bare 0..7 register here and must keep
+    ;; working: bits 0-7 the accumulator, bits 8-15 the result register plus
+    ;; one (0 = the same register), bit 16 the hoisted-zero flag.
+    (call $te_raw
+      (i32.or (local.get $acc_reg)
+        (i32.or
+          (select (i32.shl (i32.add (local.get $res_reg) (i32.const 1)) (i32.const 8))
+                  (i32.const 0)
+                  (i32.ne (local.get $res_reg) (local.get $acc_reg)))
+          (i32.shl (local.get $hoist) (i32.const 16)))))
     (call $te_raw (i32.const 0))
     (call $te_raw (i32.const -1))
     (call $te_raw (i32.const 0))
@@ -2123,17 +2262,10 @@
     (call $te_raw (local.get $ctr_step))
     (call $te_raw (local.get $m0_addr))
     (call $te_raw (local.get $m0_reg))
-    ;; A spill of the cursor itself records whatever the cursor held at that
-    ;; point in the body; the super-op writes it once, at exit, from the final
-    ;; value, so a spill that ran before the bump is one stride behind.
-    (call $te_raw (select (i32.sub (i32.const 0) (local.get $iv_stride)) (i32.const 0)
-      (i32.and (i32.eq (local.get $m0_reg) (local.get $iv_reg))
-               (i32.lt_u (local.get $m0_idx) (local.get $iv_idx)))))
+    (call $te_raw (local.get $m0_adj))
     (call $te_raw (local.get $m1_addr))
     (call $te_raw (local.get $m1_reg))
-    (call $te_raw (select (i32.sub (i32.const 0) (local.get $iv_stride)) (i32.const 0)
-      (i32.and (i32.eq (local.get $m1_reg) (local.get $iv_reg))
-               (i32.lt_u (local.get $m1_idx) (local.get $iv_idx)))))
+    (call $te_raw (local.get $m1_adj))
     (call $te_raw (local.get $fall))
     (call $te_raw (local.get $start_eip))
     (call $te_raw (local.get $n))
@@ -5811,6 +5943,8 @@
     (local $tbl_wa i32)
     (local $chunk i32) (local $trips i32) (local $allowed i32)
     (local $n i32) (local $index i32) (local $cont i32)
+    (local $acc_word i32) (local $res_field i32) (local $res_reg i32)
+    (local $acc_hoist i32) (local $acc_hi i32)
 
     (if (i32.and (local.get $op) (i32.const 0x10))
       (then (return_call $th_xlat_stosb_lut_run (local.get $op))))
@@ -5839,7 +5973,15 @@
     (local.set $dst_stride  (i32.load offset=16 (local.get $tp)))
     (local.set $dst_disp    (i32.load offset=20 (local.get $tp)))
     (local.set $tbl_reg     (i32.load offset=24 (local.get $tp)))
-    (local.set $acc_reg     (i32.load offset=28 (local.get $tp)))
+    ;; Three fields in one word. Every emitter that predates the two-register
+    ;; form writes a bare 0..7 here, which decodes as "result is the
+    ;; accumulator, zeroed in-block" -- the behavior it has always had.
+    (local.set $acc_word    (i32.load offset=28 (local.get $tp)))
+    (local.set $acc_reg     (i32.and (local.get $acc_word) (i32.const 0xFF)))
+    (local.set $res_field
+      (i32.and (i32.shr_u (local.get $acc_word) (i32.const 8)) (i32.const 0xFF)))
+    (local.set $acc_hoist
+      (i32.and (i32.shr_u (local.get $acc_word) (i32.const 16)) (i32.const 1)))
     (local.set $index_shift (i32.load offset=32 (local.get $tp)))
     (local.set $add_reg     (i32.load offset=36 (local.get $tp)))
     (local.set $term_kind   (i32.load offset=40 (local.get $tp)))
@@ -5892,6 +6034,19 @@
                 (local.set $tbl_base (call $get_reg (local.get $tbl_reg)))
                 (local.set $tbl (i32.add (local.get $tbl_base) (local.get $table_disp))))
               (else (local.set $tbl (local.get $table_disp))))))))
+    ;; A zero hoisted out of the loop leaves the accumulator's high bits
+    ;; loop-invariant: inside the body only the streamed byte load writes that
+    ;; register, and it writes the low byte. Fold them into the table base once,
+    ;; here, so the per-iteration index stays in 0..255 and the 256-byte table
+    ;; page guard below still holds. Never set together with $table_stack, whose
+    ;; table base is re-read per chunk.
+    (if (local.get $acc_hoist)
+      (then
+        (local.set $acc_hi
+          (i32.and (call $get_reg (local.get $acc_reg)) (i32.const 0xFFFFFF00)))
+        (local.set $tbl
+          (i32.add (local.get $tbl)
+            (i32.shl (local.get $acc_hi) (local.get $index_shift))))))
     (if (i32.ge_s (local.get $add_reg) (i32.const 0))
       (then (local.set $add (call $get_reg (local.get $add_reg)))))
 
@@ -6119,11 +6274,25 @@
         (br_if $exit (i32.le_s (global.get $steps) (i32.const 0)))
         (br $outer)))
 
-    (call $set_reg (local.get $acc_reg)
-      (select
-        (i32.or (i32.shl (local.get $src_b) (local.get $index_shift)) (local.get $b))
-        (local.get $b)
-        (local.get $blend)))
+    (if (local.get $res_field)
+      (then
+        ;; A distinct result register only ever received the table byte, so its
+        ;; high bits are the caller's and must survive; the accumulator keeps
+        ;; the last streamed byte over its invariant high bits.
+        (local.set $res_reg (i32.sub (local.get $res_field) (i32.const 1)))
+        (call $set_reg (local.get $res_reg)
+          (i32.or
+            (i32.and (call $get_reg (local.get $res_reg)) (i32.const 0xFFFFFF00))
+            (local.get $b)))
+        (call $set_reg (local.get $acc_reg)
+          (i32.or (local.get $acc_hi) (local.get $src_b))))
+      (else
+        (call $set_reg (local.get $acc_reg)
+          (i32.or (local.get $acc_hi)
+            (select
+              (i32.or (i32.shl (local.get $src_b) (local.get $index_shift)) (local.get $b))
+              (local.get $b)
+              (local.get $blend))))))
     (if (local.get $table_stack)
       (then (call $set_reg (local.get $tbl_reg) (local.get $tbl_base))))
     (if (local.get $blend)
