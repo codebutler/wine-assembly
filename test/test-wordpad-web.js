@@ -209,6 +209,47 @@ async function main() {
   })`, 18000);
 
   await evaluate(`(() => {
+    // Install acceptance-only instrumentation before WineAssembly creates its
+    // imports. The production logger's entry latch is intentionally cheap and
+    // can be cleared by nested font/VFS logging; log_api_exit is the exact
+    // post-handler boundary and exposes the real guest EAX without changing
+    // the runtime source under test.
+    window.__waOutlineMetricCalls = [];
+    const originalGetImports = WineAssembly.prototype.getImports;
+    WineAssembly.prototype.getImports = function(...args) {
+      const owner = this;
+      const imports = originalGetImports.apply(owner, args);
+      const originalLog = imports.host.log;
+      const originalExit = imports.host.log_api_exit;
+      let pending = null;
+      imports.host.log = (ptr, len) => {
+        originalLog(ptr, len);
+        if (!owner.memory || !owner.instance) return;
+        const view = new Uint8Array(owner.memory.buffer, ptr, Math.min(len, 64));
+        const text = new TextDecoder().decode(new Uint8Array(view)).replace(/\0.*$/, '');
+        const match = text.match(/^GetOutlineTextMetrics([AW])$/);
+        if (!match) return;
+        const e = owner.instance.exports;
+        const esp = e.get_esp() >>> 0;
+        pending = {
+          variant: match[1],
+          hdc: e.guest_read32(esp + 4) >>> 0,
+          bytes: e.guest_read32(esp + 8) >>> 0,
+          out: e.guest_read32(esp + 12) >>> 0,
+        };
+      };
+      imports.host.log_api_exit = () => {
+        if (pending && owner.instance && owner.instance.exports.get_eax) {
+          window.__waOutlineMetricCalls.push({
+            ...pending, result: owner.instance.exports.get_eax() >>> 0,
+          });
+          pending = null;
+        }
+        return originalExit();
+      };
+      return imports;
+    };
+    window.__waTraceApiNames = new Set(['GetOutlineTextMetricsA', 'GetOutlineTextMetricsW']);
     document.getElementById('app-select').value = 'wordpad';
     return launchApp();
   })()`, 45000);
@@ -463,6 +504,22 @@ async function main() {
     if (e.guest_free) e.guest_free(guest);
     return { rendererText: win.title, guestText };
   })()`);
+  const fontFaceState = await evaluate(`(() => {
+    const win = Object.values((sharedRenderer && sharedRenderer.windows) || {})
+      .find(item => item && item.wasm && item.wasm.exports.ctrl_get_id &&
+        (item.wasm.exports.ctrl_get_id(item.hwnd) | 0) === 165);
+    if (!win) return null;
+    const app = runningApps.find(item => item && item.wine && item.wine.instance === win.wasm);
+    const e = win.wasm.exports;
+    const guest = e.guest_alloc(64) >>> 0;
+    e.send_message(win.hwnd, 0x000D, 64, guest);
+    const wa = app.wine._guestToWasmAddress(guest);
+    const bytes = new Uint8Array(app.wine.memory.buffer);
+    let guestText = '';
+    for (let i = 0; i < 63 && bytes[wa + i]; i++) guestText += String.fromCharCode(bytes[wa + i]);
+    if (e.guest_free) e.guest_free(guest);
+    return { rendererText: win.title, guestText };
+  })()`);
   const toolbarVisualState = await evaluate(`(() => {
     const app = runningApps.find(item => item && item.name === 'wordpad');
     const e = app.wine.instance.exports;
@@ -510,7 +567,13 @@ async function main() {
     }
     return { buttonDetail, sizeWhite, sizeTextDark, desktopPixel };
   })()`);
-  const consoleText = consoleSummary(cdp.events).join('\n');
+  const consoleLines = consoleSummary(cdp.events);
+  const consoleText = consoleLines.join('\n');
+  const outlineCalls = await evaluate(`window.__waOutlineMetricCalls.slice()`);
+  const outlineSize = outlineCalls.find(call => call.variant === 'A' &&
+    call.bytes === 0 && call.out === 0);
+  const outlineBaseFill = outlineCalls.find(call => call.variant === 'A' &&
+    call.bytes === 0xd4 && call.out !== 0);
   assert.strictEqual(typed.text, 'hello world', `native RichEdit text mismatch: ${JSON.stringify(typed)}`);
   assert.strictEqual(longDate.selected, 1, `Date and Time should select the non-default long-date row: ${JSON.stringify(longDate)}`);
   assert(longDate.running && /hello worldMonday, January 1, 2001/.test(longDate.text),
@@ -522,8 +585,18 @@ async function main() {
     `browser should preload riched20.dll:\n${consoleText.slice(-5000)}`);
   assert(!/UNIMPLEMENTED API:|RuntimeError|LinkError|Thread \d+ crashed|FATAL:/i.test(consoleText),
     `WordPad browser run should not crash:\n${consoleText.slice(-5000)}`);
+  assert(outlineSize,
+    `authentic WordPad must execute the documented NULL sizing query: ${JSON.stringify(outlineCalls)}`);
+  assert(outlineSize.result > 0xd4,
+    `WordPad's NULL query must receive the full metric/string buffer size: ${JSON.stringify(outlineSize)}`);
+  assert(outlineBaseFill,
+    `authentic WordPad must also exercise its fixed 0xd4 compatibility probe: ${JSON.stringify(outlineCalls)}`);
+  assert.strictEqual(outlineBaseFill.result, 0,
+    `the fixed 0xd4 probe is too short for trailing strings and must fail: ${JSON.stringify(outlineBaseFill)}`);
   assert.deepStrictEqual(sizeState, { rendererText: '10', guestText: '10' },
     'WordPad browser toolbar should show the 10pt default in renderer and control state');
+  assert(fontFaceState && /^[A-Za-z][A-Za-z ]+$/.test(fontFaceState.guestText),
+  `WordPad browser font face must remain populated after outline-metric probes: ${JSON.stringify(fontFaceState)}`);
   assert(toolbarVisualState && toolbarVisualState.buttonDetail >= 900,
     `formatting toolbar buttons should be visibly painted: ${JSON.stringify(toolbarVisualState)}`);
   assert(toolbarVisualState.sizeWhite >= 350 && toolbarVisualState.sizeTextDark >= 5,
@@ -546,6 +619,9 @@ async function main() {
 
   console.log('PASS  WordPad stays running in the browser');
   console.log('PASS  browser preloads riched20.dll');
+  console.log('PASS  authentic WordPad observes GetOutlineTextMetricsA sizing/short-buffer returns:',
+    JSON.stringify({ size: outlineSize, base: outlineBaseFill }));
+  console.log('PASS  browser toolbar keeps a populated font face:', JSON.stringify(fontFaceState));
   console.log('PASS  native RichEdit accepts "hello world"');
   console.log('PASS  non-default long Date and Time format inserts without crashing');
   console.log('PASS  native RichEdit inserts a crash-safe CF_DIB object position:', JSON.stringify(dibPaste));

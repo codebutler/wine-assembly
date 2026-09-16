@@ -282,8 +282,10 @@ const digest = crypto.createHash('sha256')
 // 2026-09-15: 269 -> 267. D3D9 CheckDeviceType and CheckDepthStencilMatch now
 // validate complete adapter/color/depth tuples against the formats advertised
 // and stored by the renderer instead of promising every combination works.
-const EXPECTED_COUNT = 267;
-const EXPECTED_SHA256 = 'cb9b6302c37cd9c007c8ba43f2b26fe3b6ab554c1bc15d669d13f46f3c35b53a';
+// 2026-09-15: 267 -> 266. GetOutlineTextMetricsA/W now return selected
+// TrueType outline metrics and bounded name data instead of always failing.
+const EXPECTED_COUNT = 266;
+const EXPECTED_SHA256 = '6dfdc46b22ff4c8bf94ef92f32c1806cc431f4a79e405aa93a3e8789cb13af55';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

@@ -534,17 +534,368 @@
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
   )
 
-  ;; GetOutlineTextMetricsA/W(hdc, cbData, lpOTM) — outline metrics unavailable.
-  ;; Returning 0 makes callers use their bitmap-font fallback path.
-  (func $handle_GetOutlineTextMetricsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+  ;; OUTLINETEXTMETRIC strings are stored after the fixed 32-bit structure.
+  ;; Although wingdi.h declares the final four members as pointers, Win32 GDI
+  ;; writes byte offsets from the beginning of the caller's buffer. Keep the
+  ;; virtual LOGFONT name here rather than exposing the open font which backs
+  ;; it (for example, the vendored Liberation Sans file mounted as ARIAL.TTF).
+  (func $gdi_otm_copy_name (param $out i32) (param $text i32)
+        (param $length i32) (param $wide i32)
+    (local $i i32) (local $ch i32)
+    (block $done (loop $copy
+      (br_if $done (i32.ge_u (local.get $i) (local.get $length)))
+      (local.set $ch (i32.load8_u (i32.add (local.get $text) (local.get $i))))
+      (if (local.get $wide)
+        (then (i32.store16
+          (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 2)))
+          (local.get $ch)))
+        (else (i32.store8 (i32.add (local.get $out) (local.get $i))
+          (local.get $ch))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $copy)))
+    ;; The whole destination is zero-filled first, so the terminator which
+    ;; follows this bounded copy is already present.
   )
 
-  (func $handle_GetOutlineTextMetricsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (call $handle_GetOutlineTextMetricsA
-      (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
+  ;; Write the embedded TEXTMETRICA/W from the same TrueType helpers used by
+  ;; GetTextMetrics and text layout. `out` is a WASM address.
+  (func $gdi_otm_write_textmetric (param $out i32) (param $data i32)
+        (param $size i32) (param $ppem i32) (param $hdc i32) (param $wide i32)
+    (local $first i32) (local $last i32) (local $italic i32) (local $pitch i32)
+    (i32.store (local.get $out)
+      (call $tt_tm_height (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=4 (local.get $out)
+      (call $tt_tm_ascent (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=8 (local.get $out)
+      (call $tt_tm_descent (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=12 (local.get $out)
+      (call $tt_tm_internal_leading
+        (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=16 (local.get $out)
+      (call $tt_tm_external_leading
+        (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=20 (local.get $out)
+      (call $tt_tm_ave_char_width
+        (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=24 (local.get $out)
+      (call $tt_tm_max_char_width
+        (local.get $data) (local.get $size) (local.get $ppem)))
+    (i32.store offset=28 (local.get $out)
+      (call $tt_tm_weight (local.get $data) (local.get $size)))
+    ;; tmOverhang is zero for a natively realized outline face. The display
+    ;; target is the emulator's square-pixel 96-DPI MM_TEXT device.
+    (i32.store offset=36 (local.get $out) (i32.const 96))
+    (i32.store offset=40 (local.get $out) (i32.const 96))
+    (local.set $first (call $tt_tm_first_char (local.get $data) (local.get $size)))
+    (local.set $last (call $tt_tm_last_char (local.get $data) (local.get $size)))
+    (local.set $italic (call $tt_is_italic (local.get $data) (local.get $size)))
+    (local.set $pitch (call $tt_tm_pitch_and_family (local.get $data) (local.get $size)))
+    (if (local.get $wide)
+      (then
+        (i32.store16 offset=44 (local.get $out) (local.get $first))
+        (i32.store16 offset=46 (local.get $out) (local.get $last))
+        (i32.store16 offset=48 (local.get $out) (i32.const 0x1F))
+        (i32.store16 offset=50 (local.get $out) (i32.const 0x20))
+        (i32.store8 offset=52 (local.get $out) (local.get $italic))
+        (i32.store8 offset=55 (local.get $out) (local.get $pitch))
+        (i32.store8 offset=56 (local.get $out)
+          (call $gdi_dc_text_charset (local.get $hdc))))
+      (else
+        (i32.store8 offset=44 (local.get $out)
+          (select (local.get $first) (i32.const 0xFF)
+            (i32.le_u (local.get $first) (i32.const 0xFF))))
+        (i32.store8 offset=45 (local.get $out)
+          (select (local.get $last) (i32.const 0xFF)
+            (i32.le_u (local.get $last) (i32.const 0xFF))))
+        (i32.store8 offset=46 (local.get $out) (i32.const 0x1F))
+        (i32.store8 offset=47 (local.get $out) (i32.const 0x20))
+        (i32.store8 offset=48 (local.get $out) (local.get $italic))
+        (i32.store8 offset=51 (local.get $out) (local.get $pitch))
+        (i32.store8 offset=52 (local.get $out)
+          (call $gdi_dc_text_charset (local.get $hdc)))))
   )
+
+  ;; Shared GetOutlineTextMetrics implementation. Win32's fixed structures are
+  ;; 212 bytes for A and 216 bytes for W under the documented 32-bit default
+  ;; packing. The returned required size additionally includes four bounded
+  ;; strings. Family/face preserve the selected virtual face; style/full name
+  ;; are derived from the actual face's table-backed weight/italic selection.
+  (func $gdi_outline_text_metrics (param $hdc i32) (param $cb i32)
+        (param $buffer i32) (param $wide i32) (result i32)
+    (local $packed i32) (local $face i32) (local $ppem i32)
+    (local $data i32) (local $size i32) (local $dc i32) (local $font i32)
+    (local $name i32) (local $name_len i32) (local $style i32)
+    (local $style_len i32) (local $full_len i32) (local $unit i32)
+    (local $base i32) (local $required i32) (local $out i32)
+    (local $shift i32) (local $cursor i32) (local $family_off i32)
+    (local $face_off i32) (local $style_off i32) (local $full_off i32)
+    (local $os2 i32) (local $head i32) (local $post i32) (local $i i32)
+    (local $typo_ascent i32) (local $typo_descent i32) (local $typo_gap i32)
+
+    (local.set $packed (call $tt_gdi_index_face (local.get $hdc)))
+    (if (i32.eqz (local.get $packed)) (then (return (i32.const 0))))
+    (local.set $face
+      (i32.sub (i32.and (local.get $packed) (i32.const 0xFFFF)) (i32.const 1)))
+    (local.set $ppem (i32.shr_u (local.get $packed) (i32.const 16)))
+    (local.set $data (call $tt_face_data (local.get $face)))
+    (local.set $size (call $tt_face_size (local.get $face)))
+    (if (i32.or (i32.eqz (local.get $data)) (i32.le_s (local.get $size) (i32.const 0)))
+      (then (return (i32.const 0))))
+
+    (local.set $dc (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
+    (if (i32.eqz (local.get $dc)) (then (return (i32.const 0))))
+    (local.set $font (load.field.memarg GdiDcState font (local.get $dc)))
+    (local.set $name (call $gdi_font_face (local.get $font)))
+    (if (i32.eqz (local.get $name)) (then (return (i32.const 0))))
+    (local.set $name_len (call $strlen (local.get $name)))
+    (if (i32.or (i32.eqz (local.get $name_len))
+          (i32.gt_u (local.get $name_len) (i32.const 31)))
+      (then (return (i32.const 0))))
+
+    (if (i32.ge_s (call $tt_tm_weight (local.get $data) (local.get $size))
+          (i32.const 700))
+      (then
+        (if (call $tt_is_italic (local.get $data) (local.get $size))
+          (then
+            (local.set $style (region.addr $STRING_CONSTANTS 0x1B4))
+            (local.set $style_len (i32.const 11)))
+          (else
+            (local.set $style (region.addr $STRING_CONSTANTS 0x1A8))
+            (local.set $style_len (i32.const 4)))))
+      (else
+        (if (call $tt_is_italic (local.get $data) (local.get $size))
+          (then
+            (local.set $style (region.addr $STRING_CONSTANTS 0x1AD))
+            (local.set $style_len (i32.const 6)))
+          (else
+            (local.set $style (region.addr $STRING_CONSTANTS 0x1A0))
+            (local.set $style_len (i32.const 7))))))
+    (local.set $full_len (local.get $name_len))
+    (if (i32.ne (local.get $style_len) (i32.const 7))
+      (then (local.set $full_len
+        (i32.add (i32.add (local.get $name_len) (i32.const 1))
+          (local.get $style_len)))))
+
+    (local.set $unit (select (i32.const 2) (i32.const 1) (local.get $wide)))
+    (local.set $base (select (i32.const 216) (i32.const 212) (local.get $wide)))
+    (local.set $required
+      (i32.add (local.get $base)
+        (i32.mul (local.get $unit)
+          (i32.add
+            (i32.add (i32.add (local.get $name_len) (i32.const 1))
+              (i32.add (local.get $name_len) (i32.const 1)))
+            (i32.add (i32.add (local.get $style_len) (i32.const 1))
+              (i32.add (local.get $full_len) (i32.const 1)))))))
+    ;; The documented sizing form ignores cbData and writes nothing.
+    (if (i32.eqz (local.get $buffer)) (then (return (local.get $required))))
+    ;; A short buffer is a failed call. Validate the entire span before the
+    ;; first write so invalid and short calls leave caller canaries untouched.
+    (if (i32.lt_u (local.get $cb) (local.get $required))
+      (then (return (i32.const 0))))
+    (local.set $out (call $g2w_affine_span (local.get $buffer) (local.get $required)))
+    (if (i32.eq (local.get $out) (global.get $NULL_SENTINEL))
+      (then (return (i32.const 0))))
+    (memory.fill (local.get $out) (i32.const 0) (local.get $required))
+
+    ;; otmSize describes the fixed OUTLINETEXTMETRIC structure itself; the
+    ;; function return includes the additional trailing strings.
+    (i32.store (local.get $out) (local.get $base))
+    (call $gdi_otm_write_textmetric (i32.add (local.get $out) (i32.const 4))
+      (local.get $data) (local.get $size) (local.get $ppem)
+      (local.get $hdc) (local.get $wide))
+    (local.set $shift (select (i32.const 4) (i32.const 0) (local.get $wide)))
+    (local.set $os2 (call $tt_table_off (local.get $data) (local.get $size)
+      (i32.const 0x4F532F32)))
+    (local.set $head (call $tt_table_off (local.get $data) (local.get $size)
+      (i32.const 0x68656164)))
+    (local.set $post (call $tt_table_off (local.get $data) (local.get $size)
+      (i32.const 0x706F7374)))
+
+    ;; PANOSE is ten bytes at OS/2+32. Missing optional tables stay zero.
+    (if (local.get $os2)
+      (then
+        (local.set $i (i32.const 0))
+        (block $panose_done (loop $panose
+          (br_if $panose_done (i32.ge_u (local.get $i) (i32.const 10)))
+          (i32.store8
+            (i32.add (local.get $out)
+              (i32.add (i32.add (i32.const 61) (local.get $shift)) (local.get $i)))
+            (call $tt_u8 (local.get $data) (local.get $size)
+              (i32.add (local.get $os2) (i32.add (i32.const 32) (local.get $i)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $panose)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 72) (local.get $shift)))
+          (call $tt_os2_u16 (local.get $data) (local.get $size) (i32.const 62)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 76) (local.get $shift)))
+          (call $tt_os2_u16 (local.get $data) (local.get $size) (i32.const 8)))
+        (local.set $typo_ascent
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 68)))
+        (local.set $typo_descent
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 70)))
+        (local.set $typo_gap
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 72)))))
+    (if (i32.eqz (local.get $os2))
+      (then
+        (local.set $typo_ascent (call $tt_ascender (local.get $data) (local.get $size)))
+        (local.set $typo_descent (call $tt_descender (local.get $data) (local.get $size)))
+        (local.set $typo_gap (call $tt_line_gap (local.get $data) (local.get $size)))))
+
+    ;; The slope pair is the documented vertical default. italicAngle is read
+    ;; from post's signed 16.16 value and converted to tenths of a degree.
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 80) (local.get $shift))) (i32.const 1))
+    (if (local.get $post)
+      (then
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 88) (local.get $shift)))
+          (i32.shr_s (i32.mul
+              (call $tt_u32 (local.get $data) (local.get $size)
+                (i32.add (local.get $post) (i32.const 4)))
+              (i32.const 10))
+            (i32.const 16)))))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 92) (local.get $shift)))
+      (call $tt_units_per_em (local.get $data) (local.get $size)))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 96) (local.get $shift))) (local.get $typo_ascent))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 100) (local.get $shift))) (local.get $typo_descent))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 104) (local.get $shift))) (local.get $typo_gap))
+    ;; Microsoft documents otmsCapEmHeight and otmsXHeight as unsupported;
+    ;; they deliberately remain zero instead of exposing newer OS/2 fields.
+
+    (if (local.get $head)
+      (then
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 116) (local.get $shift)))
+          (call $tt_s16 (local.get $data) (local.get $size)
+            (i32.add (local.get $head) (i32.const 36))))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 120) (local.get $shift)))
+          (call $tt_s16 (local.get $data) (local.get $size)
+            (i32.add (local.get $head) (i32.const 38))))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 124) (local.get $shift)))
+          (call $tt_s16 (local.get $data) (local.get $size)
+            (i32.add (local.get $head) (i32.const 40))))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 128) (local.get $shift)))
+          (call $tt_s16 (local.get $data) (local.get $size)
+            (i32.add (local.get $head) (i32.const 42))))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 144) (local.get $shift)))
+          (call $tt_u16 (local.get $data) (local.get $size)
+            (i32.add (local.get $head) (i32.const 46))))))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 132) (local.get $shift)))
+      (call $tt_ascender (local.get $data) (local.get $size)))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 136) (local.get $shift)))
+      (call $tt_descender (local.get $data) (local.get $size)))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 140) (local.get $shift)))
+      (call $tt_line_gap (local.get $data) (local.get $size)))
+
+    (if (local.get $os2)
+      (then
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 148) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 10)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 152) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 12)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 156) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 14)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 160) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 16)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 164) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 18)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 168) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 20)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 172) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 22)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 176) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 24)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 180) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 26)))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 184) (local.get $shift)))
+          (call $tt_os2_s16 (local.get $data) (local.get $size) (i32.const 28)))))
+    (if (local.get $post)
+      (then
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 188) (local.get $shift)))
+          (call $tt_s16 (local.get $data) (local.get $size)
+            (i32.add (local.get $post) (i32.const 10))))
+        (i32.store (i32.add (local.get $out)
+            (i32.add (i32.const 192) (local.get $shift)))
+          (call $tt_s16 (local.get $data) (local.get $size)
+            (i32.add (local.get $post) (i32.const 8))))))
+
+    (local.set $cursor (local.get $base))
+    (local.set $family_off (local.get $cursor))
+    (call $gdi_otm_copy_name (i32.add (local.get $out) (local.get $cursor))
+      (local.get $name) (local.get $name_len) (local.get $wide))
+    (local.set $cursor (i32.add (local.get $cursor)
+      (i32.mul (i32.add (local.get $name_len) (i32.const 1)) (local.get $unit))))
+    (local.set $face_off (local.get $cursor))
+    (call $gdi_otm_copy_name (i32.add (local.get $out) (local.get $cursor))
+      (local.get $name) (local.get $name_len) (local.get $wide))
+    (local.set $cursor (i32.add (local.get $cursor)
+      (i32.mul (i32.add (local.get $name_len) (i32.const 1)) (local.get $unit))))
+    (local.set $style_off (local.get $cursor))
+    (call $gdi_otm_copy_name (i32.add (local.get $out) (local.get $cursor))
+      (local.get $style) (local.get $style_len) (local.get $wide))
+    (local.set $cursor (i32.add (local.get $cursor)
+      (i32.mul (i32.add (local.get $style_len) (i32.const 1)) (local.get $unit))))
+    (local.set $full_off (local.get $cursor))
+    (call $gdi_otm_copy_name (i32.add (local.get $out) (local.get $cursor))
+      (local.get $name) (local.get $name_len) (local.get $wide))
+    (if (i32.ne (local.get $style_len) (i32.const 7))
+      (then
+        (if (local.get $wide)
+          (then (i32.store16
+            (i32.add (local.get $out)
+              (i32.add (local.get $cursor) (i32.mul (local.get $name_len) (i32.const 2))))
+            (i32.const 0x20)))
+          (else (i32.store8
+            (i32.add (local.get $out) (i32.add (local.get $cursor) (local.get $name_len)))
+            (i32.const 0x20))))
+        (call $gdi_otm_copy_name
+          (i32.add (local.get $out)
+            (i32.add (local.get $cursor)
+              (i32.mul (i32.add (local.get $name_len) (i32.const 1)) (local.get $unit))))
+          (local.get $style) (local.get $style_len) (local.get $wide))))
+
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 196) (local.get $shift))) (local.get $family_off))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 200) (local.get $shift))) (local.get $face_off))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 204) (local.get $shift))) (local.get $style_off))
+    (i32.store (i32.add (local.get $out)
+        (i32.add (i32.const 208) (local.get $shift))) (local.get $full_off))
+    (local.get $required))
+
+  (func $handle_GetOutlineTextMetricsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $gdi_outline_text_metrics
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+
+  (func $handle_GetOutlineTextMetricsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (call $gdi_outline_text_metrics
+      (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
 
   ;; 165: GetTextExtentPointA — font-aware text measurement via host
   (func $handle_GetTextExtentPointA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
