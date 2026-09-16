@@ -813,7 +813,7 @@
     (local $r i32)
     (call $lock_acquire (global.get $LOCK_VIRTUAL_MAP))
     (local.set $r (call $virtual_map_commit_locked
-      (local.get $guest) (local.get $size) (local.get $protect)))
+      (local.get $guest) (local.get $size) (local.get $protect) (i32.const 1)))
     (call $lock_release (global.get $LOCK_VIRTUAL_MAP))
     (local.get $r))
 
@@ -957,7 +957,8 @@
     (i32.const 0))
 
   (func $virtual_map_commit_locked
-      (param $guest i32) (param $size i32) (param $protect i32) (result i32)
+      (param $guest i32) (param $size i32) (param $protect i32)
+      (param $coalesce i32) (result i32)
     (local $count i32) (local $backing_ptr i32) (local $guest_end i32)
     (local $i i32) (local $rec i32) (local $base i32) (local $map_size i32)
     (local $backing i32) (local $map_end i32) (local $backing_end i32)
@@ -1052,12 +1053,12 @@
               (i32.lt_u (local.get $guest) (local.get $map_end)))
             (i32.gt_u (local.get $guest_end) (local.get $map_end)))
         (then
-          (local.set $extended (call $virtual_map_commit_protect
+          (local.set $extended (call $virtual_map_commit_locked
             (local.get $map_end) (i32.sub (local.get $guest_end) (local.get $map_end))
-            (local.get $protect)))
+            (local.get $protect) (local.get $coalesce)))
           (return (select (local.get $guest) (i32.const 0)
             (i32.ne (local.get $extended) (i32.const 0))))))
-      (if (i32.and
+      (if (i32.and (local.get $coalesce) (i32.and
             (i32.and (i32.eq (local.get $guest) (local.get $map_end))
               (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
             (i32.and
@@ -1068,7 +1069,7 @@
               ;; through to the append path, which places this commit somewhere
               ;; nothing else owns rather than aliasing two guest ranges.
               (i32.eqz (call $virtual_backing_conflicts
-                (local.get $backing_ptr) (local.get $size) (local.get $count)))))
+                (local.get $backing_ptr) (local.get $size) (local.get $count))))))
         (then
           (call $zero_memory (local.get $backing_ptr) (local.get $size))
           ;; Publish translations before the larger record size. A reader can
@@ -1232,21 +1233,24 @@
   ;; a VirtualAlloc that returns NULL must leave no backing committed.
   (func $virtual_map_commit_split
       (param $guest i32) (param $size i32) (param $protect i32) (result i32)
-    (local $half i32)
+    (local $half i32) (local $count_before i32)
     (if (i32.le_u (local.get $size) (i32.const 0x10000))
       (then (return (i32.const 0))))
     (local.set $half
       (i32.and (i32.shr_u (local.get $size) (i32.const 1)) (i32.const 0xFFFF0000)))
     (if (i32.eqz (local.get $half))
       (then (return (i32.const 0))))
+    (local.set $count_before (i32.load (global.get $VIRTUAL_MAP_STATE)))
     (if (i32.eqz (call $virtual_map_commit_locked
-          (local.get $guest) (local.get $half) (local.get $protect)))
+          (local.get $guest) (local.get $half) (local.get $protect) (i32.const 0)))
       (then (return (i32.const 0))))
     (if (i32.eqz (call $virtual_map_commit_locked
           (i32.add (local.get $guest) (local.get $half))
-          (i32.sub (local.get $size) (local.get $half)) (local.get $protect)))
+          (i32.sub (local.get $size) (local.get $half)) (local.get $protect)
+          (i32.const 0)))
       (then
-        (call $virtual_map_release_range_locked (local.get $guest) (local.get $half))
+        (call $virtual_map_rollback_since_locked
+          (local.get $count_before) (local.get $guest) (local.get $half))
         (return (i32.const 0))))
     (call $virtual_map_mark_continuations (local.get $guest) (local.get $size))
     ;; Each half ran the commit tail, so the per-instance downward reservation
@@ -1280,31 +1284,48 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
-  ;; Release every mapping wholly inside a guest range. Used to undo the
-  ;; committed part of a split that could not be finished; releasing compacts
-  ;; the table, so the scan restarts rather than walking a moved tail.
-  (func $virtual_map_release_range_locked (param $guest i32) (param $size i32)
+  ;; Roll back only records appended by this split attempt. A range may already
+  ;; contain committed pages: VirtualAlloc(MEM_COMMIT) is idempotent over those
+  ;; pages, so deleting every record in the first half orphaned old allocations
+  ;; while leaving their reservation records alive. That is the exact state
+  ;; Storm later observed in StarCraft's small-block pool.
+  ;;
+  ;; Split children run with coalescing disabled, so every byte they add is in
+  ;; an appended record and the pre-call count is a complete transaction mark.
+  ;; Removing an overlapping speculative record clears its PTEs; republish the
+  ;; surviving maps afterwards so older committed pages retain their original
+  ;; translations.
+  (func $virtual_map_rollback_since_locked
+      (param $count_before i32) (param $guest i32) (param $size i32)
     (local $end i32) (local $count i32) (local $i i32) (local $rec i32)
-    (local $base i32)
+    (local $base i32) (local $map_size i32)
     (local.set $end (i32.add (local.get $guest) (local.get $size)))
-    (block $done (loop $again
+    (block $removed (loop $remove
       (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
-      (local.set $i (i32.const 0))
-      (block $scanned (loop $scan
-        (br_if $scanned (i32.ge_u (local.get $i) (local.get $count)))
-        (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
-          (i32.shl (local.get $i) (i32.const 4))))
-        (local.set $base (i32.load (local.get $rec)))
-        (if (i32.and
-              (i32.ge_u (local.get $base) (local.get $guest))
-              (i32.le_u (i32.add (local.get $base) (i32.load offset=4 (local.get $rec)))
-                (local.get $end)))
-          (then
-            (drop (call $virtual_map_release_one (local.get $base)))
-            (br $again)))
-        (local.set $i (i32.add (local.get $i) (i32.const 1)))
-        (br $scan)))
-      (br $done))))
+      (br_if $removed (i32.le_u (local.get $count) (local.get $count_before)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 4))))
+      (drop (call $virtual_map_release_one (i32.load (local.get $rec))))
+      (br $remove)))
+    (local.set $count (i32.load (global.get $VIRTUAL_MAP_STATE)))
+    (local.set $i (i32.const 0))
+    (block $done (loop $restore
+      (br_if $done (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $rec (i32.add (global.get $VIRTUAL_MAP_TABLE)
+        (i32.shl (local.get $i) (i32.const 4))))
+      (local.set $base (i32.load (local.get $rec)))
+      (local.set $map_size (i32.load offset=4 (local.get $rec)))
+      (if (i32.and
+            (i32.lt_u (local.get $base) (local.get $end))
+            (i32.gt_u (i32.add (local.get $base) (local.get $map_size))
+              (local.get $guest)))
+        (then
+          (drop (call $guest_page_publish_range
+            (local.get $base) (local.get $map_size)
+            (i32.load offset=8 (local.get $rec))
+            (i32.and (i32.load offset=12 (local.get $rec)) (i32.const 0x7FF))))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $restore))))
 
   ;; MEM_DECOMMIT, honestly. Windows hands back zero-filled pages the next time
   ;; a decommitted range is committed, and the MSVC small-block heap leans on
