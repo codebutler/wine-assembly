@@ -112,6 +112,25 @@ async function main() {
     assert.strictEqual(hiddenState.restored, 'block',
       'clearing guest cursor-hidden state restores the mobile cursor sprite');
 
+    // A framebuffer-cursor app must not wait for browser-input to observe a
+    // pointer and apply the canvas class. The live app profile is available
+    // from the shell as soon as launch completes and is authoritative for the
+    // entire run; this is Diablo's phone path.
+    const profileState = await page.evaluate(() => {
+      const app = wineShell.runningApps.find(item => item && item.wine?.running);
+      const sprite = document.getElementById('touch-cursor');
+      app.hideHostCursor = true;
+      TouchCursor.tick();
+      const hidden = sprite.style.display;
+      app.hideHostCursor = false;
+      TouchCursor.tick();
+      return { hidden, restored: sprite.style.display };
+    });
+    assert.strictEqual(profileState.hidden, 'none',
+      'active software-cursor app profile directly suppresses the mobile sprite');
+    assert.strictEqual(profileState.restored, 'block',
+      'ordinary app profile restores the mobile cursor sprite');
+
     // A cursor the guest BUILT. Heroes of Might & Magic II draws its own
     // pointer and hands it to CreateIconIndirect, which host-window.js turns
     // into `url(data:image/x-icon;...) hx hy` -- and no keyword in the pixel
