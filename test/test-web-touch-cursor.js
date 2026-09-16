@@ -93,6 +93,25 @@ async function main() {
     });
     assert.strictEqual(shaped, 'text', 'the cursor must follow canvas.style.cursor');
 
+    // ShowCursor/SetCursor(NULL), and software-cursor profiles such as Diablo,
+    // mark the canvas rather than changing its last selected cursor shape.
+    // The mobile sprite must follow that same state or a phone gets two
+    // cursors even though desktop CSS correctly hides the hardware pointer.
+    const hiddenState = await page.evaluate(() => {
+      const canvas = document.getElementById('screen');
+      const sprite = document.getElementById('touch-cursor');
+      canvas.classList.add('guest-cursor-hidden');
+      TouchCursor.tick();
+      const hidden = sprite.style.display;
+      canvas.classList.remove('guest-cursor-hidden');
+      TouchCursor.tick();
+      return { hidden, restored: sprite.style.display };
+    });
+    assert.strictEqual(hiddenState.hidden, 'none',
+      'guest cursor-hidden state must suppress the mobile cursor sprite');
+    assert.strictEqual(hiddenState.restored, 'block',
+      'clearing guest cursor-hidden state restores the mobile cursor sprite');
+
     // A cursor the guest BUILT. Heroes of Might & Magic II draws its own
     // pointer and hands it to CreateIconIndirect, which host-window.js turns
     // into `url(data:image/x-icon;...) hx hy` -- and no keyword in the pixel
