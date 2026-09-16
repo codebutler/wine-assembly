@@ -22,9 +22,11 @@ class slot 22 (`cbWndExtra=6`) to slot 0 (`cbWndExtra=0`); the VB runtime then
 followed an invalid far callback and trapped at `0x00650151`. This explains
 why the failure moved with paint scheduling and phone orientation.
 
-Internal queue reads now use a dedicated 32-byte MSG scratch region. The
-non-removing pending-message probe, modal pump, and window-destruction purge
-all use it; guest-supplied MSG buffers continue to be written directly.
+Internal queue reads now pass a null output pointer and return their first
+four fields through instance-private globals. The non-removing pending-message
+probe, modal pump, and window-destruction purge use this path; guest-supplied
+MSG buffers continue to be written directly. Instance-private results also
+avoid a cross-Worker race on a single shared scratch region.
 `test-user-queue-msg-scratch.js` holds a post through sixteen pending probes
 and checks the adjacent class-slot canary. The full Rodent/Rattler gameplay
 test, Win16 WaitMessage, Win32 queue/filter tests, and a 375×667 Chrome

@@ -1983,8 +1983,13 @@
   (global $THREAD_MSG_QUEUES_SIZE i32 (region.size $THREAD_MSG_QUEUES))
   (global $THREAD_MSG_QUEUES_HIGH i32 (region.addr $THREAD_MSG_QUEUES_HIGH 0))
   (global $THREAD_MSG_QUEUES_HIGH_SIZE i32 (region.size $THREAD_MSG_QUEUES_HIGH))
-  (global $USER_QUEUE_MSG_SCRATCH i32 (region.addr $USER_QUEUE_MSG_SCRATCH 0))
-  (global $USER_QUEUE_MSG_SCRATCH_SIZE i32 (region.size $USER_QUEUE_MSG_SCRATCH))
+  ;; A null MSG pointer on an internal queue probe returns the first four
+  ;; fields in these instance-private globals. Unlike a shared scratch region,
+  ;; a host shadow and guest Worker can probe concurrently without a data race.
+  (global $user_queue_probe_hwnd (mut i32) (i32.const 0))
+  (global $user_queue_probe_msg (mut i32) (i32.const 0))
+  (global $user_queue_probe_wparam (mut i32) (i32.const 0))
+  (global $user_queue_probe_lparam (mut i32) (i32.const 0))
   (global $THREAD_MSG_QUEUE_STRIDE i32 (i32.const 0x00000410))
   (global $THREAD_MSG_QUEUE_MAX i32 (i32.const 64))
   ;; Timer metadata that must be process-wide rather than per-instance.

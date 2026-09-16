@@ -66,7 +66,7 @@
     (local $api_id i32) (local $name_rva i32) (local $name_ptr i32)
     (local $arg0 i32) (local $arg1 i32) (local $arg2 i32) (local $arg3 i32)
     (local $arg4 i32)
-    (local $queued i32) (local $queue_msg_ptr i32)
+    (local $queued i32)
     (local $saved_ebx i32) (local $saved_esi i32)
     (local $saved_edi i32) (local $saved_ebp i32)
 
@@ -861,16 +861,12 @@
             (drop (call $post_queue_remove_at (i32.const 0)))
             (local.set $queued (i32.const 1)))
           (else
-            (local.set $queue_msg_ptr (call $w2g (global.get $USER_QUEUE_MSG_SCRATCH)))
-            (if (call $shared_post_queue_read (local.get $queue_msg_ptr) (i32.const 1))
+            (if (call $shared_post_queue_read (i32.const 0) (i32.const 1))
               (then
-                (local.set $arg0 (call $gl32 (local.get $queue_msg_ptr)))
-                (local.set $arg1 (call $gl32
-                  (i32.add (local.get $queue_msg_ptr) (i32.const 4))))
-                (local.set $arg2 (call $gl32
-                  (i32.add (local.get $queue_msg_ptr) (i32.const 8))))
-                (local.set $arg3 (call $gl32
-                  (i32.add (local.get $queue_msg_ptr) (i32.const 12))))
+                (local.set $arg0 (global.get $user_queue_probe_hwnd))
+                (local.set $arg1 (global.get $user_queue_probe_msg))
+                (local.set $arg2 (global.get $user_queue_probe_wparam))
+                (local.set $arg3 (global.get $user_queue_probe_lparam))
                 (local.set $queued (i32.const 1))))))
         (if (local.get $queued)
           (then

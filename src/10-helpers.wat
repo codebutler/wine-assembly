@@ -27,8 +27,8 @@
   ;; Emulator-private, NOT a guest ABI: the address handed out is a WASM linear
   ;; address. Never pass a slot to a full MSG writer: MSG is 28 bytes, and an
   ;; overrun of the final 16-byte slot reaches WND_CLASS_SLOT_TABLE. Internal
-  ;; queue reads use USER_QUEUE_MSG_SCRATCH; timer helpers only write the first
-  ;; four words of a slot.
+  ;; queue reads use instance-private result globals when only USER needs the
+  ;; first four words; timer helpers only write the first four words of a slot.
   (layout PaintRect
     (field left   i32)   ;; +0
     (field top    i32)   ;; +4

@@ -734,7 +734,3 @@
   (region.declare $THREAD_MSG_QUEUES_HIGH (size 0x00002080) (align 0x00000100)
     (stride $THREAD_MSG_QUEUE_STRIDE (count 8))
     (owner "09a-handlers.wat:$thread_msg_queue_addr"))
-  ;; Internal USER queue reads write a full 28-byte MSG. A PaintRect scratch
-  ;; slot is only 16 bytes and its last slot borders WND_CLASS_SLOT_TABLE.
-  (region.declare $USER_QUEUE_MSG_SCRATCH (size 0x00000020) (align 0x00000010)
-    (owner "09a-handlers.wat:$shared_post_queue_purge_hwnd"))

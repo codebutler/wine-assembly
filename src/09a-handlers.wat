@@ -704,12 +704,22 @@
     (call $lock_wnd_release)
     (if (local.get $free_node) (then (call $heap_free (local.get $free_node))))
     (if (local.get $free_state) (then (call $heap_free (local.get $free_state))))
-    (call $gs32 (local.get $msg_ptr) (local.get $hwnd))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (local.get $msg))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (local.get $wparam))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (local.get $lparam))
-    (call $msg_store_input_tail
-      (local.get $msg_ptr) (local.get $hwnd) (local.get $msg) (local.get $lparam))
+    ;; A null pointer is an internal USER probe: publish only the four fields
+    ;; its caller needs in instance-private globals. Full guest MSG writes also
+    ;; synthesize time/pt; they must receive a real 28-byte output buffer.
+    (if (local.get $msg_ptr)
+      (then
+        (call $gs32 (local.get $msg_ptr) (local.get $hwnd))
+        (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (local.get $msg))
+        (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (local.get $wparam))
+        (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (local.get $lparam))
+        (call $msg_store_input_tail
+          (local.get $msg_ptr) (local.get $hwnd) (local.get $msg) (local.get $lparam)))
+      (else
+        (global.set $user_queue_probe_hwnd (local.get $hwnd))
+        (global.set $user_queue_probe_msg (local.get $msg))
+        (global.set $user_queue_probe_wparam (local.get $wparam))
+        (global.set $user_queue_probe_lparam (local.get $lparam))))
     (i32.const 1)
   )
 
@@ -732,16 +742,15 @@
   ;; canonical queue; the enqueue-side locked recheck plus a post-unpublish
   ;; purge makes that race failure-atomic.
   (func $shared_post_queue_purge_hwnd (param $hwnd i32)
-    (local $tid i32) (local $msg_ptr i32)
+    (local $tid i32)
     (if (i32.eqz (local.get $hwnd)) (then (return)))
-    (local.set $msg_ptr (call $w2g (global.get $USER_QUEUE_MSG_SCRATCH)))
     (local.set $tid (i32.const 1))
     (block $done (loop $queues
       (br_if $done (i32.gt_u (local.get $tid) (i32.const 16)))
       (block $queue_done (loop $remove
         (br_if $queue_done
           (i32.eqz (call $shared_post_queue_peek_tid
-            (local.get $tid) (local.get $msg_ptr) (local.get $hwnd)
+            (local.get $tid) (i32.const 0) (local.get $hwnd)
             (i32.const 0) (i32.const 0) (i32.const 1))))
         (br $remove)))
       (local.set $tid (i32.add (local.get $tid) (i32.const 1)))
