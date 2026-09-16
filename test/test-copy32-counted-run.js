@@ -7,6 +7,16 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { bootRenderHarness } = require('./render-helper');
+const { applyExeCompatibilityPatches } = require('../lib/app-profiles');
+
+const profileCalls = [];
+const profileExports = { set_loop_copy32_counted_emit: flag => profileCalls.push(flag) };
+applyExeCompatibilityPatches('DIABLO_S.EXE', profileExports, null);
+assert.deepStrictEqual(profileCalls, [1], 'Diablo enables the counted-copy fold by default');
+applyExeCompatibilityPatches('diablo_s.exe', profileExports, null,
+  { disableCopy32Counted: true });
+applyExeCompatibilityPatches('notepad.exe', profileExports, null);
+assert.deepStrictEqual(profileCalls, [1], 'opt-out and other EXEs do not enable it');
 
 const EXTRA_WAT = `
   (func (export "test_counted_g2w") (param i32) (result i32)
