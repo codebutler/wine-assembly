@@ -129,9 +129,45 @@ perf.streamUrl = '/api/perf';
 perf._sampleGuestCounters();
 perf._sampleGuestCounters();
 ok(counterReads === 1, 'concurrent stream ticks do not pile up Worker counter reads');
-Promise.resolve().then(() => {
+Promise.resolve().then(async () => {
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  await settle();
   ok(perf._guestCounters.app === 'diablo_shareware' &&
      perf._guestCounters.values.get_loop_xlat_stosb_runs === 42,
   'the Worker fold count is retained for the next streamed batch');
+  const memory = new ArrayBuffer(64);
+  const hist = new Uint32Array(memory);
+  let collisions = 0;
+  const arms = [];
+  stubWindow.location = { search: '?hot-blocks' };
+  stubWindow.wineShell.runningApps[0].wine = {
+    running: true, memory: { buffer: memory },
+    guestWorker: {
+      callExport: (name, flag) => { arms.push([name, flag]); return Promise.resolve(); },
+      readExports: () => Promise.resolve({
+        get_hot_block_hist_base: 0, get_hot_block_hist_count: 4,
+        get_hot_block_hist_collisions: collisions,
+      }),
+    },
+  };
+  perf._sampleGuestCounters();
+  await settle();
+  ok(arms.length === 1 && arms[0][0] === 'set_handler_hist_enabled' && arms[0][1] === 1,
+    'hot-block collection arms the guest Worker only with the opt-in query');
+  hist[0] = 0x7a8bba; hist[1] = 10;
+  perf._sampleGuestCounters();
+  await settle(); // baseline
+  hist[1] = 100;
+  hist[2] = 0x441ab9; hist[3] = 3;
+  collisions = 1;
+  perf._sampleGuestCounters();
+  await settle();
+  ok(perf._hotBlocks.total === 93 && perf._hotBlocks.top[0].eip === 0x7a8bba &&
+     perf._hotBlocks.top[0].hits === 90 && perf._hotBlocks.collisions === 1,
+  'phone hot-block sample reports interval deltas, not accumulated startup hits');
+  perf.stopStream();
+  await settle();
+  ok(arms.at(-1)[0] === 'set_handler_hist_enabled' && arms.at(-1)[1] === 0,
+    'stopping the stream releases the opt-in histogram overhead');
   console.log(`\nPASS  ${checks}/${checks} checks passed`);
 }).catch(error => { console.error(error); process.exitCode = 1; });
