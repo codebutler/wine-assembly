@@ -81,6 +81,12 @@ function movR8FromMem(dstR8, baseR32) {
 function movR8FromMemDisp8(dstR8, baseR32, disp8) {
   return [0x8a, modrm(1, R8[dstR8], R32[baseR32]), disp8 & 0xff];
 }
+// mov r8, [base + index] -- the register-indexed table load, Heroes' `mov al,[eax+ecx]`.
+// Needs a SIB byte: mod=00 rm=100, then scale=0, the given index and base.
+function movR8FromMemSIB(dstR8, baseR32, indexR32) {
+  return [0x8a, modrm(0, R8[dstR8], 4),
+    ((0 & 3) << 6) | ((R32[indexR32] & 7) << 3) | (R32[baseR32] & 7)];
+}
 // mov r8, [base + disp32] -- the table load, StarCraft's `mov bl,[eax+0x4e8701]`
 function movR8FromMemDisp32(dstR8, baseR32, disp32) {
   const d = disp32 >>> 0;
@@ -136,7 +142,10 @@ function buildLoop(v) {
     ? [].concat(
       incR32(v.srcReg),
       movR8FromMemDisp8(v.acc8, v.srcReg, 0xff),
-      movR8FromMemDisp32(v.res8, v.accReg, v.tblDisp),
+      // Register-indexed table base, not disp32: that is what the in-place
+      // recognizer models, and it is the only difference that made this
+      // spelling fold.
+      movR8FromMemSIB(v.res8, v.accReg, v.tblReg),
       movMemDisp8FromR8(v.srcReg, 0xff, v.res8),
       decR32(v.ctrReg))
     : [].concat(
@@ -171,7 +180,12 @@ function makeVariant() {
   // NOT zero -- that is the path that folds acc_high into the table base.
   const accHigh = hoisted && rnd() % 2 === 0 ? (range(1, 0x3f) << 8) >>> 0 : 0;
 
-  return { accReg, resReg, ctrReg, srcReg, dstReg, oneCursor, hoisted, accHigh,
+  // The in-place form addresses its table through a register pair, so it needs
+  // a spare low register to hold the table base. One is always free: the pool
+  // has four and at most three roles are distinct.
+  const tblReg = pick(lowPool.filter(r => r !== accReg && r !== resReg && r !== ctrReg));
+
+  return { accReg, resReg, ctrReg, srcReg, dstReg, tblReg, oneCursor, hoisted, accHigh,
     acc8: LOW8_OF[accReg], res8: LOW8_OF[resReg],
     length: range(1, 48) };
 }
@@ -241,6 +255,10 @@ function makeVariant() {
     setReg[v.srcReg](srcVA);
     setReg[v.dstReg](v.oneCursor ? srcVA : dstVA);
     setReg[v.ctrReg](v.length);
+    // The table base register carries the same acc_high correction the disp32
+    // form folds into its displacement, so the effective address is
+    // tblVA + indexByte in both spellings.
+    if (v.oneCursor) setReg[v.tblReg]((tblVA - v.accHigh) >>> 0);
     setReg[v.accReg](v.accHigh);
 
     e.set_eip(ga);
