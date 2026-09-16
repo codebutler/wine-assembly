@@ -5344,18 +5344,35 @@
       (br $scan)))
     (i32.const 0))
 
-  ;; An app holding DDSCL_EXCLUSIVE owns the whole display, and every window
-  ;; it puts over the game window draws into that same framebuffer: on real
-  ;; hardware the frame shows through wherever the window does not paint.
+  ;; Only borderless top-level popups use the exclusive primary as transparent
+  ;; backing. Captioned windows paint a complete frame and client of their own;
+  ;; reseeding one after that paint overwrites ordinary dialogs on every
+  ;; DirectDraw Present. StarCraft exposed this with its fatal MessageBox: the
+  ;; title survived a late NC paint while primary pixels replaced the client.
+  (func $dx_overlay_needs_primary_seed (param $hwnd i32) (param $target i32) (result i32)
+    (if (i32.eqz (local.get $hwnd)) (then (return (i32.const 0))))
+    (if (i32.eq (local.get $hwnd) (local.get $target))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $wnd_top_level (local.get $hwnd)) (local.get $hwnd))
+      (then (return (i32.const 0))))
+    ;; WS_CAPTION = WS_BORDER | WS_DLGFRAME. A borderless Storm menu remains
+    ;; eligible; a MessageBox or other captioned dialog owns every pixel.
+    (i32.eqz (i32.and (call $wnd_get_style (local.get $hwnd)) (i32.const 0x00C00000))))
+
+  ;; An app holding DDSCL_EXCLUSIVE owns the whole display, and borderless
+  ;; windows it puts over the game window draw into that same framebuffer: on
+  ;; real hardware the frame shows through wherever the window does not paint.
   ;; Diablo's menus are exactly this -- Storm hangs each one on a screen-sized
   ;; WS_POPUP owned by the game window and paints white text into it with
   ;; ordinary GDI -- so starting that window's surface at COLOR_BTNFACE puts a
   ;; grey slab over the game instead. Start it at the presented frame.
   (func $dx_seed_overlay_surface (param $hwnd i32)
-    (local $entry i32)
+    (local $entry i32) (local $target i32)
     (if (i32.eqz (call $dx_exclusive_get)) (then (return)))
-    (if (i32.eqz (local.get $hwnd)) (then (return)))
-    (if (i32.eq (local.get $hwnd) (call $dx_target_hwnd)) (then (return)))
+    (local.set $target (call $dx_target_hwnd))
+    (if (i32.eqz (call $dx_overlay_needs_primary_seed
+          (local.get $hwnd) (local.get $target)))
+      (then (return)))
     (local.set $entry (call $dx_primary_entry))
     (if (i32.eqz (local.get $entry)) (then (return)))
     (call $dx_blit_entry_to_hdc (local.get $entry)
@@ -5383,17 +5400,15 @@
       ;; present. DX-Ball presents once per BltFast, which put 20% of its entire
       ;; wasm time inside a lookup for windows that do not exist. Letting the
       ;; two cheap comparisons gate the two calls costs nothing and skips them.
-      (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
-            (i32.ne (local.get $hwnd) (local.get $target)))
+      (if (call $dx_overlay_needs_primary_seed
+            (local.get $hwnd) (local.get $target))
         (then
-          (if (i32.eq (call $wnd_top_level (local.get $hwnd)) (local.get $hwnd))
+          (if (call $gdi_window_surface_record (local.get $hwnd) (i32.const 0))
             (then
-              (if (call $gdi_window_surface_record (local.get $hwnd) (i32.const 0))
+              (if (call $wnd_is_effectively_visible (local.get $hwnd))
                 (then
-                  (if (call $wnd_is_effectively_visible (local.get $hwnd))
-                    (then
-                      (call $dx_blit_entry_to_hdc (local.get $entry_wa)
-                        (i32.add (local.get $hwnd) (i32.const 0x40000)))))))))))
+                  (call $dx_blit_entry_to_hdc (local.get $entry_wa)
+                    (i32.add (local.get $hwnd) (i32.const 0x40000)))))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 
