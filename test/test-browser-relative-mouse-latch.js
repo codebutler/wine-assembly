@@ -5,6 +5,17 @@
 // capture latch. Only explicit relativeMouse configuration may request lock.
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const { APPS } = require('../lib/apps');
+
+assert.strictEqual(APPS.diablo_demo.hideHostCursor, true);
+assert.strictEqual(APPS.diablo_shareware.hideHostCursor, true);
+assert.notStrictEqual(APPS.diablo_shareware.relativeMouse, true,
+  'Diablo remains an absolute mouse application');
+const shellSource = fs.readFileSync(path.join(__dirname, '../lib/browser-shell.js'), 'utf8');
+assert(shellSource.includes('hideHostCursor: app.hideHostCursor === true'),
+  'browser shell propagates the presentation-only cursor policy');
 
 const listeners = new Map();
 const addListener = (type, fn) => listeners.set(type, fn);
@@ -52,7 +63,9 @@ global.clearInterval = () => {};
 const calls = { absolute: [] };
 let heuristic = false;
 // Diablo's software cursor does not change its absolute input protocol.
-const runningApps = [{ name: 'diablo_shareware', wine: { running: true } }];
+const runningApps = [{
+  name: 'diablo_shareware', hideHostCursor: true, wine: { running: true },
+}];
 const renderer = {
   windows: {},
   _exclusiveTransform: { hwnd: 1 },
@@ -83,7 +96,9 @@ try {
 
   click(320, 240);
   assert.strictEqual(lockRequests.length, 0,
-    'no guest cursor state and no manifest flag must not capture');
+    'a software-cursor profile must not capture');
+  assert(cursorClasses.has('guest-cursor-hidden'),
+    'Diablo profile hides the duplicate browser cursor');
 
   heuristic = true;
   canvas.onmousemove({ clientX: 300, clientY: 200, movementX: 1, movementY: 0 });
@@ -115,7 +130,9 @@ try {
   runningApps[0].relativeMouse = true;
   click(320, 240);
   assert.strictEqual(lockRequests.length, 1, 'explicit relative app captures');
-  runningApps[0] = { name: 'diablo_shareware', wine: { running: true } };
+  runningApps[0] = {
+    name: 'diablo_shareware', hideHostCursor: true, wine: { running: true },
+  };
   canvas.onmousemove({ clientX: 210, clientY: 190 });
   assert.deepStrictEqual(calls.absolute.at(-1), [210, 190],
     'switching to an absolute app restores ordinary motion immediately');
