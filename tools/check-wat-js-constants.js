@@ -175,5 +175,7 @@ const wordsBody = stream.slice(stream.indexOf('const ARG_WORDS = ['),
 const argWords = [...wordsBody.matchAll(/\b([0-9]+)\b/g)].map(match => number(match[1]));
 assert.deepStrictEqual(argWords, gpuWords,
   'lib/gl-command-stream.js ARG_WORDS must match tools/gen_dispatch.js gpuApis order and word counts');
+assert(require('./gen-gl-encoder-abi').check(),
+  'native GL stack lengths/barriers are stale; run node tools/gen-gl-encoder-abi.js');
 
 console.log(`check-wat-js-constants: OK (${dxSlots} DX slots, ${gpuWords.length} GPU opcodes)`);

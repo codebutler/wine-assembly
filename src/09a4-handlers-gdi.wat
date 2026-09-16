@@ -1219,7 +1219,7 @@
     ;; 55, shared with the legacy wglSwapBuffers spelling used by Quake II; a
     ;; zero result retains the legacy GDI surface path.
     (local.set $ok
-      (call $host_gpu_gl_call
+      (call $gl_wat_encode_call
         (i32.const 55)
         (call $g2w (global.get $esp))
         (i32.const 0)))

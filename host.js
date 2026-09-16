@@ -3204,6 +3204,15 @@ class WineAssembly {
   // they still point at us: a later app has already overwritten them with its
   // own and must not be unwired by a straggling stop().
   _releaseGuestMemory() {
+    // The final non-barrier GL calls still own bytes in their encoder range.
+    // Drain while the instance and shared memory are both reachable; replay is
+    // synchronous, so return also closes the range's host-side lifetime.
+    if (!this._glCommandsRetired && this.hostCtx
+        && typeof this.hostCtx.flushGLCommands === 'function') {
+      try { this.hostCtx.flushGLCommands(this.instance && this.instance.exports); }
+      catch (error) { this.logToUI(`[GL] final flush failed: ${error && error.message}`); }
+      this._glCommandsRetired = true;
+    }
     const bridge = this.hostCtx && this.hostCtx.d3d9Bridge;
     if (bridge && bridge.asyncSoftware && bridge.workerReady && !this._d3dRenderRetired) {
       if (!this._d3dRenderRetirement) this._d3dRenderRetirement = this.hostCtx.closeD3DRender().then(() => {

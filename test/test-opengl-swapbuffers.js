@@ -5,16 +5,10 @@
 // resolved legacy wglSwapBuffers spelling connected to one generic present.
 
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 const { createHostImports } = require('../lib/host-imports');
+const Stream = require('../lib/gl-command-stream');
 const { compileSrcWasm } = require('./compile-src');
 const apiTable = require('../src/api_table.json');
-// $VIRTUAL_MAP_STATE and $VIRTUAL_MAP_TABLE, from the map declared in
-// src/00-regions.wat.
-const RegionMap = require('../lib/region-map.generated.js');
-
-const ROOT = path.join(__dirname, '..');
 
 async function main() {
   const extraWat = `
@@ -24,6 +18,23 @@ async function main() {
       (i32.const 55) (i32.const 1)
       (i32.const 0x1234) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_virtual_reset")
+    (call $zero_memory (global.get $VIRTUAL_MAP_STATE)
+      (i32.add (global.get $VIRTUAL_MAP_STATE_SIZE)
+        (global.get $VIRTUAL_MAP_TABLE_SIZE)))
+    (call $zero_memory (global.get $GUEST_PAGE_TABLE)
+      (global.get $GUEST_PAGE_TABLE_SIZE))
+    (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
+      (global.get $VIRTUAL_BACKING_BASE))
+    (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT))
+    (global.set $heap_sparse_ptr (i32.const 0))
+    (global.set $heap_sparse_end (i32.const 0)))
+  (func (export "test_virtual_alloc_commit") (param $size i32) (result i32)
+    (global.set $esp (i32.const 0x00500000))
+    (call $handle_VirtualAlloc
+      (i32.const 0) (local.get $size) (i32.const 0x3000)
+      (i32.const 0x04) (i32.const 0) (i32.const 0))
     (global.get $eax))
   `;
   // Plain append: src fragments are self-balanced now, so there is no trailing
@@ -49,31 +60,48 @@ async function main() {
   const presents = [];
   let gpuResult = 1;
   imports.host.gpu_gl_call = (opcode, stackWa, aux) => {
+    if ((opcode >>> 0) === Stream.WAT_STREAM_FLUSH_OPCODE) {
+      return Stream.replay(Stream.memoryBatch(memory, stackWa, aux),
+        (streamOpcode, streamAux, capture) => {
+          presents.push({ opcode: streamOpcode, stackWa: capture.stackOffset, aux: streamAux });
+          return gpuResult;
+        });
+    }
     presents.push({ opcode, stackWa, aux });
     return gpuResult;
   };
   const { instance } = await WebAssembly.instantiate(wasm, imports);
+  instance.exports.heap_init(0x420000);
 
-  const mapView = new DataView(memory.buffer);
-  const mapTable = RegionMap.BASE.VIRTUAL_MAP_TABLE;
-  mapView.setUint32(RegionMap.BASE.VIRTUAL_MAP_STATE, 1, true);
-  mapView.setUint32(mapTable, 0x4e300000, true);
-  mapView.setUint32(mapTable + 4, 0x00010000, true);
-  mapView.setUint32(mapTable + 8, 0x10000000, true);
-  assert.strictEqual(instance.exports.guest_to_wasm(0x4e306050) >>> 0, 0x10006050,
-    'GPU host translator resolves a real Quake-style sparse vertex pointer');
+  instance.exports.test_virtual_reset();
+  const sparse = instance.exports.test_virtual_alloc_commit(0x10000) >>> 0;
+  assert(sparse, 'fixture obtains a real sparse guest allocation');
+  const sparseWa = instance.exports.guest_to_wasm(sparse + 0x6050) >>> 0;
+  assert.notStrictEqual(sparseWa, 0xf0,
+    'GPU host translator resolves a committed sparse vertex pointer');
 
   const legacy = apiTable.find(api => api.name === 'wglSwapBuffers');
   assert(legacy && legacy.nargs === 1 && legacy.convention === 'stdcall',
     'GetProcAddress name table exposes Quake II ref_gl legacy presentation');
 
+  // Leave native geometry pending. SwapBuffers must flush it before the
+  // presentation record in the same ordered stream.
+  const glStack = 0x403000;
+  const glView = new DataView(memory.buffer);
+  glView.setUint32(glStack + 4, 0, true); // GL_POINTS
+  instance.exports.gl_wat_encoder_call(21, glStack, 0);
+  [1.25, -2.5, 3.75].forEach((value, index) =>
+    glView.setFloat32(glStack + 4 + index * 4, value, true));
+  instance.exports.gl_wat_encoder_call(30, glStack, 0);
+  instance.exports.gl_wat_encoder_call(22, glStack, 0);
+
   assert.strictEqual(instance.exports.test_call_SwapBuffers(0x1234), 1,
     'GDI32 SwapBuffers returns the successful GPU presentation result');
-  assert.strictEqual(presents.length, 1,
-    'GDI32 SwapBuffers presents exactly one frame through the GPU bridge');
-  assert.strictEqual(presents[0].opcode, 55,
+  assert.deepStrictEqual(presents.map(call => call.opcode), [Stream.PACKED_DRAW_OPCODE, 55],
+    'GDI32 SwapBuffers orders pending native geometry before presentation');
+  assert.strictEqual(presents[1].opcode, 55,
     'GDI32 SwapBuffers uses the GL frontend present operation');
-  assert.strictEqual(presents[0].aux, 0,
+  assert.strictEqual(presents[1].aux, 0,
     'presentation resolves the already-current GL context');
 
   const legacyStack = 0x074ff000;
@@ -81,9 +109,9 @@ async function main() {
     'legacy wglSwapBuffers returns the generic GPU presentation result');
   assert.strictEqual(instance.exports.get_esp() >>> 0, legacyStack + 8,
     'legacy wglSwapBuffers pops its one-argument stdcall frame');
-  assert.strictEqual(presents.length, 2,
+  assert.strictEqual(presents.length, 3,
     'legacy wglSwapBuffers reaches the same present bridge exactly once');
-  assert.strictEqual(presents[1].opcode, 55,
+  assert.strictEqual(presents[2].opcode, 55,
     'legacy wglSwapBuffers uses the backend-neutral present operation');
 
   gpuResult = 0;

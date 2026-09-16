@@ -40,6 +40,7 @@ assert(THREAD_PRIMITIVE_IMPORTS.includes('terminate_thread'),
 }
 
 for (const setter of [
+  'gl_wat_encoder_set_enabled',
   'set_cpu_mmx', 'set_winver', 'set_bp', 'set_watchpoint_size', 'set_watchpoint',
   'set_cs_steal_after', 'set_fault_unmapped', 'set_callstack_enabled',
   'set_trace_eip_range', 'set_count', 'set_loop_trace', 'set_loop_emit',
@@ -56,6 +57,7 @@ for (const setter of [
 const configured = createInheritedWasmGlobals();
 const record = (setter, ...args) =>
   assert(recordInheritedWasmGlobal(configured, setter, args), `${setter} must be inheritable`);
+record('gl_wat_encoder_set_enabled', 0); // CLI JS oracle applies before any worker GL call
 record('set_loop_trace', 1, 0x401000);
 record('set_loop_emit', 0);              // zero is meaningful: disable default
 record('set_loop_lut_emit', 1);
@@ -97,6 +99,7 @@ const state = manager._workerWasmGlobals({
 const calls = inheritedWasmCalls(state);
 const bySetter = new Map(calls.map(call => [call.setter, call.args]));
 assert.deepStrictEqual(bySetter.get('set_cpu_mmx'), [0]);
+assert.deepStrictEqual(bySetter.get('gl_wat_encoder_set_enabled'), [0]);
 assert.deepStrictEqual(bySetter.get('set_winver'), [0xC0000A04]);
 assert.deepStrictEqual(bySetter.get('set_bp'), [0x407000]);
 assert.deepStrictEqual(bySetter.get('set_watchpoint_size'), [2]);
@@ -134,6 +137,10 @@ assert(!/msg\.(?:bp|watch|watchSize|callstack)\b/.test(guestWorkerSource),
   'guest Worker must not retain a hand-written debug-setter subset');
 assert(!cliSource.includes('_loopFlagsArmed'),
   'CLI must not patch only cooperative instances after spawn');
+assert(cliSource.includes("getArg('gl-encoder', 'wat')"),
+  'CLI must expose the JS/WAT GL encoder corpus switch');
+assert(cliSource.includes("inheritWasm('gl_wat_encoder_set_enabled'"),
+  'CLI GL encoder selection must propagate to every guest thread instance');
 assert(browserSource.includes(
   "recordInheritedWasmGlobal('set_loop_copy_emit', 1)"),
   'browser app decoder configuration must be recorded for future threads');

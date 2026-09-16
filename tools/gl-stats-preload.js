@@ -9,12 +9,13 @@
 // whole-run totals. A frame is one glFlush or SwapBuffers reaching the
 // executor (frontFlushes + presents); SimGolf ends frames with glFlush.
 //
-// The counters are module-level in lib/gl-command-stream.js and
+// Renderer counters are module-level in lib/gl-command-stream.js and
 // lib/gl-compat.js, so they are the same objects run.js's host imports use:
 // require() caches one instance per process. All values are counts, so they
 // are load-immune. Columns:
-//   calls    guest gl*/wgl* calls that crossed wasm->JS
-//   spans    glBegin/glEnd spans closed
+//   calls    GL host-import crossings (one per batch with the WAT encoder)
+//   jsSpans  glBegin/glEnd spans closed by the reference JS encoder only
+//   batches  WAT command submissions
 //   enq      packed spans handed to the executor
 //   draws    WebGL draws actually issued (enq/draws = how well spans merge)
 //   verts    vertices drawn
@@ -22,10 +23,28 @@
 
 const stream = require('../lib/gl-command-stream.js');
 const compat = require('../lib/gl-compat.js');
+const hostImports = require('../lib/host-imports.js');
+const crossings = { calls: 0, batches: 0, bytes: 0 };
+const createHostImports = hostImports.createHostImports;
+hostImports.createHostImports = function (...args) {
+  const imports = createHostImports.apply(this, args);
+  const call = imports.host.gpu_gl_call;
+  imports.host.gpu_gl_call = function (opcode, stackWa, aux) {
+    if ((opcode >= 0 && opcode < stream.ARG_WORDS.length)
+        || opcode === stream.WAT_STREAM_FLUSH_OPCODE) crossings.calls++;
+    if (opcode === stream.WAT_STREAM_FLUSH_OPCODE) {
+      crossings.batches++;
+      crossings.bytes += aux >>> 0;
+    }
+    return call.apply(this, arguments);
+  };
+  return imports;
+};
 
 const EVERY_MS = parseInt(process.env.GL_STATS_EVERY_MS || '10000', 10);
 const snap = () => ({
-  calls: stream.stats.calls, spans: stream.stats.spans,
+  calls: crossings.calls, spans: stream.stats.spans,
+  batches: crossings.batches, bytes: crossings.bytes,
   byOpcode: Array.from(stream.stats.byOpcode),
   enq: compat.stats.enqueued, draws: compat.stats.draws,
   verts: compat.stats.drawVertices,
@@ -45,15 +64,16 @@ const line = (label, now, then) => {
   const top = ops.slice(0, 8).map(([name, n]) => `${name}=${per(n)}`).join(' ');
   const merge = d('draws') ? (d('enq') / d('draws')).toFixed(2) : '-';
   console.log(`[gl-stats] ${label} frames=${frames} per-frame: calls=${per(d('calls'))}`
-    + ` spans=${per(d('spans'))} enq=${per(d('enq'))} draws=${per(d('draws'))}`
+    + ` jsSpans=${per(d('spans'))} batches=${per(d('batches'))}`
+    + ` bytes=${per(d('bytes'))} enq=${per(d('enq'))} draws=${per(d('draws'))}`
     + ` verts=${per(d('verts'))} spans/draw=${merge}`);
-  if (top) console.log(`[gl-stats] ${label} top calls/frame: ${top}`);
+  if (top) console.log(`[gl-stats] ${label} top JS-encoded calls/frame: ${top}`);
 };
 
 // Reachable from a --control session's `eval`, so a stepped/frozen run can
 // snapshot the counters at exactly the moment it chooses:
 //   node tools/ctl.js eval 'JSON.stringify(globalThis.__glStats.snap())'
-globalThis.__glStats = { snap, stream, compat };
+globalThis.__glStats = { snap, stream, compat, crossings };
 
 const start = snap();
 let previous = start;

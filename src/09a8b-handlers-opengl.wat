@@ -152,7 +152,7 @@
                       (i32.const 0x80000000))))
                   (else (local.set $aux (global.get $main_hwnd))))))))))
 
-    (global.set $eax (call $host_gpu_gl_call
+    (global.set $eax (call $gl_wat_encode_call
       (local.get $opcode) (call $g2w (global.get $esp)) (local.get $aux)))
     ;; OpenGL entry points use APIENTRY/stdcall. stack_dwords counts physical
     ;; 32-bit stack words, so GLdouble arguments correctly consume two each.
@@ -175,7 +175,7 @@
         (return)))
     ;; Opcode 55 is gpuPresent, shared with SwapBuffers/wglSwapBuffers. A zero
     ;; result means no current context, which is a genuine failure here.
-    (global.set $eax (call $host_gpu_gl_call
+    (global.set $eax (call $gl_wat_encode_call
       (i32.const 55) (call $g2w (global.get $esp)) (i32.const 0)))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
   )

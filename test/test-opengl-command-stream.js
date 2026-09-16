@@ -350,6 +350,41 @@ assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.RESULT), 77);
 assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.STATUS), RPC.STATUS_RESP,
   'worker is acknowledged only after replay completes');
 
+// The native producer sends only a range in the already-shared WASM memory.
+// Exercise both protocol endpoints, including their synchronous result and
+// output-memory visibility, before allowing that range to be reused.
+const nativeOffset = 0x20000;
+new Uint8Array(rpcMemory.buffer, nativeOffset, brokerBatch.bytes)
+  .set(new Uint8Array(brokerBatch.buffer, 0, brokerBatch.bytes));
+const nativeMessages = [], nativeOps = [];
+const nativeBroker = RPC.createMainBroker(rpcMemory, {
+  gpu_gl_batch: (batch, owner) => {
+    assert.strictEqual(owner, 0);
+    assert.deepStrictEqual(batch, { memoryOffset: nativeOffset, bytes: brokerBatch.bytes });
+    assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.STATUS), RPC.STATUS_REQ);
+    return Stream.replay(Stream.memoryBatch(rpcMemory, batch.memoryOffset, batch.bytes),
+      (opcode, _aux, capture) => {
+        assert.strictEqual(capture.buffer, rpcMemory.buffer);
+        nativeOps.push(opcode);
+        new DataView(rpcMemory.buffer).setUint32(nativeOffset - 4, 123, true);
+        return 91;
+      });
+  },
+}, {});
+const nativeWorker = RPC.createWorkerImports(rpcMemory, {
+  gpu_gl_call: { params: ['i32', 'i32', 'i32'], results: ['i32'] },
+}, message => {
+  nativeMessages.push(message);
+  nativeBroker.serveGlBatch(message);
+}, { guestToWasm: pointer => pointer });
+assert.strictEqual(nativeWorker.imports.host.gpu_gl_call(Stream.WAT_STREAM_FLUSH_OPCODE,
+  nativeOffset, brokerBatch.bytes), 91);
+assert.deepStrictEqual(nativeOps, [10, 12]);
+assert.deepStrictEqual(nativeMessages, [{ t: 'glBatch', slot: 0,
+  memoryOffset: nativeOffset, bytes: brokerBatch.bytes }]);
+assert.strictEqual(new DataView(rpcMemory.buffer).getUint32(nativeOffset - 4, true), 123);
+assert.strictEqual(Atomics.load(rpcView, RPC.SLOT.STATUS), RPC.STATUS_IDLE);
+
 // A query that writes into guest memory has to have written it by the time the
 // call returns, because the guest's very next instruction may read it. Warcraft
 // III queries GL_MAX_TEXTURE_UNITS_ARB and copies the answer into its renderer

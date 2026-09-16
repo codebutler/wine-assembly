@@ -118,6 +118,10 @@ const NO_RENDERER = hasFlag('no-renderer'); // --no-renderer: skip CLI canvas/re
 // Keep capability opt-in separate: the implementation is not a full SM profile.
 const D3D9_RENDERER = getArg('d3d9-renderer', null);
 const D3D9_PROGRAMMABLE = hasFlag('d3d9-programmable');
+const GL_ENCODER = getArg('gl-encoder', 'wat');
+if (GL_ENCODER !== 'wat' && GL_ENCODER !== 'js') {
+  throw new Error(`--gl-encoder must be wat or js, got ${GL_ENCODER}`);
+}
 if (D3D9_RENDERER !== null && D3D9_RENDERER !== 'software') {
   throw new Error('CLI --d3d9-renderer currently supports software only; WebGL requires a browser/provider');
 }
@@ -3777,6 +3781,9 @@ async function main() {
     });
   }
   if (instance.exports.set_process_id) instance.exports.set_process_id(ctx.processId);
+  if (instance.exports.gl_wat_encoder_set_enabled) {
+    instance.exports.gl_wat_encoder_set_enabled(GL_ENCODER === 'wat' ? 1 : 0);
+  }
   if (NO_MMX && instance.exports.set_cpu_mmx) instance.exports.set_cpu_mmx(0);
   if ((hasFlag('sse') || APP_ENTRY?.cpuSSE === true) && instance.exports.set_cpu_sse) {
     instance.exports.set_cpu_sse(1);
@@ -4088,6 +4095,7 @@ async function main() {
   const inheritedWasmGlobals = createInheritedWasmGlobals();
   const inheritWasm = (setter, ...args) =>
     recordInheritedWasmGlobal(inheritedWasmGlobals, setter, args);
+  inheritWasm('gl_wat_encoder_set_enabled', GL_ENCODER === 'wat' ? 1 : 0);
   if (TRACE_LOOPMATCH) inheritWasm('set_loop_trace', 1, TRACE_LOOPMATCH_EIP);
   if (LOOP_SUPEROPS) inheritWasm('set_loop_emit', 1);
   if (NO_LOOP_SUPEROPS) inheritWasm('set_loop_emit', 0);
@@ -9918,6 +9926,11 @@ if (VERBOSE) {
         + (perThread.length ? ` — ${perThread.join(', ')}` : ''));
     }
   }
+
+  // Retire a final non-barrier GL batch before any exit capture reads pixels or
+  // the process tears down shared memory. Normal frames still flush at their
+  // semantic barriers, so this adds no crossing to the run loop.
+  base.flushGLCommands(instance.exports);
 
   if (DX_LOCK_PAUSE.ms > 0) {
     console.log(`\n[dx-lock-pause] ${DX_LOCK_PAUSE.ms}ms per present:`

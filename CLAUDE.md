@@ -208,6 +208,9 @@ from the finger. `svh` (bars visible) and `lvh` (bars retracted) are constants. 
 | `09a7d-handlers-shell-file.wat` | Later file, registry, shell and desktop handlers |
 | `09a8-handlers-directx.wat` | DirectX handlers — DirectDraw, DirectSound, DirectInput; COM vtable dispatch through the thunk zone, and the `DxObject` record declaration |
 | `09a8b-handlers-opengl.wat` | OpenGL 1.x / WGL frontend: one ABI bridge lowering the measured Quake II GL/WGL set to the generic GPU backend |
+| `09a8c-gl-encoder.wat` | Native GL command records, immediate primitive normalization, buffer growth, and synchronous barriers |
+| `09a8d-gl-abi.generated.wat` | Generated GL argument lengths and barrier metadata, checked against the JavaScript reference |
+| `09a8e-gl-state.wat` | GL context attributes, attribute stacks, client arrays, and indexed drawing |
 | `09a9-comctl32.wat` | COMCTL32: ImageList, toolbar and status-bar creation, up-down and property-sheet stubs, MenuHelp, DSA/DPA dynamic arrays |
 | `09aa-handlers-d3dim.wat` | **Generated** — Direct3D Immediate Mode: ~211 IM methods across D3D v2/v7 (Device, Viewport, Material, ExecuteBuffer, VertexBuffer, Texture), plus pick state and viewport light lists |
 | `09ab-handlers-d3dim-core.wat` | D3DIM core helpers: hand-written forwarding from the v1/v2/v3/v7 stubs into the IDirect3DDevice3/IDirect3DViewport3 cores, and the extended state-block layout |
