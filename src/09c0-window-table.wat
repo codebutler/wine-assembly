@@ -397,6 +397,11 @@
           (store.field.memarg WndRecord state_ptr (local.get $ptr) (i32.const 0))
           (call $wnd_thread_reset_slot (local.get $i))
           (call $lock_wnd_release)
+          ;; A producer which resolved this HWND immediately before the first
+          ;; teardown purge could enqueue before unpublication. The enqueue
+          ;; path now rechecks while holding this same lock; one final purge
+          ;; after hwnd=0 therefore closes both sides of that race.
+          (call $shared_post_queue_purge_hwnd (local.get $hwnd))
           (return)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))

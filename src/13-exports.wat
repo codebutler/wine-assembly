@@ -506,6 +506,8 @@
       (local.get $hwnd) (local.get $msg) (local.get $wparam) (local.get $lparam)))
   (func (export "test_shared_post_read") (param $msg_ptr i32) (param $remove i32) (result i32)
     (call $shared_post_queue_read (local.get $msg_ptr) (local.get $remove)))
+  (func (export "reset_thread_message_queue") (param $tid i32)
+    (call $shared_post_queue_reset_tid (local.get $tid)))
   (func (export "test_timer_set")
     (param $hwnd i32) (param $id i32) (param $interval i32) (param $callback i32)
     (call $timer_set (local.get $hwnd) (local.get $id) (local.get $interval) (local.get $callback)))
@@ -877,8 +879,15 @@
     (if (result i32) (i32.eq (local.get $slot) (i32.const -1))
       (then (i32.const 0))
       (else (i32.load8_u (i32.add (global.get $FLASH_TABLE) (local.get $slot))))))
-  (func (export "get_post_queue_count") (result i32) (global.get $post_queue_count))
-  (func (export "set_post_queue_count") (param i32) (global.set $post_queue_count (local.get 0)))
+  (func (export "get_post_queue_count") (result i32)
+    (i32.add (call $post_queue_total_count)
+      (call $shared_post_queue_total_count)))
+  (func (export "set_post_queue_count") (param i32)
+    (if (i32.eqz (local.get 0))
+      (then
+        (call $post_queue_reset)
+        (call $shared_post_queue_reset_tid (global.get $current_thread_id)))
+      (else (global.set $post_queue_count (local.get 0)))))
   (func (export "wnd_table_set") (param i32) (param i32) (call $wnd_table_set (local.get 0) (local.get 1)))
   (func (export "wnd_get_proc_export") (param $hwnd i32) (result i32)
     (call $wnd_table_get (local.get $hwnd)))
@@ -1590,19 +1599,22 @@
   ;; queue so pending non-client work drains before parent/child WM_PAINT.
   (func (export "paint_invalidate_visible_tree") (param $hwnd i32)
     (call $paint_mark_visible_tree (local.get $hwnd)))
-  ;; The posted-message queue, for looking at rather than guessing about. It
-  ;; lives in this thread's LOCAL_POST_QUEUES partition. `field` is
-  ;; 0 hwnd, 1 message, 2 wParam, 3 lParam.
+  ;; The posted-message queue, for looking at rather than guessing about.
+  ;; Production posts use the process-shared canonical FIFO; the private prefix
+  ;; remains visible first for focused tests which seed raw queue bytes.
+  ;; `field` is 0 hwnd, 1 message, 2 wParam, 3 lParam.
   (func (export "post_queue_depth") (result i32)
-    (global.get $post_queue_count))
+    (i32.add (call $post_queue_total_count)
+      (call $shared_post_queue_total_count)))
   (func (export "get_post_queue_base") (result i32) (call $post_queue_base))
   (func (export "post_queue_peek") (param $i i32) (param $field i32) (result i32)
-    (if (i32.ge_u (local.get $i) (global.get $post_queue_count))
-      (then (return (i32.const 0))))
-    (if (i32.ge_u (local.get $field) (i32.const 4)) (then (return (i32.const 0))))
-    (i32.load (i32.add (i32.add (call $post_queue_base)
-                                (i32.mul (local.get $i) (i32.const 16)))
-                       (i32.shl (local.get $field) (i32.const 2)))))
+    (if (result i32)
+        (i32.lt_u (local.get $i) (call $post_queue_total_count))
+      (then (call $post_queue_peek_field (local.get $i) (local.get $field)))
+      (else (call $shared_post_queue_peek_field_tid
+        (global.get $current_thread_id)
+        (i32.sub (local.get $i) (call $post_queue_total_count))
+        (local.get $field)))))
 
   (func (export "nc_flags_test") (param $hwnd i32) (result i32)
     (call $nc_flags_test (local.get $hwnd)))
@@ -1898,6 +1910,9 @@
       (param $thunk_gs i32) (param $thunk_ge i32) (param $num_th i32)
       (param $main_rsrc_rva i32)
     (local $pe_off i32)
+    ;; A reused Worker instance must not retain heap-backed queue overflow from
+    ;; its previous guest thread. Do this before replacing allocator cursors.
+    (call $post_queue_reset)
     ;; The three per-thread arenas are split, not strided: the main thread
     ;; (tid 0) gets a large partition at offset 0 and every worker gets a small
     ;; one after it. A worker compiles the single routine it was spawned for,
@@ -1979,6 +1994,7 @@
     (global.set $heap_sparse_end (i32.const 0))
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT))
     (global.set $current_thread_id (i32.add (local.get $tid) (i32.const 1)))
+    (call $shared_post_queue_reset_tid (global.get $current_thread_id))
     (global.set $post_queue_count (i32.const 0))
     (global.set $pq_read_off (i32.const 0))
     (global.set $sync_msg_depth (i32.const 0))
@@ -2284,8 +2300,9 @@
     (if (global.get $pending_child_create) (then (return (i32.const 1))))
     (if (global.get $pending_child_size) (then (return (i32.const 1))))
     (if (global.get $pending_input_packed) (then (return (i32.const 1))))
-    (if (global.get $post_queue_count) (then (return (i32.const 1))))
-    (if (call $shared_post_queue_read (call $paint_scratch_take) (i32.const 0))
+    (if (call $post_queue_total_count) (then (return (i32.const 1))))
+    (if (call $shared_post_queue_read
+          (call $w2g (call $paint_scratch_take)) (i32.const 0))
       (then (return (i32.const 1))))
     (if (global.get $pending_wm_size) (then (return (i32.const 1))))
     ;; Bit 3 is persistent state: it records that DefWindowProc owns the

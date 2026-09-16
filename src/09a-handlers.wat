@@ -400,14 +400,25 @@
   ;; corrupt a dialog even when the queue race did not fire.
   (func $thread_msg_queue_addr (param $tid i32) (result i32)
     (if (i32.or (i32.lt_u (local.get $tid) (i32.const 1))
-                (i32.gt_u (local.get $tid) (i32.const 8)))
+                (i32.gt_u (local.get $tid) (i32.const 16)))
       (then (return (i32.const 0))))
+    (if (i32.gt_u (local.get $tid) (i32.const 8))
+      (then
+        (return (i32.add (global.get $THREAD_MSG_QUEUES_HIGH)
+          (i32.mul (i32.sub (local.get $tid) (i32.const 9))
+            (global.get $THREAD_MSG_QUEUE_STRIDE))))))
     (i32.add (global.get $THREAD_MSG_QUEUES)
       (i32.mul (i32.sub (local.get $tid) (i32.const 1))
         (global.get $THREAD_MSG_QUEUE_STRIDE))))
 
+  ;; The ring is the cross-instance fast path. Queue+12 points to a heap-backed
+  ;; {head,tail,count} overflow state only while a burst exceeds 64 messages;
+  ;; each overflow node is {next,hwnd,msg,wParam,lParam}. Producers allocate
+  ;; outside LOCK_WND, whose critical sections may never call a host import.
   (func $shared_post_queue_enqueue (param $hwnd i32) (param $msg i32) (param $wparam i32) (param $lparam i32) (result i32)
     (local $cnt i32) (local $tail i32) (local $slot i32) (local $queue i32) (local $tid i32)
+    (local $state i32) (local $state_candidate i32) (local $state_wa i32)
+    (local $node i32) (local $node_wa i32)
     (local.set $tid (call $wnd_get_thread (local.get $hwnd)))
     ;; HWND 0 and handles which vanished between routing and enqueue belong to
     ;; the caller's queue.  PostThreadMessage is a separate API.
@@ -416,11 +427,84 @@
     (local.set $queue (call $thread_msg_queue_addr (local.get $tid)))
     (if (i32.eqz (local.get $queue)) (then (return (i32.const 0))))
     (call $lock_wnd_acquire)
-    (local.set $cnt (i32.load (local.get $queue)))
-    (if (i32.ge_u (local.get $cnt) (global.get $THREAD_MSG_QUEUE_MAX))
+    (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
+          (i32.ne (call $wnd_get_thread (local.get $hwnd)) (local.get $tid)))
       (then
         (call $lock_wnd_release)
         (return (i32.const 0))))
+    (local.set $cnt (i32.load (local.get $queue)))
+    (local.set $state (i32.load offset=12 (local.get $queue)))
+    (if (i32.or (local.get $state)
+                (i32.ge_u (local.get $cnt) (global.get $THREAD_MSG_QUEUE_MAX)))
+      (then
+        (call $lock_wnd_release)
+        ;; This is the rare overflow path. Allocate both possible objects before
+        ;; reacquiring the process-wide window lock; a racing producer may have
+        ;; published the state first, in which case the spare is freed below.
+        (local.set $node (call $heap_alloc (i32.const 20)))
+        (if (i32.eqz (local.get $node)) (then (return (i32.const 0))))
+        (local.set $state_candidate (call $heap_alloc (i32.const 12)))
+        (if (i32.eqz (local.get $state_candidate))
+          (then
+            (call $heap_free (local.get $node))
+            (return (i32.const 0))))
+        (local.set $state_wa (call $g2w (local.get $state_candidate)))
+        (i32.store          (local.get $state_wa) (i32.const 0))
+        (i32.store offset=4 (local.get $state_wa) (i32.const 0))
+        (i32.store offset=8 (local.get $state_wa) (i32.const 0))
+        (local.set $node_wa (call $g2w (local.get $node)))
+        (i32.store          (local.get $node_wa) (i32.const 0))
+        (i32.store offset=4 (local.get $node_wa) (local.get $hwnd))
+        (i32.store offset=8 (local.get $node_wa) (local.get $msg))
+        (i32.store offset=12 (local.get $node_wa) (local.get $wparam))
+        (i32.store offset=16 (local.get $node_wa) (local.get $lparam))
+        (call $lock_wnd_acquire)
+        (if (i32.and (i32.ne (local.get $hwnd) (i32.const 0))
+              (i32.ne (call $wnd_get_thread (local.get $hwnd)) (local.get $tid)))
+          (then
+            (call $lock_wnd_release)
+            (call $heap_free (local.get $state_candidate))
+            (call $heap_free (local.get $node))
+            (return (i32.const 0))))
+        (local.set $cnt (i32.load (local.get $queue)))
+        (local.set $state (i32.load offset=12 (local.get $queue)))
+        ;; If the consumer made room and drained the old overflow while this
+        ;; producer allocated, return to the ring and discard both spare blocks.
+        (if (i32.and (i32.eqz (local.get $state))
+                     (i32.lt_u (local.get $cnt) (global.get $THREAD_MSG_QUEUE_MAX)))
+          (then
+            (local.set $tail (i32.load offset=8 (local.get $queue)))
+            (local.set $slot (i32.add (local.get $queue)
+              (i32.add (i32.const 0x10) (i32.mul (local.get $tail) (i32.const 16)))))
+            (i32.store          (local.get $slot) (local.get $hwnd))
+            (i32.store offset=4 (local.get $slot) (local.get $msg))
+            (i32.store offset=8 (local.get $slot) (local.get $wparam))
+            (i32.store offset=12 (local.get $slot) (local.get $lparam))
+            (i32.store offset=8 (local.get $queue)
+              (i32.rem_u (i32.add (local.get $tail) (i32.const 1))
+                (global.get $THREAD_MSG_QUEUE_MAX)))
+            (i32.store (local.get $queue) (i32.add (local.get $cnt) (i32.const 1)))
+            (call $lock_wnd_release)
+            (call $heap_free (local.get $state_candidate))
+            (call $heap_free (local.get $node))
+            (return (i32.const 1))))
+        (if (i32.eqz (local.get $state))
+          (then
+            (local.set $state (local.get $state_candidate))
+            (local.set $state_candidate (i32.const 0))
+            (i32.store offset=12 (local.get $queue) (local.get $state))))
+        (local.set $state_wa (call $g2w (local.get $state)))
+        (local.set $tail (i32.load offset=4 (local.get $state_wa)))
+        (if (local.get $tail)
+          (then (i32.store (call $g2w (local.get $tail)) (local.get $node)))
+          (else (i32.store (local.get $state_wa) (local.get $node))))
+        (i32.store offset=4 (local.get $state_wa) (local.get $node))
+        (i32.store offset=8 (local.get $state_wa)
+          (i32.add (i32.load offset=8 (local.get $state_wa)) (i32.const 1)))
+        (call $lock_wnd_release)
+        (if (local.get $state_candidate)
+          (then (call $heap_free (local.get $state_candidate))))
+        (return (i32.const 1))))
     (local.set $tail (i32.load offset=8 (local.get $queue)))
     (local.set $slot (i32.add (local.get $queue)
       (i32.add (i32.const 0x10) (i32.mul (local.get $tail) (i32.const 16)))))
@@ -437,9 +521,38 @@
     (i32.const 1)
   )
 
-  (func $shared_post_queue_read (param $msg_ptr i32) (param $remove i32) (result i32)
-    (local $cnt i32) (local $head i32) (local $slot i32) (local $queue i32)
-    (local.set $queue (call $thread_msg_queue_addr (global.get $current_thread_id)))
+  (func $shared_post_queue_matches
+        (param $hwnd i32) (param $msg i32) (param $hwnd_filter i32)
+        (param $msg_min i32) (param $msg_max i32) (result i32)
+    (i32.and
+      (i32.or
+        (i32.eqz (local.get $hwnd_filter))
+        (i32.or
+          (i32.eq (local.get $hwnd) (local.get $hwnd_filter))
+          (i32.and
+            (i32.eq (local.get $hwnd_filter) (i32.const -1))
+            (i32.eqz (local.get $hwnd)))))
+      (i32.or
+        (i32.and (i32.eqz (local.get $msg_min)) (i32.eqz (local.get $msg_max)))
+        (i32.and
+          (i32.ge_u (local.get $msg) (local.get $msg_min))
+          (i32.le_u (local.get $msg) (local.get $msg_max))))))
+
+  ;; Scan both the fixed shared ring and its overflow list with PeekMessage's
+  ;; filters. Queue mutation stays under LOCK_WND; timestamp/point synthesis
+  ;; happens after release because it calls the host clock.
+  (func $shared_post_queue_peek_tid
+        (param $tid i32) (param $msg_ptr i32) (param $hwnd_filter i32)
+        (param $msg_min i32) (param $msg_max i32) (param $remove i32)
+        (result i32)
+    (local $cnt i32) (local $head i32) (local $tail i32) (local $queue i32)
+    (local $slot i32) (local $src i32) (local $index i32) (local $j i32)
+    (local $found i32) (local $hwnd i32) (local $msg i32)
+    (local $wparam i32) (local $lparam i32)
+    (local $state i32) (local $state_wa i32)
+    (local $node i32) (local $prev i32) (local $node_wa i32) (local $next i32)
+    (local $free_node i32) (local $free_state i32)
+    (local.set $queue (call $thread_msg_queue_addr (local.get $tid)))
     (if (i32.eqz (local.get $queue)) (then (return (i32.const 0))))
     ;; Count is the producer's publication word. Avoid taking the process-wide
     ;; window lock for the overwhelmingly common empty poll; a producer racing
@@ -455,26 +568,274 @@
         (call $lock_wnd_release)
         (return (i32.const 0))))
     (local.set $head (i32.load offset=4 (local.get $queue)))
-    (local.set $slot (i32.add (local.get $queue)
-      (i32.add (i32.const 0x10) (i32.mul (local.get $head) (i32.const 16)))))
-    (call $gs32 (local.get $msg_ptr) (i32.load (local.get $slot)))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (i32.load offset=4 (local.get $slot)))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (i32.load offset=8 (local.get $slot)))
-    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (i32.load offset=12 (local.get $slot)))
-    (call $msg_store_input_tail
-      (local.get $msg_ptr)
-      (i32.load (local.get $slot))
-      (i32.load offset=4 (local.get $slot))
-      (i32.load offset=12 (local.get $slot)))
+    ;; Ring entries are logical head..head+count even when their storage wraps.
+    (block $ring_done (loop $ring_scan
+      (br_if $ring_done (i32.ge_u (local.get $index) (local.get $cnt)))
+      (local.set $slot (i32.add (local.get $queue)
+        (i32.add (i32.const 0x10)
+          (i32.mul
+            (i32.rem_u (i32.add (local.get $head) (local.get $index))
+              (global.get $THREAD_MSG_QUEUE_MAX))
+            (i32.const 16)))))
+      (if (call $shared_post_queue_matches
+            (i32.load (local.get $slot)) (i32.load offset=4 (local.get $slot))
+            (local.get $hwnd_filter) (local.get $msg_min) (local.get $msg_max))
+        (then
+          (local.set $found (i32.const 1))
+          (br $ring_done)))
+      (local.set $index (i32.add (local.get $index) (i32.const 1)))
+      (br $ring_scan)))
+    ;; If the inline prefix has no match, continue through heap overflow in
+    ;; exact FIFO order rather than returning/removing the shared head.
+    (if (i32.eqz (local.get $found))
+      (then
+        (local.set $state (i32.load offset=12 (local.get $queue)))
+        (if (local.get $state)
+          (then
+            (local.set $state_wa (call $g2w (local.get $state)))
+            (local.set $node (i32.load (local.get $state_wa)))
+            (block $overflow_done (loop $overflow_scan
+              (br_if $overflow_done (i32.eqz (local.get $node)))
+              (local.set $node_wa (call $g2w (local.get $node)))
+              (local.set $next (i32.load (local.get $node_wa)))
+              (if (call $shared_post_queue_matches
+                    (i32.load offset=4 (local.get $node_wa))
+                    (i32.load offset=8 (local.get $node_wa))
+                    (local.get $hwnd_filter) (local.get $msg_min) (local.get $msg_max))
+                (then
+                  (local.set $found (i32.const 2))
+                  (br $overflow_done)))
+              (local.set $prev (local.get $node))
+              (local.set $node (local.get $next))
+              (br $overflow_scan)))))))
+    (if (i32.eqz (local.get $found))
+      (then
+        (call $lock_wnd_release)
+        (return (i32.const 0))))
+    (if (i32.eq (local.get $found) (i32.const 1))
+      (then
+        (local.set $hwnd (i32.load (local.get $slot)))
+        (local.set $msg (i32.load offset=4 (local.get $slot)))
+        (local.set $wparam (i32.load offset=8 (local.get $slot)))
+        (local.set $lparam (i32.load offset=12 (local.get $slot))))
+      (else
+        (local.set $hwnd (i32.load offset=4 (local.get $node_wa)))
+        (local.set $msg (i32.load offset=8 (local.get $node_wa)))
+        (local.set $wparam (i32.load offset=12 (local.get $node_wa)))
+        (local.set $lparam (i32.load offset=16 (local.get $node_wa)))))
     (if (local.get $remove)
       (then
-        (i32.store offset=4 (local.get $queue)
-          (i32.rem_u (i32.add (local.get $head) (i32.const 1))
-            (global.get $THREAD_MSG_QUEUE_MAX)))
-        (i32.store (local.get $queue) (i32.sub (local.get $cnt) (i32.const 1)))))
+        (if (i32.eq (local.get $found) (i32.const 1))
+          (then
+            ;; Close the logical gap inside the circular ring.
+            (local.set $j (local.get $index))
+            (block $shift_done (loop $shift
+              (br_if $shift_done
+                (i32.ge_u (i32.add (local.get $j) (i32.const 1)) (local.get $cnt)))
+              (local.set $slot (i32.add (local.get $queue)
+                (i32.add (i32.const 0x10)
+                  (i32.mul
+                    (i32.rem_u (i32.add (local.get $head) (local.get $j))
+                      (global.get $THREAD_MSG_QUEUE_MAX))
+                    (i32.const 16)))))
+              (local.set $src (i32.add (local.get $queue)
+                (i32.add (i32.const 0x10)
+                  (i32.mul
+                    (i32.rem_u
+                      (i32.add (i32.add (local.get $head) (local.get $j)) (i32.const 1))
+                      (global.get $THREAD_MSG_QUEUE_MAX))
+                    (i32.const 16)))))
+              (call $memcpy (local.get $slot) (local.get $src) (i32.const 16))
+              (local.set $j (i32.add (local.get $j) (i32.const 1)))
+              (br $shift)))
+            (local.set $cnt (i32.sub (local.get $cnt) (i32.const 1)))
+            (local.set $tail
+              (i32.rem_u
+                (i32.add (i32.load offset=8 (local.get $queue))
+                  (i32.sub (global.get $THREAD_MSG_QUEUE_MAX) (i32.const 1)))
+                (global.get $THREAD_MSG_QUEUE_MAX)))
+            (i32.store offset=8 (local.get $queue) (local.get $tail))
+            ;; Refill the ring from overflow, preserving the invariant used by
+            ;; the lock-free empty hint.
+            (local.set $state (i32.load offset=12 (local.get $queue)))
+            (if (local.get $state)
+              (then
+                (local.set $state_wa (call $g2w (local.get $state)))
+                (local.set $node (i32.load (local.get $state_wa)))
+                (local.set $node_wa (call $g2w (local.get $node)))
+                (local.set $next (i32.load (local.get $node_wa)))
+                (local.set $slot (i32.add (local.get $queue)
+                  (i32.add (i32.const 0x10) (i32.mul (local.get $tail) (i32.const 16)))))
+                (i32.store          (local.get $slot) (i32.load offset=4 (local.get $node_wa)))
+                (i32.store offset=4 (local.get $slot) (i32.load offset=8 (local.get $node_wa)))
+                (i32.store offset=8 (local.get $slot) (i32.load offset=12 (local.get $node_wa)))
+                (i32.store offset=12 (local.get $slot) (i32.load offset=16 (local.get $node_wa)))
+                (i32.store offset=8 (local.get $queue)
+                  (i32.rem_u (i32.add (local.get $tail) (i32.const 1))
+                    (global.get $THREAD_MSG_QUEUE_MAX)))
+                (local.set $cnt (i32.add (local.get $cnt) (i32.const 1)))
+                (i32.store (local.get $state_wa) (local.get $next))
+                (i32.store offset=8 (local.get $state_wa)
+                  (i32.sub (i32.load offset=8 (local.get $state_wa)) (i32.const 1)))
+                (local.set $free_node (local.get $node))
+                (if (i32.eqz (local.get $next))
+                  (then
+                    (i32.store offset=4 (local.get $state_wa) (i32.const 0))
+                    (i32.store offset=12 (local.get $queue) (i32.const 0))
+                    (local.set $free_state (local.get $state))))))
+            ;; Count is the publication word and follows every moved payload.
+            (i32.store (local.get $queue) (local.get $cnt)))
+          (else
+            ;; Removing a filtered overflow node never disturbs the ring.
+            (if (local.get $prev)
+              (then (i32.store (call $g2w (local.get $prev)) (local.get $next)))
+              (else (i32.store (local.get $state_wa) (local.get $next))))
+            (if (i32.eq (local.get $node) (i32.load offset=4 (local.get $state_wa)))
+              (then (i32.store offset=4 (local.get $state_wa) (local.get $prev))))
+            (i32.store offset=8 (local.get $state_wa)
+              (i32.sub (i32.load offset=8 (local.get $state_wa)) (i32.const 1)))
+            (local.set $free_node (local.get $node))
+            (if (i32.eqz (local.get $next))
+              (then
+                (if (i32.eqz (local.get $prev))
+                  (then
+                    (i32.store offset=12 (local.get $queue) (i32.const 0))
+                    (local.set $free_state (local.get $state))))))))))
     (call $lock_wnd_release)
+    (if (local.get $free_node) (then (call $heap_free (local.get $free_node))))
+    (if (local.get $free_state) (then (call $heap_free (local.get $free_state))))
+    (call $gs32 (local.get $msg_ptr) (local.get $hwnd))
+    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (local.get $msg))
+    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (local.get $wparam))
+    (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (local.get $lparam))
+    (call $msg_store_input_tail
+      (local.get $msg_ptr) (local.get $hwnd) (local.get $msg) (local.get $lparam))
     (i32.const 1)
   )
+
+  (func $shared_post_queue_peek
+        (param $msg_ptr i32) (param $hwnd_filter i32)
+        (param $msg_min i32) (param $msg_max i32) (param $remove i32)
+        (result i32)
+    (call $shared_post_queue_peek_tid
+      (global.get $current_thread_id)
+      (local.get $msg_ptr) (local.get $hwnd_filter)
+      (local.get $msg_min) (local.get $msg_max) (local.get $remove)))
+
+  (func $shared_post_queue_read (param $msg_ptr i32) (param $remove i32) (result i32)
+    (call $shared_post_queue_peek
+      (local.get $msg_ptr) (i32.const 0) (i32.const 0) (i32.const 0)
+      (local.get $remove)))
+
+  ;; Window destruction may run on a thread other than the HWND's owner, and a
+  ;; producer may have resolved the owner just before unpublication. Scan every
+  ;; canonical queue; the enqueue-side locked recheck plus a post-unpublish
+  ;; purge makes that race failure-atomic.
+  (func $shared_post_queue_purge_hwnd (param $hwnd i32)
+    (local $tid i32) (local $msg_ptr i32)
+    (if (i32.eqz (local.get $hwnd)) (then (return)))
+    (local.set $msg_ptr (call $w2g (call $paint_scratch_take)))
+    (local.set $tid (i32.const 1))
+    (block $done (loop $queues
+      (br_if $done (i32.gt_u (local.get $tid) (i32.const 16)))
+      (block $queue_done (loop $remove
+        (br_if $queue_done
+          (i32.eqz (call $shared_post_queue_peek_tid
+            (local.get $tid) (local.get $msg_ptr) (local.get $hwnd)
+            (i32.const 0) (i32.const 0) (i32.const 1))))
+        (br $remove)))
+      (local.set $tid (i32.add (local.get $tid) (i32.const 1)))
+      (br $queues))))
+
+  ;; Locked queue introspection is used by USER wake predicates and the debug
+  ;; exports. The 64-entry ring count alone is not the queue depth once a burst
+  ;; has reached the heap-backed FIFO.
+  (func $shared_post_queue_total_count_tid (param $tid i32) (result i32)
+    (local $queue i32) (local $state i32) (local $count i32)
+    (local.set $queue (call $thread_msg_queue_addr (local.get $tid)))
+    (if (i32.eqz (local.get $queue)) (then (return (i32.const 0))))
+    (call $lock_wnd_acquire)
+    (local.set $count (i32.load (local.get $queue)))
+    (local.set $state (i32.load offset=12 (local.get $queue)))
+    (if (local.get $state)
+      (then
+        (local.set $count (i32.add (local.get $count)
+          (i32.load offset=8 (call $g2w (local.get $state)))))))
+    (call $lock_wnd_release)
+    (local.get $count))
+
+  (func $shared_post_queue_total_count (result i32)
+    (call $shared_post_queue_total_count_tid (global.get $current_thread_id)))
+
+  (func $shared_post_queue_peek_field_tid
+        (param $tid i32) (param $index i32) (param $field i32) (result i32)
+    (local $queue i32) (local $count i32) (local $head i32)
+    (local $slot i32) (local $state i32) (local $node i32)
+    (local $i i32) (local $value i32)
+    (if (i32.ge_u (local.get $field) (i32.const 4))
+      (then (return (i32.const 0))))
+    (local.set $queue (call $thread_msg_queue_addr (local.get $tid)))
+    (if (i32.eqz (local.get $queue)) (then (return (i32.const 0))))
+    (call $lock_wnd_acquire)
+    (local.set $count (i32.load (local.get $queue)))
+    (if (i32.lt_u (local.get $index) (local.get $count))
+      (then
+        (local.set $head (i32.load offset=4 (local.get $queue)))
+        (local.set $slot (i32.add (local.get $queue)
+          (i32.add (i32.const 0x10)
+            (i32.mul
+              (i32.rem_u (i32.add (local.get $head) (local.get $index))
+                (global.get $THREAD_MSG_QUEUE_MAX))
+              (i32.const 16)))))
+        (local.set $value (i32.load (i32.add (local.get $slot)
+          (i32.shl (local.get $field) (i32.const 2))))))
+      (else
+        (local.set $state (i32.load offset=12 (local.get $queue)))
+        (if (local.get $state)
+          (then
+            (local.set $node (i32.load (call $g2w (local.get $state))))
+            (local.set $i (local.get $count))
+            (block $done (loop $scan
+              (br_if $done (i32.eqz (local.get $node)))
+              (if (i32.eq (local.get $i) (local.get $index))
+                (then
+                  (local.set $value (i32.load (i32.add
+                    (call $g2w (local.get $node))
+                    (i32.add (i32.const 4)
+                      (i32.shl (local.get $field) (i32.const 2))))))
+                  (br $done)))
+              (local.set $node (i32.load (call $g2w (local.get $node))))
+              (local.set $i (i32.add (local.get $i) (i32.const 1)))
+              (br $scan)))))))
+    (call $lock_wnd_release)
+    (local.get $value))
+
+  ;; Detach under USER's process lock, then free after releasing it. Keeping the
+  ;; overflow pointers in shared memory means a dead Worker cannot orphan them;
+  ;; thread exit and slot reuse can both reclaim the same canonical queue.
+  (func $shared_post_queue_reset_tid (param $tid i32)
+    (local $queue i32) (local $state i32) (local $state_wa i32)
+    (local $node i32) (local $next i32)
+    (local.set $queue (call $thread_msg_queue_addr (local.get $tid)))
+    (if (i32.eqz (local.get $queue)) (then (return)))
+    (call $lock_wnd_acquire)
+    (local.set $state (i32.load offset=12 (local.get $queue)))
+    (if (local.get $state)
+      (then
+        (local.set $state_wa (call $g2w (local.get $state)))
+        (local.set $node (i32.load (local.get $state_wa)))))
+    (i32.store          (local.get $queue) (i32.const 0))
+    (i32.store offset=4 (local.get $queue) (i32.const 0))
+    (i32.store offset=8 (local.get $queue) (i32.const 0))
+    (i32.store offset=12 (local.get $queue) (i32.const 0))
+    (call $lock_wnd_release)
+    (block $done (loop $free
+      (br_if $done (i32.eqz (local.get $node)))
+      (local.set $next (i32.load (call $g2w (local.get $node))))
+      (call $heap_free (local.get $node))
+      (local.set $node (local.get $next))
+      (br $free)))
+    (if (local.get $state) (then (call $heap_free (local.get $state)))))
 
 ;; ---- PlaySound / sndPlaySound shared core --------------------------------
   ;; sndPlaySoundA, PlaySoundA and PlaySoundW all end up doing one thing: hand

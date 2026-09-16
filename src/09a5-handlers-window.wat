@@ -1807,11 +1807,8 @@
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 4)) (local.get $msg))           ;; msg
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 8)) (i32.load (i32.add (local.get $tmp) (i32.const 8))))  ;; wParam
     (call $gs32 (i32.add (local.get $msg_ptr) (i32.const 12)) (i32.load (i32.add (local.get $tmp) (i32.const 12)))) ;; lParam
-    ;; Shift remaining messages down
-    (global.set $post_queue_count (i32.sub (global.get $post_queue_count) (i32.const 1)))
-    (if (i32.gt_u (global.get $post_queue_count) (i32.const 0))
-    (then (call $memcpy (call $post_queue_base) (i32.add (call $post_queue_base) (i32.const 16))
-    (i32.mul (global.get $post_queue_count) (i32.const 16)))))
+    ;; Remove the inline head and promote the oldest heap overflow node.
+    (drop (call $post_queue_remove_at (i32.const 0)))
     ;; GetMessage returns zero for WM_QUIT even when it arrived through a
     ;; posted-message queue rather than PostQuitMessage's process-local flag.
     (global.set $eax (i32.ne (local.get $msg) (i32.const 0x0012)))
@@ -2262,23 +2259,15 @@
               (i32.load offset=12 (local.get $qaddr)))
             (if (i32.and (local.get $arg4) (i32.const 1))
               (then
-                (global.set $post_queue_count
-                  (i32.sub (global.get $post_queue_count) (i32.const 1)))
-                (if (i32.lt_u (local.get $qidx) (global.get $post_queue_count))
-                  (then
-                    (call $memcpy
-                      (local.get $qaddr)
-                      (i32.add (local.get $qaddr) (i32.const 16))
-                      (i32.mul
-                        (i32.sub (global.get $post_queue_count) (local.get $qidx))
-                        (i32.const 16)))))))
+                (drop (call $post_queue_remove_at (local.get $qidx)))))
             (global.set $eax (i32.const 1))
             (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
             (return)))
       )
     )
-    (if (call $shared_post_queue_read
-          (local.get $arg0)
+    (if (call $shared_post_queue_peek
+          (local.get $arg0) (local.get $arg1)
+          (local.get $arg2) (local.get $arg3)
           (i32.and (local.get $arg4) (i32.const 1)))
       (then
         (global.set $eax (i32.const 1))
@@ -3713,10 +3702,6 @@
               (local.get $arg3) (local.get $arg4))))
     (global.set $eax (i32.const 0))
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
-
-  (func $handle_SetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
 
   ;; BOOL FlashWindow(HWND hWnd, BOOL bInvert)
   ;; If bInvert is TRUE, toggles the titlebar between active and inactive.

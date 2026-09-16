@@ -35,7 +35,8 @@ const extraWat = String.raw`
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
     (global.set $handler_set_eip (i32.const 0))
-    (global.set $post_queue_count (i32.const 0))
+    (call $post_queue_reset)
+    (call $shared_post_queue_reset_tid (global.get $current_thread_id))
     (drop (call $post_queue_push
       (local.get $hwnd) (local.get $msg)
       (local.get $wparam) (local.get $lparam)))
@@ -43,7 +44,8 @@ const extraWat = String.raw`
     (global.set $eip (global.get $dlg_loop_thunk)))
 
   (func (export "test_clear_post_queue")
-    (global.set $post_queue_count (i32.const 0)))
+    (call $post_queue_reset)
+    (call $shared_post_queue_reset_tid (global.get $current_thread_id)))
 `;
 
 function u32(value) {
@@ -75,6 +77,7 @@ function u32(value) {
   const view = new DataView(memory.buffer);
   const seen = e.guest_alloc(16) >>> 0;
   const proc = e.guest_alloc(64) >>> 0;
+  const queuedMsg = e.guest_alloc(28) >>> 0;
   const stack = (e.guest_alloc(4096) + 4080) >>> 0;
 
   // WndProc(hwnd, msg, wParam, lParam): record all four arguments and return.
@@ -114,6 +117,16 @@ function u32(value) {
   const commandHwnd = 0x10003;
   e.test_start_dialog_post(commandHwnd, proc, stack,
     0x0111, 1, 0x10004);
+  assert.strictEqual(e.post_queue_depth(), 1,
+    'queued dialog command enters the canonical owner-thread FIFO');
+  assert.strictEqual(e.test_shared_post_read(queuedMsg, 0), 1);
+  assert.deepStrictEqual([0, 4, 8, 12].map(offset =>
+    view.getUint32(toWasm(queuedMsg + offset), true)),
+  [commandHwnd, 0x0111, 1, 0x10004],
+  'modal pump queue exposes the complete command before removal');
+  e.run(100000);
+  // The modal pump deliberately creates a scheduler boundary before entering
+  // the guest DlgProc; resume once to execute the callback it selected.
   e.run(100000);
   assert.strictEqual(view.getUint32(seenWa, true), commandHwnd,
     'modal dialog pump dispatches a queued command to its dialog hwnd');

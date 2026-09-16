@@ -276,8 +276,8 @@ const digest = crypto.createHash('sha256')
 // capability queries now validate their complete COM argument tuples against
 // the exposed adapter and shared texture backend. The multisample query reads
 // its real final stack argument instead of mistaking Windowed for the mode.
-const EXPECTED_COUNT = 273;
-const EXPECTED_SHA256 = '6873938aef7a95d6ddd6f26e7fb253304fe310d2b9bb24b2c426977f8b5ba2b1';
+const EXPECTED_COUNT = 272;
+const EXPECTED_SHA256 = 'cbbe04d93991774f1fe24a934ee6186250ef84908cf33b9aed7d05719368e507';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

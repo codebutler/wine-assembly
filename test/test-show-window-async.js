@@ -13,7 +13,6 @@ const ESP0 = 0x07390000;
 const MSG = 0x00510000;
 const WS_VISIBLE = 0x10000000;
 const ERROR_INVALID_WINDOW_HANDLE = 1400;
-const ERROR_NOT_ENOUGH_QUOTA = 1816;
 const LAST_ERROR_SENTINEL = 0x5a5aa55a;
 
 const extraWat = String.raw`
@@ -42,18 +41,8 @@ const extraWat = String.raw`
     (global.get $eax))
 
   (func (export "test_dispatch_first_post") (result i32)
-    (local $src i32)
-    (local.set $src (call $post_queue_base))
-    (call $gs32 (i32.const ${MSG}) (i32.load (local.get $src)))
-    (call $gs32 (i32.const ${MSG + 4}) (i32.load offset=4 (local.get $src)))
-    (call $gs32 (i32.const ${MSG + 8}) (i32.load offset=8 (local.get $src)))
-    (call $gs32 (i32.const ${MSG + 12}) (i32.load offset=12 (local.get $src)))
-    (global.set $post_queue_count
-      (i32.sub (global.get $post_queue_count) (i32.const 1)))
-    (if (i32.gt_u (global.get $post_queue_count) (i32.const 0))
-      (then (call $memcpy (local.get $src)
-        (i32.add (local.get $src) (i32.const 16))
-        (i32.mul (global.get $post_queue_count) (i32.const 16)))))
+    (if (i32.eqz (call $shared_post_queue_read (i32.const ${MSG}) (i32.const 1)))
+      (then (unreachable)))
     (global.set $esp (i32.const ${ESP0}))
     (call $gs32 (global.get $esp) (i32.const 0))
     (call $handle_DispatchMessageA
@@ -147,13 +136,20 @@ const extraWat = String.raw`
     ERROR_INVALID_WINDOW_HANDLE);
   assert.strictEqual(e.post_queue_depth(), 0);
 
-  e.set_post_queue_count(64);
+  for (let i = 0; i < 64; i++) {
+    assert.strictEqual(e.post_message_q(0, 0x500 + i, i, i), 1);
+  }
   e.test_set_last_error(LAST_ERROR_SENTINEL);
-  assert.strictEqual(e.test_call_ShowWindowAsync(hwnd, 5) >>> 0, 0,
-    'a full owner queue reports that the operation did not start');
-  assert.strictEqual(e.test_get_last_error() >>> 0, ERROR_NOT_ENOUGH_QUOTA);
+  assert.strictEqual(e.test_call_ShowWindowAsync(hwnd, 5) >>> 0, 1,
+    'an owner queue grows beyond its allocation-free 64-message prefix');
+  assert.strictEqual(e.test_get_last_error() >>> 0, LAST_ERROR_SENTINEL);
+  assert.strictEqual(e.post_queue_depth(), 65);
+  assert.deepStrictEqual([0, 1, 2, 3].map(field =>
+    e.post_queue_peek(64, field) >>> 0),
+  [hwnd, 0x7fef, 5, 0x53485741],
+  'the deferred show command retains FIFO position in heap overflow');
   assert.strictEqual(hostShows.length, 2,
-    'queue failure has no host-visible side effect');
+    'growing the queue still has no synchronous host-visible side effect');
   e.set_post_queue_count(0);
 
   console.log('PASS ShowWindowAsync defers complete show state through the owner post queue');

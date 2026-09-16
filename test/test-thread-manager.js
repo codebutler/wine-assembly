@@ -638,9 +638,11 @@ assert.strictEqual(priorityRuns[0], 'visualizer', 'budgeted scheduler should alt
 
 const exitNotifications = [];
 const exitedWindowThreads = [];
+const exitedQueueThreads = [];
 const exitTm = makeThreadManager({
   onThreadExit: info => exitNotifications.push(info),
 });
+exitTm.mainInstance.exports.reset_thread_message_queue = tid => exitedQueueThreads.push(tid);
 exitTm.markAudioThread(3, 1000);
 const exitThread = {
   tid: 3,
@@ -659,6 +661,8 @@ exitTm._markThreadExited(0xe1007, exitThread, 8, 'duplicate');
 assert.strictEqual(exitNotifications.length, 1, 'thread exit callback should fire once');
 assert.deepStrictEqual(exitedWindowThreads, [4],
   'thread exit should destroy its Win32 thread id windows exactly once');
+assert.deepStrictEqual(exitedQueueThreads, [4],
+  'thread exit should reclaim its shared USER queue exactly once');
 assert.deepStrictEqual(exitNotifications[0], {
   handle: 0xe1007,
   tid: 3,

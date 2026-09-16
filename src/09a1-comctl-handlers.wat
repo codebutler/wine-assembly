@@ -800,8 +800,8 @@
     (local $bits i32) (local $msg i32)
     ;; Posted messages satisfy both QS_POSTMESSAGE and QS_ALLPOSTMESSAGE.
     (if (i32.or
-          (i32.gt_u (global.get $post_queue_count) (i32.const 0))
-          (i32.gt_u (i32.load (i32.const 0xB400)) (i32.const 0)))
+          (i32.gt_u (call $post_queue_total_count) (i32.const 0))
+          (i32.gt_u (call $shared_post_queue_total_count) (i32.const 0)))
       (then (local.set $bits (i32.or (local.get $bits) (i32.const 0x0108)))))
     (if (global.get $pending_input_packed)
       (then

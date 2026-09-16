@@ -19,6 +19,11 @@
   ;; CONSTANT API STUBS — GENERATED, do not edit
   ;; Opted in with stub:{pop,ret} in api_table.json.
   ;; ============================================================
+  ;; SetMessageQueue: pop 8, return 1
+  (func $handle_SetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
+    (global.set $eax (i32.const 1))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+
   ;; StgIsStorageFile: pop 8, return 0x800300fb
   (func $handle_StgIsStorageFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (global.set $eax (i32.const 0x800300fb))
@@ -959,6 +964,14 @@
     (local $saved_esp i32)
     (local.set $saved_esp (global.get $esp))
     (call $handle_GetTextCharacterExtra
+      (local.get $arg0) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.set $esp (local.get $saved_esp))
+    (global.get $eax))
+  (func (export "test_call_SetMessageQueue") (param $arg0 i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (global.get $esp))
+    (call $handle_SetMessageQueue
       (local.get $arg0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $esp (local.get $saved_esp))

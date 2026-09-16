@@ -395,3 +395,14 @@ validate their complete Win98 caller structures before reserving a window,
 entering modal state, allocating printer objects, or writing caller memory;
 documented size, Find/Replace-buffer, font-range, and default-printer failures
 remain distinguishable from an ordinary Cancel.
+
+2026-09-15: 273 -> 272 manual handlers; 20 -> 21 explicit metadata stubs.
+SetMessageQueue's constant TRUE is the documented Win32 compatibility contract,
+not missing behavior: the obsolete call does nothing because USER grows a
+thread's queue as necessary. The hand-written body therefore moved to explicit
+generated stub metadata. Same-thread and cross-Worker producers now serialize
+into one process-shared FIFO per Win32 thread, with a 64-message allocation-free
+ring and heap-backed overflow across all sixteen execution slots. Filtered
+retrieval, destruction purge, modal dispatch, wake predicates, slot reuse and
+forced thread exit all address that same queue, so authentic QBob's
+SetMessageQueue(96) cannot conceal an emulator-only ceiling or split-order bug.

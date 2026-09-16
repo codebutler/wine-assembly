@@ -66,6 +66,7 @@
     (local $api_id i32) (local $name_rva i32) (local $name_ptr i32)
     (local $arg0 i32) (local $arg1 i32) (local $arg2 i32) (local $arg3 i32)
     (local $arg4 i32)
+    (local $queued i32) (local $queue_msg_ptr i32)
     (local $saved_ebx i32) (local $saved_esi i32)
     (local $saved_edi i32) (local $saved_ebp i32)
 
@@ -846,18 +847,33 @@
             (global.set $eip (local.get $arg4))
             (global.set $steps (i32.const 0))
             (return)))
-        ;; Check post queue next
+        ;; Check the raw test prefix first, then the canonical shared USER
+        ;; queue. Normal same-thread and cross-thread posts both use the latter.
+        (local.set $queued (i32.const 0))
         (if (i32.gt_u (global.get $post_queue_count) (i32.const 0))
           (then
             (local.set $arg0 (i32.load (call $post_queue_base)))        ;; hwnd
             (local.set $arg1 (i32.load offset=4 (call $post_queue_base))) ;; msg
             (local.set $arg2 (i32.load offset=8 (call $post_queue_base))) ;; wParam
             (local.set $arg3 (i32.load offset=12 (call $post_queue_base))) ;; lParam
-            ;; Shift queue
-            (global.set $post_queue_count (i32.sub (global.get $post_queue_count) (i32.const 1)))
-            (if (i32.gt_u (global.get $post_queue_count) (i32.const 0))
-              (then (call $memcpy (call $post_queue_base) (i32.add (call $post_queue_base) (i32.const 16))
-                (i32.mul (global.get $post_queue_count) (i32.const 16)))))
+            ;; Remove the inline head and promote the oldest heap overflow node,
+            ;; if a burst grew the queue past its allocation-free prefix.
+            (drop (call $post_queue_remove_at (i32.const 0)))
+            (local.set $queued (i32.const 1)))
+          (else
+            (local.set $queue_msg_ptr (call $w2g (call $paint_scratch_take)))
+            (if (call $shared_post_queue_read (local.get $queue_msg_ptr) (i32.const 1))
+              (then
+                (local.set $arg0 (call $gl32 (local.get $queue_msg_ptr)))
+                (local.set $arg1 (call $gl32
+                  (i32.add (local.get $queue_msg_ptr) (i32.const 4))))
+                (local.set $arg2 (call $gl32
+                  (i32.add (local.get $queue_msg_ptr) (i32.const 8))))
+                (local.set $arg3 (call $gl32
+                  (i32.add (local.get $queue_msg_ptr) (i32.const 12))))
+                (local.set $queued (i32.const 1))))))
+        (if (local.get $queued)
+          (then
             ;; Dispatch by hwnd wndproc — WAT-native controls handle directly
             (local.set $arg4 (call $wnd_table_get (local.get $arg0)))
             ;; WNDPROC_DIALOG is a USER marker, not a WAT callback. Enter its
@@ -1379,7 +1395,9 @@
                 (i32.const 0x102)
                 (i32.or
                   (i32.or (global.get $quit_flag)
-                          (i32.gt_u (global.get $post_queue_count) (i32.const 0)))
+                    (i32.or
+                      (i32.gt_u (call $post_queue_total_count) (i32.const 0))
+                      (i32.gt_u (call $shared_post_queue_total_count) (i32.const 0))))
                   (i32.or
                     (i32.or (global.get $paint_pending) (global.get $nc_flags_count))
                     (call $paint_flag_any)))))))

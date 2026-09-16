@@ -20,8 +20,9 @@
     (if (i32.or
           (i32.or
             (i32.or (global.get $quit_flag)
-                    (i32.gt_u (global.get $post_queue_count) (i32.const 0)))
-            (i32.or (call $shared_post_queue_read (call $paint_scratch_take) (i32.const 0))
+                    (i32.gt_u (call $post_queue_total_count) (i32.const 0)))
+            (i32.or (call $shared_post_queue_read
+                      (call $w2g (call $paint_scratch_take)) (i32.const 0))
                     (global.get $pending_input_packed)))
           (i32.or
             (i32.or (global.get $paint_pending)

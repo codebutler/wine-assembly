@@ -121,10 +121,16 @@ assert.strictEqual(shadow.post_message_q(mainWindow, 0x922, 33, 44), 1);
 assert.strictEqual(shadow.post_message_q(workerWindow, 0x923, 55, 66), 1);
 assert.strictEqual(shadow.post_message_q(0, 0x924, 0, 0), 0);
 assert.strictEqual(shadow.post_message_q(0xBAD, 0x925, 0, 0), 0);
-assert.strictEqual(shadow.post_queue_depth(), 0);
-assert.deepStrictEqual(queued(guest8), workerLocal, 'shadow never mutates a real slot7 local queue');
+assert.strictEqual(shadow.post_queue_depth(), 2,
+  'shadow observes the owner thread canonical queue rather than a private copy');
+assert.deepStrictEqual(queued(guest8), [
+  ...workerLocal,
+  [workerWindow, 0x923, 55, 66],
+], 'shadow routes only the addressed owner message into the shared FIFO');
 assert.strictEqual(a.test_shared_post_read(0x403000, 1), 1);
 assert.deepStrictEqual(msg(), [mainWindow, 0x922, 33, 44]);
+assert.strictEqual(guest8.test_shared_post_read(0x403000, 1), 1);
+assert.deepStrictEqual(msg(), [0, 0x921, 11, 22]);
 assert.strictEqual(guest8.test_shared_post_read(0x403000, 1), 1);
 assert.deepStrictEqual(msg(), [workerWindow, 0x923, 55, 66]);
 assert.strictEqual(a.test_shared_post_read(0x403000, 1), 0);
@@ -135,34 +141,94 @@ assert.strictEqual(b.post_queue_depth(), 0);
 assert.strictEqual(a.test_shared_post_read(0x403000, 1), 1);
 assert.deepStrictEqual(msg(), [mainWindow, 0x926, 77, 88]);
 assert.strictEqual(a.post_message_q(mainWindow, 0x927, 99, 100), 1);
-assert.deepStrictEqual(queued(a), [[mainWindow, 0x927, 99, 100]], 'native same-thread posts stay private');
+assert.deepStrictEqual(queued(a), [[mainWindow, 0x927, 99, 100]],
+  'native same-thread posts use the same canonical queue');
 a.set_post_queue_count(0);
 console.log('PASS shadow and native cross-owner routing, same-slot byte isolation, distinct recursive lock ownership');
 
-for (const e of [a, b]) {
-  e.test_post(123, 0x601, 1, 2);
-  e.test_post(456, 0x602, 3, 4);
-  e.test_post(123, 0x603, 5, 6);
+// Same-thread and foreign producers serialize into one arrival order. This is
+// the invariant the former private/shared split could not represent.
+assert.strictEqual(a.test_post(mainWindow, 0x930, 1, 0), 1);
+assert.strictEqual(b.test_post(mainWindow, 0x931, 2, 0), 1);
+assert.strictEqual(a.test_post(mainWindow, 0x932, 3, 0), 1);
+assert.strictEqual(b.test_post(mainWindow, 0x933, 4, 0), 1);
+assert.deepStrictEqual(queued(a).map(entry => entry.slice(1, 3)), [
+  [0x930, 1], [0x931, 2], [0x932, 3], [0x933, 4],
+]);
+for (const id of [0x930, 0x931, 0x932, 0x933]) {
+  assert.strictEqual(a.test_get(), 1);
+  assert.strictEqual(msg()[1], id);
 }
-a.test_purge(123);
-assert.deepStrictEqual(queued(a), [[456, 0x602, 3, 4]]);
+console.log('PASS same-thread and cross-thread producers preserve one global FIFO');
+
+// The execution model exposes main plus fifteen worker slots. The appended
+// queue region must make the highest current_thread_id just as growable as 1..8.
+const guest16 = new WebAssembly.Instance(module_, imports).exports;
+guest16.init_thread(15, 0x400000, 0, 0, 0, 0, 0);
+const highWindow = 0xF0001;
+guest16.wnd_table_set(highWindow, 0x401000);
+for (let i = 0; i < 96; i++) {
+  assert.strictEqual(guest16.test_post(highWindow, 0xA40, i, 0), 1);
+}
+assert.strictEqual(guest16.post_queue_depth(), 96);
+assert.deepStrictEqual(queued(guest16)[64], [highWindow, 0xA40, 64, 0]);
+for (let i = 0; i < 96; i++) {
+  assert.strictEqual(guest16.test_get(), 1);
+  assert.strictEqual(msg()[1], 0xA40);
+  assert.strictEqual(msg()[2], i);
+}
+console.log('PASS thread slot 16 owns a growable canonical USER queue');
+
+const aDrop = 0x10011, aKeep = 0x10012, bDrop = 0x20011, bKeep = 0x20012;
+a.wnd_table_set(aDrop, 0x401000);
+a.wnd_table_set(aKeep, 0x401000);
+b.wnd_table_set(bDrop, 0x401000);
+b.wnd_table_set(bKeep, 0x401000);
+a.test_post(aDrop, 0x601, 1, 2);
+a.test_post(aKeep, 0x602, 3, 4);
+a.test_post(aDrop, 0x603, 5, 6);
+b.test_post(bDrop, 0x601, 1, 2);
+b.test_post(bKeep, 0x602, 3, 4);
+b.test_post(bDrop, 0x603, 5, 6);
+a.test_purge(aDrop);
+assert.deepStrictEqual(queued(a), [[aKeep, 0x602, 3, 4]]);
 assert.strictEqual(b.post_queue_depth(), 3);
 a.set_post_queue_count(0);
 b.set_post_queue_count(0);
-for (let i = 0; i < 64; i++) assert.strictEqual(a.test_post(0, 0x700 + i, i, i), 1);
-const full = queued(a);
-assert.strictEqual(a.test_post(0, 0x999, 99, 99), 0);
-assert.strictEqual(a.test_error(), 1816);
-assert.strictEqual(a.test_post_w(0x998), 0, 'wide handler shares failure semantics');
-assert.deepStrictEqual(queued(a), full);
+for (let i = 0; i < 96; i++) assert.strictEqual(a.test_post(0, 0x700 + i, i, i), 1);
+assert.strictEqual(a.post_queue_depth(), 96, 'canonical queue grows beyond its 64-entry inline prefix');
+assert.deepStrictEqual(queued(a)[64], [0, 0x740, 64, 64],
+  'debug queue view crosses from inline entries into heap overflow');
+assert.strictEqual(a.test_peek(0x75F, 0x75F, 1), 1,
+  'filtered PeekMessage can find and remove an overflow entry');
+assert.strictEqual(msg()[1], 0x75F);
+for (let i = 0; i < 95; i++) {
+  assert.strictEqual(a.test_get(), 1);
+  assert.strictEqual(msg()[1], 0x700 + i);
+}
+assert.strictEqual(a.post_queue_depth(), 0);
+assert.strictEqual(a.test_post_w(0x998), 1, 'wide handler shares growable queue semantics');
+assert.strictEqual(a.test_get(), 1);
+assert.strictEqual(msg()[1], 0x998);
+for (let i = 0; i < 96; i++) {
+  assert.strictEqual(a.test_post(i % 2 ? aKeep : aDrop, 0x900 + i, i, i), 1);
+}
+a.test_purge(aDrop);
+assert.strictEqual(a.post_queue_depth(), 48,
+  'destroyed-window purge spans both inline and overflow storage');
+assert(queued(a).every(entry => entry[0] === aKeep));
+a.set_post_queue_count(0);
 assert.strictEqual(b.test_post(0, 0x800, 0, 0), 1, 'other thread still has capacity');
-// A filtered hardware event must remain pending when it cannot join a full queue.
+// A filtered hardware event can join an already-grown queue and remains
+// discoverable behind older, nonmatching posts.
+for (let i = 0; i < 96; i++) assert.strictEqual(a.test_post(0, 0x700 + i, i, i), 1);
 hardware.push(0x000D0102);
 assert.strictEqual(a.test_peek(0x900, 0x900, 1), 0);
 assert.strictEqual(a.test_peek(0x102, 0x102, 1), 1);
 assert.strictEqual(msg()[1], 0x102);
-assert.deepStrictEqual(queued(a), full);
-console.log('PASS per-thread purge, truthful capacity failure, and retained filtered input');
+assert.strictEqual(a.post_queue_depth(), 96);
+a.set_post_queue_count(0);
+console.log('PASS per-thread purge, growable canonical FIFO, overflow filtering, and retained input');
 
 a.heap_init(0x420000);
 const pa = a.guest_alloc(64) >>> 0;
@@ -173,10 +239,12 @@ b.guest_free(pa);
 assert.strictEqual(b.guest_alloc(64) >>> 0, pa, 'worker reuses main allocation');
 const small = b.guest_alloc(64) >>> 0;
 const header = b.guest_read32(small - 4) >>> 0;
+const freeListBeforeMalformed = a.get_free_list();
 for (const size of [8, 65, 0x100000, 0xFFFFFFF8]) {
   b.guest_write32(small - 4, size);
   a.guest_free(small);
-  assert.strictEqual(a.get_free_list(), 0, `malformed extent ${size} refused`);
+  assert.strictEqual(a.get_free_list(), freeListBeforeMalformed,
+    `malformed extent ${size} refused without changing the existing free list`);
 }
 b.guest_write32(small - 4, header);
 // The reserved but never allocated tail is not a valid arena extent.
@@ -185,7 +253,7 @@ b.guest_write32(tail, 16);
 a.guest_free(tail + 4);
 a.guest_free(0x52544341);
 a.guest_free(small + 1);
-assert.strictEqual(a.get_free_list(), 0);
+assert.strictEqual(a.get_free_list(), freeListBeforeMalformed);
 a.guest_free(small);
 // Revalidate headers after a freed block is corrupted, before splitting it.
 b.guest_write32(small - 4, 0x100000);
@@ -207,7 +275,8 @@ console.log('PASS cross-thread current/old sparse arena reclamation and metadata
 // Reusing an exited thread slot must start with an empty queue even though the
 // underlying bytes still contain that slot's old messages.
 b.set_post_queue_count(0);
-b.test_post(0, 0x911, 0, 0);
+for (let i = 0; i < 96; i++) b.test_post(0, 0x911, i, 0);
+assert.strictEqual(b.post_queue_depth(), 96);
 const replacement = new WebAssembly.Instance(module_, imports).exports;
 replacement.init_thread(1, 0x400000, 0, 0, 0, 0, 0);
 assert.strictEqual(replacement.post_queue_depth(), 0);

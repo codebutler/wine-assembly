@@ -728,3 +728,9 @@
   (region.declare $DEVICE_NOTIFY_PAYLOADS (size 0x00000400) (align 0x00000010)
     (stride 0x20 (count $DEVICE_NOTIFY_RECORD_COUNT))
     (owner "09a7-handlers-dispatch.wat:$device_notify_payload_addr"))
+  ;; The original shared USER queue allocation covered thread ids 1..8. Keep
+  ;; those addresses stable and append the remaining eight slots instead of
+  ;; resizing the old declaration and moving every region allocated after it.
+  (region.declare $THREAD_MSG_QUEUES_HIGH (size 0x00002080) (align 0x00000100)
+    (stride $THREAD_MSG_QUEUE_STRIDE (count 8))
+    (owner "09a-handlers.wat:$thread_msg_queue_addr"))

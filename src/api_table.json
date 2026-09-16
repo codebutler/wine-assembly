@@ -10866,6 +10866,8 @@
     "id": 1249,
     "name": "SetMessageQueue",
     "nargs": 1,
+    "test_call": true,
+    "stub": { "pop": 8, "ret": 1 },
     "convention": "stdcall",
     "hash": 156967389
   },

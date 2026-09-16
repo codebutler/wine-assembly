@@ -25,9 +25,9 @@
   ;; "a ring of 16 RECTs" for the same reason.
   ;;
   ;; Emulator-private, NOT a guest ABI: the address handed out is a WASM linear
-  ;; address, and the two call sites that pass a slot to $shared_post_queue_read
-  ;; / $timer_check_due use it as an opaque 16-byte out-buffer rather than as a
-  ;; rect. Those never name a field, so they are not sites of this layout.
+  ;; address. Call sites using one as a guest MSG out-buffer convert it through
+  ;; $w2g first; timer helpers consume the WASM address directly. Neither names
+  ;; a PaintRect field, so they are not sites of this layout.
   (layout PaintRect
     (field left   i32)   ;; +0
     (field top    i32)   ;; +4
@@ -6542,47 +6542,69 @@
     (i32.add (global.get $LOCAL_POST_QUEUES)
       (i32.mul (i32.sub (global.get $current_thread_id) (i32.const 1)) (i32.const 1024))))
 
-  ;; $post_queue_push(hwnd, msg, wParam, lParam): append to this thread's queue.
-  ;; Same layout as PostMessageA. Returns 1 on success, 0 if full.
+  (func $post_queue_remove_at (param $index i32) (result i32)
+    (local $slot i32)
+    (if (i32.ge_u (local.get $index) (global.get $post_queue_count))
+      (then (return (i32.const 0))))
+    (local.set $slot (i32.add (call $post_queue_base)
+      (i32.mul (local.get $index) (i32.const 16))))
+    (global.set $post_queue_count
+      (i32.sub (global.get $post_queue_count) (i32.const 1)))
+    (if (i32.lt_u (local.get $index) (global.get $post_queue_count))
+      (then
+        (call $memcpy
+          (local.get $slot)
+          (i32.add (local.get $slot) (i32.const 16))
+          (i32.mul
+            (i32.sub (global.get $post_queue_count) (local.get $index))
+            (i32.const 16)))))
+    (i32.const 1))
+
+  (func $post_queue_total_count (result i32)
+    (global.get $post_queue_count))
+
+  (func $post_queue_peek_field (param $index i32) (param $field i32) (result i32)
+    (if (i32.ge_u (local.get $index) (global.get $post_queue_count))
+      (then (return (i32.const 0))))
+    (if (i32.ge_u (local.get $field) (i32.const 4))
+      (then (return (i32.const 0))))
+    (i32.load (i32.add
+      (i32.add (call $post_queue_base)
+        (i32.mul (local.get $index) (i32.const 16)))
+      (i32.shl (local.get $field) (i32.const 2)))))
+
+  (func $post_queue_reset
+    (global.set $post_queue_count (i32.const 0)))
+
+  ;; $post_queue_push(hwnd, msg, wParam, lParam): append to the target thread's
+  ;; one process-shared USER queue. Same-thread and cross-Worker producers must
+  ;; meet at this exact serialization point or Peek/GetMessage can reorder them
+  ;; and an unbounded private prefix can starve an older cross-thread post.
   (func $post_queue_push
         (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
         (result i32)
-    (local $slot i32) (local $owner i32)
+    (local $owner i32) (local $ok i32)
     (if (local.get $hwnd)
       (then (local.set $owner (call $wnd_get_thread (local.get $hwnd)))))
-    ;; Host callbacks and native helpers bypass PostMessageA. They still must
-    ;; deliver to the owning guest, never to an idle shadow's private count.
-    (if (global.get $host_shadow)
-      (then
-        (if (i32.eqz (local.get $owner)) (then (return (i32.const 0))))
-        (return (call $shared_post_queue_enqueue
-          (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
-    (if (i32.and (i32.ne (local.get $owner) (i32.const 0))
-                 (i32.ne (local.get $owner) (global.get $current_thread_id)))
-      (then (return (call $shared_post_queue_enqueue
-        (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))))
-    (if (i32.ge_u (global.get $post_queue_count) (i32.const 64))
+    ;; An idle host shadow has no guest thread queue of its own. It may only
+    ;; route a message whose live HWND names the actual owning queue.
+    (if (i32.and (global.get $host_shadow) (i32.eqz (local.get $owner)))
       (then (return (i32.const 0))))
-    (local.set $slot (i32.add (call $post_queue_base)
-      (i32.mul (global.get $post_queue_count) (i32.const 16))))
-    (i32.store          (local.get $slot) (local.get $hwnd))
-    (i32.store offset=4  (local.get $slot) (local.get $msg))
-    (i32.store offset=8  (local.get $slot) (local.get $wParam))
-    (i32.store offset=12 (local.get $slot) (local.get $lParam))
-    (global.set $post_queue_count (i32.add (global.get $post_queue_count) (i32.const 1)))
+    (local.set $ok (call $shared_post_queue_enqueue
+      (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)))
     ;; --trace-win16 shows every posted message going in, which is the other
     ;; half of the dlg-pump/task-loop lines showing them come out. A message
     ;; delivered twice is either pushed twice or popped twice, and only both
     ;; halves together say which.
-    (if (global.get $win16_trace)
+    (if (i32.and (local.get $ok) (global.get $win16_trace))
       (then
         (call $host_log_i32 (i32.const 0xCA16A9EC))
         (call $host_log_i32 (local.get $hwnd))
         (call $host_log_i32 (local.get $msg))
         (call $host_log_i32 (local.get $wParam))
         (call $host_log_i32 (local.get $lParam))
-        (call $host_log_i32 (global.get $post_queue_count))))
-    (i32.const 1))
+        (call $host_log_i32 (call $shared_post_queue_total_count))))
+    (local.get $ok))
 
   ;; $post_queue_purge_hwnd(hwnd): drop every queued message aimed at a window
   ;; that is going away. USER discards a destroyed window's queued messages;
@@ -6598,19 +6620,10 @@
         (i32.mul (local.get $i) (i32.const 16))))
       (if (i32.eq (i32.load (local.get $slot)) (local.get $hwnd))
         (then
-          (global.set $post_queue_count
-            (i32.sub (global.get $post_queue_count) (i32.const 1)))
-          (if (i32.lt_u (local.get $i) (global.get $post_queue_count))
-            (then
-              (call $memcpy
-                (local.get $slot)
-                (i32.add (local.get $slot) (i32.const 16))
-                (i32.mul
-                  (i32.sub (global.get $post_queue_count) (local.get $i))
-                  (i32.const 16))))))
+          (drop (call $post_queue_remove_at (local.get $i))))
         (else (local.set $i (i32.add (local.get $i) (i32.const 1)))))
       (br $scan)))
-  )
+    (call $shared_post_queue_purge_hwnd (local.get $hwnd)))
 
   ;; Skip a DLGTEMPLATE variable-length field (OrdOrString):
   ;;   0x0000 → null (skip 2 bytes)

@@ -61,7 +61,7 @@ if (!isMainThread) {
     rendezvous(memory);
     const out = [];
     if (job === 'post') {
-      for (let i = 0; i < 32; i++) {
+      for (let i = 0; i < 48; i++) {
         out.push(ex.test_shared_post(hwnd, 0x500 + tid, tid * 1000 + i, ~i) | 0);
       }
     } else if (job === 'timer') {
@@ -119,13 +119,18 @@ async function pair(wasmBytes, memory, jobA, jobB, extra = {}) {
     check((main.exports.get_window_thread(hwnd) | 0) === 1,
       'WND_RECORDS publishes the creating thread as HWND owner');
     const posts = (await pair(wasmBytes, memory, 'post', 'post', { hwnd })).flat();
-    check(posts.every(Boolean), 'two producers enqueue 64 messages without reporting loss');
+    check(posts.every(Boolean), 'two producers grow one owner queue past its 64-message fast ring');
     const got = [];
     while (main.exports.test_shared_post_read(MSG_GUEST, 1) | 0) {
       got.push(main.exports.guest_read32(MSG_GUEST + 8) | 0);
     }
-    check(got.length === 64 && new Set(got).size === 64,
+    check(got.length === 96 && new Set(got).size === 96,
       'the owner queue receives every message exactly once', `${got.length} messages`);
+    const producerOrder = [1, 2].every(tid => {
+      const own = got.filter(value => Math.trunc(value / 1000) === tid);
+      return own.length === 48 && own.every((value, i) => value === tid * 1000 + i);
+    });
+    check(producerOrder, 'concurrent overflow preserves each producer FIFO');
   }
 
   {

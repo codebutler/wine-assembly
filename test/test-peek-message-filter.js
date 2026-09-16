@@ -106,6 +106,7 @@ const extraWat = String.raw`
     'an unfiltered PM_REMOVE consumes the retained message');
   assert.strictEqual(e.get_post_queue_count(), 0);
 
+  e.test_input_window();
   const pollsBeforeHardware = hardwarePolls;
   hardware.push(0x00010201); // WM_LBUTTONDOWN, MK_LBUTTON
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x000F, 0x000F, 1), 0,
@@ -171,25 +172,46 @@ const extraWat = String.raw`
   }
 
   e.test_input_owner(2);
-  let filled = 0;
-  while (filled < 1024 && e.post_message_q(0x3333, 0x0400, filled, 0)) filled++;
-  assert(filled > 0 && filled < 1024, 'owner queue has a finite capacity');
+  const filled = 96;
+  for (let i = 0; i < filled; i++) {
+    assert.strictEqual(e.post_message_q(0x3333, 0x0400, i, 0), 1,
+      `cross-thread owner queue grows through message ${i}`);
+  }
   hardware.push(0x000D0100);
   e.test_call_GetMessageA(0x3000);
-  // Free a shared queue slot without consuming the worker's private pending input.
-  assert.strictEqual(e.test_read_owner_queue(0x3000), 1);
-  assert.strictEqual(msg.getUint32(8, true), 0);
-  e.test_call_GetMessageA(0x3000);
   e.test_input_owner(1);
-  for (let i = 1; i < filled; i++) {
+  for (let i = 0; i < filled; i++) {
     assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
     assert.strictEqual(msg.getUint32(4, true), 0x0400);
     assert.strictEqual(msg.getUint32(8, true), i);
   }
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
   assert.strictEqual(msg.getUint32(4, true), 0x0100,
-    'a full owner queue retains and retries the hardware event without loss');
+    'hardware routed behind a grown owner queue is retained without loss');
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 0);
+
+  // Cross-thread posts use the same filtered queue path. Put the only admitted
+  // message behind a full 64-entry ring so the scan must reach heap overflow
+  // without deleting the excluded prefix.
+  e.test_input_owner(2);
+  for (let i = 0; i < 64; i++) {
+    assert.strictEqual(e.post_message_q(0x3333, 0x0417, i, 0), 1);
+  }
+  assert.strictEqual(e.post_message_q(0x3333, 0x0200, 0xBEEF, 0), 1);
+  e.test_input_owner(1);
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0200, 0x0200, 1), 1,
+    'filtered shared peek finds a matching overflow message');
+  assert.strictEqual(msg.getUint32(4, true), 0x0200);
+  assert.strictEqual(msg.getUint32(8, true), 0xBEEF);
+  assert.strictEqual(e.post_queue_depth(), 64,
+    'removing overflow leaves every excluded ring message queued');
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0200, 0x0200, 1), 0);
+  for (let i = 0; i < 64; i++) {
+    assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0, 0, 1), 1);
+    assert.strictEqual(msg.getUint32(4, true), 0x0417);
+    assert.strictEqual(msg.getUint32(8, true), i);
+  }
+  assert.strictEqual(e.post_queue_depth(), 0);
 
   e.test_seed_paint(0x4444);
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0401, 0x0401, 1), 0,

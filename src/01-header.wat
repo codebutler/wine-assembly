@@ -1468,7 +1468,7 @@
   ;; 0x079C8000  1KB     WND_Z_ORDER_TABLE (256 × 4-byte sibling z ranks)
   ;; 0x079C9C00  1KB     WND_HINSTANCE_TABLE (256 × 4-byte creating HINSTANCE)
   ;; 0x079CC400  1KB     WND_THREAD_TABLE (256 × 4-byte owning thread id)
-  ;; 0x079CC800 8320B    THREAD_MSG_QUEUES (8 tids × 64-entry MSG ring)
+  ;; 0x079CC800 8320B    THREAD_MSG_QUEUES (tids 1..8 × 64-entry MSG ring)
   ;; 0x07EEC000 13KB     GDI_REGION_WORK (4 x 208 RECT buffers)
   ;; 0x07EF0000 2KB      GDI_DC_CLIP_TABLE (256 x {HDC, owned HRGN})
   ;; 0x07EF0800 2KB      GDI_DC_SAVE_TABLE (256 x {HDC, meta guest pointer})
@@ -1957,17 +1957,21 @@
   ;; HINSTANCE. Run tools/wat-memory-map.js before moving this.
   (global $WND_THREAD_TABLE i32 (region.addr $WND_THREAD_TABLE 0))
   (global $WND_THREAD_TABLE_SIZE i32 (region.size $WND_THREAD_TABLE))
-  ;; Shared per-thread USER queues.  Eight emulated thread ids (1..8), each with
-  ;; a 64-entry MSG ring.  Queue metadata and payload live in shared memory;
-  ;; $LOCK_WND serializes producers and the single owning consumer.
+  ;; Shared per-thread USER queues. Sixteen emulated thread ids (1..16), each with
+  ;; a 64-entry MSG fast ring and a heap-backed overflow FIFO. Queue metadata
+  ;; and payload live in shared memory; $LOCK_WND serializes producers and the
+  ;; single owning consumer.
   ;;
-  ;; queue +0: count, +4: head, +8: tail, +0x10: 64 x {hwnd,msg,wParam,lParam}
+  ;; queue +0: ring count, +4: head, +8: tail, +0xC: overflow-state guest ptr,
+  ;; +0x10: 64 x {hwnd,msg,wParam,lParam}
   ;; Moved off 0x079CA000 on the merge from main: WIN16_BUILTIN_NAMES is a data
   ;; segment at that address, and its 512 bytes of export names landed on top of
   ;; queue 1's count/head/tail words. Enqueue then read a count of "KERN" and
   ;; refused every post, and the reader computed a slot address out of bounds.
   (global $THREAD_MSG_QUEUES i32 (region.addr $THREAD_MSG_QUEUES 0))
   (global $THREAD_MSG_QUEUES_SIZE i32 (region.size $THREAD_MSG_QUEUES))
+  (global $THREAD_MSG_QUEUES_HIGH i32 (region.addr $THREAD_MSG_QUEUES_HIGH 0))
+  (global $THREAD_MSG_QUEUES_HIGH_SIZE i32 (region.size $THREAD_MSG_QUEUES_HIGH))
   (global $THREAD_MSG_QUEUE_STRIDE i32 (i32.const 0x00000410))
   (global $THREAD_MSG_QUEUE_MAX i32 (i32.const 64))
   ;; Timer metadata that must be process-wide rather than per-instance.
@@ -3105,11 +3109,9 @@
   (global $pending_wm_size   (mut i32) (i32.const 0)) ;; deliver WM_SIZE after WM_CREATE (lParam=cx|cy<<16)
   (global $movewindow_pending_hwnd (mut i32) (i32.const 0)) ;; non-main hwnd awaiting WM_SIZE from MoveWindow
   (global $movewindow_pending_size (mut i32) (i32.const 0)) ;; packed client cx|cy<<16 for that hwnd
-  ;; Posted message queue: up to 64 messages, each = (hwnd, msg, wParam, lParam) = 16 bytes
-  ;; Storage is partitioned by thread in LOCAL_POST_QUEUES, like the counters.
-  ;; Bumped from 8 to 64 so calc.exe's 30-button owner-draw WM_DRAWITEM burst
-  ;; (posted from button_wndproc WM_PAINT to the x86 SciCalc parent) doesn't
-  ;; overflow during the first render frame.
+  ;; Legacy 64-entry per-instance queue retained for raw focused-test injection.
+  ;; Normal USER posts use THREAD_MSG_QUEUES: same-thread and cross-Worker
+  ;; producers therefore share one ordered, growable Win32 queue.
   (global $post_queue_count (mut i32) (i32.const 0))
   ;; The browser's idle host bridge is not a guest thread, even when its
   ;; metadata uses the same slot number as a real worker.

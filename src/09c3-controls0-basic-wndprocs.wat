@@ -967,8 +967,6 @@
             ;; Owner-draw controls must repaint on every WM_PAINT. Unlike
             ;; real Win32 child windows, our children share the top-level
             ;; back-canvas, so a later parent erase can wipe their pixels.
-            (if (i32.ge_u (global.get $post_queue_count) (i32.const 64))
-              (then (return (i32.const 0))))
             ;; Fill DRAWITEMSTRUCT at ButtonState+16
             ;; Reuse $edge_flags as WASM address of the struct
             (local.set $edge_flags (call $g2w (call $btn_drawitem_guest (local.get $state))))
