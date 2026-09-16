@@ -2161,6 +2161,24 @@ class WineAssembly {
         const debugFetch = typeof location !== 'undefined' &&
           new URLSearchParams(location.search).has('debug');
         const fetchOptions = debugFetch ? { cache: 'no-store' } : undefined;
+        // A LAN phone cannot expose DevTools' network panel here. In an
+        // opt-in perf stream, identify the exact bytes this page compiled so
+        // a stale artifact/cache can be distinguished from a runtime miss.
+        const reportWasmIdentity = typeof location !== 'undefined' &&
+          new URLSearchParams(location.search).has('perf-stream');
+        if (reportWasmIdentity) globalThis.WINE_WASM_IDENTITY = null;
+        const recordWasmIdentity = async (source, bytes) => {
+          if (!reportWasmIdentity) return;
+          try {
+            const hash = await window.watxLauncher.sha256Hex(bytes);
+            globalThis.WINE_WASM_IDENTITY = {
+              source, sha256: hash, bytes: bytes.byteLength,
+            };
+            console.log(`[host] wasm ${source} SHA-256 ${hash}`);
+          } catch (error) {
+            console.warn('[host] unable to hash loaded wasm', error);
+          }
+        };
         const forceSourceCompile = typeof location !== 'undefined' &&
           new URLSearchParams(location.search).has('compile-wat');
         if (!forceSourceCompile) {
@@ -2170,7 +2188,10 @@ class WineAssembly {
           try {
             const response = await fetch(WineAssembly.versionedUrl(artifact), fetchOptions);
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return await WebAssembly.compile(await response.arrayBuffer());
+            const bytes = await response.arrayBuffer();
+            const module = await WebAssembly.compile(bytes);
+            await recordWasmIdentity(artifact, bytes);
+            return module;
           } catch (error) {
             console.warn(`[host] unable to load ${artifact}; compiling WAT sources`, error);
           }
@@ -2206,7 +2227,9 @@ class WineAssembly {
               new URLSearchParams(location.search).has('watx-main-thread'),
           });
           WineAssembly._assertSourceBuildLayout(built.layout);
-          return WebAssembly.compile(built.bytes);
+          const module = await WebAssembly.compile(built.bytes);
+          await recordWasmIdentity('src/main.watx', built.bytes);
+          return module;
         }
         throw new Error('wine-assembly artifacts missing and lib/watx-launcher.js is not ' +
           'loaded (in-page legacy source compilation is retired); run `bash tools/build.sh` ' +

@@ -38,6 +38,10 @@ console.log('perf HUD worker-phase attribution');
 
 // ---- half one: what host.js actually marks ---------------------------------
 const hostSrc = fs.readFileSync(path.join(__dirname, '..', 'host.js'), 'utf8');
+ok(/const bytes = await response\.arrayBuffer\(\);[\s\S]*?WebAssembly\.compile\(bytes\);[\s\S]*?recordWasmIdentity\(artifact, bytes\)/.test(hostSrc),
+  'artifact identity hashes the bytes compiled by the page, not a second fetch');
+ok(/recordWasmIdentity\('src\/main\.watx', built\.bytes\)/.test(hostSrc),
+  'source-compiled fallback also reports its actual bytes');
 
 // A fixed window rather than a brace match: the point is that these three
 // things sit together in one region, and a brace-counting regex would be a
@@ -66,6 +70,8 @@ ok(/const perfThreadStart = perf \? performance\.now\(\) : 0;/.test(hostSrc) &&
 // Drive the real PerfHud so the claim about `other` is demonstrated rather
 // than asserted from reading.
 const hudSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'perf-hud.js'), 'utf8');
+ok((hudSrc.match(/wasmIdentity: global\.WINE_WASM_IDENTITY \|\| null/g) || []).length === 2,
+  'perf batches and idle heartbeats include the selected WASM source and SHA-256');
 const stubWindow = {
   addEventListener() {}, removeEventListener() {},
   performance: { now: () => stubWindow.__now },
