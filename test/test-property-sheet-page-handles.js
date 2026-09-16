@@ -20,6 +20,15 @@ const extraWat = String.raw`
       (i32.sub (global.get $esp) (local.get $before)))
     (global.get $eax))
 
+  (func (export "test_create_property_sheet_page_w") (param $psp i32) (result i32)
+    (local $saved_esp i32)
+    (local.set $saved_esp (global.get $esp))
+    (call $handle_CreatePropertySheetPageW
+      (local.get $psp) (i32.const 0) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.set $esp (local.get $saved_esp))
+    (global.get $eax))
+
   (func (export "test_destroy_property_sheet_page") (param $page i32) (result i32)
     (local $before i32)
     (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
@@ -44,6 +53,24 @@ const extraWat = String.raw`
     (call $propsheet_page_callback
       (local.get $page) (i32.add (local.get $raw_w) (i32.const 8))
       (local.get $message)))
+
+  (func (export "test_psp_inline_callback")
+      (param $page i32) (param $message i32) (result i32)
+    (call $propsheet_page_callback
+      (local.get $page) (call $g2w (local.get $page)) (local.get $message)))
+
+  ;; Let an x86 PSPCB_RELEASE callback re-enter DestroyPropertySheetPage
+  ;; through the same generated dispatcher path as a real imported call.
+  (func (export "test_make_api_thunk") (param $api_id i32) (result i32)
+    (local $addr i32)
+    (local.set $addr (i32.add (global.get $THUNK_BASE)
+      (i32.mul (global.get $num_thunks) (i32.const 8))))
+    (i32.store (local.get $addr) (i32.const 0))
+    (i32.store offset=4 (local.get $addr) (local.get $api_id))
+    (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
+    (call $update_thunk_end)
+    (i32.add (i32.sub (local.get $addr) (global.get $GUEST_BASE))
+             (global.get $image_base)))
 
   (func (export "test_propsheet_header_valid") (param $header i32) (result i32)
     (call $propsheet_header_valid (call $g2w (local.get $header))))
@@ -96,7 +123,11 @@ const extraWat = String.raw`
 (async () => {
   const { exports: e, memory } = await bootRenderHarness({ extraWat, fonts: 'none' });
   const bytes = new Uint8Array(memory.buffer);
-  e.init_thread(0, 0, 0, 0, 0, 0, 0, 0x1000);
+  const fixture = fs.readFileSync(path.join(__dirname, 'binaries', 'calc.exe'));
+  bytes.set(fixture, e.get_staging());
+  assert(e.load_pe(fixture.length), 'fixture PE initializes recursive API dispatch');
+  const apiTable = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'api_table.json'), 'utf8'));
 
   const allocPage = (size = 40, flags = 0) => {
     // Invalid dwSize values only need the fixed Win98 prefix to be readable;
@@ -181,6 +212,38 @@ const extraWat = String.raw`
       0xC2, 0x0C, 0x00,                    // ret 12
     ], e.guest_to_wasm(code) >>> 0);
     return { capture, code };
+  };
+
+  const le32 = value => [value, value >>> 8, value >>> 16, value >>> 24]
+    .map(byte => byte & 0xFF);
+  const makeOrderedCallback = ({
+    id, orderCount, orderLog, parentRef, refLog, result = 1,
+    recursiveTarget = 0, recursiveThunk = 0, recursiveResult = 0,
+  }) => {
+    const code = [
+      0x8B, 0x05, ...le32(orderCount),    // mov eax,[orderCount]
+      0xA3, ...le32(orderLog + id * 4),   // mov [orderLog+id*4],eax
+      0x83, 0xC0, 0x01,                   // add eax,1
+      0xA3, ...le32(orderCount),          // mov [orderCount],eax
+      0x8B, 0x05, ...le32(parentRef),     // mov eax,[parentRef]
+      0xA3, ...le32(refLog + id * 4),     // mov [refLog+id*4],eax
+    ];
+    if (recursiveThunk) {
+      code.push(
+        0x8B, 0x05, ...le32(recursiveTarget), // mov eax,[recursiveTarget]
+        0x50,                                  // push eax
+        0xB8, ...le32(recursiveThunk),        // mov eax,DestroyPropertySheetPage thunk
+        0xFF, 0xD0,                           // call eax
+        0xA3, ...le32(recursiveResult),        // mov [recursiveResult],eax
+      );
+    }
+    code.push(
+      0xB8, ...le32(result),               // mov eax,result
+      0xC2, 0x0C, 0x00,                   // ret 12
+    );
+    const guestCode = e.guest_alloc(code.length) >>> 0;
+    bytes.set(code, e.guest_to_wasm(guestCode) >>> 0);
+    return guestCode;
   };
 
   const accepting = makeCallback(1);
@@ -313,6 +376,147 @@ const extraWat = String.raw`
   assert.strictEqual(e.guest_read32(inlineRef), 3,
     'implicit sheet teardown balances PSP_USEREFPARENT');
 
+  const destroyApi = apiTable.find(api => api.name === 'DestroyPropertySheetPage');
+  assert(destroyApi && destroyApi.nargs === 1,
+    'DestroyPropertySheetPage is registered as a one-argument API');
+  const destroyThunk = e.test_make_api_thunk(destroyApi.id) >>> 0;
+
+  // PropertySheet takes ownership of an explicit page-handle array and
+  // destroys it in reverse order. Mix A and W-created pages because their
+  // records share this lifetime path, and have page zero recursively attempt
+  // to destroy itself from RELEASE to prove retirement precedes the callback.
+  const handleOrderCount = e.guest_alloc(4) >>> 0;
+  const handleOrderLog = e.guest_alloc(12) >>> 0;
+  const handleRefLog = e.guest_alloc(12) >>> 0;
+  const recursiveTarget = e.guest_alloc(4) >>> 0;
+  const recursiveResult = e.guest_alloc(4) >>> 0;
+  e.guest_write32(recursiveResult, 0xFFFFFFFF);
+  const orderedHandles = [];
+  const handleRefs = [];
+  for (let i = 0; i < 3; i++) {
+    const ref = e.guest_alloc(4) >>> 0;
+    e.guest_write32(ref, 10);
+    handleRefs.push(ref);
+    const callback = makeOrderedCallback({
+      id: i,
+      orderCount: handleOrderCount,
+      orderLog: handleOrderLog,
+      parentRef: ref,
+      refLog: handleRefLog,
+      recursiveTarget: i === 0 ? recursiveTarget : 0,
+      recursiveThunk: i === 0 ? destroyThunk : 0,
+      recursiveResult: i === 0 ? recursiveResult : 0,
+    });
+    const pageSource = allocPage(48, 0x80 | 0x40);
+    e.guest_write32(pageSource + 32, callback);
+    e.guest_write32(pageSource + 36, ref);
+    const page = (i === 1
+      ? e.test_create_property_sheet_page_w(pageSource)
+      : e.test_create_property_sheet_page(pageSource)) >>> 0;
+    assert(page, `explicit ordered page ${i} is created`);
+    orderedHandles.push(page);
+    assert.strictEqual(e.guest_read32(ref), 11,
+      `explicit page ${i} increments its parent reference before ADDREF`);
+  }
+  e.guest_write32(recursiveTarget, orderedHandles[0]);
+  const orderedHandleArray = e.guest_alloc(12) >>> 0;
+  orderedHandles.forEach((page, i) => e.guest_write32(orderedHandleArray + i * 4, page));
+  e.test_psp_use_handle_array(orderedHandleArray, 3);
+  e.guest_write32(handleOrderCount, 0);
+  e.test_psp_transfer_and_release();
+  assert.deepStrictEqual([0, 1, 2].map(i => e.guest_read32(handleOrderLog + i * 4)),
+    [2, 1, 0], 'explicit A/W page handles receive RELEASE in reverse array order');
+  assert.deepStrictEqual([0, 1, 2].map(i => e.guest_read32(handleRefLog + i * 4)),
+    [11, 11, 11], 'each explicit RELEASE runs before its parent reference decrement');
+  assert.deepStrictEqual(handleRefs.map(ref => e.guest_read32(ref)), [10, 10, 10],
+    'explicit reverse teardown balances every parent reference');
+  assert.strictEqual(e.guest_read32(recursiveResult), 0,
+    'a RELEASE callback cannot recursively destroy its already-retired page');
+  assert.strictEqual(e.guest_read32(handleOrderCount), 3,
+    'recursive destruction does not deliver RELEASE twice');
+  orderedHandles.forEach((page, i) => assert.strictEqual(e.test_psp_is_live(page), 0,
+    `explicit ordered page ${i} is retired exactly once`));
+
+  // Inline PSH_PROPSHEETPAGE records have the same reverse lifetime. None is
+  // shown; page one additionally vetoes PSPCB_CREATE, which must not exempt it
+  // from final RELEASE or reorder the array.
+  const inlineOrderCount = e.guest_alloc(4) >>> 0;
+  const inlineOrderLog = e.guest_alloc(12) >>> 0;
+  const inlineRefLog = e.guest_alloc(12) >>> 0;
+  const inlineRefs = [];
+  const orderedInline = e.guest_alloc(3 * 48) >>> 0;
+  for (let i = 0; i < 3; i++) {
+    const page = orderedInline + i * 48;
+    const ref = e.guest_alloc(4) >>> 0;
+    e.guest_write32(ref, 20);
+    inlineRefs.push(ref);
+    const callback = makeOrderedCallback({
+      id: i,
+      orderCount: inlineOrderCount,
+      orderLog: inlineOrderLog,
+      parentRef: ref,
+      refLog: inlineRefLog,
+      result: i === 1 ? 0 : 1,
+    });
+    for (let offset = 0; offset < 48; offset += 4) e.guest_write32(page + offset, 0);
+    e.guest_write32(page, 48);
+    e.guest_write32(page + 4, 0x80 | 0x40);
+    e.guest_write32(page + 12, 300 + i);
+    e.guest_write32(page + 24, 0x00401234);
+    e.guest_write32(page + 32, callback);
+    e.guest_write32(page + 36, ref);
+  }
+  e.test_psp_use_inline_array(orderedInline, 3);
+  assert.strictEqual(e.test_psp_prepare_inline(), 1,
+    'three inline pages initialize without materializing a dialog');
+  assert.strictEqual(e.test_psp_inline_callback(orderedInline + 48, 2), 0,
+    'the middle inline page can veto PSPCB_CREATE');
+  e.guest_write32(inlineOrderCount, 0);
+  e.test_psp_release_pages();
+  assert.deepStrictEqual([0, 1, 2].map(i => e.guest_read32(inlineOrderLog + i * 4)),
+    [2, 1, 0], 'unseen and vetoed inline pages receive RELEASE in reverse array order');
+  assert.deepStrictEqual([0, 1, 2].map(i => e.guest_read32(inlineRefLog + i * 4)),
+    [21, 21, 21], 'each inline RELEASE runs before its parent reference decrement');
+  assert.deepStrictEqual(inlineRefs.map(ref => e.guest_read32(ref)), [20, 20, 20],
+    'inline reverse teardown balances every parent reference');
+
+  // A malformed later inline record leaves only the successfully initialized
+  // prefix owned. Teardown must stay within that bound and reverse just it.
+  const partialCount = e.guest_alloc(4) >>> 0;
+  const partialLog = e.guest_alloc(12) >>> 0;
+  const partialRefLog = e.guest_alloc(12) >>> 0;
+  const partialPages = e.guest_alloc(3 * 48) >>> 0;
+  const partialRefs = [];
+  for (let i = 0; i < 3; i++) {
+    const page = partialPages + i * 48;
+    const ref = e.guest_alloc(4) >>> 0;
+    e.guest_write32(ref, 30);
+    partialRefs.push(ref);
+    const callback = makeOrderedCallback({
+      id: i,
+      orderCount: partialCount,
+      orderLog: partialLog,
+      parentRef: ref,
+      refLog: partialRefLog,
+    });
+    for (let offset = 0; offset < 48; offset += 4) e.guest_write32(page + offset, 0);
+    e.guest_write32(page, i === 2 ? 44 : 48);
+    e.guest_write32(page + 4, 0x80 | 0x40);
+    e.guest_write32(page + 32, callback);
+    e.guest_write32(page + 36, ref);
+  }
+  e.test_psp_use_inline_array(partialPages, 3);
+  assert.strictEqual(e.test_psp_prepare_inline(), 0,
+    'malformed third inline page stops initialization at the owned prefix');
+  e.guest_write32(partialCount, 0);
+  e.test_psp_release_pages();
+  assert.strictEqual(e.guest_read32(partialCount), 2,
+    'partial teardown releases only the initialized prefix');
+  assert.deepStrictEqual([0, 1].map(i => e.guest_read32(partialLog + i * 4)), [1, 0],
+    'partial inline teardown reverses the initialized prefix');
+  assert.deepStrictEqual(partialRefs.map(ref => e.guest_read32(ref)), [30, 30, 30],
+    'partial teardown balances initialized refs and never touches the malformed page');
+
   // Property pages are modeless child dialogs. Win98 creates a normal page
   // lazily the first time it is selected, then retains and hides that same
   // HWND so its dialog/control state survives later selections.
@@ -376,12 +580,6 @@ const extraWat = String.raw`
     'the revisited page regains WS_VISIBLE');
   e.test_psp_page_hwnds_release();
   e.test_psp_release_pages();
-
-  const apiTable = JSON.parse(fs.readFileSync(
-    path.join(__dirname, '..', 'src', 'api_table.json'), 'utf8'));
-  const destroyApi = apiTable.find(api => api.name === 'DestroyPropertySheetPage');
-  assert(destroyApi && destroyApi.nargs === 1,
-    'DestroyPropertySheetPage is registered as a one-argument API');
 
   console.log('PASS  property-sheet pages honor Win98 copy, callback, ownership, and retained-dialog lifetimes');
 })().catch(error => {

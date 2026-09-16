@@ -741,21 +741,26 @@
     (local.set $pages_w (call $g2w (global.get $propsheet_pages)))
     (if (global.get $propsheet_owns_page_handles)
       (then
+        ;; PropertySheet owns a successful handle array and destroys those
+        ;; pages in reverse array order. Start one past the last entry so the
+        ;; decrement also makes zero-page/partial setup safe.
+        (local.set $i (global.get $propsheet_page_count))
         (block $handles_done (loop $handles
-          (br_if $handles_done
-            (i32.ge_u (local.get $i) (global.get $propsheet_page_count)))
+          (br_if $handles_done (i32.eqz (local.get $i)))
+          (local.set $i (i32.sub (local.get $i) (i32.const 1)))
           (local.set $page (i32.load (i32.add (local.get $pages_w)
             (i32.shl (local.get $i) (i32.const 2)))))
           (drop (call $propsheet_page_destroy_owned (local.get $page)))
-          (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $handles)))
         (global.set $propsheet_owns_page_handles (i32.const 0))
         (return)))
     ;; PSH_PROPSHEETPAGE creates its inline records implicitly. Release every
-    ;; initialized record, including a page whose dialog was never selected.
+    ;; initialized record, including a page whose dialog was never selected,
+    ;; in the same documented reverse array order as explicit page handles.
+    (local.set $i (global.get $propsheet_inline_pages_initialized))
     (block $inline_done (loop $inline
-      (br_if $inline_done
-        (i32.ge_u (local.get $i) (global.get $propsheet_inline_pages_initialized)))
+      (br_if $inline_done (i32.eqz (local.get $i)))
+      (local.set $i (i32.sub (local.get $i) (i32.const 1)))
       (local.set $page (call $propsheet_resolve_page (local.get $i)))
       (if (local.get $page)
         (then
@@ -763,7 +768,6 @@
           (drop (call $propsheet_page_callback
             (local.get $page) (local.get $page_w) (i32.const 1))) ;; PSPCB_RELEASE
           (call $propsheet_page_ref_change (local.get $page_w) (i32.const -1))))
-      (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $inline)))
     (global.set $propsheet_inline_pages_initialized (i32.const 0)))
   (func $propsheet_notify (param $page i32) (param $code i32) (result i32)
