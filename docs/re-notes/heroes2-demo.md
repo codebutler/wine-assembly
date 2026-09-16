@@ -1,5 +1,32 @@
 # Heroes of Might and Magic II (demo)
 
+## Movement-triggered camera scroll: transient map-only frame (2026-09-16)
+
+Frozen CLI gameplay reproduces the user's momentary "stretched" image when a
+hero walks far enough to auto-pan the camera. The preceding full-frame capture
+at batch 2097 is `/private/tmp/heroes-hero-map.png`; the transient at batch 2118 is
+`/private/tmp/heroes-scroll-2118.png`; and the completed framed image at batch
+2148 is `/private/tmp/heroes-scroll-2148.png`. A second route click reproduced
+the same transition (`/private/tmp/heroes-newpath.png`). By contrast, parking
+the pointer at the outer screen edge (`mousemove:639:240`) panned the camera
+without dropping the HUD (`/private/tmp/heroes-edge-screen-right.png`).
+
+The image is **not resized by CSS or the browser canvas**. At the transient,
+DirectDraw primary slot 1, offscreen slot 2, its window frame layer, and the
+canvas are all 640×480; both surfaces are 8 bpp with pitch 640. Sampled primary
+indices through the active palette exactly match the displayed RGB bytes.
+The primary itself contains the map-only frame. Offscreen slot 2 retains the
+map and right sidebar, but lacks the outer border (`/private/tmp/heroes-surface-2.png`).
+The game eventually composes the complete HUD into the primary. During the
+map-only and restoration interval, the DX trace contains no Lock, Unlock,
+Blt, Flip or Present: the game writes through a retained surface pointer, and
+the host's canonical-surface `Flush id=0x200001` and fallback `Upload slot=1`
+publish whatever bytes are present at that moment. Therefore a generic
+"wait for Unlock/Flip" fix would freeze the game, since neither marks this
+frame boundary. A presentation fix needs a verified Heroes-specific completion
+signal or a narrowly scoped HUD-frame policy that preserves scene transitions;
+neither has been established here.
+
 `test/binaries/candidates/heroes-2-demo/files/H2DEMOW.EXE`, registry id
 `heroes2_demo` (`lib/apps.js`). Reaches the adventure map headlessly — see
 *Reproduction* below.
