@@ -140,14 +140,20 @@ const starcraft = APPS.starcraft_shareware;
 assert.strictEqual(starcraft.args, 'ophelia terran1',
   'StarCraft starts the first Terran mission without disabling DirectSound');
 assert(starcraft.requiredFiles);
+assert(starcraft.exe.startsWith('test/binaries/candidates/starcraft-demo-official/'),
+  'public StarCraft uses the allowlisted official demo payload');
 assert(starcraft.files.some(file =>
-  file.url.endsWith('/stardatsw.mpq') &&
-  file.vfsPaths.includes('c:\\stardatsw.mpq') &&
-  file.vfsPaths.includes('c:\\program files\\starcraft shareware\\stardatsw.mpq')),
+  file.url.endsWith('/stardated.mpq') &&
+  file.vfsPaths.includes('c:\\stardated.mpq') &&
+  file.vfsPaths.includes('c:\\program files\\starcraft shareware\\stardated.mpq')),
 'StarCraft mounts its installed MPQ at both proven paths');
 assert(starcraft.files.some(file =>
-  file.url.endsWith('/disc/INSTALL.EXE') && file.vfsPath === 'c:\\install.exe'),
-'StarCraft mounts the original shareware CD container where its StarCD check opens it');
+  file.url.endsWith('/SCDemo.exe') && file.vfsPath === 'c:\\install.exe'),
+'StarCraft mounts the original official demo container where its StarCD check opens it');
+const publishedStarcraftFiles = require('../tools/deploy-berrry.js').desktopAssetPaths();
+for (const file of [starcraft.exe, ...starcraft.files.map(entry => entry.url)]) {
+  assert(publishedStarcraftFiles.has(file), `public StarCraft asset is deployable: ${file}`);
+}
 
 const starcraftReg = new Map(starcraft.startupRegistry.map(entry =>
   [entry.valueName, entry.data]));
