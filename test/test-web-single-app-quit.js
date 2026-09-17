@@ -271,18 +271,10 @@ async function main() {
       { timeout: 10000 });
     const windowedClose = await page.evaluate(() => {
       const chip = document.getElementById('page-fullscreen-exit');
-      const rect = chip.getBoundingClientRect();
-      const hit = document.elementFromPoint(rect.left + rect.width / 2,
-        rect.top + rect.height / 2);
-      return { display: getComputedStyle(chip).display, right: rect.right,
-        top: rect.top, hit: hit && hit.id };
+      return { display: getComputedStyle(chip).display };
     });
-    assert.notStrictEqual(windowedClose.display, 'none',
-      'Close app stays visible in a windowed phone view');
-    assert(windowedClose.right >= VIEWPORT.width - 60 && windowedClose.top < 60,
-      `Close app stays at the phone top-right, got ${JSON.stringify(windowedClose)}`);
-    assert.strictEqual(windowedClose.hit, 'page-fullscreen-exit',
-      'windowed Close app receives the touch above the guest window');
+    assert.strictEqual(windowedClose.display, 'none',
+      'windowed apps use their own titlebar Close button without a duplicate chip');
     await page.evaluate(() => {
       const app = runningApps.find(item => item && item.name === 'notepad');
       // Pinned for the same reason as above: a chip that is only on screen
