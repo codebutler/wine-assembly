@@ -228,12 +228,18 @@ assert(TouchControls.el.classList.contains('tc-chrome'),
   'bare keyboard chrome gets its edge-placement scope');
 const touchStyle = head.children.find(el => el.id === 'touch-controls-style');
 assert(touchStyle.textContent.includes(
-  'padding-right: calc(4px + env(safe-area-inset-right, 0px))'),
-  'landscape bare chrome hugs the right safe-area edge');
+  'padding-right: 4px;'),
+  'landscape bare chrome hugs the already inset Safari viewport edge');
 assert.strictEqual(TouchControls.isVisible(), false, 'which is not "game controls up"');
 // And with nothing running at all, the overlay goes away entirely.
 TouchControls.sync([], renderer);
 assert.strictEqual(TouchControls.layout, null, 'no app, no layout');
+TouchControls.setLayout({ screenAnchored: true, keyboard: true, viewToggle: false });
+assert(body.classList.contains('touch-screen-anchored'),
+  'Quake-style controls also scope the page Close button');
+TouchControls.setLayout(null);
+assert(!body.classList.contains('touch-screen-anchored'),
+  'the subtle Close scope leaves with the app');
 assert(!TouchControls.el.classList.contains('tc-chrome'),
   'chrome edge-placement scope clears with the app');
 assert.strictEqual(TouchControls.el.style.display, 'none', 'no layout hides the overlay');
@@ -963,11 +969,10 @@ TouchControls.destroy();
   const nudgesInBlack=(table,what)=>{
     const kx=table.w/360, ky=table.h/416;
     const near=(a,b,msg)=>assert(Math.abs(a-b)<0.5,`${what} ${msg}: ${a} != ${b}`);
-    const fitted=2*0.0885*table.w;
     for (const [name,sx] of [['Nudge left',54.9],['Nudge right',383-31.9]]) {
       const el=byLabel(name);
       const size=parseFloat(el.style.width);
-      near(size,Math.max(44,Math.min(fitted,52)),`${name} is sized to the triangle`);
+      near(size,40,`${name} matches the other round chips`);
       near(parseFloat(el.style.left)+size/2,table.x+(sx-23)*kx,`${name} centre x`);
       near(parseFloat(el.style.top)+size/2,table.y+(63.9-32)*ky,`${name} centre y`);
       const cx=parseFloat(el.style.left)+size/2, cy=parseFloat(el.style.top)+size/2;
@@ -992,16 +997,15 @@ TouchControls.destroy();
     setup({left:0,top:0,right:375,bottom:710,width:375,height:710},presented,'zoom');
     const left=byLabel('Nudge left'), right=byLabel('Nudge right');
     // Inside the picture's top corners, which is where the black is. Here the
-    // table is 375 wide, so the measured circle would be 66px across and the
-    // 52px cap wins -- and 52 sits inside the triangle with room to spare, so
-    // the placement is the circle's measured centre either way.
-    assert.strictEqual(parseFloat(left.style.width),52,
-      'generous: 52px against Apple\'s 44px minimum, and it floats over black');
+    // table is 375 wide, so the measured circle could be larger; its 40px
+    // visible size matches the other round chips while a 44px hit area remains.
+    assert.strictEqual(parseFloat(left.style.width),40,
+      'nudge and other round chips have the same visible diameter');
     const cxP=0.0886*375, cyP=presented.y+0.0767*433;
-    assert.strictEqual(parseFloat(left.style.left),cxP-26);
-    assert.strictEqual(parseFloat(left.style.top),cyP-26);
-    assert.strictEqual(parseFloat(right.style.left),375-cxP-26);
-    assert.strictEqual(parseFloat(right.style.top),cyP-26);
+    assert.strictEqual(parseFloat(left.style.left),cxP-20);
+    assert.strictEqual(parseFloat(left.style.top),cyP-20);
+    assert.strictEqual(parseFloat(right.style.left),375-cxP-20);
+    assert.strictEqual(parseFloat(right.style.top),cyP-20);
     // Captions in the letterbox UNDER the table -- below its last row, above
     // the screen's bottom, and horizontally over the zone each one names.
     const tableBottom=presented.y+presented.h;
@@ -1279,9 +1283,9 @@ TouchControls.destroy();
     const nudge = name => parseFloat(
       TouchControls._widgets.find(w => w.getAttribute('aria-label') === name).style.top);
     // 138.33 (the table's top) + 0.0767 * 433.33 (the measured circle's centre)
-    // - 26 (half of the 52px cap, which wins at this size).
-    near(nudge('Nudge left'), 145.57, 'left nudge top');
-    near(nudge('Nudge right'), 145.57, 'right nudge top');
+    // - 20 (half of the 40px chip, which wins at this size).
+    near(nudge('Nudge left'), 151.57, 'left nudge top');
+    near(nudge('Nudge right'), 151.57, 'right nudge top');
     TouchControls.destroy();
   }
 }

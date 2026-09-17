@@ -134,9 +134,8 @@ function win(x, y, w, h, extra) {
     'a full-screen window should not be zoomed');
 }
 
-// Funtris centres a fixed-width well and score panel inside a maximized
-// landscape window. Fit focuses their measured union there; portrait Fit
-// keeps the whole window because the scarce axis is width.
+// Funtris keeps the full window width in landscape. Fit drops only the menu;
+// Fill removes more vertical furniture without clipping either side.
 {
   const crop = require('../lib/apps').APPS.funtris.mobileCrop;
   const landscape = makeRenderer(667, 375, 667, 375);
@@ -144,9 +143,13 @@ function win(x, y, w, h, extra) {
   const focused = landscape._computeSingleAppZoom([win(0, 0, 667, 375)]).viewport;
   assert.deepStrictEqual(
     [focused.cropX, focused.cropY, focused.cropW, focused.cropH],
-    [144, 43, 378, 326], 'landscape Fit keeps the well and score with measured margins');
-  assert(focused.dstW > 400 && focused.dstW < 500,
-    'the focused landscape picture grows without distorting its aspect');
+    [0, 40, 667, 335], 'landscape Fit keeps the full window width');
+  landscape.viewMode = 'zoom';
+  const filled = landscape._computeSingleAppZoom([win(0, 0, 667, 375)]).viewport;
+  assert.deepStrictEqual(
+    [filled.cropX, filled.cropY, filled.cropW, filled.cropH],
+    [0, 45, 667, 324], 'landscape Fill crops vertically, not horizontally');
+  landscape.viewMode = 'fit';
   const portrait = makeRenderer(420, 494, 375, 667);
   portrait.mobileCrop = crop;
   assert.strictEqual(portrait._computeSingleAppZoom([win(0, 0, 420, 494)]), null,
