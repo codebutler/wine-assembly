@@ -2681,6 +2681,7 @@ class WineAssembly {
     const concurrency = Math.max(1, options.concurrency || 6);
     let loaded = 0, failed = 0, next = 0;
     const failures = [];
+    const assetLoads = new Map();
     const total = urls.length;
     const fetchWithRetry = async (url) => {
       for (let attempt = 0; ; attempt++) {
@@ -2690,7 +2691,7 @@ class WineAssembly {
           const reason = String(error && error.message || error);
           const http = reason.match(/HTTP (\d{3})$/);
           const retryable = (!http || [408, 429].includes(Number(http[1])) ||
-            Number(http[1]) >= 500) && !/missing .*\.part\d+/.test(reason);
+            Number(http[1]) >= 500) && !/missing .*\.part\d+|out of memory/i.test(reason);
           if (!retryable || attempt >= 2) throw error;
           // Mobile Safari sometimes drops a LAN response while several large
           // game archives are being loaded. Retry only that file, leaving
@@ -2706,7 +2707,29 @@ class WineAssembly {
       const explicit = (typeof item === 'object') ? item.vfsPath : null;
       const explicitPaths = (typeof item === 'object' && Array.isArray(item.vfsPaths)) ? item.vfsPaths : null;
       try {
-        const data = await fetchWithRetry(url);
+        // Keep large read-only archives on the server. The VFS parks a guest
+        // read on a cache miss and fetches only the needed HTTP byte range.
+        // Duplicate URL aliases share one load and one cache.
+        const useRange = !!(item && item.httpRange && typeof window !== 'undefined' &&
+          window.byteProvider && vfs.setProviderFile);
+        const key = `${useRange ? 'range' : 'bytes'}:${url}`;
+        if (!assetLoads.has(key)) {
+          assetLoads.set(key, (async () => {
+            if (useRange) {
+              try {
+                const provider = await window.byteProvider.HttpRangeProvider.open(url);
+                return { provider: window.byteProvider.cached(provider) };
+              } catch (error) {
+                // A static host without Range support keeps the eager path.
+                if (!/does not advertise Accept-Ranges|HEAD .* → (?:404|405|501)/.test(
+                  String(error && error.message))) throw error;
+              }
+            }
+            return { data: await fetchWithRetry(url) };
+          })());
+        }
+        const asset = await assetLoads.get(key);
+        const data = asset.data;
         const decodedImage = (typeof item === 'object' && item.decodeImage)
           ? await this._decodeMountedImage(data, url)
           : null;
@@ -2716,7 +2739,8 @@ class WineAssembly {
           // Also register the drive root and every parent directory so CD
           // scans can chdir to D:\ and GetFileAttributes(dir) sees directories.
           vfs.ensureParentDirs(vfsPath);
-          vfs.files.set(vfsPath, { data, attrs: 0x20, decodedImage });
+          if (asset.provider) vfs.setProviderFile(vfsPath, { provider: asset.provider });
+          else vfs.files.set(vfsPath, { data, attrs: 0x20, decodedImage });
         };
         if (explicitPaths && explicitPaths.length) {
           for (const p of explicitPaths) addFile(p);
