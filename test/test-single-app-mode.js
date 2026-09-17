@@ -718,3 +718,23 @@ assert(/if \(\(win\.w \| 0\) > w\) w = Math\.max\(w, \(win\.x \| 0\) \+ \(win\.w
   'the desktop must grow to cover a window too wide to fit it, offset and all');
 assert(/for \(const win of Object\.values\(boardRenderer\.windows \|\| \{\}\)\) \{\s*\n\s*if \(!win \|\| win\.isChild \|\| !win\.visible \|\| win\._maximized\) continue;/.test(html),
   'and must skip the maximized window, whose size is the desktop it was given');
+
+// A hidden Fill chip must not leave pinch or a keyboard shortcut able to crop
+// an app that is meant to stay in Fit. Pinball retains the default zoom path.
+{
+  const fitted = makeRenderer(400, 711, 375, 667);
+  fitted.scheduleRepaint = () => {};
+  fitted.allowViewZoom = false;
+  assert.strictEqual(fitted.setViewMode('zoom'), false);
+  assert.strictEqual(fitted.viewMode, 'fit');
+  fitted.beginViewPinch();
+  fitted.updateViewPinch(2);
+  fitted.endViewPinch();
+  assert.strictEqual(fitted.viewMode, 'fit',
+    'pinch must not enter Fill for a Fit-only app');
+
+  const pinball = makeRenderer(641, 481, 375, 667);
+  pinball.scheduleRepaint = () => {};
+  assert.strictEqual(pinball.setViewMode('zoom'), true);
+  assert.strictEqual(pinball.viewMode, 'zoom');
+}
