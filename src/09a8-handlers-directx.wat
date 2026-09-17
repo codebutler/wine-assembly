@@ -572,6 +572,9 @@
   ;; primary" finds the stale one and every palette-driven re-present pushes an
   ;; all-black 16bpp surface over the menu that was just flushed.
   (global $dx_primary_wa (mut i32) (i32.const 0))
+  ;; Hold the last complete scanout while a 640x480x8 primary contains
+  ;; Heroes II's temporary 447-pixel-wide scroll composition.
+  (global $dx_scroll_hold_wa (mut i32) (i32.const 0))
 
   ;; EnumDisplayModes continuation state
   (global $enum_modes_idx (mut i32) (i32.const 0))       ;; current mode index
@@ -1193,6 +1196,8 @@
   ;; when the DX_OBJECTS entry type is 0.
   (func $dx_free (param $entry_wa i32)
     (local $type i32)
+    (if (i32.eq (global.get $dx_scroll_hold_wa) (local.get $entry_wa))
+      (then (global.set $dx_scroll_hold_wa (i32.const 0))))
     (local.set $type (i32.load (local.get $entry_wa)))
     ;; Zero the DX_OBJECTS entry type (marks it logically freed; wrapper stays).
     (i32.store (local.get $entry_wa) (i32.const 0))
@@ -3833,6 +3838,7 @@
     (local $ckey i32) (local $col i32)
     (local $drblt_flags i32) (local $src_keyed i32)
     (local $clipper i32) (local $clip_entry i32) (local $clip_data i32)
+    (local $scroll_viewport i32)
     (local.set $dst_entry (call $dx_from_this (local.get $arg0)))
     (call $host_dx_trace (i32.const 12) (call $dx_slot_of (local.get $dst_entry))
       (if (result i32) (local.get $arg2)
@@ -4044,6 +4050,28 @@
         (local.set $sx (i32.const 0)) (local.set $sy (i32.const 0))
         (local.set $sw (load.field DxObject width (local.get $src_entry)))
         (local.set $sh (load.field DxObject height (local.get $src_entry)))))
+    ;; Heroes II temporarily stretches its 447-pixel map into the primary.
+    (local.set $scroll_viewport
+      (i32.and
+        (i32.and (i32.eq (local.get $dst_w) (i32.const 640))
+                 (i32.eq (local.get $dst_h) (i32.const 480)))
+        (i32.and
+          (i32.and (i32.eq (local.get $bpp) (i32.const 8))
+                   (i32.eq (local.get $dx) (i32.const 0)))
+          (i32.and
+            (i32.and (i32.eq (local.get $dy) (i32.const 0))
+                     (i32.eq (local.get $dw) (i32.const 640)))
+            (i32.and
+              (i32.and (i32.eq (local.get $dh) (i32.const 480))
+                       (i32.eq (local.get $sy) (i32.const 0)))
+              (i32.and (i32.eq (local.get $sw) (i32.const 447))
+                       (i32.eq (local.get $sh) (i32.const 480))))))))
+    (if (i32.and
+          (local.get $scroll_viewport)
+          (i32.and
+            (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
+            (i32.ne (global.get $dx_scroll_hold_wa) (local.get $dst_entry))))
+      (then (global.set $dx_scroll_hold_wa (local.get $dst_entry))))
     ;; A small surface copied from this destination is commonly a saved
     ;; software-cursor background. Once Lock/Unlock has redrawn the large
     ;; surface, replaying that exact inverse copy would stamp obsolete pixels
@@ -4189,7 +4217,7 @@
                 (br $ckblit_col)))
               (local.set $row (i32.add (local.get $row) (i32.const 1)))
               (br $ckblit_row)))
-            ;; If dest is primary, present
+            ;; A primary copy may still contain a map-only intermediate frame.
             (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
               (then (call $dx_present (local.get $dst_entry))))
             (call $dx_surf_note_copy
@@ -4353,7 +4381,8 @@
       (local.get $dst_entry) (local.get $src_entry)
       (local.get $dx) (local.get $dy) (local.get $sx) (local.get $sy)
       (local.get $dw) (local.get $dh) (local.get $drblt_flags))
-    ;; If dest is primary, present
+    ;; Preserve guest pixels; $dx_present holds scanout until the static
+    ;; sidebar indices return, including through intervening palette updates.
     (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
       (then (call $dx_present (local.get $dst_entry))))
     (global.set $eax (i32.const 0))
@@ -5423,6 +5452,20 @@
     (local.set $bpp (i32.load16_u (i32.add (local.get $entry_wa) (i32.const 16))))
     (local.set $pitch (i32.load16_u (i32.add (local.get $entry_wa) (i32.const 18))))
     (local.set $dib_wa (i32.load (i32.add (local.get $entry_wa) (i32.const 20))))
+    ;; Both points are in the right sidebar. The temporary map-only image has
+    ;; index 0x23 there; complete frames use different indices as the palette
+    ;; changes and must resume presentation immediately.
+    (if (i32.eq (global.get $dx_scroll_hold_wa) (local.get $entry_wa))
+      (then
+        (if (i32.and
+              (i32.eq (i32.load8_u (i32.add (local.get $dib_wa)
+                (i32.add (i32.mul (i32.const 400) (local.get $pitch)) (i32.const 600))))
+                (i32.const 0x23))
+              (i32.eq (i32.load8_u (i32.add (local.get $dib_wa)
+                (i32.add (i32.mul (i32.const 340) (local.get $pitch)) (i32.const 600))))
+                (i32.const 0x23)))
+          (then (return)))
+        (global.set $dx_scroll_hold_wa (i32.const 0))))
     (call $host_dx_trace (i32.const 5) (call $dx_slot_of (local.get $entry_wa))
       (local.get $bpp) (local.get $dib_wa) (call $dx_primary_pal_get))
     ;; Present DirectDraw's own canonical DIB directly. The host keeps a

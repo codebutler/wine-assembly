@@ -715,6 +715,10 @@
   ;; Post queue exports for IPC injection
   (func (export "get_main_hwnd") (result i32) (global.get $main_hwnd))
   (func (export "get_dx_primary_pal_wa") (result i32) (call $dx_primary_pal_get))
+  (func (export "get_dx_scroll_hold_slot") (result i32)
+    (if (result i32) (global.get $dx_scroll_hold_wa)
+      (then (call $dx_slot_of (global.get $dx_scroll_hold_wa)))
+      (else (i32.const -1))))
   ;; The window DirectDraw currently owns the whole screen through, or 0.
   ;; A DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN app's primary surface *is* the display,
   ;; so its window shows no caption, border or menu bar however it was styled
