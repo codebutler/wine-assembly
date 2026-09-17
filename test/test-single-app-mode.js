@@ -134,6 +134,28 @@ function win(x, y, w, h, extra) {
     'a full-screen window should not be zoomed');
 }
 
+// Funtris centres a fixed-width well and score panel inside a maximized
+// landscape window. Fit focuses their measured union there; portrait Fit
+// keeps the whole window because the scarce axis is width.
+{
+  const crop = require('../lib/apps').APPS.funtris.mobileCrop;
+  const landscape = makeRenderer(667, 375, 667, 375);
+  landscape.mobileCrop = crop;
+  const focused = landscape._computeSingleAppZoom([win(0, 0, 667, 375)]).viewport;
+  assert.deepStrictEqual(
+    [focused.cropX, focused.cropY, focused.cropW, focused.cropH],
+    [144, 43, 378, 326], 'landscape Fit keeps the well and score with measured margins');
+  assert(focused.dstW > 400 && focused.dstW < 500,
+    'the focused landscape picture grows without distorting its aspect');
+  const portrait = makeRenderer(420, 494, 375, 667);
+  portrait.mobileCrop = crop;
+  assert.strictEqual(portrait._computeSingleAppZoom([win(0, 0, 420, 494)]), null,
+    'portrait Fit retains the whole guest window without a crop');
+  assert.strictEqual(landscape._computeSingleAppZoom([
+    win(0, 0, 667, 375), win(120, 70, 240, 180, { hwnd: 0x10002, isDialog: true }),
+  ]), null, 'a modal returns the full landscape window and its titlebar');
+}
+
 // A dialog hanging off the side of its owner widens the crop instead of
 // taking the screen for itself.
 {
@@ -610,6 +632,24 @@ for (const mode of ['fit', 'zoom']) {
     await tick();
     assert.strictEqual(calls.length, 3,
       'View > Standard re-measures too, so the room goes back');
+
+    // Rattler fits a 400px phone desktop by size, but opens at x=158 and
+    // extends to x=424. No maximize poll visits this fixed-size window, so
+    // creation itself must schedule the re-measure that preserves its score.
+    const rattler = makeRenderer(400, 494, 375, 667);
+    rattler.createWindow(0x10002, 0x10c00000, 158, 71, 266, 352,
+      'Snake', 0, null, null);
+    assert.strictEqual(rattler._pendingBackingGrowth, true,
+      'a visible fixed window overhanging the backing requests growth');
+    await tick();
+    assert.strictEqual(calls.length, 4,
+      'the backing is re-measured after the fixed window appears');
+
+    const fitting = makeRenderer(400, 494, 375, 667);
+    fitting.createWindow(0x10003, 0x10c00000, 40, 40, 266, 352,
+      'Snake', 0, null, null);
+    assert.strictEqual(fitting._pendingBackingGrowth, undefined,
+      'a fixed window already inside the backing causes no resize');
     delete global.window;
   })();
 }

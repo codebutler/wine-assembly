@@ -1088,18 +1088,13 @@ TouchControls.destroy();
       < presented.x + (405 - v.cropX) * k,
       'the right nudge stays off the score panel beside the table');
     const tx = table.x, tw = table.w;
-    // The destructive control, measured against the thing it must not be
-    // confused with. 40px wide in a 90.7px gutter, so it clears the bezel and
-    // the left flipper zone by the same amount -- and the gutter is off the
-    // picture entirely, which the 115px pill never managed.
+    // New game is away from the flippers at the phone's top-left in landscape.
     const ng = byLabel('New game');
     assert(ng.classList.contains('tc-chip'),'it renders as a chip');
     assert.strictEqual(ng._tcHeight,40,'and stacks at the chips\' height');
     assert.strictEqual(ng.innerHTML.indexOf('<svg'),0,'a glyph, not the words');
-    const ngW = 40, ngX = parseFloat(ng.style.left);
-    assert(Number.isFinite(ngX) ? ngX >= 0 : true, 'never hangs off the left bezel');
-    assert(table.x - (Number.isFinite(ngX) ? ngX + ngW : ngW) > 20,
-      'and keeps a real margin from the left flipper zone');
+    assert.strictEqual(ng.parentNode, TouchControls._rows['tl:0'],
+      'landscape New game belongs to the top-left phone corner');
     // Item 5b: no captions in landscape. A caption names an invisible zone, so
     // it has to be next to it; the side gutters this used to fall back to are
     // next to nothing, and the phone reported them as "all wrong".
@@ -1559,4 +1554,31 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   TouchControls.destroy();
   global.window = previous;
   console.log('PASS landscape clusters centre in the letterbox gutters and re-settle after a view-mode switch');
+}
+
+// Rodent's short landscape phone view may lose the menu and one bottom wall
+// row, but the stopwatch/lives are gameplay state. Its pad sits at the phone
+// edge; utility pills remain managed by their separate bottom-right row.
+{
+  const { APPS } = require('../lib/apps');
+  const { Win98Renderer } = require('../lib/renderer');
+  const app = APPS.wep16_rodent;
+  assert.strictEqual(app.touchControls.landscapeLeftInset, 8);
+  assert.strictEqual(app.touchControls.boardLayout, true);
+  const renderer = Object.create(Win98Renderer.prototype);
+  renderer.mobileCrop = app.mobileCrop;
+  renderer.canvas = { width: 667, height: 375 };
+  renderer.presentationCanvas = { width: 667, height: 375 };
+  const windowRect = { x: 192, y: 6, w: 282, h: 357 };
+  const fit = renderer._fitModeSource(windowRect, true);
+  assert.deepStrictEqual(fit, {
+    hwnd: undefined, x: 192, y: 44, w: 282, h: 306,
+  }, 'landscape Fit keeps both side walls and starts before the stopwatch crown');
+  renderer.presentationCanvas = { width: 375, height: 667 };
+  assert.strictEqual(renderer._fitModeSource(windowRect, true), windowRect,
+    'portrait Fit keeps the full titlebar, menu, stopwatch, and board');
+  renderer.presentationCanvas = { width: 667, height: 375 };
+  assert.strictEqual(renderer._fitModeSource(windowRect, false), windowRect,
+    'a dialog or menu restores the complete native window');
+  console.log('PASS Rodent phone Fit preserves the HUD and full portrait window');
 }
