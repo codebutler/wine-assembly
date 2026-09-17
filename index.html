@@ -960,9 +960,9 @@
       max-width: none !important;
       max-height: none !important;
     }
-    /* The one control left. A phone has no Escape key and the app owns every
-       tap on the canvas, so without this there is no way back out. Sits inside
-       the safe area so the notch and the home indicator never cover it. */
+    /* A phone has no Escape key, and a guest titlebar moves with the app.
+       Keep Close app in the phone's top-right corner for both full-screen and
+       windowed single-app views. */
     #page-fullscreen-exit { display: none; }
     /* Same chip as the keyboard and Fit/Fill pair the touch overlay puts in
        the opposite corner: 40x40, the same translucent dark fill, the same
@@ -971,7 +971,8 @@
        app's furniture plus a stray browser button. It is deliberately the
        only one at the TOP -- leaving is not something to do by accident while
        reaching for the keyboard. */
-    body.page-fullscreen #page-fullscreen-exit {
+    body.page-fullscreen #page-fullscreen-exit,
+    body.windowed-phone.app-running #page-fullscreen-exit {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1001,17 +1002,16 @@
        circle covers no more of the picture than a chip does. Never shrink
        this; test/test-web-single-app-quit.js checks a point 5px outside the
        circle still lands on the button. */
-    body.page-fullscreen #page-fullscreen-exit::before {
+    body.page-fullscreen #page-fullscreen-exit::before,
+    body.windowed-phone.app-running #page-fullscreen-exit::before {
       content: '';
       position: absolute;
       inset: -8px;
     }
-    body.page-fullscreen #page-fullscreen-exit:active {
+    body.page-fullscreen #page-fullscreen-exit:active,
+    body.windowed-phone.app-running #page-fullscreen-exit:active {
       background: rgba(255, 255, 255, 0.28);
     }
-    /* The guest window already has its own close control. Page fullscreen
-       here is only Safari toolbar management, not a second app to dismiss. */
-    body.windowed-phone #page-fullscreen-exit { display: none; }
     /* Safari's own toolbars are the one thing script cannot take away. Say so
        once, name the thing that does (Add to Home Screen runs the manifest's
        standalone display with no browser chrome at all), and get out of the

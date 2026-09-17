@@ -256,9 +256,8 @@ async function main() {
     // stack (the guest canvas, a touch-control zone) sits over the chip and
     // swallows the touch, or the tap lands and the handler is a visual no-op
     // -- which is what it was: the chip called exitPageFullscreen, and in
-    // single-app mode leaving page-fullscreen changes nothing on screen (the
-    // app already had every pixel) while hiding the chip itself behind
-    // `windowed-phone` and leaving the desktop icons hidden behind
+    // single-app mode leaving page-fullscreen changed nothing on screen (the
+    // app already had every pixel), leaving the desktop icons hidden behind
     // `app-running`. One tap and there was nothing left to press.
     //
     // Nothing here is pinball-specific: any app that takes the display goes
@@ -268,6 +267,22 @@ async function main() {
       const app = runningApps.find(item => item && item.name === 'notepad');
       return !!(app && app.wine && app.wine.renderer);
     }, { timeout: 60000 });
+    await page.waitForFunction(() => document.body.classList.contains('windowed-phone'),
+      { timeout: 10000 });
+    const windowedClose = await page.evaluate(() => {
+      const chip = document.getElementById('page-fullscreen-exit');
+      const rect = chip.getBoundingClientRect();
+      const hit = document.elementFromPoint(rect.left + rect.width / 2,
+        rect.top + rect.height / 2);
+      return { display: getComputedStyle(chip).display, right: rect.right,
+        top: rect.top, hit: hit && hit.id };
+    });
+    assert.notStrictEqual(windowedClose.display, 'none',
+      'Close app stays visible in a windowed phone view');
+    assert(windowedClose.right >= VIEWPORT.width - 60 && windowedClose.top < 60,
+      `Close app stays at the phone top-right, got ${JSON.stringify(windowedClose)}`);
+    assert.strictEqual(windowedClose.hit, 'page-fullscreen-exit',
+      'windowed Close app receives the touch above the guest window');
     await page.evaluate(() => {
       const app = runningApps.find(item => item && item.name === 'notepad');
       // Pinned for the same reason as above: a chip that is only on screen

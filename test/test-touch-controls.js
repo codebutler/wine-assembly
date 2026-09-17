@@ -584,6 +584,7 @@ TouchControls.destroy();
     handleKeyDown() {}, handleKeyUp() {},
     viewMode: 'fit',
     setViewMode() { return false; },
+    mobileCrop: { x: 0, y: 0, w: 1, h: 1 },
     caretRect: () => caret,
     getPresentedRectClient: () => ({ x: 0, y: 6, w: 390, h: 494 }),
   };
@@ -596,25 +597,24 @@ TouchControls.destroy();
   const keyPill = TouchControls._widgets.find(el => el.className === 'tc-key');
   assert.ok(keyPill, 'the keyboard pill rides along with the view toggle');
 
-  // The pills ride the bottom-right stack, below the app's own buttons. That
-  // is the flex row they are appended to, so nothing is positioned by hand and
-  // they cannot land on the picture whatever the presented rect turns out to
-  // be -- which is the failure the old dead-space search kept producing: with
-  // a 168px cross pad in one corner there was no gap wide enough for both, so
-  // one of them ended up pinned to the left bezel at 35% opacity, over the
-  // board and under the notch inset.
+  // Utility controls live in a phone-anchored row. An empty row in the game
+  // corner reserves their height below game buttons without moving the pills
+  // when that corner is centred beside a changing picture.
   const chipRow = TouchControls._rows['br:-1'];
-  assert.ok(chipRow, 'the chips get their own row');
-  assert.ok(chipRow.children.includes(keyPill) && chipRow.children.includes(toggle),
-    'and both ride it');
+  assert.ok(chipRow, 'the game corner keeps a utility spacer');
+  assert.strictEqual(chipRow.style.height, '40px');
+  assert.strictEqual(chipRow.style.width, '90px');
+  assert.strictEqual(TouchControls._utilityRow.parentNode, TouchControls.el,
+    'utility row is attached directly to the phone overlay');
+  assert.deepStrictEqual(TouchControls._utilityRow.children, [toggle, keyPill]);
   assert.strictEqual(TouchControls._corners.br.children[0], chipRow,
-    'created before any app button, so column-reverse puts it at the bottom');
+    'spacer remains below game buttons');
 
   const noInlinePlacement = () => {
     for (const p of [keyPill, toggle]) {
       for (const prop of ['left', 'top', 'position', 'transform', 'opacity']) {
         assert.strictEqual(p.style[prop] || '', '',
-          `the ${prop} of a flowed pill is the stylesheet's business`);
+          `the ${prop} of a phone-anchored pill is the stylesheet's business`);
       }
     }
   };
@@ -636,11 +636,8 @@ TouchControls.destroy();
   TouchControls.layoutZones();
   noInlinePlacement();
 
-  // A board layout places its pills by hand, against the app's action button,
-  // because its corners are positioned against the PICTURE rather than the
-  // phone. Those coordinates are host-relative, so the pills have to leave the
-  // chip row first: absolute positioning inside it resolves against the corner
-  // stack, and Rodent's Revenge put its pills 1236px down a 740px screen.
+  // Board layouts also keep the pills on the phone. A moving New game button
+  // must not drag the rarely-used controls during a Fit/Fill repaint.
   TouchControls.setLayout({
     boardLayout: true,
     dpad: { pos: 'bl', style: 'cross' },
@@ -654,23 +651,23 @@ TouchControls.destroy();
   });
   TouchControls.layoutZones();
   for (const p of [boardToggle, boardKey]) {
-    assert.strictEqual(p.parentNode, TouchControls.el,
-      'a hand-placed pill hangs off the overlay, not off the corner stack');
-    assert.strictEqual(p.style.position, 'absolute', 'and is placed by hand');
-    assert.ok(parseInt(p.style.top, 10) < 664,
-      `on the screen, not below it (top=${p.style.top})`);
-    assert.ok(parseInt(p.style.left, 10) < 390,
-      `and not off its right edge (left=${p.style.left})`);
+    assert.strictEqual(p.parentNode, TouchControls._utilityRow,
+      'board utilities stay in the phone-anchored row');
+    assert.strictEqual(p.style.position || '', '',
+      'board utilities have no position derived from the action button');
   }
+  assert.strictEqual(TouchControls._rows['br:-1'].style.height, '40px',
+    'board action still reserves a bottom utility row');
 
-  // Swapping back to an ordinary layout returns them to the row, in order.
+  // Swapping layouts recreates the utility row without stale placement.
   TouchControls.setLayout({ dpad: { pos: 'bl', style: 'cross' }, swipes: true });
   TouchControls.layoutZones();
   const backRow = TouchControls._rows['br:-1'];
   const backToggle = TouchControls._widgets.find(el => el.className === 'tc-mode');
   const backKey = TouchControls._widgets.find(el => el.className === 'tc-key');
-  assert.deepStrictEqual(backRow.children, [backToggle, backKey],
-    'both pills are back in the chip row, view toggle first');
+  assert.strictEqual(backRow.style.height, '40px');
+  assert.deepStrictEqual(TouchControls._utilityRow.children, [backToggle, backKey],
+    'both pills are back in the utility row, view toggle first');
   for (const p of [backToggle, backKey]) {
     assert.strictEqual(p.style.position || '', '',
       'and the board layout leaves no absolute positioning behind');
@@ -716,6 +713,8 @@ TouchControls.destroy();
   const bottomCorner = TouchControls._corners.bl;
   assert.strictEqual(bottomCorner.style.bottom, '144px',
     'the dpad clears Safari visual-viewport occlusion without resizing the guest');
+  assert.ok(TouchControls._utilityRow.style.bottom.includes('144px'),
+    'phone utility pills also clear the Safari toolbar');
   assert.ok(viewportHandlers.has('resize') && viewportHandlers.has('scroll'),
     'toolbar movement relayouts controls immediately');
   TouchControls.destroy();
@@ -1336,14 +1335,10 @@ console.log('PASS  touch controls hold, pair and release guest keys');
     'portrait stick starts 24px below the actual picture, not at the phone bottom');
   assert.strictEqual(parseFloat(TouchControls._corners.br.style.bottom),159,
     'primary action top aligns with the joystick top');
-  const oldKey=TouchControls._keyEl, oldMode=TouchControls._modeEl;
-  TouchControls._keyEl=document.createElement('button');
-  TouchControls._modeEl=document.createElement('button');
-  button._rect={left:278,right:357,top:375,bottom:433,width:79,height:58};
-  TouchControls._placeModeToggle(mouse.getPresentedRectClient(),TouchControls.el._rect);
-  assert.strictEqual(TouchControls._keyEl.style.top,'451px','utility pills sit below Jump with 18px gap');
-  assert.strictEqual(TouchControls._modeEl.style.top,'451px');
-  TouchControls._keyEl=oldKey; TouchControls._modeEl=oldMode;
+  assert.strictEqual(TouchControls._keyEl.parentNode, TouchControls._utilityRow,
+    'keyboard stays in the phone utility row instead of following Jump');
+  assert.strictEqual(TouchControls._keyEl.style.top || '', '');
+  assert.strictEqual(TouchControls._modeEl.style.top || '', '');
   mouse.getPresentedRectClient=()=>({x:0,y:0,w:375,h:628});
   TouchControls.layoutZones();
   assert.strictEqual(parseFloat(TouchControls._corners.br.style.bottom),58,
