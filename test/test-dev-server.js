@@ -182,6 +182,30 @@ async function main() {
       assert.ok(wasm.status === 200 || wasm.status === 404,
         `unexpected ${wasm.status}`);
     });
+
+    const asset = '/lib/vlan-wire.js';
+    const assetHead = await fetch(base + asset, { method: 'HEAD' });
+    const assetSize = Number(assetHead.headers.get('content-length'));
+    check('static files advertise byte ranges and their full size', () => {
+      assert.strictEqual(assetHead.status, 200);
+      assert.strictEqual(assetHead.headers.get('accept-ranges'), 'bytes');
+      assert.ok(assetSize > 8);
+    });
+    const partial = await fetch(base + asset, { headers: { Range: 'bytes=2-7' } });
+    const full = await fetch(base + asset);
+    const partialBytes = new Uint8Array(await partial.arrayBuffer());
+    const fullBytes = new Uint8Array(await full.arrayBuffer());
+    check('a Range GET returns exactly the requested archive slice', () => {
+      assert.strictEqual(partial.status, 206);
+      assert.strictEqual(partial.headers.get('content-range'), `bytes 2-7/${assetSize}`);
+      assert.strictEqual(Number(partial.headers.get('content-length')), 6);
+      assert.deepStrictEqual(partialBytes, fullBytes.subarray(2, 8));
+    });
+    const pastEnd = await fetch(base + asset, { headers: { Range: `bytes=${assetSize}-` } });
+    check('an unsatisfiable Range returns 416 with the file size', () => {
+      assert.strictEqual(pastEnd.status, 416);
+      assert.strictEqual(pastEnd.headers.get('content-range'), `bytes */${assetSize}`);
+    });
   } finally {
     await new Promise(resolve => server.close(resolve));
   }
