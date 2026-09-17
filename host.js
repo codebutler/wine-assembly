@@ -2680,7 +2680,25 @@ class WineAssembly {
     if (!vfs) return;
     const concurrency = Math.max(1, options.concurrency || 6);
     let loaded = 0, failed = 0, next = 0;
+    const failures = [];
     const total = urls.length;
+    const fetchWithRetry = async (url) => {
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await WineAssembly.fetchAssetBytes(url);
+        } catch (error) {
+          const reason = String(error && error.message || error);
+          const http = reason.match(/HTTP (\d{3})$/);
+          const retryable = (!http || [408, 429].includes(Number(http[1])) ||
+            Number(http[1]) >= 500) && !/missing .*\.part\d+/.test(reason);
+          if (!retryable || attempt >= 2) throw error;
+          // Mobile Safari sometimes drops a LAN response while several large
+          // game archives are being loaded. Retry only that file, leaving
+          // successful mounts in place and the worker pool bounded.
+          await new Promise(resolve => setTimeout(resolve, 250 * (attempt + 1)));
+        }
+      }
+    };
     const loadOne = async (item) => {
       // Accept plain string (flat -> c:\basename), {url, vfsPath}, or
       // {url, vfsPaths} when one fetched file needs multiple Win32 aliases.
@@ -2688,7 +2706,7 @@ class WineAssembly {
       const explicit = (typeof item === 'object') ? item.vfsPath : null;
       const explicitPaths = (typeof item === 'object' && Array.isArray(item.vfsPaths)) ? item.vfsPaths : null;
       try {
-        const data = await WineAssembly.fetchAssetBytes(url);
+        const data = await fetchWithRetry(url);
         const decodedImage = (typeof item === 'object' && item.decodeImage)
           ? await this._decodeMountedImage(data, url)
           : null;
@@ -2720,8 +2738,9 @@ class WineAssembly {
           addFile('c:\\windows\\fonts\\' + base);
         }
         loaded++;
-      } catch (_) {
+      } catch (error) {
         failed++;
+        failures.push({ url, reason: String(error && error.message || error) });
       } finally {
         if (options.onProgress) options.onProgress({ loaded, failed, total, url });
       }
@@ -2735,7 +2754,10 @@ class WineAssembly {
     });
     await Promise.all(workers);
     if (failed && options.required) {
-      throw new Error(`failed to load ${failed} of ${total} data files`);
+      const details = failures.slice(0, 5).map(({ url, reason }) =>
+        `${url}: ${reason}`).join('; ');
+      const more = failures.length > 5 ? `; ${failures.length - 5} more` : '';
+      throw new Error(`failed to load ${failed} of ${total} data files: ${details}${more}`);
     }
   }
 
