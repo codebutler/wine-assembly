@@ -757,8 +757,24 @@
               (i32.ne (i32.eq (local.get $show) (i32.const 3))
                       (call $wnd_max_get (local.get $arg0))))
           (then
+            ;; SetWindowPlacement may be the first call that shows a restored
+            ;; maximized/minimized window. Keep USER's GWL_STYLE visibility in
+            ;; sync with the renderer: otherwise the frame is on screen but
+            ;; WM_PAINT skips its tree/list/status children as hidden.
+            (drop (call $wnd_set_style (local.get $arg0)
+              (i32.or (call $wnd_get_style (local.get $arg0))
+                      (i32.const 0x10000000))))
             (drop (call $host_show_window (local.get $arg0) (local.get $show)))
-            (call $wnd_apply_show_state (local.get $arg0) (local.get $show))))))
+            (call $wnd_apply_show_state (local.get $arg0) (local.get $show))
+            ;; The host changed the frame size. Tell the application so it can
+            ;; MoveWindow its children; Regedit otherwise keeps a 234px tree
+            ;; beneath a 670px maximized parent on a phone.
+            (if (i32.ne (local.get $show) (i32.const 2)) ;; not minimized
+              (then
+                (call $post_resize_messages (local.get $arg0)
+                  (select (i32.const 2) (i32.const 0)
+                    (i32.eq (local.get $show) (i32.const 3))))
+                (call $paint_mark_visible_tree (local.get $arg0))))))))
     (global.set $eax (i32.const 1))
     (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; stdcall, 2 args
   )
