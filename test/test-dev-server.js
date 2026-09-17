@@ -127,6 +127,20 @@ async function main() {
       assert.ok(page.text.length > 0);
     });
 
+    const remoteServer = createServer({ quiet: true, agentToken: 'lan-test-token' });
+    await new Promise(resolve => remoteServer.listen(0, '127.0.0.1', resolve));
+    try {
+      const remoteBase = `http://127.0.0.1:${remoteServer.address().port}`;
+      const ordinary = await (await fetch(remoteBase + '/?debug')).text();
+      const handedOff = await (await fetch(remoteBase + '/?debug&agent=lan-test-token')).text();
+      check('LAN agent token only enables remote control on its handoff URL', () => {
+        assert.ok(!ordinary.includes('agent-remote.js?token='));
+        assert.ok(handedOff.includes('agent-remote.js?token=lan-test-token'));
+      });
+    } finally {
+      await new Promise(resolve => remoteServer.close(resolve));
+    }
+
     const doubledSlash = await alice('GET', '//?debug');
     check('a doubled-slash page request cannot crash the server', () => {
       assert.strictEqual(doubledSlash.status, 200);

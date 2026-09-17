@@ -277,7 +277,7 @@ function serveStatic(req, res, urlPath, agentInject) {
     if (inject) {
       fs.readFile(full, (err2, data) => {
         if (err2) { res.writeHead(500); res.end(); return; }
-        const body = Buffer.concat([data, Buffer.from(AGENT_INJECT)]);
+        const body = Buffer.concat([data, Buffer.from(agentInject)]);
         sendHeaders(200, body.length);
         if (req.method === 'HEAD') { res.end(); return; }
         res.end(body);
@@ -934,7 +934,14 @@ function createServer(opts) {
     // Auto-connect injection only on a localhost bind: with a wider bind the
     // page would need the agent token, and serving the token to every viewer
     // is serving control of every session.
-    const agentInject = !(opts && opts.agentToken) && !(opts && opts.noAgentInject);
+    // A LAN page opts into remote control with the hub token in its URL.
+    // Other viewers never receive an auto-connect script or the token.
+    const token = opts && opts.agentToken;
+    const agentInject = opts && opts.noAgentInject ? false : token
+      ? (url.searchParams.get('agent') === token
+        ? AGENT_INJECT.replace("import('/lib/agent-remote.js')",
+          `import('/lib/agent-remote.js?token=${token}')`) : false)
+      : AGENT_INJECT;
     // /dashboard is the multi-session grid (dashboard.html). Aliased because
     // the URL a human is handed should not carry a file extension, and because
     // the page's own tile links are written against this path.
