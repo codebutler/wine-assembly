@@ -26,6 +26,8 @@ ASCII TLDR:
   Dispatch-count reductions with the guest's work unchanged measure ~0.
   Memory-path reductions win, and win big.
   Op count is a proof of EQUAL WORK, never a proof of SPEED.
+  Code SIZE is not a metric either. Cache, branches and memory accesses are.
+  An UNPREDICTABLE indirect branch is a memory path: removing one wins too.
 ```
 
 ## 1. The cost model, as measured
@@ -95,6 +97,21 @@ because the fused handler was bigger and slower than the two it replaced.
 **4.1 Op count is not time.** A dispatch-count delta proves equal work. It says
 nothing about speed, and can point the wrong way. Every fusion needs *both* an
 op-count delta and a time measurement.
+
+**4.1b Code size is not time either, and can point the wrong way just as hard.**
+The register file grew the module 4.2% (+55,613 bytes — 3.11 bytes at each of
+17,888 sites, exactly the wasm encoding delta between `global.get $eax` and an
+indexed load) and is a 4.5-7.3% *win*. Byte count is a whole-module number; what
+costs time is the icache footprint and the branch behaviour **of the hot path**,
+and those moved the other way (the six register accessors: -65% instructions,
+11 data-dependent branches to 0). Quote size as context, never as the verdict.
+The instruments that speak the right units are `tools/indirect-census.js`
+(data-dependent indirect branches per function, `br_table` / indirect call /
+indirect tail call, in real Ion arm64 code), `tools/wasm-native.js` (the actual
+machine code; `--top` is a size census over the hot set), and
+`tools/inline-verdicts.js` (which hot leaves V8 refuses to inline, weighted by
+call count — an un-inlined accessor turns N call sites into ONE indirect jump
+site carrying N callers' worth of target mixing).
 
 **4.2 Pacing has two meters.** `$steps` is a per-block 1000-op quantum; `$block_budget`
 is the actual batch meter, spent once per block transfer. A super-op that swallows
@@ -173,10 +190,37 @@ is landing on the axis that is not binding.
    access per register read. `$th_load32_ro_base_ebp` is the pattern already in tree.
    Remaining `set_reg` sources: `H344`/`H345` 52.0M dispatches, `H154` 17.2M, and the
    16-bit cluster (`H166`/`H165`/`H206`/`H210`/`H193`, ~51M).
-   A memory-backed register file is the *other* framing and is probably negative:
-   12,734 direct `global.get/set $eax..$edi` sites vs 328 indirect ones, and AoE's
-   `br_table register helpers` row already lost at +0.6%. Any such file must be
-   per-thread partitioned — workers are separate instances over one shared memory.
+   A memory-backed register file is the *other* framing. **This entry predicted it
+   was "probably negative". Measured 2026-09-16/18, that prediction is WRONG: it is
+   a 4.5% gameplay win on its own and 7.3% with the simplifications it enables**
+   (branch `perf/regfile-2026-09-18`). The reasoning that produced the wrong call —
+   12,734 direct `global.get/set` sites against 328 indirect ones — counted *sites*
+   and so measured code size, which is the metric that does not decide this:
+
+   - V8 **refuses to inline** `$get_reg`/`$set_reg` (`tools/inline-verdicts.js`:
+     `$set_reg` denied at sites carrying 1.32M calls, zero inlined). So the 488 call
+     sites are not 488 independent branches a BTB can specialise. They collapse into
+     **one indirect jump site per accessor, 8 targets, in effectively random order** —
+     the worst case a predictor can be handed.
+   - `tools/indirect-census.js` on real arm64 Ion code, before → after: the six
+     accessors go **260 → 92 native instructions (-65%)** and **11 → 0
+     data-dependent indirect branches**. `$next` (142, 2) and `$g2w` (55, 0) are
+     untouched, so the effect is confined to the register path.
+   - The file is **32 bytes, half a cache line, permanently L1-resident**. The "added
+     memory traffic" the old framing feared is an L1 hit replacing a mispredicted
+     indirect branch plus a non-inlined call.
+   - The module gets **4.2% larger** while the hottest functions get 65% smaller.
+     Byte count points the wrong way here; see §4.1's sibling rule below.
+
+   It also unlocks what a global spelling cannot express: a wasm global has no byte
+   address, so AL..BH must be extracted with a shift and a mask behind a
+   data-dependent `r < 4` test. In memory the eight byte registers are
+   `reg_base + ((r&3)<<2) + (r>>2)`, branchlessly, turning `$set_reg8` from a
+   read-modify-write behind an unpredictable branch into one `i32.store8` at 144
+   call sites. That is the -2.9% of the -7.3%.
+
+   Any such file must be per-thread partitioned — workers are separate instances
+   over one shared memory. `$REGFILE` has a per-tid stride for exactly that.
 
 Declined with a measurement, not an opinion:
 
