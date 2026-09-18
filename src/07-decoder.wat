@@ -3440,7 +3440,7 @@
               (then (return)))
             (if (call $try_emit_base_run (local.get $dst) (global.get $mr_disp))
               (then (return)))))
-        (call $te (i32.add (i32.const 339) (global.get $mr_base)) (local.get $dst))
+        (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (global.get $mr_base)) (local.get $dst))
         (call $te_raw (global.get $mr_disp))
         (return)))
     ;; Indexed SIB loads dominate generated Smacker conversion loops. Encode
@@ -3476,7 +3476,7 @@
             (if (call $try_emit_store32_span
                   (local.get $src) (global.get $mr_disp) (local.get $insn_start))
               (then (return)))
-            (call $te (i32.add (i32.const 347) (global.get $mr_base)) (local.get $src))
+            (call $te (i32.add (global.get $TH_STORE32_RO_BASE) (global.get $mr_base)) (local.get $src))
             (call $te_raw (global.get $mr_disp)) (return)))
     (if (call $mr_absolute)
       (then
@@ -4547,13 +4547,20 @@
       (if (i32.and (i32.ge_u (local.get $op) (i32.const 0x50)) (i32.le_u (local.get $op) (i32.const 0x57)))
         (then (if (local.get $prefix_66)
           (then (call $te (i32.const 181) (i32.sub (local.get $op) (i32.const 0x50))))
-          (else (call $te (i32.add (i32.const 323) (i32.sub (local.get $op) (i32.const 0x50))) (i32.const 0))))
+          ;; EXPERIMENT: emit the generic $th_push_r (32) with the register in the
+          ;; operand instead of one of the eight $th_push_<reg> specializations.
+          ;; Only the memory-backed register file makes this cheap: the generic
+          ;; indexes $reg_base by the operand, where the global spelling would
+          ;; have needed $get_reg's br_table. Same shape the 0x66 path above
+          ;; already uses. Trades 8 dispatch targets for one shl+add.
+          (else (call $te (global.get $TH_PUSH_R) (i32.sub (local.get $op) (i32.const 0x50)))))
           (br $decode)))
       ;; ---- POP reg (0x58-0x5F) ----
       (if (i32.and (i32.ge_u (local.get $op) (i32.const 0x58)) (i32.le_u (local.get $op) (i32.const 0x5F)))
         (then (if (local.get $prefix_66)
           (then (call $te (i32.const 182) (i32.sub (local.get $op) (i32.const 0x58))))
-          (else (call $te (i32.add (i32.const 331) (i32.sub (local.get $op) (i32.const 0x58))) (i32.const 0))))
+          ;; Same collapse for POP: generic $th_pop_r (33), register in operand.
+          (else (call $te (global.get $TH_POP_R) (i32.sub (local.get $op) (i32.const 0x58)))))
           (br $decode)))
       ;; ---- PUSH/POP segment register (ES/CS/SS/DS) ----
       ;; Win32 uses a flat address space, but generated bitmap code still saves

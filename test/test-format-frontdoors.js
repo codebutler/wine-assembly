@@ -36,8 +36,8 @@ const STACK = 0x00300000;
 const extraWat = String.raw`
   (func $test_format_result (result i64)
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func $test_seed_format_args (param $value0 i32) (param $value1 i32)
     (call $gs32 (i32.const ${STACK + 12}) (local.get $value0))
@@ -46,7 +46,7 @@ const extraWat = String.raw`
   (func (export "test_wsprintfA_frontdoor")
         (param $out i32) (param $fmt i32) (param $value0 i32) (param $value1 i32)
         (result i64)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $test_seed_format_args (local.get $value0) (local.get $value1))
     (call $handle_wsprintfA
       (local.get $out) (local.get $fmt) (i32.const 0)
@@ -56,7 +56,7 @@ const extraWat = String.raw`
   (func (export "test_sprintf_frontdoor")
         (param $out i32) (param $fmt i32) (param $value0 i32) (param $value1 i32)
         (result i64)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $test_seed_format_args (local.get $value0) (local.get $value1))
     (call $handle_sprintf
       (local.get $out) (local.get $fmt) (i32.const 0)

@@ -256,9 +256,8 @@ async function main() {
     // stack (the guest canvas, a touch-control zone) sits over the chip and
     // swallows the touch, or the tap lands and the handler is a visual no-op
     // -- which is what it was: the chip called exitPageFullscreen, and in
-    // single-app mode leaving page-fullscreen changes nothing on screen (the
-    // app already had every pixel) while hiding the chip itself behind
-    // `windowed-phone` and leaving the desktop icons hidden behind
+    // single-app mode leaving page-fullscreen changed nothing on screen (the
+    // app already had every pixel), leaving the desktop icons hidden behind
     // `app-running`. One tap and there was nothing left to press.
     //
     // Nothing here is pinball-specific: any app that takes the display goes
@@ -268,6 +267,14 @@ async function main() {
       const app = runningApps.find(item => item && item.name === 'notepad');
       return !!(app && app.wine && app.wine.renderer);
     }, { timeout: 60000 });
+    await page.waitForFunction(() => document.body.classList.contains('windowed-phone'),
+      { timeout: 10000 });
+    const windowedClose = await page.evaluate(() => {
+      const chip = document.getElementById('page-fullscreen-exit');
+      return { display: getComputedStyle(chip).display };
+    });
+    assert.strictEqual(windowedClose.display, 'none',
+      'windowed apps use their own titlebar Close button without a duplicate chip');
     await page.evaluate(() => {
       const app = runningApps.find(item => item && item.name === 'notepad');
       // Pinned for the same reason as above: a chip that is only on screen

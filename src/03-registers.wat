@@ -16,32 +16,40 @@
   )
 
   ;; Get byte register value (0-3=al/cl/dl/bl, 4-7=ah/ch/dh/bh)
+  ;; AL..BH are BYTES INSIDE the dword slots, and linear memory is little-endian,
+  ;; so the low byte of register r is byte 0 of slot r, and a high byte (AH..BH,
+  ;; r >= 4) is byte 1 of slot r-4. Both cases are the one address
+  ;;     ((r & 3) << 2) + (r >> 2)
+  ;; with no branch. This is only expressible because the registers are memory:
+  ;; a wasm global has no byte address, which is why this used to be a branch
+  ;; over two shift-and-mask arms.
+  (func $reg8_addr (param $r i32) (result i32)
+    (i32.add (global.get $reg_base)
+      (i32.add (i32.shl (i32.and (local.get $r) (i32.const 3)) (i32.const 2))
+               (i32.shr_u (local.get $r) (i32.const 2)))))
   (func $get_reg8 (param $r i32) (result i32)
-    (if (result i32) (i32.lt_u (local.get $r) (i32.const 4))
-      (then (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))) (i32.const 0xFF)))
-      (else (i32.and (i32.shr_u (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.sub (local.get $r) (i32.const 4)) (i32.const 2)))) (i32.const 8)) (i32.const 0xFF))))
+    (i32.load8_u (call $reg8_addr (local.get $r)))
   )
 
   ;; Set byte register (preserves other bits)
+  ;; ONE byte store. The read-modify-write this replaces (load, mask, or, store)
+  ;; existed only because a global can be written whole or not at all -- it was
+  ;; never about x86 semantics. i32.store8 already takes the low 8 bits of $v.
+  ;; Safe on the shared memory: each guest thread owns its own $REGFILE stride,
+  ;; so no other thread can be reading the dword this partially writes.
   (func $set_reg8 (param $r i32) (param $v i32)
-    (local $old i32)
-    (if (i32.lt_u (local.get $r) (i32.const 4))
-      (then
-        (local.set $old (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))))
-        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))) (i32.or (i32.and (local.get $old) (i32.const 0xFFFFFF00)) (i32.and (local.get $v) (i32.const 0xFF)))))
-      (else
-        (local.set $old (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.sub (local.get $r) (i32.const 4)) (i32.const 2)))))
-        (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.sub (local.get $r) (i32.const 4)) (i32.const 2))) (i32.or (i32.and (local.get $old) (i32.const 0xFFFF00FF))
-            (i32.shl (i32.and (local.get $v) (i32.const 0xFF)) (i32.const 8))))))
+    (i32.store8 (call $reg8_addr (local.get $r)) (local.get $v))
   )
 
   ;; Get/set 16-bit register
+  ;; AX..DI are the low half of their slot, so a 16-bit read is one load16_u and
+  ;; a 16-bit write is one store16 -- again a read-modify-write that only ever
+  ;; existed because the register was a global.
   (func $get_reg16 (param $r i32) (result i32)
-    (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))) (i32.const 0xFFFF))
+    (i32.load16_u (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))))
   )
   (func $set_reg16 (param $r i32) (param $v i32)
-    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))) (i32.or (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2)))) (i32.const 0xFFFF0000))
-              (i32.and (local.get $v) (i32.const 0xFFFF))))
+    (i32.store16 (i32.add (global.get $reg_base) (i32.shl (local.get $r) (i32.const 2))) (local.get $v))
   )
 
   ;; ============================================================

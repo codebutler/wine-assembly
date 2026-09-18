@@ -134,6 +134,31 @@ function win(x, y, w, h, extra) {
     'a full-screen window should not be zoomed');
 }
 
+// Funtris keeps the full window width in landscape. Fit drops only the menu;
+// Fill removes more vertical furniture without clipping either side.
+{
+  const crop = require('../lib/apps').APPS.funtris.mobileCrop;
+  const landscape = makeRenderer(667, 375, 667, 375);
+  landscape.mobileCrop = crop;
+  const focused = landscape._computeSingleAppZoom([win(0, 0, 667, 375)]).viewport;
+  assert.deepStrictEqual(
+    [focused.cropX, focused.cropY, focused.cropW, focused.cropH],
+    [0, 40, 667, 335], 'landscape Fit keeps the full window width');
+  landscape.viewMode = 'zoom';
+  const filled = landscape._computeSingleAppZoom([win(0, 0, 667, 375)]).viewport;
+  assert.deepStrictEqual(
+    [filled.cropX, filled.cropY, filled.cropW, filled.cropH],
+    [0, 45, 667, 324], 'landscape Fill crops vertically, not horizontally');
+  landscape.viewMode = 'fit';
+  const portrait = makeRenderer(420, 494, 375, 667);
+  portrait.mobileCrop = crop;
+  assert.strictEqual(portrait._computeSingleAppZoom([win(0, 0, 420, 494)]), null,
+    'portrait Fit retains the whole guest window without a crop');
+  assert.strictEqual(landscape._computeSingleAppZoom([
+    win(0, 0, 667, 375), win(120, 70, 240, 180, { hwnd: 0x10002, isDialog: true }),
+  ]), null, 'a modal returns the full landscape window and its titlebar');
+}
+
 // A dialog hanging off the side of its owner widens the crop instead of
 // taking the screen for itself.
 {
@@ -610,6 +635,24 @@ for (const mode of ['fit', 'zoom']) {
     await tick();
     assert.strictEqual(calls.length, 3,
       'View > Standard re-measures too, so the room goes back');
+
+    // Rattler fits a 400px phone desktop by size, but opens at x=158 and
+    // extends to x=424. No maximize poll visits this fixed-size window, so
+    // creation itself must schedule the re-measure that preserves its score.
+    const rattler = makeRenderer(400, 494, 375, 667);
+    rattler.createWindow(0x10002, 0x10c00000, 158, 71, 266, 352,
+      'Snake', 0, null, null);
+    assert.strictEqual(rattler._pendingBackingGrowth, true,
+      'a visible fixed window overhanging the backing requests growth');
+    await tick();
+    assert.strictEqual(calls.length, 4,
+      'the backing is re-measured after the fixed window appears');
+
+    const fitting = makeRenderer(400, 494, 375, 667);
+    fitting.createWindow(0x10003, 0x10c00000, 40, 40, 266, 352,
+      'Snake', 0, null, null);
+    assert.strictEqual(fitting._pendingBackingGrowth, undefined,
+      'a fixed window already inside the backing causes no resize');
     delete global.window;
   })();
 }
@@ -718,3 +761,23 @@ assert(/if \(\(win\.w \| 0\) > w\) w = Math\.max\(w, \(win\.x \| 0\) \+ \(win\.w
   'the desktop must grow to cover a window too wide to fit it, offset and all');
 assert(/for \(const win of Object\.values\(boardRenderer\.windows \|\| \{\}\)\) \{\s*\n\s*if \(!win \|\| win\.isChild \|\| !win\.visible \|\| win\._maximized\) continue;/.test(html),
   'and must skip the maximized window, whose size is the desktop it was given');
+
+// A hidden Fill chip must not leave pinch or a keyboard shortcut able to crop
+// an app that is meant to stay in Fit. Pinball retains the default zoom path.
+{
+  const fitted = makeRenderer(400, 711, 375, 667);
+  fitted.scheduleRepaint = () => {};
+  fitted.allowViewZoom = false;
+  assert.strictEqual(fitted.setViewMode('zoom'), false);
+  assert.strictEqual(fitted.viewMode, 'fit');
+  fitted.beginViewPinch();
+  fitted.updateViewPinch(2);
+  fitted.endViewPinch();
+  assert.strictEqual(fitted.viewMode, 'fit',
+    'pinch must not enter Fill for a Fit-only app');
+
+  const pinball = makeRenderer(641, 481, 375, 667);
+  pinball.scheduleRepaint = () => {};
+  assert.strictEqual(pinball.setViewMode('zoom'), true);
+  assert.strictEqual(pinball.viewMode, 'zoom');
+}

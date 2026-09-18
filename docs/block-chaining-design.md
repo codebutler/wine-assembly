@@ -689,3 +689,69 @@ setters), `test-x87-pipeline4-fusion`, `test-x86-ops` 145/145.
 * No wall-clock app A/B was run. The box sat at loadavg 3–6 throughout, and
   every number above is a deterministic counter, a picture or an in-process
   interleaved microbenchmark minimum.
+
+## 11. Round 20 — the same four corners on Diablo and StarCraft gameplay
+
+Round 19's overlap finding rested on caesar3, heroes2, quake2 and rct. Those
+are one short-block app and three others; none of them is a Blizzard engine,
+and the Storm.dll clusters are where the phone measurement says the block
+entries go (~150k per StarCraft frame). So the four-corner table was re-run
+on `diablo_shareware` in Tristram and `starcraft_shareware` in its first
+mission, both driven to gameplay by a PNG-verified input route and both
+cooperative (`--no-threads`, because the counters are read off the main
+instance). `docs/block-executor-design/collect-round20-windows.sh` is the
+collector, `read-round19.js` the reader; 2026-09-16, HEAD 13c05d00, build
+green in a detached worktree.
+
+Two things the collector learned the hard way, both now written into it:
+
+* The Diablo route in memory was written against 1000-block batches and no
+  longer leaves the Smacker logo — every frame stayed blank for 12,000
+  batches. At `--batch-size=20000` the menu is up between batch 1600 and
+  1800 and the same clicks shifted by +1400 reach town at 2800.
+* A `--count=` hit counter arms `$dbg_any`, and with it set chaining is
+  inert: the first StarCraft pass read `chainHits 0` on the chain arm. The
+  gameplay gate is a picture, not a counter.
+
+Per retired block, fixed work (4000 and 2200 batches):
+
+```
+                 desk trips per retired block         chained tails
+ window          off     chain   exec    both        (both arm)
+ diablo-gameplay 0.820   0.457   0.816   0.468       30% of chainable, 10.6% of all
+ starcraft-gpl   0.821   0.471   0.822   0.485       82% of chainable, 46.4% of all
+```
+
+Retired blocks: Diablo 305.3M off / 296.3M exec (39.3k installs), StarCraft
+486.4M off / 463.9M exec (63.2k installs) — the executor retires 3–5% fewer
+blocks by folding regions, and changes the desk-trip rate by nothing.
+
+The reading is the same as round 19, now on the two engines that matter:
+
+* **Chaining alone halves the desk trips** on both — 0.82 → 0.46/0.47 per
+  block, 42.7% of StarCraft's branch ends chained.
+* **The executor alone does nothing for desk trips** (0.816/0.822), because
+  every region tail still ends in a block_end, ret, call or generic jcc that
+  has no chain slot.
+* **Both is slightly worse than chain alone** on both windows (+0.011 and
+  +0.014 per block): the executor converts stream edges chaining was taking
+  into descriptor tails, and only the ret-free fraction of those get chained
+  back. Gate `both <= min(chain, exec)` FAILS on both, as it did in round 19.
+
+Wall clock, single sample per arm, load 3–6: Diablo off 44.5s, chain 39.9s,
+exec 51.1s, both 51.8s; StarCraft off 124s, chain 121s, exec 96s, both 79s.
+The two apps disagree on the executor's sign and neither is a measurement —
+a three-arm interleaved `fold-ab` on Diablo (3200 batches, 3 reps) came back
+on-off mean −3.2s against a null spread of 8.3s with the load climbing from
+3 to 14 during the run. Unresolvable; the counters above are the finding.
+
+Both the API-call totals and the decode counts differ between arms by a few
+percent on these windows (Diablo 8.30M vs 8.27M calls, StarCraft 1.25M vs
+0.81M), so the runs are not the same guest work to the last call: the route
+is time-paced and an input lands on whichever batch the clock reaches first.
+Retired-block totals agree to 0.01% between off and chain, which is what the
+per-block rates are normalised by.
+
+What this changes: nothing about the levers (all still OFF), and it removes
+the "caesar3 is a short-block outlier" reading of round 19. The chain word on
+ret-free terminators (§7, §10.11) is now the named next round on five windows.

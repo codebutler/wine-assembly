@@ -260,8 +260,8 @@ function serveStatic(req, res, urlPath, agentInject) {
     // in memory first — the Content-Length must describe what is actually
     // sent, not the on-disk size. Everything else streams untouched.
     const inject = agentInject && full === path.join(ROOT, 'index.html');
-    const sendHeaders = (length) => {
-      res.writeHead(200, Object.assign({
+    const sendHeaders = (status, length, extra = {}) => {
+      res.writeHead(status, Object.assign({
         'Content-Type': type,
         'Content-Length': length,
         'Cache-Control': 'no-store, must-revalidate',
@@ -272,21 +272,46 @@ function serveStatic(req, res, urlPath, agentInject) {
         // agent-remote module if the module response says so; without this the
         // pasted connect line fails with an opaque CORS error.
         'Access-Control-Allow-Origin': '*',
-      }, isolationHeaders || {}));
+      }, isolationHeaders || {}, extra));
     };
     if (inject) {
       fs.readFile(full, (err2, data) => {
         if (err2) { res.writeHead(500); res.end(); return; }
-        const body = Buffer.concat([data, Buffer.from(AGENT_INJECT)]);
-        sendHeaders(body.length);
+        const body = Buffer.concat([data, Buffer.from(agentInject)]);
+        sendHeaders(200, body.length);
         if (req.method === 'HEAD') { res.end(); return; }
         res.end(body);
       });
       return;
     }
-    sendHeaders(st.size);
+    // ByteProvider's HTTP-backed VFS reads only the archive slices the guest
+    // asks for. A 200 to its Range request would force a whole archive into
+    // Mobile Safari memory, so advertise and honor one inclusive byte range.
+    const rangeHeader = req.headers.range;
+    let start = 0, end = st.size - 1;
+    if (rangeHeader !== undefined) {
+      const match = /^bytes=(\d+)-(\d*)$/.exec(String(rangeHeader));
+      if (!match || st.size === 0) {
+        res.writeHead(416, { 'Content-Range': `bytes */${st.size}`, 'Accept-Ranges': 'bytes' });
+        res.end();
+        return;
+      }
+      start = Number(match[1]);
+      end = match[2] ? Number(match[2]) : end;
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+          start >= st.size || end < start) {
+        res.writeHead(416, { 'Content-Range': `bytes */${st.size}`, 'Accept-Ranges': 'bytes' });
+        res.end();
+        return;
+      }
+      end = Math.min(end, st.size - 1);
+    }
+    const partial = rangeHeader !== undefined;
+    sendHeaders(partial ? 206 : 200, partial ? end - start + 1 : st.size,
+      Object.assign({ 'Accept-Ranges': 'bytes' }, partial
+        ? { 'Content-Range': `bytes ${start}-${end}/${st.size}` } : {}));
     if (req.method === 'HEAD') { res.end(); return; }
-    fs.createReadStream(full).pipe(res)
+    fs.createReadStream(full, partial ? { start, end } : undefined).pipe(res)
       .on('error', () => res.destroy());
   });
 }
@@ -909,7 +934,14 @@ function createServer(opts) {
     // Auto-connect injection only on a localhost bind: with a wider bind the
     // page would need the agent token, and serving the token to every viewer
     // is serving control of every session.
-    const agentInject = !(opts && opts.agentToken) && !(opts && opts.noAgentInject);
+    // A LAN page opts into remote control with the hub token in its URL.
+    // Other viewers never receive an auto-connect script or the token.
+    const token = opts && opts.agentToken;
+    const agentInject = opts && opts.noAgentInject ? false : token
+      ? (url.searchParams.get('agent') === token
+        ? AGENT_INJECT.replace("import('/lib/agent-remote.js')",
+          `import('/lib/agent-remote.js?token=${token}')`) : false)
+      : AGENT_INJECT;
     // /dashboard is the multi-session grid (dashboard.html). Aliased because
     // the URL a human is handed should not carry a file extension, and because
     // the page's own tile links are written against this path.

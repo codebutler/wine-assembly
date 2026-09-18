@@ -127,6 +127,20 @@ async function main() {
       assert.ok(page.text.length > 0);
     });
 
+    const remoteServer = createServer({ quiet: true, agentToken: 'lan-test-token' });
+    await new Promise(resolve => remoteServer.listen(0, '127.0.0.1', resolve));
+    try {
+      const remoteBase = `http://127.0.0.1:${remoteServer.address().port}`;
+      const ordinary = await (await fetch(remoteBase + '/?debug')).text();
+      const handedOff = await (await fetch(remoteBase + '/?debug&agent=lan-test-token')).text();
+      check('LAN agent token only enables remote control on its handoff URL', () => {
+        assert.ok(!ordinary.includes('agent-remote.js?token='));
+        assert.ok(handedOff.includes('agent-remote.js?token=lan-test-token'));
+      });
+    } finally {
+      await new Promise(resolve => remoteServer.close(resolve));
+    }
+
     const doubledSlash = await alice('GET', '//?debug');
     check('a doubled-slash page request cannot crash the server', () => {
       assert.strictEqual(doubledSlash.status, 200);
@@ -181,6 +195,30 @@ async function main() {
     check('the wasm build is served when present', () => {
       assert.ok(wasm.status === 200 || wasm.status === 404,
         `unexpected ${wasm.status}`);
+    });
+
+    const asset = '/lib/vlan-wire.js';
+    const assetHead = await fetch(base + asset, { method: 'HEAD' });
+    const assetSize = Number(assetHead.headers.get('content-length'));
+    check('static files advertise byte ranges and their full size', () => {
+      assert.strictEqual(assetHead.status, 200);
+      assert.strictEqual(assetHead.headers.get('accept-ranges'), 'bytes');
+      assert.ok(assetSize > 8);
+    });
+    const partial = await fetch(base + asset, { headers: { Range: 'bytes=2-7' } });
+    const full = await fetch(base + asset);
+    const partialBytes = new Uint8Array(await partial.arrayBuffer());
+    const fullBytes = new Uint8Array(await full.arrayBuffer());
+    check('a Range GET returns exactly the requested archive slice', () => {
+      assert.strictEqual(partial.status, 206);
+      assert.strictEqual(partial.headers.get('content-range'), `bytes 2-7/${assetSize}`);
+      assert.strictEqual(Number(partial.headers.get('content-length')), 6);
+      assert.deepStrictEqual(partialBytes, fullBytes.subarray(2, 8));
+    });
+    const pastEnd = await fetch(base + asset, { headers: { Range: `bytes=${assetSize}-` } });
+    check('an unsatisfiable Range returns 416 with the file size', () => {
+      assert.strictEqual(pastEnd.status, 416);
+      assert.strictEqual(pastEnd.headers.get('content-range'), `bytes */${assetSize}`);
     });
   } finally {
     await new Promise(resolve => server.close(resolve));

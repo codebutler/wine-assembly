@@ -960,18 +960,20 @@
       max-width: none !important;
       max-height: none !important;
     }
-    /* The one control left. A phone has no Escape key and the app owns every
-       tap on the canvas, so without this there is no way back out. Sits inside
-       the safe area so the notch and the home indicator never cover it. */
+    /* A phone has no Escape key when a full-screen app owns the display.
+       Windowed apps use their titlebar Close; a focused crop replaces it only
+       while that titlebar is outside the visible source rectangle. */
     #page-fullscreen-exit { display: none; }
     /* Same chip as the keyboard and Fit/Fill pair the touch overlay puts in
        the opposite corner: 40x40, the same translucent dark fill, the same
-       hairline, the same blur, and the same 16px/18px inset from the safe
-       area, so the two corners read as one set of controls rather than as an
+       hairline and blur, with matching edge insets, so the two corners read as
+       one set of controls rather than as an
        app's furniture plus a stray browser button. It is deliberately the
        only one at the TOP -- leaving is not something to do by accident while
        reaching for the keyboard. */
-    body.page-fullscreen #page-fullscreen-exit {
+    body.page-fullscreen #page-fullscreen-exit,
+    body.single-app.exclusive-fullscreen #page-fullscreen-exit,
+    body.windowed-phone.windowed-focus-close #page-fullscreen-exit {
       display: flex;
       align-items: center;
       justify-content: center;
@@ -982,10 +984,10 @@
       width: 40px;
       height: 40px;
       padding: 0;
-      color: rgba(255, 255, 255, 0.9);
-      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
-      background: rgba(18, 20, 26, 0.36);
-      border: 1px solid rgba(255, 255, 255, 0.22);
+      color: rgba(220, 220, 215, 0.72);
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+      background: rgba(18, 20, 26, 0.28);
+      border: 1px solid rgba(220, 220, 215, 0.16);
       border-radius: 999px;
       font: 600 15px/1 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       -webkit-backdrop-filter: blur(6px);
@@ -1001,17 +1003,34 @@
        circle covers no more of the picture than a chip does. Never shrink
        this; test/test-web-single-app-quit.js checks a point 5px outside the
        circle still lands on the button. */
-    body.page-fullscreen #page-fullscreen-exit::before {
+    body.page-fullscreen #page-fullscreen-exit::before,
+    body.single-app.exclusive-fullscreen #page-fullscreen-exit::before,
+    body.windowed-phone.windowed-focus-close #page-fullscreen-exit::before {
       content: '';
       position: absolute;
       inset: -8px;
     }
-    body.page-fullscreen #page-fullscreen-exit:active {
+    body.page-fullscreen #page-fullscreen-exit:active,
+    body.single-app.exclusive-fullscreen #page-fullscreen-exit:active,
+    body.windowed-phone.windowed-focus-close #page-fullscreen-exit:active {
       background: rgba(255, 255, 255, 0.28);
     }
-    /* The guest window already has its own close control. Page fullscreen
-       here is only Safari toolbar management, not a second app to dismiss. */
-    body.windowed-phone #page-fullscreen-exit { display: none; }
+    @media (orientation: landscape) {
+      body.page-fullscreen #page-fullscreen-exit,
+      body.single-app.exclusive-fullscreen #page-fullscreen-exit,
+      body.windowed-phone.windowed-focus-close #page-fullscreen-exit {
+        top: 8px;
+        right: 8px;
+      }
+    }
+    body.windowed-phone:not(.page-fullscreen):not(.windowed-focus-close) #page-fullscreen-exit { display: none; }
+    body.page-fullscreen.touch-screen-anchored #page-fullscreen-exit,
+    body.single-app.exclusive-fullscreen.touch-screen-anchored #page-fullscreen-exit,
+    body.windowed-phone.windowed-focus-close.touch-screen-anchored #page-fullscreen-exit {
+      color: rgba(190, 190, 185, 0.48);
+      border-color: rgba(210, 210, 205, 0.16);
+      background: rgba(18, 20, 26, 0.24);
+    }
     /* Safari's own toolbars are the one thing script cannot take away. Say so
        once, name the thing that does (Add to Home Screen runs the manifest's
        standalone display with no browser chrome at all), and get out of the
@@ -1938,6 +1957,7 @@ Resource-aware Win98 emulator
       },
       onAppRunningChange: running => {
         document.body.classList.toggle('app-running', !!running);
+        if (!running) document.body.classList.remove('windowed-focus-close');
         // Windowed phone games need Safari's scroll affordance too. They
         // never take DirectDraw exclusive mode, so the renderer cannot arm
         // it for them. Desktop/debug and browsers with a real API stay as-is.

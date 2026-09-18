@@ -30,7 +30,7 @@ out.push('');
 function popExpr(nargs) {
   // 4 bytes for return addr + 4 bytes per stdcall arg (incl. `this`).
   const n = 4 + nargs * 4;
-  return `(global.set $esp (i32.add (global.get $esp) (i32.const ${n})))`;
+  return `(i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const ${n})))`;
 }
 
 function emit(name, nargs, body) {
@@ -46,14 +46,14 @@ function bodyFor(method) {
   const tag = method.body || method.ret || 'CRASH';
   switch (tag) {
     case 'OK':
-      return ['(global.set $eax (i32.const 0))'];
+      return ['(i32.store offset=0 (global.get $reg_base) (i32.const 0))'];
     case 'ADDREF':
       return [
         '(local $entry i32) (local $rc i32)',
         '(local.set $entry (call $dx_from_this (local.get $arg0)))',
         '(local.set $rc (i32.add (i32.load (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))',
         '(i32.store (i32.add (local.get $entry) (i32.const 4)) (local.get $rc))',
-        '(global.set $eax (local.get $rc))',
+        '(i32.store offset=0 (global.get $reg_base) (local.get $rc))',
       ];
     case 'RELEASE':
       return [
@@ -61,11 +61,11 @@ function bodyFor(method) {
         '(local.set $entry (call $dx_from_this (local.get $arg0)))',
         '(local.set $rc (i32.sub (i32.load (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))',
         '(if (i32.le_s (local.get $rc) (i32.const 0))',
-        '  (then (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))',
-        '  (else (i32.store (i32.add (local.get $entry) (i32.const 4)) (local.get $rc)) (global.set $eax (local.get $rc))))',
+        '  (then (call $dx_free (local.get $entry)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))',
+        '  (else (i32.store (i32.add (local.get $entry) (i32.const 4)) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc))))',
       ];
     case 'RELEASE_DEVICE9':
-      return ['(global.set $eax (call $d3d9_device_release (local.get $arg0)))'];
+      return ['(i32.store offset=0 (global.get $reg_base) (call $d3d9_device_release (local.get $arg0)))'];
     case 'CRASH':
     default:
       return ['(call $crash_unimplemented (local.get $name_ptr))'];

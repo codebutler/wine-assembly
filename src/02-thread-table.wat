@@ -376,23 +376,28 @@
     $th_jcc_ge             ;; 320: JGE/JNL
     $th_jcc_le             ;; 321: JLE/JNG
     $th_jcc_g              ;; 322: JG/JNLE
-    ;; -- Specialized PUSH/POP r32 --
-    $th_push_eax           ;; 323
-    $th_push_ecx           ;; 324
-    $th_push_edx           ;; 325
-    $th_push_ebx           ;; 326
-    $th_push_esp           ;; 327
-    $th_push_ebp           ;; 328
-    $th_push_esi           ;; 329
-    $th_push_edi           ;; 330
-    $th_pop_eax            ;; 331
-    $th_pop_ecx            ;; 332
-    $th_pop_edx            ;; 333
-    $th_pop_ebx            ;; 334
-    $th_pop_esp            ;; 335
-    $th_pop_ebp            ;; 336
-    $th_pop_esi            ;; 337
-    $th_pop_edi            ;; 338
+    ;; -- RETIRED: specialized PUSH/POP r32 (see 05-alu.wat) --
+    ;; The decoder emits the generic $th_push_r/$th_pop_r (32/33) with the
+    ;; register in the operand. These sixteen slots are kept, pointing at that
+    ;; same generic pair, ONLY so the indices below do not move: the fold
+    ;; matchers in 07b-loop-match.wat recover a base register as (fn - 339)
+    ;; and (fn - 347). Nothing emits 323-338 any more.
+    $th_push_r             ;; 323
+    $th_push_r             ;; 324
+    $th_push_r             ;; 325
+    $th_push_r             ;; 326
+    $th_push_r             ;; 327
+    $th_push_r             ;; 328
+    $th_push_r             ;; 329
+    $th_push_r             ;; 330
+    $th_pop_r              ;; 331
+    $th_pop_r              ;; 332
+    $th_pop_r              ;; 333
+    $th_pop_r              ;; 334
+    $th_pop_r              ;; 335
+    $th_pop_r              ;; 336
+    $th_pop_r              ;; 337
+    $th_pop_r              ;; 338
     ;; -- Specialized MOV r32, [base+disp] / MOV [base+disp], r32 --
     $th_load32_ro_base_eax  ;; 339
     $th_load32_ro_base_ecx  ;; 340

@@ -1983,6 +1983,13 @@
   (global $THREAD_MSG_QUEUES_SIZE i32 (region.size $THREAD_MSG_QUEUES))
   (global $THREAD_MSG_QUEUES_HIGH i32 (region.addr $THREAD_MSG_QUEUES_HIGH 0))
   (global $THREAD_MSG_QUEUES_HIGH_SIZE i32 (region.size $THREAD_MSG_QUEUES_HIGH))
+  ;; A null MSG pointer on an internal queue probe returns the first four
+  ;; fields in these instance-private globals. Unlike a shared scratch region,
+  ;; a host shadow and guest Worker can probe concurrently without a data race.
+  (global $user_queue_probe_hwnd (mut i32) (i32.const 0))
+  (global $user_queue_probe_msg (mut i32) (i32.const 0))
+  (global $user_queue_probe_wparam (mut i32) (i32.const 0))
+  (global $user_queue_probe_lparam (mut i32) (i32.const 0))
   (global $THREAD_MSG_QUEUE_STRIDE i32 (i32.const 0x00000410))
   (global $THREAD_MSG_QUEUE_MAX i32 (i32.const 64))
   ;; Timer metadata that must be process-wide rather than per-instance.
@@ -2747,6 +2754,21 @@
   ;; holding this thread's slice; it starts on the tid-0 slice and is
   ;; reassigned in $init_thread for workers.
   (global $REGFILE i32 (region.addr $REGFILE 0))
+  ;; ---- Threaded-handler slot numbers that code OUTSIDE 02-thread-table.wat
+  ;; has to name. These are not labels, they are load-bearing ARITHMETIC: the
+  ;; fold matchers in 07b-loop-match.wat recover which base register a folded
+  ;; load used as (handler_index - $TH_LOAD32_RO_BASE), so inserting a slot
+  ;; anywhere below 339 silently changes which register a fold believes it read
+  ;; -- a miscompile of the hottest loops, with nothing to point at it. Naming
+  ;; them here means the coupling is greppable instead of being 45 bare
+  ;; integers spread over two files.
+  (global $TH_PUSH_R i32 (i32.const 32))
+  (global $TH_POP_R i32 (i32.const 33))
+  (global $TH_LOAD32_RO_BASE i32 (i32.const 339))        ;; +0..+7 = base eax..edi
+  (global $TH_LOAD32_RO_BASE_LAST i32 (i32.const 346))
+  (global $TH_STORE32_RO_BASE i32 (i32.const 347))       ;; +0..+7 = base eax..edi
+  (global $TH_STORE32_RO_BASE_LAST i32 (i32.const 354))
+
   (global $REGFILE_SIZE i32 (region.size $REGFILE))
   (global $REGFILE_THREADS i32 (i32.const 16))
   (global $REGFILE_STRIDE i32 (i32.const 64))

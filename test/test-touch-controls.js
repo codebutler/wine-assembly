@@ -228,12 +228,18 @@ assert(TouchControls.el.classList.contains('tc-chrome'),
   'bare keyboard chrome gets its edge-placement scope');
 const touchStyle = head.children.find(el => el.id === 'touch-controls-style');
 assert(touchStyle.textContent.includes(
-  'padding-right: calc(4px + env(safe-area-inset-right, 0px))'),
-  'landscape bare chrome hugs the right safe-area edge');
+  'padding-right: 4px;'),
+  'landscape bare chrome hugs the already inset Safari viewport edge');
 assert.strictEqual(TouchControls.isVisible(), false, 'which is not "game controls up"');
 // And with nothing running at all, the overlay goes away entirely.
 TouchControls.sync([], renderer);
 assert.strictEqual(TouchControls.layout, null, 'no app, no layout');
+TouchControls.setLayout({ screenAnchored: true, keyboard: true, viewToggle: false });
+assert(body.classList.contains('touch-screen-anchored'),
+  'Quake-style controls also scope the page Close button');
+TouchControls.setLayout(null);
+assert(!body.classList.contains('touch-screen-anchored'),
+  'the subtle Close scope leaves with the app');
 assert(!TouchControls.el.classList.contains('tc-chrome'),
   'chrome edge-placement scope clears with the app');
 assert.strictEqual(TouchControls.el.style.display, 'none', 'no layout hides the overlay');
@@ -584,6 +590,7 @@ TouchControls.destroy();
     handleKeyDown() {}, handleKeyUp() {},
     viewMode: 'fit',
     setViewMode() { return false; },
+    mobileCrop: { x: 0, y: 0, w: 1, h: 1 },
     caretRect: () => caret,
     getPresentedRectClient: () => ({ x: 0, y: 6, w: 390, h: 494 }),
   };
@@ -596,25 +603,24 @@ TouchControls.destroy();
   const keyPill = TouchControls._widgets.find(el => el.className === 'tc-key');
   assert.ok(keyPill, 'the keyboard pill rides along with the view toggle');
 
-  // The pills ride the bottom-right stack, below the app's own buttons. That
-  // is the flex row they are appended to, so nothing is positioned by hand and
-  // they cannot land on the picture whatever the presented rect turns out to
-  // be -- which is the failure the old dead-space search kept producing: with
-  // a 168px cross pad in one corner there was no gap wide enough for both, so
-  // one of them ended up pinned to the left bezel at 35% opacity, over the
-  // board and under the notch inset.
+  // Utility controls live in a phone-anchored row. An empty row in the game
+  // corner reserves their height below game buttons without moving the pills
+  // when that corner is centred beside a changing picture.
   const chipRow = TouchControls._rows['br:-1'];
-  assert.ok(chipRow, 'the chips get their own row');
-  assert.ok(chipRow.children.includes(keyPill) && chipRow.children.includes(toggle),
-    'and both ride it');
+  assert.ok(chipRow, 'the game corner keeps a utility spacer');
+  assert.strictEqual(chipRow.style.height, '40px');
+  assert.strictEqual(chipRow.style.width, '90px');
+  assert.strictEqual(TouchControls._utilityRow.parentNode, TouchControls.el,
+    'utility row is attached directly to the phone overlay');
+  assert.deepStrictEqual(TouchControls._utilityRow.children, [toggle, keyPill]);
   assert.strictEqual(TouchControls._corners.br.children[0], chipRow,
-    'created before any app button, so column-reverse puts it at the bottom');
+    'spacer remains below game buttons');
 
   const noInlinePlacement = () => {
     for (const p of [keyPill, toggle]) {
       for (const prop of ['left', 'top', 'position', 'transform', 'opacity']) {
         assert.strictEqual(p.style[prop] || '', '',
-          `the ${prop} of a flowed pill is the stylesheet's business`);
+          `the ${prop} of a phone-anchored pill is the stylesheet's business`);
       }
     }
   };
@@ -636,11 +642,8 @@ TouchControls.destroy();
   TouchControls.layoutZones();
   noInlinePlacement();
 
-  // A board layout places its pills by hand, against the app's action button,
-  // because its corners are positioned against the PICTURE rather than the
-  // phone. Those coordinates are host-relative, so the pills have to leave the
-  // chip row first: absolute positioning inside it resolves against the corner
-  // stack, and Rodent's Revenge put its pills 1236px down a 740px screen.
+  // Board layouts also keep the pills on the phone. A moving New game button
+  // must not drag the rarely-used controls during a Fit/Fill repaint.
   TouchControls.setLayout({
     boardLayout: true,
     dpad: { pos: 'bl', style: 'cross' },
@@ -654,23 +657,23 @@ TouchControls.destroy();
   });
   TouchControls.layoutZones();
   for (const p of [boardToggle, boardKey]) {
-    assert.strictEqual(p.parentNode, TouchControls.el,
-      'a hand-placed pill hangs off the overlay, not off the corner stack');
-    assert.strictEqual(p.style.position, 'absolute', 'and is placed by hand');
-    assert.ok(parseInt(p.style.top, 10) < 664,
-      `on the screen, not below it (top=${p.style.top})`);
-    assert.ok(parseInt(p.style.left, 10) < 390,
-      `and not off its right edge (left=${p.style.left})`);
+    assert.strictEqual(p.parentNode, TouchControls._utilityRow,
+      'board utilities stay in the phone-anchored row');
+    assert.strictEqual(p.style.position || '', '',
+      'board utilities have no position derived from the action button');
   }
+  assert.strictEqual(TouchControls._rows['br:-1'].style.height, '40px',
+    'board action still reserves a bottom utility row');
 
-  // Swapping back to an ordinary layout returns them to the row, in order.
+  // Swapping layouts recreates the utility row without stale placement.
   TouchControls.setLayout({ dpad: { pos: 'bl', style: 'cross' }, swipes: true });
   TouchControls.layoutZones();
   const backRow = TouchControls._rows['br:-1'];
   const backToggle = TouchControls._widgets.find(el => el.className === 'tc-mode');
   const backKey = TouchControls._widgets.find(el => el.className === 'tc-key');
-  assert.deepStrictEqual(backRow.children, [backToggle, backKey],
-    'both pills are back in the chip row, view toggle first');
+  assert.strictEqual(backRow.style.height, '40px');
+  assert.deepStrictEqual(TouchControls._utilityRow.children, [backToggle, backKey],
+    'both pills are back in the utility row, view toggle first');
   for (const p of [backToggle, backKey]) {
     assert.strictEqual(p.style.position || '', '',
       'and the board layout leaves no absolute positioning behind');
@@ -716,6 +719,8 @@ TouchControls.destroy();
   const bottomCorner = TouchControls._corners.bl;
   assert.strictEqual(bottomCorner.style.bottom, '144px',
     'the dpad clears Safari visual-viewport occlusion without resizing the guest');
+  assert.ok(TouchControls._utilityRow.style.bottom.includes('144px'),
+    'phone utility pills also clear the Safari toolbar');
   assert.ok(viewportHandlers.has('resize') && viewportHandlers.has('scroll'),
     'toolbar movement relayouts controls immediately');
   TouchControls.destroy();
@@ -964,11 +969,10 @@ TouchControls.destroy();
   const nudgesInBlack=(table,what)=>{
     const kx=table.w/360, ky=table.h/416;
     const near=(a,b,msg)=>assert(Math.abs(a-b)<0.5,`${what} ${msg}: ${a} != ${b}`);
-    const fitted=2*0.0885*table.w;
     for (const [name,sx] of [['Nudge left',54.9],['Nudge right',383-31.9]]) {
       const el=byLabel(name);
       const size=parseFloat(el.style.width);
-      near(size,Math.max(44,Math.min(fitted,52)),`${name} is sized to the triangle`);
+      near(size,40,`${name} matches the other round chips`);
       near(parseFloat(el.style.left)+size/2,table.x+(sx-23)*kx,`${name} centre x`);
       near(parseFloat(el.style.top)+size/2,table.y+(63.9-32)*ky,`${name} centre y`);
       const cx=parseFloat(el.style.left)+size/2, cy=parseFloat(el.style.top)+size/2;
@@ -993,16 +997,15 @@ TouchControls.destroy();
     setup({left:0,top:0,right:375,bottom:710,width:375,height:710},presented,'zoom');
     const left=byLabel('Nudge left'), right=byLabel('Nudge right');
     // Inside the picture's top corners, which is where the black is. Here the
-    // table is 375 wide, so the measured circle would be 66px across and the
-    // 52px cap wins -- and 52 sits inside the triangle with room to spare, so
-    // the placement is the circle's measured centre either way.
-    assert.strictEqual(parseFloat(left.style.width),52,
-      'generous: 52px against Apple\'s 44px minimum, and it floats over black');
+    // table is 375 wide, so the measured circle could be larger; its 40px
+    // visible size matches the other round chips while a 44px hit area remains.
+    assert.strictEqual(parseFloat(left.style.width),40,
+      'nudge and other round chips have the same visible diameter');
     const cxP=0.0886*375, cyP=presented.y+0.0767*433;
-    assert.strictEqual(parseFloat(left.style.left),cxP-26);
-    assert.strictEqual(parseFloat(left.style.top),cyP-26);
-    assert.strictEqual(parseFloat(right.style.left),375-cxP-26);
-    assert.strictEqual(parseFloat(right.style.top),cyP-26);
+    assert.strictEqual(parseFloat(left.style.left),cxP-20);
+    assert.strictEqual(parseFloat(left.style.top),cyP-20);
+    assert.strictEqual(parseFloat(right.style.left),375-cxP-20);
+    assert.strictEqual(parseFloat(right.style.top),cyP-20);
     // Captions in the letterbox UNDER the table -- below its last row, above
     // the screen's bottom, and horizontally over the zone each one names.
     const tableBottom=presented.y+presented.h;
@@ -1089,18 +1092,13 @@ TouchControls.destroy();
       < presented.x + (405 - v.cropX) * k,
       'the right nudge stays off the score panel beside the table');
     const tx = table.x, tw = table.w;
-    // The destructive control, measured against the thing it must not be
-    // confused with. 40px wide in a 90.7px gutter, so it clears the bezel and
-    // the left flipper zone by the same amount -- and the gutter is off the
-    // picture entirely, which the 115px pill never managed.
+    // New game is away from the flippers at the phone's top-left in landscape.
     const ng = byLabel('New game');
     assert(ng.classList.contains('tc-chip'),'it renders as a chip');
     assert.strictEqual(ng._tcHeight,40,'and stacks at the chips\' height');
     assert.strictEqual(ng.innerHTML.indexOf('<svg'),0,'a glyph, not the words');
-    const ngW = 40, ngX = parseFloat(ng.style.left);
-    assert(Number.isFinite(ngX) ? ngX >= 0 : true, 'never hangs off the left bezel');
-    assert(table.x - (Number.isFinite(ngX) ? ngX + ngW : ngW) > 20,
-      'and keeps a real margin from the left flipper zone');
+    assert.strictEqual(ng.parentNode, TouchControls._rows['tl:0'],
+      'landscape New game belongs to the top-left phone corner');
     // Item 5b: no captions in landscape. A caption names an invisible zone, so
     // it has to be next to it; the side gutters this used to fall back to are
     // next to nothing, and the phone reported them as "all wrong".
@@ -1285,9 +1283,9 @@ TouchControls.destroy();
     const nudge = name => parseFloat(
       TouchControls._widgets.find(w => w.getAttribute('aria-label') === name).style.top);
     // 138.33 (the table's top) + 0.0767 * 433.33 (the measured circle's centre)
-    // - 26 (half of the 52px cap, which wins at this size).
-    near(nudge('Nudge left'), 145.57, 'left nudge top');
-    near(nudge('Nudge right'), 145.57, 'right nudge top');
+    // - 20 (half of the 40px chip, which wins at this size).
+    near(nudge('Nudge left'), 151.57, 'left nudge top');
+    near(nudge('Nudge right'), 151.57, 'right nudge top');
     TouchControls.destroy();
   }
 }
@@ -1336,14 +1334,10 @@ console.log('PASS  touch controls hold, pair and release guest keys');
     'portrait stick starts 24px below the actual picture, not at the phone bottom');
   assert.strictEqual(parseFloat(TouchControls._corners.br.style.bottom),159,
     'primary action top aligns with the joystick top');
-  const oldKey=TouchControls._keyEl, oldMode=TouchControls._modeEl;
-  TouchControls._keyEl=document.createElement('button');
-  TouchControls._modeEl=document.createElement('button');
-  button._rect={left:278,right:357,top:375,bottom:433,width:79,height:58};
-  TouchControls._placeModeToggle(mouse.getPresentedRectClient(),TouchControls.el._rect);
-  assert.strictEqual(TouchControls._keyEl.style.top,'451px','utility pills sit below Jump with 18px gap');
-  assert.strictEqual(TouchControls._modeEl.style.top,'451px');
-  TouchControls._keyEl=oldKey; TouchControls._modeEl=oldMode;
+  assert.strictEqual(TouchControls._keyEl.parentNode, TouchControls._utilityRow,
+    'keyboard stays in the phone utility row instead of following Jump');
+  assert.strictEqual(TouchControls._keyEl.style.top || '', '');
+  assert.strictEqual(TouchControls._modeEl.style.top || '', '');
   mouse.getPresentedRectClient=()=>({x:0,y:0,w:375,h:628});
   TouchControls.layoutZones();
   assert.strictEqual(parseFloat(TouchControls._corners.br.style.bottom),58,
@@ -1564,4 +1558,31 @@ console.log('PASS  touch controls hold, pair and release guest keys');
   TouchControls.destroy();
   global.window = previous;
   console.log('PASS landscape clusters centre in the letterbox gutters and re-settle after a view-mode switch');
+}
+
+// Rodent's short landscape phone view may lose the menu and one bottom wall
+// row, but the stopwatch/lives are gameplay state. Its pad sits at the phone
+// edge; utility pills remain managed by their separate bottom-right row.
+{
+  const { APPS } = require('../lib/apps');
+  const { Win98Renderer } = require('../lib/renderer');
+  const app = APPS.wep16_rodent;
+  assert.strictEqual(app.touchControls.landscapeLeftInset, 8);
+  assert.strictEqual(app.touchControls.boardLayout, true);
+  const renderer = Object.create(Win98Renderer.prototype);
+  renderer.mobileCrop = app.mobileCrop;
+  renderer.canvas = { width: 667, height: 375 };
+  renderer.presentationCanvas = { width: 667, height: 375 };
+  const windowRect = { x: 192, y: 6, w: 282, h: 357 };
+  const fit = renderer._fitModeSource(windowRect, true);
+  assert.deepStrictEqual(fit, {
+    hwnd: undefined, x: 192, y: 44, w: 282, h: 306,
+  }, 'landscape Fit keeps both side walls and starts before the stopwatch crown');
+  renderer.presentationCanvas = { width: 375, height: 667 };
+  assert.strictEqual(renderer._fitModeSource(windowRect, true), windowRect,
+    'portrait Fit keeps the full titlebar, menu, stopwatch, and board');
+  renderer.presentationCanvas = { width: 667, height: 375 };
+  assert.strictEqual(renderer._fitModeSource(windowRect, false), windowRect,
+    'a dialog or menu restores the complete native window');
+  console.log('PASS Rodent phone Fit preserves the HUD and full portrait window');
 }

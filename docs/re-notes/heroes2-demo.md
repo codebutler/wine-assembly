@@ -1,5 +1,54 @@
 # Heroes of Might and Magic II (demo)
 
+## Movement-triggered camera scroll: transient map-only frame (2026-09-16)
+
+Frozen CLI gameplay reproduces the user's momentary "stretched" image when a
+hero walks far enough to auto-pan the camera. The preceding full-frame capture
+at batch 2097 is `/private/tmp/heroes-hero-map.png`; the transient at batch 2118 is
+`/private/tmp/heroes-scroll-2118.png`; and the completed framed image at batch
+2148 is `/private/tmp/heroes-scroll-2148.png`. A second route click reproduced
+the same transition (`/private/tmp/heroes-newpath.png`). An edge-pan capture
+after the frame completed kept the HUD (`/private/tmp/heroes-edge-screen-right.png`),
+but a fresh frozen run caught the same transient map-only frame during ordinary
+edge panning. The defect is a presentation-timing problem for scrolling in
+general, not a movement-only rendering path.
+
+The image is **not resized by CSS or the browser canvas**. At the transient,
+DirectDraw primary slot 1, offscreen slot 2, its window frame layer, and the
+canvas are all 640×480; both surfaces are 8 bpp with pitch 640. Sampled primary
+indices through the active palette exactly match the displayed RGB bytes.
+The primary itself contains the map-only frame. Offscreen slot 2 retains the
+map and right sidebar, but lacks the outer border (`/private/tmp/heroes-surface-2.png`).
+The game eventually composes the complete HUD into the primary. A filtered
+Win32 API trace over the same frozen route corrected an initial misleading
+host-import trace: the bad image **does** follow a DirectDraw
+Unlock→Blt→Lock cycle at batch 2116. The ordinary edge pan uses that same
+cycle with the same callsites and rectangle **addresses**. The contents of
+those rectangles change: a fresh frozen run measured destination
+`(0,0)-(640,480)` and source `(28,0)-(475,480)` at the bad movement frame
+(batch 2118). The handler's unequal-size path stretches the 447-pixel-wide
+source to 640 pixels and immediately presents the primary. The same narrow
+source and map-only image occur during edge panning at batch 2160; both paths
+return to full-width `(0,0)-(640,480)` source and the framed HUD a few batches
+later (2148 and 2170 respectively). There is no GDI `StretchBlt` in the trace;
+this is scaling inside `IDirectDrawSurface_Blt`. Fresh captures are
+`/private/tmp/heroes-repro-{2097,2118,2148,2160,2170}.png`.
+Both paths also call `InvalidateRect`
+on the map viewport `(16,16)-(463,463)`; the movement path does not have a
+special Win32 call that declares its HUD complete. In a 21-batch window around
+the bad frame there are four Unlock/Blt/Lock cycles, four invalidations, 30
+PeekMessageA calls and four GetMessageA calls. An 80-batch edge-pan window
+has 14 cycles, 14 invalidations, 92 PeekMessageA calls and 13 GetMessageA
+calls. Sleep, WaitMessage, Flip and timeGetTime occur in neither window.
+The trace is `/private/tmp/heroes-differential.log`; reproduced images are
+`/private/tmp/heroes-diff-bad.png` and `/private/tmp/heroes-diff-edge.png`.
+The host's canonical-surface `Flush id=0x200001` and fallback `Upload slot=1`
+can therefore publish the stretched map-only primary after a normal DirectDraw
+cycle. A candidate fix would keep the prior complete frame visible during
+this narrow-source Blt and publish the next full-width frame, but skipping a
+guest Blt or changing global presentation timing needs regression checks for
+other games and Heroes II's own transitions.
+
 `test/binaries/candidates/heroes-2-demo/files/H2DEMOW.EXE`, registry id
 `heroes2_demo` (`lib/apps.js`). Reaches the adventure map headlessly — see
 *Reproduction* below.

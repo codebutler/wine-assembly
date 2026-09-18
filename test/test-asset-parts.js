@@ -51,6 +51,7 @@ const response = (status, bytes = []) => ({
 });
 const context = {
   console,
+  setTimeout,
   URLSearchParams,
   Uint8Array,
   fetch: async url => {
@@ -141,6 +142,37 @@ async function run() {
   assert.deepStrictEqual(
     Array.from(await context.WineAssembly.fetchAssetBytes('Saved%20Games/001?v=9')),
     [5]);
+
+  // A dropped LAN response must not abort a required app when a retry works.
+  // A genuinely absent file should fail immediately and name the file in the
+  // launch error, so a phone crash report can identify the actual request.
+  const wine = Object.create(context.WineAssembly.prototype);
+  wine._helpCtx = { vfs: {
+    files: new Map(),
+    ensureParentDirs() {},
+  } };
+  const originalFetch = context.WineAssembly.fetchAssetBytes;
+  let attempts = 0;
+  context.WineAssembly.fetchAssetBytes = async () => {
+    if (++attempts === 1) throw new TypeError('Load failed');
+    return Uint8Array.from([9]);
+  };
+  await wine.loadFiles([{ url: 'dropped.bin', vfsPath: 'c:\\dropped.bin' }], {
+    required: true,
+  });
+  assert.strictEqual(attempts, 2);
+  assert.deepStrictEqual(Array.from(wine._helpCtx.vfs.files.get('c:\\dropped.bin').data), [9]);
+
+  attempts = 0;
+  context.WineAssembly.fetchAssetBytes = async () => {
+    attempts++;
+    throw new Error('Unable to load absent.bin: HTTP 404');
+  };
+  await assert.rejects(
+    wine.loadFiles(['absent.bin'], { required: true }),
+    /failed to load 1 of 1 data files: absent\.bin: Unable to load absent\.bin: HTTP 404/);
+  assert.strictEqual(attempts, 1, 'HTTP 404 must not retry');
+  context.WineAssembly.fetchAssetBytes = originalFetch;
 
   console.log('asset part tests passed');
 }

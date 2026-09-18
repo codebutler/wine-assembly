@@ -27,7 +27,7 @@ out.push('');
 function popExpr(nargs) {
   // 4 bytes for return addr + 4 bytes per stdcall arg (incl. `this`).
   const n = 4 + nargs * 4;
-  return `(global.set $esp (i32.add (global.get $esp) (i32.const ${n})))`;
+  return `(i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const ${n})))`;
 }
 
 function emit(name, nargs, body, calleePops = false) {
@@ -69,12 +69,12 @@ function bodyFor(method, prefix) {
   if (method.name === 'QueryInterface') {
     const fam = qiFamily[prefix] || 0;
     return [
-      `(global.set $eax (call $d3dim_qi (i32.const ${fam}) (local.get $arg0) (local.get $arg1) (local.get $arg2)))`,
+      `(i32.store offset=0 (global.get $reg_base) (call $d3dim_qi (i32.const ${fam}) (local.get $arg0) (local.get $arg1) (local.get $arg2)))`,
     ];
   }
   switch (tag) {
     case 'OK':
-      return ['(global.set $eax (i32.const 0))'];
+      return ['(i32.store offset=0 (global.get $reg_base) (i32.const 0))'];
     case 'ADDREF':
       // Read DX entry, refcount++ at +4, return new count
       return [
@@ -82,7 +82,7 @@ function bodyFor(method, prefix) {
         '(local.set $entry (call $dx_from_this (local.get $arg0)))',
         '(local.set $rc (i32.add (i32.load (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))',
         '(i32.store (i32.add (local.get $entry) (i32.const 4)) (local.get $rc))',
-        '(global.set $eax (local.get $rc))',
+        '(i32.store offset=0 (global.get $reg_base) (local.get $rc))',
       ];
     case 'RELEASE':
       return [
@@ -90,30 +90,30 @@ function bodyFor(method, prefix) {
         '(local.set $entry (call $dx_from_this (local.get $arg0)))',
         '(local.set $rc (i32.sub (i32.load (i32.add (local.get $entry) (i32.const 4))) (i32.const 1)))',
         '(if (i32.le_s (local.get $rc) (i32.const 0))',
-        '  (then (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))',
-        '  (else (i32.store (i32.add (local.get $entry) (i32.const 4)) (local.get $rc)) (global.set $eax (local.get $rc))))',
+        '  (then (call $dx_free (local.get $entry)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))',
+        '  (else (i32.store (i32.add (local.get $entry) (i32.const 4)) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc))))',
       ];
     case 'RELEASE_DEVICE':
       return [
-        '(global.set $eax (call $d3dim_device_release (local.get $arg0)))',
+        '(i32.store offset=0 (global.get $reg_base) (call $d3dim_device_release (local.get $arg0)))',
       ];
     case 'ADD_VIEWPORT':
       return [
-        '(global.set $eax (call $d3dim_device_add_viewport (local.get $arg0) (local.get $arg1)))',
+        '(i32.store offset=0 (global.get $reg_base) (call $d3dim_device_add_viewport (local.get $arg0) (local.get $arg1)))',
       ];
     case 'DELETE_VIEWPORT':
       return [
-        '(global.set $eax (call $d3dim_device_delete_viewport (local.get $arg0) (local.get $arg1)))',
+        '(i32.store offset=0 (global.get $reg_base) (call $d3dim_device_delete_viewport (local.get $arg0) (local.get $arg1)))',
       ];
     case 'NEXT_VIEWPORT':
       return [
-        '(global.set $eax',
+        '(i32.store offset=0 (global.get $reg_base)',
         '  (call $d3dim_device_next_viewport',
         '    (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))',
       ];
     case 'CREATE_LIGHT':
       return [
-        '(global.set $eax (call $d3dim_create_child',
+        '(i32.store offset=0 (global.get $reg_base) (call $d3dim_create_child',
         '  (local.get $arg1) (local.get $arg2)',
         '  (i32.const 24) (global.get $DX_VTBL_D3DLIGHT)))',
       ];
@@ -121,14 +121,14 @@ function bodyFor(method, prefix) {
       return [
         '(local $obj i32)',
         '(local.set $obj (call $dx_create_com_obj (i32.const 25) (global.get $DX_VTBL_D3DMAT3)))',
-        '(if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x80004005))',
+        '(if (i32.eqz (local.get $obj)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))',
         `  ${popExpr(method.nargs)} (return)))`,
         '(call $gs32 (local.get $arg1) (local.get $obj))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'CREATE_VIEWPORT':
       return [
-        '(global.set $eax (call $d3dim_create_child',
+        '(i32.store offset=0 (global.get $reg_base) (call $d3dim_create_child',
         '  (local.get $arg1) (local.get $arg2)',
         '  (i32.const 23) (global.get $DX_VTBL_D3DVP3)))',
       ];
@@ -148,20 +148,20 @@ function bodyFor(method, prefix) {
       return [
         '(local $obj i32)',
         '(local.set $obj (call $dx_create_com_obj (i32.const 22) (global.get $DX_VTBL_D3DVB7)))',
-        '(if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x80004005))',
+        '(if (i32.eqz (local.get $obj)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))',
         `  ${popExpr(method.nargs)} (return)))`,
         '(call $gs32 (local.get $arg2) (local.get $obj))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'CREATE_EXEC':
       // IDirect3DDevice::CreateExecuteBuffer(this, lpDesc, lplpExec, pUnkOuter)
       return [
         '(local $obj i32)',
         '(local.set $obj (call $dx_create_com_obj (i32.const 21) (global.get $DX_VTBL_D3DEXEC)))',
-        '(if (i32.eqz (local.get $obj)) (then (global.set $eax (i32.const 0x80004005))',
+        '(if (i32.eqz (local.get $obj)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))',
         `  ${popExpr(method.nargs)} (return)))`,
         '(call $gs32 (local.get $arg2) (local.get $obj))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'BEGIN_SCENE':
       return [
@@ -222,14 +222,14 @@ function bodyFor(method, prefix) {
         '(local $entry i32)',
         '(local.set $entry (call $dx_from_this (local.get $arg0)))',
         '(call $gs32 (local.get $arg2) (call $dx_slot_of (local.get $entry)))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'TEX_HANDLE':
       return [
         '(local $entry i32)',
         '(local.set $entry (call $dx_from_this (local.get $arg0)))',
         '(call $gs32 (local.get $arg2) (call $dx_slot_of (local.get $entry)))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'TEX_LOAD':
       // IDirect3DTexture2::Load(this, lpD3DTexture) — copy ref into dst slot.
@@ -241,7 +241,7 @@ function bodyFor(method, prefix) {
         '(if (local.get $arg1) (then',
         '  (local.set $src (call $dx_from_this (local.get $arg1)))',
         '  (i32.store (i32.add (local.get $dst) (i32.const 12)) (call $dx_slot_of (local.get $src)))))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'VB_LOCK':
       // IDirect3DVertexBuffer::Lock(this, dwFlags, lplpData, lpdwSize) — 4 args
@@ -249,20 +249,20 @@ function bodyFor(method, prefix) {
       return [
         '(if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))',
         '(if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))',
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'EXEC_LOCK':
       // IDirect3DExecuteBuffer::Lock(this, lpDesc) — 2 args. Caller provides
       // a D3DEXECUTEBUFFERDESC; we'd fill lpData. Stub for now.
       return [
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     case 'EXEC_SETDATA':
       return [
-        '(global.set $eax (i32.const 0))',
+        '(i32.store offset=0 (global.get $reg_base) (i32.const 0))',
       ];
     default:
-      return ['(global.set $eax (i32.const 0))'];
+      return ['(i32.store offset=0 (global.get $reg_base) (i32.const 0))'];
   }
 }
 
