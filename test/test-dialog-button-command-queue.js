@@ -34,6 +34,10 @@ const extraWat = String.raw`
     (drop (call $button_wndproc
       (local.get $hwnd) (i32.const 0x0202) (i32.const 0) (i32.const 0))))
 
+  (func (export "test_button_release") (param $hwnd i32)
+    (drop (call $button_wndproc
+      (local.get $hwnd) (i32.const 0x0202) (i32.const 0) (i32.const 0))))
+
   (func (export "test_subclass_parent") (param $hwnd i32) (param $proc i32)
     (call $wnd_table_set (call $wnd_get_parent (local.get $hwnd)) (local.get $proc)))
 
@@ -104,6 +108,11 @@ function u32(value) {
   const custom = e.test_create_dialog_button(proc, 1016) >>> 0;
   const customParent = e.wnd_get_parent(custom) >>> 0;
   e.test_subclass_parent(custom, proc);
+  e.test_button_release(custom);
+  assert.strictEqual(e.get_post_queue_count(), 0,
+    'a subclass-consumed DOWN cannot turn a stray UP into another command');
+  assert.deepStrictEqual(captured(), [0, 0, 0],
+    'a stray release does not send a synchronous command either');
   e.test_button_click(custom);
   assert.deepStrictEqual(captured(), [0, 0, 0],
     'subclassed dialog custom command does not enter a recursive x86 frame');

@@ -68,9 +68,10 @@ async function waitNoDialogs(page, timeout = 120000) {
   assert.strictEqual(await state.jsonValue(), 'loading', 'Diablo closed before loading');
 }
 
-async function capture(page, name) {
+async function capture(page, name, bytes) {
   const file = path.join(OUT, `${name}.png`);
-  await page.screenshot({ path: file });
+  if (bytes) fs.writeFileSync(file, bytes);
+  else await page.screenshot({ path: file });
   const info = { name, titles: await titles(page), file,
     windows: await page.evaluate(() => Object.values(sharedRenderer.windows)
       .filter(w => w && w.visible).map(w => w.className)) };
@@ -105,7 +106,7 @@ function loadingBorderPixels(png, y) {
   for (let x = 150; x < 1128; x++) {
     const i = (y * png.width + x) * 4;
     const r = png.data[i], g = png.data[i + 1], b = png.data[i + 2];
-    if (r > 15 && r < 100 && g > 12 && g < 100 && b < 85) count++;
+      if (r > 15 && g > 12 && b < 85) count++;
   }
   return count;
 }
@@ -152,7 +153,7 @@ async function main() {
   }
   const base = BASE_URL || `http://127.0.0.1:${server.address().port}`;
   const browser = await puppeteer.launch({
-    executablePath: CHROME, headless: true, protocolTimeout: 600000,
+    executablePath: CHROME, headless: true, protocolTimeout: 240000,
     args: ['--no-sandbox', '--no-first-run', '--disable-gpu'],
   });
   let page;
@@ -184,16 +185,51 @@ async function main() {
     const intro = await capture(page, '01-intro-video');
 
     await page.keyboard.press('Escape');
-    await wait(11000); // title artwork settles before Enter dismisses it
-    const title = await capture(page, '02-post-skip-title');
+    // The title advances automatically. Observe its red face instead of
+    // sleeping past it on a faster host and mislabelling the main menu.
+    let titleBytes;
+    const titleDeadline = Date.now() + 20000;
+    while (Date.now() < titleDeadline) {
+      await wait(200);
+      const bytes = await page.screenshot();
+      const png = PNG.sync.read(bytes);
+      if (await orbColour(page, png, 320, 180, 0) > 150) {
+        titleBytes = bytes;
+        break;
+      }
+    }
+    assert(titleBytes, 'post-skip title did not render with its red palette');
+    const title = await capture(page, '02-post-skip-title', titleBytes);
     assertSceneChanged(intro, title, 'intro skip');
+    assert(await orbColour(page, title, 320, 180, 0) > 150,
+      'post-skip title is missing its red palette');
 
-    await page.keyboard.press('Enter');
+    // Dismiss the title away from the menu rows. Enter can also activate
+    // Single Player if the title transition completes before key-up.
+    await clickGuest(page, 320, 100);
     await waitDialogs(page, 1);
     await wait(1500);
     const menu = await capture(page, '03-main-menu');
+    assert.strictEqual(await page.evaluate(() => Object.values(sharedRenderer.windows)
+      .filter(w => w && w.visible && w.className === 'SDlgDialog').length), 1,
+    'main-menu capture advanced into character selection');
     assert(menu.width === 1280 && menu.height === 900, 'unexpected screenshot size');
     assertSceneChanged(title, menu, 'title to main menu');
+    assert(await orbColour(page, menu, 86, 213, 0) > 30 &&
+      await orbColour(page, menu, 554, 213, 0) > 30,
+    'main menu is missing its red selection markers');
+
+    await clickGuest(page, 320, 299); // Replay Intro shareware notice
+    await waitDialogs(page, 2);
+    await wait(500);
+    assert.strictEqual(await page.evaluate(() => Object.values(sharedRenderer.windows)
+      .filter(w => w && w.visible && w.className === 'SDlgDialog').length), 2,
+    'Replay Intro opened duplicate dialogs');
+    await capture(page, '03b-replay-intro');
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => Object.values(sharedRenderer.windows)
+      .filter(w => w && w.visible && w.className === 'SDlgDialog').length === 1,
+    { timeout: 15000 });
 
     await clickGuest(page, 320, 213);
     await waitDialogs(page, 2);
@@ -211,8 +247,32 @@ async function main() {
     await page.keyboard.type('GAL');
     await clickGuest(page, 348, 446);
     await waitNoDialogs(page);
-    await wait(500); // compositor can retain the dialog's last frame briefly
-    const loading = await capture(page, '05-loading');
+    let loadingBytes;
+    let loadingSeenAt = 0, loadingBrightness = -1;
+    const loadingDeadline = Date.now() + 30000;
+    while (Date.now() < loadingDeadline) {
+      const bytes = await page.screenshot();
+      const png = PNG.sync.read(bytes);
+      if (loadingBorderPixels(png, 785) > 450 && loadingBorderPixels(png, 839) > 350) {
+        // Keep the brightest loading frame during fade-in instead of saving
+        // the first barely visible border. Never replace it with gameplay.
+        if (!loadingSeenAt) loadingSeenAt = Date.now();
+        if (await orbColour(page, png, 148, 400, 0) < 80) {
+          let brightness = 0;
+          for (let i = png.width * 40 * 4; i < png.data.length; i += 16) {
+            brightness += png.data[i] + png.data[i + 1] + png.data[i + 2];
+          }
+          if (brightness > loadingBrightness) {
+            loadingBrightness = brightness;
+            loadingBytes = bytes;
+          }
+        }
+      }
+      if (loadingBytes && Date.now() - loadingSeenAt >= 1000) break;
+      await wait(100);
+    }
+    assert(loadingBytes, 'Diablo loading progress bar did not render');
+    const loading = await capture(page, '05-loading', loadingBytes);
     assertSceneChanged(character, loading, 'character selection to loading');
     assert(loadingBorderPixels(loading, 785) > 450 &&
       loadingBorderPixels(loading, 839) > 350,

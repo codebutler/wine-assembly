@@ -587,6 +587,12 @@
           (then
             (local.set $state_w (call $g2w (local.get $state)))
             (local.set $flags (call $btn_flags (local.get $state_w)))
+            ;; A subclass can consume DOWN and activate the button itself.
+            ;; Its subsequent UP must not produce a second BN_CLICKED unless
+            ;; the native BUTTON actually began tracking that press. Diablo's
+            ;; menu subclass posts its command on DOWN and chains only UP.
+            (if (i32.eqz (i32.and (local.get $flags) (i32.const 1)))
+              (then (return (i32.const 0))))
             ;; clear pressed
             (local.set $flags (i32.and (local.get $flags) (i32.const 0xFFFFFFFE)))
             (if (i32.eq (global.get $capture_hwnd) (local.get $hwnd))
