@@ -231,6 +231,10 @@ const PUBLISHABLE_OUTSIDE_BINARIES = [
   // demos when every original file remains present.  This directory retains
   // SCDemo.exe plus the complete payload installed from that exact archive.
   'test/binaries/candidates/starcraft-demo-official/',
+  // Diablo's shareware installation is the spawned copy, not the retail CD
+  // data. The Diablo manual explicitly describes installing that shareware
+  // copy on other systems. Ship only the files the desktop registry mounts.
+  'test/binaries/candidates/diablo-shareware/installed/',
   'packages/freeware/dxball/',
   'packages/freeware/blobby-volley/',
 ];

@@ -323,6 +323,12 @@ async function main() {
       stopAllApps();
       sel.value = app;
     }, APP);
+    // A fresh shipping profile opens the Read Me over the desktop. Dismiss it
+    // before locating the icon or the synthetic double-click hits its text.
+    await page.evaluate(() => {
+      const readme = document.getElementById('readme-window');
+      if (readme && !readme.hidden && typeof closeReadme === 'function') closeReadme();
+    });
     // Use a trusted browser gesture for launch. AudioContext.resume() is
     // gated on user activation, so calling launchApp() through evaluate()
     // silently exercises a suspended-audio path that real users never take.
@@ -351,16 +357,22 @@ async function main() {
       // runningApps with an empty #status and no boot ever started, which
       // reads exactly like the app failing to launch. Winamp, StarCraft,
       // Heroes II and RollerCoaster Tycoon are all down there.
-      icon.scrollIntoView({ block: 'center' });
+      icon.scrollIntoView({ block: 'center', behavior: 'instant' });
       const point = centre(icon);
       if (point.x < 0 || point.y < 0 || point.x > innerWidth || point.y > innerHeight) {
         throw new Error(`desktop icon for ${app} is off-screen at ` +
           `${Math.round(point.x)},${Math.round(point.y)} in ${innerWidth}x${innerHeight}`);
       }
+      const hit = document.elementFromPoint(point.x, point.y)?.closest('.desktop-icon');
+      if (hit !== icon) {
+        throw new Error(`desktop icon for ${app} is covered at ` +
+          `${Math.round(point.x)},${Math.round(point.y)} by ` +
+          `${document.elementFromPoint(point.x, point.y)?.outerHTML?.slice(0, 120) || 'nothing'}`);
+      }
       return { ...point, icon: true };
     }, APP);
     await page.mouse.click(launchPoint.x, launchPoint.y);
-    // Icons launch on the second click of a double-click.
+    // The desktop's own handler counts two click events within 500ms.
     if (launchPoint.icon) {
       await wait(80);
       await page.mouse.click(launchPoint.x, launchPoint.y);
