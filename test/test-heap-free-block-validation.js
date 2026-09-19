@@ -28,6 +28,9 @@ const extraWat = String.raw`
     (global.set $heap_arena_record (call $heap_arena_register
       (local.get $base) (global.get $heap_end)))
     (i32.atomic.store offset=8 (global.get $heap_arena_record) (local.get $ptr))
+    ;; A fresh heap has nothing binned either; with the arenas zeroed above,
+    ;; a flush finds no bin tail resolvable and simply empties every bin.
+    (call $heap_bins_flush)
     (global.set $free_list (i32.const 0)))
 `;
 

@@ -1492,6 +1492,39 @@
   ;; last. Needs no propagation to a new instance -- 0 just means "scan".
   (global $heap_arena_hint (mut i32) (i32.const 0))
 
+  ;; Per-instance allocator counters, read at exit by run.js ("heap stats:").
+  ;; A first-fit list's cost is its walk, so count the walk, not the calls.
+  (global $heap_stat_allocs (mut i32) (i32.const 0))
+  (global $heap_stat_frees (mut i32) (i32.const 0))
+  (global $heap_stat_steps (mut i64) (i64.const 0))
+  (global $heap_stat_misses (mut i32) (i32.const 0))
+  (global $heap_stat_miss_steps (mut i64) (i64.const 0))
+  (func (export "heap_stat") (param $i i32) (result i64)
+    (if (i32.eq (local.get $i) (i32.const 0)) (then (return (i64.extend_i32_u (global.get $heap_stat_allocs)))))
+    (if (i32.eq (local.get $i) (i32.const 1)) (then (return (i64.extend_i32_u (global.get $heap_stat_frees)))))
+    (if (i32.eq (local.get $i) (i32.const 2)) (then (return (global.get $heap_stat_steps))))
+    (if (i32.eq (local.get $i) (i32.const 3)) (then (return (i64.extend_i32_u (global.get $heap_stat_misses)))))
+    (global.get $heap_stat_miss_steps))
+
+  ;; Free-list census: count of free blocks whose size has floor(log2) ==
+  ;; $bucket, or the whole list length for $bucket 32. Bounded like the walk.
+  (func (export "heap_free_census") (param $bucket i32) (result i32)
+    (local $cur i32) (local $n i32) (local $steps i32) (local $bsz i32)
+    (call $heap_bins_flush)
+    (local.set $cur (global.get $free_list))
+    (block $done (loop $walk
+      (br_if $done (i32.eqz (local.get $cur)))
+      (br_if $done (i32.gt_u (local.get $steps) (i32.const 1000000)))
+      (br_if $done (i32.eqz (call $heap_arena_find (local.get $cur))))
+      (local.set $bsz (i32.load (call $g2w (local.get $cur))))
+      (if (i32.or (i32.eq (local.get $bucket) (i32.const 32))
+                  (i32.eq (i32.sub (i32.const 31) (i32.clz (local.get $bsz))) (local.get $bucket)))
+        (then (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+      (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+      (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+      (br $walk)))
+    (local.get $n))
+
   ;; Find the authoritative allocated extent containing this header. Never map
   ;; or read an untrusted guest pointer until this succeeds.
   ;;
@@ -1550,6 +1583,7 @@
   ;; following one into released space.
   (func $heap_free_list_purge (param $base i32) (param $end i32)
     (local $cur i32) (local $prev_w i32) (local $next i32) (local $steps i32)
+    (call $heap_bins_flush)
     (local.set $cur (global.get $free_list))
     (block $done (loop $walk
       (br_if $done (i32.eqz (local.get $cur)))
@@ -2069,14 +2103,151 @@
       (then
         (drop (i32.atomic.rmw.or (call $g2w (local.get $block)) (i32.const 1))))))
 
+  ;; Small-block bins in front of the free list. One first-fit list is a walk
+  ;; past every fragment too small to use: Morrowind's world holds 24k free
+  ;; blocks, 14k of them the 16-byte minimum left over from splits, and its
+  ;; allocations walked 476 of them each (357M steps for 751k allocations).
+  ;; Blocks up to $HEAP_BIN_MAX bytes therefore go to one exact-size LIFO per
+  ;; 8-byte class, 16..256, and a small request pops one in O(1).
+  ;;
+  ;; Everything else in the emulator treats $free_list as the one list of this
+  ;; instance's free blocks (arena purge, validation, HeapCompact, render-heap
+  ;; retire/coalesce, the worker publish). Each of those calls
+  ;; $heap_bins_flush first, which splices every bin back onto $free_list in
+  ;; O(bins) through the tail pointers, so none of them can miss a block.
+  ;;
+  ;; Each bin is one per-instance i64 global, head in the low word and tail in
+  ;; the high one. Globals, not a table in guest memory: a table has to come
+  ;; out of some arena, and carving it moves a bump cursor, reserves an arena
+  ;; for an instance that had none, or splits a run of blocks that would have
+  ;; coalesced. A new instance starts with every bin empty, so nothing needs
+  ;; propagating. Bin i holds blocks of exactly (i + 2) * 8 bytes.
+  (global $HEAP_BIN_MAX i32 (i32.const 256))
+  (global $HEAP_BIN_COUNT i32 (i32.const 31))
+  (global $heap_bin0 (mut i64) (i64.const 0)) (global $heap_bin1 (mut i64) (i64.const 0)) (global $heap_bin2 (mut i64) (i64.const 0))
+  (global $heap_bin3 (mut i64) (i64.const 0)) (global $heap_bin4 (mut i64) (i64.const 0)) (global $heap_bin5 (mut i64) (i64.const 0))
+  (global $heap_bin6 (mut i64) (i64.const 0)) (global $heap_bin7 (mut i64) (i64.const 0)) (global $heap_bin8 (mut i64) (i64.const 0))
+  (global $heap_bin9 (mut i64) (i64.const 0)) (global $heap_bin10 (mut i64) (i64.const 0)) (global $heap_bin11 (mut i64) (i64.const 0))
+  (global $heap_bin12 (mut i64) (i64.const 0)) (global $heap_bin13 (mut i64) (i64.const 0)) (global $heap_bin14 (mut i64) (i64.const 0))
+  (global $heap_bin15 (mut i64) (i64.const 0)) (global $heap_bin16 (mut i64) (i64.const 0)) (global $heap_bin17 (mut i64) (i64.const 0))
+  (global $heap_bin18 (mut i64) (i64.const 0)) (global $heap_bin19 (mut i64) (i64.const 0)) (global $heap_bin20 (mut i64) (i64.const 0))
+  (global $heap_bin21 (mut i64) (i64.const 0)) (global $heap_bin22 (mut i64) (i64.const 0)) (global $heap_bin23 (mut i64) (i64.const 0))
+  (global $heap_bin24 (mut i64) (i64.const 0)) (global $heap_bin25 (mut i64) (i64.const 0)) (global $heap_bin26 (mut i64) (i64.const 0))
+  (global $heap_bin27 (mut i64) (i64.const 0)) (global $heap_bin28 (mut i64) (i64.const 0)) (global $heap_bin29 (mut i64) (i64.const 0))
+  (global $heap_bin30 (mut i64) (i64.const 0))
+
+  (func $heap_bin_get (param $i i32) (result i64)
+    (block $g30 (block $g29 (block $g28 (block $g27 (block $g26 (block $g25 (block $g24 (block $g23 (block $g22 (block $g21 (block $g20 (block $g19 (block $g18 (block $g17 (block $g16 (block $g15 (block $g14 (block $g13 (block $g12 (block $g11 (block $g10 (block $g9 (block $g8 (block $g7 (block $g6 (block $g5 (block $g4 (block $g3 (block $g2 (block $g1 (block $g0
+      (br_table $g0 $g1 $g2 $g3 $g4 $g5 $g6 $g7 $g8 $g9 $g10 $g11 $g12 $g13 $g14 $g15 $g16 $g17 $g18 $g19 $g20 $g21 $g22 $g23 $g24 $g25 $g26 $g27 $g28 $g29 $g30 (local.get $i)))
+      (return (global.get $heap_bin0)))
+      (return (global.get $heap_bin1)))
+      (return (global.get $heap_bin2)))
+      (return (global.get $heap_bin3)))
+      (return (global.get $heap_bin4)))
+      (return (global.get $heap_bin5)))
+      (return (global.get $heap_bin6)))
+      (return (global.get $heap_bin7)))
+      (return (global.get $heap_bin8)))
+      (return (global.get $heap_bin9)))
+      (return (global.get $heap_bin10)))
+      (return (global.get $heap_bin11)))
+      (return (global.get $heap_bin12)))
+      (return (global.get $heap_bin13)))
+      (return (global.get $heap_bin14)))
+      (return (global.get $heap_bin15)))
+      (return (global.get $heap_bin16)))
+      (return (global.get $heap_bin17)))
+      (return (global.get $heap_bin18)))
+      (return (global.get $heap_bin19)))
+      (return (global.get $heap_bin20)))
+      (return (global.get $heap_bin21)))
+      (return (global.get $heap_bin22)))
+      (return (global.get $heap_bin23)))
+      (return (global.get $heap_bin24)))
+      (return (global.get $heap_bin25)))
+      (return (global.get $heap_bin26)))
+      (return (global.get $heap_bin27)))
+      (return (global.get $heap_bin28)))
+      (return (global.get $heap_bin29)))
+    (global.get $heap_bin30))
+
+  (func $heap_bin_set (param $i i32) (param $v i64)
+    (block $done (block $s30 (block $s29 (block $s28 (block $s27 (block $s26 (block $s25 (block $s24 (block $s23 (block $s22 (block $s21 (block $s20 (block $s19 (block $s18 (block $s17 (block $s16 (block $s15 (block $s14 (block $s13 (block $s12 (block $s11 (block $s10 (block $s9 (block $s8 (block $s7 (block $s6 (block $s5 (block $s4 (block $s3 (block $s2 (block $s1 (block $s0
+      (br_table $s0 $s1 $s2 $s3 $s4 $s5 $s6 $s7 $s8 $s9 $s10 $s11 $s12 $s13 $s14 $s15 $s16 $s17 $s18 $s19 $s20 $s21 $s22 $s23 $s24 $s25 $s26 $s27 $s28 $s29 $s30 (local.get $i)))
+      (global.set $heap_bin0 (local.get $v)) (br $done))
+      (global.set $heap_bin1 (local.get $v)) (br $done))
+      (global.set $heap_bin2 (local.get $v)) (br $done))
+      (global.set $heap_bin3 (local.get $v)) (br $done))
+      (global.set $heap_bin4 (local.get $v)) (br $done))
+      (global.set $heap_bin5 (local.get $v)) (br $done))
+      (global.set $heap_bin6 (local.get $v)) (br $done))
+      (global.set $heap_bin7 (local.get $v)) (br $done))
+      (global.set $heap_bin8 (local.get $v)) (br $done))
+      (global.set $heap_bin9 (local.get $v)) (br $done))
+      (global.set $heap_bin10 (local.get $v)) (br $done))
+      (global.set $heap_bin11 (local.get $v)) (br $done))
+      (global.set $heap_bin12 (local.get $v)) (br $done))
+      (global.set $heap_bin13 (local.get $v)) (br $done))
+      (global.set $heap_bin14 (local.get $v)) (br $done))
+      (global.set $heap_bin15 (local.get $v)) (br $done))
+      (global.set $heap_bin16 (local.get $v)) (br $done))
+      (global.set $heap_bin17 (local.get $v)) (br $done))
+      (global.set $heap_bin18 (local.get $v)) (br $done))
+      (global.set $heap_bin19 (local.get $v)) (br $done))
+      (global.set $heap_bin20 (local.get $v)) (br $done))
+      (global.set $heap_bin21 (local.get $v)) (br $done))
+      (global.set $heap_bin22 (local.get $v)) (br $done))
+      (global.set $heap_bin23 (local.get $v)) (br $done))
+      (global.set $heap_bin24 (local.get $v)) (br $done))
+      (global.set $heap_bin25 (local.get $v)) (br $done))
+      (global.set $heap_bin26 (local.get $v)) (br $done))
+      (global.set $heap_bin27 (local.get $v)) (br $done))
+      (global.set $heap_bin28 (local.get $v)) (br $done))
+      (global.set $heap_bin29 (local.get $v)) (br $done))
+      (global.set $heap_bin30 (local.get $v)) (br $done)))
+
+  ;; Bin index for an aligned block size in [16, $HEAP_BIN_MAX].
+  (func $heap_bin_index (param $size i32) (result i32)
+    (i32.sub (i32.shr_u (local.get $size) (i32.const 3)) (i32.const 2)))
+
+  ;; Push a validated free block whose header already reads $size.
+  (func $heap_bin_push (param $block i32) (param $size i32)
+    (local $i i32) (local $v i64) (local $tail i64)
+    (local.set $i (call $heap_bin_index (local.get $size)))
+    (local.set $v (call $heap_bin_get (local.get $i)))
+    (i32.store offset=4 (call $g2w (local.get $block)) (i32.wrap_i64 (local.get $v)))
+    (local.set $tail (i64.and (local.get $v) (i64.const 0xFFFFFFFF00000000)))
+    (if (i64.eqz (local.get $v))
+      (then (local.set $tail (i64.shl (i64.extend_i32_u (local.get $block)) (i64.const 32)))))
+    (call $heap_bin_set (local.get $i)
+      (i64.or (local.get $tail) (i64.extend_i32_u (local.get $block)))))
+
+  (func $heap_bins_flush
+    (local $i i32) (local $v i64) (local $tail i32)
+    (loop $bin
+      (local.set $v (call $heap_bin_get (local.get $i)))
+      (if (i64.ne (local.get $v) (i64.const 0))
+        (then
+          (local.set $tail (i32.wrap_i64 (i64.shr_u (local.get $v) (i64.const 32))))
+          ;; The tail's link lives in guest memory. A tail that no longer
+          ;; resolves costs the bin, never a store through a bad address.
+          (if (call $heap_arena_find (local.get $tail))
+            (then
+              (i32.store offset=4 (call $g2w (local.get $tail)) (global.get $free_list))
+              (global.set $free_list (i32.wrap_i64 (local.get $v)))))
+          (call $heap_bin_set (local.get $i) (i64.const 0))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $bin (i32.lt_u (local.get $i) (global.get $HEAP_BIN_COUNT)))))
+
   ;; Free-list allocator. Each allocated block has a 4-byte size header at ptr-4.
   ;; Free blocks: [size:4][next_guest_ptr:4][...]. Min block = 16 bytes.
-  ;; Falls back to bump allocation when no free block fits.
+  ;; Small requests try the bins above first; the rest walk $free_list first-fit
+  ;; and fall back to bump allocation when no free block fits.
   (func $heap_alloc (param $size i32) (result i32)
     (local $need i32) (local $ptr i32)
     (local $prev_w i32) (local $cur i32) (local $cur_w i32)
     (local $bsz i32) (local $rem i32) (local $steps i32) (local $from_free i32)
-    (local $cur_rec i32)
+    (local $cur_rec i32) (local $bi i32) (local $bv i64) (local $next i32)
     ;; Refuse huge/overflowing allocations before adding the block header.
     (if (i32.gt_u (local.get $size) (i32.const 0x7FFFFFF0))
       (then
@@ -2092,7 +2263,52 @@
     ;; Walk free list (guest pointers)
     (local.set $prev_w (i32.const 0)) ;; 0 = scanning from head
     (local.set $cur (global.get $free_list))
-    (block $found (block $scan (loop $fl
+    (block $found (block $scan
+      ;; Exact bin first, then the next larger non-empty one. A bin whose head
+      ;; fails validation is dropped whole, as the list walk below cuts itself.
+      (if (i32.le_u (local.get $need) (global.get $HEAP_BIN_MAX))
+        (then
+          (local.set $bi (call $heap_bin_index (local.get $need)))
+          (block $bins_done (loop $bin
+            (br_if $bins_done (i32.ge_u (local.get $bi) (global.get $HEAP_BIN_COUNT)))
+            (local.set $bv (call $heap_bin_get (local.get $bi)))
+            (local.set $cur (i32.wrap_i64 (local.get $bv)))
+            (if (local.get $cur)
+              (then
+                (local.set $bsz (i32.shl (i32.add (local.get $bi) (i32.const 2)) (i32.const 3)))
+                (if (call $heap_block_bad (local.get $cur) (local.get $bsz))
+                  (then (call $heap_bin_set (local.get $bi) (i64.const 0)))
+                  (else
+                    (local.set $cur_rec (call $heap_arena_find (local.get $cur)))
+                    (local.set $cur_w (call $g2w (local.get $cur)))
+                    (if (i32.ne (i32.load (local.get $cur_w)) (local.get $bsz))
+                      (then (call $heap_bin_set (local.get $bi) (i64.const 0)))
+                      (else
+                        ;; Pop: the next block becomes head; an emptied bin
+                        ;; loses its tail with it.
+                        (local.set $next (i32.load offset=4 (local.get $cur_w)))
+                        (call $heap_bin_set (local.get $bi)
+                          (if (result i64) (local.get $next)
+                            (then (i64.or
+                              (i64.and (local.get $bv) (i64.const 0xFFFFFFFF00000000))
+                              (i64.extend_i32_u (local.get $next))))
+                            (else (i64.const 0))))
+                        (local.set $rem (i32.sub (local.get $bsz) (local.get $need)))
+                        (if (i32.ge_u (local.get $rem) (i32.const 16))
+                          (then
+                            (i32.store (local.get $cur_w) (local.get $rem))
+                            (call $heap_bin_push (local.get $cur) (local.get $rem))
+                            (local.set $ptr (i32.add (local.get $cur) (local.get $rem)))
+                            (i32.store (call $g2w (local.get $ptr)) (local.get $need)))
+                          (else (local.set $ptr (local.get $cur))))
+                        (call $heap_arena_charge (local.get $cur_rec)
+                          (i32.load (call $g2w (local.get $ptr))))
+                        (local.set $from_free (i32.const 1))
+                        (br $found)))))))
+            (local.set $bi (i32.add (local.get $bi) (i32.const 1)))
+            (br $bin)))))
+      (local.set $cur (global.get $free_list))
+      (loop $fl
       (br_if $scan (i32.eqz (local.get $cur)))
       ;; A free list is only ever reached by following guest-owned next links,
       ;; so a cycle in it is an unbounded loop inside one WASM call: no block
@@ -2147,7 +2363,17 @@
               (i32.store (local.get $cur_w) (local.get $rem))
               ;; Allocated block starts at cur + rem
               (local.set $ptr (i32.add (local.get $cur) (local.get $rem)))
-              (i32.store (call $g2w (local.get $ptr)) (local.get $need)))
+              (i32.store (call $g2w (local.get $ptr)) (local.get $need))
+              ;; A remainder small enough for a bin moves there, so the head of
+              ;; this list does not silt up with fragments nothing here can use.
+              (if (i32.le_u (local.get $rem) (global.get $HEAP_BIN_MAX))
+                (then
+                  (if (local.get $prev_w)
+                    (then (i32.store offset=4 (local.get $prev_w)
+                      (i32.load offset=4 (local.get $cur_w))))
+                    (else (global.set $free_list
+                      (i32.load offset=4 (local.get $cur_w)))))
+                  (call $heap_bin_push (local.get $cur) (local.get $rem)))))
             (else
               ;; Use whole block — unlink from free list
               (local.set $ptr (local.get $cur))
@@ -2160,9 +2386,23 @@
             (i32.load (call $g2w (local.get $ptr))))
           (local.set $from_free (i32.const 1))
           (br $found)))
+      ;; A binnable block that does not fit leaves the list for its bin as it
+      ;; is passed, so a flush (purge, validation, the render handoff) cannot
+      ;; leave the list silted with fragments for good. $prev_w stays put.
+      (if (i32.le_u (local.get $bsz) (global.get $HEAP_BIN_MAX))
+        (then
+          (local.set $next (i32.load offset=4 (local.get $cur_w)))
+          (if (local.get $prev_w)
+            (then (i32.store offset=4 (local.get $prev_w) (local.get $next)))
+            (else (global.set $free_list (local.get $next))))
+          (call $heap_bin_push (local.get $cur) (local.get $bsz))
+          (local.set $cur (local.get $next))
+          (br $fl)))
       (local.set $prev_w (local.get $cur_w))
       (local.set $cur (i32.load (i32.add (local.get $cur_w) (i32.const 4))))
       (br $fl)))
+      (global.set $heap_stat_misses (i32.add (global.get $heap_stat_misses) (i32.const 1)))
+      (global.set $heap_stat_miss_steps (i64.add (global.get $heap_stat_miss_steps) (i64.extend_i32_u (local.get $steps))))
       ;; No free block found — bump allocate inside this instance's arena.
       ;; When the arena is exhausted (or was never reserved) take another chunk
       ;; from the shared cursor. If the low window itself is spent, spill to the
@@ -2193,6 +2433,8 @@
       (global.set $heap_ptr (i32.add (global.get $heap_ptr) (local.get $need)))
       (call $heap_arena_charge (global.get $heap_arena_record) (local.get $need))
       (i32.atomic.store offset=8 (global.get $heap_arena_record) (global.get $heap_ptr)))
+    (global.set $heap_stat_allocs (i32.add (global.get $heap_stat_allocs) (i32.const 1)))
+    (global.set $heap_stat_steps (i64.add (global.get $heap_stat_steps) (i64.extend_i32_u (local.get $steps))))
     ;; A recycled block still holds whatever the last owner left in it -- and,
     ;; at offset 4, this allocator's own free-list next pointer. Bump space is
     ;; zero because every arena chunk is committed zeroed, so before this the
@@ -2275,6 +2517,24 @@
     ;; is always near the head in practice (the two frees are close together);
     ;; a deeper one still cannot hang, because $heap_alloc's walk is bounded
     ;; and cuts the list when it trips.
+    ;; A binned size is checked against, and goes to, its own bin instead.
+    (if (i32.le_u (local.get $size) (global.get $HEAP_BIN_MAX))
+      (then
+        (local.set $cur (i32.wrap_i64
+          (call $heap_bin_get (call $heap_bin_index (local.get $size)))))
+        (block $bin_checked (loop $bin_scan
+          (br_if $bin_checked (i32.eqz (local.get $cur)))
+          (br_if $bin_checked (i32.gt_u (local.get $steps) (i32.const 64)))
+          (if (i32.eq (local.get $cur) (local.get $block))
+            (then (return (i32.const 0))))
+          (if (i32.eqz (call $heap_arena_find (local.get $cur))) (then (br $bin_checked)))
+          (local.set $cur (i32.load offset=4 (call $g2w (local.get $cur))))
+          (local.set $steps (i32.add (local.get $steps) (i32.const 1)))
+          (br $bin_scan)))
+        (call $heap_bin_push (local.get $block) (local.get $size))
+        (global.set $heap_stat_frees (i32.add (global.get $heap_stat_frees) (i32.const 1)))
+        (call $heap_arena_charge (local.get $rec) (i32.sub (i32.const 0) (local.get $size)))
+        (return (i32.const 1))))
     (local.set $cur (global.get $free_list))
     (block $checked (loop $scan
       (br_if $checked (i32.eqz (local.get $cur)))
@@ -2290,6 +2550,7 @@
     ;; Prepend to free list: store next = old head
     (i32.store (i32.add (local.get $w) (i32.const 4)) (global.get $free_list))
     (global.set $free_list (local.get $block))
+    (global.set $heap_stat_frees (i32.add (global.get $heap_stat_frees) (i32.const 1)))
     (call $heap_arena_charge (local.get $rec) (i32.sub (i32.const 0) (local.get $size)))
     (i32.const 1))
 

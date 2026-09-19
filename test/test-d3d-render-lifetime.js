@@ -79,6 +79,9 @@ const {bootRenderHarness}=require('./render-helper');
   assert.strictEqual(c.guest_alloc(188)>>>0,group[0],'merged extent is actually reusable');
   assert(new Uint8Array(memory.buffer,c.guest_to_wasm(live),60).every(v=>v===0x6d),'live block remains untouched');
   c.guest_free(small);
+  // A small free goes to its size bin; get_free_list splices the bins onto the
+  // list, so the cycle below is planted in the list coalesce actually walks.
+  assert.strictEqual(c.get_free_list()>>>0,small-4,'binned block rejoins the list head');
   const header=c.guest_to_wasm(small-4)>>>0;
   view.setUint32(header+4,small-4,true);
   assert.strictEqual(c.d3d_render_coalesce_heap(),-1,'cycle rejected before sorting');

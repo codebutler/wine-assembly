@@ -4,8 +4,12 @@
 ;; host lifecycle exports, not guest APIs. Forced-death orphan recovery is separate.
   (func (export "d3d_render_retire_heap") (result i32)
     (local $head i32)
+    ;; Bins first, so each freed tail still lands at the head; flush again for
+    ;; a tail small enough to have been binned itself.
+    (call $heap_bins_flush)
     (call $heap_arena_free_tail (global.get $heap_ptr) (global.get $heap_end) (global.get $heap_arena_record))
     (call $heap_arena_free_tail (global.get $heap_sparse_ptr) (global.get $heap_sparse_end) (global.get $heap_sparse_record))
+    (call $heap_bins_flush)
     (local.set $head (global.get $free_list))
     (global.set $free_list (i32.const 0))
     (global.set $heap_ptr (i32.const 0))
@@ -47,6 +51,7 @@
     (local $psize i32) (local $qsize i32) (local $item i32) (local $tail i32)
     (local $newhead i32) (local $merges i32) (local $cur i32) (local $next i32)
     (local $wa i32) (local $size i32) (local $joined i32) (local $by_size i32)
+    (call $heap_bins_flush)
     (local.set $head (global.get $free_list))
     (if (i32.eq (call $d3d_render_list_tail (local.get $head)) (i32.const -1))
       (then (return (i32.const -1))))

@@ -801,6 +801,7 @@
   ;; through an unchecked address or spinning forever.
   (func $heap_validate_free_list_excludes (param $target i32) (result i32)
     (local $cur i32) (local $raw i32) (local $steps i32)
+    (call $heap_bins_flush)
     (local.set $cur (global.get $free_list))
     (block $valid (loop $walk
       (br_if $valid (i32.eqz (local.get $cur)))
@@ -843,6 +844,7 @@
     (local.set $live (i32.atomic.load offset=12 (local.get $rec)))
     (if (i32.gt_u (local.get $live) (local.get $total))
       (then (return (i32.const 0))))
+    (call $heap_bins_flush)
     (local.set $cur (global.get $free_list))
     (block $list_done (loop $list
       (br_if $list_done (i32.eqz (local.get $cur)))
@@ -985,6 +987,7 @@
     (local $largest i32)
     ;; Validate exact block boundaries, untagged free extents, and a finite
     ;; list before any link is rewritten. The count cap also rejects cycles.
+    (call $heap_bins_flush)
     (local.set $cur (global.get $free_list))
     (block $valid (loop $check
       (br_if $valid (i32.eqz (local.get $cur)))

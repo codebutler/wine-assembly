@@ -9492,6 +9492,14 @@ if (VERBOSE) {
     if (instance.exports.get_thunk_base) console.log('thunk_base:', hex(instance.exports.get_thunk_base()), 'thunk_end:', hex(instance.exports.get_thunk_end()), 'num_thunks:', instance.exports.get_num_thunks());
     if (instance.exports.get_heap_ptr) console.log('heap_ptr:', hex(instance.exports.get_heap_ptr()));
     if (instance.exports.get_free_list) console.log('free_list:', hex(instance.exports.get_free_list()));
+    if (instance.exports.heap_stat) {
+      const st = i => Number(instance.exports.heap_stat(i));
+      const census = instance.exports.heap_free_census;
+      const buckets = [];
+      for (let b = 4; b < 31; b++) { const n = census(b); if (n) buckets.push(`${1 << b}:${n}`); }
+      console.log(`heap stats: allocs=${st(0)} frees=${st(1)} steps=${st(2)} (${(st(2) / Math.max(1, st(0))).toFixed(1)}/alloc)`
+        + ` misses=${st(3)} missSteps=${st(4)} freeList=${census(32)} [${buckets.join(' ')}]`);
+    }
     if (instance.exports.get_heap_sparse_ptr) console.log('heap_sparse_ptr:', hex(instance.exports.get_heap_sparse_ptr()));
     if (instance.exports.get_heap_sparse_end) console.log('heap_sparse_end:', hex(instance.exports.get_heap_sparse_end()));
     if (instance.exports.get_virtual_alloc_top) console.log('virtual_alloc_top:', hex(instance.exports.get_virtual_alloc_top()));
