@@ -311,6 +311,30 @@
           (call $gl8 (global.get $ea_temp)))))
     (return_call $next))
 
+  ;; 465: [base+index*scale+disp] OP= r8 -- handler 149's EA and handler 49's
+  ;; ALU in one dispatch. op = alu<<4 | reg8; info and disp words follow, in
+  ;; 149's encoding. PKWARE implode's `cmp [ebp+esi],bl` is the case.
+  (func $th_alu_m8_r_sib (param $op i32)
+    (local $info i32) (local $base_val i32) (local $index_val i32) (local $disp i32)
+    (local $addr i32) (local $alu i32) (local $r i32)
+    (local.set $info (call $read_thread_word))
+    (local.set $disp (call $read_thread_word))
+    (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
+      (then (local.set $base_val (call $get_reg (i32.and (local.get $info) (i32.const 0xF))))))
+    (if (i32.ne (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 0xF))
+      (then
+        (local.set $index_val (i32.shl
+          (call $get_reg (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)))
+          (i32.and (i32.shr_u (local.get $info) (i32.const 8)) (i32.const 3))))))
+    (local.set $addr (i32.add (i32.add (local.get $base_val) (local.get $index_val)) (local.get $disp)))
+    (local.set $alu (i32.shr_u (local.get $op) (i32.const 4)))
+    (local.set $r (call $do_alu_sized (local.get $alu)
+      (call $gl8 (local.get $addr))
+      (call $get_reg8 (i32.and (local.get $op) (i32.const 0xF)))
+      (i32.const 0xFF) (i32.const 7)))
+    (if (i32.ne (local.get $alu) (i32.const 7)) (then (call $gs8 (local.get $addr) (local.get $r))))
+    (return_call $next))
+
   ;; 389: MOV r32,[base+index*scale+disp]. This is deliberately separate from
   ;; handler 149: StarCraft's generated Smacker converter executes indexed
   ;; dword loads millions of times, while adding another mode branch to the
@@ -2793,6 +2817,113 @@
   ;; The spills are written on the same instructions the x86 writes them, so a
   ;; capped run resumes at the head with the frame in the state the guest's
   ;; own loop would have left it in.
+  ;; 466: PKWARE implode's two match-extension loops, run to their exit.
+  ;; op 0 -- `inc esi / cmp esi,0x204 / jge X / mov ebp,[esp+0x2c] /
+  ;;          inc dword [esp+0x14] / mov edx,[esp+0x14] / mov bl,[edx] /
+  ;;          cmp [ebp+esi],bl / jz head`
+  ;; op 1 -- `mov dl,[ecx+1] / inc esi / inc ecx / cmp [esi],dl / jnz X /
+  ;;          inc ebx / cmp ebx,0x204 / jl head`
+  ;; Every guest load and store happens in the guest's order each iteration,
+  ;; so aliasing behaves as on hardware; flags are those of the compare that
+  ;; took the exit, set through the same helpers the unfolded handlers use.
+  ;; Both loops are bounded by the 0x204 compare, so one dispatch is at most
+  ;; 516 iterations. Thread words: head eip, exit eip.
+  ;; The registers, the frame displacements and the match bound all come from
+  ;; the op, because $try_emit_implode_cmp_run reads them out of the encoding
+  ;; rather than pinning one build's allocation. The quadruple is the same for
+  ;; both forms: I is the index that walks the window, V the byte register the
+  ;; compare reads, and X/Y are the two form-specific cursors --
+  ;;   form 0: X = the window base reloaded from [esp+d1], Y = the candidate
+  ;;           cursor reloaded from the frame slot [esp+d2], d3 the compare's
+  ;;           own displacement;
+  ;;   form 1: X = the candidate cursor in a register, Y = the match length,
+  ;;           d1 the displacement of the byte peek, d2/d3 unused.
+  (func $th_implode_cmp_run (param $op i32)
+    (local $tp i32) (local $exit_eip i32) (local $esp i32) (local $regs i32)
+    (local $limit i32) (local $d1 i32) (local $d2 i32) (local $d3 i32)
+    (local $ri i32) (local $rx i32) (local $ry i32) (local $rv i32)
+    (local $I i32) (local $X i32) (local $Y i32) (local $V i32)
+    (local $t i32) (local $b i32) (local $m i32)
+    (local $iters i32) (local $blocks i32) (local $cost i32)
+    (local.set $tp (global.get $ip))
+    (local.set $exit_eip (i32.load offset=4  (local.get $tp)))
+    (local.set $regs     (i32.load offset=8  (local.get $tp)))
+    (local.set $limit    (i32.load offset=12 (local.get $tp)))
+    (local.set $d1       (i32.load offset=16 (local.get $tp)))
+    (local.set $d2       (i32.load offset=20 (local.get $tp)))
+    (local.set $d3       (i32.load offset=24 (local.get $tp)))
+    (global.set $ip (i32.add (local.get $tp) (i32.const 28)))
+    (local.set $ri (i32.and             (local.get $regs)                    (i32.const 0xF)))
+    (local.set $rx (i32.and (i32.shr_u  (local.get $regs) (i32.const 4))     (i32.const 0xF)))
+    (local.set $ry (i32.and (i32.shr_u  (local.get $regs) (i32.const 8))     (i32.const 0xF)))
+    (local.set $rv (i32.and (i32.shr_u  (local.get $regs) (i32.const 12))    (i32.const 0xF)))
+    (local.set $I (call $get_reg (local.get $ri)))
+    (local.set $X (call $get_reg (local.get $rx)))
+    (local.set $Y (call $get_reg (local.get $ry)))
+    (local.set $V (call $get_reg (local.get $rv)))
+    (if (i32.eqz (local.get $op))
+      (then
+        (local.set $esp (call $get_reg (i32.const 4)))
+        (block $done (loop $iter
+          ;; inc I / cmp I,LIMIT / jge exit
+          (local.set $I (i32.add (local.get $I) (i32.const 1)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 1)))
+          (local.set $cost (i32.add (local.get $cost) (i32.const 3)))
+          (if (i32.ge_s (local.get $I) (local.get $limit))
+            (then
+              (drop (call $do_alu32 (i32.const 7) (local.get $I) (local.get $limit)))
+              (br $done)))
+          ;; mov X,[esp+d1] / inc dword [esp+d2] / mov Y,[esp+d2]
+          (local.set $X (call $gl32 (i32.add (local.get $esp) (local.get $d1))))
+          (local.set $t (i32.add (call $gl32 (i32.add (local.get $esp) (local.get $d2)))
+                                 (i32.const 1)))
+          (call $gs32 (i32.add (local.get $esp) (local.get $d2)) (local.get $t))
+          (local.set $Y (call $gl32 (i32.add (local.get $esp) (local.get $d2))))
+          ;; mov V8,[Y] / cmp [X+I+d3],V8 / jz head
+          (local.set $b (call $gl8 (local.get $Y)))
+          (local.set $V (i32.or (i32.and (local.get $V) (i32.const 0xFFFFFF00))
+                                (local.get $b)))
+          (local.set $m (call $gl8 (i32.add (i32.add (local.get $X) (local.get $I))
+                                            (local.get $d3))))
+          (drop (call $do_alu_sized (i32.const 7) (local.get $m) (local.get $b)
+                  (i32.const 0xFF) (i32.const 7)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 1)))
+          (local.set $cost (i32.add (local.get $cost) (i32.const 6)))
+          (local.set $iters (i32.add (local.get $iters) (i32.const 1)))
+          (br_if $iter (i32.eq (local.get $m) (local.get $b))))))
+      (else
+        (block $done (loop $iter
+          ;; mov V8,[X+d1] / inc I / inc X / cmp [I],V8 / jnz exit
+          (local.set $b (call $gl8 (i32.add (local.get $X) (local.get $d1))))
+          (local.set $V (i32.or (i32.and (local.get $V) (i32.const 0xFFFFFF00))
+                                (local.get $b)))
+          (local.set $I (i32.add (local.get $I) (i32.const 1)))
+          (local.set $X (i32.add (local.get $X) (i32.const 1)))
+          (local.set $m (call $gl8 (local.get $I)))
+          (drop (call $do_alu_sized (i32.const 7) (local.get $m) (local.get $b)
+                  (i32.const 0xFF) (i32.const 7)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 1)))
+          (local.set $cost (i32.add (local.get $cost) (i32.const 5)))
+          (local.set $iters (i32.add (local.get $iters) (i32.const 1)))
+          (br_if $done (i32.ne (local.get $m) (local.get $b)))
+          ;; inc Y / cmp Y,LIMIT / jl head
+          (local.set $Y (i32.add (local.get $Y) (i32.const 1)))
+          (drop (call $do_alu32 (i32.const 7) (local.get $Y) (local.get $limit)))
+          (local.set $blocks (i32.add (local.get $blocks) (i32.const 1)))
+          (local.set $cost (i32.add (local.get $cost) (i32.const 3)))
+          (br_if $iter (i32.lt_s (local.get $Y) (local.get $limit)))))))
+    (call $set_reg (local.get $ri) (local.get $I))
+    (call $set_reg (local.get $rx) (local.get $X))
+    (call $set_reg (local.get $ry) (local.get $Y))
+    (call $set_reg (local.get $rv) (local.get $V))
+    (global.set $block_budget (i32.sub (global.get $block_budget) (local.get $blocks)))
+    (global.set $steps (i32.sub (global.get $steps) (i32.add (local.get $cost) (i32.const 1))))
+    (global.set $implode_cmp_run_runs (i32.add (global.get $implode_cmp_run_runs) (i32.const 1)))
+    (global.set $implode_cmp_run_iters
+      (i64.add (global.get $implode_cmp_run_iters) (i64.extend_i32_u (local.get $iters))))
+    (global.set $eip (local.get $exit_eip))
+    (return_call $branch_end))
+
   (func $th_pcx_run (param $op i32)
     (local $tp i32) (local $head_eip i32) (local $exit_eip i32)
     (local $esp i32) (local $cursor i32) (local $hdr i32) (local $base i32)

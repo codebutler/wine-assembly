@@ -121,6 +121,112 @@ function blockEntryShape(a, useJmp) {
   };
 }
 
+function implodeShape(a, form) {
+  // Gap tables: iterations per entry = g + 1, so the means are 2.875 and 1.5.
+  // 'a2' is form a's shape under a different register allocation, so it is the
+  // arm that says whether the fold matched the SHAPE or one build's bytes.
+  const fa = form !== 'b';
+  const gaps = fa ? [0, 1, 1, 2, 2, 2, 3, 4] : [0, 0, 0, 1, 1, 0, 1, 1];
+  const lead = fa ? 1 : 2;                  // bytes before the gap run (B skips one)
+  const half = Math.floor(a.bufBytes / 2);
+  const Y = a.buf, X = a.buf + half;
+  const stream = [];
+  let seed = 12345, iters = 0;
+  while (true) {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    const g = gaps[(seed >>> 16) & 7];
+    if (stream.length + lead + g + 1 > half) break;
+    for (let i = 0; i < lead + g; i++) stream.push(0);
+    stream.push(1 + ((seed >>> 8) & 0x7F));
+    iters += g + 1;
+  }
+  const entries = stream.length === 0 ? 0 : (() => {
+    let n = 0; for (const b of stream) if (b) n++; return n;
+  })();
+  let code;
+  if (form === 'a') {
+    const loop = [0x46, 0x81, 0xFE, 0x04, 0x02, 0x00, 0x00, 0x7D, 0x14,
+      0x8B, 0x6C, 0x24, 0x2C, 0xFF, 0x44, 0x24, 0x14, 0x8B, 0x54, 0x24, 0x14,
+      0x8A, 0x1A, 0x38, 0x5C, 0x35, 0x00, 0x74, 0xE3];
+    const body = [
+      0x31, 0xF6,                     // xor esi, esi
+      0x8B, 0x54, 0x24, 0x14,         // mov edx, [esp+0x14]
+      0x8B, 0x6C, 0x24, 0x2C,         // mov ebp, [esp+0x2c]
+      0x8A, 0x1A,                     // mov bl, [edx]
+      0x38, 0x5C, 0x35, 0x00,         // cmp [ebp+esi], bl
+      0x75, loop.length,              // jnz exit
+      ...loop,
+      0xFF, 0x44, 0x24, 0x14,         // exit: inc dword [esp+0x14]
+      0x49,                           // dec ecx
+    ];
+    code = body.concat([0x75], rel8(-(body.length + 2)));
+  } else if (form === 'a2') {
+    // Same instructions, same order, different registers: index edi (not esi),
+    // window ebx (not ebp), cursor eax (not edx), compare byte dl (not bl).
+    // 28 bytes rather than 29, because inc edi is one byte and inc esi is too
+    // -- the displacements move, so the branch rel8s are not the ones above.
+    const loop = [0x47, 0x81, 0xFF, 0x04, 0x02, 0x00, 0x00, 0x7D, 0x13,
+      0x8B, 0x5C, 0x24, 0x2C, 0xFF, 0x44, 0x24, 0x14, 0x8B, 0x44, 0x24, 0x14,
+      0x8A, 0x10, 0x38, 0x14, 0x3B, 0x74, 0xE4];
+    const body = [
+      0x31, 0xFF,                     // xor edi, edi
+      0x8B, 0x44, 0x24, 0x14,         // mov eax, [esp+0x14]
+      0x8B, 0x5C, 0x24, 0x2C,         // mov ebx, [esp+0x2c]
+      0x8A, 0x10,                     // mov dl, [eax]
+      0x38, 0x14, 0x3B,               // cmp [ebx+edi*1], dl
+      0x75, loop.length,              // jnz exit
+      ...loop,
+      0xFF, 0x44, 0x24, 0x14,         // exit: inc dword [esp+0x14]
+      0x49,                           // dec ecx
+    ];
+    code = body.concat([0x75], rel8(-(body.length + 2)));
+  } else {
+    const loop = [0x8A, 0x51, 0x01, 0x46, 0x41, 0x38, 0x16, 0x75, 0x09,
+      0x43, 0x81, 0xFB, 0x04, 0x02, 0x00, 0x00, 0x7C, 0xEE];
+    const body = [
+      0x8A, 0x11,                     // mov dl, [ecx]
+      0x38, 0x16,                     // cmp [esi], dl
+      0x75, 7 + loop.length,          // jnz exit
+      0x46, 0x41,                     // inc esi; inc ecx
+      0xBB, 0x02, 0x00, 0x00, 0x00,   // mov ebx, 2
+      ...loop,
+      0x46, 0x41,                     // exit: inc esi; inc ecx
+      0xFF, 0x4C, 0x24, 0x30,         // dec dword [esp+0x30]
+    ];
+    code = body.concat([0x75], rel8(-(body.length + 2)));
+  }
+  const cursor = () => fa ? a.stackTop + 0x14 : null;
+  return {
+    iters,
+    bytesTouched: stream.length * 2,
+    code,
+    setup(e, mem, g2w) {
+      mem.set(stream, g2w(Y));
+      mem.fill(0, g2w(X), g2w(X) + half);
+      const dv = new DataView(mem.buffer);
+      dv.setUint32(g2w(a.stackTop + 0x14), Y, true);
+      dv.setUint32(g2w(a.stackTop + 0x2c), X, true);
+      dv.setUint32(g2w(a.stackTop + 0x30), entries, true);
+      e.set_ecx(fa ? entries : Y);
+      e.set_esi(X); e.set_ebx(0); e.set_edx(0); e.set_ebp(0);
+      e.set_edi(0); e.set_eax(0);
+    },
+    verify(e, mem, g2w) {
+      const dv = new DataView(mem.buffer);
+      const end = Y + stream.length;
+      const got = fa ? dv.getUint32(g2w(cursor()), true) : e.get_ecx() >>> 0;
+      return got === end ? null : `cursor=0x${got.toString(16)} want 0x${end.toString(16)}`;
+    },
+    checksum(e, mem, g2w) {
+      const dv = new DataView(mem.buffer);
+      return [e.get_esi(), e.get_ebx(), e.get_edx(), e.get_ecx(), e.get_ebp(),
+        e.get_edi(), e.get_eax(),
+        dv.getUint32(g2w(a.stackTop + 0x14), true)]
+        .map(v => (v >>> 0).toString(16)).join(' ');
+    },
+  };
+}
+
 const SHAPES = {
   sparse_scatter: {
     describe: 'cyclic dword loads across independent sparse mappings (--scatter-pages)',
@@ -436,6 +542,28 @@ const SHAPES = {
   // dispatches per iteration as well as 3.5 more block entries, so charging the
   // whole delta to entries overstates them. This pair holds dispatch count
   // equal by construction.
+  // PKWARE DCL implode's two match-extension loops, byte for byte (StarCraft
+  // 0x4c115a / 0x4c0f76; the same compiled loops are in every Storm.dll), each
+  // behind the prelude that reaches it in the original. The run length comes
+  // from the Y stream: a zero lead, `g` zeros, then a nonzero terminator, with
+  // `g` drawn so the mean iterations per entry match the save profile (A 2.9,
+  // B 1.5). --toggle=implode_cmp_run folds both; lut is the null control.
+  implode_a: {
+    describe: 'implode match extension, [esp]-cursor form (0x4c115a, ~2.9 iters/entry)',
+    real: 'StarCraft save compression; 42% of save ops with its sibling at 0x4c1000',
+    emit: a => implodeShape(a, 'a'),
+  },
+  implode_a2: {
+    describe: 'implode [esp]-cursor form under a DIFFERENT register allocation',
+    real: 'not a binary we ship: the arm that separates a shape fold from a byte signature',
+    emit: a => implodeShape(a, 'a2'),
+  },
+  implode_b: {
+    describe: 'implode match extension, register form (0x4c0f76, ~1.5 iters/entry)',
+    real: 'StarCraft save compression; the 0x4c0f5b finder, 38% of save ops',
+    emit: a => implodeShape(a, 'b'),
+  },
+
   nop_chain: {
     describe: 'K nops per iteration — the dispatch-only half of the block-entry pair',
     real: 'subtract from jmp_chain to price one block entry',
@@ -2036,6 +2164,10 @@ const TOGGLES = {
   ck_blend16: 'set_ck_blend16',
   ck_shadow16: 'set_ck_shadow16',
   block_exec: 'set_block_exec',
+  // Save-compression prototypes: a SIB-fused `OP [sib], r8` (handler 465) and
+  // the implode match-extension fold (466). Shapes: implode_a, implode_b.
+  alu8_sib: 'set_alu8_sib',
+  implode_cmp_run: 'set_implode_cmp_run',
   // Round 15 block chaining (docs/block-chaining-design.md). The shape to run
   // it on is the block-entry pair: `--shapes=nop_chain,jmp_chain
   // --toggle=block_chain`. nop_chain holds dispatch count equal and has no

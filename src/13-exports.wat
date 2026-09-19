@@ -2799,6 +2799,15 @@
   (func (export "get_pcx_run_matches") (result i32) (global.get $pcx_run_matches))
   (func (export "get_pcx_run_runs") (result i32) (global.get $pcx_run_runs))
   (func (export "get_pcx_run_tokens") (result i64) (global.get $pcx_run_tokens))
+  (func (export "set_alu8_sib") (param $flag i32)
+    (global.set $alu8_sib_enabled (local.get $flag)))
+  (func (export "get_alu8_sib") (result i32) (global.get $alu8_sib_enabled))
+  (func (export "set_implode_cmp_run") (param $flag i32)
+    (global.set $implode_cmp_run_enabled (local.get $flag)))
+  (func (export "get_implode_cmp_run") (result i32) (global.get $implode_cmp_run_enabled))
+  (func (export "get_implode_cmp_run_matches") (result i32) (global.get $implode_cmp_run_matches))
+  (func (export "get_implode_cmp_run_runs") (result i32) (global.get $implode_cmp_run_runs))
+  (func (export "get_implode_cmp_run_iters") (result i64) (global.get $implode_cmp_run_iters))
 
   ;; The alpha-blended RGB565 blit fold ($th_ck_blend16_run). The off switch
   ;; is decode-time like every other fold's, so an A/B has to run the two arms

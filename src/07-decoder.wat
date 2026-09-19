@@ -118,6 +118,19 @@
   ;; parks at the head having made progress; it cannot spin.
   (global $SMK_TREE_MAX_LEVELS i32 (i32.const 64))
 
+  ;; Handler 465: `[base+index*scale+disp] OP= r8` with the SIB EA fused in,
+  ;; so `cmp [ebp+esi],bl` is one dispatch instead of 149 + 49. The pair is
+  ;; 4.6% of every op in a StarCraft save (PKWARE implode). Off by default
+  ;; while it is being measured.
+  (global $alu8_sib_enabled (mut i32) (i32.const 0))
+  ;; Handler 466: PKWARE implode's two match-extension loops, folded whole.
+  ;; Grammar-matched at the loop head; see $try_emit_implode_cmp_run. Off by
+  ;; default while it is being measured.
+  (global $implode_cmp_run_enabled (mut i32) (i32.const 0))
+  (global $implode_cmp_run_matches (mut i32) (i32.const 0))
+  (global $implode_cmp_run_runs    (mut i32) (i32.const 0))
+  (global $implode_cmp_run_iters   (mut i64) (i64.const 0))
+
   ;; $th_pcx_run's Quake II PCX/WAL run expander (handler 462). RLE_TOKEN's
   ;; largest diamond-shaped instance in the loading windows: 24.6% of
   ;; quake2-loading over five blocks. Off switch is for A/B only.
@@ -1493,6 +1506,283 @@
     (call $te (i32.const 462) (i32.const 0))
     (call $te_raw (local.get $head))
     (call $te_raw (i32.add (local.get $head) (i32.const 108)))
+    (i32.const 1))
+
+  ;; ---- PKWARE implode's match-extension loops ($th_implode_cmp_run) -----
+  ;;
+  ;; The two byte-at-a-time "how long is this match" loops of the DCL implode
+  ;; match finder, as compiled into starcraft.exe, StarCraft's and Diablo II's
+  ;; storm.dll and Warcraft III's Storm.dll.
+  ;;   op 0, 29 bytes: 46 81fe04020000 7d14 8b6c242c ff442414 8b542414
+  ;;                   8a1a 385c3500 74e3
+  ;;   op 1, 18 bytes: 8a5101 46 41 3816 7509 43 81fb04020000 7cee
+  ;;
+  ;; Those are the bytes one build happened to emit; this is a GRAMMAR over the
+  ;; shape, not a signature of them. Every register comes out of a ModRM field
+  ;; into a role (I the window index, W/C the two cursors, V the byte the
+  ;; compare reads), the 0x204 bound is read as the compare's immediate, and
+  ;; the frame displacements are read as disp8s -- so a build that allocated
+  ;; ebx where this one has ebp, or a copy of the coder with a different window
+  ;; size, still folds. Matching a byte string instead is what made the earlier
+  ;; CK-LUT fold reject every occurrence it was written for (cba5cb90).
+  ;; What is still pinned is the shape: the role each instruction plays, the
+  ;; order they appear in, and the two structural facts below.
+  ;;
+  ;; The roles are checked, not assumed: the four registers must be distinct
+  ;; and none of them ESP ($ck_regs_mask_ok), V must be a low-byte-addressable
+  ;; register, and the loop's two exits must agree on one landing address --
+  ;; the byte after the back edge. That last one is what makes the handler's
+  ;; single `$eip = exit_eip` correct for either way out.
+  ;;
+  ;; Both forms are entered at their head, the back edge's target. They are
+  ;; disjoint at the first byte (inc r32 vs 8A mov r8,[r+d]), so the form is
+  ;; decided before anything else is read and there is no ambiguity to resolve.
+  ;; Sign-extend a disp8/rel8 the grammar below just read.
+  (func $imp_sx8 (param $v i32) (result i32)
+    (i32.shr_s (i32.shl (local.get $v) (i32.const 24)) (i32.const 24)))
+
+  ;; ModRM that must be `[esp+disp8]`: mod=01, rm=100 (SIB follows). The SIB
+  ;; byte itself is checked at the call site, because only 0x24 (base ESP, no
+  ;; index) is the frame form this grammar means.
+  (func $imp_frame_modrm (param $m i32) (result i32)
+    (i32.and (i32.eq (i32.shr_u (local.get $m) (i32.const 6)) (i32.const 1))
+             (i32.eq (i32.and (local.get $m) (i32.const 7)) (i32.const 4))))
+
+  (func $try_emit_implode_cmp_run (param $start_eip i32) (result i32)
+    (local $pc i32) (local $head i32) (local $m i32) (local $sib i32)
+    (local $b i32) (local $mod i32) (local $rm i32)
+    (local $I i32) (local $W i32) (local $C i32) (local $V i32) (local $N i32)
+    (local $limit i32) (local $d1 i32) (local $d2 i32) (local $d3 i32)
+    (local $alt i32) (local $exit_eip i32) (local $form i32)
+    (if (i32.eqz (global.get $implode_cmp_run_enabled)) (then (return (i32.const 0))))
+    (if (i32.or (global.get $code16) (global.get $d_addr16))
+      (then (return (i32.const 0))))
+    (if (global.get $d_seg) (then (return (i32.const 0))))
+    (local.set $head (global.get $d_pc))
+    (local.set $pc (local.get $head))
+    (local.set $b (call $gl8 (local.get $pc)))
+    ;; The two forms are disjoint at the first byte: `inc r32` opens form 0,
+    ;; `mov r8,[r+d]` opens form 1. Anything else is not this loop.
+    (if (i32.eq (i32.and (local.get $b) (i32.const 0xF8)) (i32.const 0x40))
+      (then
+        ;; ---------------- form 0: the [esp]-cursor loop ----------------
+        (local.set $I (i32.and (local.get $b) (i32.const 7)))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 1)))
+        ;; cmp I, LIMIT  (81 /7 id or 83 /7 ib; the bound is READ, not pinned)
+        (local.set $b (call $gl8 (local.get $pc)))
+        (if (i32.eqz (i32.or (i32.eq (local.get $b) (i32.const 0x81))
+                             (i32.eq (local.get $b) (i32.const 0x83))))
+          (then (return (i32.const 0))))
+        (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                    (i32.or (i32.const 0xF8) (local.get $I)))
+          (then (return (i32.const 0))))
+        (if (i32.eq (local.get $b) (i32.const 0x81))
+          (then
+            (local.set $limit (call $gl32 (i32.add (local.get $pc) (i32.const 2))))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 6))))
+          (else
+            (local.set $limit
+              (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 2)))))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 3)))))
+        ;; jge exit
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x7D))
+          (then (return (i32.const 0))))
+        (local.set $alt
+          (i32.add (i32.add (local.get $pc) (i32.const 2))
+                   (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+        ;; mov W, [esp+d1]
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8B))
+          (then (return (i32.const 0))))
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (if (i32.eqz (call $imp_frame_modrm (local.get $m)))
+          (then (return (i32.const 0))))
+        (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2))) (i32.const 0x24))
+          (then (return (i32.const 0))))
+        (local.set $W (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7)))
+        (local.set $d1 (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 3)))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 4)))
+        ;; inc dword [esp+d2]   (FF /0)
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0xFF))
+          (then (return (i32.const 0))))
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (if (i32.eqz (call $imp_frame_modrm (local.get $m)))
+          (then (return (i32.const 0))))
+        (if (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+          (then (return (i32.const 0))))
+        (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2))) (i32.const 0x24))
+          (then (return (i32.const 0))))
+        (local.set $d2 (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 3)))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 4)))
+        ;; mov C, [esp+d2]  -- the same frame slot that was just incremented
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8B))
+          (then (return (i32.const 0))))
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (if (i32.eqz (call $imp_frame_modrm (local.get $m)))
+          (then (return (i32.const 0))))
+        (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 2))) (i32.const 0x24))
+          (then (return (i32.const 0))))
+        (if (i32.ne (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 3))))
+                    (local.get $d2))
+          (then (return (i32.const 0))))
+        (local.set $C (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7)))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 4)))
+        ;; mov V8, [C]
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x8A))
+          (then (return (i32.const 0))))
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (local.set $V (call $ck_mem0_reg (local.get $m)))
+        (if (i32.lt_s (local.get $V) (i32.const 0)) (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $C))
+          (then (return (i32.const 0))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+        ;; cmp [W + I*1 + d3], V8   (38 /r, SIB scale 1, index I, base W)
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x38))
+          (then (return (i32.const 0))))
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (local.set $mod (i32.shr_u (local.get $m) (i32.const 6)))
+        (if (i32.gt_u (local.get $mod) (i32.const 1)) (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (i32.const 4))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7))
+                    (local.get $V))
+          (then (return (i32.const 0))))
+        (local.set $sib (call $gl8 (i32.add (local.get $pc) (i32.const 2))))
+        (if (i32.shr_u (local.get $sib) (i32.const 6)) (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (i32.shr_u (local.get $sib) (i32.const 3)) (i32.const 7))
+                    (local.get $I))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (local.get $sib) (i32.const 7)) (local.get $W))
+          (then (return (i32.const 0))))
+        (if (i32.eq (local.get $mod) (i32.const 1))
+          (then
+            (local.set $d3 (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 3)))))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 4))))
+          (else
+            ;; mod=00 with base=EBP is a disp32 absolute, not [ebp+index]
+            (if (i32.eq (local.get $W) (i32.const 5)) (then (return (i32.const 0))))
+            (local.set $d3 (i32.const 0))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 3)))))
+        ;; jz head
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x74))
+          (then (return (i32.const 0))))
+        (local.set $exit_eip (i32.add (local.get $pc) (i32.const 2)))
+        (if (i32.ne (i32.add (local.get $exit_eip)
+                             (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 1)))))
+                    (local.get $head))
+          (then (return (i32.const 0))))
+        (local.set $form (i32.const 0)))
+      (else
+        ;; ---------------- form 1: the register loop ----------------
+        (if (i32.ne (local.get $b) (i32.const 0x8A)) (then (return (i32.const 0))))
+        ;; mov V8, [C+d1]
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (local.set $mod (i32.shr_u (local.get $m) (i32.const 6)))
+        (local.set $rm (i32.and (local.get $m) (i32.const 7)))
+        (local.set $V (i32.and (i32.shr_u (local.get $m) (i32.const 3)) (i32.const 7)))
+        (if (i32.or (i32.eq (local.get $rm) (i32.const 4))
+                    (i32.eq (local.get $rm) (i32.const 5)))
+          (then (return (i32.const 0))))
+        (local.set $C (local.get $rm))
+        (if (i32.eq (local.get $mod) (i32.const 1))
+          (then
+            (local.set $d1 (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 2)))))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 3))))
+          (else
+            (if (local.get $mod) (then (return (i32.const 0))))
+            (local.set $d1 (i32.const 0))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 2)))))
+        ;; inc I / inc C
+        (local.set $b (call $gl8 (local.get $pc)))
+        (if (i32.ne (i32.and (local.get $b) (i32.const 0xF8)) (i32.const 0x40))
+          (then (return (i32.const 0))))
+        (local.set $I (i32.and (local.get $b) (i32.const 7)))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 1)))
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.or (i32.const 0x40) (local.get $C)))
+          (then (return (i32.const 0))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 1)))
+        ;; cmp [I], V8
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x38))
+          (then (return (i32.const 0))))
+        (local.set $m (call $gl8 (i32.add (local.get $pc) (i32.const 1))))
+        (if (i32.eqz (call $ck_mem0 (local.get $m) (local.get $V)))
+          (then (return (i32.const 0))))
+        (if (i32.ne (i32.and (local.get $m) (i32.const 7)) (local.get $I))
+          (then (return (i32.const 0))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+        ;; jnz exit
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x75))
+          (then (return (i32.const 0))))
+        (local.set $alt
+          (i32.add (i32.add (local.get $pc) (i32.const 2))
+                   (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 1))))))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 2)))
+        ;; inc N / cmp N, LIMIT
+        (local.set $b (call $gl8 (local.get $pc)))
+        (if (i32.ne (i32.and (local.get $b) (i32.const 0xF8)) (i32.const 0x40))
+          (then (return (i32.const 0))))
+        (local.set $N (i32.and (local.get $b) (i32.const 7)))
+        (local.set $pc (i32.add (local.get $pc) (i32.const 1)))
+        (local.set $b (call $gl8 (local.get $pc)))
+        (if (i32.eqz (i32.or (i32.eq (local.get $b) (i32.const 0x81))
+                             (i32.eq (local.get $b) (i32.const 0x83))))
+          (then (return (i32.const 0))))
+        (if (i32.ne (call $gl8 (i32.add (local.get $pc) (i32.const 1)))
+                    (i32.or (i32.const 0xF8) (local.get $N)))
+          (then (return (i32.const 0))))
+        (if (i32.eq (local.get $b) (i32.const 0x81))
+          (then
+            (local.set $limit (call $gl32 (i32.add (local.get $pc) (i32.const 2))))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 6))))
+          (else
+            (local.set $limit
+              (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 2)))))
+            (local.set $pc (i32.add (local.get $pc) (i32.const 3)))))
+        ;; jl head
+        (if (i32.ne (call $gl8 (local.get $pc)) (i32.const 0x7C))
+          (then (return (i32.const 0))))
+        (local.set $exit_eip (i32.add (local.get $pc) (i32.const 2)))
+        (if (i32.ne (i32.add (local.get $exit_eip)
+                             (call $imp_sx8 (call $gl8 (i32.add (local.get $pc) (i32.const 1)))))
+                    (local.get $head))
+          (then (return (i32.const 0))))
+        ;; The handler reads one (I, X, Y, V) quadruple for both forms; this
+        ;; form's X is the candidate cursor and its Y is the match length.
+        (local.set $W (local.get $C))
+        (local.set $C (local.get $N))
+        (local.set $form (i32.const 1))))
+
+    ;; Both exits must be the instruction after the back edge. A loop whose
+    ;; early exit goes somewhere else is a different loop, and the fold has
+    ;; exactly one EIP to leave at.
+    (if (i32.ne (local.get $alt) (local.get $exit_eip)) (then (return (i32.const 0))))
+    ;; V is written as a byte, so it has to be one of the four low-byte regs;
+    ;; 4..7 would name AH..BH and mean something else.
+    (if (i32.gt_u (local.get $V) (i32.const 3)) (then (return (i32.const 0))))
+    ;; Four distinct registers, none of them ESP: the handler writes all four
+    ;; back at the end, so an alias would make write order load-bearing.
+    (if (i32.eqz (call $ck_regs_mask_ok
+          (i32.or (i32.or (i32.shl (i32.const 1) (local.get $I))
+                          (i32.shl (i32.const 1) (local.get $W)))
+                  (i32.or (i32.shl (i32.const 1) (local.get $C))
+                          (i32.shl (i32.const 1) (local.get $V))))
+          (i32.const 4)))
+      (then (return (i32.const 0))))
+
+    (global.set $implode_cmp_run_matches
+      (i32.add (global.get $implode_cmp_run_matches) (i32.const 1)))
+    (call $te (i32.const 466) (local.get $form))
+    (call $te_raw (local.get $head))
+    (call $te_raw (local.get $exit_eip))
+    (call $te_raw (i32.or
+      (i32.or (local.get $I) (i32.shl (local.get $W) (i32.const 4)))
+      (i32.or (i32.shl (local.get $C) (i32.const 8))
+              (i32.shl (local.get $V) (i32.const 12)))))
+    (call $te_raw (local.get $limit))
+    (call $te_raw (local.get $d1))
+    (call $te_raw (local.get $d2))
+    (call $te_raw (local.get $d3))
+    (global.set $d_pc (local.get $exit_eip))
     (i32.const 1))
 
   ;; ---- the alpha-blended RGB565 blit fold ($th_ck_blend16_run) ---------
@@ -3678,6 +3968,16 @@
       (then (call $te (i32.const 129) (i32.or (i32.shl (local.get $alu_op) (i32.const 8))
               (i32.or (i32.shl (local.get $reg) (i32.const 4)) (global.get $mr_base))))
             (call $te_raw (global.get $mr_disp)) (return)))
+    (if (i32.and
+          (global.get $alu8_sib_enabled)
+          (i32.and
+            (i32.eqz (global.get $code16))
+            (i32.eqz (call $mr_absolute))))
+      (then
+        (call $te (i32.const 465) (i32.or (i32.shl (local.get $alu_op) (i32.const 4)) (local.get $reg)))
+        (call $te_raw (call $sib_info_word))
+        (call $te_raw (global.get $mr_disp))
+        (return)))
     (local.set $a (call $emit_sib_or_abs))
     (call $te (i32.const 49) (i32.or (i32.shl (local.get $alu_op) (i32.const 4)) (local.get $reg)))
     (call $te_raw (local.get $a)))
@@ -4369,6 +4669,10 @@
               (local.set $done (i32.const 1))
               (br $decode)))
           (if (call $try_emit_pcx_run (local.get $start_eip))
+            (then
+              (local.set $done (i32.const 1))
+              (br $decode)))
+          (if (call $try_emit_implode_cmp_run (local.get $start_eip))
             (then
               (local.set $done (i32.const 1))
               (br $decode)))))
