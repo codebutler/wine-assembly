@@ -61,8 +61,13 @@ const MAX_BLOCKS = parseInt(flag('max-blocks', '4'), 10);
 const DETAIL = args.includes('--detail');
 const JSON_OUT = args.includes('--json');
 const SKELETONS = parseInt(flag('skeletons', '0'), 10);
+// Keep cycles that fail the load/store/advance heuristic, classified and
+// tagged `memory:false`, rather than declining them. See the call site.
+const KEEP_NOMEMORY = args.includes('--keep-nomemory');
 
-if (!files.length) {
+// Importers (tools/loop-class-share.js) get scanFile without the CLI running:
+// a require() with no PE arguments must not print usage and exit the caller.
+if (!files.length && require.main === module) {
   console.error('usage: find-diamonds.js <pe> [<pe>...] [--max-span=N] '
     + '[--max-blocks=N] [--detail] [--skeletons=N] [--json]');
   process.exit(2);
@@ -225,7 +230,14 @@ function scanFile(file) {
         declines.push({ headVa: be.headVa, tailVa: be.tailVa, why: r.reject });
         continue;
       }
-      if (!r.memory) {
+      // The memory heuristic (a load, a store and a pointer advance) keeps the
+      // STATIC census from counting pure control-flow cycles as blit
+      // candidates. It is the wrong filter for the runtime join, which asks
+      // whether a hot loop is structurally SELF or not -- there, a cycle
+      // dropped here lands in one giant `nomemory` bucket that hides the
+      // answer (79% of Caesar III's block entries, measured). --keep-nomemory
+      // keeps the structural class and tags it instead.
+      if (!r.memory && !KEEP_NOMEMORY) {
         rejects.nomemory = (rejects.nomemory || 0) + 1;
         declines.push({ headVa: be.headVa, tailVa: be.tailVa, why: 'nomemory' });
         continue;
@@ -257,9 +269,11 @@ function scanFile(file) {
   return { file, counts, rejects, hits, skels, declines };
 }
 
-const results = files.map(scanFile);
+const results = require.main === module ? files.map(scanFile) : [];
 
-if (JSON_OUT) {
+if (require.main !== module) {
+  // imported for scanFile; print nothing
+} else if (JSON_OUT) {
   console.log(JSON.stringify(results.map(r => ({
     file: r.file, error: r.error, counts: r.counts, rejects: r.rejects,
     hits: DETAIL ? r.hits : undefined,

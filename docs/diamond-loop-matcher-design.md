@@ -232,3 +232,65 @@ And the standing caution still applies to the CRT skeleton itself — 378 binari
 is static reach, exactly the number that made H455/SimGolf look worth building
 before it moved the frame rate not at all. It earns a multi-window hot census,
 not an implementation.
+
+## The runtime join, 2026-09-19 — `tools/loop-class-share.js`
+
+The hot census above is per-*region*. `tools/loop-class-share.js` answers the
+sharper question directly: take a handler-hist window (`test/run.js
+--hist-json=F`), put every hot block inside the loop cycle that contains it, and
+report the share of **block entries** by class.
+
+Two measured apps, opposite answers:
+
+| app / window | SELFEXIT + DIAMOND | `none` (not a loop) | `declined:call` |
+|---|---|---|---|
+| Caesar III, batches 300-500 | ~59% | 4.2% | 1.1% |
+| Caesar III, batches 500-700 | ~88% | 10.8% | 0.4% |
+| Diablo, batches 600-800 | **0.06%** | 57.0% | 27.7% |
+
+So this is not a property of the emulator, it is a property of the app, and it
+swings by three orders of magnitude between two apps in the corpus. Caesar's own
+two windows disagree on which loops (SELFEXIT 28.0% → 0.9%), which is the
+H455/SimGolf spread warning firing again on a different measurement.
+
+**One concrete candidate did come out of it.** Caesar III `exe+0x49e9ca`, 27.96%
+of block entries in the 300-500 window, and the only hot SELFEXIT that also
+passes the blit heuristic (a load, a store and a pointer advance):
+
+```asm
+0049e9ca  mov eax,[ebp-0x4]     ; i
+0049e9cd  add eax,1
+0049e9d0  mov [ebp-0x4],eax
+0049e9d3  mov ecx,[ebp-0x4]
+0049e9d6  cmp ecx,[ebp+0x10]    ; i < n ?
+0049e9d9  jge short 0x49e9ed    ; <- the exit that splits the block
+0049e9db  mov edx,[ebp+0xc]     ; dst
+0049e9de  add edx,[ebp-0x4]
+0049e9e1  mov eax,[ebp+0x8]     ; src
+0049e9e4  add eax,[ebp-0x4]
+0049e9e7  mov cl,[eax]
+0049e9e9  mov [edx],cl
+0049e9eb  jmp short 0x49e9ca
+```
+
+An unoptimized indexed byte `memcpy` with its induction variable spilled to the
+stack frame. The body is already inside `COPY_RUN`'s vocabulary — **what blocks
+the fold is the precondition, not the body**. That is the single strongest
+argument for SELFEXIT support: it makes an existing fold reach code it already
+knows how to lower.
+
+Caveat kept in front: 27.96% is one window (Caesar's load phase), and it is
+absent from the next window's top loops. Before any WAT change this needs the
+multi-window treatment `tools/hot-loop-census.js` exists to give.
+
+### Two measurement bugs fixed while getting this number
+
+Both produced confident, wrong-looking-right output, so they are worth naming:
+
+1. **The blit heuristic swallowed the structural answer.** find-diamonds
+   declines a cycle without a load+store+advance, which is right for a static
+   blit census and wrong here — it put 79% of Caesar's block entries into one
+   `nomemory` bucket. `--keep-nomemory` keeps the class and tags it `~`.
+2. **`process.argv` appends after the `require`.** find-diamonds reads its
+   limits at require time, so the flags this tool appends never reached it and
+   the scan silently ran with defaults. The require is lazy now.
