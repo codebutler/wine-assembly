@@ -5,9 +5,9 @@
 // the board.
 
 const fs = require('fs');
+const { diffPng, readPng } = require('../tools/png-diff');
 const path = require('path');
 const { execSync } = require('child_process');
-const { PNG } = require('pngjs');
 
 const ROOT = path.join(__dirname, '..');
 const RUN  = path.join(__dirname, 'run.js');
@@ -51,21 +51,9 @@ try {
 
 function imageDiff(aPath, bPath) {
   if (!fs.existsSync(aPath) || !fs.existsSync(bPath)) return 0;
-  const a = PNG.sync.read(fs.readFileSync(aPath));
-  const b = PNG.sync.read(fs.readFileSync(bPath));
-  const w = Math.min(a.width, b.width);
-  const h = Math.min(a.height, b.height);
-  let diff = 0;
-  for (let y = 40; y < Math.min(h, 220); y++) {
-    for (let x = 0; x < w; x++) {
-      const i = (y * a.width + x) * 4;
-      const j = (y * b.width + x) * 4;
-      if (a.data[i] !== b.data[j] ||
-          a.data[i + 1] !== b.data[j + 1] ||
-          a.data[i + 2] !== b.data[j + 2]) diff++;
-    }
-  }
-  return diff;
+  const a = readPng(aPath);
+  return diffPng(a, bPath, { includeAlpha: false, sizePolicy: 'overlap',
+    region: { x: 0, y: 40, w: a.width, h: 180 } }).changed;
 }
 
 const diff = imageDiff(beforePng, afterPng);

@@ -26,6 +26,9 @@
 // maxDelta always reports the worst individual channel, for either metric.
 // totalDelta sums absolute differences of all included channels in the region,
 // including differences below tolerance; it measures error magnitude, not pixels.
+// `sizePolicy: 'overlap'` opts into comparing only shared image coordinates.
+// The default 'strict' returns early on different dimensions. In overlap mode
+// sizeMismatch still reports the mismatch; width/height and output use image A.
 
 const fs = require('fs');
 const { PNG } = require('pngjs');
@@ -40,9 +43,12 @@ function diffPng(fileA, fileB, options) {
   const channelCount = options.includeAlpha === false ? 3 : 4;
   const metric = options.metric === undefined ? 'max' : options.metric;
   if (metric !== 'max' && metric !== 'sum') throw new Error(`unknown PNG difference metric: ${metric}`);
+  const sizePolicy = options.sizePolicy === undefined ? 'strict' : options.sizePolicy;
+  if (sizePolicy !== 'strict' && sizePolicy !== 'overlap') throw new Error(`unknown PNG size policy: ${sizePolicy}`);
   const a = typeof fileA === 'string' ? readPng(fileA) : fileA;
   const b = typeof fileB === 'string' ? readPng(fileB) : fileB;
-  if (a.width !== b.width || a.height !== b.height) {
+  const sizeMismatch = a.width !== b.width || a.height !== b.height;
+  if (sizeMismatch && sizePolicy === 'strict') {
     return {
       sizeMismatch: true,
       a: { width: a.width, height: a.height },
@@ -52,8 +58,8 @@ function diffPng(fileA, fileB, options) {
   const region = options.region || { x: 0, y: 0, w: a.width, h: a.height };
   const x0 = Math.max(0, region.x | 0);
   const y0 = Math.max(0, region.y | 0);
-  const x1 = Math.min(a.width, x0 + (region.w | 0));
-  const y1 = Math.min(a.height, y0 + (region.h | 0));
+  const x1 = Math.min(a.width, b.width, x0 + (region.w | 0));
+  const y1 = Math.min(a.height, b.height, y0 + (region.h | 0));
   let changed = 0;
   let maxDelta = 0;
   let totalDelta = 0;
@@ -73,9 +79,10 @@ function diffPng(fileA, fileB, options) {
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
       const i = (y * a.width + x) * 4;
+      const j = (y * b.width + x) * 4;
       let delta = 0;
       for (let c = 0; c < channelCount; c++) {
-        const d = Math.abs(a.data[i + c] - b.data[i + c]);
+        const d = Math.abs(a.data[i + c] - b.data[j + c]);
         totalDelta += d;
         if (metric === 'sum') delta += d;
         else if (d > delta) delta = d;
@@ -96,14 +103,14 @@ function diffPng(fileA, fileB, options) {
     }
   }
   if (out) fs.writeFileSync(options.out, PNG.sync.write(out));
-  const area = Math.max(1, (x1 - x0) * (y1 - y0));
+  const area = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
   return {
-    sizeMismatch: false,
+    sizeMismatch,
     width: a.width,
     height: a.height,
     compared: area,
     changed,
-    share: changed / area,
+    share: area ? changed / area : 0,
     maxDelta,
     totalDelta,
     box: changed

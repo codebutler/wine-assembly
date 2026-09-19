@@ -67,4 +67,23 @@ result = diffPng(black, candidateChanges, { metric: 'sum', includeAlpha: false, 
 assert.strictEqual(result.changed, 1, 'candidate threshold is strictly greater than 40');
 assert.deepStrictEqual(result.box, { x: 1, y: 0, w: 1, h: 1 });
 
+const wide = image(3, 2, [1,2,3,255, 4,5,6,255, 99,99,99,255,
+  7,8,9,255, 10,11,12,255, 99,99,99,255]);
+const narrow = image(2, 3, [1,2,3,255, 4,5,6,255,
+  7,8,9,255, 10,11,13,255, 99,99,99,255, 99,99,99,255]);
+assert.strictEqual(diffPng(wide, narrow).changed, undefined, 'strict still rejects mismatch');
+result = diffPng(wide, narrow, { sizePolicy: 'overlap' });
+assert.strictEqual(result.sizeMismatch, true, 'overlap does not conceal mismatched dimensions');
+assert.strictEqual(result.compared, 4);
+assert.strictEqual(result.changed, 1, 'each image must use its own row stride');
+assert.strictEqual(result.totalDelta, 1);
+assert.strictEqual(result.share, 0.25);
+assert.deepStrictEqual(result.box, { x: 1, y: 1, w: 1, h: 1 });
+assert.strictEqual(diffPng(narrow, wide, { sizePolicy: 'overlap' }).changed, 1);
+result = diffPng(wide, narrow, { sizePolicy: 'overlap', region: { x: 2, y: 2, w: 1, h: 1 } });
+assert.strictEqual(result.changed, 0);
+assert.strictEqual(result.compared, 0, 'empty overlap must not report a fabricated pixel');
+assert.strictEqual(result.share, 0);
+assert.throws(() => diffPng(wide, narrow, { sizePolicy: 'typo' }), /unknown PNG size policy/);
+
 console.log('png-diff helper: PASS');

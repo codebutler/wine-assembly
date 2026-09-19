@@ -10,6 +10,10 @@ Follow-up to the Pass-5 addendum in `fable-review.md`: tests should reuse
 - `maxDelta` remains the largest individual channel difference in either mode.
 - `totalDelta` sums absolute error across all included channels/pixels in the
   region, independently of tolerance. It is not a count of changed pixels.
+- `sizePolicy: 'overlap'` explicitly compares shared coordinates using each
+  image's own row stride. Strict mismatch rejection remains the default.
+  Overlap results still expose `sizeMismatch`; output and dimension fields
+  retain image A's dimensions. Empty compared areas report 0 pixels/share.
 
 The sum metric is necessary: RGB differences of 10, 10, 11 exceed the
 installer's threshold of 30 in sum mode, but not in max mode. Unit tests pin
@@ -41,6 +45,7 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | Paint dock-toggle | Exact RGB in status-bar rectangle; mismatched dimensions now rejected | Fails preservation assertion at 1298 pixels; old/new helpers agree on identical saved frames, and original test reproduces the same failure in a fresh run |
 | Pinball playable | Exact RGB in clipped flipper regions; original size-error object retained | 9/9 gameplay checks; left/right signal 904/927 pixels over 0/0 noise. Old/new results agree for flipper, full/clipped and outside-image regions |
 | Pinball combo box | Total RGB error magnitude in each region; absent/mismatched input remains 0 | Unit tests pin channel/alpha/region/tolerance behavior. Nonzero synthetic old/new total is 69; saved workflow frames give identical zero totals. Original and migrated live suites both 12/18, with the same six dropdown/selection failures |
+| Spider Show Available Move | Exact RGB over overlapping image extents, y=40..219; missing files remain 0 | 4/4; Deal changes 40748 pixels. Overlap unit tests cover unequal strides/heights, reversed inputs, empty extent, and strict default |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -93,10 +98,11 @@ Fresh serial verification after those corrections: dirty-document **11/11**,
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
-still finds a comparison loop in the Spider Show Available Move probe.
-Spider intentionally compares the overlapping extents of
-different-sized images, which the current shared helper rejects; preserve
-that policy explicitly if extending the helper.
+The named Node comparator inventory above is migrated, including Spider's
+different-sized-image overlap policy. This is not a proof that every pixel
+loop in the repository is redundant or removed: Icewind Dale combines frame
+differences with app-specific color metrics, and browser-side comparisons
+still need separate consideration.
 Pinball combo-box `rectDiff` now uses `totalDelta`, preserving its **total RGB
 error magnitude** contract rather than substituting changed-pixel count.
 The full-frame/subregion consumers
