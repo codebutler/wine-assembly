@@ -29,6 +29,9 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | Pinball flipper | Exact RGB over whole frame and bottom 30%, original mismatch error | Existing test skips its static early snapshots; old/new helpers both report 0 total and bottom pixels. This is not gameplay validation |
 | Paint drawing / file round-trip | Exact RGB in existing rectangles; mismatched dimensions now throw instead of indexing both images with one stride | Serial runs pass 9/9 and 15/15; drawing 93 pixels, file workflow 31 cleared / 0 restored difference / 21 added pixels |
 | Paint dirty-document / 16-tool workflow | Same RGB regions and thresholds; mismatched dimensions rejected | Serial runs 10/11 and 20/21. Every pixel assertion passes; modal-command and File-menu-count assertions fail |
+| Find mouse-click | Summed RGB > 20 in the same button rectangle; mismatched dimensions rejected | 7/7; old/new helper agreement at 470 pixels |
+| Bricks drag/sound | Exact RGB in board/icon regions; mismatched dimensions rejected | 21/21; horizontal and vertical drag 1838 pixels each, sound icon 107 and board 0; old/new horizontal count agrees |
+| Win16 Minesweeper smiley | Exact RGB in the same grid rectangle; mismatched dimensions rejected | 3/3; play changes 194 pixels, reset differs from fresh by 0 |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -81,8 +84,8 @@ Fresh serial verification after those corrections: dirty-document **11/11**,
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
-still finds comparison loops in Find mouse-click, Win16 Minesweeper,
-Bricks, and other specialized probes. The five full-frame/subregion consumers
+still finds comparison loops in specialized probes such as the Pinball combo
+box, AoE menu, and WordPad print preview. The full-frame/subregion consumers
 listed above now use the shared comparator; their small local wrappers only
 adapt result shapes or combine named regions.
 Some compare masked regions or return different statistics; inspect each

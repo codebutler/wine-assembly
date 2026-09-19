@@ -15,6 +15,7 @@
 // third scenario below pins that, the byte, and the icon's own repaint.
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadImage, createCanvas } = require('../lib/canvas-compat');
@@ -118,14 +119,11 @@ async function readPixels(file) {
 }
 
 function countDiff(a, b, rect) {
-  let diff = 0;
-  for (let y = rect.y0; y < rect.y1; y++) {
-    for (let x = rect.x0; x < rect.x1; x++) {
-      const i = (y * a.w + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] || a.data[i + 2] !== b.data[i + 2]) diff++;
-    }
-  }
-  return diff;
+  const result = diffPng({ width: a.w, height: a.h, data: a.data },
+    { width: b.w, height: b.h, data: b.data }, { includeAlpha: false,
+      region: { x: rect.x0, y: rect.y0, w: rect.x1 - rect.x0, h: rect.y1 - rect.y0 } });
+  if (result.sizeMismatch) throw new Error('Bricks snapshot dimensions differ');
+  return result.changed;
 }
 
 // Shift+S sound toggle. Reuses the same boot click, then presses the

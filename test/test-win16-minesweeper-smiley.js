@@ -23,9 +23,9 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { PNG } = require('pngjs');
 
 const ROOT = path.join(__dirname, '..');
 const OUT = path.join(ROOT, 'test', 'output', 'win16-minesweeper');
@@ -56,17 +56,10 @@ function run(inputs, batches) {
 // board; uncovering a square redraws its border and its digit, which is about a
 // hundred pixels apiece.
 function gridDiff(a, b) {
-  const pa = PNG.sync.read(fs.readFileSync(a));
-  const pb = PNG.sync.read(fs.readFileSync(b));
-  let n = 0;
-  for (let y = GRID.y0; y < GRID.y1; y++) {
-    for (let x = GRID.x0; x < GRID.x1; x++) {
-      const i = (y * pa.width + x) * 4;
-      if (pa.data[i] !== pb.data[i] || pa.data[i + 1] !== pb.data[i + 1] ||
-          pa.data[i + 2] !== pb.data[i + 2]) n++;
-    }
-  }
-  return n;
+  const result = diffPng(a, b, { includeAlpha: false,
+    region: { x: GRID.x0, y: GRID.y0, w: GRID.x1 - GRID.x0, h: GRID.y1 - GRID.y0 } });
+  if (result.sizeMismatch) throw new Error('Minesweeper snapshot dimensions differ');
+  return result.changed;
 }
 
 function main() {

@@ -3,9 +3,9 @@
 // normal canvas mouse input, not just the test-only find-click helper.
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execSync } = require('child_process');
-const { createCanvas, loadImage } = require('../lib/canvas-compat');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -42,24 +42,10 @@ try {
 }
 
 async function diffButtonPixels(aPath, bPath) {
-  const a = await loadImage(aPath);
-  const b = await loadImage(bPath);
-  const w = Math.min(a.width, b.width);
-  const h = Math.min(a.height, b.height);
-  const ca = createCanvas(w, h), cb = createCanvas(w, h);
-  const ax = ca.getContext('2d'), bx = cb.getContext('2d');
-  ax.drawImage(a, 0, 0);
-  bx.drawImage(b, 0, 0);
-  const ad = ax.getImageData(0, 0, w, h).data;
-  const bd = bx.getImageData(0, 0, w, h).data;
-  let diff = 0;
-  for (let y = 88; y < 114; y++) {
-    for (let x = 310; x < 392; x++) {
-      const i = (y * w + x) * 4;
-      if (Math.abs(ad[i] - bd[i]) + Math.abs(ad[i + 1] - bd[i + 1]) + Math.abs(ad[i + 2] - bd[i + 2]) > 20) diff++;
-    }
-  }
-  return diff;
+  const result = diffPng(aPath, bPath, { includeAlpha: false, metric: 'sum', tolerance: 20,
+    region: { x: 310, y: 88, w: 82, h: 26 } });
+  if (result.sizeMismatch) throw new Error('Find snapshot dimensions differ');
+  return result.changed;
 }
 
 for (const l of out.split('\n').filter(l =>
