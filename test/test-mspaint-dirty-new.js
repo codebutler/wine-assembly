@@ -116,7 +116,8 @@ function countNonDesktop(image, box) {
     ['prompt provides Yes, No, and Cancel choices',
       /dlg-dump:first-prompt:[^\n]*id=6[^\n]*text="Yes"[^\n]*id=7[^\n]*text="No"[^\n]*id=2[^\n]*text="Cancel"/.test(output)],
     ['Cancel and No commands reached a modal dialog',
-      /dlg-cmd: cmd=2 hwnd=0x[0-9a-f]+/.test(output) && /dlg-cmd: cmd=7 hwnd=0x[0-9a-f]+/.test(output)],
+      /dlg-cmd: cmd=2 modal hwnd=0x[1-9a-f][0-9a-f]*\b/.test(output) &&
+      /dlg-cmd: cmd=7 modal hwnd=0x[1-9a-f][0-9a-f]*\b/.test(output)],
     [`Cancel preserved the drawing (${dirtyVsCancelled} px changed)`, dirtyVsCancelled <= 5],
     [`No discarded the drawing (${dirtyVsDiscarded} px changed)`, dirtyVsDiscarded >= 30],
     ['Cancel kept the untitled Paint document open',

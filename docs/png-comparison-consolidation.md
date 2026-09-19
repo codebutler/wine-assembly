@@ -58,6 +58,26 @@ for exact agreement on synthetic RGB/alpha changes over full, inset and
 image-edge-clipped rectangles. New dimension-mismatch rejection was checked
 for all four wrappers.
 
+### Paint assertion follow-up
+
+The two remaining Paint assertions were investigated, not simply relaxed:
+
+- `dlg-cmd` routes through the WAT modal dialog first and logs
+  `cmd=N modal hwnd=0x...`; the old assertion required `cmd=N hwnd=0x...`.
+  The corrected assertion explicitly requires the native modal path and a
+  nonzero HWND for both Cancel and No.
+- PE resource RT_MENU 2 contains 17 File entries, including `S&end...`
+  (command 37662) at position 9. Tracing the actual 16-tool workflow records
+  guest `RemoveMenu(0x00010002, 9, 0x400)` (MF_BYPOSITION), returning to
+  `0x011ceeda`, after a GetProfileIntA call. The resulting File menu contains
+  16 entries. The corrected test requires both count 16 and the exact
+  surviving command/separator sequence; it does not accept any arbitrary
+  shortened menu. This is evidence for this guest/configuration, not a claim
+  that every native Paint setup must lack Send.
+
+Fresh serial verification after those corrections: dirty-document **11/11**,
+16-tool workflow **22/22**. Runtime behavior and image thresholds are unchanged.
+
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
