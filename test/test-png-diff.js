@@ -44,4 +44,23 @@ assert.strictEqual(result.sizeMismatch, true);
 assert.deepStrictEqual(result.a, { width: 2, height: 2 });
 assert.deepStrictEqual(result.b, { width: 1, height: 1 });
 
+// Distributed channel changes distinguish summed distance from max-channel
+// distance. Equal-to-threshold changes must still be ignored, and alpha is
+// excluded by the migrated candidate/installer tests.
+const black = image(3, 1, new Array(12).fill(0));
+const distributed = image(3, 1, [10, 10, 10, 255, 10, 10, 11, 0, 0, 0, 0, 255]);
+result = diffPng(black, distributed, { metric: 'sum', includeAlpha: false, tolerance: 30 });
+assert.strictEqual(result.changed, 1);
+assert.strictEqual(result.maxDelta, 11, 'maxDelta remains a per-channel diagnostic');
+assert.deepStrictEqual(result.box, { x: 1, y: 0, w: 1, h: 1 });
+assert.strictEqual(diffPng(black, distributed, { tolerance: 30, includeAlpha: false }).changed, 0);
+assert.strictEqual(diffPng(black, distributed, { metric: 'sum', tolerance: 30 }).changed, 3);
+assert.strictEqual(diffPng(black, distributed, { metric: 'sum', includeAlpha: false,
+  tolerance: 30, region: { x: 0, y: 0, w: 1, h: 1 } }).changed, 0);
+assert.throws(() => diffPng(black, distributed, { metric: 'typo' }), /unknown PNG difference metric/);
+const candidateChanges = image(3, 1, [20, 10, 10, 0, 20, 10, 11, 0, 1, 1, 1, 255]);
+result = diffPng(black, candidateChanges, { metric: 'sum', includeAlpha: false, tolerance: 40 });
+assert.strictEqual(result.changed, 1, 'candidate threshold is strictly greater than 40');
+assert.deepStrictEqual(result.box, { x: 1, y: 0, w: 1, h: 1 });
+
 console.log('png-diff helper: PASS');

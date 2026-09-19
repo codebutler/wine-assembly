@@ -21,6 +21,9 @@
 // the original dimmed where they do not. Importers can pass
 // `includeAlpha: false` when transparency is deliberately outside a test's
 // contract; the command-line comparator checks RGBA by default.
+// Importers can select `metric: 'sum'` to compare the sum of absolute channel
+// differences against tolerance. The default 'max' compares each channel;
+// maxDelta always reports the worst individual channel, for either metric.
 
 const fs = require('fs');
 const { PNG } = require('pngjs');
@@ -33,6 +36,8 @@ function diffPng(fileA, fileB, options) {
   options = options || {};
   const tolerance = options.tolerance | 0;
   const channelCount = options.includeAlpha === false ? 3 : 4;
+  const metric = options.metric === undefined ? 'max' : options.metric;
+  if (metric !== 'max' && metric !== 'sum') throw new Error(`unknown PNG difference metric: ${metric}`);
   const a = typeof fileA === 'string' ? readPng(fileA) : fileA;
   const b = typeof fileB === 'string' ? readPng(fileB) : fileB;
   if (a.width !== b.width || a.height !== b.height) {
@@ -68,9 +73,10 @@ function diffPng(fileA, fileB, options) {
       let delta = 0;
       for (let c = 0; c < channelCount; c++) {
         const d = Math.abs(a.data[i + c] - b.data[i + c]);
-        if (d > delta) delta = d;
+        if (metric === 'sum') delta += d;
+        else if (d > delta) delta = d;
+        if (d > maxDelta) maxDelta = d;
       }
-      if (delta > maxDelta) maxDelta = delta;
       if (delta <= tolerance) continue;
       changed++;
       if (x < bx0) bx0 = x;

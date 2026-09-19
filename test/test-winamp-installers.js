@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { createCanvas, loadImage } = require('../lib/canvas-compat');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -95,25 +96,10 @@ async function countHighlightPixels(pngPath, rect) {
 }
 
 async function diffPixelsInRect(aPath, bPath, rect) {
-  const a = await loadImage(aPath);
-  const b = await loadImage(bPath);
-  const ca = createCanvas(a.width, a.height);
-  const cb = createCanvas(b.width, b.height);
-  const xa = ca.getContext('2d');
-  const xb = cb.getContext('2d');
-  xa.drawImage(a, 0, 0);
-  xb.drawImage(b, 0, 0);
-  const da = xa.getImageData(0, 0, a.width, a.height).data;
-  const db = xb.getImageData(0, 0, b.width, b.height).data;
-  let count = 0;
-  for (let y = rect.y; y < rect.y + rect.h; y++) {
-    for (let x = rect.x; x < rect.x + rect.w; x++) {
-      const i = (y * a.width + x) * 4;
-      const delta = Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]);
-      if (delta > 30) count++;
-    }
-  }
-  return count;
+  const diff = diffPng(aPath, bPath,
+    { region: rect, includeAlpha: false, metric: 'sum', tolerance: 30 });
+  if (diff.sizeMismatch) throw new Error('installer snapshot dimensions differ');
+  return diff.changed;
 }
 
 async function main() {

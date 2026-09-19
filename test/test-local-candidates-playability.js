@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN = path.join(__dirname, 'run.js');
@@ -30,15 +31,9 @@ function readPng(file) {
 }
 
 function diffPixels(a, b) {
-  if (!a || !b || a.width !== b.width || a.height !== b.height) return -1;
-  let diff = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    const delta = Math.abs(a.data[i] - b.data[i]) +
-      Math.abs(a.data[i + 1] - b.data[i + 1]) +
-      Math.abs(a.data[i + 2] - b.data[i + 2]);
-    if (delta > 40) diff++;
-  }
-  return diff;
+  if (!a || !b) return -1;
+  const diff = diffPng(a, b, { includeAlpha: false, metric: 'sum', tolerance: 40 });
+  return diff.sizeMismatch ? -1 : diff.changed;
 }
 
 function stats(png) {
