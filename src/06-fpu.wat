@@ -47,65 +47,58 @@
   ;; (group, reg, rm) and traps via $crash_unimplemented — so we fail loud
   ;; instead of silently no-op'ing unknown encodings.
 
-  ;; --- Tag-word helpers (1 bit per physical register, 1 = valid) ---
+  ;; --- Register file and tag-word helpers ---
+  ;; The physical registers live in this thread's $FPU_FILE slice ($fpu_base):
+  ;; value p at +p*8, exact-integer shadow p at +64+p*8. The tag words are
+  ;; one bit per physical register, 1 = valid. These helpers are the only
+  ;; code that knows the layout, and they are written without nested calls:
+  ;; V8 inlines none of them into $fpu_exec_mem/reg, so every call here used
+  ;; to cost a full call -- `$fpu_tag_phys`, whose whole body is `i & 7`, was
+  ;; 157 ms of self time on the MCM race (box, 2026-09-19) -- and the values
+  ;; were eight globals behind an eight-way branch.
   (func $fpu_tag_phys (param $i i32) (result i32)
     (i32.and (local.get $i) (i32.const 7)))
   (func $fpu_mark_valid (param $i i32)
     (global.set $fpu_tag (i32.or (global.get $fpu_tag)
-      (i32.shl (i32.const 1) (call $fpu_tag_phys
-        (i32.add (global.get $fpu_top) (local.get $i)))))))
+      (i32.shl (i32.const 1)
+        (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7))))))
   (func $fpu_mark_empty (param $i i32)
-    (global.set $fpu_raw_tag (i32.and (global.get $fpu_raw_tag)
-      (i32.xor (i32.const 0xFF)
-        (i32.shl (i32.const 1) (call $fpu_tag_phys
-          (i32.add (global.get $fpu_top) (local.get $i)))))))
-    (global.set $fpu_tag (i32.and (global.get $fpu_tag)
-      (i32.xor (i32.const 0xFF)
-        (i32.shl (i32.const 1) (call $fpu_tag_phys
-          (i32.add (global.get $fpu_top) (local.get $i))))))))
+    (local $m i32)
+    (local.set $m (i32.xor (i32.const 0xFF)
+      (i32.shl (i32.const 1)
+        (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)))))
+    (global.set $fpu_raw_tag (i32.and (global.get $fpu_raw_tag) (local.get $m)))
+    (global.set $fpu_tag (i32.and (global.get $fpu_tag) (local.get $m))))
   (func $fpu_is_valid (param $i i32) (result i32)
     (i32.and (i32.shr_u (global.get $fpu_tag)
-      (call $fpu_tag_phys (i32.add (global.get $fpu_top) (local.get $i))))
+      (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)))
       (i32.const 1)))
 
   (func $fpu_raw_clear (param $i i32)
     (global.set $fpu_raw_tag (i32.and (global.get $fpu_raw_tag)
       (i32.xor (i32.const 0xFF)
-        (i32.shl (i32.const 1) (call $fpu_tag_phys
-          (i32.add (global.get $fpu_top) (local.get $i))))))))
+        (i32.shl (i32.const 1)
+          (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)))))))
 
   (func $fpu_raw_valid (param $i i32) (result i32)
     (i32.and (i32.shr_u (global.get $fpu_raw_tag)
-      (call $fpu_tag_phys (i32.add (global.get $fpu_top) (local.get $i))))
+      (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)))
       (i32.const 1)))
 
   (func $fpu_raw_get_phys (param $p i32) (result i64)
-    (local $v i64)
-    (local.set $v (global.get $fpu_raw7))
-    (if (i32.eq (local.get $p) (i32.const 0)) (then (local.set $v (global.get $fpu_raw0))))
-    (if (i32.eq (local.get $p) (i32.const 1)) (then (local.set $v (global.get $fpu_raw1))))
-    (if (i32.eq (local.get $p) (i32.const 2)) (then (local.set $v (global.get $fpu_raw2))))
-    (if (i32.eq (local.get $p) (i32.const 3)) (then (local.set $v (global.get $fpu_raw3))))
-    (if (i32.eq (local.get $p) (i32.const 4)) (then (local.set $v (global.get $fpu_raw4))))
-    (if (i32.eq (local.get $p) (i32.const 5)) (then (local.set $v (global.get $fpu_raw5))))
-    (if (i32.eq (local.get $p) (i32.const 6)) (then (local.set $v (global.get $fpu_raw6))))
-    (local.get $v))
+    (i64.load offset=64 (i32.add (global.get $fpu_base)
+      (i32.shl (i32.and (local.get $p) (i32.const 7)) (i32.const 3)))))
 
   (func $fpu_raw_get (param $i i32) (result i64)
-    (call $fpu_raw_get_phys
-      (call $fpu_tag_phys (i32.add (global.get $fpu_top) (local.get $i)))))
+    (i64.load offset=64 (i32.add (global.get $fpu_base)
+      (i32.shl (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7))
+               (i32.const 3)))))
 
   (func $fpu_raw_set (param $i i32) (param $v i64)
     (local $p i32)
-    (local.set $p (call $fpu_tag_phys (i32.add (global.get $fpu_top) (local.get $i))))
-    (if (i32.eq (local.get $p) (i32.const 0)) (then (global.set $fpu_raw0 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 1)) (then (global.set $fpu_raw1 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 2)) (then (global.set $fpu_raw2 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 3)) (then (global.set $fpu_raw3 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 4)) (then (global.set $fpu_raw4 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 5)) (then (global.set $fpu_raw5 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 6)) (then (global.set $fpu_raw6 (local.get $v))))
-    (if (i32.eq (local.get $p) (i32.const 7)) (then (global.set $fpu_raw7 (local.get $v))))
+    (local.set $p (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)))
+    (i64.store offset=64 (i32.add (global.get $fpu_base) (i32.shl (local.get $p) (i32.const 3)))
+      (local.get $v))
     (global.set $fpu_raw_tag
       (i32.or (global.get $fpu_raw_tag) (i32.shl (i32.const 1) (local.get $p)))))
 
@@ -131,61 +124,58 @@
 
   ;; Physical access does not change TOP, tags, or the exact integer shadow.
   (func $fpu_get_phys (param $p i32) (result f64)
-    (if (i32.eq (local.get $p) (i32.const 0)) (then (return (global.get $fpu_value0))))
-    (if (i32.eq (local.get $p) (i32.const 1)) (then (return (global.get $fpu_value1))))
-    (if (i32.eq (local.get $p) (i32.const 2)) (then (return (global.get $fpu_value2))))
-    (if (i32.eq (local.get $p) (i32.const 3)) (then (return (global.get $fpu_value3))))
-    (if (i32.eq (local.get $p) (i32.const 4)) (then (return (global.get $fpu_value4))))
-    (if (i32.eq (local.get $p) (i32.const 5)) (then (return (global.get $fpu_value5))))
-    (if (i32.eq (local.get $p) (i32.const 6)) (then (return (global.get $fpu_value6))))
-    (global.get $fpu_value7))
+    (f64.load (i32.add (global.get $fpu_base)
+      (i32.shl (i32.and (local.get $p) (i32.const 7)) (i32.const 3)))))
 
   (func $fpu_set_phys (param $p i32) (param $v f64)
-    (if (i32.eq (local.get $p) (i32.const 0))
-      (then (global.set $fpu_value0 (local.get $v)) (return)))
-    (if (i32.eq (local.get $p) (i32.const 1))
-      (then (global.set $fpu_value1 (local.get $v)) (return)))
-    (if (i32.eq (local.get $p) (i32.const 2))
-      (then (global.set $fpu_value2 (local.get $v)) (return)))
-    (if (i32.eq (local.get $p) (i32.const 3))
-      (then (global.set $fpu_value3 (local.get $v)) (return)))
-    (if (i32.eq (local.get $p) (i32.const 4))
-      (then (global.set $fpu_value4 (local.get $v)) (return)))
-    (if (i32.eq (local.get $p) (i32.const 5))
-      (then (global.set $fpu_value5 (local.get $v)) (return)))
-    (if (i32.eq (local.get $p) (i32.const 6))
-      (then (global.set $fpu_value6 (local.get $v)) (return)))
-    (global.set $fpu_value7 (local.get $v)))
+    (f64.store (i32.add (global.get $fpu_base)
+      (i32.shl (i32.and (local.get $p) (i32.const 7)) (i32.const 3)))
+      (local.get $v)))
 
   (func $fpu_get (param $i i32) (result f64)
-    (call $fpu_get_phys (call $fpu_tag_phys
-      (i32.add (global.get $fpu_top) (local.get $i)))))
+    (f64.load (i32.add (global.get $fpu_base)
+      (i32.shl (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7))
+               (i32.const 3)))))
 
+  ;; Write ST(i): drop its exact-integer shadow and tag it valid.
   (func $fpu_set (param $i i32) (param $v f64)
-    (call $fpu_raw_clear (local.get $i))
-    (call $fpu_set_phys (call $fpu_tag_phys (i32.add (global.get $fpu_top) (local.get $i)))
+    (local $p i32)
+    (local.set $p (i32.and (i32.add (global.get $fpu_top) (local.get $i)) (i32.const 7)))
+    (f64.store (i32.add (global.get $fpu_base) (i32.shl (local.get $p) (i32.const 3)))
       (local.get $v))
-    (call $fpu_mark_valid (local.get $i)))
+    (global.set $fpu_raw_tag (i32.and (global.get $fpu_raw_tag)
+      (i32.xor (i32.const 0xFF) (i32.shl (i32.const 1) (local.get $p)))))
+    (global.set $fpu_tag (i32.or (global.get $fpu_tag)
+      (i32.shl (i32.const 1) (local.get $p)))))
 
   (func $fpu_push (param $v f64)
+    (local $p i32)
     ;; Stack overflow: pushing into a slot that is still tagged valid.
     ;; Real x87 sets IE|SF and (with IE masked) writes the "indefinite" QNaN.
     ;; We set the flag and keep going with the user's value, since we don't
     ;; have an indefinite-NaN bit pattern that round-trips f64.
-    (global.set $fpu_top (i32.and (i32.sub (global.get $fpu_top) (i32.const 1)) (i32.const 7)))
-    (if (call $fpu_is_valid (i32.const 0))
+    (local.set $p (i32.and (i32.sub (global.get $fpu_top) (i32.const 1)) (i32.const 7)))
+    (global.set $fpu_top (local.get $p))
+    (if (i32.and (i32.shr_u (global.get $fpu_tag) (local.get $p)) (i32.const 1))
       (then (call $fpu_set_exc (i32.const 0x41))))   ;; IE | SF
-    (call $fpu_set (i32.const 0) (local.get $v)))
+    (f64.store (i32.add (global.get $fpu_base) (i32.shl (local.get $p) (i32.const 3)))
+      (local.get $v))
+    (global.set $fpu_raw_tag (i32.and (global.get $fpu_raw_tag)
+      (i32.xor (i32.const 0xFF) (i32.shl (i32.const 1) (local.get $p)))))
+    (global.set $fpu_tag (i32.or (global.get $fpu_tag)
+      (i32.shl (i32.const 1) (local.get $p)))))
 
   (func $fpu_pop (result f64)
-    (local $v f64)
+    (local $p i32) (local $m i32)
+    (local.set $p (i32.and (global.get $fpu_top) (i32.const 7)))
     ;; Stack underflow: popping a slot that is already tagged empty.
-    (if (i32.eqz (call $fpu_is_valid (i32.const 0)))
+    (if (i32.eqz (i32.and (i32.shr_u (global.get $fpu_tag) (local.get $p)) (i32.const 1)))
       (then (call $fpu_set_exc (i32.const 0x41))))   ;; IE | SF
-    (local.set $v (call $fpu_get (i32.const 0)))
-    (call $fpu_mark_empty (i32.const 0))
-    (global.set $fpu_top (i32.and (i32.add (global.get $fpu_top) (i32.const 1)) (i32.const 7)))
-    (local.get $v))
+    (local.set $m (i32.xor (i32.const 0xFF) (i32.shl (i32.const 1) (local.get $p))))
+    (global.set $fpu_raw_tag (i32.and (global.get $fpu_raw_tag) (local.get $m)))
+    (global.set $fpu_tag (i32.and (global.get $fpu_tag) (local.get $m)))
+    (global.set $fpu_top (i32.and (i32.add (local.get $p) (i32.const 1)) (i32.const 7)))
+    (f64.load (i32.add (global.get $fpu_base) (i32.shl (local.get $p) (i32.const 3)))))
 
   ;; Crash on an x87 escape we don't implement. The string at 0x2F0 is
   ;; "FPU_UNIMPL\0"; the (group, reg, rm) triple is logged so the next

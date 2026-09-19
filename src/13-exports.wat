@@ -1949,6 +1949,8 @@
     ;; so skipping this would give every worker the main thread's registers.
     (global.set $reg_base (i32.add (global.get $REGFILE)
       (i32.mul (local.get $tid) (global.get $REGFILE_STRIDE))))
+    (global.set $fpu_base (i32.add (global.get $FPU_FILE)
+      (i32.mul (local.get $tid) (global.get $FPU_FILE_STRIDE))))
     ;; Page-compilation state is per-instance for the same reason THREAD_BASE
     ;; is: a worker is a separate instance over the same memory, and chunk
     ;; pointers name that thread's own arena partition.

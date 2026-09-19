@@ -306,6 +306,13 @@
   (region.declare $REGFILE (size 0x00000400) (align 0x00000040)
     (stride 0x40 (count $REGFILE_THREADS))
     (owner "01-header.wat:$REGFILE"))
+  ;; The eight x87 physical registers, per guest thread, for the same reason:
+  ;; +0..+63 the f64 values, +64..+127 the exact-integer i64 shadows (FILD
+  ;; m64 / FISTP m64). Indexed by physical register, so ST(i) is one load at
+  ;; ((top+i)&7)*8 instead of an eight-way branch over globals.
+  (region.declare $FPU_FILE (size 0x00000800) (align 0x00000040)
+    (stride 0x80 (count $REGFILE_THREADS))
+    (owner "01-header.wat:$FPU_FILE"))
   (region.declare-derived $GUEST_STACK (base (g2w 0x07400000)) (size 0x00100000) (align 0x00001000)
     (owner "01-header.wat:$GUEST_STACK"))
   (region.declare-derived $THUNK_BASE (base (g2w 0x07500000)) (size 0x00040000) (align 0x00001000)

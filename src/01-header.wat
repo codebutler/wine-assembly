@@ -2783,6 +2783,12 @@
   (global $REGFILE_THREADS i32 (i32.const 16))
   (global $REGFILE_STRIDE i32 (i32.const 64))
   (global $reg_base (mut i32) (region.addr $REGFILE 0))
+  ;; This thread's x87 register file (see $FPU_FILE in 00-regions.wat):
+  ;; f64 value of physical register p at +p*8, its i64 shadow at +64+p*8.
+  (global $FPU_FILE i32 (region.addr $FPU_FILE 0))
+  (global $FPU_FILE_SIZE i32 (region.size $FPU_FILE))
+  (global $FPU_FILE_STRIDE i32 (i32.const 128))
+  (global $fpu_base (mut i32) (region.addr $FPU_FILE 0))
   (global $eip (mut i32) (i32.const 0))
   (global $dbg_prev_eip (mut i32) (i32.const 0))
   ;; The block before that one — see the run loop in 13-exports.wat. A decoder
@@ -4154,16 +4160,9 @@
   (global $console_cp (mut i32) (i32.const 437))  ;; input code page
   (global $console_output_cp (mut i32) (i32.const 437))  ;; output code page
 
-  ;; x87 physical values belong to the instance, like TOP/tags and MMX below.
-  ;; A shared linear-memory bank lets sibling guest threads corrupt each other.
-  (global $fpu_value0 (mut f64) (f64.const 0))
-  (global $fpu_value1 (mut f64) (f64.const 0))
-  (global $fpu_value2 (mut f64) (f64.const 0))
-  (global $fpu_value3 (mut f64) (f64.const 0))
-  (global $fpu_value4 (mut f64) (f64.const 0))
-  (global $fpu_value5 (mut f64) (f64.const 0))
-  (global $fpu_value6 (mut f64) (f64.const 0))
-  (global $fpu_value7 (mut f64) (f64.const 0))
+  ;; x87 physical values belong to the thread, like TOP/tags and MMX below: they
+  ;; live in this thread's $FPU_FILE slice at $fpu_base, never in one shared
+  ;; bank (sibling guest threads would corrupt each other's stacks).
   (global $fpu_top (mut i32) (i32.const 0))   ;; TOP of FPU stack (0-7)
   (global $fpu_cw  (mut i32) (i32.const 0x037F)) ;; Control word (default: all exceptions masked)
   (global $fpu_sw  (mut i32) (i32.const 0))   ;; Status word
@@ -4175,15 +4174,8 @@
   ;; Exact raw payload shadow for FILD m64 values. Delphi/VCL uses
   ;; FILD/FISTP qword pairs as a memcpy fast path; f64 cannot preserve all
   ;; 64 integer bits, so unchanged FILD m64 entries keep their original bytes.
+  ;; The payloads are in $FPU_FILE at $fpu_base+64.
   (global $fpu_raw_tag (mut i32) (i32.const 0)) ;; bit i = physical ST(i) has raw_i64
-  (global $fpu_raw0 (mut i64) (i64.const 0))
-  (global $fpu_raw1 (mut i64) (i64.const 0))
-  (global $fpu_raw2 (mut i64) (i64.const 0))
-  (global $fpu_raw3 (mut i64) (i64.const 0))
-  (global $fpu_raw4 (mut i64) (i64.const 0))
-  (global $fpu_raw5 (mut i64) (i64.const 0))
-  (global $fpu_raw6 (mut i64) (i64.const 0))
-  (global $fpu_raw7 (mut i64) (i64.const 0))
 
   ;; MMX registers. On real hardware these alias the x87 mantissas; we keep them
   ;; separate because no guest reads one through the other without an EMMS in
