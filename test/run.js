@@ -4567,6 +4567,22 @@ async function main() {
           `tracks=${result.firstTrack}-${result.lastTrack} (${result.audioTracks.length} audio, lazy)`);
         drive = String.fromCharCode(drive.charCodeAt(0) + 1);
       }
+    } else if (ASSET_ENTRY && ASSET_ENTRY.cdAudio) {
+      // A registered app's CD is mounted by the page (lib/browser-shell.js)
+      // at its own letter and label; do the same so --app sees the same drive.
+      const { mountCue } = require('../lib/cdrom');
+      const config = ASSET_ENTRY.cdAudio;
+      const absoluteCue = appAsset(config.cue);
+      const directory = path.dirname(absoluteCue);
+      const resolveTrack = name => path.resolve(directory, ...String(name).split('/'));
+      const result = mountCue(ctx.vfs, fs.readFileSync(absoluteCue, 'utf8'), {
+        drive: config.drive || 'D',
+        volumeLabel: config.volumeLabel,
+        trackSize: name => fs.statSync(resolveTrack(name)).size,
+        loadTrack: name => fs.promises.readFile(resolveTrack(name)),
+      });
+      console.log(`[cue] mounted ${config.cue} -> ${result.root} ` +
+        `tracks=${result.firstTrack}-${result.lastTrack} (${result.audioTracks.length} audio, lazy)`);
     }
 
     if (MEDIA_MOUNTS.length) {
@@ -9429,6 +9445,36 @@ if (VERBOSE) {
       console.log('gdi: dib arena pages used', st(0), 'free', st(1),
         'largest free run', st(2), 'of', st(3));
     }
+  }
+  // --win16-arena: how the Win16 selector arena is spent. Every global block
+  // costs at least one 64KB slot, so "GlobalAlloc returned 0" is a question of
+  // how many blocks are live and how big, which only the segment table knows.
+  if (hasFlag('win16-arena') && instance.exports.win16_seg_count) {
+    const dv = new DataView(memory.buffer);
+    const table = RegionMap.BASE.WIN16_SEG_TABLE;
+    const entries = RegionMap.SIZE ? RegionMap.SIZE.WIN16_SEG_TABLE / 16 : 1024;
+    let used = 0, live = 0, freed = 0, liveSlots = 0, freedSlots = 0, other = 0;
+    let pooled = 0, pooledFree = 0;
+    const sizes = new Map();
+    for (let i = 1; i < entries; i++) {
+      const e = table + i * 16;
+      const base = dv.getUint32(e, true), flags = dv.getUint32(e + 8, true);
+      const bytes = dv.getUint32(e + 12, true);
+      if (!base && !flags) continue;
+      // Flag 0x40000: a pooled block, sharing one 64KB slot with others.
+      if (flags & 0x40000) { if (flags & 0x20000) pooledFree++; else { pooled++; live++; } continue; }
+      used++;
+      const slots = Math.max(1, Math.ceil(bytes / 0x10000));
+      if ((flags & 0x30000) === 0x30000) { freed++; freedSlots += slots; }
+      else if (flags & 0x10000) {
+        live++; liveSlots += slots;
+        const bucket = bytes < 256 ? '<256' : bytes < 4096 ? '<4K' : bytes < 0x10000 ? '<64K' : '>=64K';
+        sizes.set(bucket, (sizes.get(bucket) || 0) + 1);
+      } else other++;
+    }
+    console.log(`win16 arena: ${used} slots touched; pooled blocks ${pooled} live, ${pooledFree} free; ` +
+      `live global blocks ${live} (${liveSlots} slots), freed ${freed} (${freedSlots} slots), ` +
+      `other (NE/system) ${other}; live sizes ${[...sizes].map(([k, v]) => `${k}:${v}`).join(' ')}`);
   }
   // Critical-section contention, printed only when there was some. A steal means
   // a section was taken from a holder that never released it — a real bug that

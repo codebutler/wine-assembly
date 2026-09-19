@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const { spawnSync } = require('child_process');
+const { expandSzddFile } = require('./szdd');
 
 const ROOT = path.join(__dirname, '..');
 const MANIFEST_PATH = path.join(ROOT, 'test', 'candidate-corpus', 'manifest.json');
@@ -173,50 +174,10 @@ function extractRawMode1Cd(image, destination) {
   }
 }
 
-// Microsoft Compress's SZDD form is the format used by Win3.x setup media for
-// files named *.DL_, *.EX_, and similar. It is a 4 KiB LZSS window with flag
-// bits consumed least-significant first. Keeping the tiny decoder here makes
-// pinned retail recipes reproducible without requiring a host msexpand build.
+// SZDD (*.DL_, *.EX_) expansion lives in tools/szdd.js so it can also be run
+// by hand; pinned retail recipes still need no host msexpand build.
 function expandSzdd(source, destination) {
-  const input = fs.readFileSync(source);
-  const magic = Buffer.from([0x53, 0x5A, 0x44, 0x44, 0x88, 0xF0, 0x27, 0x33]);
-  if (input.length < 14 || !input.subarray(0, 8).equals(magic) || input[8] !== 0x41) {
-    throw new Error(`${source} is not an SZDD mode-A stream`);
-  }
-  const expected = input.readUInt32LE(10);
-  if (!expected || expected > 0x7FFFFFFF) throw new Error(`${source} has an invalid SZDD size`);
-  const output = Buffer.allocUnsafe(expected);
-  const window = Buffer.alloc(4096, 0x20);
-  let windowPos = 0xFF0;
-  let inPos = 14;
-  let outPos = 0;
-  while (outPos < expected) {
-    if (inPos >= input.length) throw new Error(`${source} has a truncated SZDD flag byte`);
-    const flags = input[inPos++];
-    for (let bit = 0; bit < 8 && outPos < expected; bit++) {
-      if (flags & (1 << bit)) {
-        if (inPos >= input.length) throw new Error(`${source} has a truncated SZDD literal`);
-        const value = input[inPos++];
-        output[outPos++] = value;
-        window[windowPos] = value;
-        windowPos = (windowPos + 1) & 0xFFF;
-      } else {
-        if (inPos + 1 >= input.length) throw new Error(`${source} has a truncated SZDD match`);
-        const low = input[inPos++];
-        const packed = input[inPos++];
-        const match = low | ((packed & 0xF0) << 4);
-        const length = (packed & 0x0F) + 3;
-        for (let i = 0; i < length && outPos < expected; i++) {
-          const value = window[(match + i) & 0xFFF];
-          output[outPos++] = value;
-          window[windowPos] = value;
-          windowPos = (windowPos + 1) & 0xFFF;
-        }
-      }
-    }
-  }
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.writeFileSync(destination, output);
+  expandSzddFile(source, destination);
 }
 
 function runPostExtract(candidate, destination) {
@@ -458,14 +419,25 @@ function writeBrowserManifest(candidate, destination) {
   if (!fs.statSync(path.join(destination, executable)).isFile()) {
     throw new Error(`${candidate.id}.browser.exe is not a file`);
   }
+  // `vfsPaths` places a file somewhere other than beside the exe, for a file
+  // the retail installer puts elsewhere: WinG's LibMain refuses to run from
+  // anywhere but the system directory.
+  const vfsPaths = browser.vfsPaths || {};
+  // `cdMirror` (e.g. "d:\\civ2") also places every file where it sits on the
+  // disc, for a game that proves its CD is present by opening a file there.
+  // Aliases of one URL share a single fetch, so the mirror costs no bytes.
+  const cdMirror = browser.cdMirror || null;
   const files = walkBrowserFiles(fileRoot).sort((a, b) => a.localeCompare(b))
     .map(relative => {
       const fixtureRelative = path.join(browser.fileRoot, relative);
-      if (path.normalize(fixtureRelative) === executable) return null;
-      return {
-        url: fixtureRelative.split(path.sep).join('/'),
-        vfsPath: 'c:\\' + relative.split(path.sep).join('\\'),
-      };
+      const url = fixtureRelative.split(path.sep).join('/');
+      const onDisc = cdMirror && `${cdMirror}\\${relative.split(path.sep).join('\\')}`;
+      if (path.normalize(fixtureRelative) === executable) {
+        return onDisc ? { url, vfsPath: onDisc } : null;
+      }
+      const key = relative.split(path.sep).join('/');
+      const vfsPath = vfsPaths[key] || 'c:\\' + relative.split(path.sep).join('\\');
+      return onDisc ? { url, vfsPaths: [vfsPath, onDisc] } : { url, vfsPath };
     }).filter(Boolean);
 
   const trackSizes = {};

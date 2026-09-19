@@ -1193,6 +1193,9 @@
     "\07POLYGON\24\30"
     "\0eTRACKPOPUPMENU\a0\21"
     "\07WINHELP\ab\20"
+    "\10CREATEDIBSECTION\e9\31"
+    "\10GETDIBCOLORTABLE\5b\32"
+    "\10SETDIBCOLORTABLE\5a\32"
     "\0fGETMODULEHANDLE\2f\10"
     "\11GETMODULEFILENAME\31\10"
     "\14GETPRIVATEPROFILEINT\7f\10\19WRITEPRIVATEPROFILESTRING\81\10\10LOADLIBRARYEX32W\01\12\0eFREELIBRARY32W\02\12\11GETPROCADDRESS32W\03\12\10GETVDMPOINTER32W\04\12\0bCALLPROC32W\05\12"
@@ -3811,6 +3814,15 @@
   (global $WIN16_SEG_TABLE i32 (region.addr $WIN16_SEG_TABLE 0))
   (global $WIN16_SEG_TABLE_SIZE i32 (region.size $WIN16_SEG_TABLE))
   (global $WIN16_SEG_MAX   i32 (i32.const 959))
+  ;; Selector indices at and above WIN16_SUB_FIRST own no arena slot of their
+  ;; own: they name small global blocks packed into shared pool slots (see
+  ;; $win16_global_alloc). The table holds 8192 entries — every index a 16-bit
+  ;; selector can carry — and the last is left alone so no handle is 0xFFFF.
+  (global $WIN16_SUB_FIRST i32 (i32.const 1024))
+  (global $WIN16_SEL_MAX   i32 (i32.const 8191))
+  (global $win16_sub_next  (mut i32) (i32.const 1024))
+  (global $win16_pool_base (mut i32) (i32.const 0))
+  (global $win16_pool_used (mut i32) (i32.const 0))
   ;; One entry per distinct (module, ordinal) the task and its DLLs import.
   ;; 256 was not enough once a DLL as large as VBRUN100 was in the picture, and
   ;; the table has room for 2048 — still only 8KB of thunk segment used out of

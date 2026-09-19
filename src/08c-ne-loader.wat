@@ -30,15 +30,19 @@
 
   ;; Guest base address of a selector index, from the table so a future
   ;; loader can place a segment somewhere other than its arena slot.
+  ;; Index WIN16_SEG_MAX is loader scratch, not a selector; indices past it and
+  ;; below WIN16_SEL_MAX are either unused (zero base) or pooled blocks.
   (func $win16_seg_base (export "win16_seg_base") (param $index i32) (result i32)
-    (if (i32.or (i32.eqz (local.get $index))
-                (i32.ge_u (local.get $index) (global.get $WIN16_SEG_MAX)))
+    (if (i32.or (i32.or (i32.eqz (local.get $index))
+                        (i32.eq (local.get $index) (global.get $WIN16_SEG_MAX)))
+                (i32.ge_u (local.get $index) (global.get $WIN16_SEL_MAX)))
       (then (return (i32.const 0))))
     (i32.load (i32.add (global.get $WIN16_SEG_TABLE)
                        (i32.mul (local.get $index) (i32.const 16)))))
 
   (func $win16_seg_limit (export "win16_seg_limit") (param $index i32) (result i32)
-    (if (i32.ge_u (local.get $index) (global.get $WIN16_SEG_MAX))
+    (if (i32.or (i32.eq (local.get $index) (global.get $WIN16_SEG_MAX))
+                (i32.ge_u (local.get $index) (global.get $WIN16_SEL_MAX)))
       (then (return (i32.const 0))))
     (i32.load offset=4 (i32.add (global.get $WIN16_SEG_TABLE)
                                 (i32.mul (local.get $index) (i32.const 16)))))
@@ -514,8 +518,10 @@
     ;; start at zero and every segment lives in its own 64KB arena slot.
     (global.set $image_base (i32.const 0))
     (global.set $win16_thunk_count (i32.const 0))
-    (call $zero_memory (global.get $WIN16_SEG_TABLE)
-      (i32.mul (i32.add (global.get $WIN16_SEG_MAX) (i32.const 1)) (i32.const 16)))
+    (call $zero_memory (global.get $WIN16_SEG_TABLE) (global.get $WIN16_SEG_TABLE_SIZE))
+    (global.set $win16_sub_next (global.get $WIN16_SUB_FIRST))
+    (global.set $win16_pool_base (i32.const 0))
+    (global.set $win16_pool_used (i32.const 0))
     (call $zero_memory (global.get $WIN16_THUNK_TABLE)
       (i32.mul (global.get $WIN16_THUNK_MAX) (i32.const 4)))
 

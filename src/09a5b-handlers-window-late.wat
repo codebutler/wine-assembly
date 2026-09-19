@@ -175,6 +175,51 @@
       (local.get $name_ptr))
   )
 
+  ;; Is ADDR one of the wndproc markers GetWindowLong/GetClassLong/GetClassInfo
+  ;; hand out in place of a USER32 code address?
+  (func $is_wndproc_marker (param $addr i32) (result i32)
+    (i32.or
+      (i32.ge_u (local.get $addr) (i32.const 0xFFFF0000))
+      (i32.or
+        (i32.eq (local.get $addr) (global.get $WNDPROC_BUILTIN))
+        (i32.eq (i32.and (local.get $addr) (i32.const 0xFFFFFF00))
+                (global.get $WNDPROC_SYSCLASS)))))
+
+  ;; EIP landed on a wndproc marker: the guest `call`ed a saved "previous
+  ;; wndproc" directly instead of going through CallWindowProc. On Windows that
+  ;; value is a real USER32 entry point, so this is legal. Civilization II MGE
+  ;; stores the stock control proc in its window extra bytes and does
+  ;; `call [ebp-8]` with it on every message it does not handle itself.
+  ;;
+  ;; Stack on entry: [ret][hWnd][Msg][wParam][lParam]. Rewrite it into the
+  ;; CallWindowProcA frame [ret][proc][hWnd][Msg][wParam][lParam] and run that
+  ;; handler, whose marker paths return in EAX and pop all 24 bytes. Returns 1
+  ;; when handled.
+  (func $wndproc_marker_direct_call (result i32)
+    (local $marker i32) (local $ret i32)
+    (local.set $marker (global.get $eip))
+    (if (i32.or (global.get $code16)
+                (i32.eqz (call $is_wndproc_marker (local.get $marker))))
+      (then (return (i32.const 0))))
+    (local.set $ret (call $gl32 (global.get $esp)))
+    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
+    (call $gs32 (global.get $esp) (local.get $ret))
+    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $marker))
+    (global.set $handler_set_eip (i32.const 0))
+    (call $handle_CallWindowProcA
+      (local.get $marker)
+      (call $gl32 (i32.add (global.get $esp) (i32.const 8)))
+      (call $gl32 (i32.add (global.get $esp) (i32.const 12)))
+      (call $gl32 (i32.add (global.get $esp) (i32.const 16)))
+      (call $gl32 (i32.add (global.get $esp) (i32.const 20)))
+      (i32.const 0))
+    ;; A marker handler that entered guest code (a nested send) set EIP itself
+    ;; and returns to $ret through the guest stack; otherwise return here.
+    (if (i32.and (i32.eq (global.get $eip) (local.get $marker))
+                 (i32.eqz (global.get $handler_set_eip)))
+      (then (global.set $eip (local.get $ret))))
+    (i32.const 1))
+
   ;; 793: CallWindowProcA — call a WndProc with (hwnd, msg, wParam, lParam)
   ;; Stack on entry: [ret][lpPrevWndFunc][hWnd][Msg][wParam][lParam]
   ;; We set up a call frame to the WndProc so it returns to our caller.

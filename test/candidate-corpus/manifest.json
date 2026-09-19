@@ -1261,7 +1261,11 @@
       "browser": {
         "exe": "cd/CIV2/CIV2.EXE",
         "fileRoot": "cd/CIV2",
-        "cue": "Sid Meier's Civilization II (USA) (En,Fr,De).cue"
+        "cue": "Sid Meier's Civilization II (USA) (En,Fr,De).cue",
+        "cdMirror": "d:\\civ2",
+        "vfsPaths": {
+          "WING.DLL": "c:\\windows\\system\\WING.DLL"
+        }
       },
       "cli": {
         "maxBatches": 160,

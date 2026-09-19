@@ -319,8 +319,7 @@
       (select (i32.const 4) (i32.const 3) (local.get $modeless))))
     (local.set $frame (select (i32.const 12) (i32.const 10) (local.get $modeless)))
     (local.set $index (call $win16_sel_to_index (local.get $handle)))
-    (if (i32.and (i32.ne (local.get $index) (i32.const 0))
-                 (i32.lt_u (local.get $index) (global.get $WIN16_SEG_MAX)))
+    (if (i32.ne (call $win16_seg_base (local.get $index)) (i32.const 0))
       (then
         (local.set $flags (call $win16_gseg_field (local.get $index) (i32.const 8)))
         (if (i32.and
@@ -868,6 +867,88 @@
           (i32.const 0x0001) (i32.const 0) (local.get $cs)))
         (call $heap_free (local.get $cs)))))
 
+  ;; Is this one of VB1's Thunder* windows? Their procedures are Win16 code,
+  ;; which the API bridge cannot call synchronously.
+  (func $win16_is_thunder_window (param $hwnd i32) (result i32)
+    (local $class_w i32)
+    (local.set $class_w (call $g2w (global.get $GUEST_STACK)))
+    (i32.and
+      (i32.ge_u (call $host_get_window_class
+        (local.get $hwnd) (local.get $class_w) (i32.const 32)) (i32.const 4))
+      (i32.eq (i32.load (local.get $class_w)) (i32.const 0x6E756854)))) ;; Thun
+
+  ;; DlgDirList into our own listbox control, synchronously, the way USER
+  ;; does it: the caller reads the list back on the very next line. Civ2 finds
+  ;; its CD by listing DDL_DRIVES into a hidden listbox and walking "[-x-]".
+  ;; Files are listed unless DDL_EXCLUSIVE (8000h); DDL_DIRECTORY (10h) adds
+  ;; "[name]" subdirectories and DDL_DRIVES (4000h) adds "[-x-]" drives.
+  (func $win16_dlgdir_fill_native (param $list i32) (param $spec_g i32) (param $attrs i32)
+    (local $fd_g i32) (local $fd_w i32) (local $str_g i32) (local $str_w i32)
+    (local $find i32) (local $name_w i32) (local $is_dir i32) (local $len i32)
+    (local $drive i32)
+    (drop (call $wnd_send_message (local.get $list) (i32.const 0x0184) (i32.const 0) (i32.const 0)))
+    (local.set $fd_g (call $heap_alloc (i32.const 320)))
+    (local.set $fd_w (call $g2w (local.get $fd_g)))
+    (local.set $str_g (call $heap_alloc (i32.const 280)))
+    (local.set $str_w (call $g2w (local.get $str_g)))
+    (if (i32.and
+          (i32.ne (local.get $spec_g) (i32.const 0))
+          (i32.ne (i32.and (local.get $attrs) (i32.const 0x8010)) (i32.const 0x8000)))
+      (then
+        (local.set $find (call $host_fs_find_first_file
+          (call $g2w (local.get $spec_g)) (local.get $fd_g) (i32.const 0)))
+        (if (i32.ne (local.get $find) (i32.const -1))
+          (then
+            (block $done (loop $files
+              (local.set $name_w (i32.add (local.get $fd_w) (i32.const 44)))
+              (local.set $is_dir (i32.ne
+                (i32.and (i32.load (local.get $fd_w)) (i32.const 0x10)) (i32.const 0)))
+              (local.set $len (call $strlen (local.get $name_w)))
+              ;; "." is never listed; directories only for DDL_DIRECTORY and
+              ;; ordinary files only without DDL_EXCLUSIVE.
+              (if (i32.and
+                    (i32.ne (i32.load16_u (local.get $name_w)) (i32.const 0x002E)) ;; "."
+                    (i32.and
+                      (i32.lt_u (local.get $len) (i32.const 260))
+                      (select
+                        (i32.ne (i32.and (local.get $attrs) (i32.const 0x10)) (i32.const 0))
+                        (i32.eqz (i32.and (local.get $attrs) (i32.const 0x8000)))
+                        (local.get $is_dir))))
+                (then
+                  (if (local.get $is_dir)
+                    (then
+                      (i32.store8 (local.get $str_w) (i32.const 0x5B)) ;; [
+                      (call $memcpy (i32.add (local.get $str_w) (i32.const 1))
+                        (local.get $name_w) (local.get $len))
+                      (i32.store16 (i32.add (local.get $str_w)
+                        (i32.add (local.get $len) (i32.const 1))) (i32.const 0x5D))) ;; ]\0
+                    (else
+                      (call $memcpy (local.get $str_w) (local.get $name_w)
+                        (i32.add (local.get $len) (i32.const 1)))))
+                  (drop (call $wnd_send_message (local.get $list)
+                    (i32.const 0x0180) (i32.const 0) (local.get $str_g)))))
+              (br_if $done (i32.eqz (call $host_fs_find_next_file
+                (local.get $find) (local.get $fd_g) (i32.const 0))))
+              (br $files)))
+            (drop (call $host_fs_find_close (local.get $find)))))))
+    (if (i32.and (local.get $attrs) (i32.const 0x4000))
+      (then
+        (block $drives_done (loop $drives
+          (br_if $drives_done (i32.ge_u (local.get $drive) (i32.const 26)))
+          (if (call $win16_win_drive_type (local.get $drive))
+            (then
+              ;; "[-x-]\0"
+              (i32.store (local.get $str_w)
+                (i32.or (i32.const 0x2D002D5B)
+                  (i32.shl (i32.add (local.get $drive) (i32.const 0x61)) (i32.const 16))))
+              (i32.store16 offset=4 (local.get $str_w) (i32.const 0x005D))
+              (drop (call $wnd_send_message (local.get $list)
+                (i32.const 0x0180) (i32.const 0) (local.get $str_g)))))
+          (local.set $drive (i32.add (local.get $drive) (i32.const 1)))
+          (br $drives)))))
+    (call $heap_free (local.get $str_g))
+    (call $heap_free (local.get $fd_g)))
+
   ;; USER.100 DlgDirList(hDlg, lpPathSpec, nIDListBox, nIDStaticPath,
   ;;                     uFileType) -> int.
   ;;
@@ -894,6 +975,18 @@
     (local.set $id (call $win16_arg16 (i32.const 2)))
     (local.set $attrs (call $win16_arg16 (i32.const 0)))
     (local.set $list (call $ctrl_find_by_id (local.get $dlg) (local.get $id)))
+    (if (i32.and
+          (i32.ne (local.get $list) (i32.const 0))
+          (i32.eqz (call $win16_is_thunder_window (local.get $list))))
+      (then
+        (call $win16_dlgdir_fill_native (local.get $list)
+          (call $win16_far_to_guest
+            (i32.shr_u (local.get $spec) (i32.const 16))
+            (i32.and (local.get $spec) (i32.const 0xFFFF)))
+          (local.get $attrs))
+        (global.set $eax (i32.const 1))
+        (call $win16_api_return (i32.const 12))
+        (return)))
     (if (i32.and
           (i32.ne (local.get $list) (i32.const 0))
           (i32.ne (i32.and (local.get $attrs) (i32.const 0x10)) (i32.const 0)))

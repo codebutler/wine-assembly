@@ -760,6 +760,765 @@
       (then (call $win16_StackTraceNext) (return (i32.const 1))))
     (i32.const 0))
 
+  ;; ---- AVIFILE / MSVIDEO (Video for Windows 1.1) ----
+  ;;
+  ;; Civilization II imports both for its advisor and wonder movies, which are
+  ;; Indeo 4.1 (IV41). The machine modelled here has Video for Windows but no
+  ;; IV41 decompressor: AVIFILE really opens and parses the RIFF header, and
+  ;; ICLocate truthfully finds no codec, which is the documented path the game
+  ;; takes to skip a movie (it releases the streams and carries on).
+  ;;
+  ;; A PAVIFILE is a far pointer to one global block this module owns:
+  ;;   +0 'AVIF'  +4 refs  +8 stream count  +0x10 avih (56 bytes)
+  ;;   +0x100 + i*0x200  stream i: +0 'AVIS' +4 refs +8 strh (56 bytes)
+  ;;                     +0x40 strf size, +0x44 strf (<= 0x180), +0x1C4 strn (<= 60)
+  ;;   +0x1000 the first 60 KiB of the file, read once at open.
+  ;; A PAVISTREAM is the same selector at that stream's offset, so either
+  ;; pointer finds the block with no lookup table.
+  (global $AVI_MAX_STREAMS i32 (i32.const 7)) ;; 0x100 + 7*0x200 ends at the read buffer
+  (global $AVI_READ_OFF i32 (i32.const 0x1000))
+  (global $AVI_READ_MAX i32 (i32.const 0xF000))
+
+  (func $win16_dynamic_module_is7 (param $id i32) (param $name i64) (result i32)
+    (local $slot i32)
+    (if (i32.or (i32.lt_u (local.get $id) (global.get $WIN16_DYNAMIC_BASE))
+                (i32.ge_u (local.get $id)
+                  (i32.add (global.get $WIN16_DYNAMIC_BASE)
+                           (global.get $WIN16_DYNAMIC_MODULES))))
+      (then (return (i32.const 0))))
+    (local.set $slot (call $win16_dynamic_module_slot
+      (i32.sub (local.get $id) (global.get $WIN16_DYNAMIC_BASE))))
+    (i32.and (i32.eq (i32.load8_u (local.get $slot)) (i32.const 7))
+      (i64.eq (i64.and (i64.load offset=1 (local.get $slot))
+                       (i64.const 0x00FFFFFFFFFFFFFF))
+              (local.get $name))))
+
+  ;; The far pointer's selector, checked to be one of our blocks. 0 if not.
+  (func $win16_avi_block (param $far i32) (result i32)
+    (local $base i32)
+    (if (i32.eqz (i32.shr_u (local.get $far) (i32.const 16)))
+      (then (return (i32.const 0))))
+    (local.set $base (call $win16_far_to_guest
+      (i32.shr_u (local.get $far) (i32.const 16)) (i32.const 0)))
+    (if (i32.ne (call $gl32 (local.get $base)) (i32.const 0x46495641)) ;; 'AVIF'
+      (then (return (i32.const 0))))
+    (local.get $base))
+
+  ;; The stream a PAVISTREAM names, as a guest-linear address, or 0.
+  (func $win16_avi_stream (param $far i32) (result i32)
+    (local $base i32) (local $off i32)
+    (local.set $base (call $win16_avi_block (local.get $far)))
+    (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
+    (local.set $off (i32.and (local.get $far) (i32.const 0xFFFF)))
+    (if (i32.or (i32.lt_u (local.get $off) (i32.const 0x100))
+                (i32.ge_u (local.get $off)
+                  (i32.add (i32.const 0x100)
+                    (i32.mul (call $gl32 (i32.add (local.get $base) (i32.const 8)))
+                             (i32.const 0x200)))))
+      (then (return (i32.const 0))))
+    (if (i32.and (i32.sub (local.get $off) (i32.const 0x100)) (i32.const 0x1FF))
+      (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (i32.add (local.get $base) (local.get $off)))
+                (i32.const 0x53495641)) ;; 'AVIS'
+      (then (return (i32.const 0))))
+    (i32.add (local.get $base) (local.get $off)))
+
+  ;; Walk the hdrl list read into the block: avih, then one strl per stream.
+  ;; Every chunk is bounded by its parent and by the bytes actually read, so
+  ;; a truncated or hostile header yields AVIERR_BADFORMAT, not a wild read.
+  (func $win16_avi_parse (param $base i32) (param $len i32) (result i32)
+    (local $buf i32) (local $p i32) (local $end i32) (local $id i32) (local $size i32)
+    (local $q i32) (local $qend i32) (local $st i32) (local $n i32) (local $cid i32)
+    (local $csize i32) (local $copy i32)
+    (local.set $buf (i32.add (local.get $base) (global.get $AVI_READ_OFF)))
+    (if (i32.lt_u (local.get $len) (i32.const 24)) (then (return (i32.const 0))))
+    (if (i32.or (i32.ne (call $gl32 (local.get $buf)) (i32.const 0x46464952)) ;; RIFF
+                (i32.ne (call $gl32 (i32.add (local.get $buf) (i32.const 8)))
+                        (i32.const 0x20495641))) ;; 'AVI '
+      (then (return (i32.const 0))))
+    ;; First LIST hdrl among the top-level chunks.
+    (local.set $p (i32.add (local.get $buf) (i32.const 12)))
+    (local.set $end (i32.add (local.get $buf) (local.get $len)))
+    (block $found (loop $top
+      (if (i32.gt_u (i32.add (local.get $p) (i32.const 12)) (local.get $end))
+        (then (return (i32.const 0))))
+      (local.set $id (call $gl32 (local.get $p)))
+      (local.set $size (call $gl32 (i32.add (local.get $p) (i32.const 4))))
+      (br_if $found (i32.and (i32.eq (local.get $id) (i32.const 0x5453494C)) ;; LIST
+        (i32.eq (call $gl32 (i32.add (local.get $p) (i32.const 8)))
+                (i32.const 0x6C726468)))) ;; hdrl
+      (if (i32.gt_u (local.get $size) (i32.sub (local.get $end) (local.get $p)))
+        (then (return (i32.const 0))))
+      (local.set $p (i32.add (local.get $p)
+        (i32.add (i32.const 8) (i32.and (i32.add (local.get $size) (i32.const 1))
+                                        (i32.const -2)))))
+      (br $top)))
+    (if (i32.lt_u (i32.sub (local.get $end) (i32.add (local.get $p) (i32.const 8)))
+                  (local.get $size))
+      (then (return (i32.const 0))))
+    (local.set $end (i32.add (i32.add (local.get $p) (i32.const 8)) (local.get $size)))
+    (local.set $p (i32.add (local.get $p) (i32.const 12)))
+    (block $done (loop $chunk
+      (br_if $done (i32.gt_u (i32.add (local.get $p) (i32.const 8)) (local.get $end)))
+      (local.set $id (call $gl32 (local.get $p)))
+      (local.set $size (call $gl32 (i32.add (local.get $p) (i32.const 4))))
+      (if (i32.gt_u (local.get $size)
+                    (i32.sub (local.get $end) (i32.add (local.get $p) (i32.const 8))))
+        (then (return (i32.const 0))))
+      (if (i32.and (i32.eq (local.get $id) (i32.const 0x68697661)) ;; avih
+                   (i32.ge_u (local.get $size) (i32.const 56)))
+        (then (call $guest_memmove (i32.add (local.get $base) (i32.const 0x10))
+                (i32.add (local.get $p) (i32.const 8)) (i32.const 56))))
+      (if (i32.and (i32.eq (local.get $id) (i32.const 0x5453494C))
+            (i32.and (i32.ge_u (local.get $size) (i32.const 4))
+                     (i32.eq (call $gl32 (i32.add (local.get $p) (i32.const 8)))
+                             (i32.const 0x6C727473)))) ;; strl
+        (then
+          (local.set $n (call $gl32 (i32.add (local.get $base) (i32.const 8))))
+          (if (i32.lt_u (local.get $n) (global.get $AVI_MAX_STREAMS))
+            (then
+              (local.set $st (i32.add (local.get $base)
+                (i32.add (i32.const 0x100) (i32.mul (local.get $n) (i32.const 0x200)))))
+              (local.set $q (i32.add (local.get $p) (i32.const 12)))
+              (local.set $qend (i32.add (i32.add (local.get $p) (i32.const 8))
+                                        (local.get $size)))
+              (block $sdone (loop $sub
+                (br_if $sdone (i32.gt_u (i32.add (local.get $q) (i32.const 8))
+                                        (local.get $qend)))
+                (local.set $cid (call $gl32 (local.get $q)))
+                (local.set $csize (call $gl32 (i32.add (local.get $q) (i32.const 4))))
+                (br_if $sdone (i32.gt_u (local.get $csize)
+                  (i32.sub (local.get $qend) (i32.add (local.get $q) (i32.const 8)))))
+                (if (i32.and (i32.eq (local.get $cid) (i32.const 0x68727473)) ;; strh
+                             (i32.ge_u (local.get $csize) (i32.const 48)))
+                  (then
+                    (local.set $copy (local.get $csize))
+                    (if (i32.gt_u (local.get $copy) (i32.const 56))
+                      (then (local.set $copy (i32.const 56))))
+                    (call $guest_memmove (i32.add (local.get $st) (i32.const 8))
+                      (i32.add (local.get $q) (i32.const 8)) (local.get $copy))
+                    (call $gs32 (local.get $st) (i32.const 0x53495641))))
+                (if (i32.eq (local.get $cid) (i32.const 0x66727473)) ;; strf
+                  (then
+                    (local.set $copy (local.get $csize))
+                    (if (i32.gt_u (local.get $copy) (i32.const 0x180))
+                      (then (local.set $copy (i32.const 0x180))))
+                    (call $gs32 (i32.add (local.get $st) (i32.const 0x40)) (local.get $copy))
+                    (call $guest_memmove (i32.add (local.get $st) (i32.const 0x44))
+                      (i32.add (local.get $q) (i32.const 8)) (local.get $copy))))
+                (if (i32.eq (local.get $cid) (i32.const 0x6E727473)) ;; strn
+                  (then
+                    (local.set $copy (local.get $csize))
+                    (if (i32.gt_u (local.get $copy) (i32.const 59))
+                      (then (local.set $copy (i32.const 59))))
+                    (call $guest_memmove (i32.add (local.get $st) (i32.const 0x1C4))
+                      (i32.add (local.get $q) (i32.const 8)) (local.get $copy))))
+                (local.set $q (i32.add (local.get $q)
+                  (i32.add (i32.const 8) (i32.and (i32.add (local.get $csize) (i32.const 1))
+                                                  (i32.const -2)))))
+                (br $sub)))
+              ;; A strl with no strh is not a stream.
+              (if (i32.eq (call $gl32 (local.get $st)) (i32.const 0x53495641))
+                (then (call $gs32 (i32.add (local.get $base) (i32.const 8))
+                        (i32.add (local.get $n) (i32.const 1)))))))))
+      (local.set $p (i32.add (local.get $p)
+        (i32.add (i32.const 8) (i32.and (i32.add (local.get $size) (i32.const 1))
+                                        (i32.const -2)))))
+      (br $chunk)))
+    (i32.ne (call $gl32 (i32.add (local.get $base) (i32.const 8))) (i32.const 0)))
+
+  ;; One positioned read straight through the host file API, not the Win32
+  ;; handlers, so no call32 bridge is needed between reads. Bytes read, -1 on
+  ;; a failed read, -2 when a provider-backed range is not resident yet (the
+  ;; caller unwinds and parks its thunk; the retry then hits the cache).
+  (func $win16_avi_io (param $fh i32) (param $pos i32) (param $dst i32) (param $n i32)
+        (result i32)
+    (local $cnt i32)
+    (local.set $cnt (region.addr $GUEST_STACK 0x100))
+    (drop (call $legacy_file_seek (local.get $fh) (local.get $pos) (i32.const 0)
+      (i32.const -1)))
+    (call $gs32 (local.get $cnt) (i32.const 0))
+    (if (i32.eqz (call $host_fs_read_file (local.get $fh) (local.get $dst)
+                   (local.get $n) (local.get $cnt)))
+      (then (if (i32.eq (call $host_fs_read_pending) (i32.const 1))
+              (then (return (i32.const -2))))
+            (return (i32.const -1))))
+    (call $gl32 (local.get $cnt)))
+
+  ;; Close the file and free both blocks. Used by the last release and by
+  ;; every AVIFileOpen failure after the header block exists.
+  (func $win16_avi_teardown (param $base i32)
+    (local $fh i32) (local $isel i32)
+    (local.set $fh (call $gl32 (i32.add (local.get $base) (i32.const 0x50))))
+    (local.set $isel (call $gl32 (i32.add (local.get $base) (i32.const 0x54))))
+    (if (i32.and (i32.ne (local.get $fh) (i32.const 0))
+                 (i32.ne (local.get $fh) (i32.const -1)))
+      (then (drop (call $host_fs_close_handle (local.get $fh)))))
+    (if (local.get $isel) (then (call $win16_global_free (local.get $isel))))
+    (call $gs32 (local.get $base) (i32.const 0))
+    (call $win16_global_free (call $win16_index_to_sel
+      (call $win16_gblock_at (local.get $base)))))
+
+  ;; Find movi and idx1 among the top-level chunks and turn idx1 into this
+  ;; module's own index: one 12-byte record per data chunk, {stream, absolute
+  ;; file offset of the data, size}, in file order. 'rec ' lists and anything
+  ;; else without a two-digit stream number are dropped. 1 ok, 0 no usable
+  ;; index (the file still opens; reads then find no data), -2 pending, -3 no
+  ;; memory for the index.
+  (func $win16_avi_index (param $base i32) (result i32)
+    (local $fh i32) (local $p i32) (local $scratch i32) (local $got i32)
+    (local $id i32) (local $size i32) (local $movi i32) (local $idx i32)
+    (local $isize i32) (local $count i32) (local $isel i32) (local $ibase i32)
+    (local $i i32) (local $chunk i32) (local $e i32) (local $ck i32) (local $d0 i32)
+    (local $d1 i32) (local $off i32) (local $abs i32) (local $n i32) (local $k i32)
+    (local.set $fh (call $gl32 (i32.add (local.get $base) (i32.const 0x50))))
+    (local.set $scratch (i32.add (local.get $base) (global.get $AVI_READ_OFF)))
+    (local.set $movi (i32.const -1))
+    (local.set $idx (i32.const -1))
+    (local.set $p (i32.const 12))
+    (block $walked (loop $walk
+      (local.set $got (call $win16_avi_io (local.get $fh) (local.get $p)
+        (local.get $scratch) (i32.const 12)))
+      (if (i32.eq (local.get $got) (i32.const -2)) (then (return (i32.const -2))))
+      (br_if $walked (i32.lt_s (local.get $got) (i32.const 8)))
+      (local.set $id (call $gl32 (local.get $scratch)))
+      (local.set $size (call $gl32 (i32.add (local.get $scratch) (i32.const 4))))
+      (if (i32.and (i32.eq (local.get $id) (i32.const 0x5453494C))
+                   (i32.eq (call $gl32 (i32.add (local.get $scratch) (i32.const 8)))
+                           (i32.const 0x69766F6D))) ;; LIST movi
+        (then (local.set $movi (i32.add (local.get $p) (i32.const 8)))))
+      (if (i32.eq (local.get $id) (i32.const 0x31786469)) ;; idx1
+        (then (local.set $idx (i32.add (local.get $p) (i32.const 8)))
+              (local.set $isize (local.get $size))
+              (br $walked)))
+      (local.set $p (i32.add (local.get $p)
+        (i32.add (i32.const 8) (i32.and (i32.add (local.get $size) (i32.const 1))
+                                        (i32.const -2)))))
+      (br_if $walked (i32.lt_u (local.get $p) (i32.const 12)))
+      (br $walk)))
+    (if (i32.or (i32.eq (local.get $movi) (i32.const -1))
+                (i32.eq (local.get $idx) (i32.const -1)))
+      (then (return (i32.const 0))))
+    (local.set $count (i32.shr_u (local.get $isize) (i32.const 4)))
+    (if (i32.or (i32.eqz (local.get $count)) (i32.gt_u (local.get $count) (i32.const 0x40000)))
+      (then (return (i32.const 0))))
+    (local.set $isel (call $win16_global_alloc (i32.mul (local.get $count) (i32.const 12))))
+    (if (i32.eqz (local.get $isel)) (then (return (i32.const -3))))
+    (call $gs32 (i32.add (local.get $base) (i32.const 0x54)) (local.get $isel))
+    (local.set $ibase (call $win16_far_to_guest (local.get $isel) (i32.const 0)))
+    (local.set $abs (i32.const -1))
+    (block $read (loop $pieces
+      (br_if $read (i32.ge_u (local.get $i) (local.get $count)))
+      (local.set $chunk (i32.sub (local.get $count) (local.get $i)))
+      (if (i32.gt_u (local.get $chunk) (i32.shr_u (global.get $AVI_READ_MAX) (i32.const 4)))
+        (then (local.set $chunk (i32.shr_u (global.get $AVI_READ_MAX) (i32.const 4)))))
+      (local.set $got (call $win16_avi_io (local.get $fh)
+        (i32.add (local.get $idx) (i32.shl (local.get $i) (i32.const 4)))
+        (local.get $scratch) (i32.shl (local.get $chunk) (i32.const 4))))
+      (if (i32.eq (local.get $got) (i32.const -2)) (then (return (i32.const -2))))
+      (if (i32.lt_s (local.get $got) (i32.const 16)) (then (br $read)))
+      (local.set $chunk (i32.shr_u (local.get $got) (i32.const 4)))
+      (local.set $k (i32.const 0))
+      (block $entries (loop $entry
+        (br_if $entries (i32.ge_u (local.get $k) (local.get $chunk)))
+        (local.set $e (i32.add (local.get $scratch) (i32.shl (local.get $k) (i32.const 4))))
+        (local.set $ck (call $gl32 (local.get $e)))
+        (local.set $d0 (i32.sub (i32.and (local.get $ck) (i32.const 0xFF)) (i32.const 0x30)))
+        (local.set $d1 (i32.sub (i32.and (i32.shr_u (local.get $ck) (i32.const 8))
+                                         (i32.const 0xFF)) (i32.const 0x30)))
+        (if (i32.and (i32.lt_u (local.get $d0) (i32.const 10))
+                     (i32.lt_u (local.get $d1) (i32.const 10)))
+          (then
+            (local.set $off (call $gl32 (i32.add (local.get $e) (i32.const 8))))
+            ;; idx1 offsets are relative to the 'movi' fourcc in most files and
+            ;; absolute in some; the first entry decides, as in every reader.
+            (if (i32.eq (local.get $abs) (i32.const -1))
+              (then (local.set $abs (i32.ge_u (local.get $off) (local.get $movi)))))
+            (if (i32.eqz (local.get $abs))
+              (then (local.set $off (i32.add (local.get $off) (local.get $movi)))))
+            (call $gs32 (i32.add (local.get $ibase) (i32.mul (local.get $n) (i32.const 12)))
+              (i32.add (i32.mul (local.get $d0) (i32.const 10)) (local.get $d1)))
+            (call $gs32 (i32.add (local.get $ibase)
+                          (i32.add (i32.mul (local.get $n) (i32.const 12)) (i32.const 4)))
+              (i32.add (local.get $off) (i32.const 8)))
+            (call $gs32 (i32.add (local.get $ibase)
+                          (i32.add (i32.mul (local.get $n) (i32.const 12)) (i32.const 8)))
+              (call $gl32 (i32.add (local.get $e) (i32.const 12))))
+            (local.set $n (i32.add (local.get $n) (i32.const 1)))))
+        (local.set $k (i32.add (local.get $k) (i32.const 1)))
+        (br $entry)))
+      (local.set $i (i32.add (local.get $i) (local.get $chunk)))
+      (br $pieces)))
+    (call $gs32 (i32.add (local.get $base) (i32.const 0x58)) (local.get $n))
+    (i32.const 1))
+
+  (func $win16_hresult (param $hr i32)
+    (global.set $edx (i32.shr_u (local.get $hr) (i32.const 16)))
+    (global.set $eax (i32.and (local.get $hr) (i32.const 0xFFFF))))
+
+  ;; AVIFILE.102 AVIFileOpen(PAVIFILE FAR *ppfile, LPCSTR szFile, UINT mode,
+  ;; CLSID FAR *pclsidHandler) -> HRESULT. Read-only opens only: this AVIFILE
+  ;; has no writer, and says so with AVIERR_READONLY. The file stays open
+  ;; until the last reference goes, as the real AVI handler keeps it.
+  (func $win16_AVIFileOpen
+    (local $pp i32) (local $name i32) (local $mode i32) (local $sel i32)
+    (local $base i32) (local $fh i32) (local $got i32) (local $r i32)
+    (local.set $mode (call $win16_arg16 (i32.const 2)))
+    (local.set $name (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 4)) (call $win16_arg16 (i32.const 3))))
+    (local.set $pp (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 6)) (call $win16_arg16 (i32.const 5))))
+    (call $gs32 (local.get $pp) (i32.const 0))
+    (if (i32.and (local.get $mode) (i32.const 0x1003)) ;; OF_WRITE|OF_READWRITE|OF_CREATE
+      (then (call $win16_hresult (i32.const 0x80044072)) ;; AVIERR_READONLY
+            (call $win16_api_return (i32.const 14)) (return)))
+    (local.set $sel (call $win16_global_alloc (i32.const 0x10000)))
+    (if (i32.eqz (local.get $sel))
+      (then (call $win16_hresult (i32.const 0x80044067)) ;; AVIERR_MEMORY
+            (call $win16_api_return (i32.const 14)) (return)))
+    (local.set $base (call $win16_far_to_guest (local.get $sel) (i32.const 0)))
+    (call $gs32 (local.get $base) (i32.const 0x46495641))
+    (call $gs32 (i32.add (local.get $base) (i32.const 4)) (i32.const 1))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle__lopen (local.get $name) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (local.set $fh (global.get $eax))
+    (call $gs32 (i32.add (local.get $base) (i32.const 0x50)) (local.get $fh))
+    (if (i32.eq (local.get $fh) (i32.const -1))
+      (then (call $win16_avi_teardown (local.get $base))
+            (call $win16_hresult (i32.const 0x8004406F)) ;; AVIERR_FILEOPEN
+            (call $win16_api_return (i32.const 14)) (return)))
+    (local.set $got (call $win16_avi_io (local.get $fh) (i32.const 0)
+      (i32.add (local.get $base) (global.get $AVI_READ_OFF)) (global.get $AVI_READ_MAX)))
+    (local.set $r (i32.const 1))
+    (if (i32.gt_s (local.get $got) (i32.const 0))
+      (then
+        (if (i32.eqz (call $win16_avi_parse (local.get $base) (local.get $got)))
+          (then (call $win16_avi_teardown (local.get $base))
+                (call $win16_hresult (i32.const 0x80044066)) ;; AVIERR_BADFORMAT
+                (call $win16_api_return (i32.const 14)) (return)))
+        (local.set $r (call $win16_avi_index (local.get $base)))))
+    ;; A disc read that missed the chunk cache: give everything back and park
+    ;; the untouched Pascal frame; the host fills the range and re-enters this
+    ;; thunk, whose second attempt then reads from the cache.
+    (if (i32.or (i32.eq (local.get $got) (i32.const -2))
+                (i32.eq (local.get $r) (i32.const -2)))
+      (then
+        (call $win16_avi_teardown (local.get $base))
+        (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
+        (call $spin_park (i32.const 12)) ;; IO_WAIT
+        (return)))
+    (if (i32.le_s (local.get $got) (i32.const 0))
+      (then (call $win16_avi_teardown (local.get $base))
+            (call $win16_hresult (i32.const 0x8004406D)) ;; AVIERR_FILEREAD
+            (call $win16_api_return (i32.const 14)) (return)))
+    (if (i32.eq (local.get $r) (i32.const -3))
+      (then (call $win16_avi_teardown (local.get $base))
+            (call $win16_hresult (i32.const 0x80044067)) ;; AVIERR_MEMORY
+            (call $win16_api_return (i32.const 14)) (return)))
+    (call $gs32 (local.get $pp) (i32.shl (local.get $sel) (i32.const 16)))
+    (call $win16_hresult (i32.const 0))
+    (call $win16_api_return (i32.const 14)))
+
+  ;; AVIFILE.143 AVIFileGetStream(pfile, PAVISTREAM FAR *ppavi, DWORD fccType,
+  ;; LONG lParam): the lParam'th stream of that type (any type when 0).
+  (func $win16_AVIFileGetStream
+    (local $nth i32) (local $type i32) (local $pp i32) (local $far i32)
+    (local $base i32) (local $i i32) (local $n i32) (local $st i32)
+    (local.set $nth (call $win16_arg32 (i32.const 0)))
+    (local.set $type (call $win16_arg32 (i32.const 2)))
+    (local.set $pp (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
+    (local.set $far (call $win16_arg32 (i32.const 6)))
+    (call $gs32 (local.get $pp) (i32.const 0))
+    (local.set $base (call $win16_avi_block (local.get $far)))
+    (if (i32.eqz (local.get $base))
+      (then (call $win16_hresult (i32.const 0x8004406C)) ;; AVIERR_BADHANDLE
+            (call $win16_api_return (i32.const 16)) (return)))
+    (local.set $n (call $gl32 (i32.add (local.get $base) (i32.const 8))))
+    (call $win16_hresult (i32.const 0x80044073)) ;; AVIERR_NODATA
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $st (i32.add (local.get $base)
+        (i32.add (i32.const 0x100) (i32.mul (local.get $i) (i32.const 0x200)))))
+      (if (i32.or (i32.eqz (local.get $type))
+                  (i32.eq (call $gl32 (i32.add (local.get $st) (i32.const 8)))
+                          (local.get $type)))
+        (then
+          (if (i32.eqz (local.get $nth))
+            (then
+              (call $gs32 (i32.add (local.get $st) (i32.const 4))
+                (i32.add (call $gl32 (i32.add (local.get $st) (i32.const 4))) (i32.const 1)))
+              (call $gs32 (i32.add (local.get $base) (i32.const 4))
+                (i32.add (call $gl32 (i32.add (local.get $base) (i32.const 4))) (i32.const 1)))
+              (call $gs32 (local.get $pp)
+                (i32.or (i32.and (local.get $far) (i32.const 0xFFFF0000))
+                        (i32.sub (local.get $st) (local.get $base))))
+              (call $win16_hresult (i32.const 0))
+              (br $done)))
+          (local.set $nth (i32.sub (local.get $nth) (i32.const 1)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (call $win16_api_return (i32.const 16)))
+
+  ;; AVIFILE.162 AVIStreamInfo(pavi, AVISTREAMINFO FAR *psi, LONG lSize). The
+  ;; Win16 structure is 0x84 bytes: its RECT is four WORDs, exactly the
+  ;; strh's rcFrame, so the header maps across field for field.
+  (func $win16_AVIStreamInfo
+    (local $size i32) (local $psi i32) (local $st i32) (local $tmp i32)
+    (local.set $size (call $win16_arg32 (i32.const 0)))
+    (local.set $psi (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
+    (local.set $st (call $win16_avi_stream (call $win16_arg32 (i32.const 4))))
+    (if (i32.eqz (local.get $st))
+      (then (call $win16_hresult (i32.const 0x8004406C))
+            (call $win16_api_return (i32.const 12)) (return)))
+    (local.set $tmp (global.get $GUEST_STACK))
+    (call $zero_memory (call $g2w (local.get $tmp)) (i32.const 0x84))
+    (local.set $st (i32.add (local.get $st) (i32.const 8)))
+    (call $gs32 (local.get $tmp) (call $gl32 (local.get $st)))                                   ;; fccType
+    (call $gs32 (i32.add (local.get $tmp) (i32.const 4)) (call $gl32 (i32.add (local.get $st) (i32.const 4))))  ;; fccHandler
+    (call $gs32 (i32.add (local.get $tmp) (i32.const 8)) (call $gl32 (i32.add (local.get $st) (i32.const 8))))  ;; dwFlags
+    (call $gs32 (i32.add (local.get $tmp) (i32.const 12)) (i32.const 1))                          ;; AVIFILECAPS_CANREAD
+    (call $gs32 (i32.add (local.get $tmp) (i32.const 16)) (call $gl32 (i32.add (local.get $st) (i32.const 12)))) ;; wPriority, wLanguage
+    (call $guest_memmove (i32.add (local.get $tmp) (i32.const 20))
+      (i32.add (local.get $st) (i32.const 20)) (i32.const 16))                                     ;; scale rate start length
+    (call $gs32 (i32.add (local.get $tmp) (i32.const 36)) (call $gl32 (i32.add (local.get $st) (i32.const 16)))) ;; dwInitialFrames
+    (call $guest_memmove (i32.add (local.get $tmp) (i32.const 40))
+      (i32.add (local.get $st) (i32.const 36)) (i32.const 20))                                     ;; buffer quality sample rcFrame
+    (call $guest_memmove (i32.add (local.get $tmp) (i32.const 68))
+      (i32.add (local.get $st) (i32.const 0x1BC)) (i32.const 60))                                  ;; szName from strn
+    (if (i32.gt_u (local.get $size) (i32.const 0x84)) (then (local.set $size (i32.const 0x84))))
+    (call $guest_memmove (local.get $psi) (local.get $tmp) (local.get $size))
+    (call $win16_hresult (i32.const 0))
+    (call $win16_api_return (i32.const 12)))
+
+  ;; AVIFILE.164 AVIStreamReadFormat(pavi, LONG lPos, LPVOID lpFormat,
+  ;; LONG FAR *lpcbFormat). A NULL buffer asks for the size alone.
+  (func $win16_AVIStreamReadFormat
+    (local $pcb i32) (local $fmt i32) (local $st i32) (local $have i32) (local $want i32)
+    (local.set $pcb (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+    (local.set $fmt (call $win16_arg32 (i32.const 2)))
+    (local.set $st (call $win16_avi_stream (call $win16_arg32 (i32.const 6))))
+    (if (i32.eqz (local.get $st))
+      (then (call $win16_hresult (i32.const 0x8004406C))
+            (call $win16_api_return (i32.const 16)) (return)))
+    (local.set $have (call $gl32 (i32.add (local.get $st) (i32.const 0x40))))
+    (call $win16_hresult (i32.const 0))
+    (if (local.get $fmt)
+      (then
+        (local.set $want (call $gl32 (local.get $pcb)))
+        ;; As much as fits is copied either way; a short buffer is also told so.
+        (if (i32.lt_s (local.get $want) (local.get $have))
+          (then (call $win16_hresult (i32.const 0x80044074))) ;; AVIERR_BUFFERTOOSMALL
+          (else (local.set $want (local.get $have))))
+        (if (i32.gt_s (local.get $want) (i32.const 0))
+          (then (call $guest_memmove
+            (call $win16_far_to_guest (i32.shr_u (local.get $fmt) (i32.const 16))
+                                      (i32.and (local.get $fmt) (i32.const 0xFFFF)))
+            (i32.add (local.get $st) (i32.const 0x44)) (local.get $want))))))
+    (call $gs32 (local.get $pcb) (local.get $have))
+    (call $win16_api_return (i32.const 16)))
+
+  ;; Drop one reference on the file block; the last one closes the file.
+  (func $win16_avi_file_release (param $base i32) (result i32)
+    (local $refs i32)
+    (local.set $refs (call $gl32 (i32.add (local.get $base) (i32.const 4))))
+    (if (local.get $refs)
+      (then (local.set $refs (i32.sub (local.get $refs) (i32.const 1)))))
+    (call $gs32 (i32.add (local.get $base) (i32.const 4)) (local.get $refs))
+    (if (i32.eqz (local.get $refs)) (then (call $win16_avi_teardown (local.get $base))))
+    (local.get $refs))
+
+  ;; AVIFILE.167 AVIStreamRead(pavi, LONG lStart, LONG lSamples, LPVOID lpBuffer,
+  ;; LONG cbBuffer, LONG FAR *plBytes, LONG FAR *plSamples). A NULL buffer asks
+  ;; how big the read would be. Fixed-size streams (PCM audio) are a byte
+  ;; stream across their chunks; variable ones (video) are one chunk a sample.
+  ;; lSamples -1 is AVISTREAMREAD_CONVENIENT: to the end of the current chunk.
+  (func $win16_AVIStreamRead
+    (local $psamp i32) (local $pbytes i32) (local $cb i32) (local $buf i32)
+    (local $want i32) (local $start i32) (local $far i32) (local $st i32)
+    (local $base i32) (local $ibase i32) (local $count i32) (local $s i32)
+    (local $ss i32) (local $first i32) (local $len i32) (local $i i32)
+    (local $e i32) (local $csize i32) (local $pos i32) (local $bp i32)
+    (local $bend i32) (local $from i32) (local $n i32) (local $done i32)
+    (local $got i32) (local $hr i32) (local $nth i32) (local $conv i32)
+    (local.set $psamp (call $win16_arg32 (i32.const 0)))
+    (local.set $pbytes (call $win16_arg32 (i32.const 2)))
+    (local.set $cb (call $win16_arg32 (i32.const 4)))
+    (local.set $buf (call $win16_arg32 (i32.const 6)))
+    (local.set $want (call $win16_arg32 (i32.const 8)))
+    (local.set $start (call $win16_arg32 (i32.const 10)))
+    (local.set $far (call $win16_arg32 (i32.const 12)))
+    (local.set $st (call $win16_avi_stream (local.get $far)))
+    (if (i32.eqz (local.get $st))
+      (then (call $win16_hresult (i32.const 0x8004406C))
+            (call $win16_api_return (i32.const 28)) (return)))
+    (local.set $base (call $win16_avi_block (local.get $far)))
+    (local.set $s (i32.shr_u (i32.sub (i32.sub (local.get $st) (local.get $base))
+                                      (i32.const 0x100)) (i32.const 9)))
+    (local.set $ss (call $gl32 (i32.add (local.get $st) (i32.const 52))))   ;; dwSampleSize
+    (local.set $first (call $gl32 (i32.add (local.get $st) (i32.const 36)))) ;; dwStart
+    (local.set $len (call $gl32 (i32.add (local.get $st) (i32.const 40))))   ;; dwLength
+    (local.set $count (call $gl32 (i32.add (local.get $base) (i32.const 0x58))))
+    (if (call $gl32 (i32.add (local.get $base) (i32.const 0x54)))
+      (then (local.set $ibase (call $win16_far_to_guest
+        (call $gl32 (i32.add (local.get $base) (i32.const 0x54))) (i32.const 0)))))
+    (local.set $conv (i32.eq (local.get $want) (i32.const -1)))
+    (local.set $hr (i32.const 0))
+    (local.set $n (i32.const 0))
+    (local.set $done (i32.const 0))
+    (block $out
+      ;; Outside the stream is an empty read, not an error.
+      (br_if $out (i32.or (i32.lt_s (local.get $start) (local.get $first))
+                          (i32.ge_s (local.get $start)
+                                    (i32.add (local.get $first) (local.get $len)))))
+      (if (i32.lt_s (local.get $want) (i32.const 0)) (then (local.set $want (i32.const 1))))
+      (if (i32.gt_s (local.get $want)
+                    (i32.sub (i32.add (local.get $first) (local.get $len)) (local.get $start)))
+        (then (local.set $want (i32.sub (i32.add (local.get $first) (local.get $len))
+                                        (local.get $start)))))
+      (if (local.get $ss)
+        (then
+          ;; Byte window [bp, bend) of this stream's concatenated chunk data.
+          (local.set $bp (i32.mul (i32.sub (local.get $start) (local.get $first))
+                                  (local.get $ss)))
+          (if (local.get $conv)
+            (then
+              ;; The rest of the chunk bp falls in.
+              (local.set $pos (i32.const 0))
+              (local.set $i (i32.const 0))
+              (block $found (loop $scan
+                (br_if $found (i32.ge_u (local.get $i) (local.get $count)))
+                (local.set $e (i32.add (local.get $ibase) (i32.mul (local.get $i) (i32.const 12))))
+                (if (i32.eq (i32.and (call $gl32 (local.get $e)) (i32.const 0xFF)) (local.get $s))
+                  (then
+                    (local.set $csize (call $gl32 (i32.add (local.get $e) (i32.const 8))))
+                    (if (i32.lt_u (local.get $bp) (i32.add (local.get $pos) (local.get $csize)))
+                      (then (local.set $want (i32.div_u
+                              (i32.sub (i32.add (local.get $pos) (local.get $csize)) (local.get $bp))
+                              (local.get $ss)))
+                            (br $found)))
+                    (local.set $pos (i32.add (local.get $pos) (local.get $csize)))))
+                (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                (br $scan)))
+              (if (i32.eqz (local.get $want)) (then (local.set $want (i32.const 1))))))
+          (if (i32.eqz (local.get $buf))
+            (then (local.set $n (local.get $want))
+                  (local.set $done (i32.mul (local.get $want) (local.get $ss)))
+                  (br $out)))
+          (if (i32.lt_s (local.get $cb) (local.get $ss))
+            (then (local.set $hr (i32.const 0x80044074)) (br $out))) ;; AVIERR_BUFFERTOOSMALL
+          (if (i32.gt_u (local.get $want) (i32.div_u (local.get $cb) (local.get $ss)))
+            (then (local.set $want (i32.div_u (local.get $cb) (local.get $ss)))))
+          (local.set $bend (i32.add (local.get $bp) (i32.mul (local.get $want) (local.get $ss))))
+          (local.set $buf (call $win16_far_to_guest
+            (i32.shr_u (local.get $buf) (i32.const 16))
+            (i32.and (local.get $buf) (i32.const 0xFFFF))))
+          (local.set $pos (i32.const 0))
+          (local.set $i (i32.const 0))
+          (block $copied (loop $copy
+            (br_if $copied (i32.ge_u (local.get $i) (local.get $count)))
+            (br_if $copied (i32.ge_u (local.get $pos) (local.get $bend)))
+            (local.set $e (i32.add (local.get $ibase) (i32.mul (local.get $i) (i32.const 12))))
+            (if (i32.eq (i32.and (call $gl32 (local.get $e)) (i32.const 0xFF)) (local.get $s))
+              (then
+                (local.set $csize (call $gl32 (i32.add (local.get $e) (i32.const 8))))
+                (if (i32.gt_u (i32.add (local.get $pos) (local.get $csize)) (local.get $bp))
+                  (then
+                    ;; Overlap of this chunk with the window.
+                    (local.set $from (i32.const 0))
+                    (if (i32.gt_u (local.get $bp) (local.get $pos))
+                      (then (local.set $from (i32.sub (local.get $bp) (local.get $pos)))))
+                    (local.set $got (i32.sub (local.get $csize) (local.get $from)))
+                    (if (i32.gt_u (local.get $got)
+                          (i32.sub (local.get $bend) (i32.add (local.get $pos) (local.get $from))))
+                      (then (local.set $got (i32.sub (local.get $bend)
+                              (i32.add (local.get $pos) (local.get $from))))))
+                    (local.set $got (call $win16_avi_io
+                      (call $gl32 (i32.add (local.get $base) (i32.const 0x50)))
+                      (i32.add (call $gl32 (i32.add (local.get $e) (i32.const 4))) (local.get $from))
+                      (i32.add (local.get $buf) (local.get $done)) (local.get $got)))
+                    (if (i32.eq (local.get $got) (i32.const -2))
+                      (then
+                        (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
+                        (call $spin_park (i32.const 12)) ;; IO_WAIT
+                        (return)))
+                    (if (i32.le_s (local.get $got) (i32.const 0))
+                      (then (local.set $hr (i32.const 0x8004406D)) (br $copied))) ;; AVIERR_FILEREAD
+                    (local.set $done (i32.add (local.get $done) (local.get $got)))))
+                (local.set $pos (i32.add (local.get $pos) (local.get $csize)))))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br $copy)))
+          (local.set $n (i32.div_u (local.get $done) (local.get $ss)))
+          (br $out)))
+      ;; Variable-size samples: the nth chunk of this stream.
+      (local.set $nth (i32.sub (local.get $start) (local.get $first)))
+      (local.set $e (i32.const 0))
+      (local.set $i (i32.const 0))
+      (block $found (loop $scan
+        (br_if $found (i32.ge_u (local.get $i) (local.get $count)))
+        (if (i32.eq (i32.and (call $gl32 (i32.add (local.get $ibase)
+                      (i32.mul (local.get $i) (i32.const 12)))) (i32.const 0xFF)) (local.get $s))
+          (then
+            (if (i32.eqz (local.get $nth))
+              (then (local.set $e (i32.add (local.get $ibase)
+                      (i32.mul (local.get $i) (i32.const 12))))
+                    (br $found)))
+            (local.set $nth (i32.sub (local.get $nth) (i32.const 1)))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+      (if (i32.eqz (local.get $e))
+        (then (local.set $hr (i32.const 0x80044073)) (br $out))) ;; AVIERR_NODATA
+      (local.set $csize (call $gl32 (i32.add (local.get $e) (i32.const 8))))
+      (local.set $done (local.get $csize))
+      (if (i32.eqz (local.get $buf)) (then (local.set $n (i32.const 1)) (br $out)))
+      (if (i32.lt_s (local.get $cb) (local.get $csize))
+        (then (local.set $hr (i32.const 0x80044074)) (local.set $done (i32.const 0)) (br $out)))
+      (if (local.get $csize)
+        (then
+          (local.set $got (call $win16_avi_io
+            (call $gl32 (i32.add (local.get $base) (i32.const 0x50)))
+            (call $gl32 (i32.add (local.get $e) (i32.const 4)))
+            (call $win16_far_to_guest (i32.shr_u (local.get $buf) (i32.const 16))
+                                      (i32.and (local.get $buf) (i32.const 0xFFFF)))
+            (local.get $csize)))
+          (if (i32.eq (local.get $got) (i32.const -2))
+            (then
+              (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
+              (call $spin_park (i32.const 12)) ;; IO_WAIT
+              (return)))
+          (if (i32.ne (local.get $got) (local.get $csize))
+            (then (local.set $hr (i32.const 0x8004406D)) (local.set $done (i32.const 0))
+                  (br $out)))))
+      (local.set $n (i32.const 1)))
+    (if (local.get $pbytes)
+      (then (call $gs32 (call $win16_far_to_guest
+              (i32.shr_u (local.get $pbytes) (i32.const 16))
+              (i32.and (local.get $pbytes) (i32.const 0xFFFF))) (local.get $done))))
+    (if (local.get $psamp)
+      (then (call $gs32 (call $win16_far_to_guest
+              (i32.shr_u (local.get $psamp) (i32.const 16))
+              (i32.and (local.get $psamp) (i32.const 0xFFFF))) (local.get $n))))
+    (call $win16_hresult (local.get $hr))
+    (call $win16_api_return (i32.const 28)))
+
+  ;; AVIFILE.130 AVIStreamStart / .131 AVIStreamLength -> LONG, -1 on a bad stream.
+  (func $win16_AVIStreamStartLength (param $length i32)
+    (local $st i32)
+    (local.set $st (call $win16_avi_stream (call $win16_arg32 (i32.const 0))))
+    (if (local.get $st)
+      (then (call $win16_hresult (call $gl32 (i32.add (local.get $st)
+              (select (i32.const 40) (i32.const 36) (local.get $length))))))
+      (else (call $win16_hresult (i32.const -1))))
+    (call $win16_api_return (i32.const 4)))
+
+  ;; AVIFILE.132 AVIStreamTimeToSample(pavi, LONG lTime) and .133
+  ;; AVIStreamSampleToTime(pavi, LONG lSample): milliseconds against
+  ;; dwRate/dwScale samples per second, clamped to the stream as VfW does.
+  (func $win16_AVIStreamTime (param $to_time i32)
+    (local $v i32) (local $st i32) (local $scale i64) (local $rate i64)
+    (local $first i32) (local $end i32) (local $r i64)
+    (local.set $v (call $win16_arg32 (i32.const 0)))
+    (local.set $st (call $win16_avi_stream (call $win16_arg32 (i32.const 2))))
+    (block $out
+      (if (i32.eqz (local.get $st))
+        (then (call $win16_hresult (i32.const -1)) (br $out)))
+      (local.set $scale (i64.extend_i32_u (call $gl32 (i32.add (local.get $st) (i32.const 28)))))
+      (local.set $rate (i64.extend_i32_u (call $gl32 (i32.add (local.get $st) (i32.const 32)))))
+      (local.set $first (call $gl32 (i32.add (local.get $st) (i32.const 36))))
+      (local.set $end (i32.add (local.get $first)
+        (call $gl32 (i32.add (local.get $st) (i32.const 40)))))
+      (if (i32.or (i64.eqz (local.get $rate)) (i64.eqz (local.get $scale)))
+        (then (call $win16_hresult (i32.const -1)) (br $out)))
+      (if (local.get $to_time)
+        (then
+          (if (i32.lt_s (local.get $v) (local.get $first)) (then (local.set $v (local.get $first))))
+          (if (i32.gt_s (local.get $v) (local.get $end)) (then (local.set $v (local.get $end))))
+          (local.set $r (i64.div_s
+            (i64.mul (i64.mul (i64.extend_i32_s (local.get $v)) (local.get $scale))
+                     (i64.const 1000))
+            (local.get $rate))))
+        (else
+          (local.set $r (i64.div_s
+            (i64.mul (i64.extend_i32_s (local.get $v)) (local.get $rate))
+            (i64.mul (local.get $scale) (i64.const 1000))))
+          (if (i64.lt_s (local.get $r) (i64.extend_i32_s (local.get $first)))
+            (then (local.set $r (i64.extend_i32_s (local.get $first)))))
+          (if (i64.gt_s (local.get $r) (i64.extend_i32_s (local.get $end)))
+            (then (local.set $r (i64.extend_i32_s (local.get $end)))))))
+      (call $win16_hresult (i32.wrap_i64 (local.get $r))))
+    (call $win16_api_return (i32.const 8)))
+
+  ;; AVIFILE.161 AVIStreamRelease / .141 AVIFileRelease -> the new count.
+  (func $win16_AVIRelease (param $stream i32)
+    (local $far i32) (local $base i32) (local $st i32) (local $refs i32)
+    (local.set $far (call $win16_arg32 (i32.const 0)))
+    (if (local.get $stream)
+      (then
+        (local.set $st (call $win16_avi_stream (local.get $far)))
+        (if (local.get $st)
+          (then
+            (local.set $refs (call $gl32 (i32.add (local.get $st) (i32.const 4))))
+            (if (local.get $refs) (then (local.set $refs (i32.sub (local.get $refs) (i32.const 1)))))
+            (call $gs32 (i32.add (local.get $st) (i32.const 4)) (local.get $refs))
+            (drop (call $win16_avi_file_release (call $win16_avi_block (local.get $far)))))))
+      (else
+        (local.set $base (call $win16_avi_block (local.get $far)))
+        (if (local.get $base)
+          (then (local.set $refs (call $win16_avi_file_release (local.get $base)))))))
+    (call $win16_hresult (local.get $refs))
+    (call $win16_api_return (i32.const 4)))
+
+  (func $win16_avifile (param $module i32) (param $ordinal i32) (result i32)
+    (if (i32.eqz (call $win16_dynamic_module_is7 (local.get $module)
+                   (i64.const 0x00454C4946495641))) ;; AVIFILE
+      (then (return (i32.const 0))))
+    ;; AVIFileInit / AVIFileExit: nothing to set up beyond this module itself.
+    (if (i32.or (i32.eq (local.get $ordinal) (i32.const 100))
+                (i32.eq (local.get $ordinal) (i32.const 101)))
+      (then (call $win16_api_return (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 102))
+      (then (call $win16_AVIFileOpen) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 143))
+      (then (call $win16_AVIFileGetStream) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 162))
+      (then (call $win16_AVIStreamInfo) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 164))
+      (then (call $win16_AVIStreamReadFormat) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 161))
+      (then (call $win16_AVIRelease (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 141))
+      (then (call $win16_AVIRelease (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 167))
+      (then (call $win16_AVIStreamRead) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 130))
+      (then (call $win16_AVIStreamStartLength (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 131))
+      (then (call $win16_AVIStreamStartLength (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 132))
+      (then (call $win16_AVIStreamTime (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 133))
+      (then (call $win16_AVIStreamTime (i32.const 1)) (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; MSVIDEO: an installable-compressor manager with no compressors installed.
+  ;; 213 ICLocate(fccType, fccHandler, lpbiIn, lpbiOut, wFlags) finds none;
+  ;; 204 ICClose(hic) therefore never has a real HIC to close.
+  (func $win16_msvideo (param $module i32) (param $ordinal i32) (result i32)
+    (if (i32.eqz (call $win16_dynamic_module_is7 (local.get $module)
+                   (i64.const 0x004F45444956534D)))
+      (then (return (i32.const 0))))
+    (if (i32.eq (local.get $ordinal) (i32.const 213))
+      (then (global.set $eax (i32.const 0))
+            (call $win16_api_return (i32.const 18)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 204))
+      (then (call $win16_hresult (i32.const -8)) ;; ICERR_BADHANDLE
+            (call $win16_api_return (i32.const 2)) (return (i32.const 1))))
+    (i32.const 0))
+
   ;; Win16 installers probe GDI.EXE to choose their language-dialog format.
   ;; That Windows system image is implemented by the emulator rather than
   ;; shipped in the VFS, so it needs a synthesized Win98 version resource.
@@ -1224,6 +1983,28 @@
   ;; own filename, reads that file's header to check it is the runtime it
   ;; thinks it is, found Rattler Race's header instead, and reported "a virus
   ;; has been detected during program initialization".
+  ;; Write the Pascal module name in SLOT plus ".DLL" and a NUL at BUF+AT
+  ;; (BUF a guest pointer); returns the path length without the NUL.
+  (func $win16_put_dll_name (param $buf i32) (param $at i32) (param $slot i32)
+        (result i32)
+    (local $n i32) (local $i i32) (local $p i32)
+    (local.set $n (i32.load8_u (local.get $slot)))
+    (local.set $p (i32.add (local.get $buf) (local.get $at)))
+    (block $named (loop $chars
+      (br_if $named (i32.ge_u (local.get $i) (local.get $n)))
+      (call $gs8 (i32.add (local.get $p) (local.get $i))
+        (i32.load8_u (i32.add (i32.add (local.get $slot) (i32.const 1))
+                              (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $chars)))
+    (local.set $p (i32.add (local.get $p) (local.get $n)))
+    (call $gs8 (local.get $p) (i32.const 0x2E))
+    (call $gs8 (i32.add (local.get $p) (i32.const 1)) (i32.const 0x44))
+    (call $gs8 (i32.add (local.get $p) (i32.const 2)) (i32.const 0x4C))
+    (call $gs8 (i32.add (local.get $p) (i32.const 3)) (i32.const 0x4C))
+    (call $gs8 (i32.add (local.get $p) (i32.const 4)) (i32.const 0))
+    (i32.add (i32.add (local.get $at) (local.get $n)) (i32.const 4)))
+
   (func $win16_GetModuleFileName
     (local $buf i32) (local $size i32) (local $raw_mod i32) (local $mod i32) (local $id i32)
     (local $slot i32) (local $n i32) (local $i i32)
@@ -1237,8 +2018,21 @@
     ;; A DLL may likewise pass one of its own selectors (VBRUN100 does this),
     ;; so resolve live selectors through the loader's segment-owner records.
     ;; Only non-selector handles go through the 16->32 handle table.
-    (if (i32.and (i32.ne (local.get $raw_mod) (i32.const 0))
-                 (i32.ne (local.get $raw_mod) (global.get $sreg_ds)))
+    ;; Narrowed handles start at 0x100, so a module handle LoadLibrary gave
+    ;; out can also read as a live selector (WinG's 0x117 did, and was told it
+    ;; was the EXE). A handle the table knows as a module wins.
+    (if (i32.and
+          (i32.ge_u (local.get $raw_mod) (global.get $WIN16_HANDLE_BASE))
+          (i32.le_u (i32.sub (local.get $raw_mod) (global.get $WIN16_HANDLE_BASE))
+                    (global.get $win16_handle_next)))
+      (then
+        (local.set $mod (call $win16_h32 (local.get $raw_mod)))
+        (if (i32.ne (i32.and (local.get $mod) (i32.const 0xFFFF0000))
+                    (i32.const 0x00D10000))
+          (then (local.set $mod (i32.const 0))))))
+    (if (i32.and (i32.eqz (local.get $mod))
+          (i32.and (i32.ne (local.get $raw_mod) (i32.const 0))
+                   (i32.ne (local.get $raw_mod) (global.get $sreg_ds))))
       (then
         (local.set $index (call $win16_sel_to_index (local.get $raw_mod)))
         (if (call $win16_seg_base (local.get $index))
@@ -1277,30 +2071,41 @@
                          (i32.gt_u (local.get $size)
                                    (i32.add (local.get $n) (i32.const 7))))
               (then
-                ;; "C:\" + the module name + ".DLL", which is where the host
-                ;; staged it from and the only path a task can open it by.
+                ;; Where LoadLibrary would have found NAME.DLL: the app
+                ;; directory (C:\) first, then the system directory. WinG's
+                ;; LibMain compares its own directory against
+                ;; GetSystemDirectory and refuses to load anywhere else.
                 (call $gs8 (local.get $buf) (i32.const 0x43))          ;; C
                 (call $gs8 (i32.add (local.get $buf) (i32.const 1)) (i32.const 0x3A))
                 (call $gs8 (i32.add (local.get $buf) (i32.const 2)) (i32.const 0x5C))
-                (block $named (loop $chars
-                  (br_if $named (i32.ge_u (local.get $i) (local.get $n)))
-                  (call $gs8 (i32.add (i32.add (local.get $buf) (i32.const 3))
-                                      (local.get $i))
-                    (i32.load8_u (i32.add (i32.add (local.get $slot) (i32.const 1))
-                                          (local.get $i))))
-                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
-                  (br $chars)))
-                (local.set $i (i32.add (local.get $n) (i32.const 3)))
-                (call $gs8 (i32.add (local.get $buf) (local.get $i)) (i32.const 0x2E))
-                (call $gs8 (i32.add (local.get $buf) (i32.add (local.get $i) (i32.const 1)))
-                  (i32.const 0x44))
-                (call $gs8 (i32.add (local.get $buf) (i32.add (local.get $i) (i32.const 2)))
-                  (i32.const 0x4C))
-                (call $gs8 (i32.add (local.get $buf) (i32.add (local.get $i) (i32.const 3)))
-                  (i32.const 0x4C))
-                (call $gs8 (i32.add (local.get $buf) (i32.add (local.get $i) (i32.const 4)))
-                  (i32.const 0))
-                (global.set $eax (i32.add (local.get $i) (i32.const 4)))
+                (local.set $i (call $win16_put_dll_name
+                  (local.get $buf) (i32.const 3) (local.get $slot)))
+                (if (i32.eq (call $host_fs_get_file_attributes
+                              (call $g2w (local.get $buf)) (i32.const 0))
+                            (i32.const -1))
+                  (then
+                    (if (i32.gt_u (local.get $size)
+                                  (i32.add (local.get $n) (i32.const 23)))
+                      (then
+                        (drop (call $get_fixed_windows_directory
+                          (local.get $buf) (local.get $size)
+                          (i32.const 0) (i32.const 1)))
+                        (call $gs8 (i32.add (local.get $buf) (i32.const 17))
+                          (i32.const 0x5C))
+                        (local.set $i (call $win16_put_dll_name
+                          (local.get $buf) (i32.const 18) (local.get $slot)))
+                        (if (i32.eq (call $host_fs_get_file_attributes
+                                      (call $g2w (local.get $buf)) (i32.const 0))
+                                    (i32.const -1))
+                          (then
+                            (call $gs8 (local.get $buf) (i32.const 0x43))
+                            (call $gs8 (i32.add (local.get $buf) (i32.const 1))
+                              (i32.const 0x3A))
+                            (call $gs8 (i32.add (local.get $buf) (i32.const 2))
+                              (i32.const 0x5C))
+                            (local.set $i (call $win16_put_dll_name
+                              (local.get $buf) (i32.const 3) (local.get $slot)))))))))
+                (global.set $eax (local.get $i))
                 (call $win16_api_return (i32.const 8))
                 (return)))))))
     (call $win16_call32_begin (i32.const 3))
@@ -2476,6 +3281,97 @@
   ;; the arena to its end.
   (global $WIN16_SEG_GLOBAL i32 (i32.const 0x10000))  ;; head slot of a global block
   (global $WIN16_SEG_GFREE  i32 (i32.const 0x20000))  ;; ...and it has been freed
+  (global $WIN16_SEG_POOLED i32 (i32.const 0x40000))  ;; ...and it lives in a pool slot
+
+  ;; ---- Pooled small blocks ----
+  ;;
+  ;; A slot per block is the right shape for code, stacks and anything big,
+  ;; and the wrong one for the few hundred small records a large program keeps
+  ;; live: Civilization II holds ~720 global blocks by its title screen, two
+  ;; thirds of them under 4KB, and ran the 959-slot arena dry into its own
+  ;; ERR_MEMALLOCFAILED. Real Windows places a block at any paragraph, and a
+  ;; selector base is whatever the descriptor says, so a small block here gets
+  ;; a selector of its own above WIN16_SUB_FIRST whose base is a 16-byte
+  ;; aligned run inside a shared 64KB pool slot.
+  ;;
+  ;; That gives up the 64KB alignment 05c-seg16-ops.wat relies on for SS and
+  ;; CS, which is harmless for a data block and wrong for a block a program
+  ;; later runs or stacks on. So pooling starts only once half the slots are
+  ;; gone: every program that fit before still gets exactly the layout it got
+  ;; before, and only one that would otherwise run out of memory shares slots.
+  (func $win16_pool_alloc (param $bytes i32) (result i32)
+    (local $cap i32) (local $i i32) (local $base i32)
+    (local.set $cap (i32.and (i32.add (select (local.get $bytes) (i32.const 16)
+                                        (local.get $bytes))
+                                      (i32.const 15))
+                             (i32.const -16)))
+    ;; First fit among freed pooled blocks. They are not split: they are all
+    ;; small, and a later free leaves the run whole for the next one.
+    (local.set $i (global.get $WIN16_SUB_FIRST))
+    (block $scanned (loop $scan
+      (br_if $scanned (i32.ge_u (local.get $i) (global.get $win16_sub_next)))
+      (if (i32.and
+            (i32.eq (call $win16_gseg_field (local.get $i) (i32.const 8))
+                    (i32.or (global.get $WIN16_SEG_POOLED)
+                            (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE))))
+            (i32.ge_u (call $win16_gseg_field (local.get $i) (i32.const 4)) (local.get $cap)))
+        (then
+          (call $win16_gseg_store (local.get $i) (i32.const 8)
+            (i32.or (global.get $WIN16_SEG_POOLED) (global.get $WIN16_SEG_GLOBAL)))
+          (call $win16_gseg_store (local.get $i) (i32.const 12) (local.get $bytes))
+          (call $zero_memory (call $g2w (call $win16_gseg_field (local.get $i) (i32.const 0)))
+            (call $win16_gseg_field (local.get $i) (i32.const 4)))
+          (return (call $win16_index_to_sel (local.get $i)))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (if (i32.ge_u (global.get $win16_sub_next) (global.get $WIN16_SEL_MAX))
+      (then (return (i32.const 0))))
+    (if (i32.or (i32.eqz (global.get $win16_pool_base))
+                (i32.gt_u (i32.add (global.get $win16_pool_used) (local.get $cap))
+                          (i32.const 0x10000)))
+      (then
+        (if (i32.ge_u (global.get $win16_next_seg) (global.get $WIN16_SEG_MAX))
+          (then (return (i32.const 0))))
+        ;; $win16_alloc_segment zeroes the slot, so fresh runs need no clearing.
+        (global.set $win16_pool_base
+          (call $win16_seg_base (call $win16_alloc_segment)))
+        (global.set $win16_pool_used (i32.const 0))))
+    (local.set $base (i32.add (global.get $win16_pool_base) (global.get $win16_pool_used)))
+    (global.set $win16_pool_used (i32.add (global.get $win16_pool_used) (local.get $cap)))
+    (local.set $i (global.get $win16_sub_next))
+    (global.set $win16_sub_next (i32.add (local.get $i) (i32.const 1)))
+    (call $win16_seg_set (local.get $i) (local.get $base) (local.get $cap)
+      (i32.or (global.get $WIN16_SEG_POOLED) (global.get $WIN16_SEG_GLOBAL))
+      (local.get $bytes))
+    (call $win16_index_to_sel (local.get $i)))
+
+  ;; The live global block whose memory starts at guest address $ga, as a
+  ;; table index, or 0. Slot blocks are found by arithmetic; pooled ones by a
+  ;; walk of the pooled range, which only code that was handed a linear
+  ;; pointer rather than a handle needs.
+  (func $win16_gblock_at (param $ga i32) (result i32)
+    (local $off i32) (local $i i32)
+    (local.set $off (i32.sub (local.get $ga) (global.get $WIN16_ARENA)))
+    (if (i32.and (i32.eqz (i32.and (local.get $off) (i32.const 0xFFFF)))
+                 (i32.lt_u (local.get $off)
+                   (i32.mul (i32.sub (global.get $WIN16_SEG_MAX) (i32.const 1)) (i32.const 0x10000))))
+      (then
+        (local.set $i (i32.add (i32.shr_u (local.get $off) (i32.const 16)) (i32.const 1)))
+        (if (i32.eq (i32.and (call $win16_gseg_field (local.get $i) (i32.const 8))
+                             (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE)))
+                    (global.get $WIN16_SEG_GLOBAL))
+          (then (return (local.get $i))))))
+    (local.set $i (global.get $WIN16_SUB_FIRST))
+    (block $done (loop $scan
+      (br_if $done (i32.ge_u (local.get $i) (global.get $win16_sub_next)))
+      (if (i32.and
+            (i32.eq (call $win16_gseg_field (local.get $i) (i32.const 0)) (local.get $ga))
+            (i32.eq (call $win16_gseg_field (local.get $i) (i32.const 8))
+                    (i32.or (global.get $WIN16_SEG_POOLED) (global.get $WIN16_SEG_GLOBAL))))
+        (then (return (local.get $i))))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $scan)))
+    (i32.const 0))
 
   (func $win16_gseg_field (param $index i32) (param $off i32) (result i32)
     (i32.load (i32.add (i32.add (global.get $WIN16_SEG_TABLE)
@@ -2499,8 +3395,16 @@
   (func $win16_global_alloc (param $bytes i32) (result i32)
     (local $need i32) (local $i i32) (local $head i32) (local $n i32)
     (local.set $need (call $win16_gseg_count (local.get $bytes)))
+    (if (i32.and (i32.le_u (local.get $bytes) (i32.const 0x1000))
+                 (i32.ge_u (global.get $win16_next_seg)
+                           (i32.shr_u (global.get $WIN16_SEG_MAX) (i32.const 1))))
+      (then (return (call $win16_pool_alloc (local.get $bytes)))))
 
-    ;; Reuse pass: the first freed block big enough, taken whole.
+    ;; Reuse pass: the first freed block big enough. A larger one is split and
+    ;; its tail stays free as a block of its own. Taking it whole wasted every
+    ;; slot past the first whenever a small block landed in a freed large one,
+    ;; and Civilization II, which keeps ~700 small blocks live beside its
+    ;; WinG bitmaps, ran the 959-slot arena dry that way.
     (local.set $i (i32.const 1))
     (block $scanned (loop $scan
       (br_if $scanned (i32.ge_u (local.get $i) (global.get $win16_next_seg)))
@@ -2508,10 +3412,16 @@
                            (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE)))
                   (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE)))
         (then
-          (if (i32.ge_u (call $win16_gseg_count
-                          (call $win16_gseg_field (local.get $i) (i32.const 12)))
-                        (local.get $need))
+          (local.set $n (call $win16_gseg_count
+            (call $win16_gseg_field (local.get $i) (i32.const 12))))
+          (if (i32.ge_u (local.get $n) (local.get $need))
             (then
+              (if (i32.gt_u (local.get $n) (local.get $need))
+                (then
+                  (call $win16_gseg_store (i32.add (local.get $i) (local.get $need)) (i32.const 8)
+                    (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE)))
+                  (call $win16_gseg_store (i32.add (local.get $i) (local.get $need)) (i32.const 12)
+                    (i32.shl (i32.sub (local.get $n) (local.get $need)) (i32.const 16)))))
               (call $win16_gseg_store (local.get $i) (i32.const 8)
                 (global.get $WIN16_SEG_GLOBAL))
               (call $win16_gseg_store (local.get $i) (i32.const 12) (local.get $bytes))
@@ -2547,13 +3457,13 @@
   (func $win16_global_free (param $h i32)
     (local $index i32)
     (local.set $index (call $win16_sel_to_index (local.get $h)))
-    (if (i32.and (i32.ne (local.get $index) (i32.const 0))
-                 (i32.lt_u (local.get $index) (global.get $WIN16_SEG_MAX)))
+    (if (i32.ne (call $win16_seg_base (local.get $index)) (i32.const 0))
       (then
         (if (i32.and (call $win16_gseg_field (local.get $index) (i32.const 8))
                      (global.get $WIN16_SEG_GLOBAL))
           (then (call $win16_gseg_store (local.get $index) (i32.const 8)
-                  (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE))))))))
+                  (i32.or (call $win16_gseg_field (local.get $index) (i32.const 8))
+                          (global.get $WIN16_SEG_GFREE))))))))
 
   (func $win16_GlobalFree
     (call $win16_global_free (call $win16_arg16 (i32.const 0)))
@@ -2618,6 +3528,28 @@
     (local.set $bytes (call $win16_arg32 (i32.const 1)))
     (local.set $index (call $win16_sel_to_index (local.get $h)))
     (local.set $old (call $win16_gseg_field (local.get $index) (i32.const 12)))
+    ;; A pooled block owns only its own run, so it resizes in place up to that
+    ;; run's length and moves past it; the slot rules below do not apply.
+    (if (i32.and (call $win16_gseg_field (local.get $index) (i32.const 8))
+                 (global.get $WIN16_SEG_POOLED))
+      (then
+        (if (i32.le_u (local.get $bytes) (call $win16_gseg_field (local.get $index) (i32.const 4)))
+          (then
+            (call $win16_gseg_store (local.get $index) (i32.const 12) (local.get $bytes))
+            (global.set $eax (local.get $h))
+            (call $win16_api_return (i32.const 8))
+            (return)))
+        (local.set $new (call $win16_global_alloc (local.get $bytes)))
+        (if (local.get $new)
+          (then
+            (memory.copy
+              (call $g2w (call $win16_far_to_guest (local.get $new) (i32.const 0)))
+              (call $g2w (call $win16_far_to_guest (local.get $h) (i32.const 0)))
+              (local.get $old))
+            (call $win16_global_free (local.get $h))))
+        (global.set $eax (local.get $new))
+        (call $win16_api_return (i32.const 8))
+        (return)))
     (if (i32.le_u (call $win16_gseg_count (local.get $bytes))
                   (call $win16_gseg_count (local.get $old)))
       (then
@@ -2972,17 +3904,28 @@
     (global.set $eax (i32.const 0))
     (call $win16_api_return (i32.const 0)))
 
-  ;; KERNEL.136 GetDriveType(nDrive) -> UINT. The Win16 spelling takes 0 for
-  ;; the current drive and otherwise a one-based number (A:=1, B:=2, C:=3)
-  ;; rather than a root-path string.
-  ;; This runtime exposes one fixed C: drive; reporting every letter as fixed
-  ;; makes InstallShield enumerate nonexistent roots and conclude that no disk
-  ;; can hold its temporary files.
+  ;; KERNEL.136 GetDriveType(nDrive) -> UINT, by drive number rather than a
+  ;; root-path string. A letter the host has mounted (a CD image) answers from its mount record.
+  ;; Win16 has no DRIVE_CDROM: under MSCDEX a CD-ROM is DRIVE_REMOTE, and that
+  ;; is what Civilization II scans the letters for when it looks for its disc
+  ;; (it passes `letter - 'a'`, seg 43:0x0e9b).
+  (func $win16_win_drive_type (param $drive i32) (result i32)
+    (local $mounted i32)
+    (if (i32.ge_u (local.get $drive) (i32.const 26)) (then (return (i32.const 0))))
+    (i32.store (call $g2w (global.get $GUEST_STACK))
+      (i32.or (i32.add (local.get $drive) (i32.const 0x41)) (i32.const 0x5C3A00))) ;; "X:\\\0"
+    (local.set $mounted (call $host_fs_drive_type
+      (call $g2w (global.get $GUEST_STACK)) (i32.const 0)))
+    (if (i32.eq (local.get $mounted) (i32.const 5)) (then (return (i32.const 4)))) ;; REMOTE
+    (if (local.get $mounted) (then (return (local.get $mounted))))
+    (select (i32.const 3) (i32.const 0) (i32.eq (local.get $drive) (i32.const 2)))) ;; C: FIXED
+
+  ;; The Win16 spelling numbers drives from zero (A:=0, B:=1, C:=2) and
+  ;; answers 0 for a drive that does not exist; only C: is a fixed disk here.
+  ;; Reporting other letters as fixed makes InstallShield enumerate
+  ;; nonexistent roots and conclude that no disk can hold its temporary files.
   (func $win16_GetDriveType
-    (global.set $eax (select (i32.const 3) (i32.const 1) ;; FIXED / NO_ROOT_DIR
-      (i32.or
-        (i32.eqz (call $win16_arg16 (i32.const 0)))
-        (i32.eq (call $win16_arg16 (i32.const 0)) (i32.const 3)))))
+    (global.set $eax (call $win16_win_drive_type (call $win16_arg16 (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   ;; KERNEL.166 WinExec(lpCmdLine, uCmdShow) -> UINT. Use the shared shell
@@ -3466,8 +4409,8 @@
   (global $WIN16_DLL_INIT_CONT i32 (i32.const 0xFF98))
 
   ;; Resume a LoadLibrary whose freshly loaded NE DLL has returned from its
-  ;; LibEntry. The continuation record is handle, module id, caller DS, and the
-  ;; original far return. LibEntry is register-called and RETFs no arguments,
+  ;; LibEntry. The continuation record is handle, module id, caller DS, caller
+  ;; SI and DI, and the original far return. LibEntry is register-called and RETFs no arguments,
   ;; so that record is untouched when control reaches this thunk slot.
   (func $win16_dll_init_resume
     (local $handle i32) (local $id i32) (local $ds i32)
@@ -3475,9 +4418,18 @@
     (local.set $handle (call $gl16 (global.get $esp)))
     (local.set $id     (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
     (local.set $ds     (call $gl16 (i32.add (global.get $esp) (i32.const 4))))
-    (local.set $ip     (call $gl16 (i32.add (global.get $esp) (i32.const 6))))
-    (local.set $sel    (call $gl16 (i32.add (global.get $esp) (i32.const 8))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 10)))
+    (local.set $ip     (call $gl16 (i32.add (global.get $esp) (i32.const 10))))
+    (local.set $sel    (call $gl16 (i32.add (global.get $esp) (i32.const 12))))
+    ;; LibEntry is entered with DI=hInstance and is free to leave it (and SI)
+    ;; there, but LoadLibrary is a Pascal API and preserves them for its
+    ;; caller. Civilization II's static initializers walk their table in SI/DI
+    ;; across LoadLibrary("TILES"); returning hInstance in DI made that walk
+    ;; step past its end and loop forever.
+    (global.set $esi (i32.or (i32.and (global.get $esi) (i32.const 0xFFFF0000))
+      (call $gl16 (i32.add (global.get $esp) (i32.const 6)))))
+    (global.set $edi (i32.or (i32.and (global.get $edi) (i32.const 0xFFFF0000))
+      (call $gl16 (i32.add (global.get $esp) (i32.const 8)))))
+    (global.set $esp (i32.add (global.get $esp) (i32.const 14)))
     (call $win16_set_sreg (i32.const 3) (local.get $ds))
     ;; LibEntry/LibMain returns nonzero on success. A rejected dynamic module
     ;; must release its name slot just like a staging or NE-load failure.
@@ -3580,6 +4532,8 @@
             (local.set $ret (call $win16_take_return (i32.const 4)))
             (call $win16_push16 (i32.shr_u (local.get $ret) (i32.const 16)))
             (call $win16_push16 (local.get $ret))
+            (call $win16_push16 (global.get $edi))
+            (call $win16_push16 (global.get $esi))
             (call $win16_push16 (global.get $sreg_ds))
             (call $win16_push16 (local.get $id))
             (call $win16_push16 (local.get $handle))
@@ -4883,6 +5837,8 @@
       (then (call $win16_EnableWindow) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 37))
       (then (call $win16_SetWindowText) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 45))
+      (then (call $win16_BringWindowToTop) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 46))
       (then (call $win16_hwnd_query (i32.const 2)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 49))
@@ -4897,6 +5853,8 @@
       (then (call $win16_word_query (i32.const 0)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 106))
       (then (call $win16_word_query (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 249))
+      (then (call $win16_word_query (i32.const 2)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 109))
       (then (call $win16_PeekMessage) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 137))
@@ -4923,6 +5881,10 @@
       (then (call $win16_hwnd_query (i32.const 5)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 159))
       (then (call $win16_GetSubMenu) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 263))
+      (then (call $win16_GetMenuItemCount) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 264))
+      (then (call $win16_GetMenuItemID) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 160))
       (then (call $win16_hwnd_query (i32.const 6)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 177))
@@ -5033,6 +5995,8 @@
       (then (call $win16_ShowWindow) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 57))
       (then (call $win16_RegisterClass) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 403))
+      (then (call $win16_UnregisterClass) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 107))
       (then (call $win16_DefWindowProc) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 108))
@@ -5393,6 +6357,23 @@
     (call $win16_call32_end)
     (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
+
+  ;; USER.403 UnregisterClass(lpszClassName, hInstance) -> BOOL. hInstance
+  ;; goes across unwidened because RegisterClass stored it that way; a class
+  ;; name with a zero selector is an atom, which the Win32 core takes as is.
+  (func $win16_UnregisterClass
+    (local $name i32) (local $hinst i32)
+    (local.set $name (call $win16_arg16 (i32.const 1)))
+    (if (call $win16_arg16 (i32.const 2))
+      (then (local.set $name (call $win16_far_to_guest
+        (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))))
+    (local.set $hinst (call $win16_arg16 (i32.const 0)))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_UnregisterClassA (local.get $name) (local.get $hinst)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 6)))
 
   ;; USER.404 GetClassInfo(hInstance, lpszClassName, lpWndClass) -> BOOL.
   ;;
@@ -6217,6 +7198,11 @@
     (local.get $wparam))
 
   (func $win16_msg_wparam16 (param $message i32) (param $wparam i32) (result i32)
+    ;; MM_WOM_OPEN/CLOSE/DONE carry the HWAVEOUT, which the task was given in
+    ;; its narrowed form by waveOutOpen.
+    (if (i32.and (i32.ge_u (local.get $message) (i32.const 0x03BB))
+                 (i32.le_u (local.get $message) (i32.const 0x03BD)))
+      (then (return (call $win16_h16 (local.get $wparam)))))
     (if (i32.or (i32.eq (local.get $message) (i32.const 0x0014))
                 (i32.eq (local.get $message) (i32.const 0x0027)))
       (then
@@ -7845,6 +8831,30 @@
     (global.set $eax (call $win16_h16 (global.get $eax)))
     (call $win16_api_return (i32.const 4)))
 
+  ;; USER.263 GetMenuItemCount(hMenu) -> int, -1 for a bad handle.
+  (func $win16_GetMenuItemCount
+    (local $menu i32)
+    (local.set $menu (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (call $win16_call32_begin (i32.const 1))
+    (call $handle_GetMenuItemCount (local.get $menu)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 2)))
+
+  ;; USER.264 GetMenuItemID(hMenu, nPos) -> UINT, 0xFFFF for a popup or a
+  ;; position past the end.
+  (func $win16_GetMenuItemID
+    (local $menu i32) (local $pos i32)
+    (local.set $menu (call $win16_h32 (call $win16_arg16 (i32.const 1))))
+    (local.set $pos (call $win16_arg16 (i32.const 0)))
+    (call $win16_call32_begin (i32.const 2))
+    (call $handle_GetMenuItemID (local.get $menu) (local.get $pos)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 4)))
+
   ;; USER.416 TrackPopupMenu(hMenu, wFlags, x, y, nReserved, hWnd, lpRect).
   (func $win16_TrackPopupMenu
     (local $menu i32) (local $flags i32) (local $x i32) (local $y i32)
@@ -7876,18 +8886,22 @@
     (global.set $eax (i32.const 1))
     (call $win16_api_return (i32.const 0)))
 
-  ;; USER.104 MessageBeep(wType), USER.106 GetKeyState(nVirtKey) — a word in,
-  ;; a word out, no handles involved.
+  ;; USER.104 MessageBeep(wType), USER.106 GetKeyState(nVirtKey) and USER.249
+  ;; GetAsyncKeyState(vKey) — a word in, a word out, no handles involved.
+  ;; $is_key: 0 MessageBeep, 1 GetKeyState, 2 GetAsyncKeyState.
   (func $win16_word_query (param $is_key i32)
     (local $v i32)
     (local.set $v (call $win16_arg16 (i32.const 0)))
     (call $win16_call32_begin (i32.const 1))
-    (if (local.get $is_key)
+    (if (i32.eq (local.get $is_key) (i32.const 2))
+      (then (call $handle_GetAsyncKeyState (local.get $v)
+              (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+    (else (if (local.get $is_key)
       (then (call $handle_GetKeyState
               (i32.shr_s (i32.shl (local.get $v) (i32.const 16)) (i32.const 16))
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
       (else (call $handle_MessageBeep (local.get $v)
-              (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
+              (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))))
     (call $win16_call32_end)
     (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
@@ -7903,6 +8917,17 @@
     (call $win16_call32_end)
     (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
+
+  ;; USER.45 BringWindowToTop(hWnd) -> void. The movie window Civ2 raises
+  ;; over its title screen once the intro is dismissed.
+  (func $win16_BringWindowToTop
+    (local $hwnd i32)
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    (call $win16_call32_begin (i32.const 1))
+    (call $handle_BringWindowToTop (local.get $hwnd)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (call $win16_call32_end)
+    (call $win16_api_return (i32.const 2)))
 
   ;; USER.154 CheckMenuItem / USER.155 EnableMenuItem(hMenu, wID, wFlags).
   (func $win16_menu_item (param $is_enable i32)
@@ -8132,16 +9157,26 @@
   ;; $win16_call32_end refuses. Ending the call the redirect-tolerant way puts
   ;; the task's own EIP back; the yield it asked for is still right here, since
   ;; MFC's Run loop peeks this way between every idle pass.
+  ;;
+  ;; The window and the message range go across too. Dropping them turned every
+  ;; filtered peek into an unfiltered one: Civilization II waits for a sound to
+  ;; end with PeekMessage(&msg, NULL, MM_WOM_DONE, MM_WOM_DONE, PM_REMOVE) from
+  ;; inside its WM_TIMER handler, was handed the next WM_TIMER instead,
+  ;; dispatched it into that same handler, and recursed until SS wrapped.
   (func $win16_PeekMessage
     (local $dst i32) (local $remove i32) (local $tmp i32)
+    (local $hwnd i32) (local $min i32) (local $max i32)
     (local.set $dst (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
+    (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 3))))
+    (local.set $min (call $win16_arg16 (i32.const 2)))
+    (local.set $max (call $win16_arg16 (i32.const 1)))
     (local.set $remove (call $win16_arg16 (i32.const 0)))
     (local.set $tmp (global.get $GUEST_STACK))
     (call $win16_call32_begin (i32.const 5))
     (call $win16_call32_arg (i32.const 4) (local.get $remove))
-    (call $handle_PeekMessageA (local.get $tmp) (i32.const 0) (i32.const 0)
-      (i32.const 0) (local.get $remove) (i32.const 0))
+    (call $handle_PeekMessageA (local.get $tmp) (local.get $hwnd) (local.get $min)
+      (local.get $max) (local.get $remove) (i32.const 0))
     (drop (call $win16_call32_end_redirected))
     (if (global.get $eax)
       (then
@@ -8338,6 +9373,15 @@
     (global.set $edx (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
+
+  ;; GDI.461 SetObjectOwner(hObject, hOwner) -> void. Ownership only decides
+  ;; which task's exit reclaims a GDI object. WinG calls it on the halftone
+  ;; palette and brushes it creates in LibMain so they outlive the task that
+  ;; first loaded it. Nothing here reclaims GDI objects when a task exits, so
+  ;; every object already outlives its creator and there is no owner to move.
+  (func $win16_SetObjectOwner
+    (global.set $eax (i32.const 0))
+    (call $win16_api_return (i32.const 4)))
 
   ;; GDI.471 GetTextExtentPoint(hDC, lpString, nCount, lpSize) -> BOOL.
   ;; Windows 3.1 added the pointer-result form alongside GDI.91. Win16 SIZE is
@@ -8639,8 +9683,19 @@
 
   ;; GDI.69 DeleteObject(hObject), GDI.68 DeleteDC(hDC).
   (func $win16_DeleteObject
-    (local $h i32) (local $deleted i32) (local $dynamic i32)
+    (local $h i32) (local $deleted i32) (local $dynamic i32) (local $rec i32)
+    (local $dib_bits i32)
     (local.set $h (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+    ;; A DIB section made by GDI.489 keeps its pixels in a global block the
+    ;; record does not own (flags bit0 set, bit2 clear); the block goes back to
+    ;; the arena once the object is really gone. See $win16_CreateDIBSection.
+    (local.set $rec (call $gdi_object_record (local.get $h)))
+    (if (i32.and (i32.ne (local.get $rec) (i32.const 0))
+          (i32.eq (call $gdi_object_type (local.get $h)) (i32.const 3)))
+      (then
+        (if (i32.eq (i32.and (load.field.memarg GdiBitmap flags (local.get $rec)) (i32.const 5))
+                    (i32.const 1))
+          (then (local.set $dib_bits (load.field.memarg GdiBitmap bits (local.get $rec)))))))
     ;; Whether this is a real allocated object has to be sampled *before* the
     ;; delete: a successful delete clears the record, so asking afterwards
     ;; cannot tell a deleted brush from a stock one and the answer is 0 either
@@ -8661,8 +9716,20 @@
     ;; NULL_BRUSH in exactly this way for PictureBox AutoRedraw state.
     (if (i32.and (i32.ne (local.get $deleted) (i32.const 0)) (local.get $dynamic))
       (then (call $win16_h16_forget (local.get $h))))
+    (if (i32.and (i32.ne (local.get $dib_bits) (i32.const 0))
+          (i32.eqz (call $gdi_object_record (local.get $h))))
+      (then (call $win16_dib_block_free (local.get $dib_bits))))
     (global.set $eax (i32.and (local.get $deleted) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
+
+  ;; Return a DIB section's pixel block (a WASM address) to the global arena,
+  ;; if it is one: the head of a live global block. Anything else — a Win32
+  ;; DIB section in the DIB arena — is left alone.
+  (func $win16_dib_block_free (param $bits i32)
+    (local $index i32)
+    (local.set $index (call $win16_gblock_at (call $w2g (local.get $bits))))
+    (if (local.get $index)
+      (then (call $win16_global_free (call $win16_index_to_sel (local.get $index))))))
 
   (func $win16_DeleteDC
     (local $h i32)
@@ -9863,6 +10930,91 @@
     (global.set $eax (call $win16_h16 (global.get $eax)))
     (call $win16_api_return (i32.const 20)))
 
+  ;; GDI.489 CreateDIBSection(hDC, lpbmi, iUsage, lplpvBits, hSection, dwOffset)
+  ;; -> HBITMAP, with the bits handed back as a far pointer. Windows 95's GDI
+  ;; exports this to 16-bit callers, and WinG looks for it by name: finding it
+  ;; is what keeps WinG off its Windows 3.1 path through WINGDIB.DRV, which is
+  ;; not installed here, and without which its LibMain fails and every WinG
+  ;; entry point Civilization II asks for comes back NULL.
+  ;;
+  ;; The pixels have to be reachable through a selector, so they live in a
+  ;; global block rather than the DIB arena: consecutive arena slots are
+  ;; consecutive selectors, which is exactly the tiling __AHINCR walks, so a
+  ;; caller stepping a huge pointer through a large bitmap lands on the right
+  ;; bytes. The colour table follows the pixels in the same block. The record
+  ;; does not own the block (flag bit2 clear), so DeleteObject leaves it alone.
+  (func $win16_CreateDIBSection
+    (local $hdc i32) (local $bmi i32) (local $usage i32) (local $ppv i32)
+    (local $plan i32) (local $image i32) (local $count i32) (local $sel i32)
+    (local $bits i32) (local $palette i32) (local $flags i32) (local $handle i32)
+    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 9))))
+    (local.set $bmi (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 8)) (call $win16_arg16 (i32.const 7))))
+    (local.set $usage (call $win16_arg16 (i32.const 6)))
+    (local.set $ppv (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
+    (if (i32.eqz (call $win16_arg16 (i32.const 5))) (then (local.set $ppv (i32.const 0))))
+    (local.set $plan (global.get $GDI_BITMAP_PLAN))
+    (block $fail
+      (br_if $fail (i32.eqz (call $win16_arg16 (i32.const 8))))
+      (br_if $fail (i32.gt_u (local.get $usage) (i32.const 1)))
+      (br_if $fail (i32.eqz (call $gdi_bitmap_plan_info
+        (call $g2w (local.get $bmi)) (local.get $plan))))
+      (local.set $image (i32.load offset=32 (local.get $plan)))
+      (local.set $count (i32.load offset=24 (local.get $plan)))
+      (local.set $sel (call $win16_global_alloc
+        (i32.add (local.get $image) (i32.shl (local.get $count) (i32.const 2)))))
+      (br_if $fail (i32.eqz (local.get $sel)))
+      (local.set $bits (call $g2w (call $win16_far_to_guest (local.get $sel) (i32.const 0))))
+      (local.set $palette (i32.const 0))
+      (if (local.get $count)
+        (then
+          (local.set $palette (i32.add (local.get $bits) (local.get $image)))
+          (if (i32.eq (i32.load offset=8 (local.get $plan)) (i32.const 16))
+            (then (memory.copy (local.get $palette)
+                    (i32.load offset=20 (local.get $plan)) (i32.const 12)))
+            (else (drop (call $gdi_bitmap_copy_palette
+                    (local.get $palette) (i32.load offset=20 (local.get $plan))
+                    (local.get $count) (i32.load offset=12 (local.get $plan))
+                    (local.get $usage) (call $gdi_dc_selected_palette (local.get $hdc))))))))
+      (local.set $flags (i32.or (i32.and (i32.load offset=12 (local.get $plan)) (i32.const 2))
+                                (i32.const 1)))
+      (local.set $handle (call $gdi_bitmap_alloc
+        (i32.load (local.get $plan)) (i32.load offset=4 (local.get $plan))
+        (i32.load offset=8 (local.get $plan)) (local.get $flags)
+        (local.get $bits) (i32.load offset=16 (local.get $plan))
+        (local.get $palette) (local.get $count)))
+      (if (i32.eqz (local.get $handle))
+        (then (call $win16_global_free (local.get $sel)) (br $fail)))
+      (if (local.get $ppv)
+        (then (call $gs32 (local.get $ppv) (i32.shl (local.get $sel) (i32.const 16)))))
+      (global.set $eax (call $win16_h16 (local.get $handle)))
+      (call $win16_api_return (i32.const 20))
+      (return))
+    (if (local.get $ppv) (then (call $gs32 (local.get $ppv) (i32.const 0))))
+    (global.set $eax (i32.const 0))
+    (call $win16_api_return (i32.const 20)))
+
+  ;; GDI.603 GetDIBColorTable / GDI.602 SetDIBColorTable(hDC, uStart, cEntries,
+  ;; lpColors) -> entries copied, over the DIB section selected into hDC.
+  (func $win16_dib_color_table (param $is_set i32)
+    (local $hdc i32) (local $start i32) (local $n i32) (local $colors i32)
+    (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 4))))
+    (local.set $start (call $win16_arg16 (i32.const 3)))
+    (local.set $n (call $win16_arg16 (i32.const 2)))
+    (local.set $colors (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+    (if (i32.eqz (call $win16_arg16 (i32.const 1))) (then (local.set $colors (i32.const 0))))
+    (call $win16_call32_begin (i32.const 4))
+    (if (local.get $is_set)
+      (then (call $handle_SetDIBColorTable (local.get $hdc) (local.get $start)
+              (local.get $n) (local.get $colors) (i32.const 0) (i32.const 0)))
+      (else (call $handle_GetDIBColorTable (local.get $hdc) (local.get $start)
+              (local.get $n) (local.get $colors) (i32.const 0) (i32.const 0))))
+    (call $win16_call32_end)
+    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (call $win16_api_return (i32.const 10)))
+
   ;; GDI.148 SetBrushOrg(hDC, nXOrg, nYOrg) -> previous origin in DX:AX.
   (func $win16_SetBrushOrg
     (local $hdc i32) (local $x i32) (local $y i32) (local $tmp i32)
@@ -10311,6 +11463,12 @@
       (then (call $win16_SetDIBitsToDevice) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 442))
       (then (call $win16_CreateDIBitmap) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 489))
+      (then (call $win16_CreateDIBSection) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 602))
+      (then (call $win16_dib_color_table (i32.const 1)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 603))
+      (then (call $win16_dib_color_table (i32.const 0)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 19))
       (then (call $win16_dc_point (i32.const 1)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 20))
@@ -10397,6 +11555,8 @@
       (then (call $win16_GetTextExtent) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 471))
       (then (call $win16_GetTextExtentPoint) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 461))
+      (then (call $win16_SetObjectOwner) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 80))
       (then (call $win16_GetDeviceCaps) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 82))
@@ -10548,9 +11708,648 @@
   ;; MMSYSTEM.401 waveOutGetNumDevs() -> UINT, and MMSYSTEM.2 sndPlaySound(
   ;; lpszSound, fuSound) -> BOOL. Hearts asks how many wave devices there are
   ;; before it will play anything, so answering it is what turns the sound on.
+  ;; MMSYSTEM.404-420, the waveOut family, over the same host voice and the
+  ;; same audio-clock WHDR_DONE scheduling the Win32 handlers use. What differs
+  ;; is only the 16-bit shape of the arguments:
+  ;;   - every pointer is a far pointer, including WAVEHDR.lpData;
+  ;;   - HWAVEOUT is a word: the host voice id is narrowed through the handle
+  ;;     map and written back with a 16-bit store (the Win32 handler's dword
+  ;;     store would clobber the caller's next field);
+  ;;   - a CALLBACK_WINDOW hwnd is a 16-bit handle and is widened before it is
+  ;;     stored, since the completion is posted through the 32-bit queue;
+  ;;   - MM_WOM_DONE's lParam is the header's far pointer, which is what the
+  ;;     task handed in and what it compares against;
+  ;;   - MMTIME's wType is a UINT, so the union starts at +2, not +4.
+  ;; A CALLBACK_FUNCTION would need a far call into 16-bit code from the
+  ;; completion queue, which only knows how to call 32-bit guests; it is
+  ;; refused with MMSYSERR_NOTSUPPORTED rather than jumped into as flat code.
+  (func $win16_waveout (param $ordinal i32) (result i32)
+    (local $hwo i32) (local $hdr i32) (local $hdr_far i32) (local $data i32)
+    (local $len i32) (local $wa i32) (local $flags i32) (local $cb i32)
+    (local $fmt i32) (local $ph i32) (local $p i32)
+    ;; 404 waveOutOpen(lphWaveOut, uDeviceID, lpFormat, dwCallback, dwInstance, dwFlags)
+    (if (i32.eq (local.get $ordinal) (i32.const 404))
+      (then
+        (local.set $flags (call $win16_arg32 (i32.const 0)))
+        (local.set $cb (call $win16_arg32 (i32.const 4)))
+        (local.set $fmt (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 7)) (call $win16_arg16 (i32.const 6))))
+        (local.set $ph (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 10)) (call $win16_arg16 (i32.const 9))))
+        (if (i32.eqz (call $win16_arg16 (i32.const 10))) (then (local.set $ph (i32.const 0))))
+        (if (i32.eq (i32.and (i32.shr_u (local.get $flags) (i32.const 16)) (i32.const 7))
+                    (i32.const 3))
+          (then
+            (global.set $eax (i32.const 8))      ;; MMSYSERR_NOTSUPPORTED
+            (call $win16_api_return (i32.const 22))
+            (return (i32.const 1))))
+        (if (i32.eq (i32.and (i32.shr_u (local.get $flags) (i32.const 16)) (i32.const 7))
+                    (i32.const 1))
+          (then (local.set $cb (call $win16_h32 (i32.and (local.get $cb) (i32.const 0xFFFF))))))
+        (if (i32.or (i32.eqz (call $win16_arg16 (i32.const 7)))
+              (i32.and (i32.ne (call $win16_arg16 (i32.const 8)) (i32.const 0))
+                       (i32.ne (call $win16_arg16 (i32.const 8)) (i32.const 0xFFFF))))
+          (then
+            (global.set $eax (select (i32.const 2) (i32.const 11)
+              (call $win16_arg16 (i32.const 7))))  ;; BADDEVICEID / INVALPARAM
+            (call $win16_api_return (i32.const 22))
+            (return (i32.const 1))))
+        (local.set $p (call $win16_arg32 (i32.const 2)))
+        (call $win16_call32_begin (i32.const 6))
+        (call $win16_call32_arg (i32.const 5) (local.get $flags))
+        (call $handle_waveOutOpen (i32.const 0) (i32.const 0) (local.get $fmt)
+          (local.get $cb) (local.get $p) (i32.const 0))
+        (call $win16_call32_end)
+        (if (i32.and (i32.eqz (global.get $eax))
+              (i32.and (i32.ne (local.get $ph) (i32.const 0))
+                       (i32.eqz (i32.and (local.get $flags) (i32.const 1)))))
+          (then (call $gs16 (local.get $ph) (call $win16_h16 (global.get $wave_out_handle)))))
+        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 22))
+        (return (i32.const 1))))
+    ;; The rest take the HWAVEOUT first. Header-taking calls are
+    ;; (hwo, lpWaveOutHdr, uSize): the header's far pointer is words 2:1.
+    (local.set $hdr_far (call $win16_arg32 (i32.const 1)))
+    (local.set $hdr (call $win16_far_to_guest
+      (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+    ;; 405 waveOutClose / 409 Pause / 410 Restart / 411 Reset(hWaveOut)
+    (if (i32.or (i32.eq (local.get $ordinal) (i32.const 405))
+          (i32.and (i32.ge_u (local.get $ordinal) (i32.const 409))
+                   (i32.le_u (local.get $ordinal) (i32.const 411))))
+      (then
+        (local.set $hwo (call $win16_h32 (call $win16_arg16 (i32.const 0))))
+        (call $win16_call32_begin (i32.const 1))
+        (if (i32.eq (local.get $ordinal) (i32.const 405))
+          (then (call $handle_waveOutClose (local.get $hwo) (i32.const 0) (i32.const 0)
+                  (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i32.eq (local.get $ordinal) (i32.const 409))
+          (then (call $handle_waveOutPause (local.get $hwo) (i32.const 0) (i32.const 0)
+                  (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i32.eq (local.get $ordinal) (i32.const 410))
+          (then (call $handle_waveOutRestart (local.get $hwo) (i32.const 0) (i32.const 0)
+                  (i32.const 0) (i32.const 0) (i32.const 0))))
+        (if (i32.eq (local.get $ordinal) (i32.const 411))
+          (then (call $handle_waveOutReset (local.get $hwo) (i32.const 0) (i32.const 0)
+                  (i32.const 0) (i32.const 0) (i32.const 0))))
+        (call $win16_call32_end)
+        (if (i32.eq (local.get $ordinal) (i32.const 405))
+          (then (call $win16_h16_forget (local.get $hwo))))
+        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 2))
+        (return (i32.const 1))))
+    (local.set $hwo (call $win16_h32 (call $win16_arg16 (i32.const 3))))
+    ;; 406 waveOutPrepareHeader / 407 waveOutUnprepareHeader
+    (if (i32.or (i32.eq (local.get $ordinal) (i32.const 406))
+                (i32.eq (local.get $ordinal) (i32.const 407)))
+      (then
+        (global.set $eax (i32.const 11))         ;; MMSYSERR_INVALPARAM
+        (if (call $win16_arg16 (i32.const 2))
+          (then
+            (call $win16_call32_begin (i32.const 3))
+            (if (i32.eq (local.get $ordinal) (i32.const 406))
+              (then (call $handle_waveOutPrepareHeader (local.get $hwo) (local.get $hdr)
+                      (i32.const 32) (i32.const 0) (i32.const 0) (i32.const 0)))
+              (else (call $handle_waveOutUnprepareHeader (local.get $hwo) (local.get $hdr)
+                      (i32.const 32) (i32.const 0) (i32.const 0) (i32.const 0))))
+            (call $win16_call32_end)))
+        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 8))
+        (return (i32.const 1))))
+    ;; 408 waveOutWrite(hWaveOut, lpWaveOutHdr, uSize)
+    (if (i32.eq (local.get $ordinal) (i32.const 408))
+      (then
+        (global.set $eax (i32.const 11))
+        (if (call $win16_arg16 (i32.const 2))
+          (then
+            (local.set $wa (call $g2w (local.get $hdr)))
+            (local.set $data (i32.load (local.get $wa)))
+            (local.set $len (i32.load offset=4 (local.get $wa)))
+            (if (i32.and (i32.ne (i32.shr_u (local.get $data) (i32.const 16)) (i32.const 0))
+                         (i32.ne (local.get $len) (i32.const 0)))
+              (then
+                (i32.store offset=16 (local.get $wa)
+                  (i32.or (i32.and (i32.load offset=16 (local.get $wa)) (i32.const 0xFFFFFFFE))
+                          (i32.const 0x10)))
+                (drop (call $host_wave_out_write (local.get $hwo)
+                  (call $g2w (call $win16_far_to_guest
+                    (i32.shr_u (local.get $data) (i32.const 16))
+                    (i32.and (local.get $data) (i32.const 0xFFFF))))
+                  (local.get $len)))
+                (drop (call $host_wave_out_schedule_done (local.get $hwo)
+                  (local.get $wa) (local.get $hdr_far) (local.get $len)))))
+            (global.set $eax (i32.const 0))))
+        (call $win16_api_return (i32.const 8))
+        (return (i32.const 1))))
+    ;; 412 waveOutGetPosition(hWaveOut, lpInfo, uSize): TIME_BYTES only.
+    (if (i32.eq (local.get $ordinal) (i32.const 412))
+      (then
+        (global.set $eax (i32.const 11))
+        (if (i32.and (i32.ne (call $win16_arg16 (i32.const 2)) (i32.const 0))
+                     (i32.ge_u (call $win16_arg16 (i32.const 0)) (i32.const 6)))
+          (then
+            (call $gs16 (local.get $hdr) (i32.const 4))
+            (call $gs32 (i32.add (local.get $hdr) (i32.const 2))
+              (call $host_wave_out_get_pos (local.get $hwo)))
+            (global.set $eax (i32.const 0))))
+        (call $win16_api_return (i32.const 8))
+        (return (i32.const 1))))
+    ;; 415 waveOutGetVolume(uDeviceID, lpdwVolume) / 416 waveOutSetVolume(uDeviceID, dw)
+    (if (i32.eq (local.get $ordinal) (i32.const 415))
+      (then
+        (local.set $p (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
+        (global.set $eax (i32.const 11))
+        (if (call $win16_arg16 (i32.const 1))
+          (then (call $gs32 (local.get $p) (global.get $wave_out_volume))
+                (global.set $eax (i32.const 0))))
+        (call $win16_api_return (i32.const 6))
+        (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 416))
+      (then
+        (local.set $p (call $win16_arg32 (i32.const 0)))
+        (local.set $hwo (call $win16_arg16 (i32.const 2)))
+        (call $win16_call32_begin (i32.const 2))
+        (call $handle_waveOutSetVolume (local.get $hwo)
+          (local.get $p) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+        (call $win16_call32_end)
+        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (call $win16_api_return (i32.const 6))
+        (return (i32.const 1))))
+    (i32.const 0))
+
+  ;; ---- MMSYSTEM mmio (1210-1224) ----
+  ;;
+  ;; Buffered multimedia file I/O with the documented Win16 semantics. An
+  ;; HMMIO is the selector of a global block this module owns:
+  ;;   +0 'MMIO'  +4 kind (0 DOS file, 1 memory file)  +8 host file handle
+  ;;   +0xC selector of a buffer allocated here (0 if none or the app's own)
+  ;;   +0x10 the MMIOINFO itself, in the 66-byte Win16 layout, which is also
+  ;;         what mmioGetInfo hands out: +0x10 cchBuffer, +0x14 pchBuffer,
+  ;;         +0x18 pchNext, +0x1C pchEndRead, +0x20 pchEndWrite (all huge far
+  ;;         pointers), +0x24 lBufOffset, +0x28 lDiskOffset, +0x40 hmmio.
+  ;; A memory file ('MEM ') is its buffer: nothing is ever read into it, and
+  ;; one opened without MMIO_CREATE is readable to the end of that buffer.
+  ;; Writing is not implemented; a write-mode open of a real file or a write
+  ;; Advance is left to the fail-fast path rather than pretending.
+  (global $MMIO_INFO i32 (i32.const 0x10))
+
+  ;; Huge-pointer arithmetic over contiguous arena slots (__AHINCR = 8).
+  (func $win16_huge_add (param $far i32) (param $n i32) (result i32)
+    (local $off i32)
+    (local.set $off (i32.add (i32.and (local.get $far) (i32.const 0xFFFF)) (local.get $n)))
+    (i32.or
+      (i32.shl (i32.add (i32.shr_u (local.get $far) (i32.const 16))
+                        (i32.shl (i32.shr_u (local.get $off) (i32.const 16)) (i32.const 3)))
+               (i32.const 16))
+      (i32.and (local.get $off) (i32.const 0xFFFF))))
+
+  (func $win16_far_linear (param $far i32) (result i32)
+    (call $win16_far_to_guest (i32.shr_u (local.get $far) (i32.const 16))
+                              (i32.and (local.get $far) (i32.const 0xFFFF))))
+
+  ;; The object behind an HMMIO, as a guest-linear address, or 0.
+  (func $win16_mmio_obj (param $h i32) (result i32)
+    (local $index i32) (local $base i32)
+    (local.set $index (call $win16_sel_to_index (local.get $h)))
+    (local.set $base (call $win16_seg_base (local.get $index)))
+    (if (i32.eqz (local.get $base)) (then (return (i32.const 0))))
+    (if (i32.ne (call $gl32 (local.get $base)) (i32.const 0x4F494D4D)) ;; 'MMIO'
+      (then (return (i32.const 0))))
+    (local.get $base))
+
+  (func $win16_mmio_get (param $o i32) (param $field i32) (result i32)
+    (call $gl32 (i32.add (i32.add (local.get $o) (global.get $MMIO_INFO)) (local.get $field))))
+  (func $win16_mmio_set (param $o i32) (param $field i32) (param $v i32)
+    (call $gs32 (i32.add (i32.add (local.get $o) (global.get $MMIO_INFO)) (local.get $field))
+      (local.get $v)))
+  ;; Bytes between the buffer start and one of its pointer fields.
+  (func $win16_mmio_dist (param $o i32) (param $field i32) (result i32)
+    (i32.sub (call $win16_far_linear (call $win16_mmio_get (local.get $o) (local.get $field)))
+             (call $win16_far_linear (call $win16_mmio_get (local.get $o) (i32.const 0x14)))))
+  (func $win16_mmio_set_dist (param $o i32) (param $field i32) (param $d i32)
+    (call $win16_mmio_set (local.get $o) (local.get $field)
+      (call $win16_huge_add (call $win16_mmio_get (local.get $o) (i32.const 0x14)) (local.get $d))))
+
+  ;; Refill the buffer from lDiskOffset, as mmioAdvance(MMIO_READ) and a read
+  ;; that drains the buffer both do. Bytes now in it, or -2 when the host has
+  ;; not got that range yet (the caller parks and the whole call retries).
+  (func $win16_mmio_fill (param $o i32) (result i32)
+    (local $disk i32) (local $got i32)
+    (local.set $disk (call $win16_mmio_get (local.get $o) (i32.const 0x28)))
+    (local.set $got (call $win16_avi_io (call $gl32 (i32.add (local.get $o) (i32.const 8)))
+      (local.get $disk)
+      (call $win16_far_linear (call $win16_mmio_get (local.get $o) (i32.const 0x14)))
+      (call $win16_mmio_get (local.get $o) (i32.const 0x10))))
+    (if (i32.eq (local.get $got) (i32.const -2)) (then (return (i32.const -2))))
+    (if (i32.lt_s (local.get $got) (i32.const 0)) (then (local.set $got (i32.const 0))))
+    (call $win16_mmio_set (local.get $o) (i32.const 0x24) (local.get $disk))
+    (call $win16_mmio_set (local.get $o) (i32.const 0x28)
+      (i32.add (local.get $disk) (local.get $got)))
+    (call $win16_mmio_set_dist (local.get $o) (i32.const 0x18) (i32.const 0))
+    (call $win16_mmio_set_dist (local.get $o) (i32.const 0x1C) (local.get $got))
+    (call $win16_mmio_set_dist (local.get $o) (i32.const 0x20)
+      (call $win16_mmio_get (local.get $o) (i32.const 0x10)))
+    (local.get $got))
+
+  ;; The logical file position.
+  (func $win16_mmio_tell (param $o i32) (result i32)
+    (if (i32.eqz (call $win16_mmio_get (local.get $o) (i32.const 0x10)))
+      (then (return (call $win16_mmio_get (local.get $o) (i32.const 0x28)))))
+    (i32.add (call $win16_mmio_get (local.get $o) (i32.const 0x24))
+             (call $win16_mmio_dist (local.get $o) (i32.const 0x18))))
+
+  ;; mmioSeek. Inside the loaded buffer only the pointer moves; anywhere else
+  ;; the buffer is emptied and the next read refills it from there.
+  (func $win16_mmio_seek (param $o i32) (param $off i32) (param $origin i32) (result i32)
+    (local $pos i32) (local $size i32)
+    (if (i32.eq (call $gl32 (i32.add (local.get $o) (i32.const 4))) (i32.const 1))
+      (then
+        ;; A memory file spans its readable part of the buffer.
+        (local.set $size (call $win16_mmio_dist (local.get $o) (i32.const 0x1C)))
+        (local.set $pos (local.get $off))
+        (if (i32.eq (local.get $origin) (i32.const 1))
+          (then (local.set $pos (i32.add (local.get $off) (call $win16_mmio_tell (local.get $o))))))
+        (if (i32.eq (local.get $origin) (i32.const 2))
+          (then (local.set $pos (i32.add (local.get $off) (local.get $size)))))
+        (if (i32.or (i32.lt_s (local.get $pos) (i32.const 0))
+                    (i32.gt_s (local.get $pos)
+                      (call $win16_mmio_get (local.get $o) (i32.const 0x10))))
+          (then (return (i32.const -1))))
+        (call $win16_mmio_set_dist (local.get $o) (i32.const 0x18) (local.get $pos))
+        (return (local.get $pos))))
+    (local.set $pos (local.get $off))
+    (if (i32.eq (local.get $origin) (i32.const 1))
+      (then (local.set $pos (i32.add (local.get $off) (call $win16_mmio_tell (local.get $o))))))
+    (if (i32.eq (local.get $origin) (i32.const 2))
+      (then
+        (local.set $size (call $legacy_file_seek
+          (call $gl32 (i32.add (local.get $o) (i32.const 8))) (i32.const 0) (i32.const 2)
+          (i32.const -1)))
+        (if (i32.eq (local.get $size) (i32.const -1)) (then (return (i32.const -1))))
+        (local.set $pos (i32.add (local.get $off) (local.get $size)))))
+    (if (i32.lt_s (local.get $pos) (i32.const 0)) (then (return (i32.const -1))))
+    (if (call $win16_mmio_get (local.get $o) (i32.const 0x10))
+      (then
+        (if (i32.and
+              (i32.ge_s (local.get $pos) (call $win16_mmio_get (local.get $o) (i32.const 0x24)))
+              (i32.le_s (local.get $pos)
+                (i32.add (call $win16_mmio_get (local.get $o) (i32.const 0x24))
+                         (call $win16_mmio_dist (local.get $o) (i32.const 0x1C)))))
+          (then
+            (call $win16_mmio_set_dist (local.get $o) (i32.const 0x18)
+              (i32.sub (local.get $pos) (call $win16_mmio_get (local.get $o) (i32.const 0x24))))
+            (return (local.get $pos))))
+        (call $win16_mmio_set (local.get $o) (i32.const 0x24) (local.get $pos))
+        (call $win16_mmio_set_dist (local.get $o) (i32.const 0x18) (i32.const 0))
+        (call $win16_mmio_set_dist (local.get $o) (i32.const 0x1C) (i32.const 0))))
+    (call $win16_mmio_set (local.get $o) (i32.const 0x28) (local.get $pos))
+    (local.get $pos))
+
+  ;; mmioRead into a guest-linear buffer. Bytes read, -1 on error, -2 pending.
+  (func $win16_mmio_read (param $o i32) (param $dst i32) (param $n i32) (result i32)
+    (local $done i32) (local $avail i32) (local $got i32)
+    (if (i32.le_s (local.get $n) (i32.const 0)) (then (return (i32.const 0))))
+    (if (i32.eqz (call $win16_mmio_get (local.get $o) (i32.const 0x10)))
+      (then
+        (local.set $got (call $win16_avi_io (call $gl32 (i32.add (local.get $o) (i32.const 8)))
+          (call $win16_mmio_get (local.get $o) (i32.const 0x28)) (local.get $dst) (local.get $n)))
+        (if (i32.lt_s (local.get $got) (i32.const 0)) (then (return (local.get $got))))
+        (call $win16_mmio_set (local.get $o) (i32.const 0x28)
+          (i32.add (call $win16_mmio_get (local.get $o) (i32.const 0x28)) (local.get $got)))
+        (return (local.get $got))))
+    (block $done (loop $more
+      (br_if $done (i32.ge_u (local.get $done) (local.get $n)))
+      (local.set $avail (i32.sub (call $win16_mmio_dist (local.get $o) (i32.const 0x1C))
+                                 (call $win16_mmio_dist (local.get $o) (i32.const 0x18))))
+      (if (i32.le_s (local.get $avail) (i32.const 0))
+        (then
+          ;; The buffer is spent. A memory file has nothing behind it.
+          (br_if $done (i32.eq (call $gl32 (i32.add (local.get $o) (i32.const 4))) (i32.const 1)))
+          (local.set $got (call $win16_mmio_fill (local.get $o)))
+          (if (i32.eq (local.get $got) (i32.const -2)) (then (return (i32.const -2))))
+          (br_if $done (i32.eqz (local.get $got)))
+          (br $more)))
+      (if (i32.gt_u (local.get $avail) (i32.sub (local.get $n) (local.get $done)))
+        (then (local.set $avail (i32.sub (local.get $n) (local.get $done)))))
+      (call $guest_memmove (i32.add (local.get $dst) (local.get $done))
+        (call $win16_far_linear (call $win16_mmio_get (local.get $o) (i32.const 0x18)))
+        (local.get $avail))
+      (call $win16_mmio_set (local.get $o) (i32.const 0x18)
+        (call $win16_huge_add (call $win16_mmio_get (local.get $o) (i32.const 0x18))
+                              (local.get $avail)))
+      (local.set $done (i32.add (local.get $done) (local.get $avail)))
+      (br $more)))
+    (local.get $done))
+
+  ;; A read reached a range the host is still fetching. mmio's own state may
+  ;; have moved, so put the position back before parking; the retried call
+  ;; then starts from exactly where this one did.
+  (func $win16_mmio_park (param $o i32) (param $pos i32)
+    (drop (call $win16_mmio_seek (local.get $o) (local.get $pos) (i32.const 0)))
+    (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
+    (call $spin_park (i32.const 12))) ;; IO_WAIT
+
+  ;; 1210 mmioOpen(LPSTR szFilename, LPMMIOINFO lpmmioinfo, DWORD dwOpenFlags)
+  (func $win16_mmioOpen (result i32)
+    (local $flags i32) (local $info i32) (local $name i32) (local $fcc i32)
+    (local $sel i32) (local $o i32) (local $cch i32) (local $buf i32) (local $bsel i32)
+    (local $fh i32) (local $mem i32) (local $err i32)
+    (local.set $flags (call $win16_arg32 (i32.const 0)))
+    (if (call $win16_arg16 (i32.const 3))
+      (then (local.set $info (call $win16_far_to_guest
+        (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))))
+    (local.set $name (call $win16_arg32 (i32.const 4)))
+    ;; MMIO_PARSE, MMIO_DELETE, MMIO_EXIST, MMIO_GETTEMP, and custom I/O
+    ;; procedures are real features this module does not have yet.
+    (if (i32.and (local.get $flags) (i32.const 0x24300)) (then (return (i32.const 0))))
+    (if (local.get $info)
+      (then
+        (local.set $fcc (call $gl32 (i32.add (local.get $info) (i32.const 4))))
+        (if (call $gl32 (i32.add (local.get $info) (i32.const 8))) (then (return (i32.const 0))))
+        (local.set $cch (call $gl32 (i32.add (local.get $info) (i32.const 0x10))))
+        (local.set $buf (call $gl32 (i32.add (local.get $info) (i32.const 0x14))))))
+    (local.set $mem (i32.eq (local.get $fcc) (i32.const 0x204D454D))) ;; 'MEM '
+    (if (i32.eqz (i32.or (local.get $mem)
+                   (i32.or (i32.eqz (local.get $fcc))
+                           (i32.eq (local.get $fcc) (i32.const 0x20534F44))))) ;; 'DOS '
+      (then (return (i32.const 0))))
+    (if (i32.and (i32.eqz (local.get $mem)) (i32.ne (i32.and (local.get $flags) (i32.const 3)) (i32.const 0)))
+      (then (return (i32.const 0))))
+    (block $fail
+      (local.set $err (i32.const 258)) ;; MMIOERR_OUTOFMEMORY
+      (local.set $sel (call $win16_global_alloc (i32.const 0x60)))
+      (br_if $fail (i32.eqz (local.get $sel)))
+      (local.set $o (call $win16_far_to_guest (local.get $sel) (i32.const 0)))
+      (call $gs32 (local.get $o) (i32.const 0x4F494D4D))
+      (call $gs32 (i32.add (local.get $o) (i32.const 4)) (local.get $mem))
+      (call $gs32 (i32.add (local.get $o) (i32.const 8)) (i32.const -1))
+      (if (local.get $mem)
+        (then
+          (if (i32.eqz (local.get $cch)) (then (local.set $cch (i32.const 8192))))
+          (if (i32.eqz (local.get $buf))
+            (then
+              ;; A memory file with no buffer of its own needs MMIO_ALLOCBUF.
+              (local.set $err (i32.const 266)) ;; MMIOERR_UNBUFFERED
+              (br_if $fail (i32.eqz (i32.and (local.get $flags) (i32.const 0x10000))))
+              (local.set $err (i32.const 258))
+              (local.set $bsel (call $win16_global_alloc (local.get $cch)))
+              (br_if $fail (i32.eqz (local.get $bsel)))
+              (local.set $buf (i32.shl (local.get $bsel) (i32.const 16))))))
+        (else
+          (local.set $err (i32.const 257)) ;; MMIOERR_FILENOTFOUND
+          (br_if $fail (i32.eqz (local.get $name)))
+          (call $win16_call32_begin (i32.const 2))
+          (call $handle__lopen (call $win16_far_linear (local.get $name)) (i32.const 0)
+            (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+          (call $win16_call32_end)
+          (local.set $fh (global.get $eax))
+          (br_if $fail (i32.eq (local.get $fh) (i32.const -1)))
+          (call $gs32 (i32.add (local.get $o) (i32.const 8)) (local.get $fh))
+          (if (i32.and (local.get $flags) (i32.const 0x10000))
+            (then
+              (if (i32.eqz (local.get $cch)) (then (local.set $cch (i32.const 8192))))
+              (local.set $err (i32.const 258))
+              (local.set $bsel (call $win16_global_alloc (local.get $cch)))
+              (br_if $fail (i32.eqz (local.get $bsel)))
+              (local.set $buf (i32.shl (local.get $bsel) (i32.const 16))))
+            (else (local.set $cch (i32.const 0)) (local.set $buf (i32.const 0))))))
+      (call $gs32 (i32.add (local.get $o) (i32.const 0xC)) (local.get $bsel))
+      (call $win16_mmio_set (local.get $o) (i32.const 0) (local.get $flags))
+      (call $win16_mmio_set (local.get $o) (i32.const 4)
+        (select (i32.const 0x204D454D) (i32.const 0x20534F44) (local.get $mem)))
+      (if (local.get $info)
+        (then (call $win16_mmio_set (local.get $o) (i32.const 0x2C)
+                (call $gl32 (i32.add (local.get $info) (i32.const 0x2C))))))
+      (call $win16_mmio_set (local.get $o) (i32.const 0x10) (local.get $cch))
+      (call $win16_mmio_set (local.get $o) (i32.const 0x14) (local.get $buf))
+      (call $win16_mmio_set (local.get $o) (i32.const 0x18) (local.get $buf))
+      (call $win16_mmio_set (local.get $o) (i32.const 0x1C) (local.get $buf))
+      (call $win16_mmio_set_dist (local.get $o) (i32.const 0x20) (local.get $cch))
+      (if (i32.and (local.get $mem) (i32.eqz (i32.and (local.get $flags) (i32.const 0x1000))))
+        (then (call $win16_mmio_set_dist (local.get $o) (i32.const 0x1C) (local.get $cch))))
+      (call $gs16 (i32.add (i32.add (local.get $o) (global.get $MMIO_INFO)) (i32.const 0x40))
+        (local.get $sel))
+      (if (local.get $info)
+        (then (call $gs16 (i32.add (local.get $info) (i32.const 0xC)) (i32.const 0))))
+      (global.set $eax (local.get $sel))
+      (call $win16_api_return (i32.const 12))
+      (return (i32.const 1)))
+    (if (local.get $bsel) (then (call $win16_global_free (local.get $bsel))))
+    (if (local.get $sel)
+      (then (if (i32.ne (call $gl32 (i32.add (local.get $o) (i32.const 8))) (i32.const -1))
+              (then (drop (call $host_fs_close_handle
+                (call $gl32 (i32.add (local.get $o) (i32.const 8)))))))
+            (call $gs32 (local.get $o) (i32.const 0))
+            (call $win16_global_free (local.get $sel))))
+    (if (local.get $info)
+      (then (call $gs16 (i32.add (local.get $info) (i32.const 0xC)) (local.get $err))))
+    (global.set $eax (i32.const 0))
+    (call $win16_api_return (i32.const 12))
+    (i32.const 1))
+
+  ;; 1211 mmioClose(hmmio, wFlags)
+  (func $win16_mmioClose
+    (local $o i32) (local $h i32) (local $fh i32)
+    (local.set $h (call $win16_arg16 (i32.const 1)))
+    (local.set $o (call $win16_mmio_obj (local.get $h)))
+    (global.set $eax (i32.const 5)) ;; MMSYSERR_INVALHANDLE
+    (if (local.get $o)
+      (then
+        (local.set $fh (call $gl32 (i32.add (local.get $o) (i32.const 8))))
+        (if (i32.ne (local.get $fh) (i32.const -1))
+          (then (drop (call $host_fs_close_handle (local.get $fh)))))
+        (if (call $gl32 (i32.add (local.get $o) (i32.const 0xC)))
+          (then (call $win16_global_free (call $gl32 (i32.add (local.get $o) (i32.const 0xC))))))
+        (call $gs32 (local.get $o) (i32.const 0))
+        (call $win16_global_free (local.get $h))
+        (global.set $eax (i32.const 0))))
+    (call $win16_api_return (i32.const 4)))
+
+  ;; 1212 mmioRead(hmmio, HPSTR pch, LONG cch) -> LONG
+  (func $win16_mmioRead
+    (local $n i32) (local $dst i32) (local $o i32) (local $pos i32) (local $got i32)
+    (local.set $n (call $win16_arg32 (i32.const 0)))
+    (local.set $dst (call $win16_far_linear (call $win16_arg32 (i32.const 2))))
+    (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 4))))
+    (local.set $got (i32.const -1))
+    (if (local.get $o)
+      (then
+        (local.set $pos (call $win16_mmio_tell (local.get $o)))
+        (local.set $got (call $win16_mmio_read (local.get $o) (local.get $dst) (local.get $n)))
+        (if (i32.eq (local.get $got) (i32.const -2))
+          (then (call $win16_mmio_park (local.get $o) (local.get $pos)) (return)))))
+    (call $win16_hresult (local.get $got))
+    (call $win16_api_return (i32.const 10)))
+
+  ;; 1214 mmioSeek(hmmio, LONG lOffset, int iOrigin) -> LONG
+  (func $win16_mmioSeek
+    (local $origin i32) (local $off i32) (local $o i32) (local $r i32)
+    (local.set $origin (call $win16_arg16 (i32.const 0)))
+    (local.set $off (call $win16_arg32 (i32.const 1)))
+    (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
+    (local.set $r (i32.const -1))
+    (if (i32.and (i32.ne (local.get $o) (i32.const 0)) (i32.le_u (local.get $origin) (i32.const 2)))
+      (then (local.set $r (call $win16_mmio_seek (local.get $o) (local.get $off) (local.get $origin)))))
+    (call $win16_hresult (local.get $r))
+    (call $win16_api_return (i32.const 8)))
+
+  ;; 1215 mmioGetInfo(hmmio, LPMMIOINFO lpmmioinfo, UINT wFlags)
+  (func $win16_mmioGetInfo
+    (local $info i32) (local $o i32)
+    (local.set $info (call $win16_far_linear (call $win16_arg32 (i32.const 1))))
+    (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
+    (global.set $eax (i32.const 5))
+    (if (local.get $o)
+      (then (call $guest_memmove (local.get $info)
+              (i32.add (local.get $o) (global.get $MMIO_INFO)) (i32.const 66))
+            (global.set $eax (i32.const 0))))
+    (call $win16_api_return (i32.const 8)))
+
+  ;; 1219 mmioAdvance(hmmio, LPMMIOINFO lpmmioinfo, UINT wFlags). The app's
+  ;; pchNext says how far it got; the buffer is refilled from the end of what
+  ;; it held, and the new pointers go back into the app's MMIOINFO.
+  (func $win16_mmioAdvance (result i32)
+    (local $flags i32) (local $info i32) (local $o i32) (local $got i32)
+    (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (if (call $win16_arg16 (i32.const 2))
+      (then (local.set $info (call $win16_far_linear (call $win16_arg32 (i32.const 1))))))
+    (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
+    (if (i32.and (local.get $flags) (i32.const 1)) (then (return (i32.const 0)))) ;; MMIO_WRITE
+    (global.set $eax (i32.const 5))
+    (block $out
+      (br_if $out (i32.eqz (local.get $o)))
+      (global.set $eax (i32.const 266)) ;; MMIOERR_UNBUFFERED
+      (br_if $out (i32.eqz (call $win16_mmio_get (local.get $o) (i32.const 0x10))))
+      (if (local.get $info)
+        (then
+          (call $win16_mmio_set (local.get $o) (i32.const 0x18)
+            (call $gl32 (i32.add (local.get $info) (i32.const 0x18))))
+          (call $win16_mmio_set (local.get $o) (i32.const 0x1C)
+            (call $gl32 (i32.add (local.get $info) (i32.const 0x1C))))))
+      ;; A memory file has no more behind its buffer; there is nothing to load.
+      (if (i32.eqz (call $gl32 (i32.add (local.get $o) (i32.const 4))))
+        (then
+          (local.set $got (call $win16_mmio_fill (local.get $o)))
+          (if (i32.eq (local.get $got) (i32.const -2))
+            (then
+              (call $win16_mmio_set (local.get $o) (i32.const 0x28)
+                (call $win16_mmio_get (local.get $o) (i32.const 0x24)))
+              (call $win16_mmio_set_dist (local.get $o) (i32.const 0x1C)
+                (i32.sub (call $win16_mmio_get (local.get $o) (i32.const 0x28))
+                         (call $win16_mmio_get (local.get $o) (i32.const 0x24))))
+              (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
+              (call $spin_park (i32.const 12))
+              (return (i32.const 1))))))
+      (if (local.get $info)
+        (then (call $guest_memmove (i32.add (local.get $info) (i32.const 0x18))
+                (i32.add (i32.add (local.get $o) (global.get $MMIO_INFO)) (i32.const 0x18))
+                (i32.const 0x14))))
+      (global.set $eax (i32.const 0)))
+    (call $win16_api_return (i32.const 8))
+    (i32.const 1))
+
+  ;; 1223 mmioDescend(hmmio, LPMMCKINFO lpck, LPMMCKINFO lpckParent, UINT wFlags)
+  (func $win16_mmioDescend
+    (local $flags i32) (local $parent i32) (local $ck i32) (local $o i32) (local $pos i32)
+    (local $want i32) (local $type i32) (local $tmp i32) (local $got i32) (local $start i32)
+    (local $end i32) (local $size i32)
+    (local.set $flags (call $win16_arg16 (i32.const 0)))
+    (if (call $win16_arg16 (i32.const 2))
+      (then (local.set $parent (call $win16_far_linear (call $win16_arg32 (i32.const 1))))))
+    (local.set $ck (call $win16_far_linear (call $win16_arg32 (i32.const 3))))
+    (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 5))))
+    (global.set $eax (i32.const 5))
+    (block $out
+      (br_if $out (i32.eqz (local.get $o)))
+      (local.set $start (call $win16_mmio_tell (local.get $o)))
+      (local.set $pos (local.get $start))
+      (local.set $end (i32.const 0x7FFFFFFF))
+      (if (local.get $parent)
+        (then (local.set $end (i32.add (call $gl32 (i32.add (local.get $parent) (i32.const 12)))
+                                       (call $gl32 (i32.add (local.get $parent) (i32.const 4)))))))
+      (if (i32.and (local.get $flags) (i32.const 0x10)) ;; MMIO_FINDCHUNK
+        (then (local.set $want (call $gl32 (local.get $ck)))))
+      (if (i32.and (local.get $flags) (i32.const 0x20)) ;; MMIO_FINDRIFF
+        (then (local.set $want (i32.const 0x46464952))
+              (local.set $type (call $gl32 (i32.add (local.get $ck) (i32.const 8))))))
+      (if (i32.and (local.get $flags) (i32.const 0x40)) ;; MMIO_FINDLIST
+        (then (local.set $want (i32.const 0x5453494C))
+              (local.set $type (call $gl32 (i32.add (local.get $ck) (i32.const 8))))))
+      (local.set $tmp (region.addr $GUEST_STACK 0x180))
+      (block $found (loop $scan
+        (global.set $eax (i32.const 265)) ;; MMIOERR_CHUNKNOTFOUND
+        (if (i32.gt_s (i32.add (local.get $pos) (i32.const 8)) (local.get $end))
+          (then (drop (call $win16_mmio_seek (local.get $o) (local.get $start) (i32.const 0)))
+                (br $out)))
+        (local.set $got (call $win16_mmio_read (local.get $o) (local.get $tmp) (i32.const 12)))
+        (if (i32.eq (local.get $got) (i32.const -2))
+          (then (call $win16_mmio_park (local.get $o) (local.get $start)) (return)))
+        (if (i32.lt_s (local.get $got) (i32.const 8))
+          (then (drop (call $win16_mmio_seek (local.get $o) (local.get $start) (i32.const 0)))
+                (br $out)))
+        (local.set $size (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
+        (br_if $found (i32.eqz (local.get $want)))
+        (br_if $found (i32.and (i32.eq (call $gl32 (local.get $tmp)) (local.get $want))
+          (i32.or (i32.eqz (local.get $type))
+                  (i32.eq (call $gl32 (i32.add (local.get $tmp) (i32.const 8))) (local.get $type)))))
+        (local.set $pos (i32.add (i32.add (local.get $pos) (i32.const 8))
+          (i32.and (i32.add (local.get $size) (i32.const 1)) (i32.const -2))))
+        (drop (call $win16_mmio_seek (local.get $o) (local.get $pos) (i32.const 0)))
+        (br $scan)))
+      (call $gs32 (local.get $ck) (call $gl32 (local.get $tmp)))
+      (call $gs32 (i32.add (local.get $ck) (i32.const 4)) (local.get $size))
+      (call $gs32 (i32.add (local.get $ck) (i32.const 12)) (i32.add (local.get $pos) (i32.const 8)))
+      (call $gs32 (i32.add (local.get $ck) (i32.const 16)) (i32.const 0))
+      (if (i32.or (i32.eq (call $gl32 (local.get $tmp)) (i32.const 0x46464952))
+                  (i32.eq (call $gl32 (local.get $tmp)) (i32.const 0x5453494C)))
+        (then
+          (call $gs32 (i32.add (local.get $ck) (i32.const 8))
+            (call $gl32 (i32.add (local.get $tmp) (i32.const 8))))
+          (drop (call $win16_mmio_seek (local.get $o) (i32.add (local.get $pos) (i32.const 12))
+                  (i32.const 0))))
+        (else
+          (call $gs32 (i32.add (local.get $ck) (i32.const 8)) (i32.const 0))
+          (drop (call $win16_mmio_seek (local.get $o) (i32.add (local.get $pos) (i32.const 8))
+                  (i32.const 0)))))
+      (global.set $eax (i32.const 0)))
+    (call $win16_api_return (i32.const 12)))
+
+  ;; 1224 mmioAscend(hmmio, LPMMCKINFO lpck, UINT wFlags): to the byte after
+  ;; the chunk, pad included. Nothing here ever writes, so a chunk is never dirty.
+  (func $win16_mmioAscend
+    (local $ck i32) (local $o i32)
+    (local.set $ck (call $win16_far_linear (call $win16_arg32 (i32.const 1))))
+    (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
+    (global.set $eax (i32.const 5))
+    (if (local.get $o)
+      (then
+        (global.set $eax (i32.const 263)) ;; MMIOERR_CANNOTSEEK
+        (if (i32.ne (call $win16_mmio_seek (local.get $o)
+                      (i32.add (call $gl32 (i32.add (local.get $ck) (i32.const 12)))
+                        (i32.and (i32.add (call $gl32 (i32.add (local.get $ck) (i32.const 4)))
+                                          (i32.const 1)) (i32.const -2)))
+                      (i32.const 0))
+                    (i32.const -1))
+          (then (global.set $eax (i32.const 0))))))
+    (call $win16_api_return (i32.const 8)))
+
+  (func $win16_mmio (param $ordinal i32) (result i32)
+    (if (i32.eq (local.get $ordinal) (i32.const 1210)) (then (return (call $win16_mmioOpen))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1211)) (then (call $win16_mmioClose) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1212)) (then (call $win16_mmioRead) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1214)) (then (call $win16_mmioSeek) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1215)) (then (call $win16_mmioGetInfo) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1219)) (then (return (call $win16_mmioAdvance))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1223)) (then (call $win16_mmioDescend) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 1224)) (then (call $win16_mmioAscend) (return (i32.const 1))))
+    (i32.const 0))
+
   (func $win16_mmsystem (param $ordinal i32) (result i32)
     (local $name i32) (local $flags i32) (local $dev i32) (local $msg i32)
     (local $p1 i32) (local $p2 i32)
+    (if (i32.and (i32.ge_u (local.get $ordinal) (i32.const 1210))
+                 (i32.le_u (local.get $ordinal) (i32.const 1226)))
+      (then (return (call $win16_mmio (local.get $ordinal)))))
     ;; 605/606 timeBeginPeriod/timeEndPeriod(uPeriod). Browser scheduling has
     ;; no host timer quantum to change; accepting and balancing the request is
     ;; the documented success path and keeps multimedia clients portable.
@@ -10613,6 +12412,44 @@
           (then (call $gs8 (local.get $p2) (i32.const 0))))
         (global.set $eax (i32.const 0))
         (call $win16_api_return (i32.const 10))
+        (return (i32.const 1))))
+    (if (i32.and (i32.ge_u (local.get $ordinal) (i32.const 404))
+                 (i32.le_u (local.get $ordinal) (i32.const 420)))
+      (then (if (call $win16_waveout (local.get $ordinal))
+              (then (return (i32.const 1))))))
+    ;; 402 waveOutGetDevCaps(uDeviceID, lpCaps, uSize). The Win16 WAVEOUTCAPS
+    ;; is not the Win32 one: vDriverVersion is a 16-bit UINT, so the name sits
+    ;; at +6 and dwFormats/wChannels/dwSupport at +38/+42/+44 (48 bytes). It
+    ;; describes the same single device waveOutGetNumDevs counts; any other ID
+    ;; but WAVE_MAPPER is MMSYSERR_BADDEVICEID. Only uSize bytes are written.
+    (if (i32.eq (local.get $ordinal) (i32.const 402))
+      (then
+        (local.set $dev (call $win16_arg16 (i32.const 3)))
+        (local.set $p1 (call $win16_far_to_guest
+          (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
+        (local.set $p2 (call $win16_arg16 (i32.const 0)))
+        (global.set $eax (i32.const 0))
+        (if (i32.and (i32.ne (local.get $dev) (i32.const 0))
+                     (i32.ne (local.get $dev) (i32.const 0xFFFF)))
+          (then (global.set $eax (i32.const 2))))
+        (if (i32.eqz (call $win16_arg16 (i32.const 2)))
+          (then (global.set $eax (i32.const 11))))
+        (if (i32.eqz (global.get $eax))
+          (then
+            (if (i32.gt_u (local.get $p2) (i32.const 48)) (then (local.set $p2 (i32.const 48))))
+            (local.set $name (global.get $GUEST_STACK))
+            (call $zero_memory (call $g2w (local.get $name)) (i32.const 48))
+            (call $gs16 (local.get $name) (i32.const 1))                               ;; wMid
+            (call $gs16 (i32.add (local.get $name) (i32.const 2)) (i32.const 1))       ;; wPid
+            (call $gs16 (i32.add (local.get $name) (i32.const 4)) (i32.const 0x0400))  ;; 4.0
+            (call $gs32 (i32.add (local.get $name) (i32.const 6)) (i32.const 0x69647541)) ;; "Audi"
+            (call $gs8 (i32.add (local.get $name) (i32.const 10)) (i32.const 0x6F))    ;; "o"
+            (call $gs32 (i32.add (local.get $name) (i32.const 38)) (i32.const 0x00000FFF))
+            (call $gs16 (i32.add (local.get $name) (i32.const 42)) (i32.const 2))
+            (call $gs32 (i32.add (local.get $name) (i32.const 44)) (i32.const 0x0C))
+            (memory.copy (call $g2w (local.get $p1)) (call $g2w (local.get $name))
+              (local.get $p2))))
+        (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 401))
       (then
@@ -10681,6 +12518,45 @@
             (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 2))       ;; CloseSound
       (then (call $win16_local_identity (i32.const 0) (i32.const 0)) (return (i32.const 1))))
+    ;; Everything that would queue or shape a voice answers S_SERDVNA (-1),
+    ;; the same "device not available" OpenSound gave. Blackjack ignores
+    ;; OpenSound's answer and deals its cards to SetVoiceNote regardless.
+    ;; Argument bytes: SetVoiceQueueSize(voice, bytes), SetVoiceNote(voice,
+    ;; value, length, cdots), SetVoiceAccent(voice, tempo, volume, mode,
+    ;; pitch), SetVoiceEnvelope(voice, shape, repeat), SetSoundNoise(source,
+    ;; duration), SetVoiceSound(voice, DWORD freq, duration),
+    ;; WaitSoundState(state), SetVoiceThreshold(voice, notes).
+    (if (i32.eq (local.get $ordinal) (i32.const 3))
+      (then (call $win16_local_identity (i32.const 4) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 4))
+      (then (call $win16_local_identity (i32.const 8) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 5))
+      (then (call $win16_local_identity (i32.const 10) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 6))
+      (then (call $win16_local_identity (i32.const 6) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 7))
+      (then (call $win16_local_identity (i32.const 4) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 8))
+      (then (call $win16_local_identity (i32.const 8) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 11))
+      (then (call $win16_local_identity (i32.const 2) (i32.const 0xFFFF)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 16))
+      (then (call $win16_local_identity (i32.const 4) (i32.const 0xFFFF)) (return (i32.const 1))))
+    ;; StartSound, StopSound and SyncAllVoices have nothing queued to act on;
+    ;; CountVoiceNotes(voice) counts that empty queue; GetThresholdStatus has
+    ;; no voice below its threshold to report; GetThresholdEvent's far pointer
+    ;; is NULL because no event word exists; DoBeep has no speaker.
+    (if (i32.or (i32.or (i32.eq (local.get $ordinal) (i32.const 9))
+                        (i32.eq (local.get $ordinal) (i32.const 10)))
+                (i32.or (i32.or (i32.eq (local.get $ordinal) (i32.const 12))
+                                (i32.eq (local.get $ordinal) (i32.const 15)))
+                        (i32.eq (local.get $ordinal) (i32.const 17))))
+      (then (call $win16_local_identity (i32.const 0) (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 13))
+      (then (call $win16_local_identity (i32.const 2) (i32.const 0)) (return (i32.const 1))))
+    (if (i32.eq (local.get $ordinal) (i32.const 14))
+      (then (global.set $edx (i32.const 0))
+            (call $win16_local_identity (i32.const 0) (i32.const 0)) (return (i32.const 1))))
     (i32.const 0))
 
   ;; WIN87EM is the 80x87 emulator every Windows 3.x compiler linked against.
@@ -11112,6 +12988,10 @@
       (then (if (call $win16_ctl3d (local.get $ordinal))
               (then (call $win16_trace_ret) (return)))))
     (if (call $win16_toolhelp (local.get $module) (local.get $ordinal))
+      (then (call $win16_trace_ret) (return)))
+    (if (call $win16_avifile (local.get $module) (local.get $ordinal))
+      (then (call $win16_trace_ret) (return)))
+    (if (call $win16_msvideo (local.get $module) (local.get $ordinal))
       (then (call $win16_trace_ret) (return)))
     (if (call $win16_ver (local.get $module) (local.get $ordinal))
       (then (call $win16_trace_ret) (return)))

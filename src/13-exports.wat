@@ -247,6 +247,10 @@
                 (i32.eqz (global.get $handler_set_eip)))
             (then (global.set $eip (call $gl32 (local.get $prev_esp)))))
           (br $main)))
+      ;; A wndproc marker (0xFFFE____/0xFFFF____) called directly as code.
+      (if (i32.ge_u (global.get $eip) (i32.const 0xFFFE0000))
+        (then
+          (if (call $wndproc_marker_direct_call) (then (br $main)))))
       ;; $dbg_prev_eip is set to the block about to run, so anything reading it
       ;; *during* that block sees the block itself, not its predecessor. That
       ;; is what $bp_first_caller and the debug prompt want, because they run
