@@ -1488,12 +1488,32 @@
     (i32.atomic.store (local.get $rec) (local.get $base))
     (local.get $rec))
 
+  ;; Per-instance lookup hint for $heap_arena_find: the record that answered
+  ;; last. Needs no propagation to a new instance -- 0 just means "scan".
+  (global $heap_arena_hint (mut i32) (i32.const 0))
+
   ;; Find the authoritative allocated extent containing this header. Never map
   ;; or read an untrusted guest pointer until this succeeds.
+  ;;
+  ;; $heap_alloc validates every free-list link through here and the list is
+  ;; walked from the head on every allocation, so this used to be a full
+  ;; table scan per link: 25% of Morrowind's gameplay CPU, with $heap_alloc's
+  ;; own walk another 22%. Consecutive lookups nearly always land in the same
+  ;; arena, so the record that answered last is checked first. It is only a
+  ;; hint: it is validated exactly as the scan validates a record, a record
+  ;; unpublished since (base 0) or re-registered elsewhere simply fails the
+  ;; range test, and the scan below remains the authority.
   (func $heap_arena_find (param $block i32) (result i32)
     (local $count i32) (local $i i32) (local $rec i32) (local $base i32)
     (if (i32.and (local.get $block) (i32.const 7))
       (then (return (i32.const 0))))
+    (local.set $rec (global.get $heap_arena_hint))
+    (if (local.get $rec) (then
+      (local.set $base (i32.atomic.load (local.get $rec)))
+      (if (i32.and (i32.ne (local.get $base) (i32.const 0))
+            (i32.and (i32.ge_u (local.get $block) (local.get $base))
+              (i32.lt_u (local.get $block) (i32.atomic.load offset=8 (local.get $rec)))))
+        (then (return (local.get $rec))))))
     (local.set $count (i32.atomic.load (global.get $HEAP_ARENAS)))
     (if (i32.gt_u (local.get $count) (i32.const 1024))
       (then (return (i32.const 0))))
@@ -1505,7 +1525,9 @@
       (if (local.get $base) (then
         (if (i32.and (i32.ge_u (local.get $block) (local.get $base))
               (i32.lt_u (local.get $block) (i32.atomic.load offset=8 (local.get $rec))))
-          (then (return (local.get $rec))))))
+          (then
+            (global.set $heap_arena_hint (local.get $rec))
+            (return (local.get $rec))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
     (i32.const 0))
