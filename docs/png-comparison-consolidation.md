@@ -27,6 +27,8 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | Notepad menu | Exact RGB with original result/error shape | 12/12; 33339 open, 3584 hover, 30 close pixels; old/new helpers agree for open |
 | Solitaire Deal | Exact RGB with original result/error shape | 11/12; both old/new helpers report 0 changed pixels on the captured frames, so the Deal assertion fails rather than being weakened |
 | Pinball flipper | Exact RGB over whole frame and bottom 30%, original mismatch error | Existing test skips its static early snapshots; old/new helpers both report 0 total and bottom pixels. This is not gameplay validation |
+| Paint drawing / file round-trip | Exact RGB in existing rectangles; mismatched dimensions now throw instead of indexing both images with one stride | Serial runs pass 9/9 and 15/15; drawing 93 pixels, file workflow 31 cleared / 0 restored difference / 21 added pixels |
+| Paint dirty-document / 16-tool workflow | Same RGB regions and thresholds; mismatched dimensions rejected | Serial runs 10/11 and 20/21. Every pixel assertion passes; modal-command and File-menu-count assertions fail |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -45,10 +47,21 @@ The original Solitaire test also reproduces the same 11/12 outcome with zero
 Deal changes on a fresh run. Its initial layout content varies between runs;
 the helper-equivalence check above uses identical saved frames for both helpers.
 
+The first concurrent run of all four Paint tests failed before generating
+required screenshots. Serial runs then completed; the cause of that initial
+failure was not established. The original dirty-document test was rerun
+serially too: the same modal-command assertion fails, with identical 0/31
+pixel counts and 10/11 checks. The 16-tool test's failing assertion checks
+the logged File-menu item count, not image comparison; its original whole
+test was not rerun. Old/new Paint helper functions were separately checked
+for exact agreement on synthetic RGB/alpha changes over full, inset and
+image-edge-clipped rectangles. New dimension-mismatch rejection was checked
+for all four wrappers.
+
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
-still finds comparison loops in MSPaint tests, Find mouse-click, Win16 Minesweeper,
+still finds comparison loops in Find mouse-click, Win16 Minesweeper,
 Bricks, and other specialized probes. The five full-frame/subregion consumers
 listed above now use the shared comparator; their small local wrappers only
 adapt result shapes or combine named regions.

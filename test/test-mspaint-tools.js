@@ -5,6 +5,7 @@
 // checks as well as a process-survival check.
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { loadImage, createCanvas } = require('../lib/canvas-compat');
@@ -125,15 +126,10 @@ async function pixels(file) {
 }
 
 function countDiff(a, b, box) {
-  let count = 0;
-  for (let y = box.y0; y < Math.min(box.y1, a.height, b.height); y++) {
-    for (let x = box.x0; x < Math.min(box.x1, a.width, b.width); x++) {
-      const i = (y * a.width + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] ||
-          a.data[i + 2] !== b.data[i + 2]) count++;
-    }
-  }
-  return count;
+  const result = diffPng(a, b, { includeAlpha: false,
+    region: { x: box.x0, y: box.y0, w: box.x1 - box.x0, h: box.y1 - box.y0 } });
+  if (result.sizeMismatch) throw new Error('Paint snapshot dimensions differ');
+  return result.changed;
 }
 
 function countWhere(image, box, predicate) {

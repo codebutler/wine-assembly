@@ -10,6 +10,7 @@
 // box changed between the two snapshots.
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execSync } = require('child_process');
 const { loadImage, createCanvas } = require('../lib/canvas-compat');
@@ -109,15 +110,11 @@ async function readPixels(p) {
 }
 
 function countDiffPixels(A, B, bbox) {
-  const w = Math.min(A.w, B.w), h = Math.min(A.h, B.h);
-  let diff = 0;
-  for (let y = bbox.y0; y < Math.min(bbox.y1, h); y++) {
-    for (let x = bbox.x0; x < Math.min(bbox.x1, w); x++) {
-      const i = (y * w + x) * 4;
-      if (A.data[i] !== B.data[i] || A.data[i + 1] !== B.data[i + 1] || A.data[i + 2] !== B.data[i + 2]) diff++;
-    }
-  }
-  return diff;
+  const result = diffPng({ width: A.w, height: A.h, data: A.data },
+    { width: B.w, height: B.h, data: B.data }, { includeAlpha: false,
+      region: { x: bbox.x0, y: bbox.y0, w: bbox.x1 - bbox.x0, h: bbox.y1 - bbox.y0 } });
+  if (result.sizeMismatch) throw new Error('Paint snapshot dimensions differ');
+  return result.changed;
 }
 
 // Count pixels in bbox that are NOT the background color (grey btnFace or
