@@ -1,7 +1,16 @@
 # Replicated dispatch (`repl_tailcall`) for the main emulator
 
-**Status:** proposal, not started. Nobody owns this yet — claim it on
-`messageboard.txt` before touching `src/*.wat` or `lib/compile-wat.js`.
+**Status: LANDED 2026-09-19** as `lib/dispatch-replicate.js`, applied to the
+closure text in memory by `tools/watx-closure.js` and `lib/watx-launcher.js`
+(the `9450d792` legacy-compiler transform below was retired with that
+compiler). Measured on the quiet box, StarCraft gameplay window, 3 reps,
+`perf stat` counters: **−4.86% CPU against a 1.13% null band**, branches
+−8%, instructions −6%, branch-miss rate 0.24% → 0.26%, IPC 3.43 → 3.37.
+So §2's prediction argument did not hold — the shared site was already
+well predicted — and §4's call-overhead argument is the whole win. §5's
+split of the fat tail (cold `$dispatch_bad`, no hist check in the copies)
+is still unbuilt: the landed copies inline the full body. Off switch:
+`WINE_DISPATCH=shared`.
 
 **Where the number comes from:** [toyvm-dispatch-shootout.md](toyvm-dispatch-shootout.md).
 That work compared four interpreter dispatch shells in the toy VM

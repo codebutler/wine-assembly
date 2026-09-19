@@ -35,7 +35,18 @@ function readSourceText(file) {
   return sourceTextFromBytes(fs.readFileSync(file));
 }
 
-function watxSourceClosure() {
+// The dispatch mode of a closure: 'replicated' (the canonical build, see
+// lib/dispatch-replicate.js) or 'shared' (one $next site, the A/B baseline).
+// Resolved from the caller's option, then WINE_DISPATCH, then the default.
+function dispatchMode(option) {
+  const raw = option != null ? option : (process.env.WINE_DISPATCH || 'replicated');
+  const value = String(raw).trim();
+  if (value === 'replicated' || value === 'all' || value === '1' || value === 'true') return 'replicated';
+  if (value === 'shared' || value === 'none' || value === '0' || value === 'false') return 'shared';
+  throw new Error(`watx-closure: dispatch must be "replicated" or "shared" (got ${JSON.stringify(raw)})`);
+}
+
+function watxSourceClosure(options = {}) {
   const mainFile = path.join(SRC, 'main.watx');
   if (!fs.existsSync(mainFile)) {
     throw new Error('watx-closure: src/main.watx is missing. It is the root of the ' +
@@ -45,15 +56,30 @@ function watxSourceClosure() {
   // may use ('f', 'src/f', './f'); main.watx's own forms name the bare basename.
   // Only the includes actually reached are parsed, so listing a file here does
   // not put it in the module — main.watx does.
-  const vfs = new Map();
+  const texts = new Map();
   for (const f of fs.readdirSync(SRC)) {
     if (!/\.(wat|watx)$/.test(f)) continue;
-    const text = readSourceText(path.join(SRC, f));
+    texts.set(f, readSourceText(path.join(SRC, f)));
+  }
+  // Dispatch replication rewrites the closure text HERE, in memory, so src/
+  // on disk stays the one-site source every grep and census gate reads and
+  // the compiled bytes carry the per-handler copies. Same transform as the
+  // browser's source-compile path (lib/watx-launcher.js fetchSources), so
+  // the two produce the same module.
+  const dispatch = dispatchMode(options.dispatch);
+  let replication = null;
+  if (dispatch === 'replicated') {
+    const { WAT_FILES } = require(path.join(ROOT, 'lib', 'wat-manifest.js'));
+    const { replicateSources } = require(path.join(ROOT, 'lib', 'dispatch-replicate.js'));
+    replication = replicateSources(WAT_FILES, name => texts.get(name), (name, text) => texts.set(name, text));
+  }
+  const vfs = new Map();
+  for (const [f, text] of texts) {
     vfs.set(f, text);
     vfs.set(`src/${f}`, text);
     vfs.set(`./${f}`, text);
   }
-  return { source: readSourceText(mainFile), vfs, entry: 'src/main.watx' };
+  return { source: readSourceText(mainFile), vfs, entry: 'src/main.watx', dispatch, replication };
 }
 
 // The compile options are part of the closure contract, not a caller's choice:
@@ -95,4 +121,4 @@ function compileClosure(closure, { tailCalls, regionShake, nameSection } = {}) {
   return compile(closure.source, closure.vfs, options);
 }
 
-module.exports = { watxSourceClosure, compileClosure };
+module.exports = { watxSourceClosure, compileClosure, dispatchMode };
