@@ -370,6 +370,14 @@ const IMPLODE_CMP_RUN = hasFlag('implode-cmp-run');
 // match"; this flag is what makes those matches actually run, which is the
 // only way to get an entry-weighted share out of --handler-hist.
 const X87_FUSION = hasFlag('x87-fusion');
+// --x87-fuse-debug=MASK,LO,HI: with --x87-fusion, offer only the families in
+// MASK (1 pipeline4, 2 short, 4 tree4, 8 affine, 16 island) and only blocks
+// whose guest start is in [LO,HI). The bisect knob for a fold divergence.
+// Setting it clears the code cache, and block extents depend on cache history
+// (the decoder stops at any already-cached block start), which moves the
+// batch clock on timing-driven apps. So A/B a fold as MASK=0 vs MASK=31, both
+// with this flag, never as the flag against no flag.
+const X87_FUSE_DEBUG = getArg('x87-fuse-debug', '');
 // --loopmatch-stats: print the self-loop/match counts at exit.
 const LOOPMATCH_STATS = hasFlag('loopmatch-stats');
 // --tree-fold: the general decode-time integer-expression fold, H448.
@@ -5199,6 +5207,10 @@ async function main() {
   if (X87_FUSION && instance.exports.set_x87_pipeline4_fusion) {
     instance.exports.set_x87_pipeline4_fusion(1);
     instance.exports.set_x87_affine_fusion(1);
+  }
+  if (X87_FUSE_DEBUG && instance.exports.set_x87_fuse_debug) {
+    const [mask, lo = '0', hi = '0xFFFFFFFF'] = X87_FUSE_DEBUG.split(',');
+    instance.exports.set_x87_fuse_debug(Number(mask) | 0, Number(lo) | 0, Number(hi) | 0);
   }
   if ((TREE_FOLD || TRACE_TREE_FOLD) && instance.exports.set_tree_fold) {
     instance.exports.set_tree_fold(1);

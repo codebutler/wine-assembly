@@ -7039,11 +7039,7 @@
     ;; Loop-idiom matcher runs on the ops just emitted, before the block is
     ;; published. See src/07b-loop-match.wat.
     (call $loop_match_block (local.get $start_eip) (local.get $tstart))
-    (call $x87_fuse_block)
-    (call $x87_short_fuse_block)
-    (call $x87_tree4_fuse_block)
-    (call $x87_affine_fuse_block)
-    (call $x87_island_fuse_block)
+    (call $x87_fuse_pass (local.get $start_eip))
     ;; The per-block executor runs LAST among the matchers that can claim a
     ;; whole block. After $loop_match_block, so every specialised family keeps
     ;; priority -- a block one of them took set $op_index_n to 0 and is

@@ -91,6 +91,13 @@
   (global $x87_affine_prepare_runs (mut i32) (i32.const 0))
   (global $x87_affine_finish_matches (mut i32) (i32.const 0))
   (global $x87_affine_finish_runs (mut i32) (i32.const 0))
+  ;; Bisect gate for x87 fold divergences (--x87-fuse-debug=MASK,LO,HI). MASK
+  ;; picks families -- 1 pipeline4, 2 short (449 modes 1-3), 4 tree4, 8 affine,
+  ;; 16 island -- and only blocks whose guest start lies in [LO,HI) are offered
+  ;; to them. Defaults leave every family and address in, so it is inert.
+  (global $x87_fuse_dbg_mask (mut i32) (i32.const -1))
+  (global $x87_fuse_dbg_lo (mut i32) (i32.const 0))
+  (global $x87_fuse_dbg_hi (mut i32) (i32.const -1))
   ;; LUT_RUN and COPY_RUN have independent gates. The role-proved LUT lowering
   ;; is on by default; COPY remains off while its historical Storm divergence
   ;; is investigated. set_loop_emit still controls both for compatibility.
@@ -492,6 +499,29 @@
     (i32.load
       (i32.add (global.get $OP_INDEX)
         (i32.shl (local.get $i) (i32.const 2)))))
+
+  ;; Every x87 fuser, in the order the decoder has always run them, behind the
+  ;; bisect gate above.
+  (func $x87_fuse_pass (param $eip i32)
+    (if (i32.or (i32.lt_u (local.get $eip) (global.get $x87_fuse_dbg_lo))
+                (i32.ge_u (local.get $eip) (global.get $x87_fuse_dbg_hi)))
+      (then (return)))
+    (if (i32.and (global.get $x87_fuse_dbg_mask) (i32.const 1))
+      (then (call $x87_fuse_block)))
+    (if (i32.and (global.get $x87_fuse_dbg_mask) (i32.const 2))
+      (then (call $x87_short_fuse_block)))
+    (if (i32.and (global.get $x87_fuse_dbg_mask) (i32.const 4))
+      (then (call $x87_tree4_fuse_block)))
+    (if (i32.and (global.get $x87_fuse_dbg_mask) (i32.const 8))
+      (then (call $x87_affine_fuse_block)))
+    (if (i32.and (global.get $x87_fuse_dbg_mask) (i32.const 16))
+      (then (call $x87_island_fuse_block))))
+
+  (func (export "set_x87_fuse_debug") (param $mask i32) (param $lo i32) (param $hi i32)
+    (global.set $x87_fuse_dbg_mask (local.get $mask))
+    (global.set $x87_fuse_dbg_lo (local.get $lo))
+    (global.set $x87_fuse_dbg_hi (local.get $hi))
+    (call $clear_cache))
 
   ;; Normalize H188/H190 into group|operation|address-shape fields. The low
   ;; nibble is a base register, or 8 for a decoder-resolved absolute address.
