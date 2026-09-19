@@ -931,3 +931,47 @@ leak claim. The main thread's `ESP` was `0x074ffd94` at batch 1440 and
 across all guest calls. This smoke is shorter and less busy than the late
 large battle that originally crashed, so it is evidence of mission and combat
 functionality, not proof that the old crash cannot recur.
+
+## Gameplay CPU profile on a quiet box (2026-09-18) and the VirtualAlloc fix
+
+The first quotable profile of in-mission gameplay: `node --cpu-prof` on the
+ascii.dev bench box (x86_64 V8, load 1.00) at batch 1750 and again at 4250,
+subtracted with `tools/cpuprof-diff.js` so boot cancels. Window 97.8 s CPU,
+97.5% wasm:
+
+| share | function |
+|---:|---|
+| 40.1% | `$virtual_backing_conflicts` |
+| 9.3% | `$next` |
+| 6.3% | `$read_thread_word` |
+| 4.2% | `$get_reg` |
+| 2.4% | `$set_reg` |
+| 2.3% | `$g2w` |
+| 2.1% | `$branch_end_at` |
+
+Storm's allocator does `VirtualAlloc(0, 64K, MEM_RESERVE)` + `VirtualAlloc(p,
+4K, MEM_COMMIT)` per block and frees as often: **27,530 VirtualAlloc and
+18,675 VirtualFree calls by batch 4250, 2,728 mappings live at the end**. In
+`$virtual_map_commit_locked` the coalesce test AND-ed the full-table conflict
+scan with two cheap equalities, and WAT `i32.and` evaluates every operand, so
+the scan ran once per record of the outer loop: records squared, 2.8 ms per
+commit. Fixed in 1630c665 by nesting the scan under the equalities.
+
+Two-point gameplay CPU on the same box, one build per arm, three reps:
+
+| arm | rep 1 | rep 2 | rep 3 |
+|---|---:|---:|---:|
+| off (267dd879) | 127.3 (outlier) | 97.0 | 95.9 |
+| null (same build) | 95.1 | 96.6 | — |
+| fix (1630c665) | 58.1 | 58.5 | 59.3 |
+
+**−39% gameplay CPU, boot 78 → 73 s.** For scale, the six rounds of dispatch
+levers measured on the same box the same day: chaining +1.4%, executor
++6.1%, both +7.0% — all slower.
+
+Who else pays: a 4000-batch census (`--trace-api=VirtualAlloc --dump-vmap`,
+batch size 20000) — Diablo II demo 648 calls / 717 live maps and climbing
+(affected), Diablo shareware in Tristram 27 / 14 (not), Warcraft III demo
+231 / 97 (headless run is idle, unmeasured), Quake II 106 / 47, RCT,
+Heroes II, Caesar III ≤ 2 calls (not). The cost is calls × live-records², so
+only reserve-and-commit-per-block allocators with a large live set feel it.
