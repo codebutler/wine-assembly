@@ -1,11 +1,28 @@
 # Morrowind (GOTY retail ISO) — local-only candidate
 
-Not in `lib/apps.js`. The ISO (`downloads/Morrowind.iso`), the installed tree
-(`test/binaries/candidates/morrowind/installed/`) and the registry snapshot
-(`test/binaries/candidates/morrowind/registry.json`) are all gitignored and stay
-on this machine.
+Retail, so **localhost only**: `morrowind` is in `LOCAL_CANDIDATE_APPS` (the
+dropdown `index.html` shows only on localhost), never `DESKTOP_APPS`. Nothing
+made from the disc is committed, and `tools/deploy-berrry.js` refuses
+`test/binaries/candidates/morrowind/` and `downloads/` by name, `--files=`
+included (`test/test-deploy-morrowind-local-only.js`). You bring your own disc:
 
-## Reproduce
+```bash
+node tools/prepare-morrowind.js --iso=path/to/your/Morrowind.iso   # needs unshield + 7z
+node test/run.js --app=morrowind --memory-mb=1024 --headless-gl --quiet-api \
+  --tick-ms-per-batch=2 --stuck-after=100000 --no-close --max-seconds=170
+```
+
+The prep tool unpacks `data1.cab` (unshield) and DirectShow out of
+`DX81eng.exe` (7z) into `installed/`, copies `Video\*` + the autorun files
+into `cd/` with a one-track cue over the image (D: is a CD-ROM labelled
+MORROWIND), and writes `.wine-assembly-browser.json`. That manifest also
+carries the 432 registry keys `regsvr32 /s` writes for devenum, quartz and
+l3codecx, in that order: registering quartz first misses the filter-mapper
+`Instance` keys. Both hosts import those keys at every launch. Without them the
+title music fails with "Music Error: Can not create filter graph."
+The browser path is unverified. It fetches the whole ~900 MB tree eagerly.
+
+## Reproduce (manual, pre-entry)
 
 ```bash
 I=test/binaries/candidates/morrowind/installed

@@ -4777,6 +4777,15 @@ async function main() {
     // `--app` is the CLI spelling of selecting the same dropdown entry in the
     // browser, so apply its installed-state manifest too. Direct `--exe` runs
     // intentionally retain their no-startup-behavior contract.
+    // A local media manifest may carry the registry its installer would have
+    // written (tools/prepare-morrowind.js: DirectShow's self-registration).
+    if (APP_ENTRY && APP_ENTRY.localFileManifest) {
+      const local = JSON.parse(fs.readFileSync(appAsset(APP_ENTRY.localFileManifest), 'utf8'));
+      if (local && local.registry) {
+        const n = require('../lib/storage').importStore(local.registry);
+        console.log(`[reg] imported ${n} entries from ${APP_ENTRY.localFileManifest}`);
+      }
+    }
     if (APP_ENTRY && (APP_ENTRY.startupRegistry || APP_ENTRY.startupIni)) {
       try {
         const { setRegValue, setIniValue } = require('../lib/storage');

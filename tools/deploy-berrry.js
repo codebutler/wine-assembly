@@ -216,6 +216,21 @@ const NOT_REDISTRIBUTABLE = new Set([
   'binaries/dlls/msvcrt20.dll',  // Win98 SE OEM, local-only
 ]);
 
+// Retail media the visitor supplies from their own disc (tools/prepare-*.js).
+// These are refused whatever else says yes: a registry entry, a future
+// PUBLISHABLE_OUTSIDE_BINARIES line, the `binaries` symlink spelling of the
+// same tree, or an explicit --files= list. The check runs on every path the
+// deploy is about to upload, so there is no route to berrry around it.
+const NEVER_PUBLISH_PREFIXES = [
+  'test/binaries/candidates/morrowind/',
+  'binaries/candidates/morrowind/',
+  'downloads/',
+];
+const neverPublish = p => {
+  const norm = String(p || '').replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+  return NEVER_PUBLISH_PREFIXES.some(prefix => norm.startsWith(prefix));
+};
+
 // Registry-named assets that live outside binaries/. The prefix test below is
 // what stops a deploy from shipping test/binaries/candidates wholesale — most
 // of that tree is multi-hundred-MB game data we have no right to publish — so
@@ -249,7 +264,9 @@ function desktopAssetPaths() {
   const publishable = p => p.startsWith('binaries/') ||
     PUBLISHABLE_OUTSIDE_BINARIES.some(root => p.startsWith(root));
   const add = p => {
-    if (!p || !publishable(p)) return;
+    if (!p) return;
+    if (neverPublish(p)) { blocked.add(p); return; }
+    if (!publishable(p)) return;
     if (NOT_REDISTRIBUTABLE.has(p)) { blocked.add(p); return; }
     out.add(p);
   };
@@ -752,6 +769,11 @@ async function deploy() {
   }
 
   let allFiles = [...textFiles, ...binFiles];
+  const forbidden = allFiles.filter(f => neverPublish(f.name));
+  if (forbidden.length) {
+    throw new Error('Refusing to deploy retail media that is never published: ' +
+      forbidden.slice(0, 5).map(f => f.name).join(', '));
+  }
 
   // publishName() folds spaces to underscores, so two distinct source files can
   // in principle land on one published name. That would silently serve the
@@ -911,4 +933,5 @@ module.exports = {
   SERVER_MAX_FILE_SIZE,
   encodeBinaryBytes,
   desktopAssetPaths,
+  neverPublish,
 };
