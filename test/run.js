@@ -568,6 +568,9 @@ const HANDLER_HIST_STOP = Math.max(HANDLER_HIST_START + 1,
 // for tools/cache-slots.js, which needs the whole set to say whether the
 // direct-mapped block cache index is aliasing them.
 const HOT_BLOCK_DUMP = getArg('hot-block-dump', null);
+// --hist-json=FILE: the histogram window as the JSON tools/hot-loop-census.js
+// reads (the browser probe's shape), so a headless run feeds the same census.
+const HIST_JSON = getArg('hist-json', null);
 // --cpu-prof-window=A:B:FILE: a V8 CPU profile of batches [A,B) only, written
 // as FILE (.cpuprofile, read with tools/cpuprof-top.js). `node --cpu-prof`
 // covers the whole process, so on an app whose load is minutes long the
@@ -5330,6 +5333,34 @@ async function main() {
         fs.writeFileSync(dumpPath,
           blocks.map(row => `${hex(row.addr)} ${row.hits}`).join('\n') + '\n');
         console.log(`  wrote ${blocks.length} distinct blocks to ${dumpPath}`);
+      }
+      if (HIST_JSON) {
+        // The same shape tools/page-probes/read-handler-hist.js returns from a
+        // browser, so tools/hot-loop-census.js and browser-handler-hist.js read
+        // a headless window unchanged. Counts are load-immune, so a window
+        // taken on a busy box is as good as one from a quiet one; several
+        // windows of one run are what the census needs to tell a scene from a
+        // loop that is hot everywhere.
+        const jsonPath = HANDLER_HIST_THREADS.length > 1
+          ? `${HIST_JSON}.T${handlerHistThread}` : HIST_JSON;
+        const mods = {};
+        const exeLoad = moduleBases.exe ? moduleBases.exe.loadAddr >>> 0 : -1;
+        for (const [name, m] of Object.entries(moduleBases)) {
+          if (name === 'exe') continue; // hist-blocks.js adds the exe from --exe-base
+          // Keys carry no extension; hist-blocks.js appends .dll to a bare
+          // name, so name the exe's own basename entry as the exe it is.
+          const ext = (m.loadAddr >>> 0) === exeLoad ? '.exe' : '.dll';
+          mods[name + ext] = [m.loadAddr >>> 0, m.origBase >>> 0];
+        }
+        fs.writeFileSync(jsonPath, JSON.stringify({
+          source: 'run.js', thread: handlerHistThread,
+          window: { start: handlerHistWindowStart, stop: batch },
+          ops: total, handlers: handlers.slice(0, 30).map(r => [r.id, r.hits]),
+          blockHits: blockTotal, distinct: blocks.length,
+          blocks: blocks.slice(0, 400).map(r => [r.addr.toString(16), r.hits]),
+          mods,
+        }));
+        console.log(`  wrote histogram JSON to ${jsonPath}`);
       }
     }
     if (e.get_sib_consumer_hist_base && e.get_sib_consumer_hist_count) {
