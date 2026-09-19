@@ -15,6 +15,10 @@ assert(app, 'lib/apps.js has the morrowind entry');
 assert(LOCAL_CANDIDATE_APPS.some(([name]) => name === id), 'morrowind is a local candidate');
 assert(!DESKTOP_APPS.some(([name]) => name === id), 'morrowind is never a public desktop app');
 assert(!DEBUG_ONLY_APPS.some(([name]) => name === id), 'morrowind is not a debug-only app either');
+// The <select> is hand-written: an entry with no <option> is only an icon.
+// Off localhost the page removes every option not in DESKTOP_APPS.
+assert(require('fs').readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8')
+  .includes(`<option value="${id}">`), 'index.html has the dropdown option');
 
 // Every way the entry names its bytes is refused, including the `binaries`
 // symlink spelling a future edit might use and the disc image itself.
