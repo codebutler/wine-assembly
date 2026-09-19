@@ -1531,7 +1531,8 @@
         <label><input id="perf-hud-toggle" type="checkbox" onchange="setPerfHud(this.checked)">FPS graph</label>
         <label title="Fold Caesar III's run-length sprite blit into one dispatch (handler 424). Decode-time, so it steers blocks decoded after the toggle — relaunch for a clean A/B."><input id="rle-run-toggle" type="checkbox" checked onchange="setRleRun(this.checked)">RLE fold</label>
         <label title="Experimental: compile proven x87 expression regions and fold contiguous x87 islands. Decode-time, so relaunch for a clean A/B."><input id="x87-fold-toggle" type="checkbox" onchange="setX87Fusion(this.checked)">x87 fold</label>
-        <label title="Direct3D 8/9 renderer: the WebGL backend, or the WAT software rasterizer on a render Worker. Direct3D 2-7 (immediate mode) always rasterizes in WAT. Read when the device is created, so relaunch after changing it.">D3D: <select id="d3d-renderer-select" onchange="setD3DRenderer(this.value)"><option value="webgl">WebGL</option><option value="software">Software</option></select></label>
+        <label title="Direct3D 8/9 renderer: the WebGL backend, or the WAT software rasterizer on a render Worker. Direct3D 2-7 (immediate mode) follows the D3DIM GL box beside this one. Read when the device is created, so relaunch after changing it.">D3D: <select id="d3d-renderer-select" onchange="setD3DRenderer(this.value)"><option value="webgl">WebGL</option><option value="software">Software</option></select></label>
+        <label title="Direct3D 2-7 (immediate mode) draws on WebGL instead of the WAT software rasterizer. Post-transform: the guest keeps its own T&amp;L and only the triangles are handed over, and each fence reads the result back into the guest surface. Read when the guest instance starts, so relaunch after changing it."><input id="d3dim-gpu-toggle" type="checkbox" onchange="setD3DIMGpu(this.checked)">D3DIM GL</label>
         <label><input id="perf-stream-toggle" type="checkbox" onchange="setPerfStream(this.checked)">Stream</label>
         <label title="Experimental: opt into real guest threads. Needs cross-origin isolation; the worker backend is still phase 1."><input id="threads-toggle" type="checkbox" onchange="setThreads(this.checked)">Threads</label>
         <span id="threads-status" style="color:#606060"></span>
@@ -1757,6 +1758,7 @@ Resource-aware Win98 emulator
       "lib/d3d9-fixed.js",
       "lib/d3d9-texture.js",
       "lib/d3d9-backend.js",
+      "lib/d3dim-gpu.js",
       "lib/d3d-command-stream.js",
       "lib/d3d-geometry-batches.js",
       "lib/d3d9-software-backend.js",
@@ -2241,6 +2243,17 @@ Resource-aware Win98 emulator
       if (select) select.value = window.WineD3D.renderer;
       appendDebugLog(`[d3d] renderer ${window.WineD3D.renderer} — takes effect on the next launch`);
     }
+    function setD3DIMGpu(on) {
+      window.WINE_D3DIM_GPU = !!on;
+      const box = document.getElementById('d3dim-gpu-toggle');
+      if (box) box.checked = window.WINE_D3DIM_GPU;
+      appendDebugLog(`[d3dim-gpu] D3DIM on ${window.WINE_D3DIM_GPU ? 'WebGL' : 'the WAT software rasterizer'}` +
+        ' — takes effect on the next launch');
+    }
+    window.addEventListener('load', () => {
+      const box = document.getElementById('d3dim-gpu-toggle');
+      if (box) box.checked = window.WINE_D3DIM_GPU === true;
+    });
     // Streaming can be switched on mid-session from the toolbar. Requiring a
     // URL parameter meant deciding to measure before loading the page, which
     // is the wrong order: you notice jank while playing, not before.
@@ -2281,6 +2294,10 @@ Resource-aware Win98 emulator
     // Opt-in with ?d3d-worker until a fixed-work A/B shows it is a net win:
     // overlap is measured, but per-draw copies and hand-offs are not free.
     window.WINE_D3D_RENDER_WORKER = new URLSearchParams(location.search).has('d3d-worker');
+    // D3DIM (DX2-7) triangles on WebGL instead of the WAT software rasterizer.
+    // Read once per launch by whichever thread owns the guest instance, so it
+    // steers the NEXT launch like the other renderer switches.
+    window.WINE_D3DIM_GPU = new URLSearchParams(location.search).has('d3dim-gpu');
     // Diagnostic: serialize Worker slices to distinguish shared-state races
     // from incorrect per-thread state.
     window.WINE_THREADS_SERIAL = /[?&]threads-serial\b/.test(location.search);

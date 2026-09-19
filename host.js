@@ -2001,6 +2001,11 @@ class WineAssembly {
     // implementation of every host call, not two.
     this._mainImports = imports;
     await this._maybeStartGuestWorker(wasmModule);
+    // D3DIM (DX2-7) triangles on WebGL instead of the WAT software rasterizer.
+    // The executor belongs to whichever thread owns the guest instance, so the
+    // Worker builds its own (lib/guest-worker.js) and this is the cooperative
+    // case only — with a guest Worker running, this.instance executes nothing.
+    if (window.WINE_D3DIM_GPU === true && !this.guestWorker) this._startD3DIMGpu();
     // Opt-in A/B for the counted dword-copy superinstruction. Configure both
     // decoders before any PE bytes are loaded or translated; ordinary runs
     // retain the conservative off default.
@@ -2394,6 +2399,43 @@ class WineAssembly {
     }
   }
 
+  // Attach the D3DIM WebGL executor to the main-thread instance.
+  //
+  // It renders into its own offscreen canvas and its fence reads the result
+  // back into the guest's DIB, so the renderer keeps presenting exactly the
+  // surface it presents for the software rasterizer. Nothing else in the
+  // compositing path changes, and a device with no WebGL keeps the software
+  // path rather than failing to launch.
+  _startD3DIMGpu() {
+    if (this.d3dimGpu) return this.d3dimGpu;
+    const gpu = typeof window !== 'undefined' && window.D3DIMGpu;
+    if (!gpu || !this.instance.exports.d3dim_gpu_enable) {
+      this.logToUI('[d3dim-gpu] lib/d3dim-gpu.js not loaded — software D3DIM');
+      return null;
+    }
+    try {
+      const self = this;
+      this.d3dimGpu = new gpu.D3DIMGpu({
+        getExports: () => self.instance.exports,
+        getMemory: () => self.memory.buffer,
+        createCanvas: (width, height) => {
+          const canvas = document.createElement('canvas');
+          canvas.width = width; canvas.height = height;
+          return canvas;
+        },
+        onError: message => { console.error(message); self.logToUI(message); },
+      });
+      if (this.hostCtx) this.hostCtx.d3dCommands = this.d3dimGpu;
+      this.instance.exports.d3dim_gpu_enable(1);
+      this.logToUI('[d3dim-gpu] D3DIM draws on WebGL');
+      return this.d3dimGpu;
+    } catch (error) {
+      this.d3dimGpu = null;
+      this.logToUI(`[d3dim-gpu] unavailable: ${error.message} — software D3DIM`);
+      return null;
+    }
+  }
+
   // EXPERIMENTAL: run the guest's main thread in a Worker.
   //
   // Only when the page asked for it AND the document is cross-origin isolated,
@@ -2425,6 +2467,7 @@ class WineAssembly {
         workerUrl: WineAssembly.versionedUrl('lib/guest-worker.js'),
         forwardGlLogs: !!this.verbose || !!(window.__waTraceApiNames && window.__waTraceApiNames.size),
         d3dRenderWorker: window.WINE_D3D_RENDER_WORKER === true,
+        d3dimGpu: window.WINE_D3DIM_GPU === true,
         log: msg => { console.log(msg); self.logToUI(msg); },
         tickMs: () => self._guestTickMs(self.hostCtx && self.hostCtx.sharedAudio),
         advanceGuestTime: ms => {
