@@ -19,11 +19,16 @@ if (!fs.existsSync(EXE)) {
 }
 
 const input = [
-  '20:post-cmd:403', // Enter fullscreen: SetMenu(hwnd, NULL).
-  '30:post-cmd:403', // Exit fullscreen: restore saved HMENU.
-  '40:wait-title-menu-open:3D_Pinball_for_Windows_-_Space_Cadet:2000:79:restored',
-  '40:menu-dump:restored',
-  '50:stop',
+  // Keep targeting the game window after its menu disappears. post-cmd's
+  // menu-owner lookup otherwise falls back to Pinball's first/helper HWND,
+  // so the exit command never reaches the game.
+  // Also let startup and the display transition finish before the next
+  // command; the old 20/30 schedule could still be in initialization.
+  '60:wait-title-command:3D_Pinball_for_Windows_-_Space_Cadet:2000:403:enter',
+  '100:wait-title-command:3D_Pinball_for_Windows_-_Space_Cadet:2000:403:exit',
+  '140:wait-title-menu-open:3D_Pinball_for_Windows_-_Space_Cadet:2000:79:restored',
+  '150:menu-dump:restored',
+  '160:stop',
 ].join(',');
 
 const args = [
@@ -31,7 +36,7 @@ const args = [
   `--exe=${EXE}`,
   '--args=-quick',
   '--batch-size=200000',
-  '--max-batches=80',
+  '--max-batches=180',
   '--quiet-api',
   '--quiet-blocks',
   '--no-close',

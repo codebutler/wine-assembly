@@ -3199,7 +3199,7 @@
         (i32.store offset=8 (call $dialog_state_addr (local.get $slot))
           (i32.const 1))))
     ;; Native dialog classes commonly wrap DefDlgProc in another x86 WNDPROC.
-    ;; An application-defined DLGPROC message may run its own nested modal
+    ;; A WM_COMMAND or application-defined DLGPROC message may run a nested modal
     ;; loop, so invoking it through the bounded synchronous sender would lose
     ;; that live x86 stack when the recursive budget expires. DefDlgProc and a
     ;; DLGPROC have the same four-argument stdcall frame, and dialog default
@@ -3208,7 +3208,9 @@
     ;; native wrapper that called DefDlgProc.
     (local.set $proc (call $dialog_proc_get (local.get $arg0)))
     (if (i32.and
-          (i32.ge_u (local.get $arg1) (i32.const 0x0400))
+          (i32.or
+            (i32.ge_u (local.get $arg1) (i32.const 0x0400))
+            (i32.eq (local.get $arg1) (i32.const 0x0111)))
           (i32.ne (local.get $proc) (i32.const 0)))
       (then
         (global.set $eip (local.get $proc))

@@ -5389,6 +5389,32 @@
   ;; WS_POPUP owned by the game window and paints white text into it with
   ;; ordinary GDI -- so starting that window's surface at COLOR_BTNFACE puts a
   ;; grey slab over the game instead. Start it at the presented frame.
+  ;; A popup need not start at screen (0,0). Copy the primary rectangle under
+  ;; its window, not the top-left of the display (Diablo's notice starts at
+  ;; y=162). Clip negative origins while preserving the destination offset.
+  (func $dx_blit_entry_to_overlay (param $entry i32) (param $hwnd i32)
+    (local $x i32) (local $y i32) (local $w i32) (local $h i32)
+    (local $dx i32) (local $dy i32)
+    (call $host_get_window_rect (local.get $hwnd) (global.get $WINDOW_RECT_SCRATCH))
+    (local.set $x (i32.load (global.get $WINDOW_RECT_SCRATCH)))
+    (local.set $y (i32.load offset=4 (global.get $WINDOW_RECT_SCRATCH)))
+    (local.set $w (i32.sub (i32.load offset=8 (global.get $WINDOW_RECT_SCRATCH)) (local.get $x)))
+    (local.set $h (i32.sub (i32.load offset=12 (global.get $WINDOW_RECT_SCRATCH)) (local.get $y)))
+    (if (i32.lt_s (local.get $x) (i32.const 0))
+      (then
+        (local.set $dx (i32.sub (i32.const 0) (local.get $x)))
+        (local.set $w (i32.add (local.get $w) (local.get $x)))
+        (local.set $x (i32.const 0))))
+    (if (i32.lt_s (local.get $y) (i32.const 0))
+      (then
+        (local.set $dy (i32.sub (i32.const 0) (local.get $y)))
+        (local.set $h (i32.add (local.get $h) (local.get $y)))
+        (local.set $y (i32.const 0))))
+    (call $dx_blit_entry_rect_to_hdc (local.get $entry)
+      (i32.add (local.get $hwnd) (i32.const 0x40000))
+      (local.get $dx) (local.get $dy) (local.get $x) (local.get $y)
+      (local.get $w) (local.get $h)))
+
   (func $dx_seed_overlay_surface (param $hwnd i32)
     (local $entry i32) (local $target i32)
     (if (i32.eqz (call $dx_exclusive_get)) (then (return)))
@@ -5398,8 +5424,7 @@
       (then (return)))
     (local.set $entry (call $dx_primary_entry))
     (if (i32.eqz (local.get $entry)) (then (return)))
-    (call $dx_blit_entry_to_hdc (local.get $entry)
-      (i32.add (local.get $hwnd) (i32.const 0x40000))))
+    (call $dx_blit_entry_to_overlay (local.get $entry) (local.get $hwnd)))
 
   ;; Seeding an overlay once, at surface creation, freezes it on whatever was
   ;; on screen at that instant -- but the framebuffer it shares keeps being
@@ -5430,8 +5455,8 @@
             (then
               (if (call $wnd_is_effectively_visible (local.get $hwnd))
                 (then
-                  (call $dx_blit_entry_to_hdc (local.get $entry_wa)
-                    (i32.add (local.get $hwnd) (i32.const 0x40000)))))))))
+                  (call $dx_blit_entry_to_overlay (local.get $entry_wa)
+                    (local.get $hwnd))))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan))))
 

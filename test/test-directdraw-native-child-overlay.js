@@ -16,8 +16,8 @@ const screen = createCanvas(8, 8);
 const renderer = new Win98Renderer(screen);
 const wasm = { exports: {
   get_dx_exclusive_hwnd: () => hwnd,
-  wnd_window_screen_x: target => target === childHwnd ? 2 : 0,
-  wnd_window_screen_y: target => target === childHwnd ? 3 : 0,
+  wnd_window_screen_x: target => target === childHwnd ? 2 : target === 0x10020 ? 4 : 0,
+  wnd_window_screen_y: target => target === childHwnd ? 3 : target === 0x10020 ? 5 : 0,
 } };
 const top = renderer.windows[hwnd] = {
   hwnd, x: 0, y: 0, w: 8, h: 8, visible: true, isChild: false, wasm,
@@ -64,5 +64,26 @@ assert.deepStrictEqual(pixel(3, 3), [255, 0, 0, 255],
 assert.strictEqual(renderer.detachWindowSurface(hwnd, gdi), true);
 assert.strictEqual(top._exclusiveGdiChildCanvas, null,
   'deleting the GDI surface must release the saved child overlay');
+
+// A post-processing source must retain the whole exclusive screen when a
+// smaller popup sits at a nonzero origin (Diablo's Replay Intro notice).
+const popupCanvas = createCanvas(3, 2);
+popupCanvas.getContext('2d').fillStyle = '#00ff00';
+popupCanvas.getContext('2d').fillRect(0, 0, 3, 2);
+const popup = renderer.windows[0x10020] = {
+  hwnd: 0x10020, x: 4, y: 5, w: 3, h: 2, visible: true,
+  isChild: false, wasm, _backCanvas: popupCanvas, _gdiWriteSeq: 2,
+};
+top._gdiWriteSeq = 2;
+const composed = renderer._buildExclusivePresentationSource(popup, [top, popup], 1);
+assert.strictEqual(composed.width, 8, 'popup must not shrink the full-screen source');
+assert.strictEqual(composed.height, 8, 'popup must not crop the full-screen source');
+const composedPixel = (x, y) => Array.from(composed.getContext('2d').getImageData(x, y, 1, 1).data);
+assert.deepStrictEqual(composedPixel(0, 0), [255, 0, 0, 255],
+  'the game must remain visible above the offset popup');
+assert.deepStrictEqual(composedPixel(5, 6), [0, 255, 0, 255],
+  'popup art must stay at its guest screen coordinates');
+assert.deepStrictEqual(composedPixel(5, 7), [255, 0, 0, 255],
+  'the popup must not stretch into the rest of the display');
 
 console.log('PASS  native child GDI pixels overlay exclusive DirectDraw by child rect');

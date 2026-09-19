@@ -106,6 +106,13 @@ const extraWat = String.raw`
   assert.strictEqual(wat.guest_read32(0x00520010) >>> 0, 0x12345678,
     'the reused frame retains lParam');
 
+  assert.strictEqual(wat.test_defdlg_custom_tail(stormHwnd, proc, 0x0111) >>> 0, proc,
+    'a native DefDlgProc wrapper keeps WM_COMMAND modal work on the main context');
+  assert.strictEqual(wat.get_esp() >>> 0, 0x00520000,
+    'wrapped WM_COMMAND preserves its live stack instead of recursively running it');
+  assert.strictEqual(wat.guest_read32(0x00520008) >>> 0, 0x0111,
+    'the preserved frame carries WM_COMMAND');
+
   console.log('PASS  custom dialog dispatch preserves the native modal stack');
 })().catch(error => {
   console.error(error && error.stack || error);

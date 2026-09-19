@@ -40,6 +40,7 @@
 //
 // usage: node tools/mobile-app-sweep.js --out=DIR [--apps=a,b] [--orientations=portrait,landscape]
 //                                       [--settle=14000] [--jobs=4] [--timeout=240]
+//                                       [--url=http://127.0.0.1:8080]
 
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -65,6 +66,7 @@ const TIMEOUT_S = Number(arg('timeout', 240));
 // (Winamp, StarCraft, Heroes II, RollerCoaster Tycoon) do not make the 90s
 // default on a loaded box and report as launch failures they are not.
 const LAUNCH_MS = Number(arg('launch', 150000));
+const URL_BASE = arg('url', '');
 
 const ORIENTS = {
   portrait: '375x667',   // iPhone SE, the smallest screen we claim to support
@@ -190,6 +192,7 @@ function runOne(id, orient) {
   const args = [PROBE, `--app=${id}`, '--query=', `--viewport=${ORIENTS[orient]}`,
     `--launch=${LAUNCH_MS}`, '--touch', `--steps=${steps}`,
     `--eval=JSON.stringify({fit: window.__fit, fill: ${LAYOUT_OBJ}})`];
+  if (URL_BASE) args.push(`--url=${URL_BASE}`);
 
   return new Promise(resolve => {
     const child = spawn(process.execPath, args, { cwd: REPO });
@@ -199,6 +202,7 @@ function runOne(id, orient) {
     child.stderr.on('data', d => { out += d; });
     child.on('close', code => {
       clearTimeout(kill);
+      fs.writeFileSync(path.join(dir, `${id}.log`), out);
       const line = out.split('\n').find(l => l.startsWith('eval => '));
       let both = null, error = null;
       if (line) {

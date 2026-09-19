@@ -2876,3 +2876,96 @@ canonical/compat compilation, and the complete repository build pass. The
 legacy 4,100-batch CLI gameplay acceptance did not finish under its five-minute
 guard on the loaded shared machine (batch 2,715), so that timeout is not being
 reported as gameplay acceptance or as a regression.
+
+## Browser menu sprites and title palette: resident MPQ (2026-09-18)
+
+The release's HTTP-range mount of `spawn.mpq` broke synchronous dialog art
+loading. In a fresh cooperative browser, `diabloui`'s logo and focus arrays
+remained zero although the animation callbacks ran about 20 times per second.
+Storm successfully opened both files, but their 128-byte PCX header reads
+returned `ERROR_HANDLE_EOF`. The primary framebuffer had no pentagram pixels;
+its red palette entries were present.
+
+The failure is reproducible at `waitMultipleCooperative`: the first dialog
+reads finish, but the focus42/smlogo reads park Storm's worker at yield 12
+(`io_wait`) on a cold HTTP range. The nested synchronous `WM_INITDIALOG` cannot
+return to the browser event loop to finish the fetch. `runSlice` returns zero
+steps; the wait reports `WAIT_FAILED`; Storm treats the unfinished read as EOF.
+The worker fills the range only after the menu has discarded the failed load.
+
+Mount the 50,274,091-byte shareware MPQ eagerly before entering the guest.
+With resident bytes, the post-video title has its red palette and flaming logo,
+and the main menu has the flaming logo and both red selection markers. This
+costs a resident 50 MB archive; it avoids an unsupported asynchronous suspension
+inside a synchronous guest callback. A general resumable-callback implementation
+would be needed to stream these cold ranges safely.
+
+`test/test-diablo-shareware-browser-web.js` captures the six launch/gameplay
+stages and checks title color and menu markers. Its title checkpoint observes
+pixels rather than sleeping 11 seconds, since the repaired title advances to the
+menu automatically. Dismiss the title with a click above the menu rows: Enter
+can also activate Single Player and make a mislabeled menu capture pass.
+
+An experimental change to honor later all-black DirectDraw palette writes only
+turned the broken title black; it did not repair its missing art and was reverted.
+
+## Replay Intro modal stack and duplicate activation (2026-09-18)
+
+Replay Intro in the shareware build opens an information dialog, not a movie.
+The browser previously opened two copies and could not dismiss them normally.
+The guest button subclass is `diabloui+0x9ec0` (runtime `0x8e7ec0` with
+diabloui at `0x8de000`). It consumes WM_LBUTTONDOWN and posts WM_COMMAND to
+its parent, then chains WM_LBUTTONUP to the stock BUTTON procedure. Our stock
+procedure emitted BN_CLICKED even when it had never received the DOWN. Require
+the native pressed flag before processing UP to avoid the second activation.
+
+The first dialog was independently stranded: Storm's registered window procedure
+wraps DefDlgProcA, whose WM_COMMAND path called the DLGPROC through the bounded
+recursive interpreter. The new modal loop survived beyond that budget and its
+live continuation was discarded. The ordinary DispatchMessage path already
+tail-dispatched WM_COMMAND for this reason; DefDlgProcA now does the same.
+
+Verified in Chrome: one click creates exactly one additional SDlgDialog;
+Escape removes it and returns to the main menu. The browser six-stage test also
+exercises that return before character selection. Focused regressions extend
+`test-dialog-custom-dispatch.js` and `test-dialog-button-command-queue.js`;
+`test-button-auto-check.js` and `test-dialog-setfocus-tabstop.js` still pass.
+
+The initially remaining visual issue was an invisible OK label. Its dialog rectangle
+is (0,162), 640x318; the button is (230,244), 180x42 relative to that dialog,
+so its screen rectangle (230,406)..(410,448) fits. Clicking (320,427) dismisses
+the notice. The guest allocates the expected 180x42 button bitmap; the missing
+label needed a palette-index/presentation trace. Screenshots:
+`/private/tmp/wa-replay-fixed-before.png` and the browser test's
+`03b-replay-intro.png`.
+
+The loading checkpoint also needs to account for its palette fade: a capture
+500 ms after the dialog closes can still be nearly black. The browser test now
+waits for the progress-bar border, retains the brightest loading frame over the
+following second, and excludes frames with a red gameplay HUD orb. The verified
+capture shows the village artwork and a partially filled bar before Tristram.
+
+## Replay Intro OK art: offset primary backing (2026-09-18)
+
+The button's 180x42 indexed bitmap and the 640x480 DirectDraw primary both
+contain the gold OK text and red markers at screen y=427. The missing pixels
+were introduced by `$dx_seed_overlay_surface` / `$dx_reseed_overlays`: both
+copied the primary from (0,0) into every popup, although the Replay Intro
+popup begins at (0,162) and is only 318 pixels tall. Its backing consequently
+contained the top 318 screen rows, excluding the button.
+
+Both paths now copy the primary rectangle under the popup's screen rectangle
+into window-local (0,0). Negative screen origins preserve the corresponding
+destination offset, and the shared rectangle blitter clips the right/bottom
+edges. This applies to borderless exclusive popups; the existing exclusion
+for captioned dialogs remains intact.
+
+The post-processing source independently used only the top popup's backing
+canvas, moving the repaired 318-row image to screen (0,0). It now composes the
+exclusive window stack at native screen coordinates, preserving the game above
+the popup, its offset, and the normal stale-surface/child-overlay rules. The
+native-child overlay test also covers a smaller popup at a nonzero origin.
+
+The browser regression checks both red markers and gold OK pixels, dismisses
+the notice by clicking that visible button, then reopens it and checks Escape
+before continuing through character creation and gameplay.

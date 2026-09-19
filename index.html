@@ -773,6 +773,9 @@
     body.no-debug #log { display: none; }
     body.no-debug #screen-wrap { background: #008080; }
     body.no-debug canvas { background: transparent; z-index: 2; }
+    /* With no guest running, the transparent screen still covers the desktop
+       icons. Let clicks reach them; guest input resumes when an app starts. */
+    body.no-debug:not(.app-running) #screen { pointer-events: none; }
     body.no-debug.exclusive-fullscreen,
     body.no-debug.exclusive-fullscreen #shell,
     body.no-debug.exclusive-fullscreen #content,

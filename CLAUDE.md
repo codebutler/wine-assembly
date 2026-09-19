@@ -471,6 +471,8 @@ GetMessageA in `09a5-handlers-window.wat` delivers messages in a priority-based 
 - `tools/gen_dispatch.js --check` — fails if the generated dispatch table is stale rather than regenerating it
 - `tools/deploy-berrry.js` — Deploy to berrry.app. `--update` updates an existing app and by default fetches the server's sha256 manifest, then uploads only files whose hash differs (so a no-op redeploy ships zero files). `--full` forces a complete reupload. `--files=a,b,c` uploads an explicit comma-separated list of repo-relative paths and skips diffing. Note: by default `--update` *will* push uncommitted working-tree changes, since the diff is against the live server, not git.
 
+- `node test/test-diablo-shareware-browser-web.js` — drives the shipping desktop shell through Diablo's intro video, red post-skip title, main menu, character selection, loading bar, and gameplay. Saves all six stages to `build/diablo-shareware-browser/` and checks title color, both menu selection markers, portrait, loading bar, and HUD orbs. `BASE_URL=http://127.0.0.1:8142` targets an existing release server; otherwise it starts its own. Use this browser test for launch-art regressions: CLI captures do not exercise HTTP asset mounts or browser composition.
+
 ## Test Binaries
 
 Win98/XP executables in `test/binaries/`. Currently tested:

@@ -278,6 +278,14 @@ retail-era shareware branch: it is a substantially later and more representative
 Diablo build, while still being limited shareware rather than the commercial
 full game.
 
+Blizzard also hosts the [official `diablosw.exe` shareware installer](http://ftp.blizzard.com/pub/demos/diablosw.exe)
+(52,223,944 bytes; verified HTTP 200 on 2026-09-18). The desktop's Sources
+window links to this original download and to the current
+[Diablo + Hellfire purchase page](https://www.gog.com/en/game/diablo). The
+browser fixture described below was installed from the preserved CD image;
+the direct installer is provided as an original-download link, not claimed to
+be the exact source of those installed bytes.
+
 Archive.org's original `DIABLOSW.iso` is 137,576,448 bytes, SHA-1
 `bf1a62b24ce01ce39993955bff4b3c4d4ab9d647`, and MD5
 `3f37d919254c9747039e1042ed70a5fb`. The disc was created on 1997-01-18 and

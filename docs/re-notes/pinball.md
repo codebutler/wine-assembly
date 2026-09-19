@@ -54,6 +54,21 @@ own toggle, the old windowed compositor clipping path is still a separate
 general fixed-window issue; the phone profile avoids it at startup rather
 than changing desktop placement semantics.
 
+## Fullscreen-menu regression harness correction (2026-09-18)
+
+The release check initially failed 3/4 assertions, identically before and
+after the Diablo changes. In Chrome, F4 enters fullscreen and a second F4
+restores the caption and menu. The CLI recipe was sending commands too early
+(batches 20/30), and its generic `post-cmd` menu-owner lookup falls back to
+the first/helper HWND once fullscreen removes the game's menu. Pinball's game
+window is the second HWND, so the exit command could go to the wrong window.
+
+The test now uses `wait-title-command` to target the game window explicitly,
+after startup at batch 60 and after the transition at batch 100. The menu is
+examined at batches 140/150. All four assertions pass: SetMenu detaches then
+restores handle 16782948; Options opens with eight entries including Players
+and Music; no crash. No emulator change was needed for this reported failure.
+
 ## Modal controls and high-score entry
 
 Flipper hit regions now have equal half-table widths; the smaller plunger
