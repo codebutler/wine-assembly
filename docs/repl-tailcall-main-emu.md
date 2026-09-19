@@ -335,3 +335,24 @@ at least one longer app-window sample with screenshot/trace parity.
 - [toyvm-trace-jit.md](toyvm-trace-jit.md) — the other direction (compiling a
   trace instead of dispatching it), and why its 2.10× per trace is only 1.22×
   per program
+
+## 2026-09-19 — thinned-tail arms: null
+
+With the dispatch step baked as `(dispatch-next)`, two thinner bodies were
+measured on the quiet box (StarCraft gameplay window, 3 reps, rotated order,
+perf counters), against the shipped build and a null arm of the same build:
+
+| arm | body | wasm bytes | median gameplay CPU | vs landed |
+|---|---|---|---|---|
+| landed | shipped macro | 1435041 | 48.85s | — |
+| null | same build again | 1435041 | 48.42s | band |
+| t1 | minus the `$handler_hist_enabled` test | 1430385 | 49.02s | +0.35% (inside band) |
+| t2 | t1 minus the `$nx_fn >= 469` table-bound guard | 1424463 | 48.68s | −0.35% (inside band) |
+
+Instructions moved as the source predicts (−0.1% and −0.05%, well-predicted
+branches that retire nearly free) and cycles did not move at all. The two
+per-dispatch tests are not where the remaining dispatch cost is; the
+replicated body's cost is the two loads, the `$ip` bump and the indirect tail
+call. Neither is worth landing: the guard is what turns a corrupt cache into a
+`CAC4BAD0` recovery instead of a wasm trap, and the hist test is what makes
+`--handler-hist` free when off. Scratch: `T1.wasm`, `T2.wasm`, `sweep-thin.log`.
