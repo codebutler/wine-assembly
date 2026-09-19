@@ -28,4 +28,7 @@ setTimeout(function () {
     // a pixels-per-frame figure that is off by the length of the warmup.
     try { window.__histArmSnap = window.WinePerf.snapshot(); } catch (_) {}
   } catch (err) { window.__histErr = String(err); }
-}, window.__histArmDelay || 230000), 'hist-arm-scheduled'
+// Explicitly null-checked, not `||`: an agent stepping a FROZEN session wants
+// to arm the window right now and sets this to 0, and `0 || 230000` silently
+// armed it three and a half minutes later, so every window read back ops=0.
+}, window.__histArmDelay != null ? window.__histArmDelay : 230000), 'hist-arm-scheduled'

@@ -316,3 +316,100 @@ in the next is a scene, not a fold target. Take the in-world window
 (560k-600k) and a menu window before writing any WAT, and remember the world
 window is already 37-38% native GL, so the same fold is worth much less
 there.
+
+### CORRECTION: that block is a scene, not a fold target (2026-09-19, later)
+
+The 15.33% above is **one loading window**, and it does not survive more of
+them. Two independent harnesses now say so.
+
+Six consecutive CLI windows, one run, 750k batches to the post-"New" intro
+(`--handler-hist-thread=0,0,0,0,0,0 --handler-hist-start=150000
+--handler-hist-stop=750000 --hist-json=`, with `620000:di-mousedown:1` to
+click New):
+
+| window | batches | what it is | `exe+0x479a80..479ad9` |
+|---|---|---|---|
+| w1 | 150k-250k | splash + bink | 8.0% |
+| w2 | 250k-350k | loading | 12.9% |
+| w3 | 350k-450k | loading | 0.3% |
+| w4 | 450k-550k | menu | 6.6% |
+| w5 | 550k-650k | menu | 3.2% |
+| w6 | 650k-750k | `mw_intro.bik` | **0.0%** |
+
+Mean 5.2%, spread 12.9pp. And twelve windows taken in a real Chrome (below)
+never had `0x479acd` in the top **forty** blocks at all.
+
+`tools/hot-loop-census.js` returns the same verdict on both sets:
+
+> NO region holds >=5% of block entries in every window. Nothing here is a
+> safe fold target on this evidence.
+
+The list walk is real and recurring, but it is a *load-time* name lookup, so
+it is big exactly when the game is reading assets and absent when it is
+playing a video. This is the SimGolf/H455 trap the census tool was built for,
+and it was one window away from being repeated here. **A Morrowind-specific
+fold is not the next work item.** The cross-app levers in
+[hot-idiom-census-2026-09-19.md](../hot-idiom-census-2026-09-19.md) —
+`cmp`/`test` + Jcc fusion, then the zero-then-load8 / load8+inc pair — are,
+because they pay in every window of every app rather than in one scene of
+this one.
+
+Still not measured: gameplay proper. w6 is the intro movie; the world window
+is past it.
+
+## Driving it in a real browser (frozen mode)
+
+`?app=morrowind&frozen&debug` plus `window.WineFrozen.step(n)` runs the
+browser build under an agent's control, which is the only way to reach the
+Worker-hosted code path (`--threads` in the CLI keeps the guest's MAIN thread
+in-process; the browser puts it in worker slot 0). Three things that cost a
+session each:
+
+- **The dev-server needs `--isolate`.** Without the COOP/COEP headers the page
+  reports `[threads] not cross-origin isolated — running single-threaded` and
+  quietly runs the mode you were not testing.
+- **Wait on `WineFrozen.status().hosts`, not on console text.** The
+  worker-hosted main thread never prints the cooperative path's "DLLs ready" /
+  "Starting run", and a frozen host prints nothing until it is stepped.
+  `runningApps` is module-scoped in `browser-shell.js`, not a global.
+- The ~5930-file mount takes a minute or two before any of this; give it its
+  own budget or it eats the stepping one.
+
+Morrowind at 16ms/step was still on `Initializing Data…` after 26,000 steps
+(390s of guest time), so browser windows reach the loading phase only.
+
+## The Worker-mode COM reload loop (2026-09-19)
+
+Threads mode in the browser dies a few seconds in:
+
+```
+[COM] Loading DLL: quartz.dll (worker)      x~30, each ~0x130000 lower
+[COM] DLL load error: DLL table capacity 32 exhausted
+[threads] guest trapped in worker: unreachable @ EIP=0xf523d7
+```
+
+`com_create_instance` (`lib/storage.js`) resolves the server through a fixed
+`ctx.exports`:
+
+```js
+const dllCount  = exports.get_dll_count();
+const dllTable  = exports.get_dll_table();
+const imageBase = exports.get_image_base();
+```
+
+In browser worker mode that is host.js's **idle** instance — the one that
+never loaded the PE. `dll_count` is a per-instance global, so the row the
+worker just appended is invisible to it, and its `image_base` is 0, so the
+export-name reads would be wrong even if the count were right. Every retry
+returns `CO_E_DLLNOTFOUND`, the guest yields 3 again, and
+`_handleComDllLoadThreaded` (host.js) maps another copy — until the shared
+32-row table is exhausted and the thread runs into garbage.
+
+`a4bd125c` fixed the CLI shape of this (`_publishLinkLoaderState` raises main's
+count after a worker load) but the browser reaches the loader through
+`host.js` → `guest-thread-host.js comLoadDll`, which never publishes. The
+right fix is probably to resolve against the **calling** link rather than a
+fixed instance, since raising the count alone still leaves `image_base` 0.
+
+It reproduces only at full speed: 1300 frozen steps never trapped, and the
+first unfrozen seconds did. It is a race, so a frozen bisect will not find it.
