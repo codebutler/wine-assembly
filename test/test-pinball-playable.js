@@ -33,10 +33,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-let createCanvas, loadImage;
-try {
-  ({ createCanvas, loadImage } = require('../lib/canvas-compat'));
-} catch (_) {}
+const { diffPng, readPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN  = path.join(__dirname, 'run.js');
@@ -44,10 +41,6 @@ const EXE  = path.join(__dirname, 'binaries', 'pinball', 'pinball.exe');
 
 if (!fs.existsSync(EXE)) {
   console.log('SKIP  pinball.exe not found at', EXE);
-  process.exit(0);
-}
-if (!createCanvas || !loadImage) {
-  console.log('SKIP  node-canvas not available — cannot diff PNGs');
   process.exit(0);
 }
 
@@ -105,26 +98,16 @@ for (const l of out.split('\n')) {
 //   left flipper  ~ x∈[130,170], y∈[397,452]
 //   right flipper ~ x∈[201,244], y∈[397,452]
 async function diffRect(aPath, bPath, x0, y0, x1, y1) {
-  const a = await loadImage(aPath);
-  const b = await loadImage(bPath);
+  const a = readPng(aPath);
+  const b = readPng(bPath);
   if (a.width !== b.width || a.height !== b.height) {
     return { error: `size mismatch ${a.width}x${a.height} vs ${b.width}x${b.height}` };
   }
   const w = a.width, h = a.height;
-  const ca = createCanvas(w, h), cb = createCanvas(w, h);
-  ca.getContext('2d').drawImage(a, 0, 0);
-  cb.getContext('2d').drawImage(b, 0, 0);
-  const da = ca.getContext('2d').getImageData(0, 0, w, h).data;
-  const db = cb.getContext('2d').getImageData(0, 0, w, h).data;
   const xa = Math.max(0, x0), xb = Math.min(w, x1);
   const ya = Math.max(0, y0), yb = Math.min(h, y1);
-  let diff = 0;
-  for (let y = ya; y < yb; y++) {
-    for (let x = xa; x < xb; x++) {
-      const i = (y * w + x) * 4;
-      if (da[i] !== db[i] || da[i+1] !== db[i+1] || da[i+2] !== db[i+2]) diff++;
-    }
-  }
+  const diff = diffPng(a, b, { includeAlpha: false,
+    region: { x: xa, y: ya, w: xb - xa, h: yb - ya } }).changed;
   return { diff, w, h };
 }
 

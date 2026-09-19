@@ -37,6 +37,7 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | NetHack map | Exact RGB in the map rectangle; original dimension assertion retained | Playable-tile gameplay test passes; 3827 changed pixels |
 | Minesweeper smiley reset | Exact full-frame RGB; mismatch remains -1 | 7/7; loss changes 4440 pixels, reset matches initial exactly |
 | Paint dock-toggle | Exact RGB in status-bar rectangle; mismatched dimensions now rejected | Fails preservation assertion at 1298 pixels; old/new helpers agree on identical saved frames, and original test reproduces the same failure in a fresh run |
+| Pinball playable | Exact RGB in clipped flipper regions; original size-error object retained | 9/9 gameplay checks; left/right signal 904/927 pixels over 0/0 noise. Old/new results agree for flipper, full/clipped and outside-image regions |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -89,8 +90,8 @@ Fresh serial verification after those corrections: dirty-document **11/11**,
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
-still finds comparison loops in Pinball playable and Spider Show Available
-Move probes. Spider intentionally compares the overlapping extents of
+still finds a comparison loop in the Spider Show Available Move probe.
+Spider intentionally compares the overlapping extents of
 different-sized images, which the current shared helper rejects; preserve
 that policy explicitly if extending the helper.
 Pinball combo-box `rectDiff` measures **total RGB error magnitude**, not the
