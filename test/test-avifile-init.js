@@ -11,8 +11,8 @@ const extraWat = String.raw`
 
   (func $avifile_test_call (param $init i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
-    (global.set $eax (i32.const 0x13572468))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x13572468))
     (if (local.get $init)
       (then (call $handle_AVIFileInit
         (i32.const 0) (i32.const 0) (i32.const 0)
@@ -21,8 +21,8 @@ const extraWat = String.raw`
         (i32.const 0) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))))
     (global.set $avifile_test_delta
-      (i32.sub (global.get $esp) (local.get $saved)))
-    (global.set $esp (local.get $saved)))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved)))
 
   (func (export "avifile_init") (call $avifile_test_call (i32.const 1)))
   (func (export "avifile_exit") (call $avifile_test_call (i32.const 0)))
@@ -30,7 +30,7 @@ const extraWat = String.raw`
     (i32.atomic.load (global.get $AVIFILE_STATE)))
   (func (export "avifile_delta") (result i32)
     (global.get $avifile_test_delta))
-  (func (export "avifile_eax") (result i32) (global.get $eax))
+  (func (export "avifile_eax") (result i32) (i32.load offset=0 (global.get $reg_base)))
   (func (export "avifile_init_api_id") (result i32)
     (call $lookup_api_id "AVIFileInit"))
   (func (export "avifile_exit_api_id") (result i32)

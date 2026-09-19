@@ -284,7 +284,7 @@
     (local.set $d (call $xmm_get (local.get $dst)))
     (local.set $s (call $xmm_get (local.get $src)))
     (if (i32.eq (local.get $sub) (i32.const 32)) (then
-      (call $set_reg (local.get $dst) (i32x4.bitmask (local.get $s)))
+      (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (i32x4.bitmask (local.get $s)))
       (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 31)) (then
       (call $xmm_set (local.get $dst) (call $sse_cmpps
@@ -292,12 +292,11 @@
         (i32.and (i32.shr_u (local.get $op) (i32.const 16)) (i32.const 0xFF))))
       (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 18)) (then
-      (call $set_reg (local.get $dst)
-        (call $sse_cvtt_f32_i32 (f32.nearest (f32x4.extract_lane 0 (local.get $s)))))
+      (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32 (f32.nearest (f32x4.extract_lane 0 (local.get $s)))))
       (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 17)) (then
       (call $xmm_set (local.get $dst) (f32x4.replace_lane 0 (local.get $d)
-        (f32.convert_i32_s (call $get_reg (local.get $src)))))
+        (f32.convert_i32_s (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src) (i32.const 2)))))))
       (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 12))
       (then
@@ -317,8 +316,7 @@
         (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 6))
       (then
-        (call $set_reg (local.get $dst)
-          (call $sse_cvtt_f32_i32 (f32x4.extract_lane 0 (local.get $s))))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32 (f32x4.extract_lane 0 (local.get $s))))
         (return_call $next)))
     (local.set $v (local.get $s))
     (if (i32.eq (local.get $sub) (i32.const 1))
@@ -381,7 +379,7 @@
           (call $gl32 (i32.add (local.get $addr) (i32.const 4)))))
       (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 18)) (then
-      (call $set_reg (local.get $dst) (call $sse_cvtt_f32_i32
+      (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32
         (f32.nearest (f32.reinterpret_i32 (call $gl32 (local.get $addr))))))
       (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 17)) (then
@@ -417,8 +415,7 @@
         (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 6))
       (then
-        (call $set_reg (local.get $dst)
-          (call $sse_cvtt_f32_i32
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32
             (f32.reinterpret_i32 (call $gl32 (local.get $addr)))))
         (return_call $next)))
     (if (i32.eq (local.get $sub) (i32.const 2))
@@ -681,17 +678,15 @@
     ;; movd mm, r32 -- src names a general register, not an MMX one.
     (if (i32.eq (local.get $sub) (i32.const 1))
       (then (call $mmx_set (local.get $dst)
-              (i64.extend_i32_u (call $get_reg (local.get $src))))
+              (i64.extend_i32_u (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src) (i32.const 2))))))
             (return_call $next)))
     ;; movd r32, mm -- dst names a general register.
     (if (i32.eq (local.get $sub) (i32.const 2))
-      (then (call $set_reg (local.get $dst)
-              (i32.wrap_i64 (call $mmx_get (local.get $src))))
+      (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (i32.wrap_i64 (call $mmx_get (local.get $src))))
             (return_call $next)))
     ;; pmovmskb r32, mm -- the sign bits of the eight bytes.
     (if (i32.eq (local.get $sub) (i32.const 20))
-      (then (call $set_reg (local.get $dst)
-              (i32.and (i8x16.bitmask (i64x2.splat (call $mmx_get (local.get $src))))
+      (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (i32.and (i8x16.bitmask (i64x2.splat (call $mmx_get (local.get $src))))
                        (i32.const 0xFF)))
             (return_call $next)))
     (call $mmx_set (local.get $dst)

@@ -46,19 +46,19 @@ const extraWat = String.raw`
     (call $enum_mode_dense_to_raw (local.get $i)))
 
   (func (export "test_enum_display_settings_a") (param $index i32) (param $buf i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (i32.store16 offset=36 (call $g2w (local.get $buf)) (i32.const 156))
     (call $handle_EnumDisplaySettingsA
       (i32.const 0) (local.get $index) (local.get $buf)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_enum_display_settings_w") (param $index i32) (param $buf i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (i32.store16 offset=68 (call $g2w (local.get $buf)) (i32.const 220))
     (call $handle_EnumDisplaySettingsW
       (i32.const 0) (local.get $index) (local.get $buf)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 let pass = 0, fail = 0;

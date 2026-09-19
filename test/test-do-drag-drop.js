@@ -31,12 +31,12 @@ const extraWat = String.raw`
     (global.set $eip (i32.const 0))
     (global.set $yield_flag (i32.const 0))
     (global.set $yield_reason (i32.const 0))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $gs32 (local.get $stack) (i32.const 0))
     (call $handle_DoDragDrop
       (local.get $data) (local.get $source) (local.get $allowed)
       (local.get $effect) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_do_drag_drop_api_id") (result i32)
     (call $lookup_api_id "DoDragDrop"))

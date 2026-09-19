@@ -13,7 +13,7 @@ const extraWat = String.raw`
     (local $needed i32) (local $saved_esp i32)
     (local.set $needed (call $heap_alloc (i32.const 4)))
     (call $gs32 (local.get $needed) (i32.const 0x7badf00d))
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (if (local.get $wide)
       (then
         (call $handle_GetFileSecurityW
@@ -25,9 +25,9 @@ const extraWat = String.raw`
           (i32.const 0) (local.get $needed) (i32.const 0))))
     (global.set $test_file_security_needed (call $gl32 (local.get $needed)))
     (global.set $test_file_security_stack_delta
-      (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func $test_call_SetFileSecurity (param $wide i32) (param $null_args i32) (result i32)
     (local $saved_esp i32) (local $file i32) (local $descriptor i32)
@@ -35,7 +35,7 @@ const extraWat = String.raw`
       (select (i32.const 0) (i32.const 0x400000) (local.get $null_args)))
     (local.set $descriptor
       (select (i32.const 0) (i32.const 0x410000) (local.get $null_args)))
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (if (local.get $wide)
       (then
         (call $handle_SetFileSecurityW
@@ -46,9 +46,9 @@ const extraWat = String.raw`
           (local.get $file) (i32.const 4) (local.get $descriptor)
           (i32.const 0) (i32.const 0) (i32.const 0))))
     (global.set $test_file_security_stack_delta
-      (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_get_file_security") (param $wide i32) (result i32)
     (call $test_call_GetFileSecurity (local.get $wide)))

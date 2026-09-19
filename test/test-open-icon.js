@@ -26,25 +26,25 @@ const extraWat = String.raw`
 
   (func (export "test_close_window") (param $hwnd i32) (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (call $handle_CloseWindow
       (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_open_icon") (param $hwnd i32) (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (call $handle_OpenIcon
       (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_def_query_open") (param $wide i32) (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (if (local.get $wide)
       (then (call $handle_DefWindowProcW
         (i32.const 0) (i32.const 0x0013) (i32.const 0) (i32.const 0)
@@ -52,8 +52,8 @@ const extraWat = String.raw`
       (else (call $handle_DefWindowProcA
         (i32.const 0) (i32.const 0x0013) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0))))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_active_raw") (param $hwnd i32)
     (global.set $active_hwnd (local.get $hwnd))

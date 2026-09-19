@@ -8,11 +8,11 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_get_keyboard_type")
         (param $stack i32) (param $selector i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetKeyboardType
       (local.get $selector) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

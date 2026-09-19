@@ -111,7 +111,10 @@ for (const file of SRC) {
     if (/call \$(dispatch_|crash_unimplemented|host_exit|raise_exception|d3dim_|wnd_send_message|com_|handle_|sub_|com_call_method|dx_handle_method|modal_begin|enter_modal|seh_raise|cpp_operator_)/.test(code)) {
       delegates = true;
     }
-    const em = code.match(/global\.set \$esp\s*\(i32\.add\s*\(global\.get \$esp\)\s*\(i32\.const (\d+)\)/);
+    // Two spellings of "esp += N": the historical wasm-global form, and the
+    // per-thread register-file form where esp is slot +16 of $reg_base.
+    const em = code.match(/global\.set \$esp\s*\(i32\.add\s*\(global\.get \$esp\)\s*\(i32\.const (\d+)\)/)
+      || code.match(/i32\.store offset=16 \(global\.get \$reg_base\)\s*\(i32\.add\s*\(i32\.load offset=16 \(global\.get \$reg_base\)\)\s*\(i32\.const (\d+)\)/);
     if (em) adjustments.push({ value: parseInt(em[1], 10), line: i + 1 });
 
     for (const c of code) { if (c === '(') depth++; else if (c === ')') depth--; }

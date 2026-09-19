@@ -12,8 +12,8 @@
         (local.set $len (i32.add (call $guest_wcslen (local.get $arg0)) (i32.const 1)))
         (local.set $ansi (call $heap_alloc (local.get $len)))
         (if (i32.eqz (local.get $ansi))
-          (then (global.set $eax (i32.const 0))
-                (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
                 (return)))
         (drop (call $wide_to_ansi (local.get $arg0) (local.get $ansi) (local.get $len)))))
     (call $handle_GetModuleHandleA (local.get $ansi) (local.get $arg1) (local.get $arg2)
@@ -27,10 +27,10 @@
     (local.set $idx (call $static_sys_dll_from_handle (local.get $arg0)))
     (if (local.get $idx)
       (then
-        (global.set $eax (call $static_sys_dll_file_name
+        (i32.store offset=0 (global.get $reg_base) (call $static_sys_dll_file_name
           (i32.sub (local.get $idx) (i32.const 1))
           (local.get $arg1) (local.get $arg2) (i32.const 1)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)))
     (local.set $idx (i32.const 0))
     (block $not_loaded (loop $scan_loaded
       (br_if $not_loaded (i32.ge_u (local.get $idx) (global.get $dll_count)))
@@ -42,22 +42,22 @@
             (i32.shl (local.get $idx) (i32.const 2)))))
           (if (local.get $path_g)
             (then
-              (global.set $eax (call $loaded_module_file_name
+              (i32.store offset=0 (global.get $reg_base) (call $loaded_module_file_name
                 (local.get $path_g) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-              (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
               (return)))))
       (local.set $idx (i32.add (local.get $idx) (i32.const 1)))
       (br $scan_loaded)))
-    (global.set $eax (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))) (return)
+    (i32.store offset=0 (global.get $reg_base) (call $module_file_name (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))) (return)
   )
 
   ;; 285: GetCommandLineW
   (func $handle_GetCommandLineW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (global.get $msvcrt_wcmdln_ptr))
       (then (call $store_fake_wcmdline)))
-    (global.set $eax (global.get $msvcrt_wcmdln_ptr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))) (return)
+    (i32.store offset=0 (global.get $reg_base) (global.get $msvcrt_wcmdln_ptr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) (return)
   )
 
   ;; 286: CreateWindowExW — convert ASCII-compatible wide strings and reuse
@@ -113,7 +113,7 @@
     (local $tmp i32) (local $class_name_wa i32) (local $slot i32) (local $dst i32)
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 4))))
     (local.set $class_name_wa (call $class_wide_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 36)))))
-    (global.set $eax (call $class_table_register_data
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_data
       (local.get $class_name_wa) (call $g2w (local.get $arg0))))
     (if (i32.and (i32.eqz (global.get $wndproc_addr))
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
@@ -128,7 +128,7 @@
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))
     (then (global.set $wndproc_addr2 (local.get $tmp))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 288: RegisterClassExW
@@ -138,7 +138,7 @@
     (local.set $tmp (call $gl32 (i32.add (local.get $arg0) (i32.const 8))))
     (local.set $class_name_wa (call $class_wide_name_key (call $gl32 (i32.add (local.get $arg0) (i32.const 40)))))
     (local.set $src (call $g2w (i32.add (local.get $arg0) (i32.const 4))))
-    (global.set $eax (call $class_table_register_data
+    (i32.store offset=0 (global.get $reg_base) (call $class_table_register_data
       (local.get $class_name_wa) (local.get $src)))
     (if (i32.and (i32.eqz (global.get $wndproc_addr))
       (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
@@ -154,7 +154,7 @@
             (i32.and (i32.ge_u (local.get $tmp) (global.get $image_base))
                      (i32.lt_u (local.get $tmp) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))))
         (then (global.set $wndproc_addr2 (local.get $tmp))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 289: DefWindowProcW — same as DefWindowProcA
@@ -162,22 +162,22 @@
     (if (i32.eq (local.get $arg1) (i32.const 0x0047))
       (then
         (call $windowpos_defproc_geometry (local.get $arg0) (local.get $arg3))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; WM_NCCREATE (0x81): accepting non-client creation is the documented
     ;; default. Returning zero aborts CreateWindowEx before WM_CREATE.
     (if (i32.eq (local.get $arg1) (i32.const 0x0081))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; Encoding-neutral default: permit WM_QUERYOPEN unless the application
     ;; consumes it before reaching DefWindowProcW.
     (if (i32.eq (local.get $arg1) (i32.const 0x0013))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; WM_CLOSE (0x10): default close destroys the target. Only closing the
     ;; main window should end the message loop; modeless dialogs are ordinary
@@ -201,16 +201,16 @@
               (call $wnd_table_remove (local.get $arg0))))
           (call $host_destroy_window (local.get $arg0))
           (global.set $yield_flag (i32.const 1))
-          (global.set $eax (i32.const 0))
-          (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+          (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
           (return)))
       (if (i32.eq (local.get $arg0) (global.get $main_hwnd))
         (then (global.set $quit_flag (i32.const 1))))
       (if (i32.eq (local.get $arg0) (global.get $focus_hwnd))
         (then (global.set $focus_hwnd (i32.const 0))))
       (call $wnd_destroy_recursive (local.get $arg0))
-      (global.set $eax (i32.const 0))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_ERASEBKGND (0x14): fill client area with background brush
     (if (i32.eq (local.get $arg1) (i32.const 0x0014))
     (then
@@ -221,26 +221,26 @@
     ;; and must not have its own background overwritten -- Hearts fills its
     ;; baize green and was registered with WHITE_BRUSH.
     (call $nc_flags_set (local.get $arg0) (i32.const 8))
-    (global.set $eax (call $host_erase_background (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+    (i32.store offset=0 (global.get $reg_base) (call $host_erase_background (local.get $arg0) (call $wnd_get_bg_brush (local.get $arg0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_PAINT: default handling is an empty paint cycle that validates the
     ;; update region, identical to DefWindowProcA.
     (if (i32.eq (local.get $arg1) (i32.const 0x000F))
     (then
     (call $update_clear_hwnd (local.get $arg0))
     (call $paint_flag_clear_hwnd (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
     ;; WM_NCPAINT is encoding-neutral. Keep A/W on the same WAT-native
     ;; non-client painter so activation, flashing and frame metrics cannot
     ;; diverge between otherwise identical windows.
     (if (i32.eq (local.get $arg1) (i32.const 0x0085))
     (then
     (call $defwndproc_do_ncpaint (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) (return)
   )
 
   ;; 290: LoadCursorW(hInstance, lpCursorName) — a cursor named by ordinal is
@@ -271,8 +271,8 @@
     (local $text_gp i32) (local $text_wa i32) (local $len i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.ge_u (local.get $arg1) (i32.const 0x10000))
       (then
@@ -293,11 +293,11 @@
             (i32.lt_u (call $ctrl_table_get_class (local.get $arg0)) (i32.const 10))
             (i32.gt_u (call $ctrl_table_get_class (local.get $arg0)) (i32.const 16))))
       (then
-        (global.set $eax (call $control_wndproc_dispatch
+        (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $text_gp)))
         (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
         (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Native child windows such as RichEdit20A are not WAT control-table
     ;; controls, but SetWindowText still maps to WM_SETTEXT for them.
@@ -307,19 +307,19 @@
       (then
         (call $richedit_format_reset_hwnd (local.get $arg0))
         (call $title_table_set (local.get $arg0) (local.get $text_wa) (local.get $len))
-        (global.set $eax (call $wnd_send_message
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $arg0) (i32.const 0x000C) (i32.const 0) (local.get $text_gp)))
         (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
         (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $title_table_set (local.get $arg0) (local.get $text_wa) (local.get $len))
     (call $nc_flags_set (local.get $arg0) (i32.const 1))
     (call $defwndproc_do_ncpaint (local.get $arg0))
     (call $host_set_window_text (local.get $arg0) (local.get $text_wa))
     (if (local.get $text_gp) (then (call $heap_free (local.get $text_gp))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 295: GetWindowTextW(hwnd, lpString, nMaxCount) → int (chars copied)
   ;; The same read as GetWindowTextA, staged through an ANSI buffer of the
@@ -327,19 +327,19 @@
   ;; "" for every window, which is a wrong answer rather than a missing one.
   (func $handle_GetWindowTextW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $len i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.le_s (local.get $arg2) (i32.const 0)))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (i32.store16 (call $g2w (local.get $arg1)) (i32.const 0))
     (local.set $tmp (call $heap_alloc (local.get $arg2)))
     (if (i32.eqz (local.get $tmp))
-      (then (global.set $eax (i32.const 0)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (call $gs8 (local.get $tmp) (i32.const 0))
     (local.set $len (call $window_text_ansi
       (local.get $arg0) (local.get $tmp) (local.get $arg2)))
     (drop (call $ansi_to_wide (local.get $tmp) (local.get $arg1) (local.get $arg2)))
     (call $heap_free (local.get $tmp))
-    (global.set $eax (local.get $len)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $len)))
 
   ;; 296: SendMessageW — routing and stack layout are identical to A. Message
   ;; payloads remain opaque here; individual WAT controls interpret the

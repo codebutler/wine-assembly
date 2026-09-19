@@ -15,22 +15,22 @@ const STACK = 0x00300000;
 
 const extraWat = String.raw`
   (func (export "test_global_compact") (param $minimum i32) (result i32)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $handle_GlobalCompact
       (local.get $minimum) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_heap_compact")
       (param $heap i32) (param $flags i32) (result i32)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $handle_HeapCompact
       (local.get $heap) (local.get $flags) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_compact_esp") (result i32)
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_process_heap") (result i32)
     (global.get $PROCESS_HEAP_HANDLE))

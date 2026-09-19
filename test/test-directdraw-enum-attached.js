@@ -31,20 +31,20 @@ const extraWat = String.raw`
   (func (export "test_dd_enum_call")
     (param $surface i32) (param $context i32) (param $callback i32) (param $stack i32)
     (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (global.set $eip (i32.const 0x56000000))
     (call $handle_IDirectDrawSurface_EnumAttachedSurfaces
       (local.get $surface) (local.get $context) (local.get $callback)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dd_enum_ref") (param $surface i32) (result i32)
     (i32.load offset=4 (call $dx_from_this (local.get $surface))))
   (func (export "test_dd_enum_release") (param $surface i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawSurface_Release
       (local.get $surface) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

@@ -87,8 +87,8 @@ const extraWat = String.raw`
 
   (func (export "test_def_frame") (param $wide i32) (result i32)
     (local $saved i32) (local $before i32)
-    (local.set $saved (global.get $esp))
-    (local.set $before (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (if (local.get $wide)
       (then (call $handle_DefFrameProcW
         (i32.const 0) (i32.const 0) (i32.const 0x0081)
@@ -96,14 +96,14 @@ const extraWat = String.raw`
       (else (call $handle_DefFrameProcA
         (i32.const 0) (i32.const 0) (i32.const 0x0081)
         (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.set $test_mdi_delta (i32.sub (global.get $esp) (local.get $before)))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (global.set $test_mdi_delta (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_def_child") (param $wide i32) (result i32)
     (local $saved i32) (local $before i32)
-    (local.set $saved (global.get $esp))
-    (local.set $before (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (if (local.get $wide)
       (then (call $handle_DefMDIChildProcW
         (i32.const 0) (i32.const 0) (i32.const 0)
@@ -111,20 +111,20 @@ const extraWat = String.raw`
       (else (call $handle_DefMDIChildProcA
         (i32.const 0) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.set $test_mdi_delta (i32.sub (global.get $esp) (local.get $before)))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (global.set $test_mdi_delta (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_translate") (param $client i32) (param $msg i32) (result i32)
     (local $saved i32) (local $before i32)
-    (local.set $saved (global.get $esp))
-    (local.set $before (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_TranslateMDISysAccel
       (local.get $client) (local.get $msg) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $test_mdi_delta (i32.sub (global.get $esp) (local.get $before)))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (global.set $test_mdi_delta (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   ;; Exercise the public synchronous SendMessage contract with a WAT-native
   ;; child class, so WM_MDICREATE can finish entirely inside this export. The
@@ -144,14 +144,14 @@ const extraWat = String.raw`
     (call $gs32 (i32.add (local.get $mdi) (i32.const 24)) (i32.const 80))
     (call $gs32 (i32.add (local.get $mdi) (i32.const 28)) (i32.const 0x10000000))
     (call $gs32 (i32.add (local.get $mdi) (i32.const 32)) (i32.const 0x12345678))
-    (local.set $saved (global.get $esp))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-    (local.set $before (global.get $esp))
-    (call $gs32 (global.get $esp) (i32.const 0x76543210))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $client))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0x0220))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (i32.const 0))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $mdi))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x76543210))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $client))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0x0220))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $mdi))
     (if (local.get $wide)
       (then (call $handle_SendMessageW
         (local.get $client) (i32.const 0x0220) (i32.const 0) (local.get $mdi)
@@ -159,9 +159,9 @@ const extraWat = String.raw`
       (else (call $handle_SendMessageA
         (local.get $client) (i32.const 0x0220) (i32.const 0) (local.get $mdi)
         (i32.const 0) (i32.const 0))))
-    (local.set $child (global.get $eax))
-    (global.set $test_mdi_delta (i32.sub (global.get $esp) (local.get $before)))
-    (global.set $esp (local.get $saved))
+    (local.set $child (i32.load offset=0 (global.get $reg_base)))
+    (global.set $test_mdi_delta (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
     (call $heap_free (local.get $mdi))
     (local.get $child))
 

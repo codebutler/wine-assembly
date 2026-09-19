@@ -8,18 +8,18 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_virtual_query") (param $address i32) (param $buf i32) (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_VirtualQuery
       (local.get $address) (local.get $buf) (i32.const 28)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_query_ex") (param $process i32) (param $address i32) (param $buf i32) (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_VirtualQueryEx
       (local.get $process) (local.get $address) (local.get $buf) (i32.const 28)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

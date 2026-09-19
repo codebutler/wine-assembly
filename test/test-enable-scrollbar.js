@@ -44,12 +44,12 @@ const extraWat = String.raw`
       (param $hwnd i32) (param $bar i32) (param $info i32) (param $redraw i32)
       (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetScrollInfo
       (local.get $hwnd) (local.get $bar) (local.get $info) (local.get $redraw)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_scroll_pressed_part") (result i32)
     (global.get $sb_pressed_part))

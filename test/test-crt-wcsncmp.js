@@ -19,13 +19,13 @@ const extraWat = String.raw`
   (func (export "test_wcsncmp")
       (param $a i32) (param $b i32) (param $count i32) (result i32)
     (local $start_esp i32)
-    (local.set $start_esp (global.get $esp))
+    (local.set $start_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_wcsncmp
       (local.get $a) (local.get $b) (local.get $count)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_wcsncmp_esp_delta
-      (i32.sub (global.get $esp) (local.get $start_esp)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $start_esp)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_wcsncmp_esp_delta") (result i32)
     (global.get $test_wcsncmp_esp_delta))

@@ -16,25 +16,25 @@ const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
   (func (export "test_register_class") (param $wc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_RegisterClassA
       (local.get $wc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_begin_create")
       (param $wide i32) (param $class i32) (param $title i32)
       (param $style i32) (param $parent i32) (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
-    (call $gs32 (global.get $esp) (i32.const 0x00ABCDEF))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 10))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 160))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (i32.const 100))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 36)) (local.get $parent))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 40)) (i32.const 101))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 44)) (global.get $image_base))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 48)) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00ABCDEF))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 10))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.const 160))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)) (i32.const 100))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)) (local.get $parent))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.const 101))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44)) (global.get $image_base))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 48)) (i32.const 0))
     (if (local.get $wide)
       (then
         (call $handle_CreateWindowExW
@@ -44,21 +44,21 @@ const extraWat = String.raw`
         (call $handle_CreateWindowExA
           (i32.const 0) (local.get $class) (local.get $title)
           (local.get $style) (i32.const 10) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_callback_msg") (result i32)
-    (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+    (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func (export "test_callback_hwnd") (result i32)
-    (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+    (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   (func (export "test_return_callback") (param $result i32)
     (local $thunk i32)
     ;; Model ret 16: pop the callback return address and four WndProc args,
     ;; then enter the same CACA continuation the x86 interpreter would.
-    (local.set $thunk (call $gl32 (global.get $esp)))
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (local.set $thunk (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (call $win32_dispatch
       (i32.div_u
         (i32.sub (local.get $thunk) (global.get $thunk_guest_base))
@@ -72,23 +72,23 @@ const extraWat = String.raw`
 
   (func (export "test_sysclass_nccreate")
       (param $hwnd i32) (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_CallWindowProcA
       (i32.or (global.get $WNDPROC_SYSCLASS) (i32.const 1)) ;; BUTTON
       (local.get $hwnd) (i32.const 0x0081) (i32.const 0) (i32.const 0)
       (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_native_nccreate")
       (param $hwnd i32) (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_CallWindowProcA
       (global.get $WNDPROC_CTRL_NATIVE)
       (local.get $hwnd) (i32.const 0x0081) (i32.const 0) (i32.const 0)
       (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

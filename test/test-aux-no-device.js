@@ -12,40 +12,40 @@ const STACK = 0x00300000;
 
 const extraWat = String.raw`
   (func (export "test_aux_get_num_devs") (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_auxGetNumDevs
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_aux_get_dev_caps") (param $device i32) (param $caps i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_auxGetDevCapsA
       (local.get $device) (local.get $caps) (i32.const 48)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_aux_get_volume") (param $device i32) (param $volume i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_auxGetVolume
       (local.get $device) (local.get $volume) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_aux_set_volume") (param $device i32) (param $volume i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_auxSetVolume
       (local.get $device) (local.get $volume) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_aux_out_message")
         (param $device i32) (param $message i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_auxOutMessage
       (local.get $device) (local.get $message) (i32.const 0x11111111)
       (i32.const 0x22222222) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

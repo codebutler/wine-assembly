@@ -10,7 +10,7 @@ const { createHostImports } = require('../lib/host-imports');
 const extraWat = String.raw`
   (func (export "test_profile_write")
       (param $app i32) (param $strings i32) (param $file i32) (param $wide i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (global.set $last_error (i32.const 4660))
     (if (local.get $wide)
       (then (call $handle_WritePrivateProfileSectionW
@@ -19,7 +19,7 @@ const extraWat = String.raw`
       (else (call $handle_WritePrivateProfileSectionA
         (local.get $app) (local.get $strings) (local.get $file)
         (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_profile_error") (result i32) (global.get $last_error))
 `;
 

@@ -263,12 +263,12 @@
     (i32.const 0))
 
   (func $handle_mixerGetDevCapsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_dev_caps (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_dev_caps (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_mixerGetDevCapsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_dev_caps (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_dev_caps (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; mixerGetLineInfo{A,W}(hmxobj, pmxl, fdwInfo) -> MMRESULT. Picking the line
   ;; is the same walk in both spellings; $wide only decides how the names in
@@ -331,13 +331,13 @@
     (call $mixer_get_line_info (local.get $p) (local.get $flags) (local.get $wide)))
 
   (func $handle_mixerGetLineInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_line_info_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_line_info_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; 825: mixerGetLineInfoW(hmxobj, pmxl, fdwInfo) -> MMRESULT
   (func $handle_mixerGetLineInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_line_info_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_line_info_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; mixerGetLineControls{A,W}(hmxobj, pmxlc, fdwControls) -> MMRESULT. The only
   ;; difference between the spellings is the width of the names written into
@@ -417,12 +417,12 @@
     (call $mixer_get_line_controls (local.get $p) (local.get $flags) (local.get $wide)))
 
   (func $handle_mixerGetLineControlsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_line_controls_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_line_controls_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_mixerGetLineControlsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_line_controls_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_line_controls_entry (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; MIXER_GETCONTROLDETAILSF_VALUE writes numeric detail records, so its A/W
   ;; entry points have no encoding-dependent work. Keep that behavior in one
@@ -492,8 +492,8 @@
     (i32.const 0))
 
   (func $handle_mixerGetControlDetailsA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_get_control_details_entry (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_get_control_details_entry (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_mixerGetControlDetailsW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; VALUE queries contain no strings; LISTTEXT is rejected by the shared
@@ -518,16 +518,16 @@
                   (call $mixer_validate_control_details (local.get $p)))))))))
     (if (local.get $result)
       (then
-        (global.set $eax (local.get $result))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $result))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $channels (i32.load offset=8 (local.get $p)))
     (local.set $details (call $g2w (i32.load offset=20 (local.get $p))))
     (local.set $control (i32.load offset=4 (local.get $p)))
     (if (i32.ge_u (local.get $control) (i32.const 0x3000))
       (then
-        (global.set $eax (i32.const 8))                                ;; MMSYSERR_NOTSUPPORTED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 8))                                ;; MMSYSERR_NOTSUPPORTED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (local.get $details)
       (then
@@ -541,46 +541,46 @@
           (else (call $host_audio_mixer_set_volume
             (i32.sub (local.get $control) (i32.const 0x1000))
             (i32.or (local.get $left) (i32.shl (local.get $right) (i32.const 16))))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_mixerOpen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const 11)) ;; MMSYSERR_INVALPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 11)) ;; MMSYSERR_INVALPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (i32.ne (local.get $arg1) (i32.const 0))
       (then
-        (global.set $eax (i32.const 2)) ;; MMSYSERR_BADDEVICEID
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 2)) ;; MMSYSERR_BADDEVICEID
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $handle (call $mixer_alloc_handle))
     (if (i32.eqz (local.get $handle))
       (then
-        (global.set $eax (i32.const 7)) ;; MMSYSERR_NOMEM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 7)) ;; MMSYSERR_NOMEM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (i32.store (call $g2w (local.get $arg0)) (local.get $handle))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_mixerClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $mixer_close_handle (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $mixer_close_handle (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_mixerMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; mixerMessage is for driver-private messages (uMsg >= MXDM_USER), and it
     ;; requires a device id rather than an HMIXER.  The virtual mixer exposes
     ;; no private driver protocol, so valid requests fail explicitly.
     (if (i32.lt_u (local.get $arg1) (i32.const 0x4000))
-      (then (global.set $eax (i32.const 11)))                       ;; MMSYSERR_INVALPARAM
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 11)))                       ;; MMSYSERR_INVALPARAM
       (else
         (if (i32.eqz (local.get $arg0))
-          (then (global.set $eax (i32.const 8)))                    ;; MMSYSERR_NOTSUPPORTED
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 8)))                    ;; MMSYSERR_NOTSUPPORTED
           (else
             (if (call $mixer_handle_is_live (local.get $arg0))
-              (then (global.set $eax (i32.const 8)))                ;; handle not accepted here
-              (else (global.set $eax (i32.const 5))))))))           ;; MMSYSERR_INVALHANDLE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+              (then (i32.store offset=0 (global.get $reg_base) (i32.const 8)))                ;; handle not accepted here
+              (else (i32.store offset=0 (global.get $reg_base) (i32.const 5))))))))           ;; MMSYSERR_INVALHANDLE
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))

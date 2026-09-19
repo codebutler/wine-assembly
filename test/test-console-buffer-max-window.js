@@ -9,43 +9,43 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_get_console_info")
         (param $handle i32) (param $info i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetConsoleScreenBufferInfo
       (local.get $handle) (local.get $info) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_get_largest")
         (param $handle i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetLargestConsoleWindowSize
       (local.get $handle) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_set_window")
         (param $handle i32) (param $rect i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_SetConsoleWindowInfo
       (local.get $handle) (i32.const 1) (local.get $rect)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_set_size")
         (param $handle i32) (param $size i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_SetConsoleScreenBufferSize
       (local.get $handle) (local.get $size) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_create_buffer") (result i32)
     (call $console_buffer_create))

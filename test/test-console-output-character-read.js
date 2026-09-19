@@ -9,13 +9,13 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func $pack_console_result (result i64)
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_read_character_a")
         (param $handle i32) (param $destination i32) (param $length i32)
         (param $coord i32) (param $count i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ReadConsoleOutputCharacterA
       (local.get $handle) (local.get $destination) (local.get $length)
       (local.get $coord) (local.get $count) (i32.const 0))
@@ -24,7 +24,7 @@ const extraWat = String.raw`
   (func (export "test_read_character_w")
         (param $handle i32) (param $destination i32) (param $length i32)
         (param $coord i32) (param $count i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ReadConsoleOutputCharacterW
       (local.get $handle) (local.get $destination) (local.get $length)
       (local.get $coord) (local.get $count) (i32.const 0))

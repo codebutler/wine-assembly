@@ -9,7 +9,7 @@ const { bootRenderHarness } = require('./render-helper');
 // while giving each stdcall entry a disposable guest stack.
 const extraWat = String.raw`
   (func $test_api_stack
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288))))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288))))
   (func (export "test_heap_alloc") (param $size i32) (result i32)
     (call $heap_alloc (local.get $size)))
 
@@ -18,103 +18,103 @@ const extraWat = String.raw`
     (call $handle_Comctl32_Alloc
       (local.get $size) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_comctl_realloc")
       (param $ptr i32) (param $size i32) (result i32)
     (call $test_api_stack)
     (call $handle_Comctl32_ReAlloc
       (local.get $ptr) (local.get $size) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_comctl_free") (param $ptr i32) (result i32)
     (call $test_api_stack)
     (call $handle_Comctl32_Free
       (local.get $ptr) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_comctl_get_size") (param $ptr i32) (result i32)
     (call $test_api_stack)
     (call $handle_Comctl32_GetSize
       (local.get $ptr) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dsa_create") (param $size i32) (param $grow i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_Create
       (local.get $size) (local.get $grow) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dsa_destroy") (param $dsa i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_Destroy
       (local.get $dsa) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dsa_insert")
       (param $dsa i32) (param $index i32) (param $item i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_InsertItem
       (local.get $dsa) (local.get $index) (local.get $item)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dsa_get")
       (param $dsa i32) (param $index i32) (param $item i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_GetItem
       (local.get $dsa) (local.get $index) (local.get $item)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dsa_get_ptr") (param $dsa i32) (param $index i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_GetItemPtr
       (local.get $dsa) (local.get $index) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dsa_delete") (param $dsa i32) (param $index i32) (result i32)
     (call $test_api_stack)
     (call $handle_DSA_DeleteItem
       (local.get $dsa) (local.get $index) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dpa_create") (param $grow i32) (result i32)
     (call $test_api_stack)
     (call $handle_DPA_Create
       (local.get $grow) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dpa_destroy") (param $dpa i32) (result i32)
     (call $test_api_stack)
     (call $handle_DPA_Destroy
       (local.get $dpa) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dpa_insert")
       (param $dpa i32) (param $index i32) (param $value i32) (result i32)
     (call $test_api_stack)
     (call $handle_DPA_InsertPtr
       (local.get $dpa) (local.get $index) (local.get $value)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dpa_get") (param $dpa i32) (param $index i32) (result i32)
     (call $test_api_stack)
     (call $handle_DPA_GetPtr
       (local.get $dpa) (local.get $index) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dpa_delete") (param $dpa i32) (param $index i32) (result i32)
     (call $test_api_stack)
     (call $handle_DPA_DeletePtr
       (local.get $dpa) (local.get $index) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dpa_delete_all") (param $dpa i32) (result i32)
     (call $test_api_stack)
     (call $handle_DPA_DeleteAllPtrs
       (local.get $dpa) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

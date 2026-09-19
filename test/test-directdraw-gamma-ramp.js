@@ -27,19 +27,19 @@ const extraWat = String.raw`
 
   (func (export "test_gamma_get")
         (param $obj i32) (param $flags i32) (param $ramp i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawGammaControl_GetGammaRamp
       (local.get $obj) (local.get $flags) (local.get $ramp)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_gamma_set")
         (param $obj i32) (param $flags i32) (param $ramp i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawGammaControl_SetGammaRamp
       (local.get $obj) (local.get $flags) (local.get $ramp)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_gamma_release") (param $obj i32) (result i32)
     (call $dx_com_release_basic (local.get $obj)))

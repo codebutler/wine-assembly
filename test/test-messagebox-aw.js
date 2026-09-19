@@ -11,15 +11,15 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_MessageBoxA") (param $text i32) (param $caption i32) (result i32)
-    (global.set $esp (i32.const 0x00120000))
-    (call $gs32 (global.get $esp) (i32.const 0x00401000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
     (call $handle_MessageBoxA (i32.const 0) (local.get $text) (local.get $caption)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $modal_dlg_hwnd))
 
   (func (export "test_MessageBoxW") (param $text i32) (param $caption i32) (result i32)
-    (global.set $esp (i32.const 0x00120000))
-    (call $gs32 (global.get $esp) (i32.const 0x00401000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
     (call $handle_MessageBoxW (i32.const 0) (local.get $text) (local.get $caption)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $modal_dlg_hwnd))

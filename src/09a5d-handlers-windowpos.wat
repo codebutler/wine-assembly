@@ -8,8 +8,8 @@
     (store.field Rect top (local.get $wa) (i32.add (load.field Rect top (local.get $wa)) (local.get $arg2)))  ;; top += dy
     (store.field Rect right (local.get $wa) (i32.add (load.field Rect right (local.get $wa)) (local.get $arg1)))  ;; right += dx
     (store.field Rect bottom (local.get $wa) (i32.add (load.field Rect bottom (local.get $wa)) (local.get $arg2))) ;; bottom += dy
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; stdcall, 3 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; stdcall, 3 args
   )
 
   ;; 140: MapWindowPoints(hWndFrom, hWndTo, lpPoints, cPoints) → int
@@ -37,9 +37,9 @@
       (local.set $p (i32.add (local.get $p) (i32.const 8)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $apply)))
-    (global.set $eax (i32.or (i32.and (local.get $dx) (i32.const 0xFFFF))
+    (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (local.get $dx) (i32.const 0xFFFF))
                              (i32.shl (local.get $dy) (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; 141: SetWindowPos
   ;; WINDOWPOS structs handed to guest wndprocs by $windowpos_notify. These are
@@ -237,8 +237,8 @@
     (local.set $x (local.get $arg2))
     (local.set $y (local.get $arg3))
     (local.set $cx (local.get $arg4))
-    (local.set $cy (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $uFlags (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $cy (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $uFlags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     ;; An AdjustWindowRectEx-expanded CW_USEDEFAULT remains "leave this part
     ;; alone" during SDL's first SetWindowPos, even though it is no longer the
     ;; exact 0x80000000 bit pattern understood by the host fallback.
@@ -303,8 +303,8 @@
           (then
             (call $windowpos_message_cancel (local.get $windowpos))
             (global.set $last_error (i32.const 1400)) ;; ERROR_INVALID_WINDOW_HANDLE
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
             (return)))))
     ;; Child controls own their geometry in CONTROL_GEOM. Top-level frames do
     ;; not: their renderer window can still be at the resource-template size
@@ -423,6 +423,6 @@
                 (i32.ne (i32.load offset=4 (local.get $dlg_rec)) (i32.const 0)))
               (i32.lt_s (call $wnd_get_class_slot (local.get $arg0)) (i32.const 0)))
           (then (drop (call $host_erase_background (local.get $arg0) (i32.const 16)))))))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )

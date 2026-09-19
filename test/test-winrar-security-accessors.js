@@ -8,9 +8,9 @@ const extraWat = String.raw`
   (global $security_test_esp_after (mut i32) (i32.const 0))
 
   (func $security_test_begin
-    (global.set $esp (i32.const 0x07000000)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07000000)))
   (func $security_test_end
-    (global.set $security_test_esp_after (global.get $esp)))
+    (global.set $security_test_esp_after (i32.load offset=16 (global.get $reg_base))))
   (func (export "test_esp_after") (result i32)
     (global.get $security_test_esp_after))
   (func (export "test_set_last_error") (param $value i32)
@@ -22,17 +22,17 @@ const extraWat = String.raw`
     (call $security_test_begin)
     (call $handle_IsValidSid (local.get $sid) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_IsValidAcl") (param $acl i32) (result i32)
     (call $security_test_begin)
     (call $handle_IsValidAcl (local.get $acl) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_IsValidSecurityDescriptor") (param $sd i32) (result i32)
     (call $security_test_begin)
     (call $handle_IsValidSecurityDescriptor (local.get $sd) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_GetSecurityDescriptorControl")
       (param $sd i32) (param $control i32) (param $revision i32) (result i32)
@@ -40,26 +40,26 @@ const extraWat = String.raw`
     (call $handle_GetSecurityDescriptorControl
       (local.get $sd) (local.get $control) (local.get $revision)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_GetSecurityDescriptorLength") (param $sd i32) (result i32)
     (call $security_test_begin)
     (call $handle_GetSecurityDescriptorLength (local.get $sd) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_GetSecurityDescriptorOwner")
       (param $sd i32) (param $owner i32) (param $defaulted i32) (result i32)
     (call $security_test_begin)
     (call $handle_GetSecurityDescriptorOwner
       (local.get $sd) (local.get $owner) (local.get $defaulted)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_GetSecurityDescriptorGroup")
       (param $sd i32) (param $group i32) (param $defaulted i32) (result i32)
     (call $security_test_begin)
     (call $handle_GetSecurityDescriptorGroup
       (local.get $sd) (local.get $group) (local.get $defaulted)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_GetSecurityDescriptorDacl")
       (param $sd i32) (param $present i32) (param $acl i32)
       (param $defaulted i32) (result i32)
@@ -67,7 +67,7 @@ const extraWat = String.raw`
     (call $handle_GetSecurityDescriptorDacl
       (local.get $sd) (local.get $present) (local.get $acl)
       (local.get $defaulted) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_GetSecurityDescriptorSacl")
       (param $sd i32) (param $present i32) (param $acl i32)
       (param $defaulted i32) (result i32)
@@ -75,7 +75,7 @@ const extraWat = String.raw`
     (call $handle_GetSecurityDescriptorSacl
       (local.get $sd) (local.get $present) (local.get $acl)
       (local.get $defaulted) (i32.const 0) (i32.const 0))
-    (call $security_test_end) (global.get $eax))
+    (call $security_test_end) (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

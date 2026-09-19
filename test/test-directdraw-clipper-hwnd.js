@@ -18,18 +18,18 @@ const extraWat = String.raw`
   (func (export "test_poke32") (param $ptr i32) (param $value i32)
     (call $gs32 (local.get $ptr) (local.get $value)))
   (func (export "test_get_hwnd") (param $clipper i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawClipper_GetHWnd
       (local.get $clipper) (local.get $out) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_set_hwnd")
       (param $clipper i32) (param $flags i32) (param $hwnd i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawClipper_SetHWnd
       (local.get $clipper) (local.get $flags) (local.get $hwnd)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

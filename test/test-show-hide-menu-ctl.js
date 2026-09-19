@@ -34,13 +34,13 @@ const extraWat = String.raw`
   (func (export "test_show_hide_menu_ctl")
       (param $hwnd i32) (param $selector i32) (param $info i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_ShowHideMenuCtl
       (local.get $hwnd) (local.get $selector) (local.get $info)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $test_shmc_cleanup (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+    (global.set $test_shmc_cleanup (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

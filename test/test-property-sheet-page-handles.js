@@ -11,34 +11,34 @@ const extraWat = String.raw`
 
   (func (export "test_create_property_sheet_page") (param $psp i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_CreatePropertySheetPageA
       (local.get $psp) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_psp_cleanup
-      (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_create_property_sheet_page_w") (param $psp i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_CreatePropertySheetPageW
       (local.get $psp) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_destroy_property_sheet_page") (param $page i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_DestroyPropertySheetPage
       (local.get $page) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_psp_cleanup
-      (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_psp_cleanup") (result i32)
     (global.get $test_psp_cleanup))

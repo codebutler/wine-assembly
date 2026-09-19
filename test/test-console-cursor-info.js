@@ -9,12 +9,12 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func $pack_cursor_result (result i64)
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_set_cursor_info")
         (param $handle i32) (param $info i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_SetConsoleCursorInfo
       (local.get $handle) (local.get $info) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
@@ -22,14 +22,14 @@ const extraWat = String.raw`
 
   (func (export "test_get_cursor_info")
         (param $handle i32) (param $info i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetConsoleCursorInfo
       (local.get $handle) (local.get $info) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $pack_cursor_result))
 
   (func (export "test_create_console_buffer") (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_CreateConsoleScreenBuffer
       (i32.const 0xc0000000) (i32.const 3) (i32.const 0)
       (i32.const 1) (i32.const 0) (i32.const 0))

@@ -5,9 +5,9 @@ const {bootRenderHarness}=require('./render-helper');
 (async()=>{
   const {exports:w}=await bootRenderHarness({fonts:'none',extraWat:`
     (func (export "co_dos") (param i32 i32 i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_CoFileTimeToDosDateTime (local.get 0) (local.get 1)
-        (local.get 2) (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (local.get 2) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
   `});
   const input=w.guest_alloc(8)>>>0,out=w.guest_alloc(8)>>>0;
   const setTime=s=>{const t=(BigInt(Date.parse(s))+11644473600000n)*10000n;

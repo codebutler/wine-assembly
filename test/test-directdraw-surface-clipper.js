@@ -29,25 +29,25 @@ const extraWat = String.raw`
     (call $dx_surface_target_hwnd (call $dx_from_this (local.get $surface))))
   (func (export "test_set_clipper")
       (param $surface i32) (param $clipper i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawSurface_SetClipper
       (local.get $surface) (local.get $clipper) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_get_clipper")
       (param $surface i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawSurface_GetClipper
       (local.get $surface) (local.get $out) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_set_clipper_hwnd")
       (param $clipper i32) (param $hwnd i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawClipper_SetHWnd
       (local.get $clipper) (i32.const 0) (local.get $hwnd)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

@@ -12,9 +12,9 @@ const ENTRY_SENTINEL = 0x00407777;
 
 const extraWat = String.raw`
   (func (export "test_init_common_controls_ex") (param $init i32) (result i32)
-    (global.set $esp (i32.const ${STACK}))
-    (call $gs32 (global.get $esp) (i32.const ${CALLER_RETURN}))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $init))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const ${CALLER_RETURN}))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $init))
     (global.set $eip (i32.const ${ENTRY_SENTINEL}))
     (global.set $handler_set_eip (i32.const 0))
     (global.set $steps (i32.const 17))
@@ -22,25 +22,25 @@ const extraWat = String.raw`
     (call $handle_InitCommonControlsEx
       (local.get $init) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   ;; Model the authentic stdcall epilogue for a direct legacy-mask route.
   (func (export "test_finish_direct_common_controls") (param $result i32)
       (result i32)
-    (global.set $eax (local.get $result))
-    (global.set $eip (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-    (global.get $eax))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   ;; Model authentic COMCTL32's RET 4, then enter the shared CACA0011 thunk.
   (func (export "test_finish_mixed_common_controls") (param $result i32)
       (result i32)
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0011))
     (i32.store offset=4 (global.get $THUNK_BASE) (i32.const 0))
     (call $win32_dispatch (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_guest_common_controls_entry") (result i32)
     (call $guest_comctl32_init_common_controls_ex))

@@ -11,11 +11,11 @@ const extraWat = String.raw`
     (call $shell_virtual_pidl_from_csidl (local.get $csidl)))
   (func (export "test_compare_ids")
       (param $lparam i32) (param $left i32) (param $right i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IShellFolder_CompareIDs
       (i32.const 0) (local.get $lparam) (local.get $left) (local.get $right)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_heap_alloc") (param $size i32) (result i32)
     (call $heap_alloc (local.get $size)))
 `;

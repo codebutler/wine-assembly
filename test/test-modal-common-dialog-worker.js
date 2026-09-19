@@ -11,8 +11,8 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_modal_begin") (param $hwnd i32)
-    (global.set $esp (i32.const 0x00120000))
-    (call $gs32 (global.get $esp) (i32.const 0x00401000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
     (call $modal_begin (local.get $hwnd) (i32.const 20)))
 
   (func (export "test_modal_done") (param $result i32)

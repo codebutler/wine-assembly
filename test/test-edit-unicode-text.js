@@ -10,21 +10,21 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_create_unicode_edit") (param $class i32) (param $title i32) (result i32)
     (local $saved_esp i32) (local $hwnd i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.const 0x00300000))
-    (call $gs32 (global.get $esp) (i32.const 0))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0))   ;; y
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 200)) ;; cx
-    (call $gs32 (i32.add (global.get $esp) (i32.const 32)) (i32.const 24))  ;; cy
-    (call $gs32 (i32.add (global.get $esp) (i32.const 36)) (i32.const 0))   ;; parent
-    (call $gs32 (i32.add (global.get $esp) (i32.const 40)) (i32.const 100)) ;; menu/id
-    (call $gs32 (i32.add (global.get $esp) (i32.const 44)) (i32.const 0))   ;; instance
-    (call $gs32 (i32.add (global.get $esp) (i32.const 48)) (i32.const 0))   ;; param
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 0))   ;; y
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.const 200)) ;; cx
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)) (i32.const 24))  ;; cy
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)) (i32.const 0))   ;; parent
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)) (i32.const 100)) ;; menu/id
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44)) (i32.const 0))   ;; instance
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 48)) (i32.const 0))   ;; param
     (call $handle_CreateWindowExW
       (i32.const 0) (local.get $class) (local.get $title)
       (i32.const 0x50010000) (i32.const 0) (i32.const 0))
-    (local.set $hwnd (global.get $eax))
-    (global.set $esp (local.get $saved_esp))
+    (local.set $hwnd (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (local.get $hwnd))
 
   (func (export "test_edit_message")

@@ -22,37 +22,37 @@ const extraWat = String.raw`
 
   (func (export "test_is_char_alpha_w")
       (param $ch i32) (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
     (call $handle_IsCharAlphaW
       (local.get $ch) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_is_char_upper_w")
       (param $ch i32) (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
     (call $handle_IsCharUpperW
       (local.get $ch) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_get_string_type_ansi")
       (param $api i32) (param $src i32) (param $count i32) (param $out i32)
       (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
     (call $dispatch_api_table
       (local.get $api) (i32.const 0x0409) (i32.const 1)
       (local.get $src) (local.get $count) (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_get_string_type_w")
       (param $src i32) (param $count i32) (param $out i32)
       (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
     (call $handle_GetStringTypeW
       (i32.const 1) (local.get $src) (local.get $count)
       (local.get $out) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_get_esp") (result i32)
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 function writeWide(e, address, values) {

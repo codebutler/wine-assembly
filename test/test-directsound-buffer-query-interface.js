@@ -12,23 +12,23 @@ const extraWat = String.raw`
 
   (func (export "test_query_interface")
       (param $this i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectSoundBuffer_QueryInterface
       (local.get $this) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_refcount") (param $this i32) (result i32)
     (load.field DxObject refcount (call $dx_from_this (local.get $this))))
 
   (func (export "test_release") (param $this i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_IDirectSoundBuffer_Release
       (local.get $this) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_live_count") (result i32)
     (local $i i32) (local $count i32)

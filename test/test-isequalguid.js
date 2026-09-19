@@ -14,19 +14,19 @@ const extraWat = String.raw`
     (call $gs32 (i32.add (local.get $ptr) (i32.const 8)) (local.get $c))
     (call $gs32 (i32.add (local.get $ptr) (i32.const 12)) (local.get $d)))
   (func (export "test_call_IsEqualGUID") (param $a i32) (param $b i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IsEqualGUID
       (local.get $a) (local.get $b) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_isequalguid_esp") (result i32)
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_call_UuidCreate") (param $uuid i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_UuidCreate
       (local.get $uuid) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

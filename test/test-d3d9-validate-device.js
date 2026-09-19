@@ -46,7 +46,7 @@ const STACK = 0x074ff000;
       (param $type i32) (param $value i32) (result i32)
       (call $d3d9_texture_stage_state (local.get $device) (local.get $stage)
         (local.get $type) (local.get $value) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "set_lost") (param $device i32) (param $lost i32)
       (call $gs32 (i32.add (call $d3d9_program_state (local.get $device))
         (i32.const 21776)) (local.get $lost)))
@@ -66,11 +66,11 @@ const STACK = 0x074ff000;
       (local.get $texture))
     (func (export "validate") (param $api i32) (param $device i32)
       (param $passes i32) (result i32)
-      (global.set $esp (i32.const ${STACK}))
+      (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
       (call $dispatch_api_table (local.get $api) (local.get $device)
         (local.get $passes) (i32.const 0) (i32.const 0) (i32.const 0)
         (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
   e.init_dx_com_thunks();
 

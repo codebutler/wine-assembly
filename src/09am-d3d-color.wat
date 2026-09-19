@@ -80,7 +80,7 @@
   (local $device i32) (local $entry i32) (local $dest i32) (local $rw i32)
   (local $left i32) (local $top i32) (local $result i32) (local $pitch i32)
   (local $state i32) (local $width i32) (local $height i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (local.set $device (call $d3d9_backbuffer_owner (local.get $surface)))
   (if (i32.eqz (local.get $device)) (then (return)))
   (local.set $entry (call $dx_from_this (local.get $surface)))
@@ -130,11 +130,11 @@
   (i32.store offset=4 (local.get $dest)
     (i32.add (call $w2g (load.field DxObject misc1 (local.get $entry)))
       (i32.add (i32.mul (local.get $top) (local.get $pitch)) (i32.mul (local.get $left) (i32.const 4)))))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 (func $d3d9_backbuffer_unlock (param $surface i32)
   (local $device i32) (local $entry i32) (local $flags i32) (local $result i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (local.set $device (call $d3d9_backbuffer_owner (local.get $surface)))
   (if (i32.eqz (local.get $device)) (then (return)))
   (local.set $entry (call $dx_from_this (local.get $surface)))
@@ -152,7 +152,7 @@
     (if (i32.ne (local.get $result) (i32.const 1)) (then (return)))))
   (store.field DxObject flags (local.get $entry)
     (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 0xb9ffffff)))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 ;; Embedded storage descriptors are not COM objects. The existing 20-byte
 ;; surface view owns the external reference; bindings retain its parent texture.
@@ -212,7 +212,7 @@
 (func $d3d9_color_create (param $device i32) (param $width i32) (param $height i32)
   (param $format i32) (param $pool i32) (param $usage i32) (param $lockable i32) (param $out i32)
   (local $surface i32) (local $wa i32) (local $bytes i32) (local $serial i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (if (i32.eqz (call $d3d9_state_bytes (local.get $out) (i32.const 4))) (then (return)))
   (call $gs32 (local.get $out) (i32.const 0))
   (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
@@ -222,7 +222,7 @@
     (i32.eq (local.get $format) (i32.const 22)))) (then (return)))
   (if (i32.or (i32.eq (local.get $pool) (i32.const 1)) (i32.gt_u (local.get $pool) (i32.const 3))) (then (return)))
   (local.set $bytes (i32.mul (i32.mul (local.get $width) (local.get $height)) (i32.const 4)))
-  (global.set $eax (i32.const 0x8007000e))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000e))
   (local.set $serial (call $d3d9_depth_next_serial))
   (if (i32.eqz (local.get $serial)) (then (return)))
   (local.set $surface (call $heap_alloc (i32.add (i32.const 80) (local.get $bytes))))
@@ -244,7 +244,7 @@
   (i32.store offset=64 (local.get $wa) (local.get $usage))
   (drop (call $d3d9_depth_addref (local.get $surface)))
   (call $gs32 (local.get $out) (local.get $surface))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 ;; ColorFill names its destination independently of the bound render target.
 ;; The existing descriptor's draw-only fields carry a copied rectangle/color;
@@ -253,7 +253,7 @@
   (local $storage i32) (local $wa i32) (local $rt i32) (local $width i32) (local $height i32)
   (local $rw i32) (local $left i32) (local $top i32) (local $right i32) (local $bottom i32)
   (local $desc i32) (local $result i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
   (local.set $storage (call $d3d9_color_storage (local.get $surface)))
   (if (local.get $storage) (then
@@ -293,7 +293,7 @@
       (i32.store offset=48 (local.get $desc) (local.get $bottom))
       (call $host_gpu_gl_call (i32.const 0x30014) (local.get $desc) (i32.const 0)))))
   (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
-  (if (i32.eq (local.get $result) (i32.const 1)) (then (global.set $eax (i32.const 0)))))
+  (if (i32.eq (local.get $result) (i32.const 1)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))))
 
 ;; UpdateSurface view: width,height,format,bitsWA,pitch,colorStorageGuest,
 ;; dirtyCounterWA,implicitBackbuffer. Normal texture levels remain CPU authoritative;
@@ -352,15 +352,15 @@
   (local $x i32) (local $y i32) (local $w i32) (local $h i32) (local $dx i32) (local $dy i32)
   (local $row i32) (local $bits i32) (local $result i32) (local $format i32)
   (local $block i32) (local $rowbytes i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (if (global.get $d3d_render_token) (then
     (local.set $result (call $d3d_render_poll))
     (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
-    (if (i32.eq (local.get $result) (i32.const 1)) (then (global.set $eax (i32.const 0)))) (return)))
+    (if (i32.eq (local.get $result) (i32.const 1)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))) (return)))
   (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
   (if (i32.eq (local.get $source) (local.get $dest)) (then (return)))
   (local.set $allocation (call $heap_alloc (i32.const 64)))
-  (if (i32.eqz (local.get $allocation)) (then (global.set $eax (i32.const 0x8007000e)) (return)))
+  (if (i32.eqz (local.get $allocation)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000e)) (return)))
   (local.set $s (call $g2w (local.get $allocation))) (local.set $d (i32.add (local.get $s) (i32.const 32)))
   (block $done
     (br_if $done (i32.eqz (call $d3d9_update_view (local.get $source) (local.get $device) (i32.const 2) (local.get $s))))
@@ -430,7 +430,7 @@
       (local.set $p (i32.load offset=24 (local.get $d)))
       (i32.store (local.get $p) (i32.add (i32.load (local.get $p)) (i32.const 1)))
       (local.set $result (i32.const 1))))
-    (if (i32.eq (local.get $result) (i32.const 1)) (then (global.set $eax (i32.const 0)))))
+    (if (i32.eq (local.get $result) (i32.const 1)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))))
   (call $heap_free (local.get $allocation))
   (drop (call $d3d_render_park (local.get $result) (i32.const 0))))
 
@@ -447,7 +447,7 @@
 
 (func $d3d9_color_binding (param $device i32) (param $index i32) (param $surface i32)
   (local $state i32) (local $old i32) (local $wa i32) (local $rt i32) (local $storage i32) (local $parent i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (if (i32.or (local.get $index) (i32.eqz (local.get $surface))) (then (return)))
   (local.set $state (call $d3d9_program_state (local.get $device)))
   (if (i32.eqz (local.get $state)) (then (return)))
@@ -481,11 +481,11 @@
   (call $d3d9_color_unbind (local.get $old))
   (memory.fill (i32.add (local.get $state) (i32.const 21728)) (i32.const 0) (i32.const 24))
   (memory.fill (i32.add (local.get $state) (i32.const 22000)) (i32.const 0) (i32.const 20))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 (func $d3d9_color_desc (param $surface i32) (param $out i32)
   (local $wa i32) (local $dest i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (local.set $dest (call $d3d9_state_bytes (local.get $out) (i32.const 32)))
   (if (i32.eqz (local.get $dest)) (then (return)))
   (local.set $wa (call $g2w (local.get $surface)))
@@ -496,7 +496,7 @@
   (i32.store offset=12 (local.get $dest) (i32.load offset=60 (local.get $wa)))
   (i32.store offset=24 (local.get $dest) (i32.load offset=20 (local.get $wa)))
   (i32.store offset=28 (local.get $dest) (i32.load offset=24 (local.get $wa)))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 ;; Return only after the ordered backend read/write has completed. The caller
 ;; retains its original stack and arguments while the normal render token parks.
@@ -512,7 +512,7 @@
 
 (func $d3d9_color_lock (param $surface i32) (param $out i32) (param $rect i32) (param $flags i32)
   (local $wa i32) (local $dest i32) (local $rw i32) (local $left i32) (local $top i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (local.set $wa (call $g2w (local.get $surface)))
   (local.set $dest (call $d3d9_state_bytes (local.get $out) (i32.const 8)))
   (if (i32.or (i32.eqz (local.get $dest)) (i32.or (i32.eqz (i32.load offset=32 (local.get $wa)))
@@ -533,21 +533,21 @@
   (i32.store (local.get $dest) (i32.load offset=48 (local.get $wa)))
   (i32.store offset=4 (local.get $dest) (i32.add (i32.load offset=40 (local.get $wa))
     (i32.add (i32.mul (local.get $top) (i32.load offset=48 (local.get $wa))) (i32.mul (local.get $left) (i32.const 4)))))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 (func $d3d9_color_unlock (param $surface i32)
   (local $wa i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (local.set $wa (call $g2w (local.get $surface)))
   (if (i32.eqz (i32.load offset=56 (local.get $wa))) (then (return)))
   (if (i32.eqz (i32.and (i32.load offset=56 (local.get $wa)) (i32.const 16))) (then
     (if (i32.eqz (call $d3d9_color_sync (local.get $surface) (i32.const 1))) (then (return)))
     (i32.store offset=68 (local.get $wa) (i32.add (i32.load offset=68 (local.get $wa)) (i32.const 1)))))
-  (i32.store offset=56 (local.get $wa) (i32.const 0)) (global.set $eax (i32.const 0)))
+  (i32.store offset=56 (local.get $wa) (i32.const 0)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 (func $d3d9_color_copy (param $device i32) (param $source i32) (param $dest i32)
   (local $src i32) (local $dst i32) (local $rt i32) (local $result i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
   (if (i32.eqz (call $d3d9_is_color_surface (local.get $dest))) (then (return)))
   (local.set $dst (call $g2w (local.get $dest)))
@@ -567,7 +567,7 @@
       (then (call $d3d_render_poll))
       (else (call $host_gpu_gl_call (i32.const 0x30012) (call $d3d9_gpu_descriptor (local.get $device)) (local.get $dst)))))
     (if (call $d3d_render_park (local.get $result) (i32.const 0)) (then (return)))
-    (if (i32.eq (local.get $result) (i32.const 1)) (then (global.set $eax (i32.const 0))))
+    (if (i32.eq (local.get $result) (i32.const 1)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (return)))
   (local.set $src (call $g2w (local.get $source))) (local.set $dst (call $g2w (local.get $dest)))
   (if (i32.or (i32.ne (i32.load offset=8 (local.get $src)) (local.get $device))
@@ -582,7 +582,7 @@
   (memory.copy (call $g2w (i32.load offset=40 (local.get $dst)))
     (call $g2w (i32.load offset=40 (local.get $src))) (i32.load offset=52 (local.get $src)))
   (i32.store offset=68 (local.get $dst) (i32.add (i32.load offset=68 (local.get $dst)) (i32.const 1)))
-  (global.set $eax (i32.const 0)))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
 ;; StretchRect needs TWO ordered backend calls, and the park protocol carries
 ;; one token, so the phase has to be remembered across the re-entry a park
@@ -605,7 +605,7 @@
 (func $d3d9_color_stretch (param $device i32) (param $source i32) (param $srcrect i32)
   (param $dest i32) (param $dstrect i32) (param $filter i32) (param $name_ptr i32)
   (local $src i32) (local $dst i32) (local $storage i32) (local $desc i32) (local $result i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (if (i32.eqz (call $d3d9_program_state (local.get $device))) (then (return)))
   (local.set $storage (call $d3d9_color_storage (local.get $source)))
   (if (local.get $storage) (then (local.set $source (local.get $storage))))
@@ -653,4 +653,4 @@
   (global.set $d3d9_stretch_stage (i32.const 0))
   (if (i32.eq (local.get $result) (i32.const 1)) (then
     (i32.store offset=68 (local.get $dst) (i32.add (i32.load offset=68 (local.get $dst)) (i32.const 1)))
-    (global.set $eax (i32.const 0)))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))))

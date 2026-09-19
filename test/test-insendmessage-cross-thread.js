@@ -8,18 +8,18 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_insend_prepare") (param $hwnd i32) (param $proc i32)
     (global.set $image_base (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (global.set $current_thread_id (i32.const 2))
     (call $wnd_table_set (local.get $hwnd) (local.get $proc)))
 
   (func (export "test_call_InSendMessage") (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_InSendMessage
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_local_send_depth") (param $depth i32)
     (global.set $sync_msg_depth (local.get $depth)))

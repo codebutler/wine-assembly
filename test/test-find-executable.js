@@ -10,11 +10,11 @@ const extraWat = String.raw`
   (func (export "test_find_executable")
       (param $file i32) (param $directory i32) (param $output i32)
       (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
     (call $handle_FindExecutableA
       (local.get $file) (local.get $directory) (local.get $output)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_seed_registry_default")
       (param $path i32) (param $value i32) (param $type i32) (result i32)
     (local $holder i32) (local $handle i32) (local $result i32)

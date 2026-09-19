@@ -331,7 +331,7 @@
   ;; InitCommonControls() — 0 args, void return, registers common control window classes
   (func $handle_InitCommonControls (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; No-op: our window creation handles class names directly
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; ImageList_Create(cx, cy, flags, cInitial, cGrow) — 5 args, returns HIMAGELIST handle
@@ -348,8 +348,8 @@
     (i32.store offset=8 (local.get $buf_wa) (i32.const -1))     ;; CLR_NONE
     (i32.store offset=12 (local.get $buf_wa) (i32.const 0))     ;; count=0
     (i32.store offset=32 (local.get $buf_wa) (i32.const 0x4c4d4948)) ;; "HIML"
-    (global.set $eax (local.get $buf))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; stdcall, 5 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $buf))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; stdcall, 5 args
   )
 
   ;; ImageList_GetImageCount(himl) — 1 arg, returns the logical image count.
@@ -358,7 +358,7 @@
   ;; caller's last-error value (the common-controls contract defines none).
   (func $handle_ImageList_GetImageCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $sw i32)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (local.get $arg0)
       (then
         ;; A forged non-NULL handle must not turn the validity-tag load into a
@@ -369,14 +369,14 @@
         (if (i32.and
               (i32.ne (local.get $sw) (global.get $NULL_SENTINEL))
               (i32.eq (i32.load offset=32 (local.get $sw)) (i32.const 0x4C4D4948)))
-          (then (global.set $eax (i32.load offset=12 (local.get $sw)))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.load offset=12 (local.get $sw)))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ImageList_Destroy(himl) — 1 arg, returns BOOL
   (func $handle_ImageList_Destroy (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $sw i32) (local $icons i32) (local $count i32) (local $bitmap i32)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     ;; The lists returned by SHGFI_SYSICONINDEX are shared system resources;
     ;; applications must not destroy them.  Refuse the operation so the stable
     ;; process handles never point at reclaimed heap blocks.
@@ -387,7 +387,7 @@
             (i32.eq (local.get $arg0)
               (i32.atomic.load offset=4 (global.get $SHELL_FILE_INFO)))))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (if (local.get $arg0)
       (then
@@ -412,8 +412,8 @@
             (if (local.get $bitmap)
               (then (drop (call $gdi_object_delete_full (local.get $bitmap)))))
             (call $heap_free (local.get $arg0))
-            (global.set $eax (i32.const 1))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ImageList_LoadImageA/W share all behavior except the width of lpbmp.
@@ -496,24 +496,24 @@
 
   ;; ImageList_LoadImageA(hi, lpbmp, cx, cGrow, crMask, uType, uFlags) — 7 args
   (func $handle_ImageList_LoadImageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $image_list_load_image
+    (i32.store offset=0 (global.get $reg_base) (call $image_list_load_image
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; ImageList_LoadImageW — same core with a UTF-16 resource/path name.
   (func $handle_ImageList_LoadImageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $image_list_load_image
+    (i32.store offset=0 (global.get $reg_base) (call $image_list_load_image
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; ImageList_AddMasked(himl, hbmImage, crMask) — 3 args, returns image index
@@ -524,15 +524,15 @@
     (local $old_icons i32) (local $new_icons i32) (local $new_icons_wa i32)
     (local $probe i32) (local $probe_wa i32)
     (local $i i32) (local $icon i32)
-    (global.set $eax (i32.const -1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const -1))
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $sw (call $g2w (local.get $arg0)))
     (if (i32.ne (i32.load offset=32 (local.get $sw)) (i32.const 0x4C4D4948))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $count (i32.load offset=12 (local.get $sw)))
     (local.set $cx (i32.load (local.get $sw)))
@@ -545,14 +545,14 @@
           (i32.or (i32.lt_s (local.get $bmp_w) (local.get $cx))
             (i32.lt_s (local.get $bmp_h) (local.get $cy))))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $add_count (i32.div_u (local.get $bmp_w) (local.get $cx)))
     (local.set $new_count (i32.add (local.get $count) (local.get $add_count)))
     (if (i32.or (i32.lt_u (local.get $new_count) (local.get $count))
           (i32.gt_u (local.get $new_count) (i32.const 0x10000)))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
 
     ;; Build the complete replacement array before touching the live list.
@@ -568,7 +568,7 @@
       (call $heap_alloc (i32.shl (local.get $capacity) (i32.const 2))))
     (if (i32.eqz (local.get $new_icons))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $new_icons_wa (call $g2w (local.get $new_icons)))
     (call $zero_memory (local.get $new_icons_wa)
@@ -584,7 +584,7 @@
         (then
           (call $image_list_destroy_icon_array
             (local.get $new_icons) (local.get $i))
-          (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
           (return)))
       (i32.store (i32.add (local.get $new_icons_wa)
         (i32.shl (local.get $i) (i32.const 2))) (local.get $icon))
@@ -598,7 +598,7 @@
       (then
         (call $image_list_destroy_icon_array
           (local.get $new_icons) (local.get $count))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $probe_wa (call $g2w (local.get $probe)))
     (call $zero_memory (local.get $probe_wa) (i32.const 36))
@@ -618,7 +618,7 @@
           (call $heap_free (local.get $probe))
           (call $image_list_destroy_icon_array
             (local.get $new_icons) (i32.add (local.get $count) (local.get $i)))
-          (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
           (return)))
       (i32.store (i32.add (local.get $new_icons_wa)
         (i32.shl (i32.add (local.get $count) (local.get $i)) (i32.const 2)))
@@ -635,8 +635,8 @@
     (i32.store offset=20 (local.get $sw) (i32.const -1))
     (i32.store offset=24 (local.get $sw) (local.get $new_icons))
     (i32.store offset=28 (local.get $sw) (local.get $capacity))
-    (global.set $eax (local.get $count))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $count))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; ImageList_ReplaceIcon(himl, i, hicon) — replace an existing image, or
@@ -646,10 +646,10 @@
     (local $icons i32) (local $icons_wa i32) (local $capacity i32)
     (local $new_icons i32) (local $new_icons_wa i32) (local $new_capacity i32)
     (local $copy i32) (local $old i32)
-    (global.set $eax (i32.const -1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const -1))
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg2)))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $sw (call $g2w (local.get $arg0)))
     (local.set $count (i32.load offset=12 (local.get $sw)))
@@ -659,7 +659,7 @@
       (else
         (if (i32.ge_u (local.get $index) (local.get $count))
           (then
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))))
     ;; Common controls copies the icon's image and mask; it never retains the
     ;; caller's HICON. This private copy lets the caller destroy hicon as soon
@@ -667,7 +667,7 @@
     (local.set $copy (call $icon_copy_handle (local.get $arg2)))
     (if (i32.eqz (local.get $copy))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $icons (i32.load offset=24 (local.get $sw)))
     (if (local.get $icons)
@@ -690,7 +690,7 @@
         (if (i32.eqz (local.get $new_icons))
           (then
             (drop (call $icon_destroy_handle (local.get $copy)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $new_icons_wa (call $g2w (local.get $new_icons)))
         (call $zero_memory (local.get $new_icons_wa)
@@ -714,8 +714,8 @@
       (i32.shl (local.get $index) (i32.const 2))) (local.get $copy))
     (if (i32.eq (local.get $index) (local.get $count))
       (then (i32.store offset=12 (local.get $sw) (i32.add (local.get $count) (i32.const 1)))))
-    (global.set $eax (local.get $index))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $index))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; ImageList_GetIcon(himl, i, flags) — create an independent HICON from the
@@ -723,8 +723,8 @@
   ;; DestroyIcon. ILD_NORMAL/ILD_TRANSPARENT share the same stored planes;
   ;; overlay/blend styling remains a draw-time compatibility extension.
   (func $handle_ImageList_GetIcon (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $image_list_icon_handle (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (call $image_list_icon_handle (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; ImageList_Remove(himl, i) — remove one image and close the index gap, or
@@ -736,10 +736,10 @@
     (local $old_icons i32) (local $new_icons i32) (local $new_icons_wa i32)
     (local $capacity i32) (local $source_index i32) (local $dest_index i32)
     (local $icon i32)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; SHGFI_SYSICONINDEX lists are shared process resources and cannot be
     ;; changed by applications.
@@ -749,12 +749,12 @@
           (i32.eq (local.get $arg0)
             (i32.atomic.load offset=4 (global.get $SHELL_FILE_INFO))))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $sw (call $g2w (local.get $arg0)))
     (if (i32.ne (i32.load offset=32 (local.get $sw)) (i32.const 0x4C4D4948))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $count (i32.load offset=12 (local.get $sw)))
     (local.set $old_icons (i32.load offset=24 (local.get $sw)))
@@ -768,12 +768,12 @@
         (i32.store offset=20 (local.get $sw) (i32.const -1))
         (i32.store offset=24 (local.get $sw) (i32.const 0))
         (i32.store offset=28 (local.get $sw) (i32.const 0))
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.ge_u (local.get $arg1) (local.get $count))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
 
     (local.set $new_count (i32.sub (local.get $count) (i32.const 1)))
@@ -790,7 +790,7 @@
           (call $heap_alloc (i32.shl (local.get $capacity) (i32.const 2))))
         (if (i32.eqz (local.get $new_icons))
           (then
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
             (return)))
         (local.set $new_icons_wa (call $g2w (local.get $new_icons)))
         (call $zero_memory (local.get $new_icons_wa)
@@ -806,8 +806,7 @@
                 (then
                   (call $image_list_destroy_icon_array
                     (local.get $new_icons) (local.get $dest_index))
-                  (global.set $esp
-                    (i32.add (global.get $esp) (i32.const 12)))
+                  (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
                   (return)))
               (i32.store (i32.add (local.get $new_icons_wa)
                 (i32.shl (local.get $dest_index) (i32.const 2)))
@@ -825,8 +824,8 @@
     (i32.store offset=20 (local.get $sw) (i32.const -1))
     (i32.store offset=24 (local.get $sw) (local.get $new_icons))
     (i32.store offset=28 (local.get $sw) (local.get $capacity))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   (func $create_status_window
@@ -847,11 +846,11 @@
 
   ;; CreateStatusWindowA(style, lpszText, hwndParent, wID) — 4 args, returns HWND
   (func $handle_CreateStatusWindowA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $create_status_window
+    (i32.store offset=0 (global.get $reg_base) (call $create_status_window
       (local.get $arg0)
       (if (result i32) (local.get $arg1) (then (call $g2w (local.get $arg1))) (else (i32.const 0)))
       (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; CreateToolbarEx — 13 args, returns HWND of toolbar
@@ -860,7 +859,7 @@
     (local $wa_esp i32) (local $hwnd i32) (local $state i32) (local $sw i32)
     (local $buttons i32) (local $button_count i32) (local $button_w i32) (local $button_h i32)
     (local $bitmap_w i32) (local $bitmap_h i32) (local $struct_size i32) (local $bmp i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $buttons (i32.load offset=28 (local.get $wa_esp)))
     (local.set $button_count (i32.load offset=32 (local.get $wa_esp)))
     (local.set $button_w (i32.load offset=36 (local.get $wa_esp)))
@@ -923,14 +922,14 @@
           (br $copy)))
         (i32.store (local.get $sw) (local.get $button_count))))
     (call $toolbar_autosize (local.get $hwnd))
-    (global.set $eax (local.get $hwnd))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 56)))  ;; stdcall, 13 args
+    (i32.store offset=0 (global.get $reg_base) (local.get $hwnd))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 56)))  ;; stdcall, 13 args
   )
 
   ;; CreateUpDownControl — 12 args, returns HWND
   (func $handle_CreateUpDownControl (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; CreateUpDownControl(dwStyle, x, y, cx, cy, hParent, nID, hInst, hBuddy, nUpper, nLower, nPos)
-    (global.set $eax (call $host_create_window
+    (i32.store offset=0 (global.get $reg_base) (call $host_create_window
       (global.get $next_hwnd)
       (local.get $arg0) ;; style
       (local.get $arg1) ;; x
@@ -940,7 +939,7 @@
       (i32.const 0) ;; no text
       (i32.const 0)))
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 52)))  ;; stdcall, 12 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 52)))  ;; stdcall, 12 args
   )
 
   ;; GetEffectiveClientRect(hWnd, lprc, lpInfo) — 3 args, void
@@ -954,7 +953,7 @@
     ;; the contract: a null table still receives the ordinary client rect.
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $rect (call $g2w (local.get $arg1)))
     (local.set $cs (call $wnd_get_client_size_packed (local.get $arg0)))
@@ -1010,7 +1009,7 @@
           (local.set $info (i32.add (local.get $info) (i32.const 8)))
           (local.set $pair_count (i32.add (local.get $pair_count) (i32.const 1)))
           (br $controls)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; DrawStatusTextA(hDC, lprc, pszText, uFlags) — 4 args, void
@@ -1028,7 +1027,7 @@
           (call $g2w (local.get $arg1)) ;; lpRect
           (i32.or (local.get $arg3) (i32.const 0x24)) ;; DT_SINGLELINE|DT_VCENTER
           (i32.const 0))))) ;; ANSI
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; DrawStatusTextW — 4 args, void. Same draw as the A spelling, with the
@@ -1044,7 +1043,7 @@
           (call $g2w (local.get $arg1))                  ;; lpRect
           (i32.or (local.get $arg3) (i32.const 0x24))    ;; DT_SINGLELINE|DT_VCENTER
           (i32.const 1)))))                              ;; wide
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; Resolve the RT_STRING id selected by WM_MENUSELECT. lpwIDs is already a
@@ -1100,9 +1099,9 @@
     ;; The generic handler ABI passes five register locals; remaining stdcall
     ;; arguments stay on the guest stack after the return address and arg0..4.
     (local.set $hwnd_status
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $ids_g
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (if (i32.eq (local.get $arg0) (i32.const 0x011F)) ;; WM_MENUSELECT
       (then
         (local.set $flags (i32.shr_u (local.get $arg1) (i32.const 16)))
@@ -1141,7 +1140,7 @@
               (local.get $hwnd_status) (i32.const 0x0409) ;; SB_SIMPLE
               (i32.const 1) (i32.const 0)))
             (if (local.get $buf_g) (then (call $heap_free (local.get $buf_g))))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; Show or hide one mapped child while keeping its menu check synchronized.
@@ -1254,8 +1253,8 @@
             (local.set $pair (i32.add (local.get $pair) (i32.const 8)))
             (local.set $index (i32.add (local.get $index) (i32.const 1)))
             (br $scan)))))
-    (global.set $eax (local.get $result))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; Convert COLORREF (00BBGGRR) to the RGBQUAD word used by owned indexed
@@ -1430,8 +1429,8 @@
             (local.set $bitmap (local.get $masked))))))
     ;; Load failure is failure. Win98 returns NULL; fabricating a blank 16x16
     ;; bitmap hides missing resources and produces plausible empty toolbars.
-    (global.set $eax (local.get $bitmap))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $bitmap))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; HPROPSHEETPAGE is an opaque, owned copy of PROPSHEETPAGEA. The handle
@@ -1502,27 +1501,27 @@
     (local.set $callback (i32.load offset=32 (local.get $psp_w)))
     (if (i32.eqz (local.get $callback)) (then (return (i32.const 1))))
     (local.set $old_eip (global.get $eip))
-    (local.set $old_esp (global.get $esp))
-    (local.set $old_eax (global.get $eax))
-    (local.set $old_ecx (global.get $ecx))
-    (local.set $old_edx (global.get $edx))
-    (local.set $old_ebx (global.get $ebx))
-    (local.set $old_esi (global.get $esi))
-    (local.set $old_edi (global.get $edi))
-    (local.set $old_ebp (global.get $ebp))
+    (local.set $old_esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $old_eax (i32.load offset=0 (global.get $reg_base)))
+    (local.set $old_ecx (i32.load offset=4 (global.get $reg_base)))
+    (local.set $old_edx (i32.load offset=8 (global.get $reg_base)))
+    (local.set $old_ebx (i32.load offset=12 (global.get $reg_base)))
+    (local.set $old_esi (i32.load offset=24 (global.get $reg_base)))
+    (local.set $old_edi (i32.load offset=28 (global.get $reg_base)))
+    (local.set $old_ebp (i32.load offset=20 (global.get $reg_base)))
     (local.set $old_handler_set_eip (global.get $handler_set_eip))
     (local.set $old_steps (global.get $steps))
     (local.set $old_yield_reason (global.get $yield_reason))
     (local.set $old_yield_flag (global.get $yield_flag))
     ;; Push right-to-left: ppsp, PSPCB_*, NULL hwnd, return thunk.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $page))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $message))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $sync_msg_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $page))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $message))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $sync_msg_ret_thunk))
     (global.set $eip (local.get $callback))
     (global.set $steps (i32.const 0))
     (global.set $yield_reason (i32.const 0))
@@ -1540,16 +1539,16 @@
     ;; A callback that fails to reach the return thunk cannot safely approve a
     ;; page. PSPCB_RELEASE ignores the result, but uses the same bounded call.
     (local.set $result
-      (select (global.get $eax) (i32.const 0) (i32.eqz (global.get $eip))))
+      (select (i32.load offset=0 (global.get $reg_base)) (i32.const 0) (i32.eqz (global.get $eip))))
     (global.set $eip (local.get $old_eip))
-    (global.set $esp (local.get $old_esp))
-    (global.set $eax (local.get $old_eax))
-    (global.set $ecx (local.get $old_ecx))
-    (global.set $edx (local.get $old_edx))
-    (global.set $ebx (local.get $old_ebx))
-    (global.set $esi (local.get $old_esi))
-    (global.set $edi (local.get $old_edi))
-    (global.set $ebp (local.get $old_ebp))
+    (i32.store offset=16 (global.get $reg_base) (local.get $old_esp))
+    (i32.store offset=0 (global.get $reg_base) (local.get $old_eax))
+    (i32.store offset=4 (global.get $reg_base) (local.get $old_ecx))
+    (i32.store offset=8 (global.get $reg_base) (local.get $old_edx))
+    (i32.store offset=12 (global.get $reg_base) (local.get $old_ebx))
+    (i32.store offset=24 (global.get $reg_base) (local.get $old_esi))
+    (i32.store offset=28 (global.get $reg_base) (local.get $old_edi))
+    (i32.store offset=20 (global.get $reg_base) (local.get $old_ebp))
     (global.set $handler_set_eip (local.get $old_handler_set_eip))
     (global.set $steps (local.get $old_steps))
     (global.set $yield_reason (local.get $old_yield_reason))
@@ -1633,19 +1632,17 @@
 
   ;; CreatePropertySheetPageA/W(lppsp) — 1 arg, returns HPROPSHEETPAGE.
   (func $handle_CreatePropertySheetPageA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $create_property_sheet_page (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $create_property_sheet_page (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_CreatePropertySheetPageW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $create_property_sheet_page (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $create_property_sheet_page (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; DestroyPropertySheetPage(hPSPage) — 1 arg, returns BOOL.
   (func $handle_DestroyPropertySheetPage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $propsheet_page_destroy_owned (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $propsheet_page_destroy_owned (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; PropertySheetA/W(lppsph) — 1 arg, returns int (>0 if user clicked OK).
@@ -1655,8 +1652,8 @@
     (local $dlg i32)
     (if (i32.eqz (local.get $header))
       (then
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (call $modal_capture_nonvolatile)
     (local.set $dlg
@@ -1664,8 +1661,8 @@
     (if (i32.eqz (local.get $dlg))
       (then
         (global.set $modal_restore_pending (i32.const 0))
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (call $modal_begin (local.get $dlg) (i32.const 8))
   )
@@ -1681,34 +1678,34 @@
     (local $old i32) (local $bk_wa i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $bk_wa (call $g2w (i32.add (local.get $arg0) (i32.const 8))))
     (local.set $old (i32.load (local.get $bk_wa)))
     (i32.store (local.get $bk_wa) (local.get $arg1))
-    (global.set $eax (local.get $old))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $old))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ImageList_GetBkColor(himl) — 1 arg
   (func $handle_ImageList_GetBkColor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
-    (global.set $eax (i32.load (call $g2w (i32.add (local.get $arg0) (i32.const 8)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.load (call $g2w (i32.add (local.get $arg0) (i32.const 8)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; CreateStatusWindowW — same as A version, 4 args
   (func $handle_CreateStatusWindowW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; The renderer string bridge is ANSI; the app sets status text later via
     ;; messages, so create the Unicode control with an initially empty title.
-    (global.set $eax (call $create_status_window
+    (i32.store offset=0 (global.get $reg_base) (call $create_status_window
       (local.get $arg0) (i32.const 0) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; ============================================================
@@ -1772,8 +1769,8 @@
 
   ;; Comctl32_Alloc(dwSize) — 1 arg, returns pointer (zeroed)
   (func $handle_Comctl32_Alloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $comctl_alloc_new (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $comctl_alloc_new (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; Comctl32_ReAlloc(pv, cbNew) — 2 args, returns pointer
@@ -1782,16 +1779,16 @@
     (local $new_raw i32) (local $new_wa i32)
     (if (i32.eqz (local.get $arg0))
       (then
-        (global.set $eax (call $comctl_alloc_new (local.get $arg1)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (call $comctl_alloc_new (local.get $arg1)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $old_wa (call $comctl_alloc_record (local.get $arg0)))
     (if (i32.or
           (i32.eqz (local.get $old_wa))
           (i32.gt_u (local.get $arg1) (i32.const 0x7FFFFFE8)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $old_size (i32.load offset=4 (local.get $old_wa)))
     (local.set $new_raw
@@ -1802,8 +1799,8 @@
     (if (i32.eqz (local.get $new_raw))
       (then
         ;; The original allocation remains live when reallocation fails.
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $new_wa (call $g2w (local.get $new_raw)))
     (i32.store (local.get $new_wa) (global.get $COMCTL_ALLOC_MAGIC))
@@ -1815,8 +1812,8 @@
             (i32.add (i32.const 8) (local.get $old_size)))
           (i32.const 0)
           (i32.sub (local.get $arg1) (local.get $old_size)))))
-    (global.set $eax (i32.add (local.get $new_raw) (i32.const 8)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $new_raw) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; Comctl32_Free(pv) — 1 arg, returns BOOL
@@ -1825,14 +1822,14 @@
     (local.set $raw_wa (call $comctl_alloc_record (local.get $arg0)))
     (if (i32.eqz (local.get $raw_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (i32.store (local.get $raw_wa) (i32.const 0))
     (i32.store offset=4 (local.get $raw_wa) (i32.const 0))
     (call $heap_free (i32.sub (local.get $arg0) (i32.const 8)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; Comctl32_GetSize(pv) — 1 arg, returns DWORD size
@@ -1840,9 +1837,9 @@
     (local $raw_wa i32)
     (local.set $raw_wa (call $comctl_alloc_record (local.get $arg0)))
     (if (local.get $raw_wa)
-      (then (global.set $eax (i32.load offset=4 (local.get $raw_wa))))
-      (else (global.set $eax (i32.const -1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.load offset=4 (local.get $raw_wa))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const -1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; ============================================================
@@ -1908,27 +1905,27 @@
     ;; must stay within the heap allocator's documented maximum request.
     (if (i32.le_s (local.get $arg0) (i32.const 0))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.gt_u (local.get $cap)
           (i32.div_u (i32.const 0x7FFFFFF0) (local.get $arg0)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $dsa (call $heap_alloc (i32.const 20)))
     (if (i32.eqz (local.get $dsa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $data (call $heap_alloc (i32.mul (local.get $cap) (local.get $arg0))))
     (if (i32.eqz (local.get $data))
       (then
         (call $heap_free (local.get $dsa))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $dsa_wa (call $g2w (local.get $dsa)))
     (i32.store (local.get $dsa_wa) (local.get $arg0))           ;; item_size
@@ -1936,8 +1933,8 @@
     (i32.store offset=8 (local.get $dsa_wa) (local.get $cap))  ;; capacity
     (i32.store offset=12 (local.get $dsa_wa) (local.get $data))
     (i32.store offset=16 (local.get $dsa_wa) (global.get $DSA_MAGIC))
-    (global.set $eax (local.get $dsa))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $dsa))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; DSA_Destroy(hdsa) — 1 arg, returns BOOL
@@ -1946,8 +1943,8 @@
     (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dsa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $data (i32.load offset=12 (local.get $dsa_wa)))
     ;; Retire first, then release backing storage and finally the handle.
@@ -1955,8 +1952,8 @@
     (i32.store offset=16 (local.get $dsa_wa) (i32.const 0))
     (call $heap_free (local.get $data))
     (call $heap_free (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; DSA_GetItem(hdsa, index, pitem) — 3 args, returns BOOL
@@ -1967,8 +1964,8 @@
     (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
     (if (i32.or (i32.eqz (local.get $dsa_wa)) (i32.eqz (local.get $arg2)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
@@ -1981,10 +1978,10 @@
         (memory.copy (local.get $item_wa)
           (i32.add (local.get $data_wa) (i32.mul (local.get $arg1) (local.get $item_size)))
           (local.get $item_size))
-        (global.set $eax (i32.const 1)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
       (else
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; DSA_GetItemPtr(hdsa, index) — 2 args, returns pointer to item
@@ -1995,18 +1992,18 @@
     (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dsa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
     (local.set $data_ptr (i32.load offset=12 (local.get $dsa_wa)))
     (if (i32.lt_u (local.get $arg1) (local.get $count))
       (then
-        (global.set $eax (i32.add (local.get $data_ptr) (i32.mul (local.get $arg1) (local.get $item_size)))))
+        (i32.store offset=0 (global.get $reg_base) (i32.add (local.get $data_ptr) (i32.mul (local.get $arg1) (local.get $item_size)))))
       (else
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; DSA_InsertItem(hdsa, index, pitem) — 3 args, returns index or -1
@@ -2026,8 +2023,8 @@
     (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
     (if (i32.or (i32.eqz (local.get $dsa_wa)) (i32.eqz (local.get $arg2)))
       (then
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
@@ -2041,8 +2038,8 @@
       (then
         (if (i32.gt_u (local.get $cap) (i32.const 0x3FFFFFFF))
           (then
-            (global.set $eax (i32.const -1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $new_cap (i32.shl (local.get $cap) (i32.const 1)))
         (if (i32.lt_u (local.get $new_cap) (i32.const 8))
@@ -2050,15 +2047,15 @@
         (if (i32.gt_u (local.get $new_cap)
               (i32.div_u (i32.const 0x7FFFFFF0) (local.get $item_size)))
           (then
-            (global.set $eax (i32.const -1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $new_data
           (call $heap_alloc (i32.mul (local.get $new_cap) (local.get $item_size))))
         (if (i32.eqz (local.get $new_data))
           (then
-            (global.set $eax (i32.const -1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $new_data_wa (call $g2w (local.get $new_data)))
         (if (local.get $count)
@@ -2087,8 +2084,8 @@
     ;; Increment count
     (i32.store offset=4 (local.get $dsa_wa)
       (i32.add (local.get $count) (i32.const 1)))
-    (global.set $eax (local.get $idx))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $idx))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; DSA_DeleteItem(hdsa, index) — 2 args, returns BOOL
@@ -2103,8 +2100,8 @@
     (local.set $dsa_wa (call $dsa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dsa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $item_size (i32.load (local.get $dsa_wa)))
     (local.set $count (i32.load offset=4 (local.get $dsa_wa)))
@@ -2122,10 +2119,10 @@
                 (local.get $item_size)))))
         (i32.store offset=4 (local.get $dsa_wa)
           (i32.sub (local.get $count) (i32.const 1)))
-        (global.set $eax (i32.const 1)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
       (else
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ============================================================
@@ -2142,29 +2139,29 @@
         (i32.gt_s (local.get $arg0) (i32.const 0))))
     (if (i32.gt_u (local.get $cap) (i32.const 0x1FFFFFFC))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $dpa (call $heap_alloc (i32.const 16)))
     (if (i32.eqz (local.get $dpa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $ptrs (call $heap_alloc (i32.shl (local.get $cap) (i32.const 2))))
     (if (i32.eqz (local.get $ptrs))
       (then
         (call $heap_free (local.get $dpa))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $dpa_wa (call $g2w (local.get $dpa)))
     (i32.store (local.get $dpa_wa) (i32.const 0))           ;; count
     (i32.store offset=4 (local.get $dpa_wa) (local.get $cap))  ;; capacity
     (i32.store offset=8 (local.get $dpa_wa) (local.get $ptrs))
     (i32.store offset=12 (local.get $dpa_wa) (global.get $DPA_MAGIC))
-    (global.set $eax (local.get $dpa))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $dpa))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; DPA_Destroy(hdpa) — 1 arg, returns BOOL
@@ -2173,16 +2170,16 @@
     (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dpa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
     (i32.store offset=8 (local.get $dpa_wa) (i32.const 0))
     (i32.store offset=12 (local.get $dpa_wa) (i32.const 0))
     (call $heap_free (local.get $ptrs))
     (call $heap_free (local.get $arg0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; DPA_GetPtr(hdpa, index) — 2 args, returns pointer at index
@@ -2192,17 +2189,17 @@
     (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dpa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $count (i32.load (local.get $dpa_wa)))
     (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
     (if (i32.lt_u (local.get $arg1) (local.get $count))
       (then
-        (global.set $eax (i32.load (call $g2w (i32.add (local.get $ptrs) (i32.shl (local.get $arg1) (i32.const 2)))))))
+        (i32.store offset=0 (global.get $reg_base) (i32.load (call $g2w (i32.add (local.get $ptrs) (i32.shl (local.get $arg1) (i32.const 2)))))))
       (else
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; DPA_InsertPtr(hdpa, index, p) — 3 args, returns index or -1
@@ -2223,8 +2220,8 @@
     (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dpa_wa))
       (then
-        (global.set $eax (i32.const -1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $count (i32.load (local.get $dpa_wa)))
     (local.set $cap (i32.load offset=4 (local.get $dpa_wa)))
@@ -2239,8 +2236,8 @@
       (then
         (if (i32.gt_u (local.get $cap) (i32.const 0x0FFFFFFE))
           (then
-            (global.set $eax (i32.const -1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $new_cap (i32.shl (local.get $cap) (i32.const 1)))
         (if (i32.lt_u (local.get $new_cap) (i32.const 8))
@@ -2248,8 +2245,8 @@
         (local.set $new_ptrs (call $heap_alloc (i32.shl (local.get $new_cap) (i32.const 2))))
         (if (i32.eqz (local.get $new_ptrs))
           (then
-            (global.set $eax (i32.const -1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const -1))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $new_ptrs_wa (call $g2w (local.get $new_ptrs)))
         (local.set $i (i32.const 0))
@@ -2279,8 +2276,8 @@
     (i32.store (i32.add (local.get $ptrs_wa) (i32.shl (local.get $idx) (i32.const 2)))
       (local.get $arg2))
     (i32.store (local.get $dpa_wa) (i32.add (local.get $count) (i32.const 1)))
-    (global.set $eax (local.get $idx))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $idx))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; DPA_DeletePtr(hdpa, index) — 2 args, returns removed pointer
@@ -2297,8 +2294,8 @@
     (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dpa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $count (i32.load (local.get $dpa_wa)))
     (local.set $ptrs (i32.load offset=8 (local.get $dpa_wa)))
@@ -2317,10 +2314,10 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $shift)))
         (i32.store (local.get $dpa_wa) (i32.sub (local.get $count) (i32.const 1)))
-        (global.set $eax (local.get $removed)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $removed)))
       (else
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; DPA_DeleteAllPtrs(hdpa) — 1 arg, returns BOOL
@@ -2329,10 +2326,10 @@
     (local.set $dpa_wa (call $dpa_record (local.get $arg0)))
     (if (i32.eqz (local.get $dpa_wa))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (i32.store (local.get $dpa_wa) (i32.const 0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )

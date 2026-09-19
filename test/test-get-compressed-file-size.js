@@ -13,21 +13,21 @@ const extraWat = String.raw`
 
   (func (export "test_call_GetCompressedFileSizeA")
       (param $path i32) (param $high i32) (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_GetCompressedFileSizeA
       (local.get $path) (local.get $high) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_GetCompressedFileSizeW")
       (param $path i32) (param $high i32) (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_GetCompressedFileSizeW
       (local.get $path) (local.get $high) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_last_error") (param $value i32)
     (global.set $last_error (local.get $value)))

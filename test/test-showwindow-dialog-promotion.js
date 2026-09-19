@@ -34,11 +34,11 @@ const extraWat = String.raw`
 
     ;; Direct handler calls do not have ShowWindow's stdcall frame. Preserve
     ;; the harness stack around the handler's normal 12-byte cleanup.
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_ShowWindow
       (local.get $dlg) (i32.const 5)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (i64.or (i64.extend_i32_u (local.get $hidden))
       (i64.shl (i64.extend_i32_u (local.get $dlg)) (i64.const 32))))
 

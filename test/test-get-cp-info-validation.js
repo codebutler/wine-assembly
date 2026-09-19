@@ -9,10 +9,10 @@ const ERROR_INVALID_PARAMETER = 87;
 
 const extraWat = String.raw`
   (func (export "test_get_cp_info") (param $cp i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_GetCPInfo (local.get $cp) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "set_error") (param $value i32) (global.set $last_error (local.get $value)))
   (func (export "get_error") (result i32) (global.get $last_error))
 `;

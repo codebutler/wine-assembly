@@ -54,30 +54,30 @@ const extraWat = String.raw`
 
   (func (export "test_set_capture") (param $hwnd i32) (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetCapture
       (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_get_capture") (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetCapture
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_release_capture") (result i32)
     (local $saved i32)
-    (local.set $saved (global.get $esp))
+    (local.set $saved (i32.load offset=16 (global.get $reg_base)))
     (call $handle_ReleaseCapture
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_thread") (param $tid i32)
     (global.set $current_thread_id (local.get $tid)))

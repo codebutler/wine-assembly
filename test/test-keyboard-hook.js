@@ -21,51 +21,51 @@ const KEY_LPARAM = 0x00010001; // repeat=1, Escape scan code=1
 const extraWat = String.raw`
   (func (export "test_install_keyboard_hook") (param $proc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetWindowsHookA
       (i32.const 2) (local.get $proc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_install_wide_hook")
       (param $id_hook i32) (param $proc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetWindowsHookW
       (local.get $id_hook) (local.get $proc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_uninstall_legacy_hook")
       (param $id_hook i32) (param $proc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_UnhookWindowsHook
       (local.get $id_hook) (local.get $proc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_install_ex_hook")
       (param $id_hook i32) (param $proc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetWindowsHookExA
       (local.get $id_hook) (local.get $proc) (i32.const 0) (i32.const 1)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_uninstall_ex_hook") (param $hook i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_UnhookWindowsHookEx
       (local.get $hook) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_hook_proc") (param $id_hook i32) (result i32)
     (select
@@ -77,8 +77,8 @@ const extraWat = String.raw`
       (param $msg_ptr i32) (param $remove i32) (result i32)
     ;; A zero saved return lets the continuation stop the interpreter cleanly
     ;; after proving that it restored PeekMessage's caller and BOOL result.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 64)))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 64)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_PeekMessageA
       (local.get $msg_ptr) (i32.const 0) (i32.const 0) (i32.const 0)
       (local.get $remove) (i32.const 0))

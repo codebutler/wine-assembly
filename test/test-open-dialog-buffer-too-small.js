@@ -29,8 +29,8 @@ const extraWat = String.raw`
     (global.set $next_hwnd (i32.add (global.get $next_hwnd) (i32.const 1)))
     (call $create_open_dialog (global.get $test_open_dlg) (i32.const 0)
       (i32.const 0) (global.get $test_open_ofn))
-    (global.set $esp (i32.const 0x00120000))
-    (call $gs32 (global.get $esp) (i32.const 0x00401000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
     (call $modal_begin (global.get $test_open_dlg) (i32.const 8))
     (global.get $test_open_dlg))
 

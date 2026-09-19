@@ -16,23 +16,23 @@ const extraWat = String.raw`
   (func (export "devnotify_register")
       (param $stack i32) (param $hwnd i32) (param $filter i32)
       (param $flags i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_RegisterDeviceNotificationW
       (local.get $hwnd) (local.get $filter) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $devnotify_test_delta
-      (i32.sub (global.get $esp) (local.get $stack)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $stack)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "devnotify_unregister")
       (param $stack i32) (param $handle i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_UnregisterDeviceNotification
       (local.get $handle) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $devnotify_test_delta
-      (i32.sub (global.get $esp) (local.get $stack)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $stack)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "devnotify_delta") (result i32)
     (global.get $devnotify_test_delta))

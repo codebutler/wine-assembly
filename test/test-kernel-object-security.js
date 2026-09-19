@@ -34,31 +34,31 @@ const extraWat = String.raw`
         (select (i32.const 0) (i32.const 0x7f001000)
           (i32.eq (local.get $length_mode) (i32.const 1)))
         (i32.eqz (local.get $length_mode))))
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetKernelObjectSecurity
       (i32.const 0xffffffff) (i32.const 0xffffffff)
       (local.get $descriptor_ptr) (i32.const 20) (local.get $length_ptr)
       (i32.const 0))
     (global.set $test_kernel_stack_delta
-      (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   ;; invalid_inputs selects NULL rather than deliberately unmapped values.
   (func (export "test_set_kernel_object_security")
         (param $invalid_inputs i32) (result i32)
     (local $saved_esp i32)
     (call $gs32 (global.get $test_kernel_sd) (i32.const 0xa1b2c3d4))
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetKernelObjectSecurity
       (select (i32.const 0) (i32.const 0x7f000000) (local.get $invalid_inputs))
       (i32.const 0xffffffff)
       (select (i32.const 0) (i32.const 0x7f001000) (local.get $invalid_inputs))
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_kernel_stack_delta
-      (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_kernel_sd_word") (param $offset i32) (result i32)
     (call $gl32 (i32.add (global.get $test_kernel_sd) (local.get $offset))))

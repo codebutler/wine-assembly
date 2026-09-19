@@ -30,36 +30,36 @@ const extraWat = String.raw`
 
   (func (export "test_call_BeginDeferWindowPos") (param $count i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_BeginDeferWindowPos
       (local.get $count) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_DeferWindowPos")
       (param $hdwp i32) (param $hwnd i32) (param $after i32)
       (param $x i32) (param $y i32) (param $width i32)
       (param $height i32) (param $flags i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get $width))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 28)) (local.get $height))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 32)) (local.get $flags))
     (call $handle_DeferWindowPos
       (local.get $hdwp) (local.get $hwnd) (local.get $after)
       (local.get $x) (local.get $y) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_EndDeferWindowPos") (param $hdwp i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_EndDeferWindowPos
       (local.get $hdwp) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_last_error") (result i32) (global.get $last_error))
 `;

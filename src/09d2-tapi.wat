@@ -50,51 +50,51 @@
   (func $handle_lineInitialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $h i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg4)))
       (then
-        (global.set $eax (global.get $LINEERR_INVALPOINTER))
+        (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALPOINTER))
         (return)))
     (local.set $h (i32.or (global.get $TAPI_APP_TAG) (global.get $tapi_next_app)))
     (global.set $tapi_next_app (i32.add (global.get $tapi_next_app) (i32.const 1)))
     (global.set $tapi_app_count (i32.add (global.get $tapi_app_count) (i32.const 1)))
     (i32.store (call $g2w (local.get $arg0)) (local.get $h))
     (i32.store (call $g2w (local.get $arg4)) (i32.const 0))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; lineShutdown(hLineApp)
   (func $handle_lineShutdown (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                              (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (if (i32.eqz (call $tapi_app_valid (local.get $arg0)))
       (then
-        (global.set $eax (global.get $LINEERR_INVALAPPHANDLE))
+        (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALAPPHANDLE))
         (return)))
     (global.set $tapi_app_count (i32.sub (global.get $tapi_app_count) (i32.const 1)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; lineNegotiateAPIVersion(hLineApp, dwDeviceID, dwAPILowVersion,
   ;;                         dwAPIHighVersion, lpdwAPIVersion, lpExtensionID)
   ;; Every device ID is out of range while dwNumDevs is 0.
   (func $handle_lineNegotiateAPIVersion (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                         (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
-    (global.set $eax (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineGetDevCaps(hLineApp, dwDeviceID, dwAPIVersion, dwExtVersion, lpLineDevCaps)
   (func $handle_lineGetDevCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
-    (global.set $eax (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineGetAddressCaps(hLineApp, dwDeviceID, dwAddressID, dwAPIVersion,
   ;;                    dwExtVersion, lpAddressCaps)
   (func $handle_lineGetAddressCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                    (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
-    (global.set $eax (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineGetTranslateCaps(hLineApp, dwAPIVersion, lpTranslateCaps)
@@ -107,14 +107,14 @@
   (func $handle_lineGetTranslateCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32) (local $total i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (if (i32.eqz (call $tapi_app_valid (local.get $arg0)))
       (then
-        (global.set $eax (global.get $LINEERR_INVALAPPHANDLE))
+        (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALAPPHANDLE))
         (return)))
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (global.get $LINEERR_INVALPOINTER))
+        (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALPOINTER))
         (return)))
     (local.set $wa (call $g2w (local.get $arg2)))
     (local.set $total (i32.load (local.get $wa)))
@@ -122,14 +122,14 @@
     ;; cannot even carry the needed-size answer back.
     (if (i32.lt_u (local.get $total) (i32.const 12))
       (then
-        (global.set $eax (global.get $LINEERR_STRUCTURETOOSMALL))
+        (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_STRUCTURETOOSMALL))
         (return)))
     (i32.store offset=4 (local.get $wa) (i32.const 44))   ;; dwNeededSize
     (i32.store offset=8 (local.get $wa) (i32.const 44))   ;; dwUsedSize
     (if (i32.lt_u (local.get $total) (i32.const 44))
       (then
         (i32.store offset=8 (local.get $wa) (i32.const 12))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (i32.store offset=12 (local.get $wa) (i32.const 0))   ;; dwNumLocations
     (i32.store offset=16 (local.get $wa) (i32.const 0))   ;; dwLocationListSize
@@ -139,20 +139,20 @@
     (i32.store offset=32 (local.get $wa) (i32.const 0))   ;; dwCardListSize
     (i32.store offset=36 (local.get $wa) (i32.const 0))   ;; dwCardListOffset
     (i32.store offset=40 (local.get $wa) (i32.const 0))   ;; dwCurrentPreferredCardID
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; lineGetCountry(dwCountryID, dwAPIVersion, lpLineCountryList)
   ;; No country table is installed, so no country ID resolves.
   (func $handle_lineGetCountry (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_INVALCOUNTRYCODE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALCOUNTRYCODE)))
 
   ;; lineSetCurrentLocation(hLineApp, dwLocation)
   (func $handle_lineSetCurrentLocation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                        (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-    (global.set $eax (select (global.get $LINEERR_INVALLOCATION) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_INVALLOCATION) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineSetAppPriority(lpszAppName, dwMediaMode, lpExtensionID,
@@ -162,15 +162,15 @@
   ;; the documented result of setting a priority nobody consults is success.
   (func $handle_lineSetAppPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                    (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; lineTranslateAddress(hLineApp, dwDeviceID, dwAPIVersion, lpszAddressIn,
   ;;                      dwCard, dwTranslateOptions, lpTranslateOutput)
   (func $handle_lineTranslateAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
-    (global.set $eax (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineTranslateDialog(hLineApp, dwDeviceID, dwAPIVersion, hwndOwner, lpszAddressIn)
@@ -178,80 +178,80 @@
   ;; which is not installed.
   (func $handle_lineTranslateDialog (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                     (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
-    (global.set $eax (select (global.get $LINEERR_OPERATIONUNAVAIL) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_OPERATIONUNAVAIL) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineConfigDialog(dwDeviceID, hwndOwner, lpszDeviceClass)
   (func $handle_lineConfigDialog (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                  (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_BADDEVICEID)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_BADDEVICEID)))
 
   ;; lineGetDevConfig(dwDeviceID, lpDeviceConfig, lpszDeviceClass)
   (func $handle_lineGetDevConfig (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                  (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_BADDEVICEID)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_BADDEVICEID)))
 
   ;; lineSetDevConfig(dwDeviceID, lpDeviceConfig, dwSize, lpszDeviceClass)
   (func $handle_lineSetDevConfig (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                  (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
-    (global.set $eax (global.get $LINEERR_BADDEVICEID)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_BADDEVICEID)))
 
   ;; lineOpen(hLineApp, dwDeviceID, lphLine, dwAPIVersion, dwExtVersion,
   ;;          dwCallbackInstance, dwPrivileges, dwMediaModes, lpCallParams)
   (func $handle_lineOpen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                          (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40)))
-    (global.set $eax (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $LINEERR_BADDEVICEID) (global.get $LINEERR_INVALAPPHANDLE)
       (call $tapi_app_valid (local.get $arg0)))))
 
   ;; lineClose(hLine) — no line can be open, so no handle is valid.
   (func $handle_lineClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                           (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-    (global.set $eax (global.get $LINEERR_INVALLINEHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALLINEHANDLE)))
 
   ;; lineGetID(hLine, dwAddressID, hCall, dwSelect, lpDeviceID, lpszDeviceClass)
   (func $handle_lineGetID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                           (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
-    (global.set $eax (global.get $LINEERR_INVALLINEHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALLINEHANDLE)))
 
   ;; lineGetLineDevStatus(hLine, lpLineDevStatus)
   (func $handle_lineGetLineDevStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                      (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-    (global.set $eax (global.get $LINEERR_INVALLINEHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALLINEHANDLE)))
 
   ;; lineSetStatusMessages(hLine, dwLineStates, dwAddressStates)
   (func $handle_lineSetStatusMessages (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                                       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_INVALLINEHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALLINEHANDLE)))
 
   ;; lineMakeCall(hLine, lphCall, lpszDestAddress, dwCountryCode, lpCallParams)
   (func $handle_lineMakeCall (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                              (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
-    (global.set $eax (global.get $LINEERR_INVALLINEHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALLINEHANDLE)))
 
   ;; lineAnswer(hCall, lpsUserUserInfo, dwSize)
   (func $handle_lineAnswer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                            (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_INVALCALLHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALCALLHANDLE)))
 
   ;; lineDial(hCall, lpszDestAddress, dwCountryCode)
   (func $handle_lineDial (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                          (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_INVALCALLHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALCALLHANDLE)))
 
   ;; lineDrop(hCall, lpsUserUserInfo, dwSize)
   (func $handle_lineDrop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
                          (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (global.get $LINEERR_INVALCALLHANDLE)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (global.get $LINEERR_INVALCALLHANDLE)))

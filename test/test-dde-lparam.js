@@ -18,25 +18,25 @@ const extraWat = String.raw`
   (func (export "test_reuse_dde_lparam")
       (param $lparam i32) (param $msg_in i32) (param $msg_out i32)
       (param $lo i32) (param $hi i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_ReuseDDElParam
       (local.get $lparam) (local.get $msg_in) (local.get $msg_out)
       (local.get $lo) (local.get $hi) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_unpack_dde_lparam")
       (param $msg i32) (param $lparam i32)
       (param $lo_out i32) (param $hi_out i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_UnpackDDElParam
       (local.get $msg) (local.get $lparam)
       (local.get $lo_out) (local.get $hi_out)
       (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_dde_object_valid")
       (param $lparam i32) (param $msg i32) (result i32)

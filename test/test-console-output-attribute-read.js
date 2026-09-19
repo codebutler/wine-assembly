@@ -10,13 +10,13 @@ const extraWat = String.raw`
   (func (export "test_read_attribute")
         (param $handle i32) (param $destination i32) (param $length i32)
         (param $coord i32) (param $read i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ReadConsoleOutputAttribute
       (local.get $handle) (local.get $destination) (local.get $length)
       (local.get $coord) (local.get $read) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_seed_attribute")
         (param $handle i32) (param $index i32) (param $value i32) (result i32)

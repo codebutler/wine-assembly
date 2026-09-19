@@ -11,10 +11,10 @@ const extraWat = String.raw`
       (param $count i32) (param $reset i32) (result i32)
     (if (local.get $reset)
       (then
-        (global.set $esp (i32.const 0x00300000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
         (global.set $current_thunk_eip (i32.const 0x0013579b))
         (global.set $eip (i32.const 0))
-        (global.set $eax (i32.const 0x2468ace0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x2468ace0))
         (global.set $last_error (i32.const 0))
         (global.set $handler_set_eip (i32.const 0))
         (global.set $yield_reason (i32.const 0))
@@ -39,7 +39,7 @@ const extraWat = String.raw`
             (call $handle_mmioRead
               (local.get $handle) (local.get $buffer) (local.get $count)
               (i32.const 0) (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_legacy_read_last_error") (result i32)
     (global.get $last_error))

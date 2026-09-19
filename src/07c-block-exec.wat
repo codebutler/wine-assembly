@@ -4601,14 +4601,14 @@
     ;; Entry materialization: the whole architectural register file, once.
     ;; Reading all eight unconditionally is cheaper than a live-in mask and
     ;; cannot be wrong about a register the descriptor forgot to name.
-    (local.set $r0 (global.get $eax))
-    (local.set $r1 (global.get $ecx))
-    (local.set $r2 (global.get $edx))
-    (local.set $r3 (global.get $ebx))
-    (local.set $r4 (global.get $esp))
-    (local.set $r5 (global.get $ebp))
-    (local.set $r6 (global.get $esi))
-    (local.set $r7 (global.get $edi))
+    (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+    (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+    (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+    (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+    (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+    (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+    (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+    (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
 
     ;; Both meters, exactly as the unfolded graph would have spent them: one
     ;; $steps per guest op ($cost of them per block execution) and one
@@ -5320,14 +5320,14 @@
               ;; $invalidate_code_write and the page compiler, and a fault
               ;; path reads the register file to build its report, so leaving
               ;; a stale global behind would be visible from inside the call.
-              (global.set $eax (local.get $r0))
-              (global.set $ecx (local.get $r1))
-              (global.set $edx (local.get $r2))
-              (global.set $ebx (local.get $r3))
-              (global.set $esp (local.get $r4))
-              (global.set $ebp (local.get $r5))
-              (global.set $esi (local.get $r6))
-              (global.set $edi (local.get $r7))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+              (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+              (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+              (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+              (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+              (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+              (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+              (i32.store offset=28 (global.get $reg_base) (local.get $r7))
               (block $rdone
                 (block $r3b (block $r2b (block $r1b (block $r0b
                   (br_table $r0b $r1b $r2b $r3b $r3b (local.get $d)))
@@ -5335,14 +5335,14 @@
                   (call $rep_movsd_do) (br $rdone))
                   (call $rep_stosb_do) (br $rdone))
                 (call $rep_stosd_do))
-              (local.set $r0 (global.get $eax))
-              (local.set $r1 (global.get $ecx))
-              (local.set $r2 (global.get $edx))
-              (local.set $r3 (global.get $ebx))
-              (local.set $r4 (global.get $esp))
-              (local.set $r5 (global.get $ebp))
-              (local.set $r6 (global.get $esi))
-              (local.set $r7 (global.get $edi))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+              (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+              (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+              (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+              (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+              (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+              (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+              (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
               (local.set $wrote (i32.const 0))
               (br $kdone))
               ;; 50 X87_MEM -- absolute (or H149-paired) address. The hoisted
@@ -5392,9 +5392,9 @@
               ;; writes the status word into the bottom, and reproducing that
               ;; here would be a second copy of it. Only EAX needs publishing:
               ;; DF E0 reads and writes nothing else.
-              (global.set $eax (local.get $r0))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
               (call $fpu_exec_reg (i32.const 7) (i32.const 4) (i32.const 0))
-              (local.set $r0 (global.get $eax))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
               (local.set $wrote (i32.const 0))
               (br $kdone))
 
@@ -5433,14 +5433,14 @@
               ;; so the field is free), `imm` the handler's own operand word,
               ;; and `b` the byte offset of this op's inline words in the
               ;; trailing fallback pool.
-              (global.set $eax (local.get $r0))
-              (global.set $ecx (local.get $r1))
-              (global.set $edx (local.get $r2))
-              (global.set $ebx (local.get $r3))
-              (global.set $esp (local.get $r4))
-              (global.set $ebp (local.get $r5))
-              (global.set $esi (local.get $r6))
-              (global.set $edi (local.get $r7))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+              (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+              (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+              (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+              (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+              (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+              (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+              (i32.store offset=28 (global.get $reg_base) (local.get $r7))
               ;; The H149 pair's OTHER half. A native TU_EA_SIB parks its
               ;; address in $ea_hold, a LOCAL -- but a consumer that fell back
               ;; reads it through $read_addr, which substitutes the $ea_temp
@@ -5452,14 +5452,14 @@
               (call_indirect (type $handler_t)
                 (local.get $imm) (local.get $a))
               (local.set $ea_hold (global.get $ea_temp))
-              (local.set $r0 (global.get $eax))
-              (local.set $r1 (global.get $ecx))
-              (local.set $r2 (global.get $edx))
-              (local.set $r3 (global.get $ebx))
-              (local.set $r4 (global.get $esp))
-              (local.set $r5 (global.get $ebp))
-              (local.set $r6 (global.get $esi))
-              (local.set $r7 (global.get $edi))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+              (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+              (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+              (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+              (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+              (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+              (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+              (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
               (local.set $n_fb (i32.add (local.get $n_fb) (i32.const 1)))
               (global.set $block_exec_last_fallback_fn (local.get $a))
               (local.set $wrote (i32.const 0))
@@ -5508,14 +5508,14 @@
               ;; arm does. The body walks its inline words through that global
               ;; and leaves it past them; nothing downstream of here reads it
               ;; before the exit path rewrites it.
-              (if (i32.and (local.get $d) (i32.const 0x01)) (then (global.set $eax (local.get $r0))))
-              (if (i32.and (local.get $d) (i32.const 0x02)) (then (global.set $ecx (local.get $r1))))
-              (if (i32.and (local.get $d) (i32.const 0x04)) (then (global.set $edx (local.get $r2))))
-              (if (i32.and (local.get $d) (i32.const 0x08)) (then (global.set $ebx (local.get $r3))))
-              (if (i32.and (local.get $d) (i32.const 0x10)) (then (global.set $esp (local.get $r4))))
-              (if (i32.and (local.get $d) (i32.const 0x20)) (then (global.set $ebp (local.get $r5))))
-              (if (i32.and (local.get $d) (i32.const 0x40)) (then (global.set $esi (local.get $r6))))
-              (if (i32.and (local.get $d) (i32.const 0x80)) (then (global.set $edi (local.get $r7))))
+              (if (i32.and (local.get $d) (i32.const 0x01)) (then (i32.store offset=0 (global.get $reg_base) (local.get $r0))))
+              (if (i32.and (local.get $d) (i32.const 0x02)) (then (i32.store offset=4 (global.get $reg_base) (local.get $r1))))
+              (if (i32.and (local.get $d) (i32.const 0x04)) (then (i32.store offset=8 (global.get $reg_base) (local.get $r2))))
+              (if (i32.and (local.get $d) (i32.const 0x08)) (then (i32.store offset=12 (global.get $reg_base) (local.get $r3))))
+              (if (i32.and (local.get $d) (i32.const 0x10)) (then (i32.store offset=16 (global.get $reg_base) (local.get $r4))))
+              (if (i32.and (local.get $d) (i32.const 0x20)) (then (i32.store offset=20 (global.get $reg_base) (local.get $r5))))
+              (if (i32.and (local.get $d) (i32.const 0x40)) (then (i32.store offset=24 (global.get $reg_base) (local.get $r6))))
+              (if (i32.and (local.get $d) (i32.const 0x80)) (then (i32.store offset=28 (global.get $reg_base) (local.get $r7))))
               ;; The H149 pair, one direction only: an island's FIRST op may be
               ;; an H188 whose address word is $SIB_SENTINEL, and $th_x87_island
               ;; reads $ea_temp for it. Nothing in these bodies WRITES $ea_temp,
@@ -5662,14 +5662,14 @@
     ;; resumes at a block entry rather than at a modelled exit and no mask in
     ;; the descriptor describes what is live there.
     (if (local.get $side) (then (local.set $live_out (i32.const 0xFF))))
-    (if (i32.and (local.get $live_out) (i32.const 0x01)) (then (global.set $eax (local.get $r0))))
-    (if (i32.and (local.get $live_out) (i32.const 0x02)) (then (global.set $ecx (local.get $r1))))
-    (if (i32.and (local.get $live_out) (i32.const 0x04)) (then (global.set $edx (local.get $r2))))
-    (if (i32.and (local.get $live_out) (i32.const 0x08)) (then (global.set $ebx (local.get $r3))))
-    (if (i32.and (local.get $live_out) (i32.const 0x10)) (then (global.set $esp (local.get $r4))))
-    (if (i32.and (local.get $live_out) (i32.const 0x20)) (then (global.set $ebp (local.get $r5))))
-    (if (i32.and (local.get $live_out) (i32.const 0x40)) (then (global.set $esi (local.get $r6))))
-    (if (i32.and (local.get $live_out) (i32.const 0x80)) (then (global.set $edi (local.get $r7))))
+    (if (i32.and (local.get $live_out) (i32.const 0x01)) (then (i32.store offset=0 (global.get $reg_base) (local.get $r0))))
+    (if (i32.and (local.get $live_out) (i32.const 0x02)) (then (i32.store offset=4 (global.get $reg_base) (local.get $r1))))
+    (if (i32.and (local.get $live_out) (i32.const 0x04)) (then (i32.store offset=8 (global.get $reg_base) (local.get $r2))))
+    (if (i32.and (local.get $live_out) (i32.const 0x08)) (then (i32.store offset=12 (global.get $reg_base) (local.get $r3))))
+    (if (i32.and (local.get $live_out) (i32.const 0x10)) (then (i32.store offset=16 (global.get $reg_base) (local.get $r4))))
+    (if (i32.and (local.get $live_out) (i32.const 0x20)) (then (i32.store offset=20 (global.get $reg_base) (local.get $r5))))
+    (if (i32.and (local.get $live_out) (i32.const 0x40)) (then (i32.store offset=24 (global.get $reg_base) (local.get $r6))))
+    (if (i32.and (local.get $live_out) (i32.const 0x80)) (then (i32.store offset=28 (global.get $reg_base) (local.get $r7))))
 
     ;; The H149 pair once more: a native producer parked its address in a local
     ;; that nothing outside this frame can see, and the consumer may be the
@@ -5822,14 +5822,14 @@
     ;; function does it: a live-in mask cannot be wrong about a register the
     ;; descriptor forgot to name, and eight local.sets are cheaper than the
     ;; test that would skip one.
-    (local.set $r0 (global.get $eax))
-    (local.set $r1 (global.get $ecx))
-    (local.set $r2 (global.get $edx))
-    (local.set $r3 (global.get $ebx))
-    (local.set $r4 (global.get $esp))
-    (local.set $r5 (global.get $ebp))
-    (local.set $r6 (global.get $esi))
-    (local.set $r7 (global.get $edi))
+    (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+    (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+    (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+    (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+    (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+    (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+    (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+    (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
 
     (global.set $tree_fold_runs
       (i32.add (global.get $tree_fold_runs) (i32.const 1)))
@@ -6359,14 +6359,14 @@
               ;; $invalidate_code_write and the page compiler, and a fault
               ;; path reads the register file to build its report, so leaving
               ;; a stale global behind would be visible from inside the call.
-              (global.set $eax (local.get $r0))
-              (global.set $ecx (local.get $r1))
-              (global.set $edx (local.get $r2))
-              (global.set $ebx (local.get $r3))
-              (global.set $esp (local.get $r4))
-              (global.set $ebp (local.get $r5))
-              (global.set $esi (local.get $r6))
-              (global.set $edi (local.get $r7))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+              (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+              (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+              (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+              (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+              (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+              (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+              (i32.store offset=28 (global.get $reg_base) (local.get $r7))
               (block $rdone
                 (block $r3b (block $r2b (block $r1b (block $r0b
                   (br_table $r0b $r1b $r2b $r3b $r3b (local.get $d)))
@@ -6374,14 +6374,14 @@
                   (call $rep_movsd_do) (br $rdone))
                   (call $rep_stosb_do) (br $rdone))
                 (call $rep_stosd_do))
-              (local.set $r0 (global.get $eax))
-              (local.set $r1 (global.get $ecx))
-              (local.set $r2 (global.get $edx))
-              (local.set $r3 (global.get $ebx))
-              (local.set $r4 (global.get $esp))
-              (local.set $r5 (global.get $ebp))
-              (local.set $r6 (global.get $esi))
-              (local.set $r7 (global.get $edi))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+              (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+              (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+              (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+              (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+              (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+              (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+              (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
               (local.set $wrote (i32.const 0))
               (br $kdone))
               ;; 50 X87_MEM -- absolute (or H149-paired) address. The hoisted
@@ -6431,9 +6431,9 @@
               ;; writes the status word into the bottom, and reproducing that
               ;; here would be a second copy of it. Only EAX needs publishing:
               ;; DF E0 reads and writes nothing else.
-              (global.set $eax (local.get $r0))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
               (call $fpu_exec_reg (i32.const 7) (i32.const 4) (i32.const 0))
-              (local.set $r0 (global.get $eax))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
               (local.set $wrote (i32.const 0))
               (br $kdone))
 
@@ -6515,14 +6515,14 @@
             (br $body)))
     ;; Exit. A threaded tail publishes all eight unconditionally: the next op
     ;; in the stream is the block's own terminator, which may read anything.
-    (global.set $eax (local.get $r0))
-    (global.set $ecx (local.get $r1))
-    (global.set $edx (local.get $r2))
-    (global.set $ebx (local.get $r3))
-    (global.set $esp (local.get $r4))
-    (global.set $ebp (local.get $r5))
-    (global.set $esi (local.get $r6))
-    (global.set $edi (local.get $r7))
+    (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+    (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+    (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+    (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+    (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+    (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+    (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+    (i32.store offset=28 (global.get $reg_base) (local.get $r7))
     ;; The H149 pair: a native producer parked its address in a local nothing
     ;; outside this frame can see, and the consumer may be the first op after
     ;; the block.
@@ -6644,14 +6644,14 @@
     ;; function does it: a live-in mask cannot be wrong about a register the
     ;; descriptor forgot to name, and eight local.sets are cheaper than the
     ;; test that would skip one.
-    (local.set $r0 (global.get $eax))
-    (local.set $r1 (global.get $ecx))
-    (local.set $r2 (global.get $edx))
-    (local.set $r3 (global.get $ebx))
-    (local.set $r4 (global.get $esp))
-    (local.set $r5 (global.get $ebp))
-    (local.set $r6 (global.get $esi))
-    (local.set $r7 (global.get $edi))
+    (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+    (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+    (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+    (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+    (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+    (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+    (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+    (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
 
     ;; A FALLBACK micro-op runs a real handler, and a real handler ends in
     ;; return_call $next, which spends a step and would take the out-of-steps
@@ -7193,14 +7193,14 @@
               ;; $invalidate_code_write and the page compiler, and a fault
               ;; path reads the register file to build its report, so leaving
               ;; a stale global behind would be visible from inside the call.
-              (global.set $eax (local.get $r0))
-              (global.set $ecx (local.get $r1))
-              (global.set $edx (local.get $r2))
-              (global.set $ebx (local.get $r3))
-              (global.set $esp (local.get $r4))
-              (global.set $ebp (local.get $r5))
-              (global.set $esi (local.get $r6))
-              (global.set $edi (local.get $r7))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+              (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+              (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+              (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+              (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+              (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+              (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+              (i32.store offset=28 (global.get $reg_base) (local.get $r7))
               (block $rdone
                 (block $r3b (block $r2b (block $r1b (block $r0b
                   (br_table $r0b $r1b $r2b $r3b $r3b (local.get $d)))
@@ -7208,14 +7208,14 @@
                   (call $rep_movsd_do) (br $rdone))
                   (call $rep_stosb_do) (br $rdone))
                 (call $rep_stosd_do))
-              (local.set $r0 (global.get $eax))
-              (local.set $r1 (global.get $ecx))
-              (local.set $r2 (global.get $edx))
-              (local.set $r3 (global.get $ebx))
-              (local.set $r4 (global.get $esp))
-              (local.set $r5 (global.get $ebp))
-              (local.set $r6 (global.get $esi))
-              (local.set $r7 (global.get $edi))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+              (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+              (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+              (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+              (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+              (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+              (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+              (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
               (local.set $wrote (i32.const 0))
               (br $kdone))
               ;; 50 X87_MEM -- absolute (or H149-paired) address. The hoisted
@@ -7265,9 +7265,9 @@
               ;; writes the status word into the bottom, and reproducing that
               ;; here would be a second copy of it. Only EAX needs publishing:
               ;; DF E0 reads and writes nothing else.
-              (global.set $eax (local.get $r0))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
               (call $fpu_exec_reg (i32.const 7) (i32.const 4) (i32.const 0))
-              (local.set $r0 (global.get $eax))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
               (local.set $wrote (i32.const 0))
               (br $kdone))
 
@@ -7303,14 +7303,14 @@
               ;; a carries the handler index, imm the handler's own operand
               ;; word, and b the byte offset of this op's inline words in the
               ;; trailing fallback pool.
-              (global.set $eax (local.get $r0))
-              (global.set $ecx (local.get $r1))
-              (global.set $edx (local.get $r2))
-              (global.set $ebx (local.get $r3))
-              (global.set $esp (local.get $r4))
-              (global.set $ebp (local.get $r5))
-              (global.set $esi (local.get $r6))
-              (global.set $edi (local.get $r7))
+              (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+              (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+              (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+              (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+              (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+              (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+              (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+              (i32.store offset=28 (global.get $reg_base) (local.get $r7))
               ;; The H149 pair, both directions: a native producer parks its
               ;; address in $ea_hold, a LOCAL, and a consumer that fell back
               ;; reads the $ea_temp GLOBAL instead -- and a producer can fall
@@ -7320,14 +7320,14 @@
               (call_indirect (type $handler_t)
                 (local.get $imm) (local.get $a))
               (local.set $ea_hold (global.get $ea_temp))
-              (local.set $r0 (global.get $eax))
-              (local.set $r1 (global.get $ecx))
-              (local.set $r2 (global.get $edx))
-              (local.set $r3 (global.get $ebx))
-              (local.set $r4 (global.get $esp))
-              (local.set $r5 (global.get $ebp))
-              (local.set $r6 (global.get $esi))
-              (local.set $r7 (global.get $edi))
+              (local.set $r0 (i32.load offset=0 (global.get $reg_base)))
+              (local.set $r1 (i32.load offset=4 (global.get $reg_base)))
+              (local.set $r2 (i32.load offset=8 (global.get $reg_base)))
+              (local.set $r3 (i32.load offset=12 (global.get $reg_base)))
+              (local.set $r4 (i32.load offset=16 (global.get $reg_base)))
+              (local.set $r5 (i32.load offset=20 (global.get $reg_base)))
+              (local.set $r6 (i32.load offset=24 (global.get $reg_base)))
+              (local.set $r7 (i32.load offset=28 (global.get $reg_base)))
               (local.set $n_fb (i32.add (local.get $n_fb) (i32.const 1)))
               (global.set $block_exec_last_fallback_fn (local.get $a))
               (local.set $wrote (i32.const 0))
@@ -7353,14 +7353,14 @@
               ;; through the trampoline. Identical to $th_block_exec's arm 60;
               ;; see there for why the publish is the d mask alone, why there
               ;; is no reload, and why $ea_temp moves one way only.
-              (if (i32.and (local.get $d) (i32.const 0x01)) (then (global.set $eax (local.get $r0))))
-              (if (i32.and (local.get $d) (i32.const 0x02)) (then (global.set $ecx (local.get $r1))))
-              (if (i32.and (local.get $d) (i32.const 0x04)) (then (global.set $edx (local.get $r2))))
-              (if (i32.and (local.get $d) (i32.const 0x08)) (then (global.set $ebx (local.get $r3))))
-              (if (i32.and (local.get $d) (i32.const 0x10)) (then (global.set $esp (local.get $r4))))
-              (if (i32.and (local.get $d) (i32.const 0x20)) (then (global.set $ebp (local.get $r5))))
-              (if (i32.and (local.get $d) (i32.const 0x40)) (then (global.set $esi (local.get $r6))))
-              (if (i32.and (local.get $d) (i32.const 0x80)) (then (global.set $edi (local.get $r7))))
+              (if (i32.and (local.get $d) (i32.const 0x01)) (then (i32.store offset=0 (global.get $reg_base) (local.get $r0))))
+              (if (i32.and (local.get $d) (i32.const 0x02)) (then (i32.store offset=4 (global.get $reg_base) (local.get $r1))))
+              (if (i32.and (local.get $d) (i32.const 0x04)) (then (i32.store offset=8 (global.get $reg_base) (local.get $r2))))
+              (if (i32.and (local.get $d) (i32.const 0x08)) (then (i32.store offset=12 (global.get $reg_base) (local.get $r3))))
+              (if (i32.and (local.get $d) (i32.const 0x10)) (then (i32.store offset=16 (global.get $reg_base) (local.get $r4))))
+              (if (i32.and (local.get $d) (i32.const 0x20)) (then (i32.store offset=20 (global.get $reg_base) (local.get $r5))))
+              (if (i32.and (local.get $d) (i32.const 0x40)) (then (i32.store offset=24 (global.get $reg_base) (local.get $r6))))
+              (if (i32.and (local.get $d) (i32.const 0x80)) (then (i32.store offset=28 (global.get $reg_base) (local.get $r7))))
               (global.set $ea_temp (local.get $ea_hold))
               (global.set $ip (i32.add (local.get $fbp) (local.get $b)))
               (call $x87_run_body (local.get $a) (local.get $imm))
@@ -7395,14 +7395,14 @@
             (br $body)))
     ;; Exit. A threaded tail publishes all eight unconditionally: the next op
     ;; in the stream is the block's own terminator, which may read anything.
-    (global.set $eax (local.get $r0))
-    (global.set $ecx (local.get $r1))
-    (global.set $edx (local.get $r2))
-    (global.set $ebx (local.get $r3))
-    (global.set $esp (local.get $r4))
-    (global.set $ebp (local.get $r5))
-    (global.set $esi (local.get $r6))
-    (global.set $edi (local.get $r7))
+    (i32.store offset=0 (global.get $reg_base) (local.get $r0))
+    (i32.store offset=4 (global.get $reg_base) (local.get $r1))
+    (i32.store offset=8 (global.get $reg_base) (local.get $r2))
+    (i32.store offset=12 (global.get $reg_base) (local.get $r3))
+    (i32.store offset=16 (global.get $reg_base) (local.get $r4))
+    (i32.store offset=20 (global.get $reg_base) (local.get $r5))
+    (i32.store offset=24 (global.get $reg_base) (local.get $r6))
+    (i32.store offset=28 (global.get $reg_base) (local.get $r7))
     ;; The H149 pair: a native producer parked its address in a local nothing
     ;; outside this frame can see, and the consumer may be the first op after
     ;; the block.

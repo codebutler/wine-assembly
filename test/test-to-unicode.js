@@ -8,13 +8,13 @@ const extraWat = String.raw`
   (func (export "test_to_unicode")
     (param $vk i32) (param $state i32) (param $out i32) (param $capacity i32)
     (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_ToUnicode
       (local.get $vk) (i32.const 0) (local.get $state) (local.get $out)
       (local.get $capacity) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 `;
 
 (async () => {

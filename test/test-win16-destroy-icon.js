@@ -18,7 +18,7 @@ const extraWat = String.raw`
     (global.set $seg_base_cs (i32.const 0x00100000))
     (global.set $sreg_ss (call $win16_index_to_sel (i32.const 2)))
     (global.set $seg_base_ss (i32.const 0x00110000))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     ;; Far return followed by DestroyIcon's one-word Pascal argument.
     (call $gs16 (i32.const 0x00110100) (i32.const 0x004d))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
@@ -32,7 +32,7 @@ const extraWat = String.raw`
     (global.set $test_win16_hicon (call $win16_h16 (global.get $test_win16_icon)))
     (call $test_win16_destroy_setup)
     (drop (call $win16_user (i32.const 457)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_win16_destroy_private") (result i32)
     (global.set $test_win16_icon
@@ -40,9 +40,9 @@ const extraWat = String.raw`
     (global.set $test_win16_hicon (call $win16_h16 (global.get $test_win16_icon)))
     (call $test_win16_destroy_setup)
     (drop (call $win16_user (i32.const 457)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
-  (func (export "test_win16_destroy_esp") (result i32) (global.get $esp))
+  (func (export "test_win16_destroy_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_win16_destroy_eip") (result i32) (global.get $eip))
   (func (export "test_win16_destroy_icon_live") (result i32)
     (i32.ne (call $icon_table_record (global.get $test_win16_icon)) (i32.const 0)))

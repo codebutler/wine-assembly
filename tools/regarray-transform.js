@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-// The mechanical half of the "register file in linear memory" experiment.
-// Nothing in the build calls this: it is run by hand, in a throwaway worktree,
-// to produce the second arm of an A/B. The source it rewrites is never committed.
+// EXPERIMENT ONLY (worktree wa-perf-regarray).
 //
 // Rewrites every x86 GPR access in src/*.wat from a per-instance wasm global
 // into an indexed slot of a per-thread register file in shared linear memory.
@@ -180,43 +178,50 @@ function transform(text, file) {
   return out;
 }
 
-// This rewrites all of src/*.wat IN PLACE, and src/ is usually a shared working
-// tree with other people's uncommitted work in it. So it does nothing unless it
-// is the program being run AND `--in-place` is spelled out. Importing the file
-// gets you transform() and nothing else.
-//
-// That guard is not hypothetical: `node -e "require('./tools/regarray-transform.js')"`,
-// meant as a syntax check, once rewrote 53 files of the main tree.
-function main() {
-  if (!process.argv.includes('--in-place')) {
-    console.error('regarray-transform: rewrites every src/*.wat IN PLACE.');
-    console.error('Run it only in a throwaway worktree, and pass --in-place to mean it.');
-    process.exit(2);
-  }
+const files = fs.readdirSync(SRC).filter((f) => f.endsWith('.wat')).sort();
+// Idempotent: safe to re-run over a tree that is already transformed but has
+// picked up freshly-merged code in the old spelling (a rebase onto main).
+// Refuse only if neither the old globals nor the new $reg_base exist.
+const header = fs.readFileSync(path.join(SRC, '01-header.wat'), 'utf8');
+const hasOld = /\(global \$eax \(mut i32\)/.test(header);
+const hasNew = /\(global \$reg_base \(mut i32\)/.test(header);
+if (!hasOld && !hasNew) {
+  console.error('01-header.wat declares neither $eax nor $reg_base. Aborting.');
+  process.exit(1);
+}
+console.log(hasOld ? 'mode: first run (register globals present)'
+                   : 'mode: re-run over an already-transformed tree');
 
-  const files = fs.readdirSync(SRC).filter((f) => f.endsWith('.wat')).sort();
-  // Idempotent: safe to re-run over a tree that is already transformed but has
-  // picked up freshly-merged code in the old spelling (a rebase onto main).
-  // Refuse only if neither the old globals nor the new $reg_base exist.
-  const header = fs.readFileSync(path.join(SRC, '01-header.wat'), 'utf8');
-  const hasOld = /\(global \$eax \(mut i32\)/.test(header);
-  const hasNew = /\(global \$reg_base \(mut i32\)/.test(header);
-  if (!hasOld && !hasNew) {
-    console.error('01-header.wat declares neither $eax nor $reg_base. Aborting.');
-    process.exit(1);
-  }
-  console.log(hasOld ? 'mode: first run (register globals present)'
-                     : 'mode: re-run over an already-transformed tree');
-
-  for (const f of files) {
-    const p = path.join(SRC, f);
-    const src = fs.readFileSync(p, 'utf8');
-    const out = transform(src, f);
-    if (out !== src) fs.writeFileSync(p, out);
-  }
-
-  console.log(JSON.stringify(stats, null, 2));
+for (const f of files) {
+  const p = path.join(SRC, f);
+  const src = fs.readFileSync(p, 'utf8');
+  const out = transform(src, f);
+  if (out !== src) fs.writeFileSync(p, out);
 }
 
-module.exports = { transform };
-if (require.main === module) main();
+// --tests also rewrites the inline WAT fragments that test/*.js hands to
+// bootRenderHarness via extraWat. They are compiled against src/, so a
+// fragment left in the old spelling fails to instantiate with
+// "Unknown global '$esp'" — a harness artifact that looks exactly like an
+// emulator bug. The rewriter is the same paren-aware one used on src/.
+if (process.argv.includes('--tests')) {
+  const TEST = path.join(__dirname, '..', 'test');
+  let touched = 0;
+  const skipped = [];
+  for (const f of fs.readdirSync(TEST).filter((f) => f.endsWith('.js')).sort()) {
+    const p = path.join(TEST, f);
+    const src = fs.readFileSync(p, 'utf8');
+    // The rewriter walks parens, and a .js file's own parens are not balanced
+    // the way a WAT fragment's are, so some files throw. transform() is pure
+    // and the write happens only after it returns, so a thrower is left
+    // untouched rather than half-rewritten; collect and report them.
+    let out;
+    try { out = transform(src, `test/${f}`); }
+    catch (err) { skipped.push(`${f}: ${err.message}`); continue; }
+    if (out !== src) { fs.writeFileSync(p, out); touched++; }
+  }
+  console.log(`test harness: rewrote inline WAT in ${touched} file(s), ${skipped.length} unparseable`);
+  for (const s of skipped) console.log(`  skipped ${s}`);
+}
+
+console.log(JSON.stringify(stats, null, 2));

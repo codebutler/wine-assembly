@@ -11,12 +11,12 @@ const extraWat = String.raw`
   (func (export "test_call_RectInRegion")
     (param $hrgn i32) (param $rect i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_RectInRegion
       (local.get $hrgn) (local.get $rect) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

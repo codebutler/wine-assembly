@@ -21,7 +21,7 @@ const extraWat = String.raw`
     (global.set $yield_reason (i32.const 0))
     (global.set $yield_flag (i32.const 0))
     (global.set $handler_set_eip (i32.const 0))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (global.set $eip (global.get $dlg_loop_thunk)))
 
   (func (export "test_start_dialog_post")
@@ -40,7 +40,7 @@ const extraWat = String.raw`
     (drop (call $post_queue_push
       (local.get $hwnd) (local.get $msg)
       (local.get $wparam) (local.get $lparam)))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (global.set $eip (global.get $dlg_loop_thunk)))
 
   (func (export "test_clear_post_queue")

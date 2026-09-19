@@ -18,10 +18,10 @@ const IC_AFFINE = 0x00040000;
 
 const extraWat = String.raw`
   (func (export "test_controlfp") (param $new i32) (param $mask i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle__controlfp (local.get $new) (local.get $mask)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_set_cw") (param $cw i32) (global.set $fpu_cw (local.get $cw)))
   (func (export "test_get_cw") (result i32) (global.get $fpu_cw))
   (func (export "test_round") (param $value f64) (result f64)

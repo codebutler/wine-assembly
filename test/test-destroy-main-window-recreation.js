@@ -35,8 +35,8 @@ const extraWat = String.raw`
 
   (func (export "test_complete_focus_callback")
     ;; Model an x86 zero LRESULT plus ret 16, then enter the real continuation.
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (call $win32_dispatch
       (i32.div_u
         (i32.sub (global.get $setfocus_ret_thunk) (global.get $thunk_guest_base))

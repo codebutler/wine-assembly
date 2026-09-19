@@ -14,20 +14,20 @@ const {bootRenderHarness}=require('./render-helper');
     (func (export "buffer") (param $device i32) (param $kind i32) (param $out i32) (result i32)
       (call $d3d9_buffer_create (local.get $device) (i32.const 128) (i32.const 0)
         (select (i32.const 101) (i32.const 0) (i32.eq (local.get $kind) (i32.const 7)))
-        (i32.const 1) (local.get $out) (local.get $kind)) (global.get $eax))
+        (i32.const 1) (local.get $out) (local.get $kind)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "npatch") (param $device i32) (result f64)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_IDirect3DDevice9_GetNPatchMode (local.get $device) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
       (call $fpu_pop))
     (func (export "texture") (param $device i32) (param $out i32) (result i32)
       (call $d3d9_texture_create (local.get $device) (i32.const 2) (i32.const 2)
         (i32.const 1) (i32.const 0) (i32.const 21) (i32.const 1) (local.get $out))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "releaseTexture") (param $texture i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_IDirect3DShader9_Release (local.get $texture) (i32.const 0)
-        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "device") (param $out i32) (result i32)
       (local $d i32)
       (call $d3dim_create_device (i32.const 0) (i32.const 0) (local.get $out) (global.get $DX_VTBL_D3DDEV9))
@@ -37,9 +37,9 @@ const {bootRenderHarness}=require('./render-helper');
       (local.get $d))
     ${[...methods.map(n=>['IDirect3DDevice9',n]),...blockMethods.map(n=>['IDirect3DStateBlock9',n])].map(([type,name])=>`
     (func (export "${name}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_${type}_${name} (local.get $a) (local.get $b) (local.get $c)
-        (local.get $d) (local.get $f) (i32.const 0)) (global.get $eax))`).join('\n')}
+        (local.get $d) (local.get $f) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   `});
   e.init_dx_com_thunks();
   const out=0x00409000,d=e.device(out),invalid=0x8876086c;

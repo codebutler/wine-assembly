@@ -4538,9 +4538,9 @@
   ;; 84: DestroyMenu(hMenu) — 1 arg stdcall, return TRUE
   (func $handle_DestroyMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (call $dynamic_menu_destroy (local.get $arg0))
-      (then (global.set $eax (i32.const 1)))
-      (else (global.set $eax (call $host_menu_destroy (local.get $arg0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
+      (else (i32.store offset=0 (global.get $reg_base) (call $host_menu_destroy (local.get $arg0)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 87: GetMenu(hwnd) — return the attached menu's stable resource key.
@@ -4549,24 +4549,24 @@
     ;; resource ID. Preserve that identity so SetMenu can reattach the menu
     ;; after an app temporarily removes it (Pinball fullscreen). menu_set's
     ;; legacy host blobs have no source key, so retain the old fake fallback.
-    (global.set $eax (call $menu_source_get (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $menu_source_get (local.get $arg0)))
     (if (i32.and
-          (i32.eqz (global.get $eax))
+          (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (i32.gt_s (call $menu_bar_count (local.get $arg0)) (i32.const 0)))
-      (then (global.set $eax (i32.const 0x80001))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80001))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 88: GetSubMenu(hMenu, nPos) → HMENU. A command, invalid position, or
   ;; invalid menu returns NULL; dynamic popup items return their retained child.
   (func $handle_GetSubMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_handle_submenu (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $menu_handle_submenu (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; 314: GetSystemMenu(hwnd, bRevert) — stdcall(2)
   (func $handle_GetSystemMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x40003))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))) (return)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x40003))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))) (return)
   )
 
   ;; 113: EnableMenuItem(hMenu, uIDEnableItem, uEnable).
@@ -4574,24 +4574,23 @@
   ;; has to be honoured: it is how MFC addresses items while walking a popup,
   ;; and treating a position as a command id put the state on the wrong item.
   (func $handle_EnableMenuItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (i32.and (local.get $arg2) (i32.const 0x400))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and (local.get $arg2) (i32.const 0x400))
         (then (call $menu_enable_position_global
           (local.get $arg0) (local.get $arg1)
           (i32.ne (i32.and (local.get $arg2) (i32.const 3)) (i32.const 0))))
         (else (call $menu_enable_item_global
           (local.get $arg0) (local.get $arg1) (local.get $arg2)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 121: CheckMenuRadioItem(hMenu, idFirst, idLast, idCheck, uFlags)
   ;; Unchecks items [idFirst..idLast], checks idCheck with radio bullet. Returns TRUE.
   ;; Menu item state is tracked in the renderer's menu model when available.
   (func $handle_CheckMenuRadioItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_check_radio_global
+    (i32.store offset=0 (global.get $reg_base) (call $menu_check_radio_global
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; 122: CheckMenuItem(hMenu, uIDCheckItem, uCheck) → previous state
   ;; We don't track HMENU-to-window mapping directly, so walk every
@@ -4601,13 +4600,13 @@
   ;; callers use MF_BYCOMMAND, which is what our id-based walk matches.
   (func $handle_CheckMenuItem (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and (local.get $arg2) (i32.const 0x400))
-      (then (global.set $eax (call $menu_check_position_global
+      (then (i32.store offset=0 (global.get $reg_base) (call $menu_check_position_global
         (local.get $arg0) (local.get $arg1)
         (i32.and (local.get $arg2) (i32.const 8)))))
-      (else (global.set $eax (call $menu_check_item_global
+      (else (i32.store offset=0 (global.get $reg_base) (call $menu_check_item_global
         (local.get $arg1)
         (i32.and (local.get $arg2) (i32.const 8))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 137: LoadMenuA(hInstance, lpMenuName) — 2 args stdcall.
@@ -4621,16 +4620,16 @@
     ;; If lpMenuName < 0x10000, it's MAKEINTRESOURCE (resource ID)
     (if (i32.lt_u (local.get $arg1) (i32.const 0x10000))
       (then
-        (global.set $eax (i32.or (local.get $arg1) (i32.const 0x00BE0000))))
-      (else (global.set $eax (local.get $arg1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.or (local.get $arg1) (i32.const 0x00BE0000))))
+      (else (i32.store offset=0 (global.get $reg_base) (local.get $arg1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; 138: TrackPopupMenuEx(hMenu, uFlags, x, y, hWnd, lptpm)
   (func $handle_TrackPopupMenuEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_track_popup_open
+    (i32.store offset=0 (global.get $reg_base) (call $menu_track_popup_open
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
   )
 
   ;; 292: LoadMenuW — ordinals share the A path; named resources keep the
@@ -4645,68 +4644,67 @@
   ;; 407: RemoveMenu(hMenu, uPosition, uFlags). Unlike DeleteMenu, a removed
   ;; popup remains owned by the caller.
   (func $handle_RemoveMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $menu_remove_item
+    (i32.store offset=0 (global.get $reg_base) (call $menu_remove_item
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; IsMenu(hMenu) → BOOL.
   (func $handle_IsMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_handle_is_valid (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (call $menu_handle_is_valid (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
   )
 
   ;; 619: TrackPopupMenu(hMenu, uFlags, x, y, nReserved, hWnd, prcRect)
   (func $handle_TrackPopupMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa_esp i32) (local $hwnd i32)
-    (local.set $wa_esp (call $g2w (global.get $esp)))
+    (local.set $wa_esp (call $g2w (i32.load offset=16 (global.get $reg_base))))
     (local.set $hwnd (i32.load (i32.add (local.get $wa_esp) (i32.const 24))))
-    (global.set $eax (call $menu_track_popup_open
+    (i32.store offset=0 (global.get $reg_base) (call $menu_track_popup_open
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $hwnd)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
   )
 
   ;; 620: GetMenuItemID(hMenu, nPos). A NULL id, submenu, invalid menu, or
   ;; invalid position returns -1, matching USER rather than inventing id zero.
   (func $handle_GetMenuItemID (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_handle_item_id (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))  ;; 2 args
+    (i32.store offset=0 (global.get $reg_base) (call $menu_handle_item_id (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))  ;; 2 args
   )
 
   ;; SetMenuItemInfoA(hMenu, uItem, fByPos, lpmii). Dynamic popup menus retain
   ;; the supported type/state/id/submenu/data/string fields.
   (func $handle_SetMenuItemInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dynamic_menu_item_info_set
+    (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_set
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) ;; 4 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) ;; 4 args
   )
 
   ;; GetMenuItemInfoA(hMenu, uItem, fByPos, lpmii). Unsupported menu handle or
   ;; mask combinations return FALSE instead of claiming untouched output.
   (func $handle_GetMenuItemInfoA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dynamic_menu_item_info_get
+    (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_get
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))) ;; 4 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))) ;; 4 args
   )
 
   ;; Wide spellings share the MENUITEMINFO field/mask core. Dynamic menu text
   ;; remains canonical ANSI for the byte-oriented painter, so Set converts a
   ;; UTF-16 label on entry and Get widens it only into the caller's buffer.
   (func $handle_SetMenuItemInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dynamic_menu_item_info_set
+    (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_set
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   (func $handle_GetMenuItemInfoW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dynamic_menu_item_info_get
+    (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_item_info_get
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)
       (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; 621: GetMenuItemCount(hMenu) — the menu subsystem is a stub that doesn't
@@ -4718,20 +4716,20 @@
   ;; and never enables or greys anything. Paint offered File > Send... in black
   ;; on a machine with no mail subsystem because of this.
   (func $handle_GetMenuItemCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_handle_item_count (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))) ;; 1 arg stdcall
+    (i32.store offset=0 (global.get $reg_base) (call $menu_handle_item_count (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))) ;; 1 arg stdcall
   )
 
   ;; 650: DrawMenuBar. Menu chrome is WAT-owned, so redraw it synchronously and
   ;; tell the renderer that the non-client surface changed.
   (func $handle_DrawMenuBar (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eq (call $wnd_table_find (local.get $arg0)) (i32.const -1))
-      (then (global.set $eax (i32.const 0)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (call $defwndproc_do_ncpaint (local.get $arg0))
         (call $host_invalidate_frame (local.get $arg0))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))  ;; stdcall, 1 arg
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))  ;; stdcall, 1 arg
   )
 
   ;; 655: AppendMenuW(hMenu, uFlags, uIDNewItem, lpNewItem)
@@ -4741,11 +4739,11 @@
       (call $dynamic_menu_append
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (if (i32.ne (local.get $dyn) (i32.const -1))
-      (then (global.set $eax (local.get $dyn)))
+      (then (i32.store offset=0 (global.get $reg_base) (local.get $dyn)))
       (else
-        (global.set $eax (call $host_menu_append
+        (i32.store offset=0 (global.get $reg_base) (call $host_menu_append
           (local.get $arg0) (local.get $arg1) (local.get $arg2) (call $g2w (local.get $arg3)) (i32.const 1)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; AppendMenuA(hMenu, uFlags, uIDNewItem, lpNewItem) — return TRUE
@@ -4755,11 +4753,11 @@
       (call $dynamic_menu_append
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
     (if (i32.ne (local.get $dyn) (i32.const -1))
-      (then (global.set $eax (local.get $dyn)))
+      (then (i32.store offset=0 (global.get $reg_base) (local.get $dyn)))
       (else
-        (global.set $eax (call $host_menu_append
+        (i32.store offset=0 (global.get $reg_base) (call $host_menu_append
           (local.get $arg0) (local.get $arg1) (local.get $arg2) (call $g2w (local.get $arg3)) (i32.const 0)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; InsertMenuA(hMenu, uPosition, uFlags, uIDNewItem, lpNewItem)
@@ -4787,18 +4785,18 @@
           (then (local.get $arg3))
           (else (i32.const 0)))))
     (if (i32.ne (local.get $dyn) (i32.const -1))
-      (then (global.set $eax (local.get $dyn)))
+      (then (i32.store offset=0 (global.get $reg_base) (local.get $dyn)))
       (else
         (if (i32.and
               (i32.ne (i32.and (local.get $arg2) (i32.const 0x400))
                       (i32.const 0))
               (i32.eq (local.get $arg1) (i32.const -1)))
           (then
-            (global.set $eax (call $host_menu_append
+            (i32.store offset=0 (global.get $reg_base) (call $host_menu_append
               (local.get $arg0) (local.get $arg2) (local.get $arg3)
               (call $g2w (local.get $arg4)) (i32.const 0))))
-          (else (global.set $eax (i32.const 1))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+          (else (i32.store offset=0 (global.get $reg_base) (i32.const 1))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; InsertMenuItemA/W(hMenu, uItem, fByPosition, lpmii)
@@ -4836,37 +4834,36 @@
     (i32.const 1))
 
   (func $handle_InsertMenuItemA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $insert_menu_item_common
+    (i32.store offset=0 (global.get $reg_base) (call $insert_menu_item_common
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   (func $handle_InsertMenuItemW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $insert_menu_item_common
+    (i32.store offset=0 (global.get $reg_base) (call $insert_menu_item_common
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; ModifyMenuA(hMnu, uPosition, uFlags, uIDNewItem, lpNewItem). Dynamic menus
   ;; are replaced in place; immutable/unknown handles fail instead of silently
   ;; preserving stale labels, ids, state, and submenu ownership.
   (func $handle_ModifyMenuA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dynamic_menu_modify
+    (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_modify
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4)))
-    (if (i32.eq (global.get $eax) (i32.const -1))
-      (then (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 656: DeleteMenu(hMenu, uPosition, uFlags). Return FALSE when the requested
   ;; item is absent; callers commonly clear a menu with
   ;; `while (DeleteMenu(menu, 0, MF_BYPOSITION))`.
   (func $handle_DeleteMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $menu_remove_item
+    (i32.store offset=0 (global.get $reg_base) (call $menu_remove_item
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
   )
 
   ;; 672: SetMenuItemBitmaps(hMenu, uPosition, uFlags, hBitmapUnchecked,
@@ -4879,18 +4876,16 @@
       (i32.ne (i32.and (local.get $arg2) (i32.const 0x400)) (i32.const 0)))
     (if (call $dynamic_menu_state_w (local.get $arg0))
       (then
-        (global.set $eax
-          (i32.ne
+        (i32.store offset=0 (global.get $reg_base) (i32.ne
             (call $dynamic_menu_item_w
               (local.get $arg0) (local.get $arg1) (local.get $by_position))
             (i32.const 0))))
       (else
-        (global.set $eax
-          (i32.ne
+        (i32.store offset=0 (global.get $reg_base) (i32.ne
             (call $menu_handle_locate
               (local.get $arg0) (local.get $arg1) (local.get $by_position))
             (i32.const -1)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
   )
 
   ;; 673: ModifyMenuW — item metadata shares the A path. String rendering of
@@ -4904,11 +4899,10 @@
   ;; GetMenuState(hMenu, uId, uFlags) → MF_* state, or -1 when the item is not
   ;; there. MF_BYPOSITION is 0x400; without it uId is a command id.
   (func $handle_GetMenuState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (i32.and (local.get $arg2) (i32.const 0x400))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.and (local.get $arg2) (i32.const 0x400))
         (then (call $menu_handle_item_state (local.get $arg0) (local.get $arg1)))
         (else (call $menu_handle_state_by_id (local.get $arg0) (local.get $arg1)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))  ;; 3 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))  ;; 3 args
   )
 
   ;; GetMenuItemRect uses the same geometry that paints and hit-tests menus.
@@ -5034,10 +5028,9 @@
 
   ;; 735: GetMenuItemRect(hWnd, hMenu, uItem, lprcItem) -> BOOL
   (func $handle_GetMenuItemRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $menu_get_item_rect
+    (i32.store offset=0 (global.get $reg_base) (call $menu_get_item_rect
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
   )
 
   ;; Windows 98 classic at 96 DPI uses a square 13px default check bitmap.
@@ -5054,11 +5047,10 @@
   (func $handle_GetMenuCheckMarkDimensions (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32)
     (local.set $size (call $menu_checkmark_size))
-    (global.set $eax
-      (i32.or
+    (i32.store offset=0 (global.get $reg_base) (i32.or
         (local.get $size)
         (i32.shl (local.get $size) (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )
 
   ;; 682: InsertMenuW(hMenu, uPosition, uFlags, uIDNewItem, lpNewItem).
@@ -5092,12 +5084,12 @@
   ;; unimplemented-API crash was the first thing Paint hit once its update loop
   ;; started running. MF_BYPOSITION is 0x400.
   (func $handle_GetMenuStringA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $menu_handle_copy_label
+    (i32.store offset=0 (global.get $reg_base) (call $menu_handle_copy_label
       (local.get $arg0) (local.get $arg1)
       (i32.and (local.get $arg4) (i32.const 0x400))
       (if (result i32) (local.get $arg2) (then (call $g2w (local.get $arg2))) (else (i32.const 0)))
       (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; 5 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; 5 args
   )
 
   ;; 683: GetMenuStringW(hMenu, uIDItem, lpString, cchMax, uFlag) → chars copied.
@@ -5106,10 +5098,10 @@
   ;; needs no staging at all.
   (func $handle_GetMenuStringW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $tmp i32) (local $len i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))  ;; 5 args
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))  ;; 5 args
     (if (i32.or (i32.eqz (local.get $arg2)) (i32.le_s (local.get $arg3) (i32.const 0)))
       (then
-        (global.set $eax (call $menu_handle_copy_label
+        (i32.store offset=0 (global.get $reg_base) (call $menu_handle_copy_label
           (local.get $arg0) (local.get $arg1)
           (i32.and (local.get $arg4) (i32.const 0x400))
           (i32.const 0) (local.get $arg3)))
@@ -5117,7 +5109,7 @@
     (local.set $tmp (call $heap_alloc (local.get $arg3)))
     (if (i32.eqz (local.get $tmp))
       (then (call $gs16 (local.get $arg2) (i32.const 0))
-            (global.set $eax (i32.const 0)) (return)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (return)))
     (call $gs8 (local.get $tmp) (i32.const 0))
     (local.set $len (call $menu_handle_copy_label
       (local.get $arg0) (local.get $arg1)
@@ -5125,7 +5117,7 @@
       (call $g2w (local.get $tmp)) (local.get $arg3)))
     (drop (call $ansi_to_wide (local.get $tmp) (local.get $arg2) (local.get $arg3)))
     (call $heap_free (local.get $tmp))
-    (global.set $eax (local.get $len))
+    (i32.store offset=0 (global.get $reg_base) (local.get $len))
   )
 
   ;; 687: CreateMenu() — a WAT dynamic (MNUD) menu, the same object
@@ -5140,6 +5132,6 @@
 
   ;; CreatePopupMenu() — WAT-owned dynamic popup menu state.
   (func $handle_CreatePopupMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dynamic_menu_create))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (call $dynamic_menu_create))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
   )

@@ -21,7 +21,7 @@ const extraWat = String.raw`
     (global.set $ansi_code_page (local.get $value)))
   (func (export "test_splitpath") (param $path i32) (param $drive i32)
       (param $dir i32) (param $name i32) (param $ext i32)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $handle__splitpath (local.get $path) (local.get $drive)
       (local.get $dir) (local.get $name) (local.get $ext) (i32.const 0)))
 `;

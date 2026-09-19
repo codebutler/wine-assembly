@@ -11,11 +11,11 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_joy_set_capture")
       (param $hwnd i32) (param $id i32) (param $period i32) (result i32)
-    (global.set $esp (global.get $GUEST_STACK))
+    (i32.store offset=16 (global.get $reg_base) (global.get $GUEST_STACK))
     (call $handle_joySetCapture
       (local.get $hwnd) (local.get $id) (local.get $period)
       (i32.const 1) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_stack") (result i32)
     (global.get $GUEST_STACK))
 `;

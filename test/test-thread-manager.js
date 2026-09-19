@@ -7,7 +7,7 @@ const { readWatSourceClosure } = require('./wat-source-closure');
 
 const handlersWat = readWatSourceClosure();
 const headerWat = fs.readFileSync(path.join(__dirname, '..', 'src', '01-header.wat'), 'utf8');
-assert(!handlersWat.includes('(call $host_log_i32 (global.get $eax))'),
+assert(!handlersWat.includes('(call $host_log_i32 (i32.load offset=0 (global.get $reg_base)))'),
   'synchronization handlers must not cross to the host solely to print return values');
 assert(headerWat.includes('(global $MAX_SYNC_OBJECTS i32 (i32.const 4096))'),
   'the WAT synchronization table must match the host manager capacity');

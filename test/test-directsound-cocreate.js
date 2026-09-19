@@ -11,30 +11,30 @@ const extraWat = String.raw`
   (func (export "test_cocreate")
       (param $clsid i32) (param $iid i32) (param $outer i32) (param $out i32)
       (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_CoCreateInstance
       (local.get $clsid) (local.get $outer) (i32.const 1) (local.get $iid)
       (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
-  (func (export "test_esp") (result i32) (global.get $esp))
+  (func (export "test_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_dispatch_one")
       (param $api_id i32) (param $this i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $dispatch_api_table
       (local.get $api_id) (local.get $this)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_cooperative_level")
       (param $this i32) (param $hwnd i32) (param $level i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectSound_SetCooperativeLevel
       (local.get $this) (local.get $hwnd) (local.get $level)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_register_top_level") (param $hwnd i32)
     (call $wnd_table_set (local.get $hwnd) (i32.const 0x401000))
@@ -43,11 +43,11 @@ const extraWat = String.raw`
 
   (func (export "test_query_interface")
       (param $this i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectSound_QueryInterface
       (local.get $this) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_refcount") (param $this i32) (result i32)
     (load.field DxObject refcount (call $dx_from_this (local.get $this))))

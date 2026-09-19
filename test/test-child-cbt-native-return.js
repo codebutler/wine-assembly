@@ -26,9 +26,9 @@ const extraWat = String.raw`
     (global.set $pending_child_create (local.get $hwnd))
     (global.set $pending_child_size_hwnd (local.get $hwnd))
     (global.set $pending_child_size (i32.const 0x01E00280))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (global.set $eip (i32.const 0xFFFF0002))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win32_dispatch (local.get $idx)))
 
   (func (export "test_pending_child_create") (result i32)

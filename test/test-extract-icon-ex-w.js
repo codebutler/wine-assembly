@@ -12,7 +12,7 @@ const extraWat = String.raw`
   (func (export "test_extract_icon_ex")
         (param $wide i32) (param $file i32) (param $index i32)
         (param $large i32) (param $small i32) (param $count i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (local.get $wide)
       (then (call $handle_ExtractIconExW
         (local.get $file) (local.get $index) (local.get $large)
@@ -21,12 +21,12 @@ const extraWat = String.raw`
         (local.get $file) (local.get $index) (local.get $large)
         (local.get $small) (local.get $count) (i32.const 0))))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_extract_icon")
         (param $wide i32) (param $file i32) (param $index i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (local.get $wide)
       (then (call $handle_ExtractIconW
         (i32.const 0) (local.get $file) (local.get $index)
@@ -35,8 +35,8 @@ const extraWat = String.raw`
         (i32.const 0) (local.get $file) (local.get $index)
         (i32.const 0) (i32.const 0) (i32.const 0))))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_icon_size") (param $handle i32) (result i32)
     (local $record i32)

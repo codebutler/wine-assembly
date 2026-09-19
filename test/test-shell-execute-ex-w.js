@@ -14,18 +14,18 @@ const extraWat = `
     (i32.store offset=4 (call $g2w (local.get $name)) (i32.const 0x6578456c)) ;; "lExe"
     (i32.store offset=8 (call $g2w (local.get $name)) (i32.const 0x65747563)) ;; "cute"
     (i32.store offset=12 (call $g2w (local.get $name)) (i32.const 0x00577845)) ;; "ExW\\0"
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_shell_execute_ex_w") (param $stack i32) (param $info i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ShellExecuteExW
       (local.get $info) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

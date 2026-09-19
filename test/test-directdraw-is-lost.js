@@ -16,11 +16,11 @@ const extraWat = String.raw`
     (call $dx_create_com_obj (local.get $type) (i32.const 0)))
 
   (func (export "test_dd_surface_is_lost") (param $surface i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawSurface_IsLost
       (local.get $surface) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dd_release") (param $object i32) (result i32)
     (call $dx_com_release_basic (local.get $object)))

@@ -6,29 +6,29 @@ const { bootRenderHarness } = require('./render-helper');
 (async () => {
   const { exports: e } = await bootRenderHarness({ fonts: 'none', extraWat: `
     (func (export "test_adapter") (param $adapter i32) (param $flags i32) (param $p i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
       (call $handle_IDirect3D9_GetAdapterIdentifier (i32.const 0) (local.get $adapter)
         (local.get $flags) (local.get $p) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_caps") (param $adapter i32) (param $type i32) (param $p i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
       (call $handle_IDirect3D9_GetDeviceCaps (i32.const 0) (local.get $adapter)
         (local.get $type) (local.get $p) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_device_caps") (param $p i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
       (call $handle_IDirect3DDevice9_GetDeviceCaps (i32.const 0) (local.get $p)
         (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "new_parent") (result i32)
       (call $dx_create_com_obj (i32.const 19) (global.get $DX_VTBL_D3D9)))
     (func (export "new_device") (param $parent i32) (param $pp i32) (param $out i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $gs32 (i32.const 0x074ff018) (local.get $pp))
       (call $gs32 (i32.const 0x074ff01c) (local.get $out))
       (call $handle_IDirect3D9_CreateDevice (local.get $parent) (i32.const 0)
         (i32.const 1) (i32.const 0x10001) (i32.const 0x20) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "refcount") (param $p i32) (result i32)
       (load.field DxObject refcount (call $dx_from_this (local.get $p))))
     (func (export "kind") (param $p i32) (result i32)
@@ -37,9 +37,9 @@ const { bootRenderHarness } = require('./render-helper');
       ['IDirect3DStateBlock9','Apply'],['IDirect3DStateBlock9','Release'],
       ...['GetDirect3D','GetDisplayMode','GetCreationParameters','GetRenderTarget','GetRenderState','SetRenderState','BeginStateBlock','EndStateBlock'].map(n=>['IDirect3DDevice9',n])].map(([type,name])=>`
     (func (export "${type}_${name}") (param $a i32) (param $b i32) (param $c i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_${require('../src/api_table.json').find(a=>a.name===`${type}_${name}`).handler||`${type}_${name}`} (local.get $a) (local.get $b) (local.get $c)
-        (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))`).join('\n')}
+        (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   ` });
   const ptr = 0x00403004;
   const str = offset => {

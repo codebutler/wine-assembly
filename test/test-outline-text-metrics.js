@@ -10,18 +10,18 @@ const RegionMap = require('../lib/region-map.generated.js');
   const harness = await bootRenderHarness({ extraWat: `
     (func (export "test_outline_metrics_a")
           (param $hdc i32) (param $bytes i32) (param $out i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_GetOutlineTextMetricsA
         (local.get $hdc) (local.get $bytes) (local.get $out)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_outline_metrics_w")
           (param $hdc i32) (param $bytes i32) (param $out i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_GetOutlineTextMetricsW
         (local.get $hdc) (local.get $bytes) (local.get $out)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
   const { exports: wat, memory } = harness;
   const bytes = new Uint8Array(memory.buffer);

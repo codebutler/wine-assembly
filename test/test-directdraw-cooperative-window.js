@@ -28,11 +28,11 @@ const extraWat = String.raw`
     (call $gs32 (local.get $wrapper) (i32.const 0))
     (call $gs32 (i32.add (local.get $wrapper) (i32.const 4))
       (call $dx_slot_of (local.get $entry)))
-    (global.set $esp (i32.const 0x074ff000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
     (call $handle_IDirectDraw_SetCooperativeLevel
       (local.get $wrapper) (local.get $hwnd) (i32.const 0x10)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

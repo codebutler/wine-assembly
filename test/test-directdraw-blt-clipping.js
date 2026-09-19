@@ -43,11 +43,11 @@ const extraWat = String.raw`
   (func (export "test_dx_surface_blt")
     (param $dst i32) (param $dst_rect i32) (param $src i32) (param $src_rect i32)
     (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDrawSurface_Blt
       (local.get $dst) (local.get $dst_rect) (local.get $src) (local.get $src_rect)
       (i32.const 0x01000000) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 function writeRect(wat, address, left, top, right, bottom) {

@@ -14,11 +14,11 @@ const { bootRenderHarness } = require('./render-helper');
       (param $count i32) (param $pixel i32) (param $get i32) (result i32)
       (call $d3d9_float_constants (local.get $device) (local.get $start) (local.get $p)
         (local.get $count) (local.get $pixel) (local.get $get))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "release_device") (param $device i32) (result i32)
       (call $handle_IDirect3DDevice9_Release (local.get $device) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
   const a = e.new_device(), b = e.new_device(), input = 0x00405000, output = 0x00406000;
   for (let i = 0; i < 32; ++i) e.guest_write32(input + i * 4, 0x3f000000 + i);

@@ -11,37 +11,37 @@ const extraWat = String.raw`
   (func (export "test_dx_backbuffer_create") (param $desc i32) (param $out i32) (result i32)
     (local $ddraw i32)
     (local.set $ddraw (call $dx_create_com_obj (i32.const 1) (global.get $DX_VTBL_DDRAW)))
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDraw_CreateSurface
       (local.get $ddraw) (local.get $desc) (local.get $out) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dx_backbuffer_desc") (param $surface i32) (param $desc i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDrawSurface_GetSurfaceDesc
       (local.get $surface) (local.get $desc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dx_backbuffer_get") (param $surface i32) (param $caps i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDrawSurface_GetAttachedSurface
       (local.get $surface) (local.get $caps) (local.get $out) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dx_surface_dib_wa") (param $surface i32) (result i32)
     (i32.load offset=20 (call $dx_from_this (local.get $surface))))
   (func (export "test_dx_surface_lock") (param $surface i32) (param $rect i32) (param $desc i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDrawSurface_Lock
       (local.get $surface) (local.get $rect) (local.get $desc) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_dx_surface_release") (param $surface i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDrawSurface_Release
       (local.get $surface) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

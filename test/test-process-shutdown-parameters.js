@@ -11,17 +11,17 @@ const { bootRenderHarness } = require('./render-helper');
 const ERROR_INVALID_PARAMETER = 87;
 const extraWat = String.raw`
   (func (export "test_set_shutdown") (param $level i32) (param $flags i32) (result i32)
-    (global.set $esp (global.get $GUEST_STACK))
+    (i32.store offset=16 (global.get $reg_base) (global.get $GUEST_STACK))
     (call $handle_SetProcessShutdownParameters
       (local.get $level) (local.get $flags) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_get_shutdown") (param $level i32) (param $flags i32) (result i32)
-    (global.set $esp (global.get $GUEST_STACK))
+    (i32.store offset=16 (global.get $reg_base) (global.get $GUEST_STACK))
     (call $handle_GetProcessShutdownParameters
       (local.get $level) (local.get $flags) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_alloc") (param $size i32) (result i32)
     (call $heap_alloc (local.get $size)))
   (func (export "test_load32") (param $ga i32) (result i32)

@@ -15,11 +15,11 @@ const extraWat = String.raw`
 
   (func (export "test_di_device_status")
       (param $root i32) (param $guid i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectInput_GetDeviceStatus
       (local.get $root) (local.get $guid) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

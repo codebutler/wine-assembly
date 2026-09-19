@@ -20,7 +20,7 @@ const extraWat = String.raw`
       (param $action i32) (param $ui_param i32) (param $buffer i32)
       (param $wide i32) (result i32)
     (local $before i32)
-    (local.set $before (global.get $esp))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (if (local.get $wide)
       (then
         (call $handle_SystemParametersInfoW
@@ -30,8 +30,8 @@ const extraWat = String.raw`
         (call $handle_SystemParametersInfoA
           (local.get $action) (local.get $ui_param) (local.get $buffer)
           (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.set $test_spi_handler_eax (global.get $eax))
-    (i32.sub (global.get $esp) (local.get $before)))
+    (global.set $test_spi_handler_eax (i32.load offset=0 (global.get $reg_base)))
+    (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
   (func (export "test_spi_handler_eax") (result i32)
     (global.get $test_spi_handler_eax))
 `;

@@ -45,8 +45,8 @@
         (local.set $pop (i32.const 16))))
     (if (i32.eq (local.get $operation) (i32.const 7))
       (then (local.set $pop (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (local.get $pop)))
-    (global.set $eax (local.get $result)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (local.get $pop)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result)))
 
   ;; WNetOpenEnum{A,W}(dwScope, dwType, dwUsage, lpNetResource, lphEnum)
   (func $handle_WNetOpenEnumA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)

@@ -18,20 +18,20 @@ const extraWat = String.raw`
 
   (func (export "test_query_interface")
       (param $this i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectInput_QueryInterface
       (local.get $this) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_create_ex")
       (param $version i32) (param $iid i32) (param $out i32) (param $outer i32)
       (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_DirectInputCreateEx
       (i32.const 0x400000) (local.get $version) (local.get $iid)
       (local.get $out) (local.get $outer) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_refcount") (param $this i32) (result i32)
     (load.field DxObject refcount (call $dx_from_this (local.get $this))))

@@ -23,19 +23,19 @@ const extraWat = `
     (call $handle_CreateMenu
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_InsertMenuItemW")
       (param $hmenu i32) (param $item i32) (param $bypos i32) (param $mii i32) (result i32)
     (call $handle_InsertMenuItemW
       (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_GetSubMenu") (param $hmenu i32) (param $pos i32) (result i32)
     (call $handle_GetSubMenu (local.get $hmenu) (local.get $pos)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_register_menu_window") (param $hwnd i32)
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_CTRL_NATIVE)))
   (func (export "test_call_SetMenu_bridge")
@@ -43,7 +43,7 @@ const extraWat = `
     (call $handle_SetMenu
       (local.get $hwnd) (local.get $hmenu) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 let passed = 0;

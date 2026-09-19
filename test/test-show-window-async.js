@@ -33,22 +33,22 @@ const extraWat = String.raw`
 
   (func (export "test_call_ShowWindowAsync")
       (param $hwnd i32) (param $cmd i32) (result i32)
-    (global.set $esp (i32.const ${ESP0}))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${ESP0}))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_ShowWindowAsync
       (local.get $hwnd) (local.get $cmd)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dispatch_first_post") (result i32)
     (if (i32.eqz (call $shared_post_queue_read (i32.const ${MSG}) (i32.const 1)))
       (then (unreachable)))
-    (global.set $esp (i32.const ${ESP0}))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${ESP0}))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_DispatchMessageA
       (i32.const ${MSG})
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_is_minimized") (param $hwnd i32) (result i32)
     (call $wnd_min_get (local.get $hwnd)))

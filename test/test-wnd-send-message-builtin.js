@@ -14,7 +14,7 @@ const extraWat = String.raw`
     (call $ctrl_table_set (call $wnd_table_find (local.get $hwnd))
       (i32.const 0) (i32.const 0))
     (global.set $eip (i32.const 0x00401000))
-    (global.set $esp (i32.const 0x00120000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00120000))
     (call $wnd_send_message (local.get $hwnd) (i32.const 0x000C)
       (i32.const 0) (i32.const 0)))
 

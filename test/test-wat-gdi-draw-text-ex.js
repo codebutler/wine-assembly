@@ -11,23 +11,23 @@ const extraWat = String.raw`
   (func (export "test_call_DrawTextExA")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
     (call $handle_DrawTextExA
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_call_DrawTextExW")
         (param i32 i32 i32 i32 i32 i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $saved_esp) (i32.const 24)) (local.get 5))
     (call $handle_DrawTextExW
       (local.get 0) (local.get 1) (local.get 2) (local.get 3)
       (local.get 4) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))`;
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))`;
 
 (async () => {
   const { exports: wat, memory, hostCtx } = await bootRenderHarness({ extraWat });

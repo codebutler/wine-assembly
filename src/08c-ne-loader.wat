@@ -948,7 +948,7 @@
 
     ;; $esp is a linear address; because every segment base is 64KB aligned its
     ;; low word stays SP for as long as the task runs.
-    (global.set $esp (i32.add (call $win16_seg_base (local.get $ss_index)) (local.get $sp)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (call $win16_seg_base (local.get $ss_index)) (local.get $sp)))
 
     ;; The first sixteen bytes of DGROUP are the task's instance data, and they
     ;; belong to the loader, not to the image: the linker leaves them empty and
@@ -1000,19 +1000,19 @@
     ;; Win16 hands the entry point CX = heap size, DI = hInstance, SI = previous
     ;; hInstance (0 for the first copy), ES = PSP, DS = DGROUP. The startup code
     ;; in every one of these images reads DI to store its own instance handle.
-    (global.set $eax (i32.const 0))
-    (global.set $ecx (global.get $win16_heap_size))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=4 (global.get $reg_base) (global.get $win16_heap_size))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     ;; BX is the stack size, and it is not decoration: Visual Basic's runtime
     ;; is handed the task on the first instruction — RATTLER.EXE is fifteen
     ;; bytes of `jmp far VBRUN100.100` — and lays the DGROUP out from these
     ;; two registers, its own data first, then BX of stack, then CX of heap.
     ;; With BX zero it gave itself no stack at all: SP came down on top of its
     ;; own variables and the first statement raised "out of stack space".
-    (global.set $ebx (global.get $win16_stack_size))
-    (global.set $ebp (i32.const 0))
-    (global.set $esi (i32.const 0))
-    (global.set $edi (global.get $sreg_ds))
+    (i32.store offset=12 (global.get $reg_base) (global.get $win16_stack_size))
+    (i32.store offset=20 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=24 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=28 (global.get $reg_base) (global.get $sreg_ds))
     (global.set $df (i32.const 0))
     (global.set $code16 (i32.const 1)))
 

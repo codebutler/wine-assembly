@@ -7,17 +7,17 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_alloc_byte_bstr") (param $src i32) (param $len i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SysAllocStringByteLen
       (local.get $src) (local.get $len) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_byte_bstr_len") (param $bstr i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SysStringByteLen
       (local.get $bstr) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

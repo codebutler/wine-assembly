@@ -9,12 +9,12 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func $pack_far_console_result (result i64)
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_set_cp")
         (param $cp i32) (param $output i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (if (local.get $output)
       (then
         (call $handle_SetConsoleOutputCP
@@ -36,11 +36,11 @@ const extraWat = String.raw`
         (call $handle_GetConsoleCP
           (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_attribute")
         (param $handle i32) (param $attribute i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_SetConsoleTextAttribute
       (local.get $handle) (local.get $attribute) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
@@ -53,7 +53,7 @@ const extraWat = String.raw`
   (func (export "test_loaded_attribute") (result i32)
     (global.get $console_attr))
   (func (export "test_activate") (param $handle i32)
-    (global.set $esp (i32.const 0x074ff000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
     (call $handle_SetConsoleActiveScreenBuffer
       (local.get $handle) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0)))
@@ -61,7 +61,7 @@ const extraWat = String.raw`
   (func (export "test_write_input")
         (param $buffer i32) (param $length i32) (param $written i32)
         (param $wide i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (if (local.get $wide)
       (then
         (call $handle_WriteConsoleInputW
@@ -76,7 +76,7 @@ const extraWat = String.raw`
   (func (export "test_peek_w")
         (param $handle i32) (param $buffer i32) (param $length i32)
         (param $read i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_PeekConsoleInputW
       (local.get $handle) (local.get $buffer) (local.get $length)
       (local.get $read) (i32.const 0) (i32.const 0))
@@ -85,7 +85,7 @@ const extraWat = String.raw`
   (func (export "test_read_w")
         (param $buffer i32) (param $length i32) (param $read i32)
         (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ReadConsoleInputW
       (i32.const 1) (local.get $buffer) (local.get $length)
       (local.get $read) (i32.const 0) (i32.const 0))

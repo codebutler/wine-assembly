@@ -13,7 +13,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_system_enum_enter") (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00409999))
     (global.set $font_enum_ret_thunk (i32.const 0x00402000))
     ;; The source string goes in $TEST_SCRATCH, the region declared for exactly
@@ -24,14 +24,14 @@ const extraWat = String.raw`
     (i32.store8 offset=4 (region.addr $TEST_SCRATCH 0) (i32.const 0))
     (call $system_string_enum_a
       (i32.const 0x00401000) (region.addr $TEST_SCRATCH 0) (i32.const 0x00401234))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_system_enum_return") (result i32)
     ;; Model the callback's stdcall RET 4: return address plus LPSTR argument.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
     (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0011))
     (i32.store offset=4 (global.get $THUNK_BASE) (i32.const 0))
     (call $win32_dispatch (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

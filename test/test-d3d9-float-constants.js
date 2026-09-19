@@ -7,14 +7,14 @@ const assert=require('assert'),{bootRenderHarness}=require('./render-helper'),{B
  const {exports:e,memory}=await bootRenderHarness({fonts:'none',extraHostOverrides:{gpu_gl_call:(...args)=>bridge.call(...args)},extraWat:`
  (func (export "state") (param $d i32) (result i32) (call $d3d9_program_state (local.get $d)))
  (func (export "device") (param $pp i32) (param $out i32) (result i32)
-   (global.set $esp (i32.const 0x074ff000))
-   (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $pp))
-   (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
-   (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0)) (global.get $eax))
+   (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+   (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $pp))
+   (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $out))
+   (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
  ${[...names.map(n=>['Device9',n]),...['Apply','Capture','Release'].map(n=>['StateBlock9',n])].map(([t,n])=>`
  (func (export "${t}_${n}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (result i32)
-   (global.set $esp (i32.const 0x074ff000))
-   (call $handle_IDirect3D${t}_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (i32.const 0) (i32.const 0)) (global.get $eax))`).join('\n')}`});
+   (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+   (call $handle_IDirect3D${t}_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}`});
  e.d3dim_worker_init(0x400000);e.init_dx_com_thunks();
  const alloc=n=>e.guest_alloc(n)>>>0,wa=p=>e.guest_to_wasm(p)>>>0,read=p=>e.guest_read32(p)>>>0;
  bridge=new Bridge({backend:'software',enableProgrammable:true,getExports:()=>e,getMemory:()=>memory.buffer,guestToWasm:wa});

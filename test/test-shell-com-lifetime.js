@@ -20,7 +20,7 @@ const extraWat = String.raw`
 
   (func (export "test_shell_folder_create") (result i32)
     (call $gs32 (i32.const 0x2c00) (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SHGetDesktopFolder
       (i32.const 0x2c00) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
@@ -28,7 +28,7 @@ const extraWat = String.raw`
 
   (func (export "test_shell_folder_enum") (param $folder i32) (result i32)
     (call $gs32 (i32.const 0x2c04) (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IShellFolder_EnumObjects
       (local.get $folder) (i32.const 0) (i32.const 0)
       (i32.const 0x2c04) (i32.const 0) (i32.const 0))
@@ -38,52 +38,52 @@ const extraWat = String.raw`
         (param $folder i32) (param $data1 i32) (result i32)
     (call $test_shell_iid (local.get $data1))
     (call $gs32 (i32.const 0x2d20) (i32.const 0xDEADBEEF))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IShellFolder_QueryInterface
       (local.get $folder) (i32.const 0x2d00) (i32.const 0x2d20)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_shell_enum_qi")
         (param $enumerator i32) (param $data1 i32) (result i32)
     (call $test_shell_iid (local.get $data1))
     (call $gs32 (i32.const 0x2d20) (i32.const 0xDEADBEEF))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IEnumIDList_QueryInterface
       (local.get $enumerator) (i32.const 0x2d00) (i32.const 0x2d20)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_shell_qi_out") (result i32)
     (call $gl32 (i32.const 0x2d20)))
 
   (func (export "test_shell_folder_addref") (param $folder i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IShellFolder_AddRef
       (local.get $folder) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_shell_folder_release") (param $folder i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IShellFolder_Release
       (local.get $folder) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_shell_enum_addref") (param $enumerator i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IEnumIDList_AddRef
       (local.get $enumerator) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_shell_enum_release") (param $enumerator i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IEnumIDList_Release
       (local.get $enumerator) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_shell_refcount") (param $object i32) (result i32)
     (load.field DxObject refcount (call $dx_from_this (local.get $object))))

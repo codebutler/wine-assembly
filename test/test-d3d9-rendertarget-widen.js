@@ -43,15 +43,15 @@ const D3DERR_INVALIDCALL = 0x8876086c;
       (param $usage i32) (param $format i32) (param $pool i32) (param $out i32) (result i32)
       (call $d3d9_texture_create (local.get $d) (local.get $w) (local.get $h) (i32.const 1)
         (local.get $usage) (local.get $format) (local.get $pool) (local.get $out))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "desc") (param $t i32) (param $level i32) (param $out i32) (result i32)
-      (call $d3d9_texture_desc (local.get $t) (local.get $level) (local.get $out)) (global.get $eax))
+      (call $d3d9_texture_desc (local.get $t) (local.get $level) (local.get $out)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "lock") (param $t i32) (param $level i32) (param $out i32) (result i32)
       (call $d3d9_texture_lock (local.get $t) (local.get $level) (local.get $out)
-        (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "unlock") (param $t i32) (param $level i32) (result i32)
       (call $handle_IDirect3DTexture9_UnlockRect (local.get $t) (local.get $level)
-        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
   ` });
   e.init_dx_com_thunks();
   const d = e.new_device(), out = 0x00409000, desc = out + 256, locked = out + 512;

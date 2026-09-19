@@ -12,8 +12,8 @@ const extraWat = String.raw`
   (export "test_dp_bind_entity" (func $dp_bind_entity))
   (func (export "test_start_directplay_enumerate")
       (param $ansi i32) (param $callback i32) (param $context i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $ansi)
       (then
         (call $handle_DirectPlayEnumerateA
@@ -27,8 +27,8 @@ const extraWat = String.raw`
 
   (func (export "test_null_directplay_enumerate") (param $ansi i32) (result i64)
     (global.set $eip (i32.const 0))
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $ansi)
       (then (call $handle_DirectPlayEnumerateA
         (i32.const 0) (i32.const 0) (i32.const 0)
@@ -37,49 +37,49 @@ const extraWat = String.raw`
         (i32.const 0) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_dp_create_group")
       (param $out i32) (param $name i32) (param $data i32) (param $size i32)
       (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $flags))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $flags))
     (call $handle_IDirectPlay3_CreateGroup
       (i32.const 0) (local.get $out) (local.get $name) (local.get $data)
       (local.get $size) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_create_player")
       (param $out i32) (param $name i32) (param $data i32) (param $size i32)
       (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $size))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $flags))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $size))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $flags))
     (call $handle_IDirectPlay3_CreatePlayer
       (i32.const 0) (local.get $out) (local.get $name) (i32.const 0)
       (local.get $data) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_create_group_in_group")
       (param $parent i32) (param $out i32) (param $name i32) (param $data i32)
       (param $size i32) (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $size))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $flags))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $size))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $flags))
     (call $handle_IDirectPlay3_CreateGroupInGroup
       (i32.const 0) (local.get $parent) (local.get $out) (local.get $name)
       (local.get $data) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_membership")
       (param $owner i32) (param $group i32) (param $member i32)
       (param $member_type i32) (param $add i32) (result i64)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $member_type)
       (then
         (if (local.get $add)
@@ -98,23 +98,23 @@ const extraWat = String.raw`
             (local.get $owner) (local.get $group) (local.get $member)
             (i32.const 0) (i32.const 0) (i32.const 0))))))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_dp_set_player_name")
       (param $player i32) (param $name i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_IDirectPlay3_SetPlayerName
       (i32.const 0) (local.get $player) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_get_name")
       (param $id i32) (param $type i32) (param $out i32) (param $size_ptr i32)
       (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $type)
       (then (call $handle_IDirectPlay3_GetPlayerName
         (i32.const 0) (local.get $id) (local.get $out) (local.get $size_ptr)
@@ -122,12 +122,12 @@ const extraWat = String.raw`
       (else (call $handle_IDirectPlay3_GetGroupName
         (i32.const 0) (local.get $id) (local.get $out) (local.get $size_ptr)
         (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_get_flags")
       (param $id i32) (param $type i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $type)
       (then (call $handle_IDirectPlay3_GetPlayerFlags
         (i32.const 0) (local.get $id) (local.get $out)
@@ -135,13 +135,13 @@ const extraWat = String.raw`
       (else (call $handle_IDirectPlay3_GetGroupFlags
         (i32.const 0) (local.get $id) (local.get $out)
         (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_set_data")
       (param $id i32) (param $type i32) (param $data i32) (param $size i32)
       (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $type)
       (then (call $handle_IDirectPlay3_SetPlayerData
         (i32.const 0) (local.get $id) (local.get $data) (local.get $size)
@@ -149,13 +149,13 @@ const extraWat = String.raw`
       (else (call $handle_IDirectPlay3_SetGroupData
         (i32.const 0) (local.get $id) (local.get $data) (local.get $size)
         (local.get $flags) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_get_data")
       (param $id i32) (param $type i32) (param $out i32) (param $size_ptr i32)
       (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $type)
       (then (call $handle_IDirectPlay3_GetPlayerData
         (i32.const 0) (local.get $id) (local.get $out) (local.get $size_ptr)
@@ -163,12 +163,12 @@ const extraWat = String.raw`
       (else (call $handle_IDirectPlay3_GetGroupData
         (i32.const 0) (local.get $id) (local.get $out) (local.get $size_ptr)
         (local.get $flags) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_destroy")
       (param $id i32) (param $type i32) (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (local.get $type)
       (then (call $handle_IDirectPlay3_DestroyPlayer
         (i32.const 0) (local.get $id) (i32.const 0)
@@ -176,14 +176,14 @@ const extraWat = String.raw`
       (else (call $handle_IDirectPlay3_DestroyGroup
         (i32.const 0) (local.get $id) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dp_enum")
       (param $kind i32) (param $group i32) (param $callback i32)
       (param $context i32) (param $flags i32) (result i32)
     (global.set $eip (i32.const 0))
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (if (i32.eq (local.get $kind) (i32.const 0))
       (then (call $handle_IDirectPlay3_EnumPlayers
         (i32.const 0) (i32.const 0) (local.get $callback) (local.get $context)
@@ -194,7 +194,7 @@ const extraWat = String.raw`
             (i32.const 0) (i32.const 0) (local.get $callback) (local.get $context)
             (local.get $flags) (i32.const 0)))
           (else
-            (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $flags))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $flags))
             (if (i32.eq (local.get $kind) (i32.const 2))
               (then (call $handle_IDirectPlay3_EnumGroupPlayers
                 (i32.const 0) (local.get $group) (i32.const 0)
@@ -205,12 +205,12 @@ const extraWat = String.raw`
     (global.get $eip))
 
   (func (export "test_dp_close") (result i32)
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_IDirectPlay3_Close
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

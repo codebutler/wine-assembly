@@ -9,12 +9,12 @@ const { bootRenderHarness } = require('./render-helper');
       (call $win16_seg_set (i32.const 1) (i32.const 0x00100000)
         (i32.const 0x10000) (i32.const 0) (i32.const 1))
       (global.set $code16 (i32.const 1))
-      (global.set $esp (i32.const 0x00110100))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
       (call $gs16 (i32.const 0x00110100) (i32.const 0x395))
       (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
       (drop (call $win16_user (i32.const 112)))
-      (global.get $eax))
-    (func (export "test_wait_esp") (result i32) (global.get $esp))
+      (i32.load offset=0 (global.get $reg_base)))
+    (func (export "test_wait_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
     (func (export "test_wait_flag") (result i32) (global.get $yield_flag))
   ` });
   for (let i = 0; i < 3; i++) {

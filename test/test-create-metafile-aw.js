@@ -9,7 +9,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_create_memory_metafile")
         (param $wide i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (if (local.get $wide)
       (then
         (call $handle_CreateMetaFileW
@@ -20,8 +20,8 @@ const extraWat = String.raw`
           (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 `;
 
 (async () => {

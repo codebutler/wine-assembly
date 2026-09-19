@@ -22,7 +22,7 @@ const LAST_ERROR_SENTINEL = 0x4d50524f;
 
 const extraWat = String.raw`
   (func $mpr_test_begin
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (global.set $last_error (i32.const 0x4d50524f)))
 
   (func (export "test_mpr_last_error") (result i32)
@@ -38,14 +38,14 @@ const extraWat = String.raw`
     (call $handle_WNetOpenEnumA
       (i32.const 2) (i32.const 1) (i32.const 0) (i32.const 0)
       (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_open_w") (param $out i32) (result i32)
     (call $mpr_test_begin)
     (call $handle_WNetOpenEnumW
       (i32.const 2) (i32.const 1) (i32.const 0) (i32.const 0)
       (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_enum_a")
         (param $h i32) (param $count i32) (param $buf i32) (param $size i32) (result i32)
@@ -53,7 +53,7 @@ const extraWat = String.raw`
     (call $handle_WNetEnumResourceA
       (local.get $h) (local.get $count) (local.get $buf) (local.get $size)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_enum_w")
         (param $h i32) (param $count i32) (param $buf i32) (param $size i32) (result i32)
@@ -61,14 +61,14 @@ const extraWat = String.raw`
     (call $handle_WNetEnumResourceW
       (local.get $h) (local.get $count) (local.get $buf) (local.get $size)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_close") (param $h i32) (result i32)
     (call $mpr_test_begin)
     (call $handle_WNetCloseEnum
       (local.get $h) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_parent_a")
         (param $nr i32) (param $buf i32) (param $size i32) (result i32)
@@ -76,7 +76,7 @@ const extraWat = String.raw`
     (call $handle_WNetGetResourceParentA
       (local.get $nr) (local.get $buf) (local.get $size) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_parent_w")
         (param $nr i32) (param $buf i32) (param $size i32) (result i32)
@@ -84,7 +84,7 @@ const extraWat = String.raw`
     (call $handle_WNetGetResourceParentW
       (local.get $nr) (local.get $buf) (local.get $size) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_info_a")
         (param $nr i32) (param $buf i32) (param $size i32) (param $system i32) (result i32)
@@ -92,7 +92,7 @@ const extraWat = String.raw`
     (call $handle_WNetGetResourceInformationA
       (local.get $nr) (local.get $buf) (local.get $size) (local.get $system)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_info_w")
         (param $nr i32) (param $buf i32) (param $size i32) (param $system i32) (result i32)
@@ -100,28 +100,28 @@ const extraWat = String.raw`
     (call $handle_WNetGetResourceInformationW
       (local.get $nr) (local.get $buf) (local.get $size) (local.get $system)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_add_a") (param $nr i32) (result i32)
     (call $mpr_test_begin)
     (call $handle_WNetAddConnection2A
       (local.get $nr) (i32.const 0) (i32.const 0) (i32.const 1)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_add_w") (param $nr i32) (result i32)
     (call $mpr_test_begin)
     (call $handle_WNetAddConnection2W
       (local.get $nr) (i32.const 0) (i32.const 0) (i32.const 1)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_cancel_a") (param $name i32) (result i32)
     (call $mpr_test_begin)
     (call $handle_WNetCancelConnection2A
       (local.get $name) (i32.const 1) (i32.const 1) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_connection_a")
         (param $name i32) (param $buf i32) (param $size i32) (result i32)
@@ -129,7 +129,7 @@ const extraWat = String.raw`
     (call $handle_WNetGetConnectionA
       (local.get $name) (local.get $buf) (local.get $size) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_mpr_universal_a")
         (param $name i32) (param $level i32) (param $buf i32) (param $size i32) (result i32)
@@ -137,7 +137,7 @@ const extraWat = String.raw`
     (call $handle_WNetGetUniversalNameA
       (local.get $name) (local.get $level) (local.get $buf) (local.get $size)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 function importedMprNames(exe) {

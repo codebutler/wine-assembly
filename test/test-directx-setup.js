@@ -8,11 +8,11 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = `
   (func (export "test_directx_setup") (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_DirectXSetup
       (i32.const 0x00010001) (i32.const 0x00420270) (i32.const 0x0000023f)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

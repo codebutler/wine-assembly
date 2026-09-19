@@ -15,32 +15,32 @@ const extraWat = String.raw`
     (i32.store offset=4 (call $g2w (local.get $name)) (i32.const 0x69737265)) ;; "ersi"
     (i32.store offset=8 (call $g2w (local.get $name)) (i32.const 0x78456e6f)) ;; "onEx"
     (i32.store8 offset=12 (call $g2w (local.get $name)) (i32.const 0))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_version_ex") (param $stack i32) (param $info i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetVersionEx
       (local.get $info) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_call_version_ex_a") (param $stack i32) (param $info i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetVersionExA
       (local.get $info) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_call_version_ex_w") (param $stack i32) (param $info i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetVersionExW
       (local.get $info) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_get_proc_system_windows_directory") (param $stack i32) (result i32)
     (local $name i32)
@@ -52,19 +52,19 @@ const extraWat = String.raw`
     (i32.store offset=16 (call $g2w (local.get $name)) (i32.const 0x65726944)) ;; "Dire"
     (i32.store offset=20 (call $g2w (local.get $name)) (i32.const 0x726f7463)) ;; "ctor"
     (i32.store offset=24 (call $g2w (local.get $name)) (i32.const 0x00004179)) ;; "yA"
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_system_windows_directory")
         (param $stack i32) (param $buf i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetSystemWindowsDirectoryA
       (local.get $buf) (i32.const 260) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_get_proc_system_default_ui_language") (param $stack i32) (result i32)
     (local $name i32)
@@ -76,45 +76,45 @@ const extraWat = String.raw`
     (i32.store offset=16 (call $g2w (local.get $name)) (i32.const 0x614c4955)) ;; "UILa"
     (i32.store offset=20 (call $g2w (local.get $name)) (i32.const 0x6175676e)) ;; "ngua"
     (i32.store offset=24 (call $g2w (local.get $name)) (i32.const 0x00006567)) ;; "ge"
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_system_default_ui_language") (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetSystemDefaultUILanguage
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_get_proc_lstrlen") (param $stack i32) (result i32)
     (local $name i32)
     (local.set $name (call $heap_alloc (i32.const 8)))
     (i32.store (call $g2w (local.get $name)) (i32.const 0x7274736c)) ;; "lstr"
     (i32.store offset=4 (call $g2w (local.get $name)) (i32.const 0x006e656c)) ;; "len"
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_lstrlen")
         (param $stack i32) (param $text i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_lstrlen
       (local.get $text) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_call_lstrlen_a")
         (param $stack i32) (param $text i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_lstrlenA
       (local.get $text) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

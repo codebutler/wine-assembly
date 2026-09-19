@@ -9,11 +9,11 @@ const STACK = 0x00300000;
 
 const extraWat = String.raw`
   (func (export "test_getdrive") (result i32)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $handle__getdrive
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

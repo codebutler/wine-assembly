@@ -11,20 +11,20 @@ const extraWat = String.raw`
   (func (export "test_call_itoa")
         (param $stack i32) (param $value i32) (param $buffer i32)
         (param $radix i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle__itoa
       (local.get $value) (local.get $buffer) (local.get $radix)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_call_ltoa")
         (param $stack i32) (param $value i32) (param $buffer i32)
         (param $radix i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle__ltoa
       (local.get $value) (local.get $buffer) (local.get $radix)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 function readCString(memory, wasmAddress) {

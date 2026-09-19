@@ -36,42 +36,42 @@ const extraWat = String.raw`
   (func (export "test_cocreate")
       (param $clsid i32) (param $outer i32) (param $iid i32) (param $out i32)
       (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_CoCreateInstance
       (local.get $clsid) (local.get $outer) (i32.const 1)
       (local.get $iid) (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_IDirectMusic_QueryInterface")
         (param $obj i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectMusic_QueryInterface
       (local.get $obj) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_IAMMultiMediaStream_QueryInterface")
         (param $obj i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IAMMultiMediaStream_QueryInterface
       (local.get $obj) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_IDirectDrawGammaControl_QueryInterface")
         (param $obj i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawGammaControl_QueryInterface
       (local.get $obj) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_IDirectMusic_Release") (param $obj i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectMusic_Release
       (local.get $obj) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

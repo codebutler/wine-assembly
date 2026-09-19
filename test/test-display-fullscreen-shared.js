@@ -28,10 +28,10 @@ const EXTRA_WAT = `
     (call $gs32 (i32.add (local.get $dm) (i32.const 108)) (local.get $w))
     (call $gs32 (i32.add (local.get $dm) (i32.const 112)) (local.get $h))
     (call $change_display_settings_core (local.get $dm) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_change_display_settings_null") (result i32)
     (call $change_display_settings_core (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 let failures = 0;

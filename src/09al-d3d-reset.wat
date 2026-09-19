@@ -20,7 +20,7 @@
   (local $width i32) (local $height i32) (local $format i32) (local $windowed i32) (local $hwnd i32)
   (local $auto i32) (local $autoformat i32) (local $result i32) (local $next i32) (local $entry i32)
   (local $i i32) (local $shared i32) (local $client i32) (local $swap i32) (local $refresh i32) (local $interval i32) (local $ppwa i32)
-  (global.set $eax (i32.const 0x8876086c))
+  (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876086c))
   (local.set $state (call $d3d9_program_state (local.get $device)))
   (if (i32.eqz (local.get $state)) (then (return)))
   (local.set $old (call $g2w (local.get $state)))
@@ -81,7 +81,7 @@
     (local.set $auto (i32.ne (call $gl32 (i32.add (local.get $pp) (i32.const 36))) (i32.const 0)))
     (local.set $autoformat (call $gl32 (i32.add (local.get $pp) (i32.const 40))))
     (if (i32.and (local.get $auto) (i32.eqz (call $d3d9_depth_format (local.get $autoformat)))) (then (return)))
-    (global.set $eax (i32.const 0x8007000e))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000e))
     (local.set $plan (call $heap_alloc (i32.const 64)))
     (if (i32.eqz (local.get $plan)) (then (return)))
     (local.set $wa (call $g2w (local.get $plan))) (memory.fill (local.get $wa) (i32.const 0) (i32.const 64))
@@ -115,7 +115,7 @@
   (local.set $wa (call $g2w (local.get $plan)))
   (i32.store offset=21768 (local.get $old) (i32.const 0))
   (if (i32.ne (local.get $result) (i32.const 1)) (then
-    (call $d3d9_reset_dispose (local.get $plan)) (global.set $eax (i32.const 0x88760868)) (return)))
+    (call $d3d9_reset_dispose (local.get $plan)) (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760868)) (return)))
   (local.set $next (call $g2w (i32.load offset=4 (local.get $wa))))
   ;; Preserve vtables needed by surviving shaders/managed resources and the
   ;; creation identity, but none of the old bindings or render state.
@@ -179,4 +179,4 @@
   (call $gs32 (local.get $pp) (i32.const 0)) (call $gs32 (i32.add (local.get $pp) (i32.const 4)) (i32.const 0))
   (call $gs32 (i32.add (local.get $pp) (i32.const 12)) (i32.const 0))
   (if (i32.load offset=44 (local.get $wa)) (then (call $gs32 (i32.add (local.get $pp) (i32.const 8)) (i32.const 0))))
-  (call $heap_free (local.get $plan)) (global.set $eax (i32.const 0)))
+  (call $heap_free (local.get $plan)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))

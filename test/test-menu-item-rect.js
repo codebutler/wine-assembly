@@ -8,14 +8,14 @@ const extraWat = String.raw`
   (func (export "test_call_GetMenuItemRect")
       (param $hwnd i32) (param $hmenu i32) (param $item i32) (param $rect i32)
       (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_GetMenuItemRect
       (local.get $hwnd) (local.get $hmenu) (local.get $item) (local.get $rect)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_menu_item_rect_esp") (result i32)
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 const SENTINEL = [0x11111111, 0x22222222, 0x33333333, 0x44444444];

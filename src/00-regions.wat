@@ -296,6 +296,16 @@
   ;; docs/re-notes/warcraft3-demo.md has the whole measured chain.
   (region.declare $THREAD_CACHE_BASE (size 0x01E00000) (align 0x00001000)
     (owner "01-header.wat:$THREAD_CACHE_BASE"))
+  ;; The eight x86 GPRs, per guest thread. Memory is SHARED between instances
+  ;; while wasm globals are per-instance, so one fixed address would give every
+  ;; worker the same register file — hence a tid-strided partition, exactly
+  ;; like $THREAD_CACHE_BASE above. The stride is a full 64-byte cache line so
+  ;; two threads never share one, and 64 bytes is 16 slots for 8 registers, so
+  ;; a 4-bit-masked index that goes out of range lands in this thread's own
+  ;; padding rather than another thread's file.
+  (region.declare $REGFILE (size 0x00000400) (align 0x00000040)
+    (stride 0x40 (count $REGFILE_THREADS))
+    (owner "01-header.wat:$REGFILE"))
   (region.declare-derived $GUEST_STACK (base (g2w 0x07400000)) (size 0x00100000) (align 0x00001000)
     (owner "01-header.wat:$GUEST_STACK"))
   (region.declare-derived $THUNK_BASE (base (g2w 0x07500000)) (size 0x00040000) (align 0x00001000)

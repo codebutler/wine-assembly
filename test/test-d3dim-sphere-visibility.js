@@ -11,7 +11,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_d3dim_sphere_visibility")
     (param $revision i32) (param $count i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $gs32 (i32.const 0x00300018) (local.get $out))
     (if (i32.eq (local.get $revision) (i32.const 3))
       (then
@@ -22,9 +22,9 @@ const extraWat = String.raw`
         (call $handle_IDirect3DDevice7_ComputeSphereVisibility
           (i32.const 0) (i32.const 0) (i32.const 0) (local.get $count)
           (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_sphere_esp") (result i32)
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

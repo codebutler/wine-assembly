@@ -29,10 +29,10 @@ const IR=require('../lib/d3d-shader-ir');
    (load.field DxObject refcount (call $dx_from_this (local.get $device))))
  (func (export "create_shader") (param $device i32) (param $code i32) (param $out i32) (result i32)
    (call $d3d9_shader_create (local.get $device) (local.get $code) (local.get $out) (i32.const 0xfffe0101))
-   (global.get $eax))
+   (i32.load offset=0 (global.get $reg_base)))
  (func (export "release_shader") (param $shader i32) (result i32)
    (call $handle_IDirect3DShader9_Release (local.get $shader) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-   (global.get $eax))`;
+   (i32.load offset=0 (global.get $reg_base)))`;
  let patched=0;
  const wasm=compileSrcWasm((file,source)=>{
   if(file==='09ad-handlers-d3d9.wat'){

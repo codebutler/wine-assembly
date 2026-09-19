@@ -111,11 +111,11 @@ const IMAGE_MASK = 0x00C0C0C0;
 const extraWat = String.raw`
   (func (export "test_set_scroll_pos")
       (param $hwnd i32) (param $bar i32) (param $pos i32) (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (call $handle_SetScrollPos
       (local.get $hwnd) (local.get $bar) (local.get $pos) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

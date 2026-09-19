@@ -15,13 +15,13 @@ const extraWat = String.raw`
     (call $console_input_set_mode (i32.const 3)))
   (func (export "test_set_ctrl_handler") (param $handler i32) (param $add i32)
         (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (call $handle_SetConsoleCtrlHandler
       (local.get $handler) (local.get $add) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_prepare_ctrl_dispatch")
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00405000))
     (global.set $current_thunk_eip (i32.const 0x00403000))
     (global.set $font_enum_ret_thunk (i32.const 0x00404000)))
@@ -30,8 +30,8 @@ const extraWat = String.raw`
     (call $console_ctrl_maybe_begin))
   (func (export "test_return_from_ctrl") (param $handled i32)
     ;; Model HandlerRoutine's stdcall RET 4.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-    (global.set $eax (local.get $handled))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handled))
     (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0011))
     (i32.store offset=4 (global.get $THUNK_BASE) (i32.const 0))
     (call $win32_dispatch (i32.const 0)))
@@ -58,14 +58,14 @@ const extraWat = String.raw`
     (global.get $last_error))
   (func (export "test_read_console_input") (param $buffer i32) (param $read i32)
         (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00405000))
     (global.set $current_thunk_eip (i32.const 0x00403000))
     (global.set $font_enum_ret_thunk (i32.const 0x00404000))
     (call $handle_ReadConsoleInputA
       (i32.const 1) (local.get $buffer) (i32.const 1) (local.get $read)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

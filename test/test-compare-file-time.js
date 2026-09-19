@@ -17,11 +17,11 @@ const extraWat = String.raw`
     (call $gs32 (i32.add (local.get $a) (i32.const 4)) (local.get $a_hi))
     (call $gs32 (local.get $b) (local.get $b_lo))
     (call $gs32 (i32.add (local.get $b) (i32.const 4)) (local.get $b_hi))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_CompareFileTime
       (local.get $a) (local.get $b) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

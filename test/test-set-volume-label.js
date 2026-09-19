@@ -14,14 +14,14 @@ const extraWat = String.raw`
   (func (export "test_set_volume_label")
       (param $root i32) (param $label i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_SetVolumeLabelA
       (local.get $root) (local.get $label)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_set_volume_label_esp_delta
-      (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_volume_label_esp_delta") (result i32)
     (global.get $test_set_volume_label_esp_delta))

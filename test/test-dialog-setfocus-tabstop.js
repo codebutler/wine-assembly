@@ -51,7 +51,7 @@ const extraWat = String.raw`
     (param $dlg i32) (param $candidate i32) (param $accepted i32)
     (param $stack i32) (result i32)
     (global.set $createwnd_implicit_show (i32.const 0))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $gs32 (local.get $stack) (i32.const 0x44494643)) ;; "DIFC"
     (call $gs32 (i32.add (local.get $stack) (i32.const 4))
       (local.get $candidate))
@@ -59,10 +59,10 @@ const extraWat = String.raw`
       (i32.const 0x00405678))
     (call $gs32 (i32.add (local.get $stack) (i32.const 12))
       (local.get $dlg))
-    (global.set $eax (local.get $accepted))
+    (i32.store offset=0 (global.get $reg_base) (local.get $accepted))
     (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA0001))
     (call $win32_dispatch (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_eip") (result i32) (global.get $eip))
 
@@ -70,12 +70,12 @@ const extraWat = String.raw`
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
     (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_DefDlgProcA
       (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)
       (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_dialog_proc") (param $hwnd i32) (param $proc i32)
     (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_DIALOG))

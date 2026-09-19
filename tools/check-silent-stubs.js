@@ -37,8 +37,15 @@ function functions(source, prefix) {
 // mutate a global: that broader shape deliberately catches stateful-looking
 // no-ops such as SetFileApisToOEM/ANSI, which escaped the old exact matcher.
 const effectOrControl = /\((?:call(?:_indirect)?|return|unreachable|if|block|loop|br(?:_if|_table|_on_[A-Za-z0-9_]+)?|memory\.(?:fill|copy|init|grow)|table\.(?:set|fill|copy|init)|data\.drop|elem\.drop|(?:i32|i64|f32|f64|v128)\.(?:store\d*|atomic\.(?:store|rmw|cmpxchg|wait|notify)))\b/;
+// A write into the per-thread register file is CPU state, not a published
+// output buffer — it is the exact analogue of `global.set $eax`, which this
+// classifier has always treated as quiet. Neutralize just the store head so a
+// constant stub stays quiet; the stored VALUE is left in place, so a `call`
+// inside it still makes the handler loud.
+const stripRegFileStores = flat =>
+  flat.replace(/\(i32\.store offset=\d+ \(global\.get \$reg_base\)/g, '(regset');
 const isQuietHandler = flat =>
-  !effectOrControl.test(flat) && !/\bunreachable\b/.test(flat);
+  !effectOrControl.test(stripRegFileStores(flat)) && !/\bunreachable\b/.test(flat);
 
 function quietEntries(file, source) {
   const entries = [];
@@ -295,7 +302,7 @@ const digest = crypto.createHash('sha256')
 // that can exist; it succeeds and every other handle is D3DERR_INVALIDCALL.
 // GetPixelShader reports that same 0. Morrowind saves and restores it.
 const EXPECTED_COUNT = 267;
-const EXPECTED_SHA256 = '09c872142087ff24efe76e843c73f4c3d20b9b3645020e6d4d8498e1980df1c0';
+const EXPECTED_SHA256 = 'f53a80702fa1c65ab0b04f00ebdbfad41ce2a32161b36e9564c2b1b575a01199';
 
 const pinLines = () => [
   `const EXPECTED_COUNT = ${quiet.length};`,

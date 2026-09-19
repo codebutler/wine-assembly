@@ -8,29 +8,29 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_convert_default_locale") (param $locale i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_ConvertDefaultLocale (local.get $locale) (i32.const 0) (i32.const 0)
-      (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+      (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_get_thread_locale") (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_GetThreadLocale
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_set_thread_locale") (param $locale i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SetThreadLocale
       (local.get $locale) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_create_thread") (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     ;; Sixth argument, lpThreadId, is NULL.
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 0))
     (call $handle_CreateThread
       (i32.const 0) (i32.const 0x10000) (i32.const 0x00401000)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_set_last_error") (param $value i32)
     (global.set $last_error (local.get $value)))
   (func (export "test_get_last_error") (result i32)

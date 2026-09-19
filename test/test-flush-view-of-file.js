@@ -153,21 +153,21 @@ function makeCtx() {
         (i32.store offset=4 (global.get $VIRTUAL_MAP_STATE) (region.end $VIRTUAL_BACKING_BASE))
         (region.end $VIRTUAL_BACKING_BASE))
       (func (export "test_flush_view_of_file") (param $base i32) (param $bytes i32) (result i64)
-        (global.set $esp (i32.const 0x00300000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
         (call $handle_FlushViewOfFile
           (local.get $base) (local.get $bytes)
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (i64.or
-          (i64.extend_i32_u (global.get $eax))
-          (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+          (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+          (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
       (func (export "test_map_view_of_file") (result i64)
-        (global.set $esp (i32.const 0x00300000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
         (call $handle_MapViewOfFile
           (i32.const 0xfb000001) (i32.const 4) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (i64.or
-          (i64.extend_i32_u (global.get $eax))
-          (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+          (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+          (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
     `,
     extraHostOverrides: {
       fs_flush_view: (...args) => { seen.push(args); return 1; },

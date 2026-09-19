@@ -57,8 +57,8 @@
                   (if (result i32) (i32.eq (local.get $arg0) (i32.const 0x1F02))
                     (then (region.addr $TT_FONT_STRING_STORAGE 0x88))
                     (else (region.addr $TT_FONT_STRING_STORAGE 0xA0))))))))
-        (global.set $eax (call $gpu_linear_to_guest (local.get $string_wa)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (call $gpu_linear_to_guest (local.get $string_wa)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
 
     ;; wglGetProcAddress. An extension named in GL_EXTENSIONS has to be
@@ -69,7 +69,7 @@
     ;; stays exactly the set api_table.json implements.
     (if (i32.eq (local.get $opcode) (i32.const 50))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (block $wgpa
           (br_if $wgpa (i32.lt_u (local.get $arg0) (i32.const 0x10000)))
           (local.set $name_wa (call $g2w (local.get $arg0)))
@@ -89,12 +89,12 @@
           (i32.store (local.get $aux)
             (i32.sub (local.get $string_wa) (global.get $GUEST_BASE)))
           (i32.store offset=4 (local.get $aux) (local.get $api_id))
-          (global.set $eax (i32.add
+          (i32.store offset=0 (global.get $reg_base) (i32.add
             (i32.sub (local.get $aux) (global.get $GUEST_BASE))
             (global.get $image_base)))
           (global.set $num_thunks (i32.add (global.get $num_thunks) (i32.const 1)))
           (call $update_thunk_end))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
 
     ;; WGL context creation/make-current needs the target owning the supplied
@@ -152,11 +152,11 @@
                       (i32.const 0x80000000))))
                   (else (local.set $aux (global.get $main_hwnd))))))))))
 
-    (global.set $eax (call $gl_wat_encode_call
-      (local.get $opcode) (call $g2w (global.get $esp)) (local.get $aux)))
+    (i32.store offset=0 (global.get $reg_base) (call $gl_wat_encode_call
+      (local.get $opcode) (call $g2w (i32.load offset=16 (global.get $reg_base))) (local.get $aux)))
     ;; OpenGL entry points use APIENTRY/stdcall. stack_dwords counts physical
     ;; 32-bit stack words, so GLdouble arguments correctly consume two each.
-    (global.set $esp (i32.add (global.get $esp)
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
       (i32.shl (i32.add (local.get $stack_dwords) (i32.const 1)) (i32.const 2))))
   )
 
@@ -170,12 +170,12 @@
       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (i32.and (local.get $arg1) (i32.const 0x00000001)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; Opcode 55 is gpuPresent, shared with SwapBuffers/wglSwapBuffers. A zero
     ;; result means no current context, which is a genuine failure here.
-    (global.set $eax (call $gl_wat_encode_call
-      (i32.const 55) (call $g2w (global.get $esp)) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (call $gl_wat_encode_call
+      (i32.const 55) (call $g2w (i32.load offset=16 (global.get $reg_base))) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )

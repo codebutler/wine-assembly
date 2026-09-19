@@ -15,24 +15,24 @@ const extraWat = String.raw`
       (param $hwnd i32) (param $id i32) (param $mods i32) (param $vk i32)
       (result i64)
     (global.set $last_error (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_RegisterHotKey
       (local.get $hwnd) (local.get $id) (local.get $mods) (local.get $vk)
       (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_unregister_hotkey")
       (param $hwnd i32) (param $id i32) (result i64)
     (global.set $last_error (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_UnregisterHotKey
       (local.get $hwnd) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_hotkey_last_error") (result i32)
     (global.get $last_error))
@@ -41,11 +41,11 @@ const extraWat = String.raw`
       (param $remove i32) (param $min i32) (param $max i32) (result i32)
     (if (i32.eqz (global.get $test_hotkey_msg))
       (then (global.set $test_hotkey_msg (call $heap_alloc (i32.const 28)))))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_PeekMessageA
       (global.get $test_hotkey_msg) (i32.const 0)
       (local.get $min) (local.get $max) (local.get $remove) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_hotkey_msg_field") (param $field i32) (result i32)
     (call $gl32 (i32.add (global.get $test_hotkey_msg)

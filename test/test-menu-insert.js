@@ -40,7 +40,7 @@ function check(label, fn) {
       (call $handle_CreateMenu
         (i32.const 0) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_register_menu_window") (param $hwnd i32)
       (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_CTRL_NATIVE)))
     (func (export "test_call_SetMenu_bridge")
@@ -48,28 +48,28 @@ function check(label, fn) {
       (call $handle_SetMenu
         (local.get $hwnd) (local.get $hmenu) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_call_SetMenuItemInfoA")
         (param $hmenu i32) (param $item i32) (param $bypos i32) (param $mii i32)
         (result i32)
       (call $handle_SetMenuItemInfoA
         (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
         (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_call_GetMenuItemInfoA")
         (param $hmenu i32) (param $item i32) (param $bypos i32) (param $mii i32)
         (result i32)
       (call $handle_GetMenuItemInfoA
         (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
         (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_call_SetMenuItemBitmaps")
         (param $hmenu i32) (param $item i32) (param $flags i32)
         (param $unchecked i32) (param $checked i32) (result i32)
       (call $handle_SetMenuItemBitmaps
         (local.get $hmenu) (local.get $item) (local.get $flags)
         (local.get $unchecked) (local.get $checked) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
   const wat = harness.exports;
 

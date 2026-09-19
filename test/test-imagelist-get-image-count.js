@@ -14,12 +14,12 @@ const { bootRenderHarness } = require('./render-helper');
       (call $handle_ImageList_Create
         (i32.const 16) (i32.const 16) (i32.const 0x21)
         (i32.const 0) (i32.const 4) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_imagelist_count") (param $himl i32) (result i32)
       (call $handle_ImageList_GetImageCount
         (local.get $himl) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_imagelist_seed_count")
         (param $himl i32) (param $count i32)
       (call $gs32 (i32.add (local.get $himl) (i32.const 12)) (local.get $count)))
@@ -27,7 +27,7 @@ const { bootRenderHarness } = require('./render-helper');
       (call $handle_ImageList_Destroy
         (local.get $himl) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
 
   e.set_esp(0x700100);

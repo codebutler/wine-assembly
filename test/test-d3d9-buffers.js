@@ -12,16 +12,16 @@ const {bootRenderHarness}=require('./render-helper');
     (func (export "create") (param $d i32) (param $length i32) (param $usage i32)
       (param $format i32) (param $pool i32) (param $out i32) (param $kind i32) (result i32)
       (call $d3d9_buffer_create (local.get $d) (local.get $length) (local.get $usage)
-        (local.get $format) (local.get $pool) (local.get $out) (local.get $kind)) (global.get $eax))
+        (local.get $format) (local.get $pool) (local.get $out) (local.get $kind)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "bind") (param $d i32) (param $b i32) (param $kind i32)
       (param $offset i32) (param $stride i32) (result i32)
       (call $d3d9_buffer_bind (local.get $d) (local.get $b) (local.get $kind)
-        (local.get $offset) (local.get $stride) (i32.const 0)) (global.get $eax))
+        (local.get $offset) (local.get $stride) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     ${names.map(name=>`(func (export "${name}") (param $a i32) (param $b i32) (param $c i32)
       (param $d i32) (param $f i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_IDirect3DBuffer9_${name} (local.get $a) (local.get $b) (local.get $c)
-        (local.get $d) (local.get $f) (i32.const 0)) (global.get $eax))`).join('\n')}
+        (local.get $d) (local.get $f) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   `});
   e.init_dx_com_thunks();
   const d=e.device(),other=e.device(),out=0x00409000,desc=out+128,iid=out+256;

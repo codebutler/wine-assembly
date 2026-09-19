@@ -27,13 +27,13 @@ const extraWat = String.raw`
     (drop (call $win16_dynamic_module_id (local.get $name))))
 
   (func $test_ver_stack (param $argbytes i32)
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1))))
 
   (func $test_ver_result (result i32)
-    (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF))
-      (i32.shl (i32.sub (global.get $esp) (i32.const 0x00110000)) (i32.const 16))))
+    (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF))
+      (i32.shl (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00110000)) (i32.const 16))))
 
   (func (export "test_ver_module") (result i32)
     (call $test_ver_init)

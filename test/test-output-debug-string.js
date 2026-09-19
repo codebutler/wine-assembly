@@ -7,8 +7,8 @@ const { bootRenderHarness } = require('./render-helper');
 const STACK = 0x00300000;
 const extraWat = String.raw`
   (func (export "test_output_debug_string_a") (param $text i32)
-    (global.set $esp (i32.const ${STACK}))
-    (call $gs32 (global.get $esp) (i32.const 0x12345678))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x12345678))
     (call $handle_OutputDebugStringA
       (local.get $text) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0)))

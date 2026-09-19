@@ -26,8 +26,8 @@ const extraWat = String.raw`
     (global.set $seg_base_ss (i32.const 0x00110000))
     (global.set $sreg_ds (call $win16_index_to_sel (i32.const 2)))
     (global.set $seg_base_ds (i32.const 0x00110000))
-    (global.set $ebp (i32.const 0x26))
-    (global.set $eax (local.get $eax_in))
+    (i32.store offset=20 (global.get $reg_base) (i32.const 0x26))
+    (i32.store offset=0 (global.get $reg_base) (local.get $eax_in))
     (call $gs16 (i32.const 0x00110020) (local.get $sel))
     (local.set $code (i32.add (i32.const 0x00100000) (local.get $off)))
     (call $gs8 (local.get $code)                 (i32.const 0x0F))
@@ -37,7 +37,7 @@ const extraWat = String.raw`
     (call $gs8 (i32.add (local.get $code) (i32.const 4)) (i32.const 0xF4))
     (call $load_eflags (i32.const 0x202))
     (global.set $eip (local.get $code)))
-  (func (export "test_lar_eax") (result i32) (global.get $eax))
+  (func (export "test_lar_eax") (result i32) (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_lar_zf") (result i32) (call $get_zf))
 `;
 

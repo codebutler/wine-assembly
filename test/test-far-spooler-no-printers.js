@@ -28,22 +28,22 @@ const ERROR_INVALID_PRINTER_NAME = 1801;
 
 const extraWat = String.raw`
   (func $test_spool_begin
-    (global.set $esp (i32.const ${STACK}))
-    (call $gs32 (global.get $esp) (i32.const 0x12345678)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x12345678)))
 
   (func (export "test_EnumPrintersA")
       (param $flags i32) (param $name i32) (param $level i32)
       (param $buffer i32) (param $size i32)
       (param $needed i32) (param $returned i32) (result i32)
     (call $test_spool_begin)
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))
       (local.get $needed))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))
       (local.get $returned))
     (call $handle_EnumPrintersA
       (local.get $flags) (local.get $name) (local.get $level)
       (local.get $buffer) (local.get $size) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_OpenPrinterA")
       (param $name i32) (param $out i32) (param $defaults i32) (result i32)
@@ -51,14 +51,14 @@ const extraWat = String.raw`
     (call $handle_OpenPrinterA
       (local.get $name) (local.get $out) (local.get $defaults)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_ClosePrinter") (param $handle i32) (result i32)
     (call $test_spool_begin)
     (call $handle_ClosePrinter
       (local.get $handle) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_StartDocPrinterA")
       (param $handle i32) (param $level i32) (param $info i32) (result i32)
@@ -66,14 +66,14 @@ const extraWat = String.raw`
     (call $handle_StartDocPrinterA
       (local.get $handle) (local.get $level) (local.get $info)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_EndDocPrinter") (param $handle i32) (result i32)
     (call $test_spool_begin)
     (call $handle_EndDocPrinter
       (local.get $handle) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_WritePrinter")
       (param $handle i32) (param $buffer i32) (param $size i32)
@@ -82,7 +82,7 @@ const extraWat = String.raw`
     (call $handle_WritePrinter
       (local.get $handle) (local.get $buffer) (local.get $size)
       (local.get $written) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_spool_set_error") (param $value i32)
     (global.set $last_error (local.get $value)))

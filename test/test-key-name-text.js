@@ -5,9 +5,9 @@ const {bootRenderHarness}=require('./render-helper');
 (async()=>{
   const {exports:w}=await bootRenderHarness({fonts:'none',extraWat:`
     (func (export "key_name_w") (param i32 i32 i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_GetKeyNameTextW (local.get 0) (local.get 1) (local.get 2)
-        (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
   `});
   const out=w.guest_alloc(128)>>>0;
   for(const [scan,name] of [[1,'Esc'],[0x0e,'Backspace'],[0x10,'Q'],[0x1e,'A'],

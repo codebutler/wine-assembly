@@ -11,14 +11,14 @@ const extraWat = String.raw`
       (param $instance i32) (param $id i32) (param $flags i32)
       (param $map i32) (param $count i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_CreateMappedBitmap
       (local.get $instance) (local.get $id) (local.get $flags)
       (local.get $map) (local.get $count) (i32.const 0))
     (global.set $test_cmb_cleanup
-      (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_cmb_cleanup") (result i32)
     (global.get $test_cmb_cleanup))
 `;

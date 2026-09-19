@@ -8,12 +8,12 @@ const { parseShellLaunchCommand, resolveShellLaunchPath } = require('../host.js'
 const extraWat = String.raw`
   (func (export "test_call_WinExec")
         (param $command i32) (param $show i32) (param $name i32) (result i32)
-    (global.set $esp (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0))
     (call $handle_WinExec
       (local.get $command) (local.get $show) (i32.const 0)
       (i32.const 0) (i32.const 0) (call $g2w (local.get $name)))
-    (global.get $eax))
-  (func (export "test_winexec_esp") (result i32) (global.get $esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_winexec_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 `;
 
 function checkParsing() {

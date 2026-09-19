@@ -10,14 +10,14 @@ const extraWat = String.raw`
     (param $value i32) (param $format i32) (param $out i32) (param $cch i32)
     (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.const 0x07000000))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07000000))
     (call $gs32 (i32.const 0x07000018) (local.get $cch))
     (call $handle_GetNumberFormatA
       (i32.const 0x400) (i32.const 0x80000000)
       (local.get $value) (local.get $format) (local.get $out) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

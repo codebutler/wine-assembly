@@ -17,9 +17,9 @@ const {bootRenderHarness} = require('./render-helper');
     ${[...methods.map(n=>['IDirect3DDevice9',n]),
       ...['Capture','Apply','Release'].map(n=>['IDirect3DStateBlock9',n])].map(([type,n])=>`
       (func (export "${n}") (param $a i32) (param $b i32) (result i32)
-        (global.set $esp (i32.const 0x074ff000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
         (call $handle_${type}_${n} (local.get $a) (local.get $b) (i32.const 0)
-          (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))`).join('\n')}
+          (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   `});
   e.init_dx_com_thunks();
   const out=0x00409000, input=out+64, result=out+128;

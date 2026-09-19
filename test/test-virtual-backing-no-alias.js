@@ -42,11 +42,11 @@ const extraWat = String.raw`
     (global.set $heap_sparse_ptr (i32.const 0))
     (global.set $heap_sparse_end (i32.const 0)))
   (func (export "test_na_alloc") (param $size i32) (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (call $handle_VirtualAlloc
       (i32.const 0) (local.get $size) (i32.const 0x3000)
       (i32.const 0x04) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_na_records") (result i32)
     (i32.load (global.get $VIRTUAL_MAP_STATE)))
   (func (export "test_na_rec_guest") (param $i i32) (result i32)

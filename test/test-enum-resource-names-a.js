@@ -14,10 +14,10 @@ const extraWat = String.raw`
 
   (func (export "test_begin_enum_resource_names")
       (param $type i32) (param $callback i32) (param $lparam i32) (result i32)
-    (global.set $esp (i32.const 0x07000000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07000000))
     ;; A zero return address lets the callback continuation halt cleanly after
     ;; the last resource name.
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_EnumResourceNamesA
       (i32.const 0) (local.get $type) (local.get $callback) (local.get $lparam)
       (i32.const 0) (i32.const 0))

@@ -13,7 +13,7 @@ const { bootRenderHarness } = require('./render-helper');
       (global.set $win16_msg_slot (i32.const 0))
       (call $win16_set_sreg (i32.const 3) (call $win16_index_to_sel (i32.const 1)))
       (call $win16_set_sreg (i32.const 2) (call $win16_index_to_sel (i32.const 2)))
-      (global.set $esp (i32.add (call $win16_seg_base (i32.const 2)) (i32.const 0xF000)))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (call $win16_seg_base (i32.const 2)) (i32.const 0xF000)))
       (call $win16_seg_base (i32.const 1)))
     (func (export "scratch_message") (param $src i32) (result i32)
       (call $win16_msg_lparam16 (i32.const 0x2B) (local.get $src)))

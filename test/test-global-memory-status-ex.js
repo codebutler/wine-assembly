@@ -6,10 +6,10 @@ const { bootRenderHarness } = require('./render-helper');
 (async () => {
   const { exports: e, memory } = await bootRenderHarness({ fonts: 'none', extraWat: `
     (func (export "test_memory_status") (param $p i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
       (call $handle_GlobalMemoryStatusEx (local.get $p) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_commit") (result i32)
       (call $virtual_map_commit (i32.const 0x40000000) (i32.const 65536)))
     (func (export "test_last_error") (result i32) (global.get $last_error))

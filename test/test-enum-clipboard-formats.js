@@ -29,12 +29,12 @@ const extraWat = String.raw`
 
   (func (export "test_enum_clipboard_formats")
       (param $format i32) (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_EnumClipboardFormats
       (local.get $format) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_enum_set_last_error") (param $value i32)
     (global.set $last_error (local.get $value)))

@@ -25,9 +25,9 @@ const extraWat = String.raw`
   (global $ps_esp_delta (mut i32) (i32.const 0))
 
   (func $ps_record (param $saved_esp i32)
-    (global.set $ps_eax (global.get $eax))
-    (global.set $ps_esp_delta (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp)))
+    (global.set $ps_eax (i32.load offset=0 (global.get $reg_base)))
+    (global.set $ps_esp_delta (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 
   (func (export "ps_last_eax") (result i32) (global.get $ps_eax))
   (func (export "ps_last_esp_delta") (result i32) (global.get $ps_esp_delta))
@@ -40,21 +40,21 @@ const extraWat = String.raw`
 
   (func (export "ps_play_sound_a") (param $name i32) (param $flags i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_PlaySoundA (local.get $name) (i32.const 0) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $ps_record (local.get $saved_esp)))
 
   (func (export "ps_play_sound_w") (param $name i32) (param $flags i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_PlaySoundW (local.get $name) (i32.const 0) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $ps_record (local.get $saved_esp)))
 
   (func (export "ps_snd_play_sound_a") (param $name i32) (param $flags i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_sndPlaySoundA (local.get $name) (local.get $flags) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $ps_record (local.get $saved_esp)))

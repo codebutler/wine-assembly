@@ -67,11 +67,11 @@ const extraWat = String.raw`
   (func (export "test_dialog_box_param") (param $id i32) (param $owner i32)
         (param $dlgproc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_DialogBoxParamA
       (i32.const 0) (local.get $id) (local.get $owner)
       (local.get $dlgproc) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (global.get $dlg_hwnd))
 
   (func (export "test_dlg_template_style") (param $hwnd i32) (result i32)

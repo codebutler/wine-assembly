@@ -25,21 +25,21 @@ const extraWat = String.raw`
   (func (export "test_keybd_event")
       (param $vk i32) (param $scan i32) (param $flags i32) (param $extra i32)
       (result i32)
-    (global.set $esp (i32.const 0x00300000))
-    (global.set $eax (i32.const 0x5a5a5a5a))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x5a5a5a5a))
     (call $handle_keybd_event
       (local.get $vk) (local.get $scan) (local.get $flags) (local.get $extra)
       (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_keybd_peek") (result i32)
     (if (i32.eqz (global.get $test_keybd_msg))
       (then (global.set $test_keybd_msg (call $heap_alloc (i32.const 28)))))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_PeekMessageA
       (global.get $test_keybd_msg) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const ${PM_REMOVE}) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_keybd_msg_field") (param $field i32) (result i32)
     (call $gl32 (i32.add (global.get $test_keybd_msg)
@@ -50,11 +50,11 @@ const extraWat = String.raw`
 
   (func (export "test_keybd_register_hotkey")
       (param $id i32) (param $mods i32) (param $vk i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_RegisterHotKey
       (i32.const 0) (local.get $id) (local.get $mods) (local.get $vk)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 function msg(e) {

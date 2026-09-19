@@ -18,12 +18,12 @@ const extraWat = String.raw`
     ;; allocated now, so a literal here goes stale silently and the handler
     ;; simply answers MMSYSERR_INVALHANDLE to a valid handle.
     (i32.store (region.addr $WAVE_OUT_SHARED 0) (local.get $open_handle))
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_waveOutGetID
       (local.get $query_handle) (local.get $device_id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

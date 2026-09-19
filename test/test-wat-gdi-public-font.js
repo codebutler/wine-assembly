@@ -13,9 +13,9 @@ const RegionMap = require('../lib/region-map.generated.js');
   // test/test-gdi-migration-status.js is what holds that surface closed.
   const { exports: wat, memory, hostCtx } = await bootRenderHarness({extraWat: `
     (func (export "font_language_info") (param $dc i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_GetFontLanguageInfo (local.get $dc) (i32.const 0) (i32.const 0)
-        (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
   `});
   const bytes = new Uint8Array(memory.buffer);
   const imageBase = wat.get_image_base() >>> 0;

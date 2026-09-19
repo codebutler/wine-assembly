@@ -20,12 +20,12 @@ const extraWat = String.raw`
   (func (export "test_dispatch_legacy_seek")
       (param $api i32) (param $handle i32) (param $offset i32)
       (param $origin i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
-    (global.set $eax (i32.const 0x13579bdf))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x13579bdf))
     (call $dispatch_api_table
       (local.get $api) (local.get $handle) (local.get $offset)
       (local.get $origin) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

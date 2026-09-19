@@ -8,10 +8,10 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_global_alloc") (param $flags i32) (param $size i32) (result i32)
     (global.set $image_base (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_GlobalAlloc (local.get $flags) (local.get $size)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   ;; Test-local scaffolding. The module deliberately exports no heap-cursor
   ;; setters — JS used to marshal them between instances to fake shared state,
   ;; and $heap_low_reserve replaces that. A single-instance test still needs a
@@ -21,7 +21,7 @@ const extraWat = String.raw`
     (global.set $free_list (i32.const 0)))
   (func (export "test_global_free") (param $ptr i32)
     (global.set $image_base (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_GlobalFree (local.get $ptr)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
 `;

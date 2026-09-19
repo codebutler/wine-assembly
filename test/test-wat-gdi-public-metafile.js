@@ -21,7 +21,7 @@ const RegionMap = require('../lib/region-map.generated.js');
         (param $hdc i32) (param $hmf i32) (param $callback i32)
         (param $data i32) (result i32)
     (local $start i32)
-    (local.set $start (global.get $esp))
+    (local.set $start (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (local.get $start) (i32.const 0))
     (call $handle_EnumMetaFile (local.get $hdc) (local.get $hmf)
       (local.get $callback) (local.get $data) (i32.const 0) (i32.const 0))
@@ -30,11 +30,11 @@ const RegionMap = require('../lib/region-map.generated.js');
         (param $hdc i32) (param $table i32) (param $record i32)
         (param $count i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_PlayMetaFileRecord (local.get $hdc) (local.get $table)
       (local.get $record) (local.get $count) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))`,
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))`,
   });
   const root = path.join(__dirname, '..');
   hostCtx.vfs.dirs.add('c:\\windows');

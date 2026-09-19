@@ -6,34 +6,34 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_enum_display_devices_w") (param $device i32) (param $index i32) (param $buf i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (i32.store (call $g2w (local.get $buf)) (i32.const 0x348))
     (call $handle_EnumDisplayDevicesW
       (local.get $device) (local.get $index) (local.get $buf)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_enum_display_settings_a") (param $index i32) (param $buf i32) (param $size i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (i32.store16 offset=36 (call $g2w (local.get $buf)) (local.get $size))
     (call $handle_EnumDisplaySettingsA
       (i32.const 0) (local.get $index) (local.get $buf)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_enum_display_settings_w") (param $index i32) (param $buf i32) (param $size i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (i32.store16 offset=68 (call $g2w (local.get $buf)) (local.get $size))
     (call $handle_EnumDisplaySettingsW
       (i32.const 0) (local.get $index) (local.get $buf)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 `;
 
 function utf16z(view, offset, maxChars) {

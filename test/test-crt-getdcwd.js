@@ -21,13 +21,13 @@ const extraWat = String.raw`
 
   (func (export "test_getdcwd")
       (param $drive i32) (param $buffer i32) (param $maxlen i32) (result i32)
-    (global.set $esp (i32.const ${STACK}))
+    (i32.store offset=16 (global.get $reg_base) (i32.const ${STACK}))
     (call $handle__getdcwd
       (local.get $drive) (local.get $buffer) (local.get $maxlen)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_getdcwd_esp_delta
-      (i32.sub (global.get $esp) (i32.const ${STACK})))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const ${STACK})))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_getdcwd_esp_delta") (result i32)
     (global.get $test_getdcwd_esp_delta))

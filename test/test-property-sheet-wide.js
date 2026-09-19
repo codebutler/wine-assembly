@@ -19,31 +19,31 @@ const extraWat = String.raw`
 
   (func (export "test_CreatePropertySheetPageA") (param $psp i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_CreatePropertySheetPageA
       (local.get $psp) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_propsheet_cleanup
-      (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_CreatePropertySheetPageW") (param $psp i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_CreatePropertySheetPageW
       (local.get $psp) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_propsheet_cleanup
-      (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_DestroyPropertySheetPage") (param $page i32) (result i32)
     (call $handle_DestroyPropertySheetPage
       (local.get $page) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_propsheet_cleanup") (result i32)
     (global.get $test_propsheet_cleanup))
@@ -59,16 +59,16 @@ const extraWat = String.raw`
       (local.get $message)))
 
   (func (export "test_PropertySheetA") (param $header i32) (result i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (call $gs32 (global.get $esp) (i32.const 0x00401000))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
     (call $handle_PropertySheetA
       (local.get $header) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $modal_dlg_hwnd))
 
   (func (export "test_PropertySheetW") (param $header i32) (result i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (call $gs32 (global.get $esp) (i32.const 0x00401000))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401000))
     (call $handle_PropertySheetW
       (local.get $header) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
@@ -76,14 +76,14 @@ const extraWat = String.raw`
 
   (func (export "test_PropertySheetW_invalid") (param $header i32) (result i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_PropertySheetW
       (local.get $header) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_propsheet_cleanup
-      (i32.sub (global.get $esp) (local.get $before)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_PropertySheet_done")
     (call $modal_done (i32.const 0)))

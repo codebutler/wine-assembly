@@ -21,27 +21,27 @@ const extraWat = String.raw`
     (local.get $atom))
   (func (export "test_find_window_a")
       (param $class i32) (param $title i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_FindWindowA
       (local.get $class) (local.get $title) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_find_window_w")
       (param $class i32) (param $title i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_FindWindowW
       (local.get $class) (local.get $title) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_find_window_ex_a")
       (param $parent i32) (param $after i32)
       (param $class i32) (param $title i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_FindWindowExA
       (local.get $parent) (local.get $after)
       (local.get $class) (local.get $title)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

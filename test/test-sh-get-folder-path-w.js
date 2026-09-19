@@ -7,26 +7,26 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_sh_get_folder_path_w") (param $csidl i32) (param $buf i32) (result i32)
     (global.set $image_base (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SHGetFolderPathW
       (i32.const 0) (local.get $csidl) (i32.const 0) (i32.const 0)
       (local.get $buf) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_sh_get_folder_path_a") (param $csidl i32) (param $buf i32) (result i32)
     (global.set $image_base (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SHGetFolderPathA
       (i32.const 0) (local.get $csidl) (i32.const 0) (i32.const 0)
       (local.get $buf) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_sh_get_special_folder_path_a")
       (param $csidl i32) (param $create i32) (param $buf i32) (result i32)
     (global.set $image_base (i32.const 0))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_SHGetSpecialFolderPathA
       (i32.const 0) (local.get $buf) (local.get $csidl) (local.get $create)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

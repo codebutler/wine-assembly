@@ -19,8 +19,8 @@
   ;; OpenPrinter/AddPrinter.  This model creates no such handles.
   (func $sub_spool_invalid_handle (param $stack_pop i32)
     (global.set $last_error (global.get $SPOOL_ERROR_INVALID_HANDLE))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (local.get $stack_pop))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (local.get $stack_pop))))
 
   ;; BOOL EnumPrintersA(Flags, Name, Level, pPrinterEnum, cbBuf,
   ;;                    pcbNeeded, pcReturned)
@@ -35,9 +35,9 @@
                               (param $arg4 i32) (param $name_ptr i32)
     (local $needed i32) (local $returned i32) (local $error i32)
     (local.set $needed
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $returned
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
     (if (i32.or (i32.eqz (local.get $needed))
                 (i32.eqz (local.get $returned)))
@@ -74,12 +74,12 @@
     (if (local.get $error)
       (then
         (global.set $last_error (local.get $error))
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
         (call $gs32 (local.get $needed) (i32.const 0))
         (call $gs32 (local.get $returned) (i32.const 0))
-        (global.set $eax (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
 
   ;; BOOL OpenPrinterA(pPrinterName, phPrinter, pDefault).  A NULL name can
   ;; denote the local print server on a configured system, but there is no
@@ -93,8 +93,8 @@
         (global.get $SPOOL_ERROR_INVALID_PRINTER_NAME)
         (global.get $SPOOL_ERROR_INVALID_PARAMETER)
         (i32.ne (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; BOOL ClosePrinter(HANDLE)
   (func $handle_ClosePrinter (param $arg0 i32) (param $arg1 i32)

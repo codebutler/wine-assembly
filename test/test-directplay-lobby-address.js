@@ -10,18 +10,18 @@ const extraWat = String.raw`
   (func (export "test_dplobby_compound_address")
       (param $elements i32) (param $count i32) (param $address i32)
       (param $size i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectPlayLobby2_CreateCompoundAddress
       (i32.const 0) (local.get $elements) (local.get $count)
       (local.get $address) (local.get $size) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dplobby_enum_address")
       (param $callback i32) (param $address i32) (param $size i32)
       (param $context i32) (result i32)
     (global.set $eip (i32.const 0))
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_IDirectPlayLobby2_EnumAddress
       (i32.const 0) (local.get $callback) (local.get $address) (local.get $size)
       (local.get $context) (i32.const 0))
@@ -31,8 +31,8 @@ const extraWat = String.raw`
       (param $callback i32) (param $provider i32) (param $context i32)
       (param $flags i32) (result i32)
     (global.set $eip (i32.const 0))
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_IDirectPlayLobby2_EnumAddressTypes
       (i32.const 0) (local.get $callback) (local.get $provider)
       (local.get $context) (local.get $flags) (i32.const 0))
@@ -42,12 +42,12 @@ const extraWat = String.raw`
       (param $callback i32) (param $context i32) (param $flags i32)
       (result i32)
     (global.set $eip (i32.const 0))
-    (global.set $esp (i32.const 0x074FF000))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x074FF000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_IDirectPlayLobby2_EnumLocalApplications
       (i32.const 0) (local.get $callback) (local.get $context)
       (local.get $flags) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

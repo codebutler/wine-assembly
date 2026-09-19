@@ -9,22 +9,22 @@ const EXTRA_WAT = `
     (call $native_override_export_api_id (local.get $name_wa)))
   (func (export "test_ftol") (param $value f64) (param $cw i32) (result i64)
     (global.set $fpu_cw (local.get $cw))
-    (global.set $esp (i32.const 0x07600000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07600000))
     (call $fpu_push (local.get $value))
     (call $handle__ftol
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $edx)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=8 (global.get $reg_base))) (i64.const 32))))
   (func (export "test_ftol_cw") (result i32) (global.get $fpu_cw))
-  (func (export "test_ftol_esp") (result i32) (global.get $esp))
+  (func (export "test_ftol_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_stricmp") (param $a i32) (param $b i32) (result i32)
-    (global.set $esp (i32.const 0x07600000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x07600000))
     (call $handle__stricmp
       (local.get $a) (local.get $b) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

@@ -11,13 +11,13 @@ const extraWat = String.raw`
 
   (func (export "call_pulse_event") (param $handle i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_PulseEvent
       (local.get $handle) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $test_eax (global.get $eax))
-    (global.set $test_esp_delta (i32.sub (global.get $esp) (local.get $saved_esp)))
-    (global.set $esp (local.get $saved_esp)))
+    (global.set $test_eax (i32.load offset=0 (global.get $reg_base)))
+    (global.set $test_esp_delta (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 
   (func (export "last_eax") (result i32) (global.get $test_eax))
   (func (export "last_esp_delta") (result i32) (global.get $test_esp_delta))

@@ -6,12 +6,12 @@ const { bootRenderHarness } = require('./render-helper');
 
 const extraWat = String.raw`
   (func (export "test_lzcopy") (param $src i32) (param $dst i32) (result i32)
-    (global.set $esp (i32.const 0x00430000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00430000))
     (call $handle_LZCopy
       (local.get $src) (local.get $dst) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
-  (func (export "test_lzcopy_esp") (result i32) (global.get $esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_lzcopy_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

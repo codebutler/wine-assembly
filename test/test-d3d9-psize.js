@@ -7,19 +7,19 @@ const {Bridge}=require('../lib/d3d9-host');
  const names=['SetFVF','SetRenderState','CreateVertexDeclaration','SetVertexDeclaration','CreateVertexShader','SetVertexShader','DrawPrimitiveUP','Present','Release'];
  const {exports:e,memory}=await bootRenderHarness({fonts:'none',extraHostOverrides:{gpu_gl_call:(op,p,a)=>bridge.call(op,p,a)},extraWat:`
  (func (export "create") (param $pp i32) (param $out i32) (result i32)
-  (global.set $esp (i32.const 0x00300000))
-  (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $pp))
-  (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
-  (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0)) (global.get $eax))
+  (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+  (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $pp))
+  (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $out))
+  (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 1) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
  (func (export "clear") (param $d i32) (result i32)
-  (global.set $esp (i32.const 0x00300000))
-  (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 1065353216))
-  (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 0))
-  (call $handle_IDirect3DDevice9_Clear (local.get $d) (i32.const 0) (i32.const 0) (i32.const 1) (i32.const -16777216) (i32.const 0)) (global.get $eax))
+  (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+  (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 1065353216))
+  (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.const 0))
+  (call $handle_IDirect3DDevice9_Clear (local.get $d) (i32.const 0) (i32.const 0) (i32.const 1) (i32.const -16777216) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
  (func (export "bits") (param $d i32) (result i32) (load.field DxObject misc1 (call $d3ddev_rt_entry (local.get $d))))
  ${names.map(n=>`(func (export "${n}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
-  (global.set $esp (i32.const 0x00300000))
-  (call $handle_IDirect3DDevice9_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $f) (i32.const 0)) (global.get $eax))`).join('\n')}`});
+  (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+  (call $handle_IDirect3DDevice9_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $f) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))`).join('\n')}`});
  const wa=p=>e.guest_to_wasm(p)>>>0,alloc=n=>e.guest_alloc(n)>>>0;
  let descriptors=0;
  const native={...e,d3d_software_create(p){

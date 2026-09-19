@@ -29,7 +29,7 @@ const extraWat = String.raw`
     (global.set $seg_base_ss (i32.const 0x00110000))
     (global.set $sreg_ds (call $win16_index_to_sel (i32.const 4)))
     (global.set $seg_base_ds (i32.const 0x00130000))
-    (global.set $ebp (i32.const 0x0020))
+    (i32.store offset=20 (global.get $reg_base) (i32.const 0x0020))
     ;; SS:[BP+0E] = offset 0x3456, selector for segment index 3.
     (call $gs16 (i32.const 0x0011002E) (i32.const 0x3456))
     (call $gs16 (i32.const 0x00110030) (call $win16_index_to_sel (i32.const 3)))

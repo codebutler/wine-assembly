@@ -14,39 +14,39 @@ const { compileSrcWasm } = require('./compile-src');
 const ROOT = path.join(__dirname, '..');
 const extraWat = String.raw`
   (func (export "test_ds_create") (param $output i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_DirectSoundCreate
       (i32.const 0) (local.get $output) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_ds_create_raw") (param $type i32) (result i32)
     (call $dx_create_com_obj (local.get $type) (global.get $DX_VTBL_DSOUND)))
 
   (func (export "test_ds_get_speaker")
       (param $this i32) (param $output i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectSound_GetSpeakerConfig
       (local.get $this) (local.get $output)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_ds_set_speaker")
       (param $this i32) (param $config i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectSound_SetSpeakerConfig
       (local.get $this) (local.get $config)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_ds_initialize") (param $this i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectSound_Initialize
       (local.get $this) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
-  (func (export "test_esp") (result i32) (global.get $esp))
+  (func (export "test_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 `;
 
 async function main() {

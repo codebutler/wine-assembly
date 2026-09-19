@@ -47,15 +47,15 @@ const EXTRA_WAT = `
   (func (export "t_GetStockObject") (param i32) (result i32)
     (call $handle_GetStockObject (local.get 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "t_SetTextColor") (param i32 i32) (result i32)
     (call $handle_SetTextColor (local.get 0) (local.get 1)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "t_SetBkColor") (param i32 i32) (result i32)
     (call $handle_SetBkColor (local.get 0) (local.get 1)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "t_g2w") (param i32) (result i32) (call $g2w (local.get 0)))
   (func (export "t_object_type") (param i32) (result i32)
     (call $gdi_object_type (local.get 0)))
@@ -67,7 +67,7 @@ const EXTRA_WAT = `
   (func (export "t_SetBkMode") (param i32 i32) (result i32)
     (call $handle_SetBkMode (local.get 0) (local.get 1)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 const SHEET = 320;          // the atlas is 320x320, a 16x16 grid of 20x20 cells

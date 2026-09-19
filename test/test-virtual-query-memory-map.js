@@ -50,37 +50,37 @@ function makePe({ imageBase = IMAGE_BASE, dll = false } = {}) {
 const extraWat = String.raw`
   (func (export "test_virtual_query")
       (param $address i32) (param $buffer i32) (param $length i32) (result i32)
-    (global.set $esp (i32.const 0x00404e00))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00404e00))
     (call $handle_VirtualQuery
       (local.get $address) (local.get $buffer) (local.get $length)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_alloc")
       (param $address i32) (param $size i32) (param $kind i32)
       (param $protect i32) (result i32)
-    (global.set $esp (i32.const 0x00404e00))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00404e00))
     (call $handle_VirtualAlloc
       (local.get $address) (local.get $size) (local.get $kind)
       (local.get $protect) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_free")
       (param $address i32) (param $size i32) (param $kind i32) (result i32)
-    (global.set $esp (i32.const 0x00404e00))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00404e00))
     (call $handle_VirtualFree
       (local.get $address) (local.get $size) (local.get $kind)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_protect")
       (param $address i32) (param $size i32) (param $protect i32)
       (param $old i32) (result i32)
-    (global.set $esp (i32.const 0x00404e00))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00404e00))
     (call $handle_VirtualProtect
       (local.get $address) (local.get $size) (local.get $protect)
       (local.get $old) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_pte") (param $address i32) (result i32)
     (call $virtual_query_pte (local.get $address)))
-  (func (export "test_esp") (result i32) (global.get $esp))
+  (func (export "test_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 `;
 
 function mbi(e) {

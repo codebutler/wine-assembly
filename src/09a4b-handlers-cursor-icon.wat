@@ -6,14 +6,14 @@
   (func $handle_LoadCursorA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and (i32.eqz (local.get $arg0))
                  (i32.lt_u (local.get $arg1) (i32.const 0x10000)))
-      (then (global.set $eax (i32.or (i32.const 0x60000)
+      (then (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 0x60000)
                                      (i32.and (local.get $arg1) (i32.const 0xFFFF)))))
       (else
         (if (i32.lt_u (local.get $arg1) (i32.const 0x10000))
-          (then (global.set $eax (i32.or (i32.const 0x680000)
+          (then (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 0x680000)
                                          (i32.and (local.get $arg1) (i32.const 0xFFFF)))))
-          (else (global.set $eax (i32.const 0x67F00)))))) ;; string cursor names unsupported
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+          (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x67F00)))))) ;; string cursor names unsupported
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )
 
   ;; ---- ICON_TABLE: HICON → the resource it was loaded from ----
@@ -717,10 +717,10 @@
     (if (i32.and (i32.ne (local.get $arg0) (i32.const 0))
                  (i32.le_u (local.get $arg1) (i32.const 0xFFFF)))
       (then
-        (global.set $eax (call $icon_intern (local.get $arg0) (local.get $arg1)))
-        (if (global.get $eax)
-          (then (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (call $icon_intern (local.get $arg0) (local.get $arg1)))
+        (if (i32.load offset=0 (global.get $reg_base))
+          (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
                 (return)))))
-    (global.set $eax (i32.const 0x60001)) ;; opaque HICON, no pixels
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x60001)) ;; opaque HICON, no pixels
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
   )

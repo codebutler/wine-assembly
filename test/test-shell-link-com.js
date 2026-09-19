@@ -16,13 +16,13 @@ const extraWat = String.raw`
   (func (export "test_cocreate")
       (param $clsid i32) (param $iid i32) (param $outer i32) (param $out i32)
       (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_CoCreateInstance
       (local.get $clsid) (local.get $outer) (i32.const 1) (local.get $iid)
       (local.get $out) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
-  (func (export "test_esp") (result i32) (global.get $esp))
+  (func (export "test_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_refcount") (param $this i32) (result i32)
     (load.field DxObject refcount (call $dx_from_this (local.get $this))))
@@ -48,14 +48,14 @@ const extraWat = String.raw`
       (param $this i32) (param $buffer i32) (param $chars i32)
       (param $find_data i32) (param $flags i32) (result i32)
     (local $saved_esp i32) (local $result i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.const 0x30000))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IShellLinkA_GetPath
       (local.get $this) (local.get $buffer) (local.get $chars)
       (local.get $find_data) (local.get $flags) (i32.const 0))
-    (local.set $result (global.get $eax))
-    (global.set $test_shell_link_last_esp (global.get $esp))
-    (global.set $esp (local.get $saved_esp))
+    (local.set $result (i32.load offset=0 (global.get $reg_base)))
+    (global.set $test_shell_link_last_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (local.get $result))
 
   (func (export "test_shell_link_get_path_esp") (result i32)

@@ -24,7 +24,7 @@ const extraWat = String.raw`
 
   (func (export "test_civ16_module_filename") (result i32)
     (call $test_civ16_setup)
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     ;; far return followed by Pascal's rightmost argument first.
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
@@ -34,7 +34,7 @@ const extraWat = String.raw`
     ;; The exact hModule shape Civ II uses: a live DGROUP selector.
     (call $gs16 (i32.const 0x0011010A) (call $win16_index_to_sel (i32.const 2)))
     (call $win16_GetModuleFileName)
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_civ16_filename_byte") (param $index i32) (result i32)
     (call $gl8 (i32.add (i32.const 0x00110200) (local.get $index))))
@@ -42,13 +42,13 @@ const extraWat = String.raw`
   (func (export "test_civ16_mmsystem") (param $ordinal i32) (param $argbytes i32)
         (result i32)
     (call $test_civ16_setup)
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (i32.const 1))
     (drop (call $win16_mmsystem (local.get $ordinal)))
-    (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF))
-      (i32.shl (i32.and (global.get $edx) (i32.const 0xFFFF)) (i32.const 16))))
+    (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF))
+      (i32.shl (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF)) (i32.const 16))))
 
   (func (export "test_civ16_dynamic_module") (param $which i32) (result i32)
     (local $p i32)
@@ -73,7 +73,7 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x00110400) (i32.const 0x0420))
     (call $gs16 (i32.const 0x00110402) (i32.const 0x5678))
     (call $gs16 (i32.const 0x00110404) (call $win16_index_to_sel (i32.const 1)))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     ;; Pascal rightmost first: BP, IP, CS, SS, then the output far pointer.
@@ -84,12 +84,12 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x0011010C) (i32.const 0x0300))
     (call $gs16 (i32.const 0x0011010E) (call $win16_index_to_sel (i32.const 2)))
     (drop (call $win16_toolhelp (local.get $module) (i32.const 67)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_civ16_toolhelp_module") (result i32)
     (call $test_civ16_setup)
     (call $gs32 (i32.const 0x00110300) (i32.const 276))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     ;; Pascal rightmost first: hModule, then the output far pointer.
@@ -97,7 +97,7 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x00110106) (i32.const 0x0300))
     (call $gs16 (i32.const 0x00110108) (call $win16_index_to_sel (i32.const 2)))
     (drop (call $win16_toolhelp (i32.const 13) (i32.const 62)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_civ16_toolhelp_byte") (param $offset i32) (result i32)
     (call $gl8 (i32.add (i32.const 0x00110300) (local.get $offset))))
@@ -105,22 +105,22 @@ const extraWat = String.raw`
   (func (export "test_civ16_toolhelp_memman") (result i32)
     (call $test_civ16_setup)
     (call $gs32 (i32.const 0x00110300) (i32.const 42))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (i32.const 0x0300))
     (call $gs16 (i32.const 0x00110106) (call $win16_index_to_sel (i32.const 2)))
     (drop (call $win16_toolhelp (i32.const 13) (i32.const 72)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_civ16_toolhelp_next") (result i32)
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (i32.const 0x0300))
     (call $gs16 (i32.const 0x00110106) (call $win16_index_to_sel (i32.const 2)))
     (drop (call $win16_toolhelp (i32.const 13) (i32.const 68)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_civ16_toolhelp_word") (param $offset i32) (result i32)
     (call $gl16 (i32.add (i32.const 0x00110300) (local.get $offset))))
@@ -134,7 +134,7 @@ const extraWat = String.raw`
     (call $gs8 (i32.const 0x00110302) (i32.const 0x33))
     (call $gs8 (i32.const 0x00110303) (i32.const 0x44))
     (call $gs8 (i32.const 0x00110304) (i32.const 0x55))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     ;; Pascal rightmost argument first: DWORD count, src far, dst far.
@@ -145,7 +145,7 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x0011010C) (i32.const 0x0400))
     (call $gs16 (i32.const 0x0011010E) (call $win16_index_to_sel (i32.const 3)))
     (call $win16_hmemcpy)
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_civ16_hmemcpy_byte") (param $index i32) (result i32)
     (call $gl8 (i32.add (i32.const 0x00120400) (local.get $index))))
@@ -154,19 +154,19 @@ const extraWat = String.raw`
     (local $hdc i32)
     (call $test_civ16_setup)
     ;; GetDC(NULL) supplies a real shared GDI DC and its Win16 handle mapping.
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (i32.const 0))
     (call $win16_GetDC)
-    (local.set $hdc (global.get $eax))
+    (local.set $hdc (i32.load offset=0 (global.get $reg_base)))
     (call $gs8 (i32.const 0x00110500) (i32.const 0x43)) ;; C
     (call $gs8 (i32.const 0x00110501) (i32.const 0x69)) ;; i
     (call $gs8 (i32.const 0x00110502) (i32.const 0x76)) ;; v
     (call $gs8 (i32.const 0x00110503) (i32.const 0))
     (call $gs16 (i32.const 0x00110600) (i32.const 0xDEAD))
     (call $gs16 (i32.const 0x00110602) (i32.const 0xBEEF))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     ;; Pascal rightmost first: lpSize, count, lpString, hDC.
@@ -177,33 +177,33 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x0011010C) (call $win16_index_to_sel (i32.const 2)))
     (call $gs16 (i32.const 0x0011010E) (local.get $hdc))
     (drop (call $win16_gdi (i32.const 471)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_civ16_text_extent_word") (param $offset i32) (result i32)
     (call $gl16 (i32.add (i32.const 0x00110600) (local.get $offset))))
 
   (func (export "test_civ16_text_align") (result i32)
     (local $hdc i32)
     (call $test_civ16_setup)
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (i32.const 0))
     (call $win16_GetDC)
-    (local.set $hdc (global.get $eax))
+    (local.set $hdc (i32.load offset=0 (global.get $reg_base)))
     ;; Set TA_RIGHT|TA_TOP through 346, then read it back through Civ's next
     ;; imported call, GDI.345 GetTextAlign.
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (i32.const 6))
     (call $gs16 (i32.const 0x00110106) (local.get $hdc))
     (drop (call $win16_gdi (i32.const 346)))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (call $gs16 (i32.const 0x00110104) (local.get $hdc))
     (drop (call $win16_gdi (i32.const 345)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

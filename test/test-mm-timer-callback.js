@@ -45,7 +45,7 @@ const extraWat = String.raw`
     (i32.load (call $mm_timer_due_slot)))
   (func (export "test_mm_timer_enters_from_parked_wait") (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00405678))
     (call $test_clear_slots)
     (call $test_set_slot (i32.const 0) (i32.const 1) (i32.const 0)
@@ -58,16 +58,16 @@ const extraWat = String.raw`
     (call $fire_mm_timer))
   (func (export "test_mm_timer_parked_wait_return") (result i32)
     ;; Model the TimeProc's RET 20, then execute its return continuation.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (call $win32_dispatch (i32.const 0))
     (global.get $yield_reason))
   (func (export "test_mm_timer_callback_return") (result i32)
     ;; Model fire_mm_timer's interrupted frame, followed by the callback's
     ;; stdcall RET landing on the dedicated CACA000A continuation.
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00401234))
-    (global.set $eax (i32.const 0x11223344))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x11223344))
     (call $save_caller_regs)
     (i32.store (global.get $THUNK_BASE) (i32.const 0xCACA000A))
     (i32.store offset=4 (global.get $THUNK_BASE) (i32.const 0))
@@ -80,9 +80,9 @@ const extraWat = String.raw`
     ;; it. The handler must leave a marked callback frame, not an untracked
     ;; direct return to the application's DispatchMessage caller.
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00409999))
-    (call $gs32 (global.get $esp) (i32.const 0x00401234))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401234))
     (call $gs32 (i32.const 0x00510000) (i32.const 0x12345678))
     (call $gs32 (i32.const 0x00510004) (i32.const 0x7FF0))
     (call $gs32 (i32.const 0x00510008) (i32.const 7))
@@ -102,7 +102,7 @@ const extraWat = String.raw`
   (func (export "test_mm_timer_dispatch_return") (result i32)
     ;; Model RET 20 from the stdcall TimeProc: pop its return address and five
     ;; arguments, then execute the CACA000A continuation.
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (call $win32_dispatch (i32.const 0))
     (global.get $mm_timer_in_cb))
   (func (export "test_dispatch_thread_message_ignored") (result i32)
@@ -110,10 +110,10 @@ const extraWat = String.raw`
     ;; Returning through DispatchMessage's own caller frame keeps the message
     ;; loop alive for applications that post private thread notifications.
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (global.set $eip (i32.const 0x00409999))
     (global.set $wndproc_addr (i32.const 0x00405678))
-    (call $gs32 (global.get $esp) (i32.const 0x00401234))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00401234))
     (call $gs32 (i32.const 0x00510000) (i32.const 0))
     (call $gs32 (i32.const 0x00510004) (i32.const 0x7FF1))
     (call $gs32 (i32.const 0x00510008) (i32.const 0x0089146C))
@@ -121,9 +121,9 @@ const extraWat = String.raw`
     (call $handle_DispatchMessageA (i32.const 0x00510000)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (i32.and
-      (i32.eq (global.get $eax) (i32.const 0))
+      (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
       (i32.and
-        (i32.eq (global.get $esp) (i32.const 0x00500008))
+        (i32.eq (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00500008))
         (i32.eq (global.get $eip) (i32.const 0x00409999)))))
 `;
 

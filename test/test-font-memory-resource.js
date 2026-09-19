@@ -7,13 +7,13 @@ const {bootRenderHarness}=require('./render-helper');
 (async()=>{
   const {exports:w,memory}=await bootRenderHarness({extraWat:`
     (func (export "add_memory_font") (param i32 i32 i32 i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_AddFontMemResourceEx (local.get 0) (local.get 1) (local.get 2)
-        (local.get 3) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (local.get 3) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "remove_memory_font") (param i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_RemoveFontMemResourceEx (local.get 0) (i32.const 0) (i32.const 0)
-        (i32.const 0) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "memory_face") (param i32) (result i32)
       (call $tt_mem_face (call $g2w (local.get 0)) (i32.const 400) (i32.const 0)))
     (func (export "face_data") (param i32) (result i32) (call $tt_face_data (local.get 0)))

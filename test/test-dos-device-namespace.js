@@ -14,22 +14,22 @@ const EXTRA_WAT = String.raw`
   (func (export "test_call_QueryDosDeviceA")
       (param $name i32) (param $out i32) (param $max i32)
       (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_QueryDosDeviceA
       (local.get $name) (local.get $out) (local.get $max)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_DefineDosDeviceA")
       (param $flags i32) (param $name i32) (param $target i32)
       (param $esp0 i32) (result i32)
-    (global.set $esp (local.get $esp0))
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (local.get $esp0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_DefineDosDeviceA
       (local.get $flags) (local.get $name) (local.get $target)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_set_last_error") (param $value i32)
     (global.set $last_error (local.get $value)))

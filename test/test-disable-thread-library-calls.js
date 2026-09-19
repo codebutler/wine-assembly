@@ -21,11 +21,11 @@ const extraWat = String.raw`
     (i32.store offset=4 (global.get $DLL_FLAGS_TABLE) (i32.const 1)))
 
   (func (export "test_call_DisableThreadLibraryCalls") (param $module i32) (result i32)
-    (global.set $esp (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0))
     (call $handle_DisableThreadLibraryCalls
       (local.get $module) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

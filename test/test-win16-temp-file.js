@@ -22,7 +22,7 @@ const extraWat = String.raw`
     (call $gs8 (i32.const 0x00110200) (i32.const 0x53)) ;; S
     (call $gs8 (i32.const 0x00110201) (i32.const 0x44)) ;; D
     (call $gs8 (i32.const 0x00110202) (i32.const 0))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     ;; Far return, then Pascal's rightmost argument first.
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
@@ -33,8 +33,8 @@ const extraWat = String.raw`
     (call $gs16 (i32.const 0x0011010C) (call $win16_index_to_sel (i32.const 2)))
     (call $gs16 (i32.const 0x0011010E) (local.get $drive))
     (drop (call $win16_kernel (i32.const 97)))
-    (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF))
-      (i32.shl (global.get $esp) (i32.const 16))))
+    (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF))
+      (i32.shl (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func (export "test_win16_temp_byte") (param $index i32) (result i32)
     (call $gl8 (i32.add (i32.const 0x00110300) (local.get $index))))
@@ -51,21 +51,21 @@ const extraWat = String.raw`
       (i64.const 0x5C504D45545C5357))
     (i64.store offset=16 (call $g2w (i32.const 0x00110400))
       (i64.const 0x00000045534957))
-    (global.set $edx (i32.const 0x0400))
-    (global.set $eax (i32.const 0x3900))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0x0400))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x3900))
     (call $win16_dos_int21)
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_win16_disk_free") (param $which i32) (result i32)
-    (global.set $eax (i32.const 0x3600))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x3600))
     (call $win16_dos_int21)
     (if (result i32) (i32.eqz (local.get $which))
-      (then (global.get $eax))
+      (then (i32.load offset=0 (global.get $reg_base)))
       (else (if (result i32) (i32.eq (local.get $which) (i32.const 1))
-        (then (global.get $ebx))
+        (then (i32.load offset=12 (global.get $reg_base)))
         (else (if (result i32) (i32.eq (local.get $which) (i32.const 2))
-          (then (global.get $ecx))
-          (else (global.get $edx))))))))
+          (then (i32.load offset=4 (global.get $reg_base)))
+          (else (i32.load offset=8 (global.get $reg_base)))))))))
 
   (func (export "test_win16_rename") (result i32)
     (call $win16_seg_set (i32.const 2) (i32.const 0x00110000)
@@ -81,11 +81,11 @@ const extraWat = String.raw`
       (i64.const 0x2E57454E5C3A43)) ;; C:\NEW.
     (i32.store offset=7 (call $g2w (i32.const 0x00110540))
       (i32.const 0x00504D54))       ;; TMP\0
-    (global.set $edx (i32.const 0x0500))
-    (global.set $edi (i32.const 0x0540))
-    (global.set $eax (i32.const 0x5600))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0x0500))
+    (i32.store offset=28 (global.get $reg_base) (i32.const 0x0540))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x5600))
     (call $win16_dos_int21)
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_win16_ctl3d_module") (param $v2 i32) (result i32)
     (local $name i32) (local $module i32)
@@ -139,12 +139,12 @@ const extraWat = String.raw`
     (global.set $seg_base_cs (i32.const 0x00100000))
     (global.set $sreg_ss (call $win16_index_to_sel (i32.const 2)))
     (global.set $seg_base_ss (i32.const 0x00110000))
-    (global.set $esp (i32.const 0x00110100))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00110100))
     (call $gs16 (i32.const 0x00110100) (i32.const 0x0010))
     (call $gs16 (i32.const 0x00110102) (call $win16_index_to_sel (i32.const 1)))
     (drop (call $win16_ctl3d (local.get $ordinal)))
-    (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF))
-      (i32.shl (i32.sub (global.get $esp) (i32.const 0x00110000)) (i32.const 16))))
+    (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF))
+      (i32.shl (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 0x00110000)) (i32.const 16))))
 `;
 
 (async () => {

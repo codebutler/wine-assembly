@@ -17,19 +17,19 @@ const extraWat = String.raw`
     (global.set $virtual_alloc_top (global.get $VIRTUAL_ALLOC_TOP_INIT)))
   (func (export "test_virtual_alloc")
       (param $size i32) (param $protect i32) (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (call $handle_VirtualAlloc
       (i32.const 0) (local.get $size) (i32.const 0x3000)
       (local.get $protect) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_protect")
       (param $address i32) (param $size i32) (param $protect i32)
       (param $old_out i32) (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (call $handle_VirtualProtect
       (local.get $address) (local.get $size) (local.get $protect)
       (local.get $old_out) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_page_protect") (param $address i32) (result i32)
     (i32.and
       (i32.atomic.load

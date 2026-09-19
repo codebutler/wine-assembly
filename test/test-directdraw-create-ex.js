@@ -10,21 +10,21 @@ const extraWat = String.raw`
     (global.set $DX_VTBL_DDRAW2 (local.get $extended_vtbl)))
   (func (export "test_ddrawex_call")
       (param $out i32) (param $iid i32) (param $outer i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_DirectDrawCreateEx
       (i32.const 0) (local.get $out) (local.get $iid) (local.get $outer)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
-  (func (export "test_ddrawex_esp") (result i32) (global.get $esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_ddrawex_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_ddrawex_release") (param $obj i32) (result i32)
     (call $dx_com_release_basic (local.get $obj)))
   (func (export "test_ddraw_set_display_mode_esp") (param $obj i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDraw_SetDisplayMode
       (local.get $obj)
       (i32.const 640) (i32.const 480) (i32.const 8)
       (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

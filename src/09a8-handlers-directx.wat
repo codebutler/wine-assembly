@@ -1241,12 +1241,12 @@
 
   ;; Shared dispatch endpoints. One stdcall argument: this.
   (func $handle_dx_com_addref (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dx_com_addref (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $dx_com_addref (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_dx_com_release_basic (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dx_com_release_basic (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $dx_com_release_basic (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ── Init COM vtables ─────────────────────────────────────────
   ;; Allocate thunks for each COM method and populate the vtable blocks.
@@ -1351,9 +1351,9 @@
   (func $handle_DirectDrawEnumerateA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $desc i32) (local $desc_wa i32) (local $name i32) (local $name_wa i32) (local $ret_addr i32)
     ;; Save the original return address (on stack before our args)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Clean up stdcall args: 2 args + ret
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     ;; Allocate strings for description and driver name
     (local.set $desc (call $heap_alloc (i32.const 32))) (local.set $desc_wa (call $g2w (local.get $desc)))
     (local.set $name (call $heap_alloc (i32.const 16))) (local.set $name_wa (call $g2w (local.get $name)))
@@ -1369,20 +1369,20 @@
     (i32.store (local.get $name_wa) (i32.const 0x70736964))  ;; "disp"
     (i32.store offset=4 (local.get $name_wa) (i32.const 0x0079616c)) ;; "lay\0"
     ;; Save original return address first (highest on stack, popped by CACA0007 after callback ret)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     ;; Push callback args (right-to-left): lpContext, lpName, lpDesc, lpGUID(=NULL)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg1))  ;; lpContext
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $name))  ;; lpDriverName
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))  ;; lpDriverDescription
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))  ;; lpGUID = NULL (primary)
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg1))  ;; lpContext
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $name))  ;; lpDriverName
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))  ;; lpDriverDescription
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))  ;; lpGUID = NULL (primary)
     ;; Push continuation thunk as return address (lowest on stack = callback's return addr)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
     ;; Jump to callback
     (global.set $eip (local.get $arg0))
     (global.set $steps (i32.const 0)))
@@ -1391,9 +1391,9 @@
   ;; Callback: BOOL WINAPI cb(GUID *lpGUID, LPSTR lpDesc, LPSTR lpName, LPVOID lpCtx, HMONITOR hm)
   (func $handle_DirectDrawEnumerateExA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $desc i32) (local $desc_wa i32) (local $name i32) (local $name_wa i32) (local $ret_addr i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Clean up stdcall args: 3 args + ret
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     ;; Allocate strings for description and driver name
     (local.set $desc (call $heap_alloc (i32.const 32))) (local.set $desc_wa (call $g2w (local.get $desc)))
     (local.set $name (call $heap_alloc (i32.const 16))) (local.set $name_wa (call $g2w (local.get $name)))
@@ -1409,22 +1409,22 @@
     (i32.store (local.get $name_wa) (i32.const 0x70736964))
     (i32.store offset=4 (local.get $name_wa) (i32.const 0x0079616c))
     ;; Save original return address first (highest on stack, popped by CACA0007 after callback ret)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     ;; Push callback args (right-to-left): hMonitor, lpContext, lpName, lpDesc, lpGUID(=NULL)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))  ;; hMonitor = NULL
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg1))  ;; lpContext
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $name))  ;; lpDriverName
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))  ;; lpDriverDescription
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))  ;; lpGUID = NULL (primary)
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))  ;; hMonitor = NULL
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg1))  ;; lpContext
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $name))  ;; lpDriverName
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))  ;; lpDriverDescription
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))  ;; lpGUID = NULL (primary)
     ;; Push continuation thunk as return address (lowest on stack = callback's return addr)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
     ;; Jump to callback
     (global.set $eip (local.get $arg0))
     (global.set $steps (i32.const 0)))
@@ -1468,45 +1468,45 @@
       (local.get $obj) (local.get $iid_wa) (local.get $out)))
 
   (func $handle_IDirectX7_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $directx7_query_interface
+    (i32.store offset=0 (global.get $reg_base) (call $directx7_query_interface
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectX7_DirectSlot003 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectX7_DirectDrawCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $obj_guest i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80004003))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $obj_guest (call $dx_create_com_obj
       (i32.const 33) (call $init_com_vtable (i32.const 2534) (i32.const 30))))
     (if (i32.eqz (local.get $obj_guest))
-      (then (global.set $eax (i32.const 0x80004005)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)))
       (else
         (call $gs32 (local.get $arg2) (local.get $obj_guest))
         (global.set $dx_ddraw_this (local.get $obj_guest))
         (call $dx_coop_hwnd_set (i32.const 0))
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectX7_DirectInputCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; No current dropdown app requests the DX7VB DirectInput face.
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectX7_DirectSoundCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $native_obj i32) (local $entry i32) (local $slot i32) (local $wrapper i32)
     ;; The Automation method takes a BSTR device GUID; an empty/default BSTR
     ;; selects the primary device, matching a NULL native GUID.
     (if (i32.eqz (local.get $arg2))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else
         (local.set $native_obj (call $dx_create_com_obj
           (i32.const 4) (global.get $DX_VTBL_DSOUND)))
         (if (i32.eqz (local.get $native_obj))
-          (then (global.set $eax (i32.const 0x80004005)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)))
           (else
             (call $dsound_mark_initialized (local.get $native_obj))
             (local.set $entry (call $dx_from_this (local.get $native_obj)))
@@ -1514,11 +1514,11 @@
             (local.set $wrapper (call $dx_get_wrapper_for_vtbl
               (local.get $slot) (call $init_com_vtable (i32.const 2574) (i32.const 11))))
             (call $gs32 (local.get $arg2) (local.get $wrapper))
-            (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectX7_DirectSlot007 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; DX7VB wraps native DirectDraw interfaces in typelib-specific vtables.
   ;; JigSaw's first observed wrapper method is CreateSurface at slot 7.
@@ -1527,8 +1527,8 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IVBDirectDraw7_DirectSlot (param $slot i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IVBDirectDraw7_CreateClipper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $native_obj i32) (local $entry i32) (local $slot i32) (local $wrapper i32)
     (call $handle_IDirectDraw_CreateClipper
@@ -1537,7 +1537,7 @@
     ;; DX7VB inserts one typelib slot ahead of SetHWnd. Keep the native
     ;; clipper state, but publish a same-slot auxiliary wrapper with that
     ;; ten-entry layout rather than letting the client call past slot 8.
-    (if (i32.and (i32.eqz (global.get $eax)) (i32.ne (local.get $arg2) (i32.const 0))) (then
+    (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base))) (i32.ne (local.get $arg2) (i32.const 0))) (then
       (local.set $native_obj (call $gl32 (local.get $arg2)))
       (if (local.get $native_obj) (then
         (local.set $entry (call $dx_from_this (local.get $native_obj)))
@@ -1545,14 +1545,14 @@
         (local.set $wrapper (call $dx_get_wrapper_for_vtbl
           (local.get $slot) (call $init_com_vtable (i32.const 2564) (i32.const 10))))
         (call $gs32 (local.get $arg2) (local.get $wrapper))))))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
   (func $handle_IVBDirectDraw7_CreateSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $native_obj i32) (local $entry i32) (local $slot i32)
     (local $vb_vtbl i32) (local $wrapper i32)
     (call $handle_IDirectDraw_CreateSurface
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const 0) (i32.const 0) (local.get $name_ptr))
-    (if (i32.and (i32.eqz (global.get $eax)) (i32.ne (local.get $arg2) (i32.const 0))) (then
+    (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base))) (i32.ne (local.get $arg2) (i32.const 0))) (then
       (local.set $native_obj (call $gl32 (local.get $arg2)))
       (if (local.get $native_obj) (then
         (local.set $entry (call $dx_from_this (local.get $native_obj)))
@@ -1566,7 +1566,7 @@
           (local.get $slot) (local.get $vb_vtbl)))
         (call $gs32 (local.get $arg2) (local.get $wrapper))))))
     ;; The native method includes pUnkOuter; DX7VB does not expose it.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
   (func $handle_IVBDirectDraw7_SetCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectDraw_SetCooperativeLevel
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
@@ -1581,44 +1581,44 @@
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IVBDirectDrawClipper_DirectSlot (param $slot i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IVBDirectDrawClipper_SetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectDrawClipper_SetHWnd
       (local.get $arg0) (i32.const 0) (local.get $arg1)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr))
     ;; Native SetHWnd includes dwFlags; the VB wrapper omits it.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   (func $handle_IVBDirectSound_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectSound_QueryInterface
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IVBDirectSound_DirectSlot (param $slot i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IVBDirectSound_CreateSoundBufferFromFile (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $obj i32)
     ;; The app's UI sounds are optional, but VB still requires a real buffer
     ;; interface through the hidden retval before it can finish construction.
     (if (i32.eqz (local.get $arg2))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else
         (local.set $obj (call $dx_create_com_obj
           (i32.const 5) (global.get $DX_VTBL_DSBUF)))
         (if (i32.eqz (local.get $obj))
-          (then (global.set $eax (i32.const 0x80004005)))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)))
           (else
             (call $gs32 (local.get $arg2) (local.get $obj))
-            (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IVBDirectSound_SetCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectSound_SetCooperativeLevel
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
   (func $handle_IVBDirectDrawSurface7_DirectSlot (param $slot i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IVBDirectDrawSurface7_SetClipper (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $handle_IDirectDrawSurface_SetClipper
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
@@ -1628,8 +1628,8 @@
   ;; already provides the DirectX runtime, so legacy redistributables must not
   ;; replace its system DLLs before continuing the application installer.
   (func $handle_DirectXSetup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; DirectDrawCreate(lpGUID, lplpDD, pUnkOuter) → HRESULT
   (func $handle_DirectDrawCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1637,15 +1637,15 @@
     (local.set $obj_guest (call $dx_create_com_obj (i32.const 1) (global.get $DX_VTBL_DDRAW)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005)) ;; E_FAIL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)) ;; E_FAIL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; *lplpDD = obj_guest
     (call $gs32 (local.get $arg1) (local.get $obj_guest))
     (global.set $dx_ddraw_this (local.get $obj_guest))
     (call $dx_coop_hwnd_set (i32.const 0))
-    (global.set $eax (i32.const 0)) ;; DD_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))) ;; stdcall 3 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DD_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))) ;; stdcall 3 args
 
   ;; The generated registry has historically exposed one 24-slot
   ;; IDirectDraw2 superset for IID_IDirectDraw2/4/7. IDirectDraw4 adds four
@@ -1673,13 +1673,13 @@
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
     (if (local.get $arg3)
       (then
-        (global.set $eax (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; E_INVALIDARG
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; Translate the caller's REFIID once, then compare all four GUID words.
     ;; IID_IDirectDraw7 {15E65EC0-3B9C-11D2-B92F-00609797EA5B}.
@@ -1688,21 +1688,21 @@
           (i32.const 0x15E65EC0) (i32.const 0x11D23B9C)
           (i32.const 0x60002FB9) (i32.const 0x5BEA9797)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $obj_guest
       (call $dx_create_com_obj (i32.const 1) (call $dx_get_ddraw7_vtbl)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005)) ;; E_FAIL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)) ;; E_FAIL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (call $gs32 (local.get $arg1) (local.get $obj_guest))
     (global.set $dx_ddraw_this (local.get $obj_guest))
     (call $dx_coop_hwnd_set (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; DirectDrawCreateClipper(dwFlags, lplpDDClipper, pUnkOuter) → HRESULT
   ;; Standalone clipper factory — equivalent to IDirectDraw_CreateClipper.
@@ -1711,12 +1711,12 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 10) (global.get $DX_VTBL_DDCLIP)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $gs32 (local.get $arg1) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; DirectSoundCreate(lpGUID, lplpDS, pUnkOuter) → HRESULT
   (func $handle_DirectSoundCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1724,13 +1724,13 @@
     (local.set $obj_guest (call $dx_create_com_obj (i32.const 4) (global.get $DX_VTBL_DSOUND)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $dsound_mark_initialized (local.get $obj_guest))
     (call $gs32 (local.get $arg1) (local.get $obj_guest))
-    (global.set $eax (i32.const 0)) ;; DS_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DS_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; DirectInputCreateA(hInstance, dwVersion, lplpDI, pUnkOuter) → HRESULT
   (func $handle_DirectInputCreateA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1738,14 +1738,14 @@
     (local.set $obj_guest (call $dx_create_com_obj (i32.const 6) (global.get $DX_VTBL_DINPUT)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj_guest)))
     (store.field.memarg DxObject misc0 (local.get $entry) (local.get $arg1))
     (call $gs32 (local.get $arg2) (local.get $obj_guest))
-    (global.set $eax (i32.const 0)) ;; DI_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))) ;; stdcall 4 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DI_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))) ;; stdcall 4 args
 
   ;; Complete DirectInput interface classifier. A/W pairs share the same
   ;; wrapper shape here, but remain distinct complete COM identities.
@@ -1798,21 +1798,21 @@
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
     (if (i32.or (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; E_INVALIDARG
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (local.get $arg4)
       (then
-        (global.set $eax (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $iid_wa (call $g2w (local.get $arg2)))
     (local.set $kind (call $dinput_iid_kind_wa (local.get $iid_wa)))
     (if (i32.or (i32.lt_u (local.get $kind) (i32.const 2))
                 (i32.gt_u (local.get $kind) (i32.const 4)))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $vtbl
       (select (global.get $DX_VTBL_DINPUT7) (global.get $DX_VTBL_DINPUT)
@@ -1821,14 +1821,14 @@
       (call $dx_create_com_obj (i32.const 6) (local.get $vtbl)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005)) ;; E_FAIL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)) ;; E_FAIL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj_guest)))
     (store.field.memarg DxObject misc0 (local.get $entry) (local.get $arg1))
     (call $gs32 (local.get $arg3) (local.get $obj_guest))
-    (global.set $eax (i32.const 0)) ;; DI_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DI_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; DirectInput8Create(hInstance, dwVersion, riidltf, ppvOut, pUnkOuter)
   ;; IDirectInput8 keeps the legacy methods at the front of its vtable, which
@@ -1838,32 +1838,32 @@
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
     (if (local.get $arg4)
       (then
-        (global.set $eax (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (i32.or (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; E_INVALIDARG
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $iid_wa (call $g2w (local.get $arg2)))
     (if (i32.ne (call $dinput_iid_kind_wa (local.get $iid_wa)) (i32.const 5))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $obj_guest
       (call $dx_create_com_obj (i32.const 6) (global.get $DX_VTBL_DINPUT)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005)) ;; E_FAIL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)) ;; E_FAIL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj_guest)))
     (store.field.memarg DxObject misc0 (local.get $entry) (i32.const 0x0800))
     (call $gs32 (local.get $arg3) (local.get $obj_guest))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectDraw methods
@@ -1921,30 +1921,30 @@
     (local $slot i32) (local $obj i32) (local $child_entry i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $gs32 (local.get $arg2) (i32.const 0))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Translate riid exactly once, then compare all four GUID words in-place.
     (local.set $iid_wa (call $g2w (local.get $arg1)))
     (local.set $kind (call $ddraw_iid_kind_wa (local.get $iid_wa)))
     (if (i32.eqz (local.get $kind))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Resolve this and its primary slot once. Every wrapper for this object
     ;; shares that entry; IUnknown must always return the controlling wrapper.
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eqz (local.get $entry))
       (then
-        (global.set $eax (i32.const 0x80004002))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $slot (call $dx_slot_of (local.get $entry)))
     (if (i32.eq (local.get $kind) (i32.const 1))
@@ -1979,8 +1979,8 @@
         (store.field DxObject refcount (local.get $entry)
           (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
         (call $gs32 (local.get $arg2) (local.get $obj))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; IDirect3D{,2,3} — create a new child entry and link parent DDraw slot at +8
     ;; so that IDirect3D::QI(IID_IDirectDraw) can find the parent via the link
@@ -1995,15 +1995,15 @@
             (else (local.set $obj (call $dx_create_com_obj (i32.const 9) (global.get $DX_VTBL_D3D3)))))))
         (if (i32.eqz (local.get $obj))
           (then
-            (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         ;; Store parent DDraw slot at child_entry+8.
         (local.set $child_entry (call $dx_from_this (local.get $obj)))
         (store.field DxObject misc0 (local.get $child_entry) (local.get $slot))
         (call $gs32 (local.get $arg2) (local.get $obj))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; IDirect3D7 — keep this separate so the legacy D3D1/2/3 path remains
     ;; unchanged for d3drm.dll, which is sensitive to QueryInterface HRESULTs.
@@ -2012,26 +2012,26 @@
         (local.set $obj (call $dx_create_com_obj (i32.const 9) (global.get $DX_VTBL_D3D7)))
         (if (i32.eqz (local.get $obj))
           (then
-            (global.set $eax (i32.const 0x8007000E))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (local.set $child_entry (call $dx_from_this (local.get $obj)))
         (store.field DxObject misc0 (local.get $child_entry) (local.get $slot))
         (call $gs32 (local.get $arg2) (local.get $obj))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Classification above makes this unreachable, but fail closed if a new
     ;; kind is added without a corresponding wrapper path.
-    (global.set $eax (i32.const 0x80004002))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
 
   ;; Compact — no-op
   (func $handle_IDirectDraw_Compact (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; CreateClipper — stub
   ;; CreateClipper(this, dwFlags, lplpDDClipper, pUnkOuter) — type 10 = DDClipper
@@ -2040,12 +2040,12 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 10) (global.get $DX_VTBL_DDCLIP)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005)) ;; E_FAIL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)) ;; E_FAIL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (call $gs32 (local.get $arg2) (local.get $obj))
-    (global.set $eax (i32.const 0)) ;; DD_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DD_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; CreatePalette(this, dwFlags, lpDDColorArray, lplpDDPalette, pUnkOuter)
   (func $handle_IDirectDraw_CreatePalette (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2054,8 +2054,8 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 3) (global.get $DX_VTBL_DDPAL)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; Copy 256 PALETTEENTRY entries (1024 bytes) to heap
     (local.set $entry (call $dx_from_this (local.get $obj)))
@@ -2064,8 +2064,8 @@
     (store.field DxObject misc1 (local.get $entry) (local.get $pal_wa)) ;; dib_ptr = palette data WASM addr
     ;; *lplpDDPalette = obj
     (call $gs32 (local.get $arg3) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))) ;; 5 args (this + 4)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) ;; 5 args (this + 4)
 
   ;; CreateSurface(this, lpDDSD, lplpDDSurface, pUnkOuter)
   (func $handle_IDirectDraw_CreateSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2177,8 +2177,8 @@
     ;; Report the failure DirectDraw would report instead.
     (if (i32.eqz (local.get $dib_guest))
       (then
-        (global.set $eax (i32.const 0x8876017C)) ;; DDERR_OUTOFVIDEOMEMORY
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876017C)) ;; DDERR_OUTOFVIDEOMEMORY
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x200)))
       (then
@@ -2201,8 +2201,8 @@
       (then
         (if (i32.eqz (i32.and (local.get $flags) (i32.const 0x200)))
           (then (call $dib_free_wasm (local.get $dib_wa))))
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
     (call $zero_memory (call $dx_surf_meta_ptr (local.get $entry)) (i32.const 8))
@@ -2276,8 +2276,8 @@
           ;; Same guard as the primary above: never zero from g2w(0).
           (if (i32.eqz (local.get $dib_guest))
             (then
-              (global.set $eax (i32.const 0x8876017C)) ;; DDERR_OUTOFVIDEOMEMORY
-              (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+              (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876017C)) ;; DDERR_OUTOFVIDEOMEMORY
+              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
               (return)))
           (local.set $dib_wa (call $g2w (local.get $dib_guest))) (call $zero_memory (local.get $dib_wa) (local.get $dib_size))
           (global.set $dx_vidmem_used (i32.add (global.get $dx_vidmem_used) (local.get $dib_size)))
@@ -2287,8 +2287,8 @@
           (call $dx_surf_fmt_set (local.get $back_entry) (local.get $fmt))
           ;; Store back buffer guest ptr in primary's misc0 field for GetAttachedSurface
           (store.field DxObject misc0 (local.get $entry) (local.get $back_obj))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))) ;; 4 args (this+3)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))) ;; 4 args (this+3)
 
   ;; DuplicateSurface — stub
   (func $handle_IDirectDraw_DuplicateSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2300,9 +2300,9 @@
   (func $handle_IDirectDraw_EnumDisplayModes (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
     ;; Save state for continuation
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Clean up stdcall args: 5 args + ret = 24 bytes
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     ;; Allocate a DDSURFACEDESC on the heap (reused for each callback)
     (global.set $enum_modes_ddsd (call $heap_alloc (i32.const 108)))
     (global.set $enum_modes_callback (local.get $arg4))
@@ -2432,7 +2432,7 @@
     (if (i32.ge_u (local.get $idx) (call $enum_mode_raw_count))
       (then
         (global.set $eip (global.get $enum_modes_ret))
-        (global.set $eax (i32.const 0))  ;; DD_OK
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; DD_OK
         (return)))
     (local.set $w (call $enum_mode_res_w (i32.div_u (local.get $idx) (i32.const 3))))
     (local.set $h (call $enum_mode_res_h (i32.div_u (local.get $idx) (i32.const 3))))
@@ -2475,16 +2475,16 @@
           (i32.store (i32.add (local.get $ddsd_wa) (i32.const 92)) (i32.const 0x0000FF00))
           (i32.store (i32.add (local.get $ddsd_wa) (i32.const 96)) (i32.const 0x000000FF))))))
     ;; Push saved caller return addr (popped on enum complete)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $enum_modes_ret))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_modes_ret))
     ;; Push callback args: lpContext, lpDDSD (right to left, __stdcall)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $enum_modes_context))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $enum_modes_ddsd))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_modes_context))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_modes_ddsd))
     ;; Push continuation thunk as callback's return address
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $enum_modes_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $enum_modes_thunk))
     ;; Jump to callback
     (global.set $eip (global.get $enum_modes_callback))
     (global.set $steps (i32.const 0)))
@@ -2495,15 +2495,15 @@
     ;; Stack now has [saved_caller_ret] at ESP.
     (call $host_log_i32 (i32.or (i32.const 0xED00000)
       (i32.or (i32.shl (global.get $enum_modes_idx) (i32.const 8))
-              (i32.and (global.get $eax) (i32.const 0xFF)))))
+              (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))))
     ;; Pop the saved caller return addr
-    (global.set $enum_modes_ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (global.set $enum_modes_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     ;; If callback returned 0 (DDENUMRET_CANCEL), stop enumeration
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then
         (global.set $eip (global.get $enum_modes_ret))
-        (global.set $eax (i32.const 0))  ;; DD_OK
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; DD_OK
         (return)))
     ;; Advance to next mode
     (global.set $enum_modes_idx (i32.add (global.get $enum_modes_idx) (i32.const 1)))
@@ -2519,8 +2519,8 @@
   ;; Dispatches callback N times via CACA000B continuation thunk.
   (func $d3d_enum_devices_invoke (param $cb i32) (param $ctx i32) (param $ret_addr i32) (param $version i32)
     ;; Push saved caller ret once (stays on stack across all iterations).
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     (global.set $d3d_enum_dev_mode (local.get $version))
     (global.set $d3d_enum_dev_cb  (local.get $cb))
     (global.set $d3d_enum_dev_ctx (local.get $ctx))
@@ -2541,9 +2541,9 @@
         (i32.le_u (global.get $d3d_enum_dev_mode) (i32.const 2))))
     (if (i32.ge_u (local.get $idx) (local.get $count))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4))) ;; pop saved ret
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) ;; pop saved ret
         (global.set $eip (global.get $d3d_enum_dev_ret))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $kind
       (i32.add (local.get $idx)
@@ -2616,33 +2616,33 @@
     (if (i32.eq (local.get $kind) (i32.const 0))
       (then (call $gs32 (i32.add (local.get $hel) (i32.const 8)) (i32.const 1))))
     ;; Push callback args right-to-left: ctx, helDesc, hwDesc, name, desc, guid
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_dev_ctx))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $hel))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $hw))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $name))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $guid))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_dev_ctx))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $hel))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $hw))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $name))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $guid))
     ;; Push callback return = CACA000B
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_dev_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_dev_thunk))
     (global.set $eip (global.get $d3d_enum_dev_cb))
     (global.set $steps (i32.const 0)))
 
   ;; CACA000B: callback returned; callback popped its 6 args via `ret 0x18`.
   ;; If callback returned DDENUMRET_CANCEL (0), stop; else advance idx.
   (func $d3d_enum_devices_continue
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4))) ;; pop saved ret
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) ;; pop saved ret
         (global.set $eip (global.get $d3d_enum_dev_ret))
         (global.set $d3d_enum_dev_mode (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (global.set $d3d_enum_dev_idx (i32.add (global.get $d3d_enum_dev_idx) (i32.const 1)))
     (if (i32.eq (global.get $d3d_enum_dev_mode) (i32.const 7))
@@ -2654,8 +2654,8 @@
   ;; D3D7 EnumDevices callback signature:
   ;; EnumDevicesCallback(lpDeviceDescription, lpDeviceName, lpD3DDeviceDesc7, lpContext).
   (func $d3d_enum_devices7_invoke (param $cb i32) (param $ctx i32) (param $ret_addr i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     (global.set $d3d_enum_dev_mode (i32.const 7))
     (global.set $d3d_enum_dev_cb  (local.get $cb))
     (global.set $d3d_enum_dev_ctx (local.get $ctx))
@@ -2669,10 +2669,10 @@
     ;; 0=HAL, 1=RGB software. D3D7 exposes no GUID in the callback.
     (if (i32.ge_u (local.get $idx) (i32.const 2))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4))) ;; pop saved ret
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))) ;; pop saved ret
         (global.set $eip (global.get $d3d_enum_dev_ret))
         (global.set $d3d_enum_dev_mode (i32.const 0))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $desc (call $heap_alloc (i32.const 32)))
     (local.set $name (call $heap_alloc (i32.const 16)))
@@ -2701,16 +2701,16 @@
       (then
         (i32.store (call $g2w (local.get $caps)) (i32.const 0x8AEA0)))) ;; HAL-style dev caps
     ;; Push callback args right-to-left: ctx, caps7, name, desc.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_dev_ctx))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $caps))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $name))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_dev_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_dev_ctx))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $caps))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $name))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_dev_thunk))
     (global.set $eip (global.get $d3d_enum_dev_cb))
     (global.set $steps (i32.const 0)))
 
@@ -2729,24 +2729,24 @@
     (i32.store (i32.add (local.get $wa) (i32.const 12)) (i32.const 16))   ;; dwZBufferBitDepth
     (i32.store (i32.add (local.get $wa) (i32.const 16)) (i32.const 0xFFFF)) ;; dwZBitMask
     ;; Push saved caller return, then callback args right-to-left.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_zbuf_context))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_zbuf_format))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_zbuf_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_zbuf_context))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_zbuf_format))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_zbuf_thunk))
     (global.set $eip (global.get $d3d_enum_zbuf_callback))
     (global.set $steps (i32.const 0)))
 
   ;; CACA000D: z-buffer-format callback returned. One format is enough for
   ;; DX5-era device setup, so finish enumeration regardless of callback EAX.
   (func $d3d_enum_zbuf_continue
-    (global.set $d3d_enum_zbuf_ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+    (global.set $d3d_enum_zbuf_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
     (global.set $eip (global.get $d3d_enum_zbuf_ret))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   ;; ── IDirect3DDevice7::EnumTextureFormats — common RGB/ARGB formats ──
   ;; Callback signature: EnumTextureFormatsCallback(lpDDPixelFormat, lpContext).
@@ -2812,8 +2812,8 @@
     (global.set $d3d_enum_tex_format   (call $heap_alloc (i32.const 32)))
     (global.set $d3d_enum_tex_idx      (i32.const 0))
     (global.set $d3d_enum_tex_desc_mode (i32.const 0))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     (call $d3d_enum_tex_dispatch))
 
   (func $d3d_enum_tex_desc_invoke (param $cb i32) (param $ctx i32) (param $ret_addr i32)
@@ -2823,17 +2823,17 @@
     (global.set $d3d_enum_tex_format   (call $heap_alloc (i32.const 108)))
     (global.set $d3d_enum_tex_idx      (i32.const 0))
     (global.set $d3d_enum_tex_desc_mode (i32.const 1))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     (call $d3d_enum_tex_dispatch))
 
   (func $d3d_enum_tex_dispatch
     (if (i32.ge_u (global.get $d3d_enum_tex_idx) (i32.const 4))
       (then
-        (global.set $d3d_enum_tex_ret (call $gl32 (global.get $esp)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (global.set $d3d_enum_tex_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (global.set $eip (global.get $d3d_enum_tex_ret))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $d3d_enum_tex_desc_mode (i32.const 0))
         (return)))
     (if (global.get $d3d_enum_tex_desc_mode)
@@ -2842,24 +2842,24 @@
       (else
         (call $d3d_fill_texture_format (global.get $d3d_enum_tex_format) (global.get $d3d_enum_tex_idx))))
     ;; Push callback args right-to-left: ctx, lpDDPixelFormat or lpDDSurfaceDesc.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_tex_context))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_tex_format))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $d3d_enum_tex_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_tex_context))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_tex_format))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $d3d_enum_tex_thunk))
     (global.set $eip (global.get $d3d_enum_tex_callback))
     (global.set $steps (i32.const 0)))
 
   ;; CACA000F: texture-format callback returned. DDENUMRET_CANCEL (0) stops;
   ;; any non-zero result advances to the next format.
   (func $d3d_enum_tex_continue
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then
-        (global.set $d3d_enum_tex_ret (call $gl32 (global.get $esp)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (global.set $d3d_enum_tex_ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (global.set $eip (global.get $d3d_enum_tex_ret))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (global.set $d3d_enum_tex_desc_mode (i32.const 0))
         (return)))
     (global.set $d3d_enum_tex_idx (i32.add (global.get $d3d_enum_tex_idx) (i32.const 1)))
@@ -3031,20 +3031,20 @@
   ;;   +16 owner slot+1, +20 flags, +24 next slot
   ;;   +32 requested DDSURFACEDESC, +140 callback DDSURFACEDESC; 256 bytes.
   (func $dd_enum_surfaces_finish
-    (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 256)))
-    (global.set $eax (i32.const 0)))
+    (global.set $eip (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 256)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $dd_enum_surfaces_invoke (param $frame i32) (param $surface i32)
     (local $frame_wa i32)
     (local.set $frame_wa (call $g2w (local.get $frame)))
     ;; Callback(surface, descriptor, context), right-to-left under stdcall.
-    (global.set $esp (i32.sub (local.get $frame) (i32.const 16)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $surface))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 8))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $frame) (i32.const 16)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $surface))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))
       (i32.add (local.get $frame) (i32.const 140)))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))
       (i32.load offset=12 (local.get $frame_wa)))
     (global.set $eip (i32.load offset=8 (local.get $frame_wa)))
     (global.set $steps (i32.const 0)))
@@ -3063,17 +3063,17 @@
           (i32.eq (i32.load (call $dx_surf_owner_ptr (local.get $entry)))
             (i32.load offset=16 (local.get $frame_wa))))
       (then
-        (global.set $esp (local.get $frame))
+        (i32.store offset=16 (global.get $reg_base) (local.get $frame))
         (call $handle_IDirectDrawSurface_Release
           (local.get $surface) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
-        (global.set $esp (local.get $frame)))))
+        (i32.store offset=16 (global.get $reg_base) (local.get $frame)))))
 
   (func $dd_enum_surfaces_continue
     (local $frame i32) (local $frame_wa i32) (local $slot i32)
     (local $entry i32) (local $selected i32) (local $matches i32)
     (local $surface i32)
-    (local.set $frame (global.get $esp))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
     (local.set $frame_wa (call $g2w (local.get $frame)))
     ;; CANBECREATED enumerates only the first temporary match. The callback's
     ;; return value does not change its one-shot lifecycle.
@@ -3084,7 +3084,7 @@
         (return)))
     ;; DDENUMRET_CANCEL is zero. The reference passed to the just-finished
     ;; callback remains the caller's to Release, exactly as Microsoft documents.
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $dd_enum_surfaces_finish) (return)))
     (local.set $slot (i32.load offset=24 (local.get $frame_wa)))
     (local.set $selected (i32.const -1))
@@ -3141,37 +3141,37 @@
     (local $entry i32) (local $ret i32) (local $frame i32) (local $frame_wa i32)
     (local $search i32) (local $match i32)
     (local $create_result i32) (local $temp i32) (local $saved_primary i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $search (i32.and (local.get $arg1) (i32.const 0x18)))
     (local.set $match (i32.and (local.get $arg1) (i32.const 0x7)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 1))
-      (then (global.set $eax (i32.const 0x88760082)) (return))) ;; DDERR_INVALIDOBJECT
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) (return))) ;; DDERR_INVALIDOBJECT
     (if (i32.eqz (local.get $arg4))
-      (then (global.set $eax (i32.const 0x80070057)) (return))) ;; DDERR_INVALIDPARAMS
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return))) ;; DDERR_INVALIDPARAMS
     (if (i32.ne (i32.and (local.get $arg1) (i32.const -32)) (i32.const 0))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (i32.and
           (i32.ne (local.get $search) (i32.const 0x8))
           (i32.ne (local.get $search) (i32.const 0x10)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (i32.and
           (i32.ne (local.get $match) (i32.const 0x1))
           (i32.and (i32.ne (local.get $match) (i32.const 0x2))
                    (i32.ne (local.get $match) (i32.const 0x4))))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (i32.and (i32.eq (local.get $search) (i32.const 0x8))
                  (i32.ne (local.get $match) (i32.const 0x2)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (i32.and (i32.ne (local.get $match) (i32.const 0x1))
                  (i32.eqz (local.get $arg2)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (i32.and (i32.ne (local.get $arg2) (i32.const 0))
           (i32.lt_u (call $gl32 (local.get $arg2)) (i32.const 108)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
-    (local.set $frame (i32.sub (global.get $esp) (i32.const 256)))
-    (global.set $esp (local.get $frame))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
+    (local.set $frame (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 256)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $frame))
     (local.set $frame_wa (call $g2w (local.get $frame)))
     (call $zero_memory (local.get $frame_wa) (i32.const 256))
     (i32.store (local.get $frame_wa) (i32.const 0x53454444)) ;; "DDES"
@@ -3191,15 +3191,15 @@
         ;; object, but restore the prior primary selection immediately: this
         ;; probe must not replace the application's display surface.
         (local.set $saved_primary (global.get $dx_primary_wa))
-        (global.set $esp (local.get $frame))
+        (i32.store offset=16 (global.get $reg_base) (local.get $frame))
         (call $handle_IDirectDraw_CreateSurface
           (local.get $arg0)
           (i32.add (local.get $frame) (i32.const 32))
           (i32.add (local.get $frame) (i32.const 248))
           (i32.const 0) (i32.const 0) (i32.const 0))
-        (local.set $create_result (global.get $eax))
+        (local.set $create_result (i32.load offset=0 (global.get $reg_base)))
         (global.set $dx_primary_wa (local.get $saved_primary))
-        (global.set $esp (local.get $frame))
+        (i32.store offset=16 (global.get $reg_base) (local.get $frame))
         (local.set $temp (i32.load offset=248 (local.get $frame_wa)))
         ;; A description that cannot be created is a successful empty search,
         ;; not the old unconditional success that skipped every valid callback.
@@ -3213,13 +3213,13 @@
           (i32.add (local.get $frame_wa) (i32.const 140)) (local.get $entry))
         (call $dd_enum_surfaces_invoke (local.get $frame) (local.get $temp))
         (return)))
-    (global.set $eax (i32.const 1)) ;; initial dispatch is not cancellation
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1)) ;; initial dispatch is not cancellation
     (call $dd_enum_surfaces_continue))
 
   ;; FlipToGDISurface — no-op
   (func $handle_IDirectDraw_FlipToGDISurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetCaps(this, lpDDDriverCaps, lpDDHELCaps)
   (func $handle_IDirectDraw_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3263,8 +3263,8 @@
         (then (i32.store (i32.add (local.get $wa) (i32.const 0x3c)) (i32.const 0x00800000))))
       (if (i32.gt_u (local.get $sz) (i32.const 0x40))
         (then (i32.store (i32.add (local.get $wa) (i32.const 0x40)) (i32.const 0x00800000))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetDisplayMode(this, lpDDSD) — return current display mode
   (func $handle_IDirectDraw_GetDisplayMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3284,15 +3284,15 @@
     (i32.store (i32.add (local.get $wa) (i32.const 88)) (i32.const 0xF800))
     (i32.store (i32.add (local.get $wa) (i32.const 92)) (i32.const 0x07E0))
     (i32.store (i32.add (local.get $wa) (i32.const 96)) (i32.const 0x001F))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetFourCCCodes — return 0 codes
   (func $handle_IDirectDraw_GetFourCCCodes (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetGDISurface — stub
   (func $handle_IDirectDraw_GetGDISurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3301,8 +3301,8 @@
   ;; GetMonitorFrequency(this, lpdwFreq)
   (func $handle_IDirectDraw_GetMonitorFrequency (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $gs32 (local.get $arg1) (i32.const 60))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; ---- the 60 Hz vblank model ------------------------------------------
   ;; See the block comment on $vblank_counter in src/01-header.wat for why
@@ -3387,8 +3387,8 @@
   (func $handle_IDirectDraw_GetScanLine (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (call $vblank_scanline (call $host_get_ticks)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetVerticalBlankStatus(this, lpbIsInVB) — the real ~8% duty cycle. This
   ;; used to answer TRUE unconditionally, which makes "spin until vblank"
@@ -3396,20 +3396,20 @@
   (func $handle_IDirectDraw_GetVerticalBlankStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (call $vblank_in_blank (call $host_get_ticks)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Initialize — no-op
   (func $handle_IDirectDraw_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; RestoreDisplayMode — the surfaces stay as they are, but the mode is no
   ;; longer in effect, so the screen metrics go back to the host window.
   (func $handle_IDirectDraw_RestoreDisplayMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dx_display_mode_set (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SetCooperativeLevel(this, hwnd, dwFlags) — store the presentation owner.
   (func $handle_IDirectDraw_SetCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -3440,8 +3440,8 @@
         ;; already-visible renderer window is harmless and keeps both views in
         ;; sync when the application changed only the guest-side style.
         (drop (call $host_show_window (local.get $arg1) (i32.const 5)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetDisplayMode(this, dwWidth, dwHeight, dwBPP, [dwRefreshRate, dwFlags])
   ;; IDirectDraw v1: 4 args (this+3). IDirectDraw2+: 6 args (this+5).
@@ -3576,15 +3576,15 @@
           (i32.const 0)
           (i32.or (i32.and (local.get $arg1) (i32.const 0xFFFF))
                   (i32.shl (local.get $arg2) (i32.const 16)))))))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (local.set $vtbl (call $gl32 (local.get $arg0)))
     (if (i32.or
           (i32.eq (local.get $vtbl) (global.get $DX_VTBL_DDRAW2))
           (i32.or
             (i32.eq (local.get $vtbl) (global.get $DX_VTBL_DDRAW4))
             (i32.eq (local.get $vtbl) (global.get $DX_VTBL_DDRAW7))))
-      (then (global.set $esp (i32.add (global.get $esp) (i32.const 28)))) ;; v2+: this + 5 args
-      (else (global.set $esp (i32.add (global.get $esp) (i32.const 20)))))) ;; v1: this + 3 args
+      (then (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))) ;; v2+: this + 5 args
+      (else (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))))) ;; v1: this + 3 args
 
   ;; WaitForVerticalBlank(this, dwFlags, hEvent) — blocks until the next
   ;; vblank boundary, which is the whole point of the call.
@@ -3602,8 +3602,8 @@
     (if (i32.eqz (call $vblank_wait_elapsed))
       (then (call $vblank_block) (return)))
     (global.set $vblank_wait_active (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetAvailableVidMem(this, lpDDSCaps, lpdwTotal, lpdwFree) — IDirectDraw2+ only
   ;; Total = 8 MB (matches GetCaps dwVidMemTotal). Free = Total - $dx_vidmem_used;
@@ -3614,30 +3614,28 @@
     (if (i32.lt_s (local.get $free) (i32.const 0)) (then (local.set $free (i32.const 0))))
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0x00800000))))
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $free))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; IDirectDraw4 tail (slots 24..27).
   (func $handle_IDirectDraw4_GetSurfaceFromDC (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; E_NOTIMPL
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; E_NOTIMPL
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectDraw4_RestoreAllSurfaces (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Surfaces in this software implementation never become lost, but still
     ;; validate the interface instead of accepting an arbitrary pointer.
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x88760096)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x88760096)
         (i32.ne (call $dx_from_this (local.get $arg0)) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirectDraw4_TestCooperativeLevel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Windowed mode is a valid implicit cooperative level. As above, reject a
     ;; stale/non-DirectDraw wrapper rather than turning this into a silent stub.
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x88760096)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x88760096)
         (i32.ne (call $dx_from_this (local.get $arg0)) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetDeviceIdentifier(this, LPDDDEVICEIDENTIFIER, flags). The DX6
   ;; structure is 560 bytes: two MAX_PATH ANSI strings, driver version,
@@ -3646,8 +3644,8 @@
   (func $handle_IDirectDraw4_GetDeviceIdentifier (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $wa i32)
     (if (i32.eqz (local.get $arg1)) (then
-      (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
-      (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; E_INVALIDARG
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
       (return)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (call $zero_memory (local.get $wa) (i32.const 560))
@@ -3663,26 +3661,25 @@
     (i32.store offset=272 (local.get $wa) (i32.const 0x69442079))
     (i32.store offset=276 (local.get $wa) (i32.const 0x74636572))
     (i32.store offset=280 (local.get $wa) (i32.const 0x77617244))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirectDraw7 tail (slots 28..29). Mode testing is advisory; the display
   ;; mode path remains authoritative.
   (func $handle_IDirectDraw7_StartModeTest (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Mode testing is advisory in DirectDraw 7. Accept a non-empty list on a
     ;; live object; invalid input fails before EvaluateMode can observe it.
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x80070057)
         (i32.and
           (i32.ne (call $dx_from_this (local.get $arg0)) (i32.const 0))
           (i32.and (i32.ne (local.get $arg1) (i32.const 0))
                    (i32.ne (local.get $arg2) (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirectDraw7_EvaluateMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectDrawSurface methods
@@ -3752,7 +3749,7 @@
           (local.get $arg0)
           (local.get $arg2)
           (local.get $device_vtbl))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (local.get $vtbl)
@@ -3765,8 +3762,8 @@
         (call $gs32 (local.get $arg2) (local.get $arg0))))
     ;; COM rule: QI must AddRef the returned interface
     (store.field DxObject refcount (local.get $entry) (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   ;; One teardown path serves every COM view of a type-2 surface, including
@@ -3802,8 +3799,8 @@
     (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
 
   (func $handle_IDirectDrawSurface_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dx_surface_release (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $dx_surface_release (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; AddAttachedSurface — retain the parent relationship on the child in the
   ;; per-surface metadata. D3DIM also checks the child's creation-time
@@ -3822,12 +3819,12 @@
           (i32.add (call $dx_slot_of (local.get $parent)) (i32.const 1)))
         (i32.store offset=4 (local.get $child)
           (i32.add (i32.load offset=4 (local.get $child)) (i32.const 1)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectDrawSurface_AddOverlayDirtyRect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) ;; DDERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DDERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Blt(this, lpDestRect, lpDDSrcSurface, lpSrcRect, dwFlags, lpDDBltFx)
   ;; Note: 6 args but we only get 5 from dispatch; 6th is at ESP+24
@@ -3898,7 +3895,7 @@
       (then
         (call $dx_surf_clear_copy (local.get $dst_entry))
         (local.set $row (call $gl32 (i32.add
-          (call $gl32 (i32.add (global.get $esp) (i32.const 24))) ;; lpDDBltFx arg6
+          (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))) ;; lpDDBltFx arg6
           (i32.const 80)))) ;; DDBLTFX.dwFillColor at offset 80 (after dwSize..dwAlphaSrcConst)
         (call $host_dx_trace (i32.const 13) (call $dx_slot_of (local.get $dst_entry))
           (local.get $row) (local.get $dx) (local.get $dy))
@@ -3956,8 +3953,8 @@
         ;; If dest is primary, present
         (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
           (then (call $dx_present (local.get $dst_entry))))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28))) ;; 6 args + ret
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))) ;; 6 args + ret
         (return)))
     ;; Motocross Madness uses this exact null-source WAIT marker at the start of
     ;; each overlay frame. Restore the background saved beneath its prior keyed
@@ -3986,8 +3983,8 @@
         (call $dx_cursor_restore_or_arm (local.get $dst_entry))
         (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
           (then (call $dx_present (local.get $dst_entry))))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     ;; MCM's profile form normally copies a temporary black backing surface
     ;; over the title before drawing the editable name, instructions, and OK
@@ -4023,14 +4020,14 @@
           (br $profile_clear_rows)))
         (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
           (then (call $dx_present (local.get $dst_entry))))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     ;; Source surface blit
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     (local.set $src_entry (call $dx_from_this (local.get $arg2)))
     (local.set $src_dib (load.field DxObject misc1 (local.get $src_entry)))
@@ -4086,8 +4083,8 @@
           (local.get $dx) (local.get $dy) (local.get $sx) (local.get $sy)
           (local.get $dw) (local.get $dh) (local.get $drblt_flags))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     (if (i32.and
           (i32.and
@@ -4147,8 +4144,8 @@
                 (i32.or (i32.ge_u (local.get $sx) (local.get $src_full_w))
                         (i32.ge_u (local.get $sy) (local.get $src_full_h)))))
           (then
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
             (return)))
         (if (i32.gt_u (local.get $dw) (i32.sub (local.get $dst_w) (local.get $dx)))
           (then (local.set $dw (i32.sub (local.get $dst_w) (local.get $dx)))))
@@ -4226,8 +4223,8 @@
               (local.get $dst_entry) (local.get $src_entry)
               (local.get $dx) (local.get $dy) (local.get $sx) (local.get $sy)
               (local.get $dw) (local.get $dh) (local.get $drblt_flags))
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
             (return)))
         (if (local.get $clip_entry)
           (then
@@ -4384,13 +4381,13 @@
     ;; sidebar indices return, including through intervening palette updates.
     (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
       (then (call $dx_present (local.get $dst_entry))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   ;; BltBatch — stub
   (func $handle_IDirectDrawSurface_BltBatch (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; BltFast(this, dwX, dwY, lpDDSrcSurface, lpSrcRect, dwTrans)
   (func $handle_IDirectDrawSurface_BltFast (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4408,8 +4405,8 @@
     ;; callers that need clipping must use Blt.
     (if (call $dx_surface_clipper_get (local.get $dst_entry))
       (then
-        (global.set $eax (i32.const 0x80004001)) ;; DDERR_UNSUPPORTED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DDERR_UNSUPPORTED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     (local.set $dst_dib (load.field DxObject misc1 (local.get $dst_entry)))
     (local.set $dst_w (load.field DxObject width (local.get $dst_entry)))
@@ -4418,15 +4415,15 @@
     (local.set $bps (i32.div_u (load.field DxObject bpp (local.get $dst_entry)) (i32.const 8)))
     (if (i32.eqz (local.get $arg3))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     (local.set $src_entry (call $dx_from_this (local.get $arg3)))
     (local.set $src_dib (load.field DxObject misc1 (local.get $src_entry)))
     (local.set $src_full_w (load.field DxObject width (local.get $src_entry)))
     (local.set $src_full_h (load.field DxObject height (local.get $src_entry)))
     (local.set $src_pitch (load.field DxObject pitch (local.get $src_entry)))
-    (local.set $trans (call $gl32 (i32.add (global.get $esp) (i32.const 24)))) ;; dwTrans (6th arg)
+    (local.set $trans (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) ;; dwTrans (6th arg)
     (call $host_dx_trace (i32.const 14) (call $dx_slot_of (local.get $dst_entry))
       (call $dx_slot_of (local.get $src_entry))
       (local.get $arg1) (local.get $arg2))
@@ -4456,8 +4453,8 @@
             (i32.ge_u (local.get $sx) (local.get $src_full_w))
             (i32.ge_u (local.get $sy) (local.get $src_full_h))))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     (if (i32.gt_u (local.get $sw) (i32.sub (local.get $src_full_w) (local.get $sx)))
       (then (local.set $sw (i32.sub (local.get $src_full_w) (local.get $sx)))))
@@ -4469,8 +4466,8 @@
       (then (local.set $sh (i32.sub (local.get $dst_h) (local.get $arg2)))))
     (if (i32.or (i32.eqz (local.get $sw)) (i32.eqz (local.get $sh)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
     ;; DDBLTFAST_SRCCOLORKEY = 0x1, DDBLTFAST_DESTCOLORKEY = 0x2
     (if (i32.and (local.get $trans) (i32.const 0x01))
@@ -4537,8 +4534,8 @@
     ;; If dest is primary, present
     (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
       (then (call $dx_present (local.get $dst_entry))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))) ;; 6 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))) ;; 6 args
 
   ;; DeleteAttachedSurface(this, dwFlags, lpDDSAttachedSurface). Only explicit
   ;; AddAttachedSurface relationships may be removed; DirectDraw-created flip
@@ -4591,9 +4588,9 @@
     (i32.const 0)) ;; DD_OK
 
   (func $handle_IDirectDrawSurface_DeleteAttachedSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dx_surface_delete_attached
+    (i32.store offset=0 (global.get $reg_base) (call $dx_surface_delete_attached
       (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Enumerate the directly attached surface.  Our flip-chain model links one
   ;; backbuffer from entry+8; explicit AddAttachedSurface calls retain the
@@ -4605,14 +4602,14 @@
     (local $desc i32) (local $ret_addr i32) (local $slot i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $parent (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $parent)) (i32.const 2))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $child (load.field.memarg DxObject misc0 (local.get $parent)))
     (if (i32.eqz (local.get $child))
@@ -4642,38 +4639,38 @@
     ;; No direct (or still-live) attachment is a successful empty enumeration.
     (if (i32.eqz (local.get $child))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $desc (call $heap_alloc (i32.const 108)))
     (if (i32.eqz (local.get $desc))
       (then
-        (global.set $eax (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)) ;; E_OUTOFMEMORY
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $dx_fill_surface_desc (call $g2w (local.get $desc)) (local.get $child_entry))
     (i32.store offset=4 (local.get $child_entry)
       (i32.add (i32.load offset=4 (local.get $child_entry)) (i32.const 1)))
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     ;; Saved caller return, then callback args right-to-left: context,
     ;; DDSURFACEDESC, attached surface. CACA0007 finishes with DD_OK.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg1))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $child))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg1))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $child))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
     (global.set $eip (local.get $arg2))
     (global.set $steps (i32.const 0)))
 
   (func $handle_IDirectDrawSurface_EnumOverlayZOrders (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; Flip(this, lpDDSurfaceTargetOverride, dwFlags)
   (func $handle_IDirectDrawSurface_Flip (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4698,8 +4695,8 @@
             ;; boundary passed.
             (if (i32.and (local.get $arg2) (i32.const 0x00000020))
               (then
-                (global.set $eax (i32.const 0x8876021C)) ;; DDERR_WASSTILLDRAWING
-                (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+                (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876021C)) ;; DDERR_WASSTILLDRAWING
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
                 (return)))
             (call $vblank_block)
             (return)))
@@ -4719,8 +4716,8 @@
               (call $dx_slot_of (local.get $back_entry))
               (load.field DxObject misc1 (local.get $back_entry))
               (load.field DxObject misc1 (local.get $entry)))
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))))
     (call $d3dim_worker_fence)
     (if (local.get $back_guest)
@@ -4736,8 +4733,8 @@
           (local.get $tmp_dib))
         ;; Present front buffer
         (call $dx_present (local.get $entry))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetAttachedSurface(this, lpDDSCaps, lplpDDAttachedSurface)
   (func $handle_IDirectDrawSurface_GetAttachedSurface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4760,17 +4757,16 @@
                   (local.get $requested)))
       (then
         (call $gs32 (local.get $arg2) (local.get $child))
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
-        (global.set $eax (i32.const 0x887600FF)))) ;; DDERR_NOTFOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x887600FF)))) ;; DDERR_NOTFOUND
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Browser-backed blits complete before their handlers return, so either
   ;; documented status query succeeds immediately on a live surface. Reject
   ;; stale wrappers and malformed flags rather than extending that shortcut.
   (func $handle_IDirectDrawSurface_GetBltStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (i32.eqz (call $ddraw_surface_live (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eqz (call $ddraw_surface_live (local.get $arg0)))
         (then (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
         (else
           (if (result i32)
@@ -4779,7 +4775,7 @@
                 (i32.eq (local.get $arg1) (i32.const 2))) ;; DDGBS_ISBLTDONE
             (then (i32.const 0)) ;; DD_OK
             (else (i32.const 0x80070057)))))) ;; DDERR_INVALIDPARAMS
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetCaps(this, lpDDSCaps)
   (func $handle_IDirectDrawSurface_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4799,8 +4795,8 @@
         (if (i32.and (local.get $flags) (i32.const 2))
           (then (call $gs32 (local.get $arg1) (i32.const 0x1C))) ;; BACKBUFFER|COMPLEX|FLIP
           (else (call $gs32 (local.get $arg1) (i32.const 0x840)))))) ;; OFFSCREEN|SYSTEMMEMORY
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetClipper(this, lplpDDClipper) — return an independently owned COM
   ;; reference to the surface's current clipper.
@@ -4809,25 +4805,25 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 2))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $gs32 (local.get $arg1) (i32.const 0))
     (local.set $clipper (call $dx_surface_clipper_get (local.get $entry)))
     (if (i32.eqz (local.get $clipper))
       (then
-        (global.set $eax (i32.const 0x887600FF)) ;; DDERR_NOCLIPPERATTACHED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x887600FF)) ;; DDERR_NOCLIPPERATTACHED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (drop (call $dx_com_addref (local.get $clipper)))
     (call $gs32 (local.get $arg1) (local.get $clipper))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetColorKey(this, dwFlags, lpDDColorKey)
   (func $handle_IDirectDrawSurface_GetColorKey (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4837,10 +4833,10 @@
       (then
         (call $gs32 (local.get $arg2) (load.field DxObject misc2 (local.get $entry)))
         (call $gs32 (i32.add (local.get $arg2) (i32.const 4)) (load.field DxObject misc2 (local.get $entry)))
-        (global.set $eax (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
       (else
-        (global.set $eax (i32.const 0x887600FF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x887600FF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetDC(this, lphDC) — return a synthetic HDC for GDI operations on the surface
   ;; HDC = 0x200000 + slot_index (unique range, doesn't conflict with hwnd-based DCs)
@@ -4856,18 +4852,18 @@
     (if (call $gdi_dx_dc_bind (local.get $hdc))
       (then
         (call $gs32 (local.get $arg1) (local.get $hdc))
-        (global.set $eax (i32.const 0))) ;; DD_OK
-      (else (global.set $eax (i32.const 0x88760096)))) ;; DDERR_GENERIC
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))) ;; DD_OK
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760096)))) ;; DDERR_GENERIC
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetFlipStatus — always DD_OK
   (func $handle_IDirectDrawSurface_GetFlipStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectDrawSurface_GetOverlayPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetPalette — return a fresh palette COM wrapper (d3drm dereferences the pointer, so null isn't safe;
   ;; and DDERR_NOPALETTEATTACHED propagates up as a fatal DXException in d3drm-based screensavers).
@@ -4888,15 +4884,15 @@
         ;; MAKE_DDHRESULT(572). d3drm's CreateDevice tolerates exactly this
         ;; value and treats every other failure as fatal, so an approximate
         ;; error code here reads to it as "this device cannot be created".
-        (global.set $eax (i32.const 0x8876023C)) ;; DDERR_NOPALETTEATTACHED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876023C)) ;; DDERR_NOPALETTEATTACHED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $obj_guest (call $dx_create_com_obj (i32.const 3) (global.get $DX_VTBL_DDPAL)))
     (store.field DxObject misc1 (call $dx_from_this (local.get $obj_guest)) (local.get $pal_wa))
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (local.get $obj_guest))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Fill a 32-byte DDPIXELFORMAT at $pf_wa describing a surface of $bpp.
   ;; An 8bpp surface is DDPF_PALETTEINDEXED8, NOT DDPF_RGB with 5-6-5 masks:
@@ -4987,8 +4983,8 @@
     (if (local.get $entry)
       (then (call $dx_fill_surface_pixel_format (call $g2w (local.get $arg1)) (local.get $entry)))
       (else (call $dx_fill_pixel_format (call $g2w (local.get $arg1)) (local.get $bpp))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetSurfaceDesc(this, lpDDSD)
   (func $handle_IDirectDrawSurface_GetSurfaceDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -4996,14 +4992,14 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (call $dx_fill_surface_desc (local.get $wa) (local.get $entry))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; DirectDraw creates every surface already initialized. This COM-compliance
   ;; method therefore always rejects a second initialization attempt.
   (func $handle_IDirectDrawSurface_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x88760005)) ;; DDERR_ALREADYINITIALIZED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760005)) ;; DDERR_ALREADYINITIALIZED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $ddraw_surface_live (param $this i32) (result i32)
     (local $entry i32)
@@ -5014,11 +5010,10 @@
   ;; Browser-backed surface memory remains allocated for a live surface. A
   ;; stale or foreign COM wrapper is not a surface and must not inherit DD_OK.
   (func $handle_IDirectDrawSurface_IsLost (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (call $ddraw_surface_live (local.get $arg0))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $ddraw_surface_live (local.get $arg0))
         (then (i32.const 0)) ;; DD_OK: memory retained
         (else (i32.const 0x88760082)))) ;; DDERR_INVALIDOBJECT
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Lock(this, lpDestRect, lpDDSD, dwFlags, hEvent) — 5 args
   (func $handle_IDirectDrawSurface_Lock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5057,8 +5052,8 @@
     (local.set $dib_guest (call $w2g (local.get $dib_wa)))
     (i32.store (i32.add (local.get $wa) (i32.const 36)) (local.get $dib_guest))
     (call $dx_fill_surface_pixel_format (i32.add (local.get $wa) (i32.const 72)) (local.get $entry))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))) ;; 5 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))) ;; 5 args
 
   ;; ReleaseDC drops transient HDC state, not the surface presentation cache.
   ;; WAT has already written
@@ -5074,17 +5069,16 @@
     ;; so without this the DIB update never reaches the screen.
     (if (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 1))
       (then (call $dx_present (local.get $entry))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; A live browser-backed surface has retained memory, so restoring it is an
   ;; idempotent success. Invalid/released wrappers cannot be restored.
   (func $handle_IDirectDrawSurface_Restore (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (if (result i32) (call $ddraw_surface_live (local.get $arg0))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (call $ddraw_surface_live (local.get $arg0))
         (then (i32.const 0)) ;; DD_OK
         (else (i32.const 0x88760082)))) ;; DDERR_INVALIDOBJECT
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SetClipper(this, lpDDClipper) — the surface owns one clipper reference.
   ;; Repeating the same underlying object is neutral; replacement retains the
@@ -5095,42 +5089,42 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 2))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $old_clipper (call $dx_surface_clipper_get (local.get $entry)))
     (if (i32.eqz (local.get $arg1))
       (then
         (if (i32.eqz (local.get $old_clipper))
           (then
-            (global.set $eax (i32.const 0x887600FF)) ;; DDERR_NOCLIPPERATTACHED
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x887600FF)) ;; DDERR_NOCLIPPERATTACHED
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
             (return)))
         (i32.store (call $dx_surface_clipper_ptr (local.get $entry)) (i32.const 0))
         (drop (call $dx_com_release_basic (local.get $old_clipper)))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $clipper_entry (call $dx_from_this (local.get $arg1)))
     (if (i32.ne (load.field DxObject type (local.get $clipper_entry)) (i32.const 10))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (local.get $old_clipper)
       (then
         (local.set $old_entry (call $dx_from_this (local.get $old_clipper)))
         (if (i32.eq (local.get $old_entry) (local.get $clipper_entry))
           (then
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
             (return)))))
     (drop (call $dx_com_addref (local.get $arg1)))
     (i32.store (call $dx_surface_clipper_ptr (local.get $entry)) (local.get $arg1))
     (if (local.get $old_clipper)
       (then (drop (call $dx_com_release_basic (local.get $old_clipper)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetColorKey(this, dwFlags, lpDDColorKey)
   (func $handle_IDirectDrawSurface_SetColorKey (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5150,12 +5144,12 @@
     (store.field DxObject misc2 (local.get $entry) (local.get $ck)) ;; dwColorSpaceLowValue
     ;; Set has_colorkey flag
     (store.field DxObject flags (local.get $entry) (i32.or (load.field DxObject flags (local.get $entry)) (i32.const 0x100)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectDrawSurface_SetOverlayPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetPalette(this, lpDDPalette) — associate palette with surface
   (func $handle_IDirectDrawSurface_SetPalette (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5175,8 +5169,8 @@
               (i32.and (load.field.memarg DxObject flags (local.get $surf_entry)) (i32.const 1))
               (i32.const 0))
           (then (call $dx_primary_pal_set (local.get $pal_wa))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Unlock(this, lpRect)
   (func $handle_IDirectDrawSurface_Unlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5190,34 +5184,34 @@
     ;; If primary, present on unlock
     (if (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 1))
       (then (call $dx_present (local.get $entry))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectDrawSurface_UpdateOverlay (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   (func $handle_IDirectDrawSurface_UpdateOverlayDisplay (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectDrawSurface_UpdateOverlayZOrder (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirectDrawSurface2 extensions — slots 36-38 beyond IDirectDrawSurface's 36.
   ;; flip3dtl QI's the RT surface for IID_IDirectDrawSurface2 and calls slot 36.
   (func $handle_IDirectDrawSurface2_GetDDInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then (call $gs32 (local.get $arg1) (global.get $dx_ddraw_this))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectDrawSurface2_PageLock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectDrawSurface2_PageUnlock (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; IDirectDrawSurface3 extension — slot 39. SDL 1.2 allocates its own
   ;; framebuffer, then attaches it to the DirectDraw surface through this
@@ -5242,8 +5236,8 @@
             (store.field.memarg DxObject misc1 (local.get $entry) (if (result i32) (local.get $pixels)
                 (then (call $g2w (local.get $pixels)))
                 (else (i32.const 0))))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; ── Present helper: blit DIB to screen via SetDIBitsToDevice ─
   ;; Constructs a BITMAPINFOHEADER on the stack and calls the existing host import
@@ -5617,8 +5611,8 @@
     (i32.const 0))
 
   (func $handle_IDirectDrawPalette_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   (func $handle_IDirectDrawPalette_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5629,13 +5623,13 @@
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
     (if (i32.le_s (local.get $rc) (i32.const 0))
       (then (call $dx_free (local.get $entry))))
-    (global.set $eax (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirectDrawPalette_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $gs32 (local.get $arg1) (i32.const 0x4)) ;; DDPCAPS_8BIT
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectDrawPalette_GetEntries (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $pal_wa i32)
@@ -5645,13 +5639,13 @@
       (call $memcpy (call $g2w (local.get $arg4))
         (i32.add (local.get $pal_wa) (i32.mul (local.get $arg2) (i32.const 4)))
         (i32.mul (local.get $arg3) (i32.const 4)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; IDirectDrawPalette::Initialize — already initialized, just return DD_OK
   (func $handle_IDirectDrawPalette_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectDrawPalette_SetEntries (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $pal_wa i32) (local $src_wa i32) (local $skip_copy i32)
@@ -5699,8 +5693,8 @@
         (local.set $prim (call $dx_primary_entry))
         (if (local.get $prim)
           (then (call $dx_present (local.get $prim))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectDrawClipper methods
@@ -5709,8 +5703,8 @@
   (func $handle_IDirectDrawClipper_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; Return same object for IUnknown / IDirectDrawClipper
     (call $gs32 (local.get $arg2) (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   (func $handle_IDirectDrawClipper_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5722,8 +5716,8 @@
       (then
         (call $dx_clipper_release_explicit (local.get $entry))
         (call $dx_free (local.get $entry))))
-    (global.set $eax (local.get $rc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $rc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetClipList(this, lpRect, lpClipList, lpdwSize). Build a canonical
   ;; RGNDATA result, intersecting each retained rectangle with lpRect when one
@@ -5740,13 +5734,13 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (if (i32.eqz (local.get $arg3))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $capacity (call $gl32 (local.get $arg3)))
     (local.set $hwnd (load.field DxObject misc0 (local.get $entry)))
@@ -5758,8 +5752,8 @@
         (local.set $data_guest (load.field DxObject misc1 (local.get $entry)))
         (if (i32.eqz (local.get $data_guest))
           (then
-            (global.set $eax (i32.const 0x887600CD)) ;; DDERR_NOCLIPLIST
-            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x887600CD)) ;; DDERR_NOCLIPLIST
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
             (return)))
         (local.set $data_wa (call $g2w (local.get $data_guest)))
         (local.set $source_count (i32.load offset=8 (local.get $data_wa)))))
@@ -5810,13 +5804,13 @@
     (call $gs32 (local.get $arg3) (local.get $required))
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (if (i32.lt_u (local.get $capacity) (local.get $required))
       (then
-        (global.set $eax (i32.const 0x88760236)) ;; DDERR_REGIONTOOSMALL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760236)) ;; DDERR_REGIONTOOSMALL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; RGNDATAHEADER: sizeof, RDH_RECTANGLES, count, rectangle bytes, bound.
     (call $gs32 (local.get $arg2) (i32.const 32))
@@ -5866,8 +5860,8 @@
     (if (local.get $hwnd)
       (then (store.field DxObject flags (local.get $entry)
         (i32.and (load.field DxObject flags (local.get $entry)) (i32.const -3)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; GetHWnd(this, lphWnd)
   (func $handle_IDirectDrawClipper_GetHWnd (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -5875,22 +5869,22 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $gs32 (local.get $arg1) (load.field DxObject misc0 (local.get $entry)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Initialize(this, lpDD, dwFlags) — no-op
   (func $handle_IDirectDrawClipper_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IsClipListChanged is meaningful for an HWND-backed clipper. Keep the
   ;; change latched until GetClipList successfully copies the new list.
@@ -5899,13 +5893,13 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (load.field DxObject misc0 (local.get $entry))
       (then (call $dx_clipper_refresh_hwnd (local.get $entry))))
@@ -5913,8 +5907,8 @@
       (select (i32.const 1) (i32.const 0)
         (i32.ne (i32.and (load.field DxObject flags (local.get $entry)) (i32.const 2))
                 (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetClipList(this, lpClipList, dwFlags). Validate and canonicalize the
   ;; caller's rectangles before replacing the prior private copy.
@@ -5926,38 +5920,38 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.ne (local.get $arg2) (i32.const 0))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (load.field DxObject misc0 (local.get $entry))
       (then
-        (global.set $eax (i32.const 0x88760237)) ;; DDERR_CLIPPERISUSINGHWND
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760237)) ;; DDERR_CLIPPERISUSINGHWND
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
         (call $dx_clipper_release_explicit (local.get $entry))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; RGNDATAHEADER is 32 bytes and DirectDraw accepts only RDH_RECTANGLES.
     (if (i32.or
           (i32.ne (call $gl32 (local.get $arg1)) (i32.const 32))
           (i32.ne (call $gl32 (i32.add (local.get $arg1) (i32.const 4))) (i32.const 1)))
       (then
-        (global.set $eax (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $count (call $gl32 (i32.add (local.get $arg1) (i32.const 8))))
     (if (i32.gt_u (local.get $count) (i32.const 4096))
       (then
-        (global.set $eax (i32.const 0x8876006E))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876006E))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $bytes (i32.shl (local.get $count) (i32.const 4)))
     (if (i32.and
@@ -5965,15 +5959,15 @@
           (i32.lt_u (call $gl32 (i32.add (local.get $arg1) (i32.const 12)))
                     (local.get $bytes)))
       (then
-        (global.set $eax (i32.const 0x8876006E))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876006E))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $source (call $g2w_affine_span (local.get $arg1)
       (i32.add (i32.const 32) (local.get $bytes))))
     (if (i32.eq (local.get $source) (global.get $NULL_SENTINEL))
       (then
-        (global.set $eax (i32.const 0x8876006E))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876006E))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Validate every RECT and recompute rcBound instead of trusting it.
     (block $validate_done (loop $validate
@@ -5987,8 +5981,8 @@
       (if (i32.or (i32.ge_s (local.get $l) (local.get $r))
                   (i32.ge_s (local.get $t) (local.get $b)))
         (then
-          (global.set $eax (i32.const 0x8876006E))
-          (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+          (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876006E))
+          (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
           (return)))
       (if (i32.eqz (local.get $i))
         (then
@@ -6004,8 +5998,8 @@
     (local.set $copy (call $heap_alloc (i32.add (i32.const 32) (local.get $bytes))))
     (if (i32.eqz (local.get $copy))
       (then
-        (global.set $eax (i32.const 0x8007000E)) ;; DDERR_OUTOFMEMORY
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)) ;; DDERR_OUTOFMEMORY
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $copy_wa (call $g2w (local.get $copy)))
     (i32.store (local.get $copy_wa) (i32.const 32))
@@ -6023,8 +6017,8 @@
     (store.field DxObject misc2 (local.get $entry)
       (i32.add (i32.const 32) (local.get $bytes)))
     (store.field DxObject flags (local.get $entry) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetHWnd(this, dwFlags, hWnd) — retain the window whose visible client
   ;; region defines this clipper. GetClipList snapshots that live client region,
@@ -6034,8 +6028,8 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 10))
       (then
-        (global.set $eax (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88760082)) ;; DDERR_INVALIDOBJECT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Microsoft documents dwFlags as reserved and required to be zero. An
     ;; explicit list and an HWND-derived list are mutually exclusive.
@@ -6043,21 +6037,21 @@
           (i32.ne (local.get $arg1) (i32.const 0))
           (i32.eqz (call $window_handle_valid (local.get $arg2))))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DDERR_INVALIDPARAMS
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.and
           (i32.eqz (load.field DxObject misc0 (local.get $entry)))
           (i32.ne (load.field DxObject misc1 (local.get $entry)) (i32.const 0)))
       (then
-        (global.set $eax (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8876006E)) ;; DDERR_INVALIDCLIPLIST
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (store.field DxObject misc0 (local.get $entry) (local.get $arg2))
     (store.field DxObject flags (local.get $entry) (i32.const 0))
     (call $dx_clipper_refresh_hwnd (local.get $entry))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectSound methods
@@ -6101,11 +6095,11 @@
 
   (func $handle_IDirectSound_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; IID_IDirectSound {279AFA83-4981-11CE-A521-0020AF0BE560}.
-    (global.set $eax (call $dx_query_interface_single
+    (i32.store offset=0 (global.get $reg_base) (call $dx_query_interface_single
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const 0x279AFA83) (i32.const 0x11CE4981)
       (i32.const 0x200021A5) (i32.const 0x60E50BAF)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Validate the fixed PCM WAVEFORMATEX fields understood by the browser
   ;; voice bridge and return the translated address. NULL_SENTINEL means the
@@ -6153,27 +6147,27 @@
     (local $state i32) (local $buf_guest i32) (local $buf_wa i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (call $gs32 (local.get $arg2) (i32.const 0))
     (if (i32.ne (local.get $arg3) (i32.const 0))
       (then
-        (global.set $eax (i32.const 0x80040110)) ;; DSERR_NOAGGREGATION
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040110)) ;; DSERR_NOAGGREGATION
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $root (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $desc_wa
       (call $g2w_affine_span (local.get $arg1) (i32.const 20)))
     (if (i32.eq (local.get $desc_wa) (global.get $NULL_SENTINEL))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $desc_size (i32.load (local.get $desc_wa)))
     ;; Win98-era callers use DSBUFFERDESC1 (20 bytes) or the DirectX 7
@@ -6182,8 +6176,8 @@
           (i32.ne (local.get $desc_size) (i32.const 20))
           (i32.ne (local.get $desc_size) (i32.const 36)))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; DSBUFFERDESC: +4 dwFlags, +8 dwBufferBytes, +12 dwReserved, +16 lpwfxFormat
     (local.set $flags (i32.load (i32.add (local.get $desc_wa) (i32.const 4))))
@@ -6191,8 +6185,8 @@
     (local.set $fmt_guest (i32.load (i32.add (local.get $desc_wa) (i32.const 16))))
     (if (i32.ne (i32.load offset=12 (local.get $desc_wa)) (i32.const 0))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; The primary ring is device-owned: callers must not prescribe its size
     ;; or format in the descriptor. SetFormat changes it after creation.
@@ -6201,8 +6195,8 @@
           (i32.or (i32.ne (local.get $buf_size) (i32.const 0))
                   (i32.ne (local.get $fmt_guest) (i32.const 0))))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (if (i32.eq (i32.and (local.get $flags) (i32.const 1)) (i32.const 0))
       (then
@@ -6212,21 +6206,21 @@
         (if (i32.or (i32.eqz (local.get $buf_size))
                     (i32.eqz (local.get $fmt_guest)))
           (then
-            (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
             (return)))
         (local.set $fmt_wa (call $ds_pcm_format_wa (local.get $fmt_guest)))
         (if (i32.eq (local.get $fmt_wa) (global.get $NULL_SENTINEL))
           (then
-            (global.set $eax (i32.const 0x88780064)) ;; DSERR_BADFORMAT
-            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780064)) ;; DSERR_BADFORMAT
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
             (return)))))
     ;; Create DSBuffer COM object
     (local.set $obj (call $dx_create_com_obj (i32.const 5) (global.get $DX_VTBL_DSBUF)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
     (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
@@ -6248,8 +6242,8 @@
         (if (i32.eqz (local.get $buf_guest))
           (then
             (call $dx_free (local.get $entry))
-            (global.set $eax (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
-            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
             (return)))
         (local.set $buf_wa (call $g2w (local.get $buf_guest)))
         (call $zero_memory (local.get $buf_wa) (local.get $buf_size))
@@ -6265,8 +6259,8 @@
           (if (i32.eqz (local.get $buf_guest))
             (then
               (call $dx_free (local.get $entry))
-              (global.set $eax (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
-              (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+              (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000E)) ;; DSERR_OUTOFMEMORY
+              (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
               (return)))
           (local.set $buf_wa (call $g2w (local.get $buf_guest)))
           (call $zero_memory (local.get $buf_wa) (local.get $buf_size))
@@ -6286,8 +6280,8 @@
         ))))
     ;; *lplpDirectSoundBuffer = obj
     (call $gs32 (local.get $arg2) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; GetCaps(this, lpDSCaps)
   (func $handle_IDirectSound_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6305,8 +6299,8 @@
     (i32.store (i32.add (local.get $wa) (i32.const 4)) (i32.const 0xF0))
     ;; dwMaxSecondarySampleRate = 44100
     (i32.store (i32.add (local.get $wa) (i32.const 56)) (i32.const 44100))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; DuplicateSoundBuffer(this, pOriginalBuffer, ppDuplicateBuffer)
   (func $handle_IDirectSound_DuplicateSoundBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6318,8 +6312,8 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 5) (global.get $DX_VTBL_DSBUF)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $dst_entry (call $dx_from_this (local.get $obj)))
     (memory.copy
@@ -6348,8 +6342,8 @@
       (store.field DxObject misc1 (local.get $dst_entry) (local.get $buf_wa))))
     ;; *ppDuplicateBuffer = obj
     (call $gs32 (local.get $arg2) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetCooperativeLevel(this, hwnd, level). DirectSound requires a live
   ;; top-level application window and one exact DSSCL_* value (1..4). Keep the
@@ -6368,14 +6362,14 @@
                        (i32.const 0x40000000))
               (i32.const 0))))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.or (i32.lt_u (local.get $arg2) (i32.const 1))
                 (i32.gt_u (local.get $arg2) (i32.const 4)))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (store.field DxObject misc0 (local.get $root) (local.get $arg1))
     (store.field DxObject misc1 (local.get $root) (local.get $arg2))
@@ -6392,8 +6386,8 @@
             (then (i32.store offset=8 (local.get $state) (local.get $arg2))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Compact requires PRIORITY, EXCLUSIVE or WRITEPRIMARY. The browser has no
   ;; fragmented hardware heap to compact once that privilege check succeeds.
@@ -6401,14 +6395,13 @@
     (local $root i32) (local $level i32)
     (local.set $root (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
-      (then (global.set $eax (i32.const 0x80070057)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)))
       (else
         (local.set $level (load.field DxObject misc1 (local.get $root)))
-        (global.set $eax
-          (select (i32.const 0) (i32.const 0x88780046)
+        (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x88780046)
             (i32.and (i32.ge_u (local.get $level) (i32.const 2))
                      (i32.le_u (local.get $level) (i32.const 4)))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetSpeakerConfig(this, pdwSpeakerConfig). Microsoft documents a packed
   ;; configuration/geometry DWORD and INVALIDPARAM/UNINITIALIZED failures.
@@ -6417,68 +6410,68 @@
     (local.set $root (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $state (load.field DxObject flags (local.get $root)))
     (if (i32.eqz (local.get $state))
       (then
-        (global.set $eax (i32.const 0x887800AA)) ;; DSERR_UNINITIALIZED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x887800AA)) ;; DSERR_UNINITIALIZED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $out_wa
       (call $g2w_affine_span (local.get $arg1) (i32.const 4)))
     (if (i32.eq (local.get $out_wa) (global.get $NULL_SENTINEL))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (i32.store (local.get $out_wa) (i32.sub (local.get $state) (i32.const 1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound_SetSpeakerConfig (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $root i32) (local $config i32)
     (local.set $root (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (load.field DxObject flags (local.get $root)))
       (then
-        (global.set $eax (i32.const 0x887800AA)) ;; DSERR_UNINITIALIZED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x887800AA)) ;; DSERR_UNINITIALIZED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (call $dsound_speaker_config_valid (local.get $arg1)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $config (local.get $arg1))
     (if (i32.eq (local.get $config) (i32.const 4)) ;; stereo, no geometry
       (then (local.set $config (i32.const 0x00140004)))) ;; default WIDE
     (store.field DxObject flags (local.get $root)
       (i32.add (local.get $config) (i32.const 1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $root i32)
     (local.set $root (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $root)) (i32.const 4))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.ne (load.field DxObject flags (local.get $root)) (i32.const 0))
       (then
-        (global.set $eax (i32.const 0x88780082)) ;; DSERR_ALREADYINITIALIZED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780082)) ;; DSERR_ALREADYINITIALIZED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (call $dsound_mark_initialized (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectSoundBuffer methods
@@ -6530,28 +6523,28 @@
     (local $slot i32) (local $wrapper i32) (local $handle i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $gs32 (local.get $arg2) (i32.const 0))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Translate riid exactly once, then classify the complete identity.
     (local.set $iid_wa (call $g2w (local.get $arg1)))
     (local.set $kind (call $dsbuf_iid_kind_wa (local.get $iid_wa)))
     (if (i32.eqz (local.get $kind))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eqz (local.get $entry))
       (then
-        (global.set $eax (i32.const 0x80004002))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $slot (call $dx_slot_of (local.get $entry)))
     (if (i32.eq (local.get $kind) (i32.const 1))
@@ -6583,8 +6576,8 @@
     (store.field DxObject refcount (local.get $entry)
       (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (call $gs32 (local.get $arg2) (local.get $wrapper))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   (func $handle_IDirectSoundBuffer_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6597,8 +6590,8 @@
         (local.set $handle (load.field DxObject misc0 (local.get $entry)))
         (if (local.get $handle) (then (drop (call $host_voice_close (local.get $handle)))))
         (call $dx_free (local.get $entry))))
-    (global.set $eax (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetCaps(this, lpDSBCaps)
   (func $handle_IDirectSoundBuffer_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6614,8 +6607,8 @@
       (i32.load offset=4 (local.get $state)))
     ;; dwBufferBytes
     (i32.store (i32.add (local.get $wa) (i32.const 8)) (i32.load (i32.add (local.get $entry) (i32.const 12))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetCurrentPosition(this, lpdwCurrentPlayCursor, lpdwCurrentWriteCursor)
   (func $handle_IDirectSoundBuffer_GetCurrentPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6672,8 +6665,8 @@
           (if (result i32) (local.get $size)
             (then (i32.rem_u (i32.add (local.get $pos) (local.get $lead)) (local.get $size)))
             (else (local.get $pos))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetFormat(this, pwfxFormat, dwSizeAllocated, pdwSizeWritten)
   ;;
@@ -6689,16 +6682,15 @@
     ;; A NULL format pointer is the documented size-query form.
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax
-          (select (i32.const 0x80070057) (i32.const 0)
+        (i32.store offset=0 (global.get $reg_base) (select (i32.const 0x80070057) (i32.const 0)
             (i32.ne (local.get $arg2) (i32.const 0))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     ;; Never write a partial WAVEFORMATEX across the caller's allocation.
     (if (i32.lt_u (local.get $arg2) (i32.const 18))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $channels
       (load.field DxObject bpp (local.get $entry)))
@@ -6717,27 +6709,27 @@
     (i32.store16 (i32.add (local.get $wa) (i32.const 12)) (local.get $align))
     (i32.store16 (i32.add (local.get $wa) (i32.const 14)) (local.get $bits))
     ;; cbSize remains zero for PCM.
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; GetVolume / GetPan / GetFrequency — return 0
   (func $handle_IDirectSoundBuffer_GetVolume (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSoundBuffer_GetPan (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSoundBuffer_GetFrequency (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (local.get $arg1) (then
       (call $gs32 (local.get $arg1) (load.field DxObject misc2 (local.get $entry)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetStatus(this, lpdwStatus)
   (func $handle_IDirectSoundBuffer_GetStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6759,13 +6751,13 @@
     (if (local.get $arg1) (then
       (call $gs32 (local.get $arg1)
         (i32.and (local.get $flags) (i32.const 0x7)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Initialize — no-op
   (func $handle_IDirectSoundBuffer_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Lock(this, dwOffset, dwBytes, ppvAudioPtr1, pdwAudioBytes1, ppvAudioPtr2, pdwAudioBytes2, dwFlags)
   ;; 8 args! We only have 5 from dispatch. Read remaining from stack.
@@ -6781,14 +6773,14 @@
       (i32.sub (local.get $dib_wa) (global.get $GUEST_BASE))
       (global.get $image_base)))
     ;; ppvAudioPtr2 and pdwAudioBytes2 (args 6,7 at ESP+24,ESP+28), flags at +32
-    (local.set $ppv2 (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $pdw2 (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $ppv2 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $pdw2 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (local.set $offset (local.get $arg1))
     (if (local.get $buf_size)
       (then (local.set $offset (i32.rem_u (local.get $offset) (local.get $buf_size)))))
     ;; DSBLOCK_ENTIREBUFFER (0x2) means "ignore dwBytes, lock all of it".
     (local.set $total (select (local.get $buf_size) (local.get $arg2)
-      (i32.and (call $gl32 (i32.add (global.get $esp) (i32.const 32))) (i32.const 2))))
+      (i32.and (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))) (i32.const 2))))
     (if (i32.gt_u (local.get $total) (local.get $buf_size))
       (then (local.set $total (local.get $buf_size))))
     ;; A lock that runs off the end of a ring comes back in TWO pieces: the tail
@@ -6809,8 +6801,8 @@
       (then (call $gs32 (local.get $ppv2)
         (select (local.get $buf_guest) (i32.const 0) (local.get $len2)))))
     (if (local.get $pdw2) (then (call $gs32 (local.get $pdw2) (local.get $len2))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36)))) ;; 8 args
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36)))) ;; 8 args
 
   ;; Play(this, dwReserved1, dwReserved2, dwFlags)
   ;; Snapshot the buffer's PCM via voice_play_ring. Each DSBuffer owns its own
@@ -6845,8 +6837,8 @@
         (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
         (local.get $start) (local.get $loop)))))
     (store.field DxObject flags (local.get $entry) (i32.or (i32.const 1) (i32.shl (local.get $loop) (i32.const 2))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; SetCurrentPosition(this, dwNewPosition). This is a DirectSound secondary-
   ;; buffer operation: a stopped buffer remembers where its next Play starts;
@@ -6858,23 +6850,23 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 5))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (if (i32.ne
           (i32.and (i32.load offset=4 (local.get $state)) (i32.const 1))
           (i32.const 0))
       (then
-        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $size (i32.load offset=12 (local.get $entry)))
     (if (i32.or (i32.eqz (local.get $size))
                 (i32.ge_u (local.get $arg1) (local.get $size)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (i32.store offset=12 (local.get $state) (local.get $arg1))
     (local.set $status (load.field DxObject flags (local.get $entry)))
@@ -6889,8 +6881,8 @@
         (drop (call $host_voice_play_ring
           (local.get $handle) (local.get $dib_wa) (local.get $size)
           (local.get $arg1) (local.get $loop)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetFormat(this, pcfxFormat) — primary buffers are born without a format.
   ;; Keep the canonical PCM fields in the DS buffer entry so GetFormat,
@@ -6903,27 +6895,27 @@
     (local $dib_wa i32) (local $buf_size i32) (local $loop i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DSERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.ne (load.field DxObject type (local.get $entry)) (i32.const 5))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $state (call $dx_surf_state_ptr (local.get $entry)))
     (if (i32.eqz (i32.and (i32.load offset=4 (local.get $state)) (i32.const 1)))
       (then
-        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $level (i32.load offset=8 (local.get $state)))
     (if (i32.or (i32.lt_u (local.get $level) (i32.const 2))
                 (i32.gt_u (local.get $level) (i32.const 4)))
       (then
-        (global.set $eax (i32.const 0x88780046)) ;; DSERR_PRIOLEVELNEEDED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780046)) ;; DSERR_PRIOLEVELNEEDED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $status (load.field DxObject flags (local.get $entry)))
     ;; WRITEPRIMARY grants direct access, so the caller must stop its primary
@@ -6933,14 +6925,14 @@
           (i32.eq (local.get $level) (i32.const 4))
           (i32.ne (i32.and (local.get $status) (i32.const 1)) (i32.const 0)))
       (then
-        (global.set $eax (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780032)) ;; DSERR_INVALIDCALL
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $wa (call $ds_pcm_format_wa (local.get $arg1)))
     (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
       (then
-        (global.set $eax (i32.const 0x88780064)) ;; DSERR_BADFORMAT
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x88780064)) ;; DSERR_BADFORMAT
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
     (if (i32.ne (local.get $handle) (i32.const 0))
@@ -6964,8 +6956,8 @@
             (drop (call $host_voice_play_ring
               (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
               (i32.const 0) (local.get $loop)))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetVolume(this, lVolume) — DSOUND attenuation centibels (0=full, -10000=silent)
   (func $handle_IDirectSoundBuffer_SetVolume (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6974,8 +6966,8 @@
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
     (if (local.get $handle) (then
       (call $host_voice_set_volume_db (local.get $handle) (local.get $arg1))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetPan(this, lPan) — centibels, -10000=left .. +10000=right
   (func $handle_IDirectSoundBuffer_SetPan (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6984,8 +6976,8 @@
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
     (if (local.get $handle) (then
       (call $host_voice_set_pan (local.get $handle) (local.get $arg1))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetFrequency(this, dwFrequency) — playback rate in Hz; 0 = original
   (func $handle_IDirectSoundBuffer_SetFrequency (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -6994,8 +6986,8 @@
     (local.set $handle (load.field DxObject misc0 (local.get $entry)))
     (if (local.get $handle) (then
       (call $host_voice_set_freq (local.get $handle) (local.get $arg1))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Stop(this) — stop playback but keep the voice; Play() may be called again
   (func $handle_IDirectSoundBuffer_Stop (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -7023,8 +7015,8 @@
     (if (local.get $handle) (then
       (drop (call $host_voice_stop (local.get $handle)))))
     (store.field DxObject flags (local.get $entry) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Unlock(this, pvAudioPtr1, dwAudioBytes1, pvAudioPtr2, dwAudioBytes2)
   ;; A looping DirectSound buffer is commonly a software-mixer ring. Miles
@@ -7047,13 +7039,13 @@
         (drop (call $host_voice_play_ring
           (local.get $handle) (local.get $dib_wa) (local.get $buf_size)
           (i32.const 0) (i32.const 2)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Restore — no-op
   (func $handle_IDirectSoundBuffer_Restore (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectSound3DBuffer methods
@@ -7084,9 +7076,9 @@
   (func $handle_IDirectSound3DBuffer_GetAllParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else (if (i32.lt_u (call $gl32 (local.get $arg1)) (i32.const 64))
-        (then (global.set $eax (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
         (else
         (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
         (call $gs32 (local.get $arg1) (i32.const 64))
@@ -7105,16 +7097,16 @@
         (call $gs32 (i32.add (local.get $arg1) (i32.const 52)) (call $host_voice_3d_get (local.get $handle) (i32.const 12)))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 56)) (call $host_voice_3d_get (local.get $handle) (i32.const 13)))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 60)) (call $host_voice_3d_get (local.get $handle) (i32.const 14)))
-        (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetConeAngles (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 6)))))
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (call $host_voice_3d_get (local.get $handle) (i32.const 7)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DBuffer_GetConeOrientation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
@@ -7123,36 +7115,36 @@
       (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 8)))
       (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (call $host_voice_3d_get (local.get $handle) (i32.const 9)))
       (call $gs32 (i32.add (local.get $arg1) (i32.const 8)) (call $host_voice_3d_get (local.get $handle) (i32.const 10)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetConeOutsideVolume (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 11)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetMaxDistance (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 13)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetMinDistance (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 12)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 14)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
@@ -7161,8 +7153,8 @@
       (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 0)))
       (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (call $host_voice_3d_get (local.get $handle) (i32.const 1)))
       (call $gs32 (i32.add (local.get $arg1) (i32.const 8)) (call $host_voice_3d_get (local.get $handle) (i32.const 2)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_GetVelocity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
@@ -7171,15 +7163,15 @@
       (call $gs32 (local.get $arg1) (call $host_voice_3d_get (local.get $handle) (i32.const 3)))
       (call $gs32 (i32.add (local.get $arg1) (i32.const 4)) (call $host_voice_3d_get (local.get $handle) (i32.const 4)))
       (call $gs32 (i32.add (local.get $arg1) (i32.const 8)) (call $host_voice_3d_get (local.get $handle) (i32.const 5)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DBuffer_SetAllParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $handle i32)
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else (if (i32.ne (call $gl32 (local.get $arg1)) (i32.const 64))
-        (then (global.set $eax (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
         (else
         (local.set $handle (call $ds3d_voice_from_this (local.get $arg0)))
         (call $host_voice_3d_set (local.get $handle) (i32.const 0)
@@ -7205,56 +7197,56 @@
           (call $gl32 (i32.add (local.get $arg1) (i32.const 56))) (i32.const 0) (i32.const 0))
         (call $host_voice_3d_set (local.get $handle) (i32.const 14)
           (call $gl32 (i32.add (local.get $arg1) (i32.const 60))) (i32.const 0) (i32.const 0))
-        (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DBuffer_SetConeAngles (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 6)
       (local.get $arg1) (local.get $arg2) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirectSound3DBuffer_SetConeOrientation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 8)
       (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirectSound3DBuffer_SetConeOutsideVolume (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 11)
       (local.get $arg1) (i32.const 0) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DBuffer_SetMaxDistance (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 13)
       (local.get $arg1) (i32.const 0) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DBuffer_SetMinDistance (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 12)
       (local.get $arg1) (i32.const 0) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DBuffer_SetMode (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 14)
       (local.get $arg1) (i32.const 0) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DBuffer_SetPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 0)
       (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirectSound3DBuffer_SetVelocity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (call $ds3d_voice_from_this (local.get $arg0)) (i32.const 3)
       (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectSound3DListener methods
@@ -7288,9 +7280,9 @@
 
   (func $handle_IDirectSound3DListener_GetAllParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else (if (i32.lt_u (call $gl32 (local.get $arg1)) (i32.const 64))
-        (then (global.set $eax (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
         (else
         (call $gs32 (local.get $arg1) (i32.const 64))
         (call $ds3d_listener_get_vector (i32.add (local.get $arg1) (i32.const 4)) (i32.const 0))
@@ -7300,59 +7292,59 @@
         (call $gs32 (i32.add (local.get $arg1) (i32.const 52)) (call $host_voice_3d_get (i32.const 0) (i32.const 12)))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 56)) (call $host_voice_3d_get (i32.const 0) (i32.const 13)))
         (call $gs32 (i32.add (local.get $arg1) (i32.const 60)) (call $host_voice_3d_get (i32.const 0) (i32.const 14)))
-        (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DListener_GetDistanceFactor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then
         (call $gs32 (local.get $arg1) (call $host_voice_3d_get (i32.const 0) (i32.const 12)))
-        (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 0x80004003))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DListener_GetDopplerFactor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then
         (call $gs32 (local.get $arg1) (call $host_voice_3d_get (i32.const 0) (i32.const 14)))
-        (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 0x80004003))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DListener_GetOrientation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and (i32.ne (local.get $arg1) (i32.const 0)) (i32.ne (local.get $arg2) (i32.const 0)))
       (then
         (call $ds3d_listener_get_vector (local.get $arg1) (i32.const 6))
         (call $ds3d_listener_get_vector (local.get $arg2) (i32.const 9))
-        (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 0x80004003))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DListener_GetPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
-      (then (call $ds3d_listener_get_vector (local.get $arg1) (i32.const 0)) (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 0x80004003))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+      (then (call $ds3d_listener_get_vector (local.get $arg1) (i32.const 0)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DListener_GetRolloffFactor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
       (then
         (call $gs32 (local.get $arg1) (call $host_voice_3d_get (i32.const 0) (i32.const 13)))
-        (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 0x80004003))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DListener_GetVelocity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1)
-      (then (call $ds3d_listener_get_vector (local.get $arg1) (i32.const 3)) (global.set $eax (i32.const 0)))
-      (else (global.set $eax (i32.const 0x80004003))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+      (then (call $ds3d_listener_get_vector (local.get $arg1) (i32.const 3)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirectSound3DListener_SetAllParameters (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0x80004003)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)))
       (else (if (i32.ne (call $gl32 (local.get $arg1)) (i32.const 64))
-        (then (global.set $eax (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))) ;; DSERR_INVALIDPARAM
         (else
         (call $host_voice_3d_set (i32.const 0) (i32.const 0)
           (call $gl32 (i32.add (local.get $arg1) (i32.const 4)))
@@ -7376,50 +7368,50 @@
           (call $gl32 (i32.add (local.get $arg1) (i32.const 56))) (local.get $arg2) (i32.const 0))
         (call $host_voice_3d_set (i32.const 0) (i32.const 14)
           (call $gl32 (i32.add (local.get $arg1) (i32.const 60))) (local.get $arg2) (i32.const 0))
-        (global.set $eax (i32.const 0))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DListener_SetDistanceFactor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 12) (local.get $arg1) (local.get $arg2) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DListener_SetDopplerFactor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 14) (local.get $arg1) (local.get $arg2) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DListener_SetOrientation (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 6)
       (local.get $arg1) (local.get $arg2) (local.get $arg3))
     (call $host_voice_3d_set (i32.const 0) (i32.const 9)
       (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   (func $handle_IDirectSound3DListener_SetPosition (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 0)
       (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirectSound3DListener_SetRolloffFactor (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 13) (local.get $arg1) (local.get $arg2) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectSound3DListener_SetVelocity (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 3)
       (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirectSound3DListener_CommitDeferredSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $host_voice_3d_set (i32.const 0) (i32.const 15) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectInput methods
@@ -7430,14 +7422,14 @@
     (local $version i32) (local $slot i32) (local $obj i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $gs32 (local.get $arg2) (i32.const 0))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Translate riid exactly once and classify the complete GUID.
     (local.set $iid_wa (call $g2w (local.get $arg1)))
@@ -7445,8 +7437,8 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eqz (local.get $entry))
       (then
-        (global.set $eax (i32.const 0x80004002))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $version (load.field.memarg DxObject misc0 (local.get $entry)))
     (if (i32.eqz (local.get $version))
@@ -7467,8 +7459,8 @@
                 (i32.and (i32.eq (local.get $kind) (i32.const 4))
                   (i32.lt_u (local.get $version) (i32.const 0x0700))))))))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $slot (call $dx_slot_of (local.get $entry)))
     (if (i32.eq (local.get $kind) (i32.const 1))
@@ -7493,14 +7485,14 @@
         (local.get $slot) (global.get $DX_VTBL_DINPUT)))))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004002))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (store.field DxObject refcount (local.get $entry)
       (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (call $gs32 (local.get $arg2) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
 
@@ -7512,8 +7504,8 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 7) (global.get $DX_VTBL_DIDEV2)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
     (i32.store offset=16 (local.get $entry)
@@ -7529,16 +7521,16 @@
       (then
         (store.field DxObject misc0 (local.get $entry) (i32.const 2)))) ;; mouse
     (call $gs32 (local.get $arg2) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; IDirectInput2::FindDevice(this, rguidClass, ptszName, pguidInstance)
   ;; We expose exactly the system keyboard and mouse, neither of which is
   ;; found by name, so this reports "no such device" rather than handing back
   ;; an uninitialised GUID the caller would then create a device from.
   (func $handle_IDirectInput7_FindDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80070002)) ;; DIERR_DEVICENOTREG
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070002)) ;; DIERR_DEVICENOTREG
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; Complete DirectInput device interface classifier. Device7/8 identities
   ;; are recognized so callers get an honest E_NOINTERFACE until their extra
@@ -7594,13 +7586,13 @@
           (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
           (i32.eqz (local.get $arg3)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; E_INVALIDARG
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; E_INVALIDARG
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (local.get $arg4)
       (then
-        (global.set $eax (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040110)) ;; CLASS_E_NOAGGREGATION
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; Translate riid exactly once and accept only implemented complete faces.
     (local.set $iid_wa (call $g2w (local.get $arg2)))
@@ -7608,8 +7600,8 @@
     (if (i32.or (i32.lt_u (local.get $kind) (i32.const 2))
                 (i32.gt_u (local.get $kind) (i32.const 3)))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; DIERR_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; DIERR_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $vtbl
       (select (global.get $DX_VTBL_DIDEV2) (global.get $DX_VTBL_DIDEV)
@@ -7617,8 +7609,8 @@
     (local.set $obj (call $dx_create_com_obj (i32.const 7) (local.get $vtbl)))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
     (local.set $parent_entry (call $dx_from_this (local.get $arg0)))
@@ -7631,8 +7623,8 @@
     (if (i32.eq (local.get $guid_first) (i32.const 0x6F1D2B60))
       (then (store.field DxObject misc0 (local.get $entry) (i32.const 2)))) ;; mouse
     (call $gs32 (local.get $arg3) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; DirectInput enumeration uses the generic CACA0011 callback-return thunk.
   ;; The state is a typed frame on the guest stack, not mutable globals, so an
@@ -7780,18 +7772,18 @@
 
   (func $di_enum_finish (param $frame i32)
     (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 4))))
-    (global.set $esp (i32.add (local.get $frame) (global.get $DI_ENUM_FRAME_SIZE)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $frame) (global.get $DI_ENUM_FRAME_SIZE)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $di_enum_invoke (param $frame i32)
     (local $desc i32)
     (local.set $desc (i32.add (local.get $frame) (i32.const 40)))
-    (global.set $esp (i32.sub (local.get $frame) (i32.const 4)))
-    (call $gs32 (global.get $esp) (call $gl32 (i32.add (local.get $frame) (i32.const 12))))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $frame) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (call $gl32 (i32.add (local.get $frame) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
     (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 8))))
     (global.set $steps (i32.const 0)))
 
@@ -7799,7 +7791,7 @@
     (local $frame i32) (local $kind i32) (local $filter i32) (local $index i32)
     (local $device_kind i32) (local $version i32) (local $flags i32) (local $obj_type i32)
     (local $desc i32) (local $match i32)
-    (local.set $frame (global.get $esp))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
     (local.set $kind (call $gl32 (i32.add (local.get $frame) (i32.const 16))))
     (local.set $filter (call $gl32 (i32.add (local.get $frame) (i32.const 20))))
     (local.set $version (call $gl32 (i32.add (local.get $frame) (i32.const 36))))
@@ -7875,33 +7867,33 @@
   ;; any nonzero value continues, as Win32 callback code commonly returns TRUE.
   (func $di_enum_continue
     (local $frame i32)
-    (local.set $frame (global.get $esp))
-    (if (i32.eqz (global.get $eax))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $di_enum_finish (local.get $frame)))
       (else (call $di_enum_dispatch))))
 
   ;; EnumDevices(this, dwDevType, callback, pvRef, dwFlags)
   (func $handle_IDirectInput_EnumDevices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32) (local $frame i32) (local $entry i32) (local $version i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $version (load.field.memarg DxObject misc0 (local.get $entry)))
     (if (i32.eqz (local.get $version)) (then (local.set $version (i32.const 0x0700))))
     (if (i32.or (i32.eqz (local.get $arg2))
           (i32.ne (i32.and (local.get $arg4) (i32.const 0xFEFAFEFE)) (i32.const 0)))
-      (then (global.set $eax (i32.const 0x80070057)) (return))) ;; DIERR_INVALIDPARAM
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return))) ;; DIERR_INVALIDPARAM
     (if (i32.lt_u (local.get $version) (i32.const 0x0800))
       (then
         (if (i32.gt_u (local.get $arg1) (i32.const 4))
-          (then (global.set $eax (i32.const 0x80070057)) (return))))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return))))
       (else
         (if (i32.and (i32.gt_u (local.get $arg1) (i32.const 4))
                      (i32.or (i32.lt_u (local.get $arg1) (i32.const 0x11))
                              (i32.gt_u (local.get $arg1) (i32.const 0x1C))))
-          (then (global.set $eax (i32.const 0x80070057)) (return)))))
-    (global.set $esp (i32.sub (global.get $esp) (global.get $DI_ENUM_FRAME_SIZE)))
-    (local.set $frame (global.get $esp))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (global.get $DI_ENUM_FRAME_SIZE)))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (local.get $frame) (i32.const 0x4E454944)) ;; "DIEN"
     (call $gs32 (i32.add (local.get $frame) (i32.const 4)) (local.get $ret))
     (call $gs32 (i32.add (local.get $frame) (i32.const 8)) (local.get $arg2))
@@ -7920,11 +7912,10 @@
   (func $handle_IDirectInput_GetDeviceStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $guid_wa i32)
     (if (i32.eqz (local.get $arg1))
-      (then (global.set $eax (i32.const 0x80070057))) ;; DIERR_INVALIDPARAM
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))) ;; DIERR_INVALIDPARAM
       (else
         (local.set $guid_wa (call $g2w (local.get $arg1)))
-        (global.set $eax
-          (select
+        (i32.store offset=0 (global.get $reg_base) (select
             (i32.const 0) ;; DI_OK
             (i32.const 1) ;; DI_NOTATTACHED
             (i32.or
@@ -7934,17 +7925,17 @@
               (call $guid_words_equal (local.get $guid_wa)
                 (i32.const 0x6F1D2B61) (i32.const 0x11CFD5A0)
                 (i32.const 0x4544C7BF) (i32.const 0x00005453)))))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; RunControlPanel — no-op
   (func $handle_IDirectInput_RunControlPanel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectInput_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (store.field.memarg DxObject misc0 (call $dx_from_this (local.get $arg0)) (local.get $arg2))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectInputDevice methods
@@ -7955,14 +7946,14 @@
     (local $version i32) (local $slot i32) (local $obj i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $gs32 (local.get $arg2) (i32.const 0))
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; Translate riid exactly once and compare the complete device IID.
     (local.set $iid_wa (call $g2w (local.get $arg1)))
@@ -7970,8 +7961,8 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eqz (local.get $entry))
       (then
-        (global.set $eax (i32.const 0x80004002))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $version (i32.load offset=16 (local.get $entry)))
     (if (i32.eqz (local.get $version))
@@ -7985,8 +7976,8 @@
             (i32.and (i32.eq (local.get $kind) (i32.const 3))
               (i32.lt_u (local.get $version) (i32.const 0x0500)))))
       (then
-        (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $slot (call $dx_slot_of (local.get $entry)))
     (if (i32.eq (local.get $kind) (i32.const 1))
@@ -8006,16 +7997,16 @@
         (local.get $slot) (global.get $DX_VTBL_DIDEV2)))))
     (if (i32.eqz (local.get $obj))
       (then
-        (global.set $eax (i32.const 0x80004002))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     ;; QI must AddRef even when returning the same object identity — MCM pairs
     ;; Release on the original while retaining the queried Device2 pointer.
     (store.field DxObject refcount (local.get $entry)
       (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (call $gs32 (local.get $arg2) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
 
@@ -8025,8 +8016,8 @@
     (local $wa i32) (local $entry i32) (local $size i32) (local $version i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $wa (call $g2w (local.get $arg1)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
@@ -8034,8 +8025,8 @@
     (if (i32.and (i32.ne (local.get $size) (i32.const 24))
                  (i32.ne (local.get $size) (i32.const 44)))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $version (i32.load offset=16 (local.get $entry)))
     (if (i32.eqz (local.get $version)) (then (local.set $version (i32.const 0x0700))))
@@ -8054,24 +8045,24 @@
             (i32.ge_u (local.get $version) (i32.const 0x0800))))
         (i32.store (i32.add (local.get $wa) (i32.const 12)) (i32.const 3)) ;; 3 axes
         (i32.store (i32.add (local.get $wa) (i32.const 20)) (i32.const 3)))) ;; 3 buttons
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; EnumObjects(this, callback, pvRef, dwFlags)
   (func $handle_IDirectInputDevice_EnumObjects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32) (local $frame i32) (local $entry i32) (local $version i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (if (i32.or (i32.eqz (local.get $arg0)) (i32.eqz (local.get $arg1)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     ;; DIDFT_AXIS|BUTTON|POV|COLLECTION|NODATA are the documented filters.
     (if (i32.ne (i32.and (local.get $arg3) (i32.const 0xFFFFFF20)) (i32.const 0))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $version (i32.load offset=16 (local.get $entry)))
     (if (i32.eqz (local.get $version)) (then (local.set $version (i32.const 0x0700))))
-    (global.set $esp (i32.sub (global.get $esp) (global.get $DI_ENUM_FRAME_SIZE)))
-    (local.set $frame (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (global.get $DI_ENUM_FRAME_SIZE)))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (local.get $frame) (i32.const 0x4E454944)) ;; "DIEN"
     (call $gs32 (i32.add (local.get $frame) (i32.const 4)) (local.get $ret))
     (call $gs32 (i32.add (local.get $frame) (i32.const 8)) (local.get $arg1))
@@ -8109,15 +8100,15 @@
     (local $entry i32)
     (if (i32.eqz (call $di_valid_device_dword_property (local.get $arg2)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.and
           (i32.ne (local.get $arg1) (i32.const 1)) ;; DIPROP_BUFFERSIZE
           (i32.ne (local.get $arg1) (i32.const 2))) ;; DIPROP_AXISMODE
       (then
-        (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eq (local.get $arg1) (i32.const 1))
@@ -8130,22 +8121,22 @@
             (i32.and (load.field DxObject flags (local.get $entry))
                      (global.get $DIDEV_AXIS_ABSOLUTE))
             (i32.const 0)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectInputDevice_SetProperty (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32)
     (if (i32.eqz (call $di_valid_device_dword_property (local.get $arg2)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.and
           (i32.ne (local.get $arg1) (i32.const 1)) ;; DIPROP_BUFFERSIZE
           (i32.ne (local.get $arg1) (i32.const 2))) ;; DIPROP_AXISMODE
       (then
-        (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eq (local.get $arg1) (i32.const 1))
@@ -8157,8 +8148,8 @@
               (call $gl32 (i32.add (local.get $arg2) (i32.const 16)))
               (i32.const 1))
           (then
-            (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-            (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
             (return)))
         (store.field DxObject flags (local.get $entry)
           (i32.or
@@ -8167,8 +8158,8 @@
             (i32.mul
               (call $gl32 (i32.add (local.get $arg2) (i32.const 16)))
               (global.get $DIDEV_AXIS_ABSOLUTE))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; DirectInput device lifecycle bits in the DIDev arm of DxObject.flags.
   ;; The low five bits retain DISCL_* from SetCooperativeLevel; these bits are
@@ -8266,21 +8257,21 @@
           (i32.and (local.get $flags) (global.get $DIDEV_ACQUIRED))
           (i32.const 0))
       (then
-        (global.set $eax (i32.const 1)) ;; S_FALSE: already acquired
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)) ;; S_FALSE: already acquired
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (if (i32.ne
           (i32.and (local.get $flags)
             (i32.or (global.get $DIDEV_FORMAT_SET) (global.get $DIDEV_COOP_SET)))
           (i32.or (global.get $DIDEV_FORMAT_SET) (global.get $DIDEV_COOP_SET)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (store.field DxObject flags (local.get $entry)
       (i32.or (local.get $flags) (global.get $DIDEV_ACQUIRED)))
-    (global.set $eax (i32.const 0)) ;; DI_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DI_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirectInputDevice_Unacquire (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $flags i32)
@@ -8289,13 +8280,13 @@
     (if (i32.eqz
           (i32.and (local.get $flags) (global.get $DIDEV_ACQUIRED)))
       (then
-        (global.set $eax (i32.const 1)) ;; DI_NOEFFECT / S_FALSE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)) ;; DI_NOEFFECT / S_FALSE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (store.field DxObject flags (local.get $entry)
       (i32.and (local.get $flags) (i32.const 0xFFFFFBFF)))
-    (global.set $eax (i32.const 0)) ;; DI_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DI_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; DIK scan code -> Win32 VK, one byte per scan code. 0 means the scan code
   ;; has no VK, which the buffered-keyboard scan uses to skip it. A table
@@ -8446,24 +8437,24 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eqz (call $di_device_is_acquired (local.get $entry)))
       (then
-        (global.set $eax (i32.const 0x8007000C)) ;; DIERR_NOTACQUIRED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000C)) ;; DIERR_NOTACQUIRED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.or
           (i32.eqz (local.get $arg2))
           (i32.ne (local.get $arg1)
                   (load.field DxObject misc1 (local.get $entry))))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $dev_type (load.field DxObject misc0 (local.get $entry)))
     (local.set $wa
       (call $g2w_affine_span (local.get $arg2) (local.get $arg1)))
     (if (i32.eq (local.get $wa) (global.get $NULL_SENTINEL))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $zero_memory (local.get $wa) (local.get $arg1))
     (if (i32.eq (local.get $dev_type) (i32.const 1))
@@ -8496,8 +8487,8 @@
             (if (i32.and (local.get $buttons) (i32.const 0x0002))
               (then (i32.store8 offset=13 (local.get $wa) (i32.const 0x80))))))
         ))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $di_mouse_data_write (param $base i32) (param $cb i32) (param $index i32)
                              (param $ofs i32) (param $data i32) (param $stamp i32)
@@ -8573,15 +8564,15 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (i32.eqz (call $di_device_is_acquired (local.get $entry)))
       (then
-        (global.set $eax (i32.const 0x8007000C)) ;; DIERR_NOTACQUIRED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8007000C)) ;; DIERR_NOTACQUIRED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (i32.or
           (i32.eqz (local.get $arg3))
           (i32.lt_u (local.get $arg1) (i32.const 16)))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $dev_type (load.field DxObject misc0 (local.get $entry)))
     (local.set $capacity (i32.load offset=12 (local.get $entry)))
@@ -8604,15 +8595,15 @@
               (then (call $gs32 (local.get $arg3)
                 (call $di_kbd_collect (i32.const 0) (local.get $arg1)
                   (local.get $requested) (i32.const 0)))))
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
             (return)))
         (local.set $data (call $di_kbd_collect (local.get $arg2)
           (local.get $arg1) (local.get $requested)
           (i32.eqz (i32.and (local.get $arg4) (i32.const 1)))))
         (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $data))))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (i32.eq (local.get $dev_type) (i32.const 2))
       (then
@@ -8648,8 +8639,8 @@
               (then (call $gs32 (local.get $arg3)
                 (select (local.get $available) (local.get $requested)
                   (i32.lt_u (local.get $available) (local.get $requested))))))
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
             (return)))
         (local.set $commit (i32.eqz (i32.and (local.get $arg4) (i32.const 1))))
         (local.set $delivered (i32.const 0))
@@ -8735,12 +8726,12 @@
                           (i32.and (local.get $buttons) (i32.const 2))))))))
         (if (local.get $arg3)
           (then (call $gs32 (local.get $arg3) (local.get $delivered))))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; SetDataFormat accepts the standard keyboard, DIMOUSESTATE and
   ;; DIMOUSESTATE2 layouts that the browser can reproduce. The format may be
@@ -8750,22 +8741,22 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (if (call $di_device_is_acquired (local.get $entry))
       (then
-        (global.set $eax (i32.const 0x800700AA)) ;; DIERR_ACQUIRED
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x800700AA)) ;; DIERR_ACQUIRED
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $data_size
       (call $di_standard_data_format_size (local.get $entry) (local.get $arg1)))
     (if (i32.eqz (local.get $data_size))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (store.field DxObject misc1 (local.get $entry) (local.get $data_size))
     (store.field DxObject flags (local.get $entry)
       (i32.or (load.field DxObject flags (local.get $entry))
               (global.get $DIDEV_FORMAT_SET)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetEventNotification(this, hEvent) — remember the host event so renderer
   ;; input can wake DirectInput polling loops.
@@ -8774,8 +8765,8 @@
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $dev_type (load.field DxObject misc0 (local.get $entry)))
     (drop (call $host_di_set_event_notification (local.get $dev_type) (local.get $arg1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetCooperativeLevel requires a process-owned top-level HWND and exactly
   ;; one foreground/background plus one exclusive/nonexclusive choice.
@@ -8785,8 +8776,8 @@
           (i32.eqz (call $window_handle_valid (local.get $arg1)))
           (i32.ne (call $wnd_top_level (local.get $arg1)) (local.get $arg1)))
       (then
-        (global.set $eax (i32.const 0x80070006)) ;; E_HANDLE
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070006)) ;; E_HANDLE
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.or
           (i32.ne (i32.and (local.get $arg2) (i32.const 0xFFFFFFE0)) (i32.const 0))
@@ -8798,8 +8789,8 @@
               (i32.ne (i32.and (local.get $arg2) (i32.const 4)) (i32.const 0))
               (i32.ne (i32.and (local.get $arg2) (i32.const 8)) (i32.const 0)))))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $flags (load.field DxObject flags (local.get $entry)))
@@ -8808,8 +8799,8 @@
       (i32.or
         (i32.and (local.get $flags) (i32.const 0xFFFFFFE0))
         (i32.or (local.get $arg2) (global.get $DIDEV_COOP_SET))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetObjectInfo(this, pdidoi, dwObj, dwHow). The system keyboard and mouse
   ;; use their standard data formats, so offsets are DIK_* values or DIMOFS_*.
@@ -8819,8 +8810,8 @@
     (local $index i32) (local $match i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $size (call $gl32 (local.get $arg1)))
     (if (i32.or
@@ -8829,8 +8820,8 @@
           (i32.or (i32.lt_u (local.get $arg3) (i32.const 1))
                   (i32.gt_u (local.get $arg3) (i32.const 3))))
       (then
-        (global.set $eax (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
-        (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) ;; DIERR_INVALIDPARAM
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $kind (load.field.memarg DxObject misc0 (local.get $entry)))
@@ -8854,13 +8845,13 @@
               (then
                 (call $di_fill_object_instance_size
                   (local.get $arg1) (local.get $kind) (local.get $index) (local.get $size))
-                (global.set $eax (i32.const 0)) ;; DI_OK
-                (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+                (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DI_OK
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
                 (return)))))
         (local.set $index (i32.add (local.get $index) (i32.const 1)))
         (br $objects)))
-    (global.set $eax (i32.const 0x80070002)) ;; DIERR_OBJECTNOTFOUND
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070002)) ;; DIERR_OBJECTNOTFOUND
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; GetDeviceInfo(this, DIDEVICEINSTANCEA*) accepts the full structure and
   ;; the explicit DirectX 3 compatibility shape selected by the caller.
@@ -8868,15 +8859,15 @@
     (local $entry i32) (local $size i32) (local $version i32) (local $kind i32)
     (if (i32.eqz (local.get $arg1))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $size (call $gl32 (local.get $arg1)))
     (if (i32.and (i32.ne (local.get $size) (i32.const 560))
                  (i32.ne (local.get $size) (i32.const 580)))
       (then
-        (global.set $eax (i32.const 0x80070057))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $kind (load.field.memarg DxObject misc0 (local.get $entry)))
@@ -8884,18 +8875,18 @@
     (if (i32.eqz (local.get $version)) (then (local.set $version (i32.const 0x0700))))
     (call $di_fill_device_instance (local.get $arg1) (local.get $kind)
       (local.get $version) (local.get $size))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; RunControlPanel — no-op
   (func $handle_IDirectInputDevice_RunControlPanel (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Initialize — no-op
   (func $handle_IDirectInputDevice_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ── IDirectInputDevice2 (slots 18..26) ────────────────────────────────
   ;; The devices we expose are the system keyboard and mouse: neither has
@@ -8909,58 +8900,57 @@
   ;; CreateEffect(this, rguid, lpeff, ppdeff, punkOuter)
   (func $handle_IDirectInputDevice2_CreateEffect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; EnumEffects(this, lpCallback, pvRef, dwEffType) — no effects to report,
   ;; so the callback never fires and the enumeration succeeds empty.
   (func $handle_IDirectInputDevice2_EnumEffects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; GetEffectInfo(this, pdei, rguid)
   (func $handle_IDirectInputDevice2_GetEffectInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetForceFeedbackState(this, pdwOut)
   (func $handle_IDirectInputDevice2_GetForceFeedbackState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SendForceFeedbackCommand(this, dwFlags)
   (func $handle_IDirectInputDevice2_SendForceFeedbackCommand (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; EnumCreatedEffectObjects(this, lpCallback, pvRef, fl) — we never create
   ;; an effect, so this enumeration is always empty and succeeds.
   (func $handle_IDirectInputDevice2_EnumCreatedEffectObjects (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; Escape(this, pesc) — driver-specific escape; no driver here.
   (func $handle_IDirectInputDevice2_Escape (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Poll(this) — keyboard and mouse do not require polling, but DirectInput
   ;; still requires acquisition before answering DI_NOEFFECT.
   (func $handle_IDirectInputDevice2_Poll (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
-    (global.set $eax
-      (select (i32.const 1) (i32.const 0x8007000C)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 1) (i32.const 0x8007000C)
         (call $di_device_is_acquired (local.get $entry)))) ;; DI_NOEFFECT / DIERR_NOTACQUIRED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SendDeviceData(this, cbObjectData, rgdod, pdwInOut, fl) — output devices
   ;; only; nothing here accepts device data.
   (func $handle_IDirectInputDevice2_SendDeviceData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; DIERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; IDirectPlay3A — bounded local/no-network COM object. Player/group state
   ;; is real state: IDs are unique, DPNAMEs are copied, membership survives
@@ -9503,11 +9493,10 @@
   (func $dp_handle_membership
       (param $owner i32) (param $group_id i32) (param $member_id i32)
       (param $member_type i32) (param $add i32)
-    (global.set $eax
-      (call $dp_update_membership
+    (i32.store offset=0 (global.get $reg_base) (call $dp_update_membership
         (local.get $owner) (local.get $group_id) (local.get $member_id)
         (local.get $member_type) (local.get $add)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $dp_destroy_entity (param $id i32) (param $type i32) (result i32)
     (local $entry i32) (local $i i32) (local $scan i32) (local $bit i32)
@@ -9702,15 +9691,15 @@
   ;; +20 required membership bit, +24 next slot, +28 flags, +32 filter bool.
   (func $dp_enum_finish (param $frame i32)
     (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 4))))
-    (global.set $esp (i32.add (local.get $frame) (i32.const 40)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $frame) (i32.const 40)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $dp_enum_continue
     (local $frame i32) (local $i i32) (local $entry i32)
     (local $type i32) (local $entity_flags i32) (local $enum_flags i32)
     (local $criteria i32)
-    (local.set $frame (global.get $esp))
-    (if (i32.eqz (global.get $eax))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $dp_enum_finish (local.get $frame)) (return)))
     (if (i32.eqz (global.get $dp_entity_table))
       (then (call $dp_enum_finish (local.get $frame)) (return)))
@@ -9760,17 +9749,17 @@
                   (i32.const 0)))))
         (then
           ;; callback(id, type, name, flags, context), right-to-left.
-          (global.set $esp (i32.sub (local.get $frame) (i32.const 24)))
-          (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 4))
+          (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $frame) (i32.const 24)))
+          (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))
             (call $gl32 (local.get $entry)))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 8))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))
             (call $gl32 (i32.add (local.get $entry) (i32.const 4))))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 12))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))
             (call $gl32 (i32.add (local.get $entry) (i32.const 8))))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 16))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))
             (call $gl32 (i32.add (local.get $entry) (i32.const 12))))
-          (call $gs32 (i32.add (global.get $esp) (i32.const 20))
+          (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))
             (call $gl32 (i32.add (local.get $frame) (i32.const 12))))
           (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 8))))
           (global.set $steps (i32.const 0))
@@ -9783,7 +9772,7 @@
       (param $type i32) (param $membership_bit i32) (param $flags i32)
       (param $filter_membership i32)
     (local $frame i32)
-    (local.set $frame (i32.sub (global.get $esp) (i32.const 40)))
+    (local.set $frame (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
     (call $zero_memory (call $g2w (local.get $frame)) (i32.const 40))
     (call $gs32 (local.get $frame) (i32.const 0x4E455044)) ;; 'DPEN'
     (call $gs32 (i32.add (local.get $frame) (i32.const 4)) (local.get $ret_addr))
@@ -9793,8 +9782,8 @@
     (call $gs32 (i32.add (local.get $frame) (i32.const 20)) (local.get $membership_bit))
     (call $gs32 (i32.add (local.get $frame) (i32.const 28)) (local.get $flags))
     (call $gs32 (i32.add (local.get $frame) (i32.const 32)) (local.get $filter_membership))
-    (global.set $esp (local.get $frame))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (local.get $frame))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $dp_enum_continue))
 
   ;; Query the two bounded ANSI DirectPlay families that this runtime exposes.
@@ -9862,9 +9851,9 @@
       (local.get $out) (local.get $family)))
 
   (func $handle_IDirectPlay3_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dplay_query_interface
+    (i32.store offset=0 (global.get $reg_base) (call $dplay_query_interface
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $dp_owned_entity (param $owner i32) (param $id i32) (param $type i32) (result i32)
     (local $entry i32)
@@ -9876,108 +9865,108 @@
   ;; Ownership notifications/migration are not yet implemented. Keep output
   ;; buffers untouched and fail explicitly instead of publishing guessed policy.
   (func $handle_IDirectPlay4_GetGroupOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (i32.const 0x80004001))
-    (if (i32.eqz (local.get $arg2)) (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
+    (if (i32.eqz (local.get $arg2)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 0)))
-      (then (global.set $eax (i32.const 0x8877009B)))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8877009B)))))
 
   (func $handle_IDirectPlay4_SetGroupOwner (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
     (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 0)))
-      (then (global.set $eax (i32.const 0x8877009B)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x8877009B)) (return)))
     (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg2) (i32.const 1)))
-      (then (global.set $eax (i32.const 0x88770096)))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770096)))))
 
   (func $handle_IDirectPlay4_SendEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32) (local $priority i32)
-    (local.set $size (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $priority (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 44)))
+    (local.set $size (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $priority (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 44)))
     (if (i32.gt_u (local.get $priority) (i32.const 65535))
-      (then (global.set $eax (i32.const 0x88770186)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770186)) (return)))
     ;; Synchronous delivery has no pending-send ID or completion context.
-    (global.set $eax (call $dp_send_local_priority (local.get $arg0) (local.get $arg1)
+    (i32.store offset=0 (global.get $reg_base) (call $dp_send_local_priority (local.get $arg0) (local.get $arg1)
       (local.get $arg2) (local.get $arg3) (local.get $arg4) (local.get $size) (local.get $priority))))
 
   (func $handle_IDirectPlay4_GetMessageQueue (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $bytes i32) (local $kind i32)
-    (local.set $bytes (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (local.set $bytes (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (if (i32.gt_u (local.get $arg3) (i32.const 2))
-      (then (global.set $eax (i32.const 0x88770078)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770078)) (return)))
     (if (local.get $arg1)
       (then (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg1) (i32.const 1)))
-        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770096)) (return)))))
     (if (local.get $arg2)
       (then (if (i32.eqz (call $dp_owned_entity (local.get $arg0) (local.get $arg2) (i32.const 1)))
-        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770096)) (return)))))
     (local.set $kind (i32.eq (local.get $arg3) (i32.const 2)))
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4)
       (call $dp_message_query (local.get $arg0) (local.get $kind) (local.get $arg1) (local.get $arg2) (i32.const 0)))))
     (if (local.get $bytes) (then (call $gs32 (local.get $bytes)
       (call $dp_message_query (local.get $arg0) (local.get $kind) (local.get $arg1) (local.get $arg2) (i32.const 1)))))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $handle_IDirectPlay4_CancelMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (i32.const 0x88770078))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770078))
     (if (local.get $arg2) (then (return)))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.eqz (local.get $arg1))
       (then (drop (call $dp_message_cancel_range (local.get $arg0) (i32.const 0) (i32.const 0) (i32.const -1))) (return)))
-    (global.set $eax (i32.const 0x8877017C))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x8877017C))
     (local.set $entry (call $dp_message_find (local.get $arg0) (local.get $arg1)))
     (if (i32.eqz (local.get $entry)) (then (return)))
     (if (call $gl32 (i32.add (local.get $entry) (i32.const 28))) (then (return)))
     (drop (call $dp_message_remove (local.get $arg0) (local.get $arg1)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $handle_IDirectPlay4_CancelPriority (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
-    (global.set $eax (i32.const 0x88770078))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770078))
     (if (local.get $arg3) (then (return)))
-    (global.set $eax (i32.const 0x88770186))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770186))
     (if (i32.gt_u (local.get $arg1) (local.get $arg2)) (then (return)))
     (if (i32.gt_u (local.get $arg2) (i32.const 65535)) (then (return)))
     (drop (call $dp_message_cancel_range (local.get $arg0) (i32.const 0) (local.get $arg1) (local.get $arg2)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
 
   (func $handle_IDirectPlay3_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $rc (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
-    (global.set $eax (local.get $rc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $rc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; The Lobby3 ABI is callable, but application registration and external
   ;; lobby launch/settings handoff are not implemented. Never invent a connection.
   (func $handle_IDirectPlayLobby3_ConnectEx (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
-    (global.set $eax (i32.const 0x80070057))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
     (if (i32.eqz (local.get $arg3)) (then (return)))
     (call $gs32 (local.get $arg3) (i32.const 0))
     (if (i32.eqz (local.get $arg2)) (then (return)))
-    (global.set $eax (i32.const 0x80040110))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80040110))
     (if (local.get $arg4) (then (return)))
-    (global.set $eax (i32.const 0x80004001)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)))
 
   (func $handle_dplobby3_application_unsupported (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (global.set $eax (i32.const 0x88770078))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770078))
     (if (local.get $arg1) (then (return)))
-    (global.set $eax (i32.const 0x80070057))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
     (if (i32.eqz (local.get $arg2)) (then (return)))
-    (global.set $eax (i32.const 0x80004001)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)))
 
   (func $handle_IDirectPlayLobby3_WaitForConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-    (global.set $eax (i32.const 0x80004001))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001))
     (if (i32.and (local.get $arg1) (i32.const -2))
-      (then (global.set $eax (i32.const 0x88770078)))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770078)))))
 
   (func $handle_IDirectPlay3_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
@@ -9986,9 +9975,9 @@
     (if (i32.le_s (local.get $rc) (i32.const 0))
       (then
         (call $dp_close_owner (local.get $arg0))
-        (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))
-      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (global.set $eax (local.get $rc))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+        (call $dx_free (local.get $entry)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirectPlay3_AddPlayerToGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_handle_membership
@@ -9996,69 +9985,65 @@
       (i32.const 1) (i32.const 1)))
   (func $handle_IDirectPlay3_Close (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_close_owner (local.get $arg0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectPlay3_CreateGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $flags i32)
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $eax
-      (call $dp_create_entity
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (call $dp_create_entity
         (local.get $arg1) (local.get $arg2) (local.get $arg3) (local.get $arg4)
         (local.get $flags) (i32.const 0)))
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectPlay3_CreatePlayer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32) (local $flags i32)
-    (local.set $size (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
-    (global.set $eax
-      (call $dp_create_entity
+    (local.set $size (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (call $dp_create_entity
         (local.get $arg1) (local.get $arg2) (local.get $arg4) (local.get $size)
         (local.get $flags) (i32.const 1)))
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $dp_bind_entity (call $gl32 (local.get $arg1)) (local.get $arg0) (local.get $arg3))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
   (func $handle_IDirectPlay3_DeletePlayerFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_handle_membership
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const 1) (i32.const 0)))
   (func $handle_IDirectPlay3_DestroyGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x80070057)
         (call $dp_destroy_entity (local.get $arg1) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectPlay3_DestroyPlayer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x80070057)
         (call $dp_destroy_entity (local.get $arg1) (i32.const 1))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectPlay3_EnumGroupPlayers (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $group i32) (local $flags i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $group (call $dp_find_entity (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (if (i32.or (i32.eqz (local.get $arg3)) (i32.eqz (local.get $group)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (call $dp_enum_begin
       (local.get $ret_addr) (local.get $arg3) (local.get $arg4) (i32.const 1)
       (call $dp_group_bit (local.get $group)) (local.get $flags) (i32.const 1)))
   (func $handle_IDirectPlay3_EnumGroups (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.eqz (local.get $arg2))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (call $dp_enum_begin
       (local.get $ret_addr) (local.get $arg2) (local.get $arg3) (i32.const 0)
       (i32.const 0) (local.get $arg4) (i32.const 0)))
   (func $handle_IDirectPlay3_EnumPlayers (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $type i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.eqz (local.get $arg2))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (local.set $type
       (select (i32.const -1) (i32.const 1)
         (i32.ne (i32.and (local.get $arg4) (i32.const 0x00000020)) (i32.const 0))))
@@ -10067,12 +10052,12 @@
       (i32.const 0) (local.get $arg4) (i32.const 0)))
   (func $handle_IDirectPlay3_EnumSessions (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $flags i32) (local $desc i32) (local $name i32) (local $name_wa i32) (local $timeout i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (if (i32.eqz (local.get $arg3))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $name (call $heap_alloc (i32.const 16))) (local.set $name_wa (call $g2w (local.get $name)))
     (i32.store (local.get $name_wa) (i32.const 0x61636F4C))
@@ -10098,114 +10083,106 @@
     (call $gs32 (local.get $timeout) (i32.const 0))
     ;; Push saved caller return, then callback args right-to-left:
     ;; context, flags, timeout, session-desc.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg4))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $timeout))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg4))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $timeout))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
     (global.set $eip (local.get $arg3))
     (global.set $steps (i32.const 0)))
   (func $handle_IDirectPlay3_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $zero_memory (call $g2w (local.get $arg1)) (i32.const 64))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_GetGroupData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_get_data
+    (i32.store offset=0 (global.get $reg_base) (call $dp_get_data
         (local.get $arg1) (i32.const 0) (local.get $arg2) (local.get $arg3)
         (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_GetGroupName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_get_name
+    (i32.store offset=0 (global.get $reg_base) (call $dp_get_name
         (local.get $arg1) (i32.const 0) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_GetMessageCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-    (if (i32.eqz (local.get $arg2)) (then (global.set $eax (i32.const 0x80070057)) (return)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+    (if (i32.eqz (local.get $arg2)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (if (local.get $arg1)
       (then (if (i32.eqz (call $dp_find_entity (local.get $arg1) (i32.const 1)))
-        (then (global.set $eax (i32.const 0x88770096)) (return)))))
+        (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x88770096)) (return)))))
     (call $gs32 (local.get $arg2) (call $dp_message_query (local.get $arg0) (i32.const 1)
       (i32.const 0) (local.get $arg1) (i32.const 0)))
-    (global.set $eax (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
   (func $handle_IDirectPlay3_GetPlayerAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_GetPlayerCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg2) (then (call $zero_memory (call $g2w (local.get $arg2)) (i32.const 64))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_GetPlayerData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_get_data
+    (i32.store offset=0 (global.get $reg_base) (call $dp_get_data
         (local.get $arg1) (i32.const 1) (local.get $arg2) (local.get $arg3)
         (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_GetPlayerName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_get_name
+    (i32.store offset=0 (global.get $reg_base) (call $dp_get_name
         (local.get $arg1) (i32.const 1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_GetSessionDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectPlay3_Open (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_Receive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dp_receive (local.get $arg0) (local.get $arg1)
+    (i32.store offset=0 (global.get $reg_base) (call $dp_receive (local.get $arg0) (local.get $arg1)
       (local.get $arg2) (local.get $arg3) (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectPlay3_Send (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dp_send_local (local.get $arg0) (local.get $arg1) (local.get $arg2)
-      (local.get $arg3) (local.get $arg4) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (call $dp_send_local (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectPlay3_SetGroupData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_set_data
+    (i32.store offset=0 (global.get $reg_base) (call $dp_set_data
         (local.get $arg1) (i32.const 0) (local.get $arg2) (local.get $arg3)
         (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_SetGroupName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x80070057)
         (call $dp_replace_name (local.get $arg1) (i32.const 0) (local.get $arg2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_SetPlayerData (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_set_data
+    (i32.store offset=0 (global.get $reg_base) (call $dp_set_data
         (local.get $arg1) (i32.const 1) (local.get $arg2) (local.get $arg3)
         (local.get $arg4)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_SetPlayerName (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (i32.const 0) (i32.const 0x80070057)
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 0) (i32.const 0x80070057)
         (call $dp_replace_name (local.get $arg1) (i32.const 1) (local.get $arg2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_SetSessionDesc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_AddGroupToGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_handle_membership
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const 0) (i32.const 1)))
   (func $handle_IDirectPlay3_CreateGroupInGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size i32) (local $flags i32) (local $hr i32) (local $id i32)
-    (local.set $size (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $size (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (if (i32.eqz
           (call $dp_owned_entity
             (local.get $arg0) (local.get $arg1) (i32.const 0)))
       (then
-        (global.set $eax (i32.const 0x8877009B)) ;; DPERR_INVALIDGROUP
-        (global.set $esp (i32.add (global.get $esp) (i32.const 32)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8877009B)) ;; DPERR_INVALIDGROUP
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
         (return)))
     (local.set $hr
       (call $dp_create_entity
@@ -10222,19 +10199,19 @@
         (if (local.get $hr)
           (then
             (drop (call $dp_destroy_entity (local.get $id) (i32.const 0)))))))
-    (global.set $eax (local.get $hr))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
   (func $handle_IDirectPlay3_DeleteGroupFromGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $dp_handle_membership
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const 0) (i32.const 0)))
   (func $handle_IDirectPlay3_EnumConnections (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $guid i32) (local $guid_wa i32) (local $conn i32) (local $dpname i32) (local $dpname_wa i32) (local $label i32) (local $label_wa i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     ;; DPSPGUID_TCPIP {36E95EE0-8577-11cf-960C-0080C7534E82}.
     (local.set $guid (call $heap_alloc (i32.const 16))) (local.set $guid_wa (call $g2w (local.get $guid)))
@@ -10258,87 +10235,85 @@
     (i32.store offset=12 (local.get $dpname_wa) (local.get $label))
     ;; Push saved caller return, then callback args right-to-left:
     ;; context, flags, name, connection size, connection, provider GUID.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg3))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg4))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $dpname))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 4))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $conn))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $guid))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg3))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg4))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $dpname))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 4))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $conn))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $guid))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
     (global.set $eip (local.get $arg2))
     (global.set $steps (i32.const 0)))
   (func $handle_IDirectPlay3_EnumGroupsInGroup (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32) (local $group i32) (local $flags i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (local.set $flags (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $flags (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $group (call $dp_find_entity (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
     (if (i32.or (i32.eqz (local.get $arg3)) (i32.eqz (local.get $group)))
-      (then (global.set $eax (i32.const 0x80070057)) (return)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)) (return)))
     (call $dp_enum_begin
       (local.get $ret_addr) (local.get $arg3) (local.get $arg4) (i32.const 0)
       (call $dp_group_bit (local.get $group)) (local.get $flags) (i32.const 1)))
   (func $handle_IDirectPlay3_GetGroupConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 0))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_InitializeConnection (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_SecureOpen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_SendChatMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_SetGroupConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlay3_StartSession (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_GetGroupFlags (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_get_flags (local.get $arg1) (i32.const 0) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $dp_get_flags (local.get $arg1) (i32.const 0) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_GetGroupParent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg2) (then (call $gs32 (local.get $arg2) (i32.const 0))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectPlay3_GetPlayerAccount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg4) (then (call $gs32 (local.get $arg4) (i32.const 0))))
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlay3_GetPlayerFlags (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $dp_get_flags (local.get $arg1) (i32.const 1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $dp_get_flags (local.get $arg1) (i32.const 1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirectPlayLobby2A — local/no-network lobby shim. Used by DX SDK samples
   ;; that create a lobby object during startup; no actual launched-from-lobby
   ;; state or transport providers are exposed.
   (func $handle_IDirectPlayLobby2_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $dplay_query_interface
+    (i32.store offset=0 (global.get $reg_base) (call $dplay_query_interface
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirectPlayLobby2_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $rc (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
-    (global.set $eax (local.get $rc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $rc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirectPlayLobby2_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $entry i32) (local $rc i32)
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (local.set $rc (i32.sub (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
     (if (i32.le_s (local.get $rc) (i32.const 0))
-      (then (call $dx_free (local.get $entry)) (global.set $eax (i32.const 0)))
-      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (global.set $eax (local.get $rc))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+      (then (call $dx_free (local.get $entry)) (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (store.field DxObject refcount (local.get $entry) (local.get $rc)) (i32.store offset=0 (global.get $reg_base) (local.get $rc))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Reentrant Lobby address enumeration state. Both callback shapes return
   ;; through CACA0011 and leave this typed frame at ESP:
@@ -10350,16 +10325,15 @@
 
   (func $dpl_enum_finish (param $frame i32) (param $hr i32)
     (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 4))))
-    (global.set $esp
-      (i32.add (local.get $frame) (global.get $DPL_ENUM_FRAME_SIZE)))
-    (global.set $eax (local.get $hr)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (local.get $frame) (global.get $DPL_ENUM_FRAME_SIZE)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hr)))
 
   (func $dpl_enum_continue
     (local $frame i32) (local $tag i32) (local $offset i32)
     (local $remaining i32) (local $record i32) (local $data_size i32)
-    (local.set $frame (global.get $esp))
+    (local.set $frame (i32.load offset=16 (global.get $reg_base)))
     (local.set $tag (call $gl32 (local.get $frame)))
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (call $dpl_enum_finish (local.get $frame) (i32.const 0)) (return)))
     (if (i32.eq (local.get $tag) (i32.const 0x414C5044)) ;; 'DPLA'
       (then
@@ -10394,13 +10368,13 @@
           (i32.add (local.get $offset)
             (i32.add (i32.const 20) (local.get $data_size))))
         ;; EnumAddressCallback(guid, size, data, context), right-to-left.
-        (global.set $esp (i32.sub (local.get $frame) (i32.const 20)))
-        (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $record))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $data_size))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 12))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $frame) (i32.const 20)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $record))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $data_size))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))
           (i32.add (local.get $record) (i32.const 20)))
-        (call $gs32 (i32.add (global.get $esp) (i32.const 16))
+        (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))
           (call $gl32 (i32.add (local.get $frame) (i32.const 12))))
         (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 8))))
         (global.set $steps (i32.const 0))
@@ -10420,13 +10394,13 @@
     (call $gs32 (i32.add (local.get $frame) (i32.const 48))
       (i32.const 0x5E4205C9))
     ;; EnumAddressTypesCallback(guid, context, flags), right-to-left.
-    (global.set $esp (i32.sub (local.get $frame) (i32.const 16)))
-    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 4))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $frame) (i32.const 16)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))
       (i32.add (local.get $frame) (i32.const 36)))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 8))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))
       (call $gl32 (i32.add (local.get $frame) (i32.const 12))))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (i32.const 0))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (i32.const 0))
     (global.set $eip (call $gl32 (i32.add (local.get $frame) (i32.const 8))))
     (global.set $steps (i32.const 0)))
 
@@ -10451,7 +10425,7 @@
       (param $flags i32)
     (local $frame i32)
     (local.set $frame
-      (i32.sub (global.get $esp) (global.get $DPL_ENUM_FRAME_SIZE)))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (global.get $DPL_ENUM_FRAME_SIZE)))
     (call $zero_memory
       (call $g2w (local.get $frame)) (global.get $DPL_ENUM_FRAME_SIZE))
     (call $gs32 (local.get $frame) (local.get $tag))
@@ -10461,8 +10435,8 @@
     (call $gs32 (i32.add (local.get $frame) (i32.const 16)) (local.get $source))
     (call $gs32 (i32.add (local.get $frame) (i32.const 20)) (local.get $size))
     (call $gs32 (i32.add (local.get $frame) (i32.const 28)) (local.get $flags))
-    (global.set $esp (local.get $frame))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (local.get $frame))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $dpl_enum_continue))
 
   (func $handle_IDirectPlayLobby2_Connect (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -10474,41 +10448,41 @@
     (if (i32.and
           (i32.ne (local.get $arg2) (i32.const 0))
           (i32.eqz (local.get $obj_guest)))
-      (then (global.set $eax (i32.const 0x80004005)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirectPlayLobby2_CreateAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $size_ptr i32)
-    (local.set $size_ptr (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $size_ptr (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (if (local.get $size_ptr) (then (call $gs32 (local.get $size_ptr) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
 
   (func $handle_IDirectPlayLobby2_EnumAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.or
           (i32.eqz (local.get $arg1))
           (i32.or (i32.eqz (local.get $arg2)) (i32.lt_u (local.get $arg3) (i32.const 20))))
       (then
-        (global.set $eax (i32.const 0x80070057))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
         (return)))
     (call $dpl_enum_begin
       (i32.const 0x414C5044) (local.get $ret) (local.get $arg1)
       (local.get $arg4) (local.get $arg2) (local.get $arg3) (i32.const 0)))
   (func $handle_IDirectPlayLobby2_EnumAddressTypes (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret i32)
-    (local.set $ret (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+    (local.set $ret (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
     (if (i32.or
           (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg2)))
           (i32.or
             (i32.ne (local.get $arg4) (i32.const 0))
             (i32.eqz (call $dpl_guid_is_tcpip (local.get $arg2)))))
       (then
-        (global.set $eax (i32.const 0x80070057))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
         (return)))
     (call $dpl_enum_begin
       (i32.const 0x544C5044) (local.get $ret) (local.get $arg1)
@@ -10522,25 +10496,25 @@
     (if (i32.or
           (i32.eqz (local.get $arg1))
           (i32.ne (local.get $arg3) (i32.const 0)))
-      (then (global.set $eax (i32.const 0x80070057)))
-      (else (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057)))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirectPlayLobby2_GetConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0x8877042E))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x8877042E))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirectPlayLobby2_ReceiveLobbyMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x887700BE)) (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x887700BE)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectPlayLobby2_RunApplication (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x887703FC)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x887703FC)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlayLobby2_SendLobbyMessage (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
   (func $handle_IDirectPlayLobby2_SetConnectionSettings (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectPlayLobby2_SetLobbyMessageEvent (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0)) (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirectPlayLobby2_CreateCompoundAddress (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $i i32) (local $element i32) (local $data_size i32)
@@ -10567,7 +10541,7 @@
           (i32.lt_u (call $gl32 (local.get $arg4)) (local.get $required)))
       (then
         (call $gs32 (local.get $arg4) (local.get $required))
-        (global.set $eax (i32.const 0x8877001E))) ;; DPERR_BUFFERTOOSMALL
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8877001E))) ;; DPERR_BUFFERTOOSMALL
       (else
         (local.set $i (i32.const 0))
         (local.set $out (local.get $arg3))
@@ -10595,16 +10569,16 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $copy_loop)))
         (call $gs32 (local.get $arg4) (local.get $required))
-        (global.set $eax (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Direct3DRMCreate(lplpD3DRM) → HRESULT — 1 arg stdcall
   ;; D3D Retained Mode is not supported; return E_FAIL
   (func $handle_Direct3DRMCreate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg0) (then
       (call $gs32 (local.get $arg0) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004005))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirect3D stub methods (9 methods)
@@ -10614,42 +10588,42 @@
   ;; IDirect3D::QueryInterface(this, riid, ppvObj) — 3 args
   ;; Routes upgrades to v2/v3/v7 vtables on the same DX_OBJECTS slot.
   (func $handle_IDirect3D_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_qi (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_qi (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D::AddRef(this) — 1 arg
   (func $handle_IDirect3D_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3D::Release(this) — 1 arg
   (func $handle_IDirect3D_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3D::Initialize(this, riid) — 2 args
   (func $handle_IDirect3D_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; IDirect3D::EnumDevices(this, lpEnumDevicesCallback, lpUserArg) — 3 args
   ;; Invokes the callback once with a HAL device descriptor (shared with v2/v3).
   (func $handle_IDirect3D_EnumDevices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
     (if (i32.eqz (local.get $arg1)) (then
-      (global.set $eax (i32.const 0x80070057))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
       (return)))
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (call $d3d_enum_devices_invoke (local.get $arg1) (local.get $arg2) (local.get $ret_addr) (i32.const 1)))
 
   ;; IDirect3D::CreateLight — mirrors the IDirect3D3 pattern (DX type 24, vtbl D3DLIGHT)
   (func $handle_IDirect3D_CreateLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_create_child
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_create_child
       (local.get $arg1) (local.get $arg2)
       (i32.const 24) (global.get $DX_VTBL_D3DLIGHT)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D::CreateMaterial returns the legacy v1 material layout.
   ;; D3DRM calls GetHandle at vtable +0x18, which is not the v3 slot.
@@ -10657,26 +10631,26 @@
     (local $obj i32)
     (local.set $obj (call $dx_create_com_obj (i32.const 25) (global.get $DX_VTBL_D3DMAT1)))
     (if (i32.eqz (local.get $obj)) (then
-      (global.set $eax (i32.const 0x80004005))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
       (return)))
     (call $gs32 (local.get $arg1) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D::CreateViewport — DX type 23, vtbl D3DVP3
   (func $handle_IDirect3D_CreateViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_create_child
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_create_child
       (local.get $arg1) (local.get $arg2)
       (i32.const 23) (global.get $DX_VTBL_D3DVP3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D::FindDevice — return a concrete legacy RGB device GUID. D3DRM
   ;; feeds result.guid back into surface QI to obtain IDirect3DDevice v1.
   (func $handle_IDirect3D_FindDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3d_fill_find_device_result (local.get $arg2))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirect3D3 stub methods (10 methods)
@@ -10684,61 +10658,61 @@
 
   ;; IDirect3D3::QueryInterface — routes upgrades across D3D family (v1/v2/v3/v7).
   (func $handle_IDirect3D3_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_qi (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_qi (i32.const 1) (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D3::AddRef(this) — 1 arg
   (func $handle_IDirect3D3_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3D3::Release(this) — 1 arg
   (func $handle_IDirect3D3_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3D3::EnumDevices(this, lpEnumDevicesCallback, lpUserArg) — 3 args
   (func $handle_IDirect3D3_EnumDevices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
     (if (i32.eqz (local.get $arg1)) (then
-      (global.set $eax (i32.const 0x80070057))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x80070057))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
       (return)))
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (call $d3d_enum_devices_invoke (local.get $arg1) (local.get $arg2) (local.get $ret_addr) (i32.const 3)))
 
   ;; IDirect3D3::CreateLight(this, lplpDirect3DLight, pUnkOuter) — 3 args
   (func $handle_IDirect3D3_CreateLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_create_child
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_create_child
       (local.get $arg1) (local.get $arg2)
       (i32.const 24) (global.get $DX_VTBL_D3DLIGHT)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D3::CreateMaterial(this, lplpDirect3DMaterial, pUnkOuter) — 3 args
   (func $handle_IDirect3D3_CreateMaterial (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $obj i32)
     (local.set $obj (call $dx_create_com_obj (i32.const 25) (global.get $DX_VTBL_D3DMAT3)))
     (if (i32.eqz (local.get $obj)) (then
-      (global.set $eax (i32.const 0x80004005))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
       (return)))
     (call $gs32 (local.get $arg1) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D3::CreateViewport(this, lplpDirect3DViewport, pUnkOuter) — 3 args
   (func $handle_IDirect3D3_CreateViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_create_child
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_create_child
       (local.get $arg1) (local.get $arg2)
       (i32.const 23) (global.get $DX_VTBL_D3DVP3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3D3::FindDevice(this, lpD3DFDS, lpD3DFDR) — 3 args
   (func $handle_IDirect3D3_FindDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3d_fill_find_device_result (local.get $arg2))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Device state block layout (guest heap, 1024 bytes, zero-init then defaults):
   ;;   +0    world matrix    (64 bytes, 4x4 f32, row-major D3D)
@@ -10798,8 +10772,8 @@
     (local $parent_entry i32) (local $parent_slot i32)
     (local.set $obj (call $dx_create_com_obj (i32.const 20) (global.get $DX_VTBL_D3DDEV3)))
     (if (i32.eqz (local.get $obj)) (then
-      (global.set $eax (i32.const 0x80004005))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
       (return)))
     (local.set $entry (call $dx_from_this (local.get $obj)))
     (local.set $parent_entry (call $dx_from_this (local.get $arg0)))
@@ -10819,8 +10793,8 @@
     (call $d3ddev_init_state (local.get $state))
     (i32.store (i32.add (local.get $entry) (i32.const 16)) (local.get $state))
     (call $gs32 (local.get $arg3) (local.get $obj))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Helper: given device "this", return guest addr of its state block (or 0).
   (func $d3ddev_state (param $this_guest i32) (result i32)
@@ -10840,23 +10814,23 @@
   ;; IDirect3D3::CreateVertexBuffer(this, lpVBDesc, lplpD3DVertexBuffer, dwFlags, pUnkOuter) — 5 args
   (func $handle_IDirect3D3_CreateVertexBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_create_vb (local.get $arg1) (local.get $arg2) (global.get $DX_VTBL_D3DVB))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; IDirect3D3::EnumZBufferFormats(this, refclsid, lpCallback, lpContext)
   (func $handle_IDirect3D3_EnumZBufferFormats (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
     (if (i32.eqz (local.get $arg2)) (then
-      (global.set $eax (i32.const 0))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
       (return)))
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
     (call $d3d_enum_zbuf_invoke (local.get $arg2) (local.get $arg3) (local.get $ret_addr)))
 
   ;; IDirect3D3::EvictManagedTextures(this)
   (func $handle_IDirect3D3_EvictManagedTextures (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; IDirectDrawFactory methods (from ddrawex.dll)
@@ -10869,11 +10843,11 @@
   ;; QueryInterface(this, riid, ppv) — 3 args
   (func $handle_IDirectDrawFactory_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; IID_IDirectDrawFactory {4FD2A823-86C8-11D0-8FCA-00C04FD9189D}.
-    (global.set $eax (call $dx_query_interface_single
+    (i32.store offset=0 (global.get $reg_base) (call $dx_query_interface_single
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (i32.const 0x4FD2A823) (i32.const 0x11D086C8)
       (i32.const 0xC000CA8F) (i32.const 0x9D18D94F)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; AddRef(this) — 1 arg
 
@@ -10885,8 +10859,8 @@
     (store.field DxObject refcount (local.get $entry) (local.get $rc))
     (if (i32.eqz (local.get $rc))
       (then (call $dx_free (local.get $entry))))
-    (global.set $eax (local.get $rc))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (local.get $rc))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; CreateDirectDraw(this, pGUID, hWnd, dwCoopFlags, dwReserved, pUnkOuter, ppDirectDraw) — 6 args
   ;; The factory's coop level is supplied at creation time (vs DirectDrawCreate where SetCooperativeLevel
@@ -10897,12 +10871,12 @@
     ;; ppDirectDraw is the 6th arg, beyond arg4 — read it from stack at ESP+24 (after this+5*arg).
     ;; Stack: [ESP]=ret, [ESP+4]=this, [ESP+8]=pGUID, [ESP+12]=hWnd, [ESP+16]=dwCoopFlags,
     ;;        [ESP+20]=dwReserved, [ESP+24]=pUnkOuter, [ESP+28]=ppDirectDraw
-    (local.set $pp_dd (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $pp_dd (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (local.set $obj_guest (call $dx_create_com_obj (i32.const 1) (global.get $DX_VTBL_DDRAW)))
     (if (i32.eqz (local.get $obj_guest))
       (then
-        (global.set $eax (i32.const 0x80004005))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 32))) ;; ret + this + 6 args
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004005))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))) ;; ret + this + 6 args
         (return)))
     ;; Stash hWnd in misc0 (DDraw entry layout: +8 = hwnd)
     (local.set $entry_wa (call $dx_from_this (local.get $obj_guest)))
@@ -10910,8 +10884,8 @@
     (global.set $dx_ddraw_this (local.get $obj_guest))
     (call $dx_coop_hwnd_set (local.get $arg2))
     (call $gs32 (local.get $pp_dd) (local.get $obj_guest))
-    (global.set $eax (i32.const 0)) ;; DD_OK
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; DD_OK
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
 
   ;; DirectDrawEnumerate(this, lpCallback, lpContext) — 2 args
   ;; Same payload as the standalone DirectDrawEnumerateA — fires once for the primary driver.
@@ -10920,9 +10894,9 @@
   ;; just care about the enumeration completing.
   (func $handle_IDirectDrawFactory_DirectDrawEnumerate (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $desc i32) (local $desc_wa i32) (local $name i32) (local $name_wa i32) (local $ret_addr i32)
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
     ;; Pop this + 2 args + ret
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     ;; Build description/name strings
     (local.set $desc (call $heap_alloc (i32.const 32))) (local.set $desc_wa (call $g2w (local.get $desc)))
     (local.set $name (call $heap_alloc (i32.const 16))) (local.set $name_wa (call $g2w (local.get $name)))
@@ -10936,20 +10910,20 @@
     (i32.store   (local.get $name_wa)           (i32.const 0x70736964))
     (i32.store   offset=4 (local.get $name_wa)  (i32.const 0x0079616c))
     ;; Save original return address so the existing $ddenum_ret_thunk path returns to caller
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $ret_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $ret_addr))
     ;; Push callback args (right-to-left): lpContext, lpName, lpDesc, lpGUID(=NULL)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $arg2)) ;; lpContext
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $name))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $desc))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0)) ;; lpGUID = NULL
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg2)) ;; lpContext
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $name))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $desc))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0)) ;; lpGUID = NULL
     ;; Push continuation thunk as callback's return addr
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $ddenum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $ddenum_ret_thunk))
     (global.set $eip (local.get $arg1))
     (global.set $steps (i32.const 0)))
 
@@ -11124,88 +11098,88 @@
     (call $da_write_dispatch_variant (local.get $pVarResult)))
 
   (func $handle_IDirectAnimationDAView_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_qi (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_qi (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectAnimationDAView_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_addref (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_addref (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectAnimationDAView_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_release (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_release (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectAnimationDAView_GetTypeInfoCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectAnimationDAView_GetTypeInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; E_NOTIMPL
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; E_NOTIMPL
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectAnimationDAView_GetIDsOfNames (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_get_ids_of_names (local.get $arg2) (local.get $arg3) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_get_ids_of_names (local.get $arg2) (local.get $arg3) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectAnimationDAView_Invoke (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_invoke
+    (i32.store offset=0 (global.get $reg_base) (call $da_invoke
       (local.get $arg0)
       (local.get $arg1)
       (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))))
 
   (func $handle_IDirectAnimationDAStatics_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_qi (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_qi (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectAnimationDAStatics_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_addref (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_addref (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectAnimationDAStatics_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_release (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_release (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectAnimationDAStatics_GetTypeInfoCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectAnimationDAStatics_GetTypeInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; E_NOTIMPL
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; E_NOTIMPL
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectAnimationDAStatics_GetIDsOfNames (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_get_ids_of_names (local.get $arg2) (local.get $arg3) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_get_ids_of_names (local.get $arg2) (local.get $arg3) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectAnimationDAStatics_Invoke (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_invoke
+    (i32.store offset=0 (global.get $reg_base) (call $da_invoke
       (local.get $arg0)
       (local.get $arg1)
       (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))))
 
   (func $handle_IDirectAnimationDABehavior_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_qi (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_qi (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
   (func $handle_IDirectAnimationDABehavior_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_addref (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_addref (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectAnimationDABehavior_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_release (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_release (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
   (func $handle_IDirectAnimationDABehavior_GetTypeInfoCount (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
   (func $handle_IDirectAnimationDABehavior_GetTypeInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (i32.const 0))))
-    (global.set $eax (i32.const 0x80004001)) ;; E_NOTIMPL
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; E_NOTIMPL
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
   (func $handle_IDirectAnimationDABehavior_GetIDsOfNames (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_get_ids_of_names (local.get $arg2) (local.get $arg3) (call $gl32 (i32.add (global.get $esp) (i32.const 24)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_get_ids_of_names (local.get $arg2) (local.get $arg3) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
   (func $handle_IDirectAnimationDABehavior_Invoke (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_invoke
+    (i32.store offset=0 (global.get $reg_base) (call $da_invoke
       (local.get $arg0)
       (local.get $arg1)
       (local.get $arg4)
-      (call $gl32 (i32.add (global.get $esp) (i32.const 28)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 40))))
+      (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40))))
 
   (func $da_view_direct_nargs (param $slot i32) (result i32)
     (if (i32.eq (local.get $slot) (i32.const 8)) (then (return (i32.const 4))))
@@ -11289,9 +11263,8 @@
               (load.field DxObject pitch (local.get $surface_entry))
               (load.field DxObject bpp (local.get $surface_entry))))))
         (if (local.get $arg3) (then (call $gs32 (local.get $arg3) (local.get $rendered))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp
-      (i32.add (global.get $esp)
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
         (i32.shl (i32.add (call $da_view_direct_nargs (local.get $slot)) (i32.const 1)) (i32.const 2)))))
 
   (func $handle_IDirectAnimationDAStatics_DirectSlot (param $slot i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11331,9 +11304,8 @@
     (if (i32.or (i32.eq (local.get $slot) (i32.const 106))
                 (i32.eq (local.get $slot) (i32.const 252)))
       (then (local.set $hr (call $da_write_out_node (local.get $arg1)))))
-    (global.set $eax (local.get $hr))
-    (global.set $esp
-      (i32.add (global.get $esp)
+    (i32.store offset=0 (global.get $reg_base) (local.get $hr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
         (i32.shl (i32.add (call $da_statics_direct_nargs (local.get $slot)) (i32.const 1)) (i32.const 2)))))
 
   (func $handle_IDirectAnimationDABehavior_DirectSlot (param $slot i32) (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11352,9 +11324,8 @@
       (then
         (local.set $hr (call $da_write_out_node (local.get $arg1)))
         (call $da_set_out_node_image (local.get $arg1) (local.get $image_id))))
-    (global.set $eax (local.get $hr))
-    (global.set $esp
-      (i32.add (global.get $esp)
+    (i32.store offset=0 (global.get $reg_base) (local.get $hr))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base))
         (i32.shl (i32.add (call $da_behavior_direct_nargs (local.get $slot)) (i32.const 1)) (i32.const 2)))))
 
   ;; ── IMalloc returned by CoGetMalloc ─────────────────────────
@@ -11362,8 +11333,8 @@
     (local $iid_dword i32)
     (if (i32.eqz (local.get $arg2))
       (then
-        (global.set $eax (i32.const 0x80004003)) ;; E_POINTER
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004003)) ;; E_POINTER
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $iid_dword
       (if (result i32) (local.get $arg1)
@@ -11375,59 +11346,58 @@
       (then
         (call $gs32 (local.get $arg2) (local.get $arg0))
         (drop (call $da_addref (local.get $arg0)))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (call $gs32 (local.get $arg2) (i32.const 0))
-    (global.set $eax (i32.const 0x80004002)) ;; E_NOINTERFACE
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004002)) ;; E_NOINTERFACE
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IMalloc_AddRef (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_addref (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_addref (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IMalloc_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $da_release (local.get $arg0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $da_release (local.get $arg0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IMalloc_Alloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_alloc (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_alloc (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IMalloc_Realloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $heap_realloc (local.get $arg1) (local.get $arg2) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $heap_realloc (local.get $arg1) (local.get $arg2) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IMalloc_Free (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $heap_free (local.get $arg1))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IMalloc_GetSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.and
           (i32.ge_u (local.get $arg1) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))
           (i32.lt_u (local.get $arg1) (global.get $heap_ptr)))
       (then
-        (global.set $eax (i32.sub
+        (i32.store offset=0 (global.get $reg_base) (i32.sub
           (call $heap_block_size_unchecked (local.get $arg1))
           (i32.const 4))))
       (else
-        (global.set $eax (i32.const 0xFFFFFFFF))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFFFFFF))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IMalloc_DidAlloc (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select
+    (i32.store offset=0 (global.get $reg_base) (select
         (i32.const 1)
         (i32.const 0)
         (i32.and
           (i32.ge_u (local.get $arg1) (i32.add (global.get $image_base) (global.get $exe_size_of_image)))
           (i32.lt_u (local.get $arg1) (global.get $heap_ptr)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IMalloc_HeapMinimize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ════════════════════════════════════════════════════════════
   ;; D3DIM Phase 0 — S_OK stubs (generated by scratch/gen-d3dim-phase0.js)
@@ -11436,71 +11406,68 @@
   ;; ── IDirect3DDevice3 ─────────────────────────────────────────
   ;; IDirect3DDevice3::QueryInterface — routes upgrades across Device family (v1/v2/v3/v7).
   (func $handle_IDirect3DDevice3_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_qi (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_qi (i32.const 2) (local.get $arg0) (local.get $arg1) (local.get $arg2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   (func $handle_IDirect3DDevice3_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_worker_fence)
-    (global.set $eax (call $d3dim_device_release (local.get $arg0)))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_device_release (local.get $arg0)))
 
 
 
 
 
 
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; IDirect3DDevice3_GetCaps — 3 args (incl. this): (this, lpHWDesc, lpHELDesc)
   (func $handle_IDirect3DDevice3_GetCaps (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_fill_device_desc (local.get $arg1))
     (call $d3dim_fill_device_desc (local.get $arg2))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DDevice3_GetStats (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_get_stats (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_get_stats (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_AddViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $d3dim_device_add_viewport (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_device_add_viewport (local.get $arg0) (local.get $arg1)))
 
 
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_DeleteViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $d3dim_device_delete_viewport (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_device_delete_viewport (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_NextViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $d3dim_device_next_viewport
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_device_next_viewport
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DDevice3_EnumTextureFormats (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $ret_addr i32)
     (if (i32.eqz (local.get $arg1)) (then
-      (global.set $eax (i32.const 0))
-      (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
       (return)))
-    (local.set $ret_addr (call $gl32 (global.get $esp)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+    (local.set $ret_addr (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
     (call $d3d_enum_tex_invoke (local.get $arg1) (local.get $arg2) (local.get $ret_addr)))
 
   (func $handle_IDirect3DDevice3_BeginScene (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_begin_scene (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirect3DDevice3_EndScene (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_end_scene (local.get $arg0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirect3DDevice3_GetDirect3D (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_direct3d (local.get $arg0) (local.get $arg1) (global.get $DX_VTBL_D3D3))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_SetCurrentViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     ;; The viewport must already belong to this device through AddViewport;
@@ -11510,40 +11477,40 @@
 
 
     (call $d3dim_set_current_viewport (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_GetCurrentViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_current_viewport (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_SetRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_worker_fence)
     (call $d3dim_set_render_target (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DDevice3_GetRenderTarget (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_render_target (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_Begin (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DDevice3_BeginIndexed (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirect3DDevice3_Vertex (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_Index (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_End (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetRenderState(this, dwRenderStateType, lpdwRenderState) — 3 args
   (func $handle_IDirect3DDevice3_GetRenderState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11554,8 +11521,8 @@
       (then (call $gs32 (local.get $arg2)
               (call $gl32 (i32.add (local.get $state)
                 (i32.add (i32.const 256) (i32.mul (local.get $arg1) (i32.const 4))))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetRenderState(this, dwRenderStateType, dwRenderState) — 3 args
   (func $handle_IDirect3DDevice3_SetRenderState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11563,7 +11530,7 @@
     ;; D3DRENDERSTATE_TEXTUREHANDLE (1) is also the stage-0 texture binding;
     ;; merely saving the render-state dword leaves indexed draws untextured.
     (call $d3dim_set_render_state (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetLightState(this, dwLightStateType, lpdwLightState) — 3 args
   (func $handle_IDirect3DDevice3_GetLightState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11574,8 +11541,8 @@
       (then (call $gs32 (local.get $arg2)
               (call $gl32 (i32.add (local.get $state)
                 (i32.add (i32.const 2304) (i32.mul (local.get $arg1) (i32.const 4))))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetLightState(this, dwLightStateType, dwLightState) — 3 args
   (func $handle_IDirect3DDevice3_SetLightState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11587,8 +11554,8 @@
               (i32.add (local.get $state)
                 (i32.add (i32.const 2304) (i32.mul (local.get $arg1) (i32.const 4))))
               (local.get $arg2))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; SetTransform(this, dtstTransformStateType, lpD3DMATRIX) — 3 args
   (func $handle_IDirect3DDevice3_SetTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11600,8 +11567,8 @@
         (call $g2w (i32.add (local.get $state) (i32.mul (local.get $slot) (i32.const 64))))
         (call $g2w (local.get $arg2))
         (i32.const 64))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetTransform(this, dtstTransformStateType, lpD3DMATRIX) — 3 args
   (func $handle_IDirect3DDevice3_GetTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11613,12 +11580,12 @@
         (call $g2w (local.get $arg2))
         (call $g2w (i32.add (local.get $state) (i32.mul (local.get $slot) (i32.const 64))))
         (i32.const 64))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DDevice3_MultiplyTransform (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_multiply_transform (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; IDirect3DDevice3::DrawPrimitive(primType, vertexTypeDesc, lpvVerts, dwVtxCount, dwFlags)
   ;; Device3 uses an FVF-style vertex descriptor. Pack it into the renderer's
@@ -11626,7 +11593,7 @@
   ;; feeds fixed-function stage 0.
   (func $handle_IDirect3DDevice3_DrawPrimitive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dwVertexCount i32) (local $vtxType i32) (local $packed i32)
-    (local.set $dwVertexCount (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
+    (local.set $dwVertexCount (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
     (local.set $vtxType (call $d3dim_fvf_vtxtype (local.get $arg2)))
     (call $host_dx_trace (i32.const 15) (local.get $arg1) (local.get $arg2)
       (local.get $dwVertexCount) (local.get $arg3))
@@ -11639,14 +11606,14 @@
       (call $d3dim_draw_primitive (local.get $arg0) (local.get $arg1) (local.get $vtxType)
         (local.get $packed) (local.get $dwVertexCount))
       (call $heap_free (local.get $packed))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   (func $handle_IDirect3DDevice3_DrawIndexedPrimitive (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $dwVertexCount i32) (local $lpwIndices i32) (local $dwIndexCount i32) (local $vtxType i32) (local $packed i32)
-    (local.set $dwVertexCount (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
-    (local.set $lpwIndices    (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
-    (local.set $dwIndexCount  (call $gl32 (i32.add (global.get $esp) (i32.const 28))))
+    (local.set $dwVertexCount (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+    (local.set $lpwIndices    (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
+    (local.set $dwIndexCount  (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (local.set $vtxType (call $d3dim_fvf_vtxtype (local.get $arg2)))
     (local.set $packed
       (call $d3dim_pack_fvf_vertices
@@ -11658,16 +11625,16 @@
         (local.get $packed) (local.get $dwVertexCount)
         (local.get $lpwIndices) (local.get $dwIndexCount))
       (call $heap_free (local.get $packed))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
 
   (func $handle_IDirect3DDevice3_SetClipStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_set_clip_status (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DDevice3_GetClipStatus (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_clip_status (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; Same six-argument ABI as Device7; the core queues on the render Worker.
   (func $handle_IDirect3DDevice3_DrawPrimitiveStrided (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11682,45 +11649,45 @@
       (local.get $name_ptr)))
 
   (func $handle_IDirect3DDevice3_DrawPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   (func $handle_IDirect3DDevice3_DrawIndexedPrimitiveVB (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
 
   (func $handle_IDirect3DDevice3_ComputeSphereVisibility (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $out i32) (local $i i32)
-    (local.set $out (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $out (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (if (local.get $out) (then
       (block $done (loop $lp
         (br_if $done (i32.ge_u (local.get $i) (local.get $arg3)))
         (call $gs32 (i32.add (local.get $out) (i32.mul (local.get $i) (i32.const 4))) (i32.const 0))
         (local.set $i (i32.add (local.get $i) (i32.const 1)))
         (br $lp)))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 28))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
 
   (func $handle_IDirect3DDevice3_GetTexture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_texture (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DDevice3_SetTexture (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_set_texture (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DDevice3_GetTextureStageState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_get_tss (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DDevice3_SetTextureStageState (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_set_tss (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DDevice3_ValidateDevice (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg1) (then (call $gs32 (local.get $arg1) (i32.const 1))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; ── IDirect3DViewport3 ─────────────────────────────────────────
   (func $handle_IDirect3DViewport3_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11728,8 +11695,8 @@
     (call $gs32 (local.get $arg2) (local.get $arg0))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (store.field DxObject refcount (local.get $entry) (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   (func $handle_IDirect3DViewport3_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11741,84 +11708,83 @@
       (then
         (call $d3dim_viewport_release_lights (local.get $arg0))
         (call $dx_free (local.get $entry))))
-    (global.set $eax (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirect3DViewport3_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_GetViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_viewport_get (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_SetViewport (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_viewport_set (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_TransformVertices (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (local.get $arg4)
       (then (call $gs32 (local.get $arg4) (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_IDirect3DViewport3_LightElements (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0x80004001)) ;; E_NOTIMPL / DDERR_UNSUPPORTED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0x80004001)) ;; E_NOTIMPL / DDERR_UNSUPPORTED
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DViewport3_SetBackground (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_viewport_set_background (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_GetBackground (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_viewport_get_background (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DViewport3_SetBackgroundDepth (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_GetBackgroundDepth (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Clear(this, dwCount, lpRects, dwFlags) — 4 args. No color/z (uses background).
   (func $handle_IDirect3DViewport3_Clear (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_worker_fence)
     (call $d3dim_viewport_clear_full (local.get $arg0) (local.get $arg3)
       (call $d3dim_viewport_background_color (local.get $arg0)) (f32.const 1.0))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DViewport3_AddLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_viewport_add_light (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_viewport_add_light (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_DeleteLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $d3dim_viewport_delete_light (local.get $arg0) (local.get $arg1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_viewport_delete_light (local.get $arg0) (local.get $arg1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_NextLight (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $d3dim_viewport_next_light
+    (i32.store offset=0 (global.get $reg_base) (call $d3dim_viewport_next_light
         (local.get $arg0) (local.get $arg1) (local.get $arg2) (local.get $arg3)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_IDirect3DViewport3_GetViewport2 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_viewport_get (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_SetViewport2 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_viewport_set (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_SetBackgroundDepth2 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DViewport3_GetBackgroundDepth2 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; Clear2(this, dwCount, lpRects, dwFlags, dwColor, dvZ, dwStencil) — 6 args + this.
   ;; arg3=dwFlags, arg4=dwColor; dvZ and dwStencil are deeper on the stack.
@@ -11827,12 +11793,12 @@
     (call $d3dim_worker_fence)
     ;; dvZ sits 1 dword past arg4 on the caller stack: [retaddr][a0][a1][a2][a3][a4=dwColor][dvZ][stencil]
     ;; esp currently still points at retaddr (we haven't popped yet).
-    (local.set $dvZ_bits (call $gl32 (i32.add (global.get $esp) (i32.const 24))))
+    (local.set $dvZ_bits (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (call $d3dim_viewport_clear_full
       (local.get $arg0) (local.get $arg3) (local.get $arg4)
       (f32.reinterpret_i32 (local.get $dvZ_bits)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 32))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
 
   ;; ── IDirect3DLight ─────────────────────────────────────────
   ;; Each Light slot owns a 76-byte D3DLIGHT buffer on the guest heap;
@@ -11854,8 +11820,8 @@
     (call $gs32 (local.get $arg2) (local.get $arg0))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (store.field DxObject refcount (local.get $entry) (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
   (func $handle_IDirect3DLight_Release (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11870,13 +11836,13 @@
           (call $heap_free (local.get $buf))
           (store.field DxObject misc0 (local.get $entry) (i32.const 0))))
         (call $dx_free (local.get $entry))))
-    (global.set $eax (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (select (local.get $rc) (i32.const 0) (i32.gt_s (local.get $rc) (i32.const 0))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Initialize(this, lpDirect3D) — advisory. Keep S_OK; the v1 glue is vestigial.
   (func $handle_IDirect3DLight_Initialize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetLight(this, lpLight) — copy caller's D3DLIGHT (first dword is dwSize) into
   ;; our per-slot buffer. Clamp to 76 (full D3DLIGHT2) to keep older/shorter
@@ -11894,8 +11860,8 @@
           (call $g2w (local.get $buf))
           (call $g2w (local.get $arg1))
           (local.get $dwSize))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetLight(this, lpLight) — caller provides D3DLIGHT* with dwSize prefilled.
   ;; Copy back min(dwSize, 76) bytes from our buffer. If no SetLight ever ran,
@@ -11918,8 +11884,8 @@
           ;; No stored light yet — zero the caller buffer then restore dwSize.
           (call $zero_memory (local.get $out_wa) (local.get $dwSize))
           (i32.store (local.get $out_wa) (local.get $dwSize))))))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; ── IDirect3DMaterial3 ─────────────────────────────────────────
   (func $handle_IDirect3DMaterial3_QueryInterface (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -11927,30 +11893,30 @@
     (call $gs32 (local.get $arg2) (local.get $arg0))
     (local.set $entry (call $dx_from_this (local.get $arg0)))
     (store.field DxObject refcount (local.get $entry) (i32.add (load.field DxObject refcount (local.get $entry)) (i32.const 1)))
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
 
 
   (func $handle_IDirect3DMaterial3_SetMaterial (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_material_set (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DMaterial3_GetMaterial (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_material_get (local.get $arg0) (local.get $arg1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_IDirect3DMaterial3_GetHandle (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $d3dim_material_get_handle (local.get $arg0) (local.get $arg1) (local.get $arg2))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   (func $handle_IDirect3DMaterial3_Reserved1 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_IDirect3DMaterial3_Reserved2 (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; ============================================================
   ;; VIDEO FOR WINDOWS (VFW) — codec enumeration stubs
@@ -11959,16 +11925,16 @@
   ;; ICInfo(fccType, fccHandler, lpicinfo) — 3 args
   ;; Returns FALSE: no codecs available
   (func $handle_ICInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; ICOpen(fccType, fccHandler, wMode) — 3 args
   ;; Returns NULL: no codec handle
   (func $handle_ICOpen (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; ICClose(hic) — 1 arg
   (func $handle_ICClose (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))

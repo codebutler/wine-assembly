@@ -783,7 +783,7 @@
   (func $x87_pipeline_addr (param $base i32) (param $word i32) (result i32)
     (if (result i32) (i32.eq (local.get $base) (i32.const 8))
       (then (local.get $word))
-      (else (i32.add (call $get_reg (local.get $base)) (local.get $word)))))
+      (else (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $base) (i32.const 2)))) (local.get $word)))))
 
   (func $x87_pipeline_load (param $addr i32) (param $wide i32) (result f64)
     (if (result f64) (local.get $wide)
@@ -1392,7 +1392,7 @@
           (then
             (local.set $addr
               (i32.add
-                (call $get_reg (i32.and (local.get $op) (i32.const 0xF)))
+                (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))))
                 (i32.load (local.get $cursor))))
             (local.set $cursor (i32.add (local.get $cursor) (i32.const 4)))
             (call $fpu_exec_mem
@@ -3130,18 +3130,18 @@
       (then (return (i32.const 0))))
     (local.set $p (call $loop_op_at (i32.const 0)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
-                (i32.gt_u (local.get $fn) (i32.const 346)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $a_base (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $a_base (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
     (local.set $a (load.field.memarg LoopOp operand (local.get $p)))
     (local.set $a_disp (i32.load offset=8 (local.get $p)))
     (local.set $p (call $loop_op_at (i32.const 1)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
-                (i32.gt_u (local.get $fn) (i32.const 346)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $b_base (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $b_base (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
     (local.set $b (load.field.memarg LoopOp operand (local.get $p)))
     (local.set $b_disp (i32.load offset=8 (local.get $p)))
 
@@ -3174,11 +3174,11 @@
     (local.set $p (call $loop_op_at (i32.const 7)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
     (if (i32.or
-          (i32.or (i32.lt_u (local.get $fn) (i32.const 347))
-                  (i32.gt_u (local.get $fn) (i32.const 354)))
+          (i32.or (i32.lt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE))
+                  (i32.gt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE_LAST)))
           (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $a)))
       (then (return (i32.const 0))))
-    (local.set $d_base (i32.sub (local.get $fn) (i32.const 347)))
+    (local.set $d_base (i32.sub (local.get $fn) (global.get $TH_STORE32_RO_BASE)))
     (local.set $d_disp (i32.load offset=8 (local.get $p)))
 
     ;; Three cursor bumps by four bytes in stream order.
@@ -3233,16 +3233,16 @@
       (local.get $d_base) (i32.const -1) (i32.const 0) (local.get $d_disp) (i32.const 4)
       (local.get $ind) (i32.const -1) (i32.const 0) (i32.const 13))
 
-    (call $te (i32.add (i32.const 339) (local.get $a_base)) (local.get $a))
+    (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (local.get $a_base)) (local.get $a))
     (call $te_raw (local.get $a_disp))
-    (call $te (i32.add (i32.const 339) (local.get $b_base)) (local.get $b))
+    (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (local.get $b_base)) (local.get $b))
     (call $te_raw (local.get $b_disp))
     (call $te (i32.const 53) (i32.or (local.get $a) (i32.const 0x10500)))
     (call $te (i32.const 53) (i32.or (local.get $b) (i32.const 0x10500)))
     (call $te (i32.const 7) (local.get $a)) (call $te_raw (local.get $mask))
     (call $te (i32.const 7) (local.get $b)) (call $te_raw (local.get $mask))
     (call $te (i32.const 12) (i32.or (i32.shl (local.get $a) (i32.const 4)) (local.get $b)))
-    (call $te (i32.add (i32.const 347) (local.get $d_base)) (local.get $a))
+    (call $te (i32.add (global.get $TH_STORE32_RO_BASE) (local.get $d_base)) (local.get $a))
     (call $te_raw (local.get $d_disp))
     (call $te (i32.const 3) (local.get $a_base)) (call $te_raw (i32.const 4))
     (call $te (i32.const 3) (local.get $b_base)) (call $te_raw (i32.const 4))
@@ -3272,18 +3272,18 @@
       (then (return (i32.const 0))))
     (local.set $p (call $loop_op_at (i32.const 0)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
-                (i32.gt_u (local.get $fn) (i32.const 346)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $a_base (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $a_base (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
     (local.set $a (load.field.memarg LoopOp operand (local.get $p)))
     (local.set $a_disp (i32.load offset=8 (local.get $p)))
     (local.set $p (call $loop_op_at (i32.const 1)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
-                (i32.gt_u (local.get $fn) (i32.const 346)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $b_base (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $b_base (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
     (local.set $b (load.field.memarg LoopOp operand (local.get $p)))
     (local.set $b_disp (i32.load offset=8 (local.get $p)))
 
@@ -3339,11 +3339,11 @@
     (local.set $p (call $loop_op_at (i32.const 11)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
     (if (i32.or
-          (i32.or (i32.lt_u (local.get $fn) (i32.const 347))
-                  (i32.gt_u (local.get $fn) (i32.const 354)))
+          (i32.or (i32.lt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE))
+                  (i32.gt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE_LAST)))
           (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $a)))
       (then (return (i32.const 0))))
-    (local.set $d_base (i32.sub (local.get $fn) (i32.const 347)))
+    (local.set $d_base (i32.sub (local.get $fn) (global.get $TH_STORE32_RO_BASE)))
     (local.set $d_disp (i32.load offset=8 (local.get $p)))
 
     (local.set $p (call $loop_op_at (i32.const 12)))
@@ -3401,9 +3401,9 @@
       (local.get $ind) (i32.const -1) (i32.const 0) (i32.const 17))
 
     ;; Retain the complete final iteration as ordinary threaded handlers.
-    (call $te (i32.add (i32.const 339) (local.get $a_base)) (local.get $a))
+    (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (local.get $a_base)) (local.get $a))
     (call $te_raw (local.get $a_disp))
-    (call $te (i32.add (i32.const 339) (local.get $b_base)) (local.get $b))
+    (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (local.get $b_base)) (local.get $b))
     (call $te_raw (local.get $b_disp))
     (call $te (i32.const 11)
       (i32.or (i32.shl (local.get $round) (i32.const 4)) (local.get $a)))
@@ -3418,7 +3418,7 @@
       (i32.or (i32.shl (local.get $a) (i32.const 4)) (local.get $b)))
     (call $te (i32.const 12)
       (i32.or (i32.shl (local.get $a) (i32.const 4)) (local.get $round)))
-    (call $te (i32.add (i32.const 347) (local.get $d_base)) (local.get $a))
+    (call $te (i32.add (global.get $TH_STORE32_RO_BASE) (local.get $d_base)) (local.get $a))
     (call $te_raw (local.get $d_disp))
     (call $te (i32.const 3) (local.get $a_base)) (call $te_raw (i32.const 4))
     (call $te (i32.const 3) (local.get $b_base)) (call $te_raw (i32.const 4))
@@ -3460,10 +3460,10 @@
       (then (return (i32.const 0))))
     (local.set $p (call $loop_op_at (i32.const 0)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
-                (i32.gt_u (local.get $fn) (i32.const 346)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $src (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $src (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
     (local.set $scratch (load.field.memarg LoopOp operand (local.get $p)))
     (local.set $src_disp (i32.load offset=8 (local.get $p)))
     (local.set $p (call $loop_op_at (i32.const 1)))
@@ -3473,10 +3473,10 @@
       (then (return (i32.const 0))))
     (local.set $p (call $loop_op_at (i32.const 2)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 347))
-                (i32.gt_u (local.get $fn) (i32.const 354)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $dst (i32.sub (local.get $fn) (i32.const 347)))
+    (local.set $dst (i32.sub (local.get $fn) (global.get $TH_STORE32_RO_BASE)))
     (if (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $scratch))
       (then (return (i32.const 0))))
     (local.set $dst_disp (i32.load offset=8 (local.get $p)))
@@ -3536,10 +3536,10 @@
     ;; mov scratch,[src+disp]
     (local.set $p (call $loop_op_at (i32.const 0)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 339))
-                (i32.gt_u (local.get $fn) (i32.const 346)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $src (i32.sub (local.get $fn) (i32.const 339)))
+    (local.set $src (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
     (local.set $scratch (load.field.memarg LoopOp operand (local.get $p)))
     (local.set $src_disp (i32.load offset=8 (local.get $p)))
 
@@ -3555,10 +3555,10 @@
     ;; mov [dst+disp],scratch
     (local.set $p (call $loop_op_at (i32.const 2)))
     (local.set $fn (load.field LoopOp handler (local.get $p)))
-    (if (i32.or (i32.lt_u (local.get $fn) (i32.const 347))
-                (i32.gt_u (local.get $fn) (i32.const 354)))
+    (if (i32.or (i32.lt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE))
+                (i32.gt_u (local.get $fn) (global.get $TH_STORE32_RO_BASE_LAST)))
       (then (return (i32.const 0))))
-    (local.set $dst (i32.sub (local.get $fn) (i32.const 347)))
+    (local.set $dst (i32.sub (local.get $fn) (global.get $TH_STORE32_RO_BASE)))
     (if (i32.ne (load.field.memarg LoopOp operand (local.get $p)) (local.get $scratch))
       (then (return (i32.const 0))))
     (local.set $dst_disp (i32.load offset=8 (local.get $p)))
@@ -3627,7 +3627,7 @@
     ;; Reconstruct the final full-width scratch value from the last destination
     ;; dword, then retain the exact terminator. Reading the destination (rather
     ;; than the possibly overwritten source) also preserves overlap semantics.
-    (call $te (i32.add (i32.const 339) (local.get $dst)) (local.get $scratch))
+    (call $te (i32.add (global.get $TH_LOAD32_RO_BASE) (local.get $dst)) (local.get $scratch))
     (call $te_raw (i32.sub (local.get $dst_disp) (i32.const 4)))
     (call $te (i32.const 19)
       (i32.or (i32.shl (local.get $dst) (i32.const 4)) (local.get $bound)))
@@ -3902,11 +3902,11 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $mask (global.get $ebx))
-    (local.set $pitch (global.get $eax))
-    (local.set $src (global.get $esi))
-    (local.set $dst (global.get $edi))
-    (local.set $count (global.get $edx))
+    (local.set $mask (i32.load offset=12 (global.get $reg_base)))
+    (local.set $pitch (i32.load offset=0 (global.get $reg_base)))
+    (local.set $src (i32.load offset=24 (global.get $reg_base)))
+    (local.set $dst (i32.load offset=28 (global.get $reg_base)))
+    (local.set $count (i32.load offset=8 (global.get $reg_base)))
     (global.set $mmx_mask_copy_runs
       (i32.add (global.get $mmx_mask_copy_runs) (i32.const 1)))
 
@@ -3981,10 +3981,10 @@
                     (global.get $steps)))
         (br $rows)))
 
-    (global.set $ebx (local.get $mask))
-    (global.set $esi (local.get $src))
-    (global.set $edi (local.get $dst))
-    (global.set $edx (local.get $count))
+    (i32.store offset=12 (global.get $reg_base) (local.get $mask))
+    (i32.store offset=24 (global.get $reg_base) (local.get $src))
+    (i32.store offset=28 (global.get $reg_base) (local.get $dst))
+    (i32.store offset=8 (global.get $reg_base) (local.get $count))
     ;; DEC preserves the carry produced by the preceding ADD ESI,32.
     (call $set_flags_add (local.get $old_src) (i32.const 32) (local.get $src))
     (call $set_flags_dec (local.get $old_count) (local.get $count))
@@ -4027,9 +4027,9 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $src (global.get $esi))
-    (local.set $dst (global.get $edi))
-    (local.set $count (global.get $ecx))
+    (local.set $src (i32.load offset=24 (global.get $reg_base)))
+    (local.set $dst (i32.load offset=28 (global.get $reg_base)))
+    (local.set $count (i32.load offset=4 (global.get $reg_base)))
     (global.set $mmx_copy64_runs
       (i32.add (global.get $mmx_copy64_runs) (i32.const 1)))
 
@@ -4110,9 +4110,9 @@
                     (global.get $steps)))
         (br $lines)))
 
-    (global.set $esi (local.get $src))
-    (global.set $edi (local.get $dst))
-    (global.set $ecx (local.get $count))
+    (i32.store offset=24 (global.get $reg_base) (local.get $src))
+    (i32.store offset=28 (global.get $reg_base) (local.get $dst))
+    (i32.store offset=4 (global.get $reg_base) (local.get $count))
     ;; DEC preserves the carry flag produced by the immediately preceding ADD
     ;; EDI,64; all other arithmetic flags come from DEC.
     (call $set_flags_add (local.get $old_dst) (i32.const 64) (local.get $dst))
@@ -4146,9 +4146,9 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $src (global.get $esi))
-    (local.set $dst (global.get $edi))
-    (local.set $count (global.get $eax))
+    (local.set $src (i32.load offset=24 (global.get $reg_base)))
+    (local.set $dst (i32.load offset=28 (global.get $reg_base)))
+    (local.set $count (i32.load offset=0 (global.get $reg_base)))
     (global.set $mmx_copy64_runs
       (i32.add (global.get $mmx_copy64_runs) (i32.const 1)))
     (block $done
@@ -4205,9 +4205,9 @@
           (i32.ge_u (i32.sub (local.get $charge) (i32.const 1))
                     (global.get $steps)))
         (br $lines)))
-    (global.set $esi (local.get $src))
-    (global.set $edi (local.get $dst))
-    (global.set $eax (local.get $count))
+    (i32.store offset=24 (global.get $reg_base) (local.get $src))
+    (i32.store offset=28 (global.get $reg_base) (local.get $dst))
+    (i32.store offset=0 (global.get $reg_base) (local.get $count))
     (call $set_flags_add (local.get $old_dst) (i32.const 64) (local.get $dst))
     (call $set_flags_dec (local.get $old_count) (local.get $count))
     (call $mmx_set (i32.const 0) (local.get $q0))
@@ -4250,9 +4250,9 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $src (global.get $esi))
-    (local.set $dst (global.get $edi))
-    (local.set $count (global.get $ecx))
+    (local.set $src (i32.load offset=24 (global.get $reg_base)))
+    (local.set $dst (i32.load offset=28 (global.get $reg_base)))
+    (local.set $count (i32.load offset=4 (global.get $reg_base)))
     (global.set $mmx_copy64_runs
       (i32.add (global.get $mmx_copy64_runs) (i32.const 1)))
 
@@ -4333,9 +4333,9 @@
                     (global.get $steps)))
         (br $lines)))
 
-    (global.set $esi (local.get $src))
-    (global.set $edi (local.get $dst))
-    (global.set $ecx (local.get $count))
+    (i32.store offset=24 (global.get $reg_base) (local.get $src))
+    (i32.store offset=28 (global.get $reg_base) (local.get $dst))
+    (i32.store offset=4 (global.get $reg_base) (local.get $count))
     ;; DEC preserves CF from the preceding ADD ESI,64.
     (call $set_flags_add (local.get $old_src) (i32.const 64) (local.get $src))
     (call $set_flags_dec (local.get $old_count) (local.get $count))
@@ -4387,9 +4387,9 @@
     (local.set $dst_disp (call $read_thread_word))
     (local.set $fall (call $read_thread_word))
     (local.set $back (call $read_thread_word))
-    (local.set $src (call $get_reg (local.get $src_reg)))
-    (local.set $dst (call $get_reg (local.get $dst_reg)))
-    (local.set $count (call $get_reg (local.get $count_reg)))
+    (local.set $src (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src_reg) (i32.const 2)))))
+    (local.set $dst (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $dst_reg) (i32.const 2)))))
+    (local.set $count (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $count_reg) (i32.const 2)))))
     (local.set $src_ga (i32.add (local.get $src) (local.get $src_disp)))
     (local.set $dst_ga (i32.add (local.get $dst) (local.get $dst_disp)))
     (if (i32.and (i32.eq (local.get $count) (i32.const 8))
@@ -4438,10 +4438,10 @@
             (i32.ge_u (i32.sub (local.get $charge) (i32.const 1))
                       (global.get $steps)))
           (br $copy)))))
-    (call $set_reg (local.get $src_reg) (local.get $src))
-    (call $set_reg (local.get $dst_reg) (local.get $dst))
-    (call $set_reg (local.get $scratch_reg) (local.get $last))
-    (call $set_reg (local.get $count_reg) (local.get $count))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $src_reg) (i32.const 2))) (local.get $src))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst_reg) (i32.const 2))) (local.get $dst))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $scratch_reg) (i32.const 2))) (local.get $last))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $count_reg) (i32.const 2))) (local.get $count))
     (call $set_flags_add (local.get $old_dst) (i32.const 4) (local.get $dst))
     (call $set_flags_dec (local.get $old_count) (local.get $count))
     (global.set $steps
@@ -4501,12 +4501,12 @@
     (local.set $back       (i32.load offset=48 (local.get $tp)))
     (local.set $cost       (i32.load offset=52 (local.get $tp)))
 
-    (local.set $src (call $get_reg (local.get $src_reg)))
-    (local.set $dst (call $get_reg (local.get $dst_reg)))
+    (local.set $src (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src_reg) (i32.const 2)))))
+    (local.set $dst (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $dst_reg) (i32.const 2)))))
     (if (i32.eq (local.get $ctr_kind) (i32.const 2))
       (then
         (local.set $round_quantum (local.get $ctr_disp))
-        (local.set $bound (call $get_reg (local.get $ctr_loc)))
+        (local.set $bound (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $ctr_loc) (i32.const 2)))))
         ;; The original is do-while. At/above the bound it still performs one
         ;; element; below it, round the unsigned distance up to a whole element.
         ;; A near-4GB distance would overflow the round-up, so keep the safe
@@ -4561,9 +4561,9 @@
       (else (if (i32.eq (local.get $ctr_kind) (i32.const 1))
         (then
         (local.set $ctr_addr
-          (i32.add (call $get_reg (local.get $ctr_loc)) (local.get $ctr_disp)))
+          (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $ctr_loc) (i32.const 2)))) (local.get $ctr_disp)))
         (local.set $ctr (call $gl32 (local.get $ctr_addr))))
-        (else (local.set $ctr (call $get_reg (local.get $ctr_loc)))))))
+        (else (local.set $ctr (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $ctr_loc) (i32.const 2)))))))))
 
     ;; A memory counter has to be written back per iteration in general: the
     ;; destination range is allowed to cover the counter's own address, and a
@@ -4720,12 +4720,12 @@
             (br_if $exit (i32.le_s (global.get $steps) (i32.const 0)))))
         (br $outer)))
 
-    (call $set_reg (local.get $src_reg) (local.get $src))
-    (call $set_reg (local.get $dst_reg) (local.get $dst))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $src_reg) (i32.const 2))) (local.get $src))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst_reg) (i32.const 2))) (local.get $dst))
     (if (i32.ge_s (local.get $byte_reg) (i32.const 0))
       (then (call $set_reg8 (local.get $byte_reg) (local.get $b))))
     (if (i32.eqz (local.get $ctr_kind))
-      (then (call $set_reg (local.get $ctr_loc) (local.get $ctr)))
+      (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $ctr_loc) (i32.const 2))) (local.get $ctr)))
       (else (if (i32.and
                   (i32.eq (local.get $ctr_kind) (i32.const 1))
                   (i32.eqz (local.get $store_ctr)))
@@ -4791,7 +4791,7 @@
     (if (i32.ge_s (local.get $index_reg) (i32.const 0))
       (then
         (local.set $index
-          (select (local.get $ind) (call $get_reg (local.get $index_reg))
+          (select (local.get $ind) (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $index_reg) (i32.const 2))))
             (i32.eq (local.get $index_reg) (local.get $ind_reg))))))
     (i32.add (i32.add (local.get $base)
       (i32.shl (local.get $index) (local.get $scale))) (local.get $disp)))
@@ -4831,10 +4831,10 @@
     (local.set $term (call $read_thread_word))
     (local.set $cost (call $read_thread_word))
 
-    (local.set $a_base (call $get_reg (local.get $a_base_reg)))
-    (local.set $b_base (call $get_reg (local.get $b_base_reg)))
-    (local.set $d_base (call $get_reg (local.get $d_base_reg)))
-    (local.set $ind (call $get_reg (local.get $ind_reg)))
+    (local.set $a_base (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $a_base_reg) (i32.const 2)))))
+    (local.set $b_base (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $b_base_reg) (i32.const 2)))))
+    (local.set $d_base (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $d_base_reg) (i32.const 2)))))
+    (local.set $ind (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $ind_reg) (i32.const 2)))))
     ;; The suffix executes one original iteration. Fold only the iterations
     ;; before it, so a zero/negative do-while entry naturally stays ordinary.
     (if (local.get $term)
@@ -4898,12 +4898,12 @@
     (if (local.get $n)
       (then
         (if (local.get $a_step)
-          (then (call $set_reg (local.get $a_base_reg) (local.get $a_base))))
+          (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $a_base_reg) (i32.const 2))) (local.get $a_base))))
         (if (local.get $b_step)
-          (then (call $set_reg (local.get $b_base_reg) (local.get $b_base))))
+          (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $b_base_reg) (i32.const 2))) (local.get $b_base))))
         (if (local.get $d_step)
-          (then (call $set_reg (local.get $d_base_reg) (local.get $d_base))))
-        (call $set_reg (local.get $ind_reg) (local.get $ind))))
+          (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $d_base_reg) (i32.const 2))) (local.get $d_base))))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $ind_reg) (i32.const 2))) (local.get $ind))))
     (global.set $loop_avg_runs
       (i32.add (global.get $loop_avg_runs) (i32.const 1)))
     (global.set $loop_avg_pixels
@@ -4935,13 +4935,13 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $bp (global.get $ebp))
-    (local.set $eax (global.get $eax))
-    (local.set $ecx (global.get $ecx))
-    (local.set $edx (global.get $edx))
-    (local.set $ebx (global.get $ebx))
-    (local.set $esi (global.get $esi))
-    (local.set $edi (global.get $edi))
+    (local.set $bp (i32.load offset=20 (global.get $reg_base)))
+    (local.set $eax (i32.load offset=0 (global.get $reg_base)))
+    (local.set $ecx (i32.load offset=4 (global.get $reg_base)))
+    (local.set $edx (i32.load offset=8 (global.get $reg_base)))
+    (local.set $ebx (i32.load offset=12 (global.get $reg_base)))
+    (local.set $esi (i32.load offset=24 (global.get $reg_base)))
+    (local.set $edi (i32.load offset=28 (global.get $reg_base)))
     (local.set $count (call $gl32 (i32.add (local.get $bp) (i32.const -24))))
 
     (block $done (loop $pixels
@@ -5030,12 +5030,12 @@
       (local.set $iters (i32.add (local.get $iters) (i32.const 1)))
       (br_if $pixels (local.get $count))))
 
-    (global.set $eax (local.get $eax))
-    (global.set $ecx (local.get $count))
-    (global.set $edx (local.get $edx))
-    (global.set $ebx (local.get $ebx))
-    (global.set $esi (local.get $esi))
-    (global.set $edi (local.get $edi))
+    (i32.store offset=0 (global.get $reg_base) (local.get $eax))
+    (i32.store offset=4 (global.get $reg_base) (local.get $count))
+    (i32.store offset=8 (global.get $reg_base) (local.get $edx))
+    (i32.store offset=12 (global.get $reg_base) (local.get $ebx))
+    (i32.store offset=24 (global.get $reg_base) (local.get $esi))
+    (i32.store offset=28 (global.get $reg_base) (local.get $edi))
     (if (local.get $iters)
       (then (call $set_flags_dec (local.get $old_count) (local.get $count))))
     (global.set $steps
@@ -5071,11 +5071,11 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $eax (global.get $eax))
-    (local.set $ecx (global.get $ecx))
-    (local.set $esi (global.get $esi))
+    (local.set $eax (i32.load offset=0 (global.get $reg_base)))
+    (local.set $ecx (i32.load offset=4 (global.get $reg_base)))
+    (local.set $esi (i32.load offset=24 (global.get $reg_base)))
     (local.set $key
-      (call $gl16 (i32.add (global.get $ebp) (i32.const 12))))
+      (call $gl16 (i32.add (i32.load offset=20 (global.get $reg_base)) (i32.const 12))))
 
     ;; The authentic predecessor proves ESI > 0. Retain do-while behavior for
     ;; a synthetic zero entry by executing one iteration and resuming at the
@@ -5123,7 +5123,7 @@
       (if (i32.ne (local.get $pixel) (local.get $key))
         (then
           (call $gs16
-            (i32.add (local.get $eax) (global.get $ebx))
+            (i32.add (local.get $eax) (i32.load offset=12 (global.get $reg_base)))
             (local.get $pixel))
           (local.set $cost (i32.add (local.get $cost) (i32.const 7))))
         (else
@@ -5134,9 +5134,9 @@
       (local.set $iters (i32.add (local.get $iters) (i32.const 1)))
       (br $pixels)))
 
-    (global.set $eax (local.get $eax))
-    (global.set $ecx (local.get $ecx))
-    (global.set $esi (local.get $esi))
+    (i32.store offset=0 (global.get $reg_base) (local.get $eax))
+    (i32.store offset=4 (global.get $reg_base) (local.get $ecx))
+    (i32.store offset=24 (global.get $reg_base) (local.get $esi))
     ;; ADD EAX,2 sets CF; DEC ESI then replaces every arithmetic flag except
     ;; that CF. Publish them in precisely that order for the final iteration.
     (call $set_flags_add
@@ -5184,14 +5184,14 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $eax (global.get $eax))
-    (local.set $ecx (global.get $ecx))
-    (local.set $edx (global.get $edx))
-    (local.set $ebx (global.get $ebx))
-    (local.set $esp (global.get $esp))
-    (local.set $ebp (global.get $ebp))
-    (local.set $esi (global.get $esi))
-    (local.set $edi (global.get $edi))
+    (local.set $eax (i32.load offset=0 (global.get $reg_base)))
+    (local.set $ecx (i32.load offset=4 (global.get $reg_base)))
+    (local.set $edx (i32.load offset=8 (global.get $reg_base)))
+    (local.set $ebx (i32.load offset=12 (global.get $reg_base)))
+    (local.set $esp (i32.load offset=16 (global.get $reg_base)))
+    (local.set $ebp (i32.load offset=20 (global.get $reg_base)))
+    (local.set $esi (i32.load offset=24 (global.get $reg_base)))
+    (local.set $edi (i32.load offset=28 (global.get $reg_base)))
 
     ;; [ESP+10h], [ESP+14h], and [ESP+20h] are reloaded in the body in the
     ;; authentic order. Translate their enclosing span once without caching
@@ -5365,13 +5365,13 @@
         (i32.and (i32.ne (local.get $count) (i32.const 0))
           (i32.lt_u (local.get $iters) (local.get $allowed))))))
 
-    (global.set $eax (local.get $eax))
-    (global.set $ecx (local.get $ecx))
-    (global.set $edx (local.get $edx))
-    (global.set $ebx (local.get $ebx))
-    (global.set $ebp (local.get $ebp))
-    (global.set $esi (local.get $esi))
-    (global.set $edi (local.get $edi))
+    (i32.store offset=0 (global.get $reg_base) (local.get $eax))
+    (i32.store offset=4 (global.get $reg_base) (local.get $ecx))
+    (i32.store offset=8 (global.get $reg_base) (local.get $edx))
+    (i32.store offset=12 (global.get $reg_base) (local.get $ebx))
+    (i32.store offset=20 (global.get $reg_base) (local.get $ebp))
+    (i32.store offset=24 (global.get $reg_base) (local.get $esi))
+    (i32.store offset=28 (global.get $reg_base) (local.get $edi))
     (call $set_flags_add
       (local.get $add_lhs) (local.get $add_rhs) (local.get $add_result))
     (call $set_flags_dec (local.get $old_count) (local.get $count))
@@ -5531,8 +5531,8 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $old (global.get $eax))
-    (local.set $end (global.get $edx))
+    (local.set $old (i32.load offset=0 (global.get $reg_base)))
+    (local.set $end (i32.load offset=8 (global.get $reg_base)))
 
     ;; The original is do-while. The bulk proof only covers the normal
     ;; monotonic interval; wrapped or reversed inputs execute the same six
@@ -5561,9 +5561,9 @@
     (if (i32.gt_u (local.get $n) (local.get $allowed))
       (then (local.set $n (local.get $allowed))))
 
-    (local.set $table (call $gl32 (i32.add (global.get $esi) (i32.const 0x408))))
+    (local.set $table (call $gl32 (i32.add (i32.load offset=24 (global.get $reg_base)) (i32.const 0x408))))
     (local.set $entry
-      (i32.add (local.get $table) (i32.shl (global.get $ecx) (i32.const 2))))
+      (i32.add (local.get $table) (i32.shl (i32.load offset=4 (global.get $reg_base)) (i32.const 2))))
     (local.set $row (call $gl32 (local.get $entry)))
     (local.set $dst (i32.add (local.get $row) (local.get $old)))
     (local.set $wa (call $g2w_affine_span (local.get $dst) (local.get $n)))
@@ -5579,9 +5579,9 @@
           (i32.and
             (i32.or
               (i32.le_u (i32.add (local.get $dst) (local.get $n))
-                        (i32.add (global.get $esi) (i32.const 0x408)))
+                        (i32.add (i32.load offset=24 (global.get $reg_base)) (i32.const 0x408)))
               (i32.ge_u (local.get $dst)
-                        (i32.add (global.get $esi) (i32.const 0x40c))))
+                        (i32.add (i32.load offset=24 (global.get $reg_base)) (i32.const 0x40c))))
             (i32.or
               (i32.le_u (i32.add (local.get $dst) (local.get $n)) (local.get $entry))
               (i32.ge_u (local.get $dst) (i32.add (local.get $entry) (i32.const 4))))))))
@@ -5591,8 +5591,8 @@
         (call $invalidate_code_write (local.get $dst) (local.get $n))
         (memory.fill (local.get $wa) (i32.const 0xff) (local.get $n))
         (local.set $next_index (i32.add (local.get $old) (local.get $n)))
-        (global.set $eax (local.get $next_index))
-        (global.set $edi (local.get $row))
+        (i32.store offset=0 (global.get $reg_base) (local.get $next_index))
+        (i32.store offset=28 (global.get $reg_base) (local.get $row))
         (call $set_flags_sub
           (local.get $next_index) (local.get $end)
           (i32.sub (local.get $next_index) (local.get $end))))
@@ -5600,17 +5600,17 @@
         (local.set $allowed (local.get $n))
         (loop $slow
           (local.set $table
-            (call $gl32 (i32.add (global.get $esi) (i32.const 0x408))))
-          (local.set $next_index (i32.add (global.get $eax) (i32.const 1)))
+            (call $gl32 (i32.add (i32.load offset=24 (global.get $reg_base)) (i32.const 0x408))))
+          (local.set $next_index (i32.add (i32.load offset=0 (global.get $reg_base)) (i32.const 1)))
           (call $set_flags_sub
             (local.get $next_index) (local.get $end)
             (i32.sub (local.get $next_index) (local.get $end)))
           (local.set $row
             (call $gl32
-              (i32.add (local.get $table) (i32.shl (global.get $ecx) (i32.const 2)))))
-          (global.set $edi (local.get $row))
-          (call $gs8 (i32.add (local.get $row) (global.get $eax)) (i32.const 0xff))
-          (global.set $eax (local.get $next_index))
+              (i32.add (local.get $table) (i32.shl (i32.load offset=4 (global.get $reg_base)) (i32.const 2)))))
+          (i32.store offset=28 (global.get $reg_base) (local.get $row))
+          (call $gs8 (i32.add (local.get $row) (i32.load offset=0 (global.get $reg_base))) (i32.const 0xff))
+          (i32.store offset=0 (global.get $reg_base) (local.get $next_index))
           (local.set $allowed (i32.sub (local.get $allowed) (i32.const 1)))
           (br_if $slow (local.get $allowed)))))
 
@@ -5628,7 +5628,7 @@
       (i64.add (global.get $loop_aoe_fill_bytes) (i64.extend_i32_u (local.get $n))))
     (global.set $eip
       (select (local.get $back) (local.get $fall)
-        (i32.lt_s (global.get $eax) (local.get $end))))
+        (i32.lt_s (i32.load offset=0 (global.get $reg_base)) (local.get $end))))
     (return_call $branch_end))
 
   ;; 438: one span-prefix executor for both AoE builds. `op` selects only the
@@ -5655,18 +5655,18 @@
 
     ;; push ebx/ebp/esi; mov esi,ecx; push edi; mov edi,[esp+1c]
     (local.set $cost (i32.const 6))
-    (local.set $old_esp (global.get $esp))
+    (local.set $old_esp (i32.load offset=16 (global.get $reg_base)))
     (local.set $esp_wa (call $g2w (i32.sub (local.get $old_esp) (i32.const 16))))
-    (i32.store offset=12 (local.get $esp_wa) (global.get $ebx))
-    (i32.store offset=8 (local.get $esp_wa) (global.get $ebp))
-    (i32.store offset=4 (local.get $esp_wa) (global.get $esi))
-    (i32.store (local.get $esp_wa) (global.get $edi))
-    (global.set $esp (i32.sub (local.get $old_esp) (i32.const 16)))
-    (local.set $this (global.get $ecx))
+    (i32.store offset=12 (local.get $esp_wa) (i32.load offset=12 (global.get $reg_base)))
+    (i32.store offset=8 (local.get $esp_wa) (i32.load offset=20 (global.get $reg_base)))
+    (i32.store offset=4 (local.get $esp_wa) (i32.load offset=24 (global.get $reg_base)))
+    (i32.store (local.get $esp_wa) (i32.load offset=28 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (local.get $old_esp) (i32.const 16)))
+    (local.set $this (i32.load offset=4 (global.get $reg_base)))
     (local.set $this_wa (call $g2w (local.get $this)))
-    (global.set $esi (local.get $this))
+    (i32.store offset=24 (global.get $reg_base) (local.get $this))
     (local.set $row (i32.load offset=28 (local.get $esp_wa)))
-    (global.set $edi (local.get $row))
+    (i32.store offset=28 (global.get $reg_base) (local.get $row))
 
     (local.set $cost (i32.add (local.get $cost) (i32.const 2)))
     (local.set $min_row (i32.load offset=0x60 (local.get $this_wa)))
@@ -5706,17 +5706,17 @@
 
     (if (i32.eq (local.get $op) (i32.const 1))
       (then
-        (global.set $eax (local.get $x0))
-        (global.set $ebp (local.get $x1)))
+        (i32.store offset=0 (global.get $reg_base) (local.get $x0))
+        (i32.store offset=20 (global.get $reg_base) (local.get $x1)))
       (else
-        (global.set $ebx (local.get $x0))
-        (global.set $ebp (local.get $x1))))
+        (i32.store offset=12 (global.get $reg_base) (local.get $x0))
+        (i32.store offset=20 (global.get $reg_base) (local.get $x1))))
 
     (local.set $cost (i32.add (local.get $cost) (i32.const 3)))
     (local.set $min_x (i32.load offset=0x58 (local.get $this_wa)))
     (if (i32.eq (local.get $op) (i32.const 1))
-      (then (global.set $ecx (local.get $min_x)))
-      (else (global.set $eax (local.get $min_x))))
+      (then (i32.store offset=4 (global.get $reg_base) (local.get $min_x)))
+      (else (i32.store offset=0 (global.get $reg_base) (local.get $min_x))))
     (if (i32.lt_s (local.get $x1) (local.get $min_x))
       (then
         (call $set_flags_sub
@@ -5730,8 +5730,8 @@
     (local.set $cost (i32.add (local.get $cost) (i32.const 3)))
     (local.set $max_x (i32.load offset=0x5c (local.get $this_wa)))
     (if (i32.eq (local.get $op) (i32.const 1))
-      (then (global.set $edx (local.get $max_x)))
-      (else (global.set $ecx (local.get $max_x))))
+      (then (i32.store offset=8 (global.get $reg_base) (local.get $max_x)))
+      (else (i32.store offset=4 (global.get $reg_base) (local.get $max_x))))
     (if (i32.gt_s (local.get $x0) (local.get $max_x))
       (then
         (call $set_flags_sub
@@ -5750,7 +5750,7 @@
           (then
             (local.set $cost (i32.add (local.get $cost) (i32.const 2)))
             (local.set $x0 (local.get $min_x))
-            (global.set $ebx (local.get $x0)))
+            (i32.store offset=12 (global.get $reg_base) (local.get $x0)))
           (else
             (local.set $cost (i32.add (local.get $cost) (i32.const 1)))))))
 
@@ -5760,23 +5760,23 @@
         (local.set $cost (i32.add (local.get $cost) (i32.const 2)))
         (local.set $x1 (local.get $max_x))
         (i32.store offset=24 (local.get $esp_wa) (local.get $x1))
-        (global.set $ebp (local.get $x1))))
+        (i32.store offset=20 (global.get $reg_base) (local.get $x1))))
 
     (local.set $row_base (i32.load offset=0x3c (local.get $this_wa)))
     (if (i32.eq (local.get $op) (i32.const 1))
       (then
         (local.set $cost (i32.add (local.get $cost) (i32.const 5)))
         (local.set $row (i32.shl (local.get $row) (i32.const 2)))
-        (global.set $edi (local.get $row))
-        (global.set $eax (local.get $row_base))
+        (i32.store offset=28 (global.get $reg_base) (local.get $row))
+        (i32.store offset=0 (global.get $reg_base) (local.get $row_base))
         (local.set $row_head (call $gl32 (i32.add (local.get $row_base) (local.get $row))))
-        (global.set $ebx (local.get $row_head)))
+        (i32.store offset=12 (global.get $reg_base) (local.get $row_head)))
       (else
         (local.set $cost (i32.add (local.get $cost) (i32.const 4)))
         (local.set $row_head
           (call $gl32
             (i32.add (local.get $row_base) (i32.shl (local.get $row) (i32.const 2)))))
-        (global.set $eax (local.get $row_head))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $row_head))))
     (call $set_flags_logic (local.get $row_head))
     (global.set $steps
       (i32.sub (global.get $steps) (i32.sub (local.get $cost) (i32.const 1))))
@@ -5802,11 +5802,11 @@
     (global.set $ip (i32.add (local.get $tp) (i32.const 8)))
     (local.set $fall (i32.load (local.get $tp)))
     (local.set $back (i32.load offset=4 (local.get $tp)))
-    (local.set $ptr (global.get $edi))
-    (local.set $count (global.get $esi))
+    (local.set $ptr (i32.load offset=28 (global.get $reg_base)))
+    (local.set $count (i32.load offset=24 (global.get $reg_base)))
     (local.set $key
-      (i32.and (i32.shr_u (global.get $eax) (i32.const 8)) (i32.const 0xff)))
-    (local.set $replacement (i32.and (global.get $eax) (i32.const 0xff)))
+      (i32.and (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 8)) (i32.const 0xff)))
+    (local.set $replacement (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xff)))
     (global.set $loop_colorkey8_runs
       (i32.add (global.get $loop_colorkey8_runs) (i32.const 1)))
 
@@ -5842,8 +5842,8 @@
       (i32.const 0xff) (i32.const 7)))
     (call $set_flags_inc (local.get $old_ptr) (local.get $ptr))
     (call $set_flags_dec (local.get $old_count) (local.get $count))
-    (global.set $edi (local.get $ptr))
-    (global.set $esi (local.get $count))
+    (i32.store offset=28 (global.get $reg_base) (local.get $ptr))
+    (i32.store offset=24 (global.get $reg_base) (local.get $count))
     (global.set $steps
       (i32.sub (global.get $steps) (i32.sub (local.get $cost) (i32.const 1))))
     ;; Each element enters the compare/JNE block and the induction/JNE block.
@@ -5873,8 +5873,8 @@
     (local.set $cost (call $read_thread_word))
     (local.set $prefixed (i32.and (local.get $op) (i32.const 0x20)))
     (if (local.get $prefixed)
-      (then (global.set $ecx (call $read_thread_word))))
-    (local.set $count (global.get $ecx))
+      (then (i32.store offset=4 (global.get $reg_base) (call $read_thread_word))))
+    (local.set $count (i32.load offset=4 (global.get $reg_base)))
     ;; LOOP is a do-while. ECX=0 therefore means 2^32 iterations; represent
     ;; that wrapped distance as UINT_MAX and let the normal step quantum split
     ;; it rather than hanging inside one handler invocation.
@@ -5900,20 +5900,18 @@
     (loop $pixels
       ;; Preserve the original ordering and alias behavior: the source and
       ;; destination are the same byte, and either may overlap the XLAT table.
-      (local.set $byte (call $gl8 (global.get $edi)))
-      (global.set $eax
-        (i32.or (i32.and (global.get $eax) (i32.const 0xFFFFFF00))
+      (local.set $byte (call $gl8 (i32.load offset=28 (global.get $reg_base))))
+      (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFFFF00))
           (local.get $byte)))
       ;; Match H280's translation path exactly: XLAT uses DS:[EBX+AL].
       (local.set $byte
         (i32.load8_u (call $g2w
-          (i32.add (global.get $ebx) (local.get $byte)))))
-      (global.set $eax
-        (i32.or (i32.and (global.get $eax) (i32.const 0xFFFFFF00))
+          (i32.add (i32.load offset=12 (global.get $reg_base)) (local.get $byte)))))
+      (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFFFF00))
           (local.get $byte)))
-      (call $gs8 (global.get $edi) (local.get $byte))
-      (global.set $edi (i32.add (global.get $edi) (local.get $step)))
-      (global.set $ecx (i32.sub (global.get $ecx) (i32.const 1)))
+      (call $gs8 (i32.load offset=28 (global.get $reg_base)) (local.get $byte))
+      (i32.store offset=28 (global.get $reg_base) (i32.add (i32.load offset=28 (global.get $reg_base)) (local.get $step)))
+      (i32.store offset=4 (global.get $reg_base) (i32.sub (i32.load offset=4 (global.get $reg_base)) (i32.const 1)))
       (local.set $trips (i32.sub (local.get $trips) (i32.const 1)))
       (br_if $pixels (local.get $trips)))
 
@@ -5938,7 +5936,7 @@
         (i64.extend_i32_u (local.get $iters))))
     (global.set $eip
       (select (local.get $back) (local.get $fall)
-        (i32.ne (global.get $ecx) (i32.const 0))))
+        (i32.ne (i32.load offset=4 (global.get $reg_base)) (i32.const 0))))
     (return_call $branch_end))
 
   ;; Both recognizers emit the descriptor documented above. Cursors advance
@@ -6039,14 +6037,14 @@
     (if (local.get $table_stack)
       (then (local.set $stack_disp (i32.load offset=92 (local.get $tp)))))
 
-    (local.set $src (call $get_reg (local.get $src_reg)))
-    (local.set $dst (call $get_reg (local.get $dst_reg)))
-    (local.set $term (call $get_reg (local.get $term_reg)))
+    (local.set $src (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src_reg) (i32.const 2)))))
+    (local.set $dst (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $dst_reg) (i32.const 2)))))
+    (local.set $term (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $term_reg) (i32.const 2)))))
     (if (local.get $blend)
-      (then (local.set $src2 (call $get_reg (local.get $src2_reg)))))
+      (then (local.set $src2 (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src2_reg) (i32.const 2)))))))
     (if (local.get $table_stack)
       (then
-        (local.set $stack_ga (i32.add (global.get $esp) (local.get $stack_disp)))
+        (local.set $stack_ga (i32.add (i32.load offset=16 (global.get $reg_base)) (local.get $stack_disp)))
         (local.set $stack_page0
           (i32.and (local.get $stack_ga) (i32.const 0xFFFFF000)))
         (local.set $stack_page1
@@ -6061,7 +6059,7 @@
           (else
             (if (i32.ge_s (local.get $tbl_reg) (i32.const 0))
               (then
-                (local.set $tbl_base (call $get_reg (local.get $tbl_reg)))
+                (local.set $tbl_base (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $tbl_reg) (i32.const 2)))))
                 (local.set $tbl (i32.add (local.get $tbl_base) (local.get $table_disp))))
               (else (local.set $tbl (local.get $table_disp))))))))
     ;; A zero hoisted out of the loop leaves the accumulator's high bits
@@ -6073,12 +6071,12 @@
     (if (local.get $acc_hoist)
       (then
         (local.set $acc_hi
-          (i32.and (call $get_reg (local.get $acc_reg)) (i32.const 0xFFFFFF00)))
+          (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $acc_reg) (i32.const 2)))) (i32.const 0xFFFFFF00)))
         (local.set $tbl
           (i32.add (local.get $tbl)
             (i32.shl (local.get $acc_hi) (local.get $index_shift))))))
     (if (i32.ge_s (local.get $add_reg) (i32.const 0))
-      (then (local.set $add (call $get_reg (local.get $add_reg)))))
+      (then (local.set $add (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $add_reg) (i32.const 2)))))))
 
     ;; Translate the complete lookup range once when it is the normal affine
     ;; guest window. Version 1 indexes all 64KB; the two-endpoint guard keeps
@@ -6310,31 +6308,28 @@
         ;; high bits are the caller's and must survive; the accumulator keeps
         ;; the last streamed byte over its invariant high bits.
         (local.set $res_reg (i32.sub (local.get $res_field) (i32.const 1)))
-        (call $set_reg (local.get $res_reg)
-          (i32.or
-            (i32.and (call $get_reg (local.get $res_reg)) (i32.const 0xFFFFFF00))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $res_reg) (i32.const 2))) (i32.or
+            (i32.and (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $res_reg) (i32.const 2)))) (i32.const 0xFFFFFF00))
             (local.get $b)))
-        (call $set_reg (local.get $acc_reg)
-          (i32.or (local.get $acc_hi) (local.get $src_b))))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $acc_reg) (i32.const 2))) (i32.or (local.get $acc_hi) (local.get $src_b))))
       (else
-        (call $set_reg (local.get $acc_reg)
-          (i32.or (local.get $acc_hi)
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $acc_reg) (i32.const 2))) (i32.or (local.get $acc_hi)
             (select
               (i32.or (i32.shl (local.get $src_b) (local.get $index_shift)) (local.get $b))
               (local.get $b)
               (local.get $blend))))))
     (if (local.get $table_stack)
-      (then (call $set_reg (local.get $tbl_reg) (local.get $tbl_base))))
+      (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $tbl_reg) (i32.const 2))) (local.get $tbl_base))))
     (if (local.get $blend)
       (then
-        (call $set_reg (local.get $aux_reg) (local.get $aux))
-        (call $set_reg (local.get $src2_reg) (local.get $src2))))
-    (call $set_reg (local.get $src_reg) (local.get $src))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $aux_reg) (i32.const 2))) (local.get $aux))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $src2_reg) (i32.const 2))) (local.get $src2))))
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $src_reg) (i32.const 2))) (local.get $src))
     (if (i32.ne (local.get $dst_reg) (local.get $src_reg))
-      (then (call $set_reg (local.get $dst_reg) (local.get $dst))))
+      (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst_reg) (i32.const 2))) (local.get $dst))))
     (if (i32.eqz (local.get $term_kind))
       (then
-        (call $set_reg (local.get $term_reg) (local.get $term))
+        (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $term_reg) (i32.const 2))) (local.get $term))
         (if (i32.eq (local.get $term_step) (i32.const -1))
           (then (call $set_flags_dec (local.get $old) (local.get $term)))
           (else (call $set_flags_inc (local.get $old) (local.get $term)))))
@@ -6343,10 +6338,10 @@
           (i32.sub (local.get $cursor) (local.get $term)))))
     (if (local.get $m0_addr)
       (then (call $gs32 (local.get $m0_addr)
-              (i32.add (call $get_reg (local.get $m0_reg)) (local.get $m0_adj)))))
+              (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $m0_reg) (i32.const 2)))) (local.get $m0_adj)))))
     (if (local.get $m1_addr)
       (then (call $gs32 (local.get $m1_addr)
-              (i32.add (call $get_reg (local.get $m1_reg)) (local.get $m1_adj)))))
+              (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $m1_reg) (i32.const 2)))) (local.get $m1_adj)))))
     (global.set $eip (select (local.get $back) (local.get $fall) (local.get $cont))))
 
   ;; ==================================================================
@@ -7166,20 +7161,20 @@
     ;; -- base-specialized load/store dword (339..354): the base register is
     ;; named by the handler index itself and the operand is the data register.
     ;; Same semantics as 26/27; the decoder picks these to save one br_table.
-    (if (i32.and (i32.ge_u (local.get $fn) (i32.const 339))
-                 (i32.le_u (local.get $fn) (i32.const 346)))
+    (if (i32.and (i32.ge_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE))
+                 (i32.le_u (local.get $fn) (global.get $TH_LOAD32_RO_BASE_LAST)))
       (then
         (global.set $tu_kind (global.get $TU_LOAD32))
         (global.set $tu_d (i32.and (local.get $op) (i32.const 0xF)))
-        (global.set $tu_a (i32.sub (local.get $fn) (i32.const 339)))
+        (global.set $tu_a (i32.sub (local.get $fn) (global.get $TH_LOAD32_RO_BASE)))
         (global.set $tu_imm (i32.load offset=8 (local.get $p)))
         (return (i32.const 1))))
-    (if (i32.and (i32.ge_u (local.get $fn) (i32.const 347))
-                 (i32.le_u (local.get $fn) (i32.const 354)))
+    (if (i32.and (i32.ge_u (local.get $fn) (global.get $TH_STORE32_RO_BASE))
+                 (i32.le_u (local.get $fn) (global.get $TH_STORE32_RO_BASE_LAST)))
       (then
         (global.set $tu_kind (global.get $TU_STORE32))
         (global.set $tu_d (i32.and (local.get $op) (i32.const 0xF)))
-        (global.set $tu_a (i32.sub (local.get $fn) (i32.const 347)))
+        (global.set $tu_a (i32.sub (local.get $fn) (global.get $TH_STORE32_RO_BASE)))
         (global.set $tu_imm (i32.load offset=8 (local.get $p)))
         (return (i32.const 1))))
 

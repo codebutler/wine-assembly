@@ -2748,14 +2748,34 @@
   ;; ============================================================
   ;; CPU STATE
   ;; ============================================================
-  (global $eax (mut i32) (i32.const 0))
-  (global $ecx (mut i32) (i32.const 0))
-  (global $edx (mut i32) (i32.const 0))
-  (global $ebx (mut i32) (i32.const 0))
-  (global $esp (mut i32) (i32.const 0))
-  (global $ebp (mut i32) (i32.const 0))
-  (global $esi (mut i32) (i32.const 0))
-  (global $edi (mut i32) (i32.const 0))
+  ;; The eight x86 GPRs live in a per-thread register file in shared linear
+  ;; memory, not in wasm globals. Slot order is x86 register order:
+  ;;   +0 eax  +4 ecx  +8 edx  +12 ebx  +16 esp  +20 ebp  +24 esi  +28 edi
+  ;; so `$get_reg(r)` is `i32.load (reg_base + r*4)` — one indexed load, with no
+  ;; call and no br_table. See the $REGFILE declaration in 00-regions.wat for
+  ;; why it is partitioned by tid. $reg_base is a per-instance mutable global
+  ;; holding this thread's slice; it starts on the tid-0 slice and is
+  ;; reassigned in $init_thread for workers.
+  (global $REGFILE i32 (region.addr $REGFILE 0))
+  ;; ---- Threaded-handler slot numbers that code OUTSIDE 02-thread-table.wat
+  ;; has to name. These are not labels, they are load-bearing ARITHMETIC: the
+  ;; fold matchers in 07b-loop-match.wat recover which base register a folded
+  ;; load used as (handler_index - $TH_LOAD32_RO_BASE), so inserting a slot
+  ;; anywhere below 339 silently changes which register a fold believes it read
+  ;; -- a miscompile of the hottest loops, with nothing to point at it. Naming
+  ;; them here means the coupling is greppable instead of being 45 bare
+  ;; integers spread over two files.
+  (global $TH_PUSH_R i32 (i32.const 32))
+  (global $TH_POP_R i32 (i32.const 33))
+  (global $TH_LOAD32_RO_BASE i32 (i32.const 339))        ;; +0..+7 = base eax..edi
+  (global $TH_LOAD32_RO_BASE_LAST i32 (i32.const 346))
+  (global $TH_STORE32_RO_BASE i32 (i32.const 347))       ;; +0..+7 = base eax..edi
+  (global $TH_STORE32_RO_BASE_LAST i32 (i32.const 354))
+
+  (global $REGFILE_SIZE i32 (region.size $REGFILE))
+  (global $REGFILE_THREADS i32 (i32.const 16))
+  (global $REGFILE_STRIDE i32 (i32.const 64))
+  (global $reg_base (mut i32) (region.addr $REGFILE 0))
   (global $eip (mut i32) (i32.const 0))
   (global $dbg_prev_eip (mut i32) (i32.const 0))
   ;; The block before that one — see the run loop in 13-exports.wat. A decoder

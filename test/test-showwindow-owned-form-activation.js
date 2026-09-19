@@ -28,7 +28,7 @@ const extraWat = String.raw`
     (global.set $focus_hwnd (local.get $helper))
     ;; Model the imported ShowWindow frame's return slot. The continuation
     ;; chain returns to zero, which is the nested-test run stop sentinel.
-    (call $gs32 (global.get $esp) (i32.const 0))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
     (call $handle_ShowWindow
       (local.get $form) (i32.const 3)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))

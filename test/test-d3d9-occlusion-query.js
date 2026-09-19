@@ -11,19 +11,19 @@ const sigs=require('../lib/host-import-sigs.generated.json').sigs;
   const {exports:e,memory,module}=await bootRenderHarness({fonts:'none',
     extraHostOverrides:{gpu_gl_call:(op,p,a)=>bridge.call(op,p,a)},extraWat:`
     (func (export "device") (param $pp i32) (param $out i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $pp))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $pp))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $out))
       (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1)
-        (i32.const 1) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 1) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "query") (param $device i32) (param $out i32) (result i32)
-      (call $d3d9_query_create (local.get $device) (i32.const 9) (local.get $out)) (global.get $eax))
+      (call $d3d9_query_create (local.get $device) (i32.const 9) (local.get $out)) (i32.load offset=0 (global.get $reg_base)))
     ${[['Device9','SetFVF'],['Device9','SetRenderState'],['Device9','DrawPrimitiveUP'],['Device9','Release'],['Device9','Reset'],
       ['Query9','Issue'],['Query9','GetData'],['Query9','Release']].map(([type,name])=>`
     (func (export "${type}_${name}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_IDirect3D${type}_${name} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $f) (i32.const 0))
-      (global.get $eax))`).join('\n')}`});
+      (i32.load offset=0 (global.get $reg_base)))`).join('\n')}`});
   e.d3dim_worker_init(0x400000);e.init_dx_com_thunks();
   const alloc=n=>e.guest_alloc(n)>>>0,wa=p=>e.guest_to_wasm(p)>>>0,read=p=>e.guest_read32(p)>>>0;
   const out=alloc(8),pp=alloc(64),vertices=alloc(60),view=new DataView(memory.buffer);

@@ -56,13 +56,13 @@ const extraWat = String.raw`
   (func (export "test_get_effective_client_rect")
       (param $hwnd i32) (param $rect i32) (param $info i32)
     (local $before i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
-    (local.set $before (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
+    (local.set $before (i32.load offset=16 (global.get $reg_base)))
     (call $handle_GetEffectiveClientRect
       (local.get $hwnd) (local.get $rect) (local.get $info)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_gecr_cleanup
-      (i32.sub (global.get $esp) (local.get $before))))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $before))))
   (func (export "test_gecr_cleanup") (result i32)
     (global.get $test_gecr_cleanup))
   (func (export "test_gecr_find") (param $id i32) (result i32)
@@ -78,11 +78,11 @@ const extraWat = String.raw`
 
   (func (export "test_subtract_rect")
       (param $dst i32) (param $src1 i32) (param $src2 i32) (result i32)
-    (global.set $esp (call $w2g (region.addr $GUEST_STACK 524288)))
+    (i32.store offset=16 (global.get $reg_base) (call $w2g (region.addr $GUEST_STACK 524288)))
     (call $handle_SubtractRect
       (local.get $dst) (local.get $src1) (local.get $src2)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

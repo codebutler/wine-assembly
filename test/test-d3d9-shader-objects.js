@@ -20,9 +20,9 @@ const IR = require('../lib/d3d-shader-ir');
     (func (export "device_refs") (param $device i32) (result i32)
       (load.field DxObject refcount (call $dx_from_this (local.get $device))))
     ${methods.map(name => `(func (export "${name}") (param $a i32) (param $b i32) (param $c i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
       (call $handle_${name} (local.get $a) (local.get $b) (local.get $c) (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))`).join('\n')}
+      (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   ` });
   const device = e.new_device(), second = e.new_device(), code = 0x00408000, out = code+256,
     copy = code+512, size = code+1024, iid = code+1088;

@@ -948,7 +948,7 @@
           (then
             (global.set $fpu_sw (i32.or (i32.and (global.get $fpu_sw) (i32.const 0xC7FF))
               (i32.shl (global.get $fpu_top) (i32.const 11))))
-            (global.set $eax (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF0000)) (global.get $fpu_sw)))
+            (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000)) (global.get $fpu_sw)))
             (return)))
         ;; DF E8..EF = FUCOMIP ST, ST(i) — pop after unordered compare.
         (if (i32.eq (local.get $reg) (i32.const 5))
@@ -987,7 +987,7 @@
     (call $fpu_exec_mem
       (i32.shr_u (local.get $op) (i32.const 8))
       (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF))
-      (i32.add (call $get_reg (i32.and (local.get $op) (i32.const 0xF))) (call $read_thread_word)))
+      (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (call $read_thread_word)))
     (return_call $next))
 
   ;; 439: canonical x87 compare branch tail:
@@ -1005,13 +1005,12 @@
       (i32.or
         (i32.and (global.get $fpu_sw) (i32.const 0xC7FF))
         (i32.shl (global.get $fpu_top) (i32.const 11))))
-    (global.set $eax
-      (i32.or
-        (i32.and (global.get $eax) (i32.const 0xFFFF0000))
+    (i32.store offset=0 (global.get $reg_base) (i32.or
+        (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000))
         (global.get $fpu_sw)))
     (local.set $r
       (i32.and
-        (i32.and (i32.shr_u (global.get $eax) (i32.const 8)) (i32.const 0xFF))
+        (i32.and (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 8)) (i32.const 0xFF))
         (i32.and (local.get $op) (i32.const 0xFF))))
     (call $set_flags_logic (local.get $r))
     (global.set $flag_sign_shift (i32.const 7))

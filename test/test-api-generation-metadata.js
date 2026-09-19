@@ -67,9 +67,8 @@ function expectedStub(api) {
     (func $handle_${api.name}
       (param $arg0 i32) (param $arg1 i32) (param $arg2 i32)
       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-      (global.set $eax (i32.const ${watI32(api.stub.ret)}))
-      (global.set $esp
-        (i32.add (global.get $esp) (i32.const ${api.stub.pop}))))`;
+      (i32.store offset=0 (global.get $reg_base) (i32.const ${watI32(api.stub.ret)}))
+      (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const ${api.stub.pop}))))`;
 }
 
 function expectedTestCall(api) {
@@ -81,12 +80,12 @@ function expectedTestCall(api) {
   return `
     (func (export "test_call_${api.name}")${params} (result i32)
       (local $saved_esp i32)
-      (local.set $saved_esp (global.get $esp))
+      (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
       (call $handle_${api.handler || api.name}
         ${args.slice(0, 3).join(' ')}
         ${args.slice(3).join(' ')})
-      (global.set $esp (local.get $saved_esp))
-      (global.get $eax))`;
+      (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+      (i32.load offset=0 (global.get $reg_base)))`;
 }
 
 const metadataStubs = table.filter(api => api.stub !== undefined);

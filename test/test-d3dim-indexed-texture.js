@@ -23,16 +23,16 @@ const extraWat = String.raw`
   (func (export "test_diptex_create_surface") (param $desc i32) (param $out i32) (result i32)
     (local $ddraw i32)
     (local.set $ddraw (call $dx_create_com_obj (i32.const 1) (global.get $DX_VTBL_DDRAW)))
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDraw_CreateSurface
       (local.get $ddraw) (local.get $desc) (local.get $out) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_diptex_create_device") (param $surface i32) (param $out i32) (result i32)
     (call $d3dim_create_device
       (i32.const 0) (local.get $surface) (local.get $out) (global.get $DX_VTBL_D3DDEV3))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_diptex_create_viewport") (result i32)
     (call $dx_create_com_obj (i32.const 23) (i32.const 0x54000000)))
@@ -68,20 +68,20 @@ const extraWat = String.raw`
   (func (export "test_diptex_get_handle")
       (param $api i32) (param $texture i32) (param $device i32) (param $out i32)
       (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $dispatch_api_table
       (local.get $api) (local.get $texture) (local.get $device)
       (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
-  (func (export "test_diptex_esp") (result i32) (global.get $esp))
+  (func (export "test_diptex_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_diptex_bind_handle") (param $device i32) (param $handle i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirect3DDevice3_SetRenderState
       (local.get $device) (i32.const 1) (local.get $handle)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_diptex_set_rs") (param $device i32) (param $state i32) (param $value i32)
     (call $d3dim_set_render_state (local.get $device) (local.get $state) (local.get $value)))
@@ -140,19 +140,19 @@ const extraWat = String.raw`
 
   (func (export "test_diptex_get_tss") (param $device i32) (param $type i32) (param $out i32) (result i32)
     (call $d3dim_get_tss (local.get $device) (i32.const 0) (local.get $type) (local.get $out))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_diptex_attach") (param $parent i32) (param $child i32) (result i32)
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDrawSurface_AddAttachedSurface
       (local.get $parent) (local.get $child)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_diptex_draw")
       (param $device i32) (param $vertices i32) (param $indices i32)
     ;; Direct handler calls still read the tail arguments from the guest stack.
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $gs32 (i32.const 0x30014) (i32.const 3))
     (call $gs32 (i32.const 0x30018) (local.get $indices))
     (call $gs32 (i32.const 0x3001c) (i32.const 3))

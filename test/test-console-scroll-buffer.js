@@ -10,13 +10,13 @@ const extraWat = String.raw`
   (func (export "test_scroll")
         (param $handle i32) (param $scroll i32) (param $clip i32)
         (param $destination i32) (param $fill i32) (param $stack i32) (result i64)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ScrollConsoleScreenBufferW
       (local.get $handle) (local.get $scroll) (local.get $clip)
       (local.get $destination) (local.get $fill) (i32.const 0))
     (i64.or
-      (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+      (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_set_cell")
         (param $handle i32) (param $x i32) (param $y i32)

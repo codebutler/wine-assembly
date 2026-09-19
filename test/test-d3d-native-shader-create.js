@@ -15,13 +15,13 @@ const { bootRenderHarness } = require('./render-helper');
         (store.field DxObject misc1 (call $dx_from_this (local.get $d)) (call $d3d9_program_alloc))
         (local.get $d))
       (func (export "native_shader_create") (param $d i32) (param $code i32) (param $out i32) (param $pixel i32) (result i32)
-        (global.set $esp (i32.const 0x074ff000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
         (if (local.get $pixel)
           (then (call $handle_IDirect3DDevice9_CreatePixelShader (local.get $d) (local.get $code)
             (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0)))
           (else (call $handle_IDirect3DDevice9_CreateVertexShader (local.get $d) (local.get $code)
             (local.get $out) (i32.const 0) (i32.const 0) (i32.const 0))))
-        (global.get $eax))
+        (i32.load offset=0 (global.get $reg_base)))
     `});
   e.init_dx_com_thunks();
   const device=e.native_shader_device(),code=e.guest_alloc(24),out=e.guest_alloc(4);

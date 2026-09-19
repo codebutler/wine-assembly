@@ -11,13 +11,13 @@ const methods = {
 const wrappers = Object.entries(methods).map(([name, count]) => `
   (func (export "test_${name}") (param $stack i32)
       ${Array.from({ length: count }, (_, i) => `(param $a${i} i32)`).join(' ')} (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     ${Array.from({ length: count }, (_, i) => `(call $gs32
       (i32.add (local.get $stack) (i32.const ${(i + 1) * 4})) (local.get $a${i}))`).join('\n')}
     (call $handle_IDirectPlay3_${name}
       ${Array.from({ length: 5 }, (_, i) => i < count ? `(local.get $a${i})` : '(i32.const 0)').join(' ')}
       (i32.const 0))
-    (global.get $eax))`).join('\n');
+    (i32.load offset=0 (global.get $reg_base)))`).join('\n');
 const extraWat = `${wrappers}
   (func (export "test_object") (result i32)
     (call $dx_create_com_obj (i32.const 26) (global.get $DX_VTBL_DPLAY3)))

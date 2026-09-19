@@ -37,29 +37,29 @@ const extraWat = String.raw`
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
     (param $timeout i32) (param $result_ptr i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 32)))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $timeout))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $result_ptr))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $timeout))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $result_ptr))
     (call $handle_SendMessageTimeoutA
       (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)
       (i32.const 1) (i32.const 0)) ;; SMTO_BLOCK, no name pointer
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_send_message_timeout_w")
     (param $hwnd i32) (param $msg i32) (param $wParam i32) (param $lParam i32)
     (param $timeout i32) (param $result_ptr i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 32)))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $timeout))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $result_ptr))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 32)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $timeout))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $result_ptr))
     (call $handle_SendMessageTimeoutW
       (local.get $hwnd) (local.get $msg) (local.get $wParam) (local.get $lParam)
       (i32.const 1) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 function u32(value) {

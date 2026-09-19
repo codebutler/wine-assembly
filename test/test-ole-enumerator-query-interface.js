@@ -7,19 +7,19 @@ const { compileSrcWasm } = require('./compile-src');
 const extraWat = String.raw`
   (func (export "test_call_IEnumSTATSTG_QueryInterface")
         (param $obj i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IEnumSTATSTG_QueryInterface
       (local.get $obj) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_IEnumFORMATETC_QueryInterface")
         (param $obj i32) (param $iid i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IEnumFORMATETC_QueryInterface
       (local.get $obj) (local.get $iid) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

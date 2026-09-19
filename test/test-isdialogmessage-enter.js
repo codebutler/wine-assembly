@@ -51,7 +51,7 @@ const extraWat = String.raw`
     (call $handle_IsDialogMessageA
       (local.get $dlg) (local.get $msg)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

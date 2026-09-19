@@ -29,11 +29,11 @@ const extraWat = String.raw`
     (global.get $last_error))
   (func (export "test_call_FlushInstructionCache")
       (param $process i32) (param $base i32) (param $size i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_FlushInstructionCache
       (local.get $process) (local.get $base) (local.get $size)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

@@ -13,12 +13,12 @@ const apiTable = require('../src/api_table.json');
 async function main() {
   const extraWat = `
   (func (export "test_call_legacy_wglSwapBuffers") (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_gpu_api
       (i32.const 55) (i32.const 1)
       (i32.const 0x1234) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_virtual_reset")
     (call $zero_memory (global.get $VIRTUAL_MAP_STATE)
       (i32.add (global.get $VIRTUAL_MAP_STATE_SIZE)
@@ -31,11 +31,11 @@ async function main() {
     (global.set $heap_sparse_ptr (i32.const 0))
     (global.set $heap_sparse_end (i32.const 0)))
   (func (export "test_virtual_alloc_commit") (param $size i32) (result i32)
-    (global.set $esp (i32.const 0x00500000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00500000))
     (call $handle_VirtualAlloc
       (i32.const 0) (local.get $size) (i32.const 0x3000)
       (i32.const 0x04) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   `;
   // Plain append: src fragments are self-balanced now, so there is no trailing
   // `)` to splice into — the old regex matched nothing and dropped extraWat.

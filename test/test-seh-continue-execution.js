@@ -15,12 +15,12 @@ const extraWat = String.raw`
     (global.set $delphi_resume_eip (local.get $resume_eip))
     (global.set $delphi_resume_esp (local.get $resume_esp))
     (global.set $eip (i32.const 0xCCCCCCCC))
-    (global.set $esp (i32.const 0x00402000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00402000))
     (global.set $steps (i32.const 77))
-    (global.set $eax (i32.const 0)) ;; ExceptionContinueExecution
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0)) ;; ExceptionContinueExecution
     (call $win32_dispatch (i32.const 0)))
   (func (export "test_eip") (result i32) (global.get $eip))
-  (func (export "test_esp") (result i32) (global.get $esp))
+  (func (export "test_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_steps") (result i32) (global.get $steps))
 `;
 

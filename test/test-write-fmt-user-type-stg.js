@@ -12,13 +12,13 @@ const extraWat = String.raw`
   (func (export "write_fmt_call")
       (param $stack i32) (param $storage i32) (param $format i32)
       (param $user_type i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_WriteFmtUserTypeStg
       (local.get $storage) (local.get $format) (local.get $user_type)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $write_fmt_test_delta
-      (i32.sub (global.get $esp) (local.get $stack)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $stack)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "write_fmt_delta") (result i32)
     (global.get $write_fmt_test_delta))

@@ -23,18 +23,18 @@ const extraWat = String.raw`
     (local $ddraw i32)
     (local.set $ddraw
       (call $dx_create_com_obj (i32.const 1) (global.get $DX_VTBL_DDRAW)))
-    (global.set $esp (i32.const 0x30000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
     (call $handle_IDirectDraw_CreateSurface
       (local.get $ddraw) (local.get $desc) (local.get $out) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_worker_create_device")
       (param $surface i32) (param $out i32) (result i32)
     (call $d3dim_create_device
       (i32.const 0) (local.get $surface) (local.get $out)
       (global.get $DX_VTBL_D3DDEV3))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_worker_surface_dib") (param $surface i32) (result i32)
     (i32.load offset=20 (call $dx_from_this (local.get $surface))))

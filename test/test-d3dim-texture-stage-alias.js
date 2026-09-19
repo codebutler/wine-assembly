@@ -31,30 +31,30 @@ const extraWat = String.raw`
   (func (export "d3dim_tss_get")
       (param $api i32) (param $device i32) (param $stage i32)
       (param $type i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $dispatch_api_table
       (local.get $api) (local.get $device) (local.get $stage)
       (local.get $type) (local.get $out) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "d3dim_tss_set")
       (param $api i32) (param $device i32) (param $stage i32)
       (param $type i32) (param $value i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $dispatch_api_table
       (local.get $api) (local.get $device) (local.get $stage)
       (local.get $type) (local.get $value) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "d3dim_validate")
       (param $api i32) (param $device i32) (param $passes i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $dispatch_api_table
       (local.get $api) (local.get $device) (local.get $passes)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
-  (func (export "d3dim_tss_esp") (result i32) (global.get $esp))
+  (func (export "d3dim_tss_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

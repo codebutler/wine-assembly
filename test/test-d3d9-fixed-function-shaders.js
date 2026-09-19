@@ -11,7 +11,7 @@ const extraWat = String.raw`
     (store.field DxObject misc1 (call $dx_from_this (local.get $d)) (call $d3d9_program_alloc))
     (local.get $d))
   (func (export "test_d3d9_set_null_shaders") (param $device i32) (param $pixel i32) (param $shader i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (local.get $pixel)
       (then (call $handle_IDirect3DDevice9_SetPixelShader
         (local.get $device) (local.get $shader) (i32.const 0)
@@ -19,8 +19,8 @@ const extraWat = String.raw`
       (else (call $handle_IDirect3DDevice9_SetVertexShader
         (local.get $device) (local.get $shader) (i32.const 0)
         (i32.const 0) (i32.const 0) (i32.const 0))))
-    (i64.or (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+    (i64.or (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 `;
 
 (async () => {

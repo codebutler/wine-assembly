@@ -191,19 +191,19 @@
         (i32.shl (i32.sub (local.get $count) (i32.const 1)) (i32.const 2)))))
     (global.set $console_ctrl_dispatching (i32.const 1))
     ;; Context, deepest first: next index, event, resume thunk, "CCTL".
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.sub (local.get $count) (i32.const 2)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.sub (local.get $pending) (i32.const 1)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $current_thunk_eip))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.const 0x4C544343)) ;; "CCTL"
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.sub (local.get $count) (i32.const 2)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.sub (local.get $pending) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $current_thunk_eip))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x4C544343)) ;; "CCTL"
     ;; HandlerRoutine(DWORD dwCtrlType), stdcall.
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (i32.sub (local.get $pending) (i32.const 1)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.sub (local.get $pending) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
     (global.set $eip (local.get $handler))
     (global.set $handler_set_eip (i32.const 1))
     (global.set $steps (i32.const 0))
@@ -212,14 +212,14 @@
   ;; Resume after HandlerRoutine's RET 4 has exposed the CCTL context at ESP.
   (func $console_ctrl_continue
     (local $next i32) (local $event i32) (local $handler i32)
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then
-        (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (global.set $eip (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (global.set $console_ctrl_dispatching (i32.const 0))
         (return)))
-    (local.set $next (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
-    (local.set $event (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+    (local.set $next (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (local.set $event (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
     (if (i32.lt_s (local.get $next) (i32.const 0))
       (then (call $console_ctrl_default_exit) (return)))
     (local.set $handler (i32.atomic.load
@@ -227,12 +227,12 @@
         (i32.shl (local.get $next) (i32.const 2)))))
     (if (i32.eqz (local.get $handler))
       (then (call $console_ctrl_default_exit) (return)))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 12))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))
       (i32.sub (local.get $next) (i32.const 1)))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (local.get $event))
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-    (call $gs32 (global.get $esp) (global.get $font_enum_ret_thunk))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $event))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $font_enum_ret_thunk))
     (global.set $eip (local.get $handler))
     (global.set $steps (i32.const 0)))
 
@@ -657,15 +657,15 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg1)))
     ;; dwSize.X, dwSize.Y
@@ -696,19 +696,19 @@
         (i32.shr_u (local.get $largest) (i32.const 16))
         (i32.le_u (global.get $console_height)
           (i32.shr_u (local.get $largest) (i32.const 16)))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; --- Console API handlers ---
 
   ;; AllocConsole() → BOOL. A process may own only one console; allocating a
   ;; second one fails until FreeConsole detaches the first.
   (func $handle_AllocConsole (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $console_attach_new))
-    (if (i32.eqz (global.get $eax))
+    (i32.store offset=0 (global.get $reg_base) (call $console_attach_new))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (global.set $last_error (i32.const 5)))) ;; ERROR_ACCESS_DENIED
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; SetConsoleScreenBufferSize(hConsole, dwSize) → BOOL
   ;; dwSize is COORD packed as i32: loword=X, hiword=Y
@@ -717,8 +717,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $old_width (global.get $console_width))
     (local.set $old_height (global.get $console_height))
@@ -742,26 +742,26 @@
         (global.set $console_width (local.get $old_width))
         (global.set $console_height (local.get $old_height))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleActiveScreenBuffer(hConsole) → BOOL
   (func $handle_SetConsoleActiveScreenBuffer (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (i32.store (global.get $CONSOLE_BUFFER_ACTIVE) (local.get $arg0))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SetConsoleCursorPosition(hConsole, dwCursorPosition) → BOOL
   ;; dwCursorPosition is COORD packed: loword=X, hiword=Y
@@ -771,8 +771,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     ;; COORD members are signed SHORTs. Reject negative or out-of-buffer cells
     ;; without changing this buffer's cursor or viewport.
@@ -786,9 +786,9 @@
                   (i32.ge_s (local.get $y) (global.get $console_height))))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (global.set $console_cursor_x (local.get $x))
     (global.set $console_cursor_y (local.get $y))
@@ -823,9 +823,9 @@
     (i32.store16 offset=2 (local.get $win) (local.get $top))
     (i32.store16 offset=4 (local.get $win) (local.get $right))
     (i32.store16 offset=6 (local.get $win) (local.get $bottom))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleCursorInfo(hConsole, lpConsoleCursorInfo) → BOOL
   (func $handle_SetConsoleCursorInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -833,15 +833,15 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg1)))
     (local.set $size (i32.load (local.get $p)))
@@ -849,16 +849,16 @@
                 (i32.gt_u (local.get $size) (i32.const 100)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (global.set $console_cursor_size (local.get $size))
     (global.set $console_cursor_visible
       (i32.ne (i32.load (i32.add (local.get $p) (i32.const 4))) (i32.const 0)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleTextAttribute(hConsoleOutput, wAttributes) changes the current
   ;; attribute of that screen buffer only. Existing cells are untouched; the
@@ -867,13 +867,13 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (global.set $console_attr (i32.and (local.get $arg1) (i32.const 0xFFFF)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; GetConsoleCursorInfo(hConsole, lpConsoleCursorInfo) → BOOL
   (func $handle_GetConsoleCursorInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -881,22 +881,22 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (if (i32.eqz (local.get $arg1))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
     (local.set $p (call $g2w (local.get $arg1)))
     (i32.store (local.get $p) (global.get $console_cursor_size))
     (i32.store (i32.add (local.get $p) (i32.const 4)) (global.get $console_cursor_visible))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $console_title_publish
     (local $hwnd i32) (local $len i32)
@@ -946,13 +946,13 @@
 
   ;; SetConsoleTitleA(lpConsoleTitle) → BOOL
   (func $handle_SetConsoleTitleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $console_title_set (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_title_set (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; SetConsoleTitleW(lpConsoleTitle) → BOOL
   (func $handle_SetConsoleTitleW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $console_title_set (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_title_set (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Copy at most nSize-1 characters, always terminate a non-empty
   ;; destination, and return the count excluding that terminator. nSize is a
@@ -986,14 +986,12 @@
     (local.get $copy))
 
   (func $handle_GetConsoleTitleA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $console_title_get (local.get $arg0) (local.get $arg1) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_title_get (local.get $arg0) (local.get $arg1) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   (func $handle_GetConsoleTitleW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $console_title_get (local.get $arg0) (local.get $arg1) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 12))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_title_get (local.get $arg0) (local.get $arg1) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
 
   ;; SetConsoleWindowInfo(hConsole, bAbsolute, lpConsoleWindow) → BOOL
   (func $handle_SetConsoleWindowInfo (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1002,15 +1000,15 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (if (i32.eqz (local.get $arg2))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (local.set $src (call $g2w (local.get $arg2)))
     (local.set $win (call $console_loaded_window_record))
@@ -1042,17 +1040,17 @@
                   (i32.ge_s (local.get $bottom) (global.get $console_height))))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
         (return)))
     (i32.store16 (local.get $win) (local.get $left))
     (i32.store16 offset=2 (local.get $win) (local.get $top))
     (i32.store16 offset=4 (local.get $win) (local.get $right))
     (i32.store16 offset=6 (local.get $win) (local.get $bottom))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
 
   ;; GetLargestConsoleWindowSize(hConsole) → COORD (packed in eax)
   (func $handle_GetLargestConsoleWindowSize (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1061,19 +1059,18 @@
     (if (i32.eqz (call $console_buffer_record (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
-    (global.set $eax (call $console_largest_window_size))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_largest_window_size))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; GetConsoleCP() → UINT. The code page belongs to the console associated
   ;; with this process, not to the process itself: a GUI image without a
   ;; console, or a process after FreeConsole, must fail with zero.
   (func $handle_GetConsoleCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (select (global.get $console_cp) (i32.const 0) (call $console_is_attached)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4))))
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $console_cp) (i32.const 0) (call $console_is_attached)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
 
   ;; SetConsoleCP(wCodePageID) / SetConsoleOutputCP(wCodePageID) change the
   ;; pages owned by the attached console. The pseudo-code-page constants used
@@ -1096,14 +1093,12 @@
     (i32.const 1))
 
   (func $handle_SetConsoleCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $console_set_code_page (local.get $arg0) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_set_code_page (local.get $arg0) (i32.const 0)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   (func $handle_SetConsoleOutputCP (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax
-      (call $console_set_code_page (local.get $arg0) (i32.const 1)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (call $console_set_code_page (local.get $arg0) (i32.const 1)))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Validate a signed COORD and clip a linear fill to the end of the loaded
   ;; screen buffer. -1 distinguishes an invalid starting cell from a valid
@@ -1134,8 +1129,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
     (if (i32.eq (local.get $limit) (i32.const -1))
@@ -1143,9 +1138,9 @@
         (if (local.get $arg4)
           (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
     (local.set $x (i32.and (local.get $arg3) (i32.const 0xFFFF)))
@@ -1164,9 +1159,9 @@
     ;; Write count to lpNumberOfCharsWritten
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; FillConsoleOutputAttribute(hConsole, wAttribute, nLength, dwWriteCoord, lpNumberOfAttrsWritten) → BOOL
   (func $handle_FillConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1174,8 +1169,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
     (if (i32.eq (local.get $limit) (i32.const -1))
@@ -1183,9 +1178,9 @@
         (if (local.get $arg4)
           (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
     (local.set $x (i32.and (local.get $arg3) (i32.const 0xFFFF)))
@@ -1203,9 +1198,9 @@
       (br $fill)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; The character-writing half of WriteConsole, shared by both spellings: the
   ;; cursor, wrap and control-character rules are identical, only the width of
@@ -1636,13 +1631,13 @@
     (if (i32.ne (call $console_handle_resolve (local.get $arg0)) (i32.const 1))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
     (call $console_input_drop (call $console_input_count))
     (global.set $last_error (i32.const 0))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 8))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
 
   ;; Number of queued events up to and including the first Enter, or 0 when no
   ;; complete line is queued yet.
@@ -1858,13 +1853,13 @@
 
   ;; WriteConsoleW(hConsole, lpBuffer, nNumberOfCharsToWrite, lpNumberOfCharsWritten, lpReserved) → BOOL
   (func $handle_WriteConsoleW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $console_write
+    (i32.store offset=0 (global.get $reg_base) (call $console_write
       (local.get $arg0) (local.get $arg1) (local.get $arg2) (i32.const 1)))
-    (if (i32.and (global.get $eax) (i32.ne (local.get $arg3) (i32.const 0)))
+    (if (i32.and (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)) (i32.ne (local.get $arg3) (i32.const 0)))
       (then (i32.store (call $g2w (local.get $arg3)) (local.get $arg2))))
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then (global.set $last_error (i32.const 6))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Shared WriteConsoleOutputA/W rectangle writer. CHAR_INFO is four bytes in
   ;; both forms; only the character union member changes width.
@@ -1876,12 +1871,12 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg4)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (return)))
     ;; COORD fields are signed SHORTs. Treat both buffers as true 2-D arrays;
@@ -1978,20 +1973,20 @@
         (br $cols)))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
       (br $rows)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (local.get $changed)))
 
   ;; WriteConsoleOutputW(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpWriteRegion) → BOOL
   (func $handle_WriteConsoleOutputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_write_output (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr) (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleOutputA(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpWriteRegion) → BOOL
   (func $handle_WriteConsoleOutputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_write_output (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (local.get $name_ptr) (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleOutputCharacterA(hConsole, lpCharacter, nLength, dwWriteCoord, lpNumberOfCharsWritten) → BOOL
   (func $handle_WriteConsoleOutputCharacterA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -1999,8 +1994,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
     (if (i32.eq (local.get $limit) (i32.const -1))
@@ -2008,9 +2003,9 @@
         (if (local.get $arg4)
           (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
     (local.set $src (call $g2w (local.get $arg1)))
@@ -2029,9 +2024,9 @@
       (br $fill)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; WriteConsoleOutputAttribute(hConsole, lpAttribute, nLength, dwWriteCoord, lpNumberOfAttrsWritten) → BOOL
   (func $handle_WriteConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2039,8 +2034,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
     (if (i32.eq (local.get $limit) (i32.const -1))
@@ -2048,9 +2043,9 @@
         (if (local.get $arg4)
           (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (call $console_cells_ensure)
     (local.set $src (call $g2w (local.get $arg1)))
@@ -2069,9 +2064,9 @@
       (br $fill)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.ne (local.get $limit) (i32.const 0)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleW(hConsole, lpBuffer, nNumberOfCharsToRead, lpNumberOfCharsRead, pInputControl) → BOOL
   ;; Blocks until the console input queue can satisfy the read. Returning
@@ -2080,8 +2075,8 @@
   (func $handle_ReadConsoleW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (if (call $console_read (local.get $arg1) (local.get $arg2) (local.get $arg3) (i32.const 1))
       (then (return)))
-    (global.set $eax (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsRead) → BOOL
   ;; Shared A/W low-level input reader. A return of one means the call parked
@@ -2093,7 +2088,7 @@
     (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return (i32.const 0))))
     (if (i32.or (i32.eqz (local.get $count_ptr))
           (i32.and (i32.ne (local.get $length) (i32.const 0))
@@ -2102,7 +2097,7 @@
         (if (local.get $count_ptr)
           (then (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return (i32.const 0))))
     ;; A zero-sized destination cannot receive a record, so complete without
     ;; blocking and without touching the queue or the (possibly NULL) buffer.
@@ -2111,7 +2106,7 @@
         (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))
         (if (i32.eqz (local.get $peek))
           (then (global.set $handler_set_eip (i32.const 0))))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (return (i32.const 0))))
     (call $console_input_poll_host)
     (if (global.get $console_ctrl_dispatching)
@@ -2128,7 +2123,7 @@
     (if (i32.eqz (local.get $peek))
       (then (call $console_input_drop (local.get $n))))
     (i32.store (call $g2w (local.get $count_ptr)) (local.get $n))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.const 0))
 
   (func $console_input_count_api (param $handle i32) (param $count_ptr i32)
@@ -2136,18 +2131,18 @@
     (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return (i32.const 0))))
     (if (i32.eqz (local.get $count_ptr))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return (i32.const 0))))
     (call $console_input_poll_host)
     (if (global.get $console_ctrl_dispatching)
       (then (return (i32.const 1))))
     (i32.store (call $g2w (local.get $count_ptr)) (call $console_input_count))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (i32.const 0))
 
   (func $handle_ReadConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2155,7 +2150,7 @@
           (local.get $arg0) (local.get $arg1) (local.get $arg2)
           (local.get $arg3) (i32.const 1) (i32.const 0))
       (then (return)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; PeekConsoleInputW(hConsole, lpBuffer, nLength, lpNumberOfEventsRead)
   ;; shares the real input ring with both ReadConsoleInput variants, but keeps
@@ -2166,7 +2161,7 @@
           (local.get $arg0) (local.get $arg1) (local.get $arg2)
           (local.get $arg3) (i32.const 1) (i32.const 1))
       (then (return)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; Shared ReadConsoleOutputA/W rectangle reader. CHAR_INFO is four bytes in
   ;; both forms; the A form exposes the low console-codepage byte of Char.
@@ -2178,7 +2173,7 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (call $console_cells_ensure)
     (local.set $dst (call $g2w (local.get $arg1)))
@@ -2271,7 +2266,7 @@
         (br $cols)))
       (local.set $row (i32.add (local.get $row) (i32.const 1)))
       (br $rows)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0)))
 
   ;; ReadConsoleOutputW(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpReadRegion) → BOOL
@@ -2279,14 +2274,14 @@
     (call $console_read_output
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleOutputA(hConsole, lpBuffer, dwBufferSize, dwBufferCoord, lpReadRegion) → BOOL
   (func $handle_ReadConsoleOutputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_read_output
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ReadConsoleOutputAttribute(hConsole, lpAttribute, nLength, dwReadCoord, lpNumberOfAttrsRead) → BOOL
   (func $handle_ReadConsoleOutputAttribute (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2294,8 +2289,8 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6))
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $limit (call $console_fill_limit (local.get $arg3) (local.get $arg2)))
     (if (i32.eq (local.get $limit) (i32.const -1))
@@ -2303,9 +2298,9 @@
         (if (local.get $arg4)
           (then (i32.store (call $g2w (local.get $arg4)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $dst (call $g2w (local.get $arg1)))
     (local.set $x (i32.and (local.get $arg3) (i32.const 0xFFFF)))
@@ -2323,9 +2318,9 @@
       (br $read)))
     (if (local.get $arg4)
       (then (i32.store (call $g2w (local.get $arg4)) (local.get $limit))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Shared ReadConsoleOutputCharacterA/W body. The low-level character APIs
   ;; walk consecutive cells, wrapping rows, but never expose attributes or
@@ -2338,14 +2333,14 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $handle)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     ;; lpNumberOfCharsRead is required. A zero-length call still reports zero,
     ;; but need not dereference lpCharacter because it transfers no cells.
     (if (i32.eqz (local.get $count_g))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (return)))
     (call $gs32 (local.get $count_g) (i32.const 0))
@@ -2353,14 +2348,14 @@
     (if (i32.eq (local.get $limit) (i32.const -1))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (return)))
     (if (i32.and (i32.ne (local.get $limit) (i32.const 0))
           (i32.eqz (local.get $buffer_g)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
         (return)))
     (if (local.get $limit)
@@ -2393,20 +2388,20 @@
           (br $read)))
         (local.set $count (local.get $limit))))
     (call $gs32 (local.get $count_g) (local.get $count))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (i32.const 0)))
 
   (func $handle_ReadConsoleOutputCharacterA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_read_output_character
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   (func $handle_ReadConsoleOutputCharacterW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_read_output_character
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (local.get $arg4) (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; ScrollConsoleScreenBufferW(hConsole, lpScrollRectangle, lpClipRectangle, dwDestinationOrigin, lpFill) → BOOL
   (func $handle_ScrollConsoleScreenBufferW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
@@ -2422,15 +2417,15 @@
     (if (i32.eqz (call $console_buffer_enter (local.get $arg0)))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (i32.or (i32.eqz (local.get $arg1)) (i32.eqz (local.get $arg4)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (local.set $scroll (call $g2w (local.get $arg1)))
     (local.set $fill (call $g2w (local.get $arg4)))
@@ -2442,9 +2437,9 @@
                 (i32.lt_s (local.get $bottom) (local.get $top)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     (if (local.get $arg2)
       (then
@@ -2462,9 +2457,9 @@
                 (i32.lt_s (local.get $clip_bottom) (local.get $clip_top)))
       (then
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $console_buffer_finish (i32.const 0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (return)))
     ;; The clip rectangle limits every destination and fill write.
     (if (i32.lt_s (local.get $clip_left) (i32.const 0))
@@ -2594,9 +2589,9 @@
           (br_if $fill_rows_done (i32.eq (local.get $y) (local.get $copy_bottom)))
           (local.set $y (i32.add (local.get $y) (i32.const 1)))
           (br $fill_rows)))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $console_buffer_finish (local.get $changed))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 24))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
 
   ;; Shared WriteConsoleInputA/W input-ring writer. INPUT_RECORD is 20 bytes
   ;; in either form; only KEY_EVENT_RECORD.uChar changes from an eight-bit
@@ -2609,7 +2604,7 @@
     (if (i32.ne (call $console_handle_resolve (local.get $handle)) (i32.const 1))
       (then
         (global.set $last_error (i32.const 6)) ;; ERROR_INVALID_HANDLE
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (if (i32.or (i32.eqz (local.get $count_ptr))
           (i32.and (i32.ne (local.get $length) (i32.const 0))
@@ -2618,7 +2613,7 @@
         (if (local.get $count_ptr)
           (then (i32.store (call $g2w (local.get $count_ptr)) (i32.const 0))))
         (global.set $last_error (i32.const 87)) ;; ERROR_INVALID_PARAMETER
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (return)))
     (local.set $count (call $console_input_count))
     (local.set $limit
@@ -2659,19 +2654,19 @@
     (if (local.get $limit)
       (then (drop (call $host_set_event (call $console_input_event)))))
     (i32.store (call $g2w (local.get $count_ptr)) (local.get $limit))
-    (global.set $eax (i32.const 1)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
 
   (func $handle_WriteConsoleInputA (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_write_input
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (i32.const 0))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   (func $handle_WriteConsoleInputW (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (call $console_write_input
       (local.get $arg0) (local.get $arg1) (local.get $arg2)
       (local.get $arg3) (i32.const 1))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
   ;; ============================================================
   ;; CONSOLE WINDOW

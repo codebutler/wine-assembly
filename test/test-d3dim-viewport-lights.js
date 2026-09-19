@@ -39,7 +39,7 @@ const extraWat = String.raw`
       (call $dx_slot_of (local.get $entry)) (i32.const 0x55000000)))
   (func (export "test_d3dim_add_viewport")
     (param $revision i32) (param $device i32) (param $viewport i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DDevice_AddViewport
         (local.get $device) (local.get $viewport) (i32.const 0) (i32.const 0)
@@ -51,10 +51,10 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DDevice3_AddViewport
           (local.get $device) (local.get $viewport) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_delete_viewport")
     (param $revision i32) (param $device i32) (param $viewport i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DDevice_DeleteViewport
         (local.get $device) (local.get $viewport) (i32.const 0) (i32.const 0)
@@ -66,11 +66,11 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DDevice3_DeleteViewport
           (local.get $device) (local.get $viewport) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_next_viewport")
     (param $revision i32) (param $device i32) (param $viewport i32)
     (param $out i32) (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DDevice_NextViewport
         (local.get $device) (local.get $viewport) (local.get $out) (local.get $flags)
@@ -82,10 +82,10 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DDevice3_NextViewport
           (local.get $device) (local.get $viewport) (local.get $out) (local.get $flags)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_set_current_viewport")
     (param $revision i32) (param $device i32) (param $viewport i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 2))
       (then (call $handle_IDirect3DDevice2_SetCurrentViewport
         (local.get $device) (local.get $viewport) (i32.const 0) (i32.const 0)
@@ -93,14 +93,14 @@ const extraWat = String.raw`
       (else (call $handle_IDirect3DDevice3_SetCurrentViewport
         (local.get $device) (local.get $viewport) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_set_current_viewport_core")
     (param $device i32) (param $viewport i32) (result i32)
     (call $d3dim_device_set_current_viewport
       (local.get $device) (local.get $viewport)))
   (func (export "test_d3dim_get_current_viewport")
     (param $revision i32) (param $device i32) (param $out i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 2))
       (then (call $handle_IDirect3DDevice2_GetCurrentViewport
         (local.get $device) (local.get $out) (i32.const 0) (i32.const 0)
@@ -108,18 +108,18 @@ const extraWat = String.raw`
       (else (call $handle_IDirect3DDevice3_GetCurrentViewport
         (local.get $device) (local.get $out) (i32.const 0) (i32.const 0)
         (i32.const 0) (i32.const 0))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_device_add_ref")
     (param $api_id i32) (param $device i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $dispatch_api_table
       (local.get $api_id) (local.get $device)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_device_release")
     (param $revision i32) (param $device i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DDevice_Release
         (local.get $device) (i32.const 0) (i32.const 0) (i32.const 0)
@@ -135,10 +135,10 @@ const extraWat = String.raw`
           (else (call $handle_IDirect3DDevice7_Release
             (local.get $device) (i32.const 0) (i32.const 0) (i32.const 0)
             (i32.const 0) (i32.const 0))))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_add_light")
     (param $revision i32) (param $viewport i32) (param $light i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DViewport_AddLight
         (local.get $viewport) (local.get $light) (i32.const 0) (i32.const 0)
@@ -150,10 +150,10 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DViewport3_AddLight
           (local.get $viewport) (local.get $light) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_delete_light")
     (param $revision i32) (param $viewport i32) (param $light i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DViewport_DeleteLight
         (local.get $viewport) (local.get $light) (i32.const 0) (i32.const 0)
@@ -165,11 +165,11 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DViewport3_DeleteLight
           (local.get $viewport) (local.get $light) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_next_light")
     (param $revision i32) (param $viewport i32) (param $light i32)
     (param $out i32) (param $flags i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DViewport_NextLight
         (local.get $viewport) (local.get $light) (local.get $out) (local.get $flags)
@@ -181,10 +181,10 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DViewport3_NextLight
           (local.get $viewport) (local.get $light) (local.get $out) (local.get $flags)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_light_elements")
     (param $revision i32) (param $viewport i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DViewport_LightElements
         (local.get $viewport) (i32.const 0) (i32.const 0) (i32.const 0)
@@ -196,10 +196,10 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DViewport3_LightElements
           (local.get $viewport) (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_viewport_release")
     (param $revision i32) (param $viewport i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $revision) (i32.const 1))
       (then (call $handle_IDirect3DViewport_Release
         (local.get $viewport) (i32.const 0) (i32.const 0) (i32.const 0)
@@ -211,13 +211,13 @@ const extraWat = String.raw`
         (else (call $handle_IDirect3DViewport3_Release
           (local.get $viewport) (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_light_release") (param $light i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirect3DLight_Release
       (local.get $light) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_d3dim_object_type") (param $object i32) (result i32)
     (i32.load (call $dx_from_this (local.get $object))))
   (func (export "test_d3dim_object_ref") (param $object i32) (result i32)
@@ -240,7 +240,7 @@ const extraWat = String.raw`
   (func (export "test_d3dim_create_child_api")
     (param $revision i32) (param $type i32) (param $out i32) (param $outer i32)
     (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (if (i32.eq (local.get $type) (i32.const 24))
       (then
         (if (i32.eq (local.get $revision) (i32.const 1))
@@ -266,8 +266,8 @@ const extraWat = String.raw`
             (else (call $handle_IDirect3D3_CreateViewport
               (i32.const 0) (local.get $out) (local.get $outer) (i32.const 0)
               (i32.const 0) (i32.const 0))))))))
-    (global.get $eax))
-  (func (export "test_d3dim_esp") (result i32) (global.get $esp))
+    (i32.load offset=0 (global.get $reg_base)))
+  (func (export "test_d3dim_esp") (result i32) (i32.load offset=16 (global.get $reg_base)))
   (func (export "test_d3dim_live_type") (param $type i32) (result i32)
     (local $i i32) (local $count i32) (local $entry i32)
     (block $done (loop $scan

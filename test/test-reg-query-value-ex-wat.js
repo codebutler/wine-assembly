@@ -11,8 +11,8 @@ const extraWat = String.raw`
         (param $which i32) (param $hkey i32) (param $name i32)
         (param $reserved i32) (param $type i32) (param $data i32)
         (param $cb i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $cb))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $cb))
     (if (i32.eq (local.get $which) (i32.const 0))
       (then (call $handle_RegQueryValueExA
         (local.get $hkey) (local.get $name) (local.get $reserved)
@@ -28,7 +28,7 @@ const extraWat = String.raw`
           (else (call $handle_SHQueryValueExW
             (local.get $hkey) (local.get $name) (local.get $reserved)
             (local.get $type) (local.get $data) (i32.const 0))))))))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

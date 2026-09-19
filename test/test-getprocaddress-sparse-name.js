@@ -22,13 +22,13 @@ const extraWat = String.raw`
     (global.set $heap_end (i32.const 0))
     (i32.atomic.store (global.get $HEAP_SHARED) (i32.const -1))
 
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $test_sparse_thunk
       (i32.sub (global.get $num_thunks) (i32.const 1)))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_sparse_name_length") (result i32)
     (local $name_rva i32)
@@ -40,10 +40,10 @@ const extraWat = String.raw`
         (i32.add (local.get $name_rva) (i32.const 2)))))
 
   (func (export "test_dispatch_sparse_thunk") (param $stack i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $gs32 (local.get $stack) (i32.const 0x12345678))
     (call $win32_dispatch (global.get $test_sparse_thunk))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_sparse_heap_active") (result i32)
     (global.get $heap_sparse_ptr))

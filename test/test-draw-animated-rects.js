@@ -14,13 +14,13 @@ const extraWat = String.raw`
   (func (export "animated_call")
       (param $stack i32) (param $hwnd i32) (param $kind i32)
       (param $from i32) (param $to i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_DrawAnimatedRects
       (local.get $hwnd) (local.get $kind) (local.get $from) (local.get $to)
       (i32.const 0) (i32.const 0))
     (global.set $animated_test_delta
-      (i32.sub (global.get $esp) (local.get $stack)))
-    (global.get $eax))
+      (i32.sub (i32.load offset=16 (global.get $reg_base)) (local.get $stack)))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "animated_delta") (result i32)
     (global.get $animated_test_delta))

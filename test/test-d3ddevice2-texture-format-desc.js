@@ -13,12 +13,12 @@ const extraWat = String.raw`
   (func (export "test_d3ddev2_enum_begin")
       (param $callback i32) (param $context i32) (param $return_addr i32)
       (result i32)
-    (global.set $esp (i32.const 0x30000))
-    (call $gs32 (global.get $esp) (local.get $return_addr))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x30000))
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $return_addr))
     (call $handle_IDirect3DDevice2_EnumTextureFormats
       (i32.const 0) (local.get $callback) (local.get $context)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 
   (func (export "test_fill_d3d_texture_desc")
       (param $desc i32) (param $index i32)

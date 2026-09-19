@@ -9,6 +9,20 @@ const fs = require('fs');
 const path = require('path');
 
 const apiTable = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'src', 'api_table.json'), 'utf8'));
+
+// Two spellings of the x86 GPRs: the historical per-instance wasm globals, and
+// the per-thread register file in linear memory ($reg_base, slots +0 eax /
+// +16 esp). The generated table must match whichever the tree declares, or the
+// build's own staleness check fires on every run. Read it from 01-header.wat
+// rather than a flag so the generator cannot drift from the source it feeds.
+const REGFILE = /\(global \$reg_base \(mut i32\)/.test(
+  fs.readFileSync(path.join(__dirname, '..', 'src', '01-header.wat'), 'utf8'));
+const getR = r => REGFILE
+  ? `(i32.load offset=${{ eax: 0, esp: 16 }[r]} (global.get $reg_base))`
+  : `(global.get $${r})`;
+const setR = (r, v) => REGFILE
+  ? `(i32.store offset=${{ eax: 0, esp: 16 }[r]} (global.get $reg_base) ${v})`
+  : `(global.set $${r} ${v})`;
 const outPath = path.join(__dirname, '..', 'src', '09b2-dispatch-table.generated.wat');
 
 // --check: generate in memory and compare with the file on disk. Used as a build
@@ -111,8 +125,8 @@ for (const api of stubApis) {
   if (!stubHandlers.has(api.name)) continue;
   out.push(`  ;; ${api.name}: pop ${api.stub.pop}, return ${watI32(api.stub.ret)}`);
   out.push(`  (func $handle_${api.name} (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)`);
-  out.push(`    (global.set $eax (i32.const ${watI32(api.stub.ret)}))`);
-  out.push(`    (global.set $esp (i32.add (global.get $esp) (i32.const ${api.stub.pop}))))`);
+  out.push(`    ${setR('eax', `(i32.const ${watI32(api.stub.ret)})`)}`);
+  out.push(`    ${setR('esp', `(i32.add ${getR('esp')} (i32.const ${api.stub.pop}))`)})`);
   out.push('');
 }
 
@@ -145,12 +159,12 @@ for (const api of testCallApis) {
   args.push('(i32.const 0)');
   out.push(`  (func (export "test_call_${api.name}")${params} (result i32)`);
   out.push('    (local $saved_esp i32)');
-  out.push('    (local.set $saved_esp (global.get $esp))');
+  out.push(`    (local.set $saved_esp ${getR('esp')})`);
   out.push(`    (call $handle_${handler}`);
   out.push(`      ${args.slice(0, 3).join(' ')}`);
   out.push(`      ${args.slice(3).join(' ')})`);
-  out.push('    (global.set $esp (local.get $saved_esp))');
-  out.push('    (global.get $eax))');
+  out.push(`    ${setR('esp', '(local.get $saved_esp)')}`);
+  out.push(`    ${getR('eax')})`);
 }
 if (testCallApis.length) out.push('');
 

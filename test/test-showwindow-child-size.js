@@ -28,11 +28,11 @@ const extraWat = String.raw`
 
   (func (export "test_call_show_window") (param $hwnd i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_ShowWindow
       (local.get $hwnd) (i32.const 5)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 `;
 
 (async () => {

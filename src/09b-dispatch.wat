@@ -57,10 +57,10 @@
   (func $restore_win32_nonvolatile
       (param $saved_ebx i32) (param $saved_esi i32)
       (param $saved_edi i32) (param $saved_ebp i32)
-    (global.set $ebx (local.get $saved_ebx))
-    (global.set $esi (local.get $saved_esi))
-    (global.set $edi (local.get $saved_edi))
-    (global.set $ebp (local.get $saved_ebp)))
+    (i32.store offset=12 (global.get $reg_base) (local.get $saved_ebx))
+    (i32.store offset=24 (global.get $reg_base) (local.get $saved_esi))
+    (i32.store offset=28 (global.get $reg_base) (local.get $saved_edi))
+    (i32.store offset=20 (global.get $reg_base) (local.get $saved_ebp)))
 
   (func $win32_dispatch (param $thunk_idx i32)
     (local $api_id i32) (local $name_rva i32) (local $name_ptr i32)
@@ -151,14 +151,14 @@
 
     ;; Catch-return thunk — SEH catch handler returned
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0000))
-      (then (global.set $eip (global.get $eax)) (return)))
+      (then (global.set $eip (i32.load offset=0 (global.get $reg_base))) (return)))
 
     ;; Delphi SEH handler returned. EAX=1 means ExceptionContinueSearch, so
     ;; clean the handler's cdecl arguments and invoke the next registration.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA000E))
       (then
-        (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
-        (if (i32.eq (global.get $eax) (i32.const 1))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
+        (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const 1))
           (then
             (call $delphi_seh_continue_search)
             (call $dispatch_delphi_exception_handler)
@@ -168,10 +168,10 @@
         ;; raising code runs on. MSVC's __except_handler3 maps a filter result
         ;; of EXCEPTION_CONTINUE_EXECUTION (-1) to this disposition; debuggers'
         ;; conventional thread-name exception is one real caller of that path.
-        (if (i32.eqz (global.get $eax))
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (then
             (global.set $eip (global.get $delphi_resume_eip))
-            (global.set $esp (global.get $delphi_resume_esp))
+            (i32.store offset=16 (global.get $reg_base) (global.get $delphi_resume_esp))
             (global.set $steps (i32.const 0))
             (return)))
         ;; Other dispositions should have resumed inside the Delphi runtime.
@@ -190,30 +190,30 @@
         ;; only while WM_CREATE is outstanding. This keeps the shared thunk's
         ;; ShowWindow/dialog uses from interpreting their LRESULT as a create
         ;; decision. On success discard the marker and retain the old layout.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x43524541)) ;; "CREA"
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x43524541)) ;; "CREA"
           (then
-            (if (i32.eq (global.get $eax) (i32.const -1))
+            (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
               (then
                 (local.set $arg0
-                  (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+                  (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
                 (call $create_window_abort (local.get $arg0))
                 (global.set $eip
-                  (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-                (global.set $eax (i32.const 0))
-                (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+                  (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+                (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
                 (return)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 4)))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
         ;; CreateDialogParamA's DLGPROC just returned from WM_INITDIALOG.
         ;; Its nonzero return accepts the candidate passed in wParam. Keep the
         ;; marker/candidate on the guest stack so nested modeless dialogs each
         ;; retain their own decision state.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x44494643)) ;; "DIFC"
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x44494643)) ;; "DIFC"
           (then
             (call $dialog_apply_init_focus
-              (call $gl32 (i32.add (global.get $esp) (i32.const 12)))
-              (call $gl32 (i32.add (global.get $esp) (i32.const 4)))
-              (global.get $eax))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+              (i32.load offset=0 (global.get $reg_base)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))))
         ;; If WS_VISIBLE was set on main_hwnd's style, kick off the implicit-show
         ;; activation chain (matches real Win32 CreateWindowEx behavior). Leaves
         ;; saved_ret/saved_hwnd in place at [ESP]/[ESP+4]; the chain ends by
@@ -259,18 +259,18 @@
                 (call $host_invalidate (global.get $main_hwnd)))
               (else
                 ;; Push WndProc args: hwnd, WM_ACTIVATEAPP(0x001C), TRUE, 0
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-                (call $gs32 (global.get $esp) (i32.const 0))                ;; lParam
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-                (call $gs32 (global.get $esp) (i32.const 1))                ;; wParam = TRUE
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-                (call $gs32 (global.get $esp) (i32.const 0x001C))           ;; WM_ACTIVATEAPP
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-                (call $gs32 (global.get $esp) (global.get $main_hwnd))      ;; hwnd
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))                ;; lParam
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 1))                ;; wParam = TRUE
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x001C))           ;; WM_ACTIVATEAPP
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $main_hwnd))      ;; hwnd
                 ;; Push CACA0022 as WndProc return; chains through activation,
                 ;; focus, move, size, then CACA0001.
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-                (call $gs32 (global.get $esp) (global.get $createwnd_activate_thunk))
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_activate_thunk))
                 (global.set $eip (local.get $arg0))
                 (if (i32.eqz (global.get $eip))
                   (then (global.set $eip (global.get $wndproc_addr))))
@@ -281,7 +281,7 @@
         ;; WM_INITDIALOG. NSIS creates/shows wizard pages from dialog init; Win98
         ;; repaints those children through USER's visible-region pass before the
         ;; dialog is observably idle.
-        (local.set $arg0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+        (local.set $arg0 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
         (if (i32.and
               (i32.ne (local.get $arg0) (i32.const 0))
               (i32.ne
@@ -290,9 +290,9 @@
           (then
             (drop (call $paint_drain_native_control_paints))
             (drop (call $paint_flush_shown_native_children (local.get $arg0)))))
-        (global.set $eip (call $gl32 (global.get $esp)))
-        (global.set $eax (local.get $arg0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+        (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
         (return)))
 
     ;; ── First-ShowWindow synchronous activation chain (main window only) ──
@@ -306,16 +306,16 @@
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0022))
       (then
         ;; Push WndProc args: hwnd, WM_ACTIVATE(0x0006), WA_ACTIVE(1), hwnd
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $main_hwnd))        ;; lParam = hwnd
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 1))                  ;; wParam = WA_ACTIVE
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0006))             ;; WM_ACTIVATE
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $main_hwnd))        ;; hwnd
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_setfocus_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $main_hwnd))        ;; lParam = hwnd
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 1))                  ;; wParam = WA_ACTIVE
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0006))             ;; WM_ACTIVATE
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $main_hwnd))        ;; hwnd
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_setfocus_thunk))
         (global.set $eip (call $wnd_table_get (global.get $main_hwnd)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
@@ -328,16 +328,16 @@
         ;; GetFocus already names the receiving window inside WM_SETFOCUS.
         (global.set $focus_hwnd (global.get $main_hwnd))
         ;; Push WndProc args: hwnd, WM_SETFOCUS(0x0007), 0, 0
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))                  ;; lParam = 0
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))                  ;; wParam = hwndLoseFocus
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0007))             ;; WM_SETFOCUS
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $main_hwnd))        ;; hwnd
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_move_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))                  ;; lParam = 0
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))                  ;; wParam = hwndLoseFocus
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0007))             ;; WM_SETFOCUS
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $main_hwnd))        ;; hwnd
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_move_thunk))
         (global.set $eip (call $wnd_table_get (global.get $main_hwnd)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
@@ -356,21 +356,21 @@
         (local.set $arg0 (call $paint_scratch_take))
         (call $host_get_window_rect (global.get $main_hwnd) (local.get $arg0))
         ;; Push WndProc args: hwnd, WM_MOVE, 0, lParam=x|(y<<16).
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp)
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base))
           (i32.or
             (i32.and (load.field PaintRect left (local.get $arg0))
               (i32.const 0xFFFF))
             (i32.shl (load.field.memarg PaintRect top (local.get $arg0))
               (i32.const 16))))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0003))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $main_hwnd))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_size_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0003))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $main_hwnd))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_size_thunk))
         (global.set $eip (call $wnd_table_get (global.get $main_hwnd)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
@@ -388,18 +388,18 @@
           (then (local.set $arg0 (call $host_get_window_client_size (global.get $main_hwnd))))
           (else (local.set $arg0 (global.get $pending_wm_size))))
         ;; Push WndProc args: hwnd, WM_SIZE(0x0005), SIZE_*, lParam=client size.
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (local.get $arg0))              ;; lParam = cx|(cy<<16)
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp)
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))              ;; lParam = cx|(cy<<16)
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base))
           (select (i32.const 2) (i32.const 0)
                   (call $wnd_max_get (global.get $main_hwnd))))       ;; wParam = SIZE_MAXIMIZED/RESTORED
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0005))             ;; WM_SIZE
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $main_hwnd))        ;; hwnd
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_ret_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0005))             ;; WM_SIZE
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $main_hwnd))        ;; hwnd
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_ret_thunk))
 	        ;; Consume pending_wm_size so GetMessageA drain path doesn't replay it.
 	        (global.set $pending_wm_size (i32.const 0))
 	        ;; Match what the GetMessageA-drain path does: set WM_NCCALCSIZE pending.
@@ -422,11 +422,11 @@
       (then
         ;; Pop the typed outer-active-node frame saved below HookProc. The
         ;; marker keeps direct continuation tests and old saved frames valid.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x31544243))
           (then
             (call $hook_dispatch_leave
-              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))))
         ;; Clear pending_child_create — the full create chain is now synchronous.
         ;; (pending_child_size is kept; it flows through the message loop.)
         (global.set $pending_child_create (i32.const 0))
@@ -438,7 +438,7 @@
               (call $wnd_table_get (global.get $child_cbt_saved_hwnd))
               (global.get $WNDPROC_CTRL_NATIVE))
           (then
-            (global.set $eax (global.get $child_cbt_saved_hwnd))
+            (i32.store offset=0 (global.get $reg_base) (global.get $child_cbt_saved_hwnd))
             (global.set $eip (global.get $child_cbt_saved_ret))
             (global.set $steps (i32.const 0))
             (return)))
@@ -453,24 +453,24 @@
             (local.set $arg0 (global.get $pending_child_size))
             (global.set $pending_child_size (i32.const 0))
             (global.set $pending_child_size_hwnd (i32.const 0))))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (local.get $arg0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $child_cbt_saved_hwnd))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $child_cbt_saved_ret))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $child_cbt_saved_hwnd))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $child_cbt_saved_ret))
         ;; Push WndProc args: hwnd, WM_NCCREATE, 0, &CREATESTRUCT
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.add (global.get $image_base) (i32.const 0x100)))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0081))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $child_cbt_saved_hwnd))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.add (global.get $image_base) (i32.const 0x100)))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0081))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $child_cbt_saved_hwnd))
         ;; Push CACA002E, which sends WM_CREATE then reaches CACA0027.
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $child_create_nccreate_ret_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $child_create_nccreate_ret_thunk))
         ;; Jump to the child's (possibly-subclassed) wndproc
         (global.set $eip (call $wnd_table_get (global.get $child_cbt_saved_hwnd)))
         (if (i32.eqz (global.get $eip))
@@ -483,28 +483,28 @@
     ;; deliver the paired WM_SIZE before returning the HWND to CreateWindowEx.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA002E))
       (then
-        (local.set $arg0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-        (if (i32.eqz (global.get $eax))
+        (local.set $arg0 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (then
             (call $create_window_abort (local.get $arg0))
-            (global.set $eip (call $gl32 (global.get $esp)))
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+            (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
             (return)))
         ;; Distinguish the following WM_CREATE result from the WM_SIZE result
         ;; that re-enters CACA0027 with the same ordinary saved frame.
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x43524541)) ;; "CREA"
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.add (global.get $image_base) (i32.const 0x100)))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0001))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (local.get $arg0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $child_create_ret_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x43524541)) ;; "CREA"
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.add (global.get $image_base) (i32.const 0x100)))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0001))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $child_create_ret_thunk))
         (global.set $eip (call $wnd_table_get (local.get $arg0)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
@@ -515,40 +515,40 @@
     ;; initial WM_SIZE, then pop saved state and hand hwnd back.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0027))
       (then
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x43524541))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x43524541))
           (then
-            (if (i32.eq (global.get $eax) (i32.const -1))
+            (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
               (then
                 (local.set $arg0
-                  (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+                  (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
                 (call $create_window_abort (local.get $arg0))
                 (global.set $eip
-                  (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-                (global.set $eax (i32.const 0))
-                (global.set $esp (i32.add (global.get $esp) (i32.const 16)))
+                  (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+                (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+                (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)))
                 (return)))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 4)))))
-        (local.set $arg0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-        (local.set $arg1 (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))))
+        (local.set $arg0 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (local.set $arg1 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
         (if (local.get $arg1)
           (then
             ;; Mark the saved size consumed, then call the child wndproc with
             ;; WM_SIZE. When it returns to CACA0027 again, the zero size marker
             ;; falls through to the final return path below.
-            (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0))
             (if (call $wnd_is_effectively_visible (local.get $arg0))
               (then (call $nc_flags_set (local.get $arg0) (i32.const 4)))
               (else (call $defwndproc_do_nccalcsize (local.get $arg0))))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (local.get $arg1))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (i32.const 0))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (i32.const 0x0005))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (local.get $arg0))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (global.get $child_create_ret_thunk))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg1))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0005))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $child_create_ret_thunk))
             (global.set $eip (call $wnd_table_get (local.get $arg0)))
             (if (i32.eqz (global.get $eip))
               (then (global.set $eip (global.get $wndproc_addr))))
@@ -562,39 +562,39 @@
               (call $ctrl_table_get_class (call $wnd_get_parent (local.get $arg0)))
               (i32.const 33))
           (then (drop (call $mdi_client_register_child (local.get $arg0)))))
-        (global.set $eip (call $gl32 (global.get $esp)))
-        (global.set $eax (local.get $arg0))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+        (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
         (return)))
 
     ;; CACA0029: WM_NCCREATE returned — dispatch WM_CREATE with the same
     ;; CREATESTRUCT while CreateWindowExA's caller stack is still live.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0029))
       (then
-        (local.set $arg0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-        (if (i32.eqz (global.get $eax))
+        (local.set $arg0 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (then
             (call $create_window_abort (local.get $arg0))
-            (global.set $eip (call $gl32 (global.get $esp)))
-            (global.set $eax (i32.const 0))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
+            (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
             (return)))
         ;; This marker survives the stdcall WndProc frame and tells the shared
         ;; CACA0001 return thunk that its EAX is specifically WM_CREATE's.
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x43524541)) ;; "CREA"
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x43524541)) ;; "CREA"
         ;; Push WndProc args: hwnd, WM_CREATE, 0, &CREATESTRUCT.
         ;; saved_ret + saved_hwnd remain below these args for CACA0001.
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.add (global.get $image_base) (i32.const 0x100)))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0001))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (local.get $arg0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_ret_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.add (global.get $image_base) (i32.const 0x100)))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0001))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_ret_thunk))
         (global.set $eip (call $wnd_table_get (local.get $arg0)))
         (if (i32.eqz (global.get $eip))
           (then (global.set $eip (global.get $wndproc_addr))))
@@ -606,68 +606,68 @@
     ;; direct path, but lets MFC's WH_CBT hook attach m_hWnd first.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0028))
       (then
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x31544243))
           (then
             (call $hook_dispatch_leave
-              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))))
         (if (global.get $dialog_cbt_saved_proc)
           (then
             (local.set $arg0 (call $dialog_first_init_tabstop
               (global.get $dialog_cbt_saved_hwnd)))
             ;; Push saved_hwnd + saved_ret below DlgProc args; CACA0001
             ;; returns saved_hwnd in EAX after WM_INITDIALOG.
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (global.get $dialog_cbt_saved_hwnd))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (global.get $dialog_cbt_saved_ret))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (local.get $arg0))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (i32.const 0x44494643)) ;; "DIFC"
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (global.get $dialog_cbt_saved_lparam))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (local.get $arg0))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (i32.const 0x110))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (global.get $dialog_cbt_saved_hwnd))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-            (call $gs32 (global.get $esp) (global.get $createwnd_ret_thunk))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dialog_cbt_saved_hwnd))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dialog_cbt_saved_ret))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x44494643)) ;; "DIFC"
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dialog_cbt_saved_lparam))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (local.get $arg0))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x110))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dialog_cbt_saved_hwnd))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_ret_thunk))
             (global.set $eip (global.get $dialog_cbt_saved_proc))
             (global.set $steps (i32.const 0))
             (return)))
         (global.set $eip (global.get $dialog_cbt_saved_ret))
-        (global.set $eax (global.get $dialog_cbt_saved_hwnd))
+        (i32.store offset=0 (global.get $reg_base) (global.get $dialog_cbt_saved_hwnd))
         (return)))
 
     ;; CBT hook continuation — hook returned, now dispatch WM_NCCREATE. The
     ;; CACA0029 continuation follows with WM_CREATE using the same CREATESTRUCT.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA0002))
       (then
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31544243))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x31544243))
           (then
             (call $hook_dispatch_leave
-              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))))
         ;; Push saved_hwnd and saved_ret below WndProc args (for CACA0001 to pop)
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_saved_hwnd))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_saved_ret))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_saved_hwnd))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_saved_ret))
         ;; Push WndProc args: hwnd, WM_NCCREATE, 0, &CREATESTRUCT
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.add (global.get $image_base) (i32.const 0x100)))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (i32.const 0x0081))
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_saved_hwnd))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.add (global.get $image_base) (i32.const 0x100)))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0x0081))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_saved_hwnd))
         ;; CACA0029 dispatches WM_CREATE, whose return then reaches CACA0001.
-        (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-        (call $gs32 (global.get $esp) (global.get $createwnd_nccreate_ret_thunk))
+        (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $createwnd_nccreate_ret_thunk))
         ;; Get WndProc from window table (may have been updated by CBT hook)
         (global.set $eip (call $wnd_table_get (global.get $createwnd_saved_hwnd)))
         (if (i32.eqz (global.get $eip))
@@ -680,13 +680,13 @@
     ;; DestroyWindow's focused-descendant transfer path.
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA002A))
       (then
-        (global.set $eip (call $gl32 (global.get $esp)))
-        (global.set $eax (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-        (global.set $ebx (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
-        (global.set $esi (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
-        (global.set $edi (call $gl32 (i32.add (global.get $esp) (i32.const 16))))
-        (global.set $ebp (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 28)))
+        (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=0 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+        (i32.store offset=12 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+        (i32.store offset=24 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+        (i32.store offset=28 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+        (i32.store offset=20 (global.get $reg_base) (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)))
         (return)))
 
     ;; DialogBoxParamA continuation — dialog proc returned, pump next message or finish
@@ -711,7 +711,7 @@
             (call $dialog_apply_init_focus
               (global.get $dlg_pump_hwnd)
               (global.get $dlg_init_focus_hwnd)
-              (global.get $eax))
+              (i32.load offset=0 (global.get $reg_base)))
             (global.set $dlg_init_focus_hwnd (i32.const 0))))
         ;; If EndDialog was called, destroy dialog and return result
         (if (global.get $dlg_ended)
@@ -736,22 +736,22 @@
             (local.set $arg0 (global.get $dlg_result))
             (local.set $arg1 (global.get $dlg_ret_addr))
             (global.set $dlg_pump_hwnd
-              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
             (global.set $dlg_proc
-              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
             (global.set $dlg_ret_addr
-              (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
             (global.set $dlg_callback_yield_pending
-              (call $gl32 (i32.add (global.get $esp) (i32.const 16))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
             (global.set $dlg_init_focus_hwnd
-              (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
             (if (global.get $dlg_pump_hwnd)
               (then (global.set $dlg_hwnd (global.get $dlg_pump_hwnd))))
             (i32.store (global.get $SHARED_DLG_PUMP_HWND)
               (global.get $dlg_pump_hwnd))
-            (global.set $eax (local.get $arg0))
+            (i32.store offset=0 (global.get $reg_base) (local.get $arg0))
             (global.set $eip (local.get $arg1))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
             (global.set $dlg_ended (i32.const 0))
             (global.set $dlg_result (i32.const 0))
             (global.set $quit_flag (i32.const 0))
@@ -837,12 +837,12 @@
                 (global.set $eip (global.get $dlg_loop_thunk))
                 (global.set $steps (i32.const 0))
                 (return)))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-            (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $arg1))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $arg2))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $arg3))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $arg1))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $arg2))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $arg3))
             (global.set $dlg_callback_yield_pending (i32.const 1))
             (global.set $eip (local.get $arg4))
             (global.set $steps (i32.const 0))
@@ -892,12 +892,12 @@
               (then (local.set $arg4 (global.get $dlg_proc))))
             (if (i32.lt_u (local.get $arg4) (global.get $image_base))
               (then (local.set $arg4 (global.get $dlg_proc))))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-            (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $arg1))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $arg2))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $arg3))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $arg1))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $arg2))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $arg3))
             (global.set $dlg_callback_yield_pending (i32.const 1))
             (global.set $eip (local.get $arg4))
             (global.set $steps (i32.const 0))
@@ -940,12 +940,12 @@
                 ;; can't reroute input to the inner sub-dialog.
                 (local.set $arg0 (global.get $dlg_pump_hwnd))
                 (local.set $arg4 (global.get $dlg_proc))))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-            (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $arg1))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $arg2))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $arg3))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $arg1))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $arg2))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $arg3))
             (global.set $dlg_callback_yield_pending (i32.const 1))
             (global.set $eip (local.get $arg4))
             (global.set $steps (i32.const 0))
@@ -967,13 +967,13 @@
             ;; five-argument TimeProc rather than a window procedure.
             (if (i32.eq (local.get $arg1) (i32.const 0x7FF0))
               (then
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 24)))
-                (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg2))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (i32.const 0))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $arg0))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (i32.const 0))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 20)) (i32.const 0))
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg2))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $arg0))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (i32.const 0))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)) (i32.const 0))
                 (global.set $dlg_callback_yield_pending (i32.const 1))
                 (global.set $eip (local.get $arg3))
                 (global.set $steps (i32.const 0))
@@ -982,12 +982,12 @@
             ;; arguments are hwnd, WM_TIMER, id, and the tick count.
             (if (local.get $arg3)
               (then
-                (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-                (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $arg1))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $arg2))
-                (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (global.get $tick_count))
+                (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+                (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $arg1))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $arg2))
+                (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (global.get $tick_count))
                 (global.set $dlg_callback_yield_pending (i32.const 1))
                 (global.set $eip (local.get $arg3))
                 (global.set $steps (i32.const 0))
@@ -1006,12 +1006,12 @@
               (then (local.set $arg4 (global.get $dlg_proc))))
             (if (i32.lt_u (local.get $arg4) (global.get $image_base))
               (then (local.set $arg4 (global.get $dlg_proc))))
-            (global.set $esp (i32.sub (global.get $esp) (i32.const 20)))
-            (call $gs32 (global.get $esp) (global.get $dlg_loop_thunk))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 4)) (local.get $arg0))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 8)) (local.get $arg1))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 12)) (local.get $arg2))
-            (call $gs32 (i32.add (global.get $esp) (i32.const 16)) (local.get $arg3))
+            (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
+            (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $dlg_loop_thunk))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)) (local.get $arg0))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (local.get $arg1))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)) (local.get $arg2))
+            (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16)) (local.get $arg3))
             (global.set $dlg_callback_yield_pending (i32.const 1))
             (global.set $eip (local.get $arg4))
             (global.set $steps (i32.const 0))
@@ -1065,14 +1065,14 @@
               (then (call $modal_done (i32.const 1))))))
         (if (call $modal_pump_step (global.get $modal_loop_thunk)) (then (return)))
         ;; Modal complete — splice the API call back together.
-        (global.set $eax (global.get $modal_result))
-        (global.set $ebx (global.get $modal_saved_ebx))
-        (global.set $esi (global.get $modal_saved_esi))
-        (global.set $edi (global.get $modal_saved_edi))
-        (global.set $ebp (global.get $modal_saved_ebp))
+        (i32.store offset=0 (global.get $reg_base) (global.get $modal_result))
+        (i32.store offset=12 (global.get $reg_base) (global.get $modal_saved_ebx))
+        (i32.store offset=24 (global.get $reg_base) (global.get $modal_saved_esi))
+        (i32.store offset=28 (global.get $reg_base) (global.get $modal_saved_edi))
+        (i32.store offset=20 (global.get $reg_base) (global.get $modal_saved_ebp))
         (global.set $modal_restore_pending (i32.const 0))
         (global.set $eip (global.get $modal_ret_addr))
-        (global.set $esp (i32.add (global.get $modal_saved_esp) (global.get $modal_esp_adjust)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (global.get $modal_saved_esp) (global.get $modal_esp_adjust)))
         (global.set $yield_reason (i32.const 0))
         (return)))
 
@@ -1087,8 +1087,8 @@
           (global.set $initterm_ptr (i32.add (global.get $initterm_ptr) (i32.const 4)))
           (if (local.get $arg0)
             (then
-              (global.set $esp (i32.sub (global.get $esp) (i32.const 4)))
-              (call $gs32 (global.get $esp) (global.get $initterm_thunk))
+              (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+              (call $gs32 (i32.load offset=16 (global.get $reg_base)) (global.get $initterm_thunk))
               (global.set $eip (local.get $arg0))
               (global.set $steps (i32.const 0))
               (return)))
@@ -1109,15 +1109,15 @@
     (if (i32.eq (local.get $name_rva) (i32.const 0xCACA000C))
       (then
         ;; compar's ret popped the thunk addr; our 2 pushed args remain.
-        (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-        (if (i32.eqz (global.get $eax))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (then
-            (global.set $eax (i32.add (global.get $bsearch_base)
+            (i32.store offset=0 (global.get $reg_base) (i32.add (global.get $bsearch_base)
               (i32.mul (global.get $bsearch_mid) (global.get $bsearch_size))))
             (global.set $eip (global.get $bsearch_ret))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
             (return)))
-        (if (i32.lt_s (global.get $eax) (i32.const 0))
+        (if (i32.lt_s (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
           (then (global.set $bsearch_high (global.get $bsearch_mid)))
           (else (global.set $bsearch_low
             (i32.add (global.get $bsearch_mid) (i32.const 1)))))
@@ -1135,12 +1135,12 @@
       (then
         ;; EnumSurfaces keeps a typed, stack-resident iterator so callbacks
         ;; may re-enter DirectDraw and enumeration can resume or cancel.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x53454444))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x53454444))
           (then (call $dd_enum_surfaces_continue) (return)))
         ;; Pop the saved original return address
-        (global.set $eip (call $gl32 (global.get $esp)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
-        (global.set $eax (i32.const 0))  ;; DD_OK
+        (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))  ;; DD_OK
         (return)))
 
     ;; EnumDisplayModes continuation — callback returned, try next mode
@@ -1199,38 +1199,38 @@
         ;; A nested HookProc returned from CallNextHookEx. Restore the calling
         ;; hook as the active chain node and resume immediately after the API
         ;; call, preserving the nested hook's exact LRESULT in EAX.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x314E4B48))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x314E4B48))
           (then
             (global.set $eip
-              (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
             (global.set $hook_active_node
-              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
             (return)))
         ;; DirectPlay player/group enumeration leaves its reentrant DPEN frame
         ;; at ESP after the five-argument callback returns.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x4E455044))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x4E455044))
           (then
             (call $dp_enum_continue)
             (return)))
         ;; DirectInput EnumDevices/EnumObjects callbacks leave their reentrant
         ;; stack-resident DIEN frame at ESP after stdcall pops both arguments.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x4E454944))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x4E454944))
           (then
             (call $di_enum_continue)
             (return)))
         ;; DirectPlayLobby EnumAddress/EnumAddressTypes callbacks leave a
         ;; reentrant DPLA/DPLT frame after popping four/three arguments.
         (if (i32.or
-              (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x414C5044))
-              (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x544C5044)))
+              (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x414C5044))
+              (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x544C5044)))
           (then
             (call $dpl_enum_continue)
             (return)))
         ;; Console HandlerRoutine callbacks leave their CCTL chain frame after
         ;; stdcall RET 4. Resume the prior handler or the interrupted console
         ;; API according to the handler's BOOL result.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x4C544343))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x4C544343))
           (then
             (call $console_ctrl_continue)
             (return)))
@@ -1238,55 +1238,55 @@
         ;; Win98 COMCTL32 has returned from the masked legacy half, exposing
         ;; ICCT, the temporary structure, and the original stdcall frame.
         ;; Preserve its BOOL in EAX while completing the original RET 4.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x54434349))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x54434349))
           (then
             (global.set $eip
-              (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 20)))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))
             (return)))
         ;; WH_KEYBOARD callbacks use this existing one-callback thunk with a
         ;; tiny typed context. KeyboardProc's stdcall return leaves KHK1 at
         ;; ESP; restore the USER caller and the successful Get/PeekMessage
         ;; result. (Hook suppression on nonzero return is not modeled yet.)
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x314B484B))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x314B484B))
           (then
             (call $hook_dispatch_leave
-              (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
-            (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-            (global.set $eax (i32.const 1))
+              (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+            (global.set $eip (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1))
             (return)))
         ;; TranslateAccelerator's WM_COMMAND returned: the accelerator was
         ;; translated, so the API reports TRUE whatever the wndproc said.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x43434154))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x43434154))
           (then
-            (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 8)))
-            (global.set $eax (i32.const 1))
+            (global.set $eip (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1))
             (return)))
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x434E5446))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x434E5446))
           (then
             (call $gdi_font_enum_continue)
             (return)))
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x4345464D))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x4345464D))
           (then
             (call $gdi_metafile_enum_continue)
             (return)))
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x43454C4F))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x43454C4F))
           (then
             (call $ole_guest_callback_continue)
             (return)))
         ;; One-string system enumerations use a typed frame so their temporary
         ;; guest buffer is released before the original API caller resumes.
-        (if (i32.eq (call $gl32 (global.get $esp)) (i32.const 0x31535953))
+        (if (i32.eq (call $gl32 (i32.load offset=16 (global.get $reg_base))) (i32.const 0x31535953))
           (then
-            (call $heap_free (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-            (global.set $eip (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
-            (global.set $esp (i32.add (global.get $esp) (i32.const 12)))
-            (global.set $eax (i32.const 1))
+            (call $heap_free (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+            (global.set $eip (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+            (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 1))
             (return)))
-        (global.set $eip (call $gl32 (global.get $esp)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (global.set $eip (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (return)))
 
     ;; LineDDA point callback returned; stdcall popped its three arguments.
@@ -1353,18 +1353,18 @@
           (i32.add (local.get $name_rva) (i32.const 2)))))
         (call $host_log (local.get $name_ptr) (call $strlen (local.get $name_ptr)))))
     ;; Load args from guest stack
-    (local.set $arg0 (call $gl32 (i32.add (global.get $esp) (i32.const 4))))
-    (local.set $arg1 (call $gl32 (i32.add (global.get $esp) (i32.const 8))))
-    (local.set $arg2 (call $gl32 (i32.add (global.get $esp) (i32.const 12))))
-    (local.set $arg3 (call $gl32 (i32.add (global.get $esp) (i32.const 16))))
-    (local.set $arg4 (call $gl32 (i32.add (global.get $esp) (i32.const 20))))
+    (local.set $arg0 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+    (local.set $arg1 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8))))
+    (local.set $arg2 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
+    (local.set $arg3 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 16))))
+    (local.set $arg4 (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20))))
 
     ;; Win32 APIs use stdcall/cdecl ABIs and must preserve the x86 nonvolatile
     ;; registers even when a handler recursively dispatches window messages.
-    (local.set $saved_ebx (global.get $ebx))
-    (local.set $saved_esi (global.get $esi))
-    (local.set $saved_edi (global.get $edi))
-    (local.set $saved_ebp (global.get $ebp))
+    (local.set $saved_ebx (i32.load offset=12 (global.get $reg_base)))
+    (local.set $saved_esi (i32.load offset=24 (global.get $reg_base)))
+    (local.set $saved_edi (i32.load offset=28 (global.get $reg_base)))
+    (local.set $saved_ebp (i32.load offset=20 (global.get $reg_base)))
 
     ;; Hot message pumps exercise PeekMessage often enough that a direct path
     ;; avoids large br_table edge cases and keeps idle loops from corrupting ESP.
@@ -1402,10 +1402,9 @@
         (if (i32.and
               (i32.ne (local.get $arg4) (i32.const 0xFFFF))
               (i32.ne (local.get $arg4) (i32.const 0x102)))
-          (then (global.set $eax (local.get $arg4)))
+          (then (i32.store offset=0 (global.get $reg_base) (local.get $arg4)))
           (else
-            (global.set $eax
-              (select
+            (i32.store offset=0 (global.get $reg_base) (select
                 (local.get $arg0)
                 (i32.const 0x102)
                 (i32.or
@@ -1416,7 +1415,7 @@
                   (i32.or
                     (i32.or (global.get $paint_pending) (global.get $nc_flags_count))
                     (call $paint_flag_any)))))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)))
         (global.set $yield_flag (i32.const 1))
         (global.set $steps (i32.const 0))
         (call $restore_win32_nonvolatile
@@ -1425,7 +1424,7 @@
         (call $host_log_api_exit)
         ;; This direct handler deliberately completes its own stdcall frame,
         ;; so resume at the return address instead of relying on thunk auto-pop.
-        (global.set $eip (call $gl32 (i32.sub (global.get $esp) (i32.const 24))))
+        (global.set $eip (call $gl32 (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
         (return)))
 
     ;; Delegate to generated br_table

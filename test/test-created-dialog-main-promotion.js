@@ -51,7 +51,7 @@ const extraWat = String.raw`
   (func (export "test_finish_implicit_show") (param $stack i32) (result i32)
     ;; Model the WM_CREATE continuation frame consumed by CACA0001. The
     ;; retained-dialog branch completes its activation chain synchronously.
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $gs32 (local.get $stack) (i32.const 0x00405678))
     (call $gs32 (i32.add (local.get $stack) (i32.const 4))
       (global.get $main_hwnd))

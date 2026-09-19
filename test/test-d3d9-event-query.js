@@ -17,14 +17,14 @@ const {CommandQueue}=require('../lib/d3d-command-stream');
       (store.field DxObject misc1 (call $dx_from_this (local.get $d)) (call $d3d9_program_alloc))
       (local.get $d))
     (func (export "create") (param $d i32) (param $type i32) (param $out i32) (result i32)
-      (call $d3d9_query_create (local.get $d) (local.get $type) (local.get $out)) (global.get $eax))
+      (call $d3d9_query_create (local.get $d) (local.get $type) (local.get $out)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "device_refs") (param $d i32) (result i32)
       (load.field DxObject refcount (call $dx_from_this (local.get $d))))
     ${['QueryInterface','AddRef','Release','GetDevice','GetType','GetDataSize','Issue','GetData'].map(n=>`
     (func (export "${n}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (result i32)
-      (global.set $esp (i32.const 0x074ff000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x074ff000))
       (call $handle_IDirect3DQuery9_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (i32.const 0) (i32.const 0))
-      (global.get $eax))`).join('\n')}
+      (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   `});
   e.init_dx_com_thunks();
   const out=0x00409000,d=e.device(out),read=p=>e.guest_read32(p)>>>0;

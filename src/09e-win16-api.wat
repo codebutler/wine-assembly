@@ -33,9 +33,9 @@
   ;; which under Pascal is every byte the caller pushed.
   (func $win16_api_return (param $argbytes i32)
     (local $ip i32) (local $sel i32)
-    (local.set $ip  (call $gl16 (global.get $esp)))
-    (local.set $sel (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.add (i32.const 4) (local.get $argbytes))))
+    (local.set $ip  (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $sel (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 4) (local.get $argbytes))))
     (call $win16_set_sreg (i32.const 1) (local.get $sel))
     (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $ip)))
     (call $cs_pop))
@@ -61,7 +61,7 @@
         (call $host_log_i32 (call $win16_api_key (global.get $win16_last_module)
                                                  (global.get $win16_last_ordinal)))
         (unreachable)))
-    (call $gl16 (i32.add (global.get $esp)
+    (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base))
                          (i32.add (i32.const 4) (i32.shl (local.get $n) (i32.const 1))))))
 
   (func $win16_arg32 (param $n i32) (result i32)
@@ -271,14 +271,14 @@
   ;; frame and a 16-bit task, so those get their own Win16 implementations.
   (func $win16_call32_begin (param $argc i32)
     (global.set $win16_in_call32 (i32.const 1))
-    (global.set $win16_esp_save (global.get $esp))
+    (global.set $win16_esp_save (i32.load offset=16 (global.get $reg_base)))
     (global.set $win16_eip_save (global.get $eip))
-    (global.set $esp (i32.sub (i32.add (global.get $GUEST_STACK) (global.get $GUEST_STACK_SIZE))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.add (global.get $GUEST_STACK) (global.get $GUEST_STACK_SIZE))
                               (i32.shl (i32.add (local.get $argc) (i32.const 1)) (i32.const 2))))
-    (call $gs32 (global.get $esp) (i32.const 0)))   ;; return address the handler will pop
+    (call $gs32 (i32.load offset=16 (global.get $reg_base)) (i32.const 0)))   ;; return address the handler will pop
 
   (func $win16_call32_arg (param $i i32) (param $val i32)
-    (call $gs32 (i32.add (global.get $esp)
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base))
                          (i32.add (i32.const 4) (i32.shl (local.get $i) (i32.const 2))))
                 (local.get $val)))
 
@@ -297,7 +297,7 @@
     (global.set $win16_in_call32 (i32.const 0))
     (local.set $moved (i32.ne (global.get $eip) (global.get $win16_eip_save)))
     (global.set $eip (global.get $win16_eip_save))
-    (global.set $esp (global.get $win16_esp_save))
+    (i32.store offset=16 (global.get $reg_base) (global.get $win16_esp_save))
     (local.get $moved))
 
   ;; A blocking handler yields instead of returning: it leaves its frame on the
@@ -332,7 +332,7 @@
         (call $host_log_i32 (global.get $eip))
         (unreachable)))
     (global.set $win16_in_call32 (i32.const 0))
-    (global.set $esp (global.get $win16_esp_save)))
+    (i32.store offset=16 (global.get $reg_base) (global.get $win16_esp_save)))
 
   ;; ---- KERNEL ----
 
@@ -374,12 +374,12 @@
         (call $gs8 (i32.add (local.get $base) (i32.const 0x81)) (i32.const 0))
         (call $gs8 (i32.add (local.get $base) (i32.const 0x82)) (i32.const 0x0D))))
 
-    (global.set $eax (i32.const 1))
-    (global.set $ecx (global.get $win16_stack_size))
-    (global.set $edx (i32.const 1))   ;; SW_SHOWNORMAL
-    (global.set $ebx (i32.const 0x81))
-    (global.set $esi (i32.const 0))   ;; no previous instance
-    (global.set $edi (global.get $sreg_ds))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+    (i32.store offset=4 (global.get $reg_base) (global.get $win16_stack_size))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 1))   ;; SW_SHOWNORMAL
+    (i32.store offset=12 (global.get $reg_base) (i32.const 0x81))
+    (i32.store offset=24 (global.get $reg_base) (i32.const 0))   ;; no previous instance
+    (i32.store offset=28 (global.get $reg_base) (global.get $sreg_ds))
     (call $win16_set_sreg (i32.const 0) (global.get $win16_psp_sel))
     (call $win16_api_return (i32.const 0)))
 
@@ -390,8 +390,8 @@
     (if (i32.eqz (global.get $win16_psp_sel))
       (then (global.set $win16_psp_sel
               (call $win16_index_to_sel (call $win16_alloc_segment)))))
-    (global.set $eax (global.get $win16_psp_sel))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (global.get $win16_psp_sel))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 0)))
 
   ;; KERNEL.3 GetVersion. AL:AH is the Windows version and DX the DOS one.
@@ -399,15 +399,15 @@
   ;; significant for Win95-era 16-bit bootstrap programs: InstallShield's
   ;; launcher rejects 3.10 before it starts the bundled 32-bit installer.
   (func $win16_GetVersion
-    (global.set $eax (i32.and (global.get $winver) (i32.const 0xFFFF)))
-    (global.set $edx (i32.const 0x070A))  ;; DH=7 major, DL=10 minor
+    (i32.store offset=0 (global.get $reg_base) (i32.and (global.get $winver) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0x070A))  ;; DH=7 major, DL=10 minor
     (call $win16_api_return (i32.const 0)))
 
   ;; KERNEL.30 WaitEvent(HTASK). Yields until the task has a message. With one
   ;; task and a message queue that is always ready to be asked, there is
   ;; nothing to wait for and returning immediately is the honest answer.
   (func $win16_WaitEvent
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
   ;; KERNEL.127 GetPrivateProfileInt(lpAppName, lpKeyName, nDefault, lpFileName)
@@ -426,7 +426,7 @@
     (call $handle_GetPrivateProfileIntA (local.get $app) (local.get $key)
       (local.get $def) (local.get $file) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 14)))
 
   (func $win16_GetPrivateProfileString
@@ -448,7 +448,7 @@
     (call $handle_GetPrivateProfileStringA (local.get $app) (local.get $key)
       (local.get $def) (local.get $buf) (local.get $size) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 22)))
 
   (func $win16_WritePrivateProfileString
@@ -465,7 +465,7 @@
     (call $handle_WritePrivateProfileStringA (local.get $app) (local.get $key)
       (local.get $val) (local.get $file) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 16)))
 
   ;; KERNEL.57 GetProfileInt / .58 GetProfileString / .59 WriteProfileString —
@@ -482,7 +482,7 @@
     (call $handle_GetProfileIntA (local.get $app) (local.get $key)
       (local.get $def) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   (func $win16_GetProfileString
@@ -502,7 +502,7 @@
     (call $handle_GetProfileStringA (local.get $app) (local.get $key)
       (local.get $def) (local.get $buf) (local.get $size) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 18)))
 
   (func $win16_WriteProfileString
@@ -519,7 +519,7 @@
     (call $handle_WriteProfileStringA (local.get $app) (local.get $key)
       (local.get $val) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))
 
   ;; KERNEL.97 GetTempFileName(bDriveLetter, lpPrefix, uUnique, lpBuffer).
@@ -552,7 +552,7 @@
     (call $handle_GetTempFileNameA (local.get $buf) (local.get $prefix)
       (local.get $unique) (local.get $buf) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))
 
   ;; KERNEL.88 lstrcpy / KERNEL.89 lstrcat(lpString1, lpString2) -> lpString1,
@@ -585,12 +585,12 @@
       (br_if $done (i32.eqz (local.get $ch)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $copy)))
-    (global.set $edx (call $win16_arg16 (i32.const 3)))
-    (global.set $eax (call $win16_arg16 (i32.const 2)))
+    (i32.store offset=8 (global.get $reg_base) (call $win16_arg16 (i32.const 3)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_arg16 (i32.const 2)))
     (call $win16_api_return (i32.const 8)))
 
   (func $win16_lstrlen
-    (global.set $eax (call $win16_lstr_len (call $win16_far_to_guest
+    (i32.store offset=0 (global.get $reg_base) (call $win16_lstr_len (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0)))))
     (call $win16_api_return (i32.const 4)))
 
@@ -619,8 +619,8 @@
     (local.set $module (call $win16_arg16 (i32.const 0)))
     (local.set $entry (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
-    (global.set $eax (i32.const 0))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (if (i32.and (i32.ne (local.get $module) (i32.const 0))
                  (i32.ge_u (call $gl32 (local.get $entry)) (i32.const 276)))
       (then
@@ -633,7 +633,7 @@
           (i32.add (local.get $entry) (i32.const 18)) (i32.const 256)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (global.get $eax)
+        (if (i32.load offset=0 (global.get $reg_base))
           (then
             ;; Derive szModule from the returned path: basename, uppercase,
             ;; without the extension, capped at the SDK's eight-character
@@ -663,7 +663,7 @@
                                   (local.get $n)) (local.get $ch))
               (local.set $n (i32.add (local.get $n) (i32.const 1)))
               (br $name)))
-            (global.set $eax (local.get $module))))))
+            (i32.store offset=0 (global.get $reg_base) (local.get $module))))))
     (call $win16_api_return (i32.const 6)))
 
   ;; TOOLHELP.72 MemManInfo. Counts are 4 KiB pages; the two LinearSpace
@@ -674,8 +674,8 @@
     (local $info i32)
     (local.set $info (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (if (i32.ge_u (call $gl32 (local.get $info)) (i32.const 42))
       (then
         (call $gs32 (i32.add (local.get $info) (i32.const 4)) (i32.const 0x01000000))
@@ -688,7 +688,7 @@
         (call $gs32 (i32.add (local.get $info) (i32.const 32)) (i32.const 0x04000000))
         (call $gs32 (i32.add (local.get $info) (i32.const 36)) (i32.const 0))
         (call $gs16 (i32.add (local.get $info) (i32.const 40)) (i32.const 4096))
-        (global.set $eax (i32.const 1))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
     (call $win16_api_return (i32.const 4)))
 
   ;; TOOLHELP.67 StackTraceCSIPFirst and .68 StackTraceNext.
@@ -720,10 +720,10 @@
     (local $entry i32)
     (local.set $entry (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
-    (global.set $eax (call $win16_toolhelp_stack_fill (local.get $entry)
+    (i32.store offset=0 (global.get $reg_base) (call $win16_toolhelp_stack_fill (local.get $entry)
       (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 0))
       (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 12)))
 
   (func $win16_StackTraceNext
@@ -740,11 +740,11 @@
     (if (i32.or (i32.le_u (local.get $next_bp) (local.get $bp))
                 (i32.eqz (call $win16_seg_base
                   (call $win16_sel_to_index (local.get $next_cs)))))
-      (then (global.set $eax (i32.const 0)))
-      (else (global.set $eax (call $win16_toolhelp_stack_fill (local.get $entry)
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
+      (else (i32.store offset=0 (global.get $reg_base) (call $win16_toolhelp_stack_fill (local.get $entry)
         (local.get $ss) (local.get $next_bp) (local.get $next_cs)
         (local.get $next_ip)))))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_toolhelp (param $module i32) (param $ordinal i32) (result i32)
@@ -1053,8 +1053,8 @@
     (i32.const 1))
 
   (func $win16_hresult (param $hr i32)
-    (global.set $edx (i32.shr_u (local.get $hr) (i32.const 16)))
-    (global.set $eax (i32.and (local.get $hr) (i32.const 0xFFFF))))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $hr) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $hr) (i32.const 0xFFFF))))
 
   ;; AVIFILE.102 AVIFileOpen(PAVIFILE FAR *ppfile, LPCSTR szFile, UINT mode,
   ;; CLSID FAR *pclsidHandler) -> HRESULT. Read-only opens only: this AVIFILE
@@ -1083,7 +1083,7 @@
     (call $handle__lopen (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (local.set $fh (global.get $eax))
+    (local.set $fh (i32.load offset=0 (global.get $reg_base)))
     (call $gs32 (i32.add (local.get $base) (i32.const 0x50)) (local.get $fh))
     (if (i32.eq (local.get $fh) (i32.const -1))
       (then (call $win16_avi_teardown (local.get $base))
@@ -1512,7 +1512,7 @@
                    (i64.const 0x004F45444956534D)))
       (then (return (i32.const 0))))
     (if (i32.eq (local.get $ordinal) (i32.const 213))
-      (then (global.set $eax (i32.const 0))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (call $win16_api_return (i32.const 18)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 204))
       (then (call $win16_hresult (i32.const -8)) ;; ICERR_BADHANDLE
@@ -1562,16 +1562,16 @@
     (if (call $win16_version_name_is_gdi (local.get $file))
       (then
         (if (local.get $handle) (then (call $gs32 (local.get $handle) (i32.const 0))))
-        (global.set $eax (i32.add (global.get $DX_VERSION_INFO_SIZE) (i32.const 4)))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.add (global.get $DX_VERSION_INFO_SIZE) (i32.const 4)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 8))
         (return)))
     (call $win16_call32_begin (i32.const 2))
     (call $handle_GetFileVersionInfoSizeA (local.get $file) (local.get $handle)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; VER.7 GetFileVersionInfo(filename, handle, len, data) -> BOOL.
@@ -1608,16 +1608,16 @@
             ;; only for this translation pair before choosing its dialog.
             (call $gs32 (i32.add (local.get $data) (global.get $DX_VERSION_INFO_SIZE))
               (i32.const 0x04E40409))))
-        (global.set $eax (i32.const 1))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 16))
         (return)))
     (call $win16_call32_begin (i32.const 4))
     (call $handle_GetFileVersionInfoA (local.get $file) (local.get $handle)
       (local.get $len) (local.get $data) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 16)))
 
   ;; VER.10 VerLanguageName(language, buffer, capacity) -> chars excluding NUL.
@@ -1629,8 +1629,8 @@
     (if (call $win16_arg16 (i32.const 2))
       (then (local.set $buf (call $win16_far_to_guest
         (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))))
-    (global.set $eax (i32.const 0))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (if (i32.and (i32.ne (local.get $buf) (i32.const 0))
                  (i32.ne (local.get $capacity) (i32.const 0)))
       (then
@@ -1645,7 +1645,7 @@
         (local.set $copied (i32.sub (local.get $capacity) (i32.const 1)))
         (if (i32.gt_u (local.get $copied) (i32.const 23))
           (then (local.set $copied (i32.const 23))))
-        (global.set $eax (local.get $copied))))
+        (i32.store offset=0 (global.get $reg_base) (local.get $copied))))
     (call $win16_api_return (i32.const 8)))
 
   ;; VER.11 VerQueryValue(block, subBlock, outFarPtr, outWordLen) -> BOOL.
@@ -1678,7 +1678,7 @@
         (call $win16_call32_begin (i32.const 4))
         (call $handle_VerQueryValueA (local.get $block) (local.get $sub)
           (local.get $tmp_out) (local.get $tmp_len) (i32.const 0) (i32.const 0))
-        (local.set $result (global.get $eax))
+        (local.set $result (i32.load offset=0 (global.get $reg_base)))
         (call $win16_call32_end)))
     (if (local.get $result)
       (then
@@ -1707,8 +1707,8 @@
             (call $gs16 (local.get $len_out) (call $gl32 (local.get $tmp_len)))))))
     (if (i32.eqz (local.get $result))
       (then (if (local.get $len_out) (then (call $gs16 (local.get $len_out) (i32.const 0))))))
-    (global.set $eax (local.get $result))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 16)))
 
   (func $win16_ver (param $module i32) (param $ordinal i32) (result i32)
@@ -1748,10 +1748,10 @@
       (br_if $done (i32.eqz (local.get $ca)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $cmp)))
-    (global.set $eax (i32.and
+    (i32.store offset=0 (global.get $reg_base) (i32.and
       (select (i32.const 1) (i32.const -1) (i32.gt_u (local.get $ca) (local.get $cb)))
       (i32.const 0xFFFF)))
-    (if (i32.eq (local.get $ca) (local.get $cb)) (then (global.set $eax (i32.const 0))))
+    (if (i32.eq (local.get $ca) (local.get $cb)) (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (call $win16_api_return (i32.const 8)))
 
   ;; ---- Resources ----
@@ -1772,7 +1772,7 @@
     ;; hInstance is the last argument pushed before the two names.
     (global.set $win16_res_module_id
       (call $win16_res_module (call $win16_arg16 (i32.const 4))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     ;; A string type names a custom TYPEINFO. Resolve it to a tagged table
     ;; offset so the handle can carry it through LoadResource to LockResource.
     (if (i32.eq (local.get $type) (i32.const -1))
@@ -1782,7 +1782,7 @@
                  (i32.ne (local.get $id) (i32.const -1)))
       (then
         (if (call $win16_find_resource (local.get $type) (local.get $id))
-          (then (global.set $eax (call $win16_res_handle_alloc
+          (then (i32.store offset=0 (global.get $reg_base) (call $win16_res_handle_alloc
             (call $win16_res_key (local.get $type) (local.get $id))
             (global.get $win16_res_module_id)))))))
     (global.set $win16_res_module_id (i32.const 0))
@@ -1790,7 +1790,7 @@
 
   ;; KERNEL.61 LoadResource(hInstance, hResInfo) — nothing to load yet.
   (func $win16_LoadResource
-    (global.set $eax (call $win16_arg16 (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_arg16 (i32.const 0)))
     (call $win16_api_return (i32.const 4)))
 
   ;; Build C:\NAME.DLL for an app-local module into a guest buffer. The name
@@ -1842,7 +1842,7 @@
         (local.set $key (i32.load (local.get $desc)))
         (local.set $module (i32.load offset=4 (local.get $desc)))))
     (global.set $win16_res_module_id (local.get $module))
-    (global.set $eax (i32.const 0xFFFF))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFF))
     (if (i32.and (local.get $desc)
           (call $win16_find_resource (i32.shr_u (local.get $key) (i32.const 16))
                                      (i32.and (local.get $key) (i32.const 0xFFFF))))
@@ -1858,14 +1858,14 @@
         (call $handle__lopen (local.get $path) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (local.set $h (global.get $eax))
+        (local.set $h (i32.load offset=0 (global.get $reg_base)))
         (if (i32.ne (local.get $h) (i32.const -1))
           (then
             (call $win16_call32_begin (i32.const 3))
             (call $handle__llseek (local.get $h) (global.get $win16_res_file_off)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
             (call $win16_call32_end)
-            (global.set $eax (call $win16_fh16 (local.get $h)))))))
+            (i32.store offset=0 (global.get $reg_base) (call $win16_fh16 (local.get $h)))))))
     (global.set $win16_res_module_id (i32.const 0))
     ;; Two words: an instance handle and a resource handle. Popping six left
     ;; two bytes of the caller's frame behind, and Visual Basic's runtime
@@ -1880,11 +1880,11 @@
       (then
         (local.set $key (i32.load (local.get $desc)))
         (global.set $win16_res_module_id (i32.load offset=4 (local.get $desc)))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.and (local.get $desc)
           (call $win16_find_resource (i32.shr_u (local.get $key) (i32.const 16))
                                      (i32.and (local.get $key) (i32.const 0xFFFF))))
-      (then (global.set $eax (global.get $win16_res_len))))
+      (then (i32.store offset=0 (global.get $reg_base) (global.get $win16_res_len))))
     (global.set $win16_res_module_id (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
@@ -1901,14 +1901,14 @@
     (local $data i32) (local $len i32) (local $sel i32) (local $buf i32)
     (local $path i32) (local $h i32) (local $read i32)
     (local.set $desc (call $win16_res_desc_from_handle (call $win16_arg16 (i32.const 0))))
-    (global.set $eax (i32.const 0))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (if (local.get $desc)
       (then
         (local.set $sel (i32.load offset=8 (local.get $desc)))
         (if (local.get $sel)
           (then
-            (global.set $edx (local.get $sel))
+            (i32.store offset=8 (global.get $reg_base) (local.get $sel))
             (call $win16_api_return (i32.const 2))
             (return)))
         (local.set $key (i32.load (local.get $desc)))
@@ -1931,7 +1931,7 @@
                     (call $handle__lopen (local.get $path) (i32.const 0)
                       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
                     (call $win16_call32_end)
-                    (local.set $h (global.get $eax))
+                    (local.set $h (i32.load offset=0 (global.get $reg_base)))
                     (if (i32.ne (local.get $h) (i32.const -1))
                       (then
                         (call $win16_call32_begin (i32.const 3))
@@ -1942,7 +1942,7 @@
                         (call $handle__hread (local.get $h) (local.get $buf) (local.get $len)
                           (i32.const 0) (i32.const 0) (i32.const 0))
                         (call $win16_call32_end)
-                        (local.set $read (global.get $eax))
+                        (local.set $read (i32.load offset=0 (global.get $reg_base)))
                         (call $win16_call32_begin (i32.const 1))
                         (call $handle__lclose (local.get $h) (i32.const 0) (i32.const 0)
                           (i32.const 0) (i32.const 0) (i32.const 0))
@@ -1953,7 +1953,7 @@
                 (if (i32.eq (local.get $read) (local.get $len))
                   (then
                     (i32.store offset=8 (local.get $desc) (local.get $sel))
-                    (global.set $edx (local.get $sel)))
+                    (i32.store offset=8 (global.get $reg_base) (local.get $sel)))
                   (else (call $win16_global_free (local.get $sel))))))))))
     (global.set $win16_res_module_id (i32.const 0))
     (call $win16_api_return (i32.const 2)))
@@ -1968,7 +1968,7 @@
         (local.set $sel (i32.load offset=8 (local.get $desc)))
         (if (local.get $sel) (then (call $win16_global_free (local.get $sel))))
         (i32.store offset=8 (local.get $desc) (i32.const 0))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
   ;; ---- Modules ----
@@ -2105,14 +2105,14 @@
                               (i32.const 0x5C))
                             (local.set $i (call $win16_put_dll_name
                               (local.get $buf) (i32.const 3) (local.get $slot)))))))))
-                (global.set $eax (local.get $i))
+                (i32.store offset=0 (global.get $reg_base) (local.get $i))
                 (call $win16_api_return (i32.const 8))
                 (return)))))))
     (call $win16_call32_begin (i32.const 3))
     (call $handle_GetModuleFileNameA (i32.const 0) (local.get $buf) (local.get $size)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; KERNEL.55 Catch(lpCatchBuf) / KERNEL.56 Throw(lpCatchBuf, nErrLevel) —
@@ -2128,21 +2128,21 @@
     (local $buf i32) (local $ip i32) (local $cs i32)
     (local.set $buf (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
-    (local.set $ip (call $gl16 (global.get $esp)))
-    (local.set $cs (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
+    (local.set $ip (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $cs (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
     (call $gs16 (local.get $buf)
-      (i32.and (i32.add (global.get $esp) (i32.const 8)) (i32.const 0xFFFF)))
+      (i32.and (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)) (i32.const 0xFFFF)))
     (call $gs16 (i32.add (local.get $buf) (i32.const 2))
-      (i32.and (global.get $ebp) (i32.const 0xFFFF)))
+      (i32.and (i32.load offset=20 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $gs16 (i32.add (local.get $buf) (i32.const 4))
-      (i32.and (global.get $esi) (i32.const 0xFFFF)))
+      (i32.and (i32.load offset=24 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $gs16 (i32.add (local.get $buf) (i32.const 6))
-      (i32.and (global.get $edi) (i32.const 0xFFFF)))
+      (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $gs16 (i32.add (local.get $buf) (i32.const 8)) (global.get $sreg_ds))
     (call $gs16 (i32.add (local.get $buf) (i32.const 10)) (global.get $sreg_es))
     (call $gs16 (i32.add (local.get $buf) (i32.const 12)) (local.get $ip))
     (call $gs16 (i32.add (local.get $buf) (i32.const 14)) (local.get $cs))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_Throw
@@ -2156,10 +2156,10 @@
     (call $win16_set_sreg (i32.const 3) (call $gl16 (i32.add (local.get $buf) (i32.const 8))))
     (call $win16_set_sreg (i32.const 0) (call $gl16 (i32.add (local.get $buf) (i32.const 10))))
     (call $win16_set_sreg (i32.const 1) (call $gl16 (i32.add (local.get $buf) (i32.const 14))))
-    (global.set $esp (i32.add (global.get $seg_base_ss) (call $gl16 (local.get $buf))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (global.get $seg_base_ss) (call $gl16 (local.get $buf))))
     (global.set $eip (i32.add (global.get $seg_base_cs)
       (call $gl16 (i32.add (local.get $buf) (i32.const 12)))))
-    (global.set $eax (local.get $n))
+    (i32.store offset=0 (global.get $reg_base) (local.get $n))
     (global.set $steps (i32.const 0)))
 
   ;; ---- The registry ----
@@ -2180,8 +2180,8 @@
     (call $handle_RegCreateKeyA (local.get $key) (local.get $sub) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))
 
   ;; KERNEL.220 RegCloseKey(hKey), KERNEL.227 RegFlushKey(hKey). Flushing is a
@@ -2194,8 +2194,8 @@
     (call $handle_RegCloseKey (local.get $key)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; KERNEL.221 RegSetValue(hKey, lpSubKey, dwType, lpData, cbData).
@@ -2213,8 +2213,8 @@
     (call $handle_RegSetValueA (local.get $key) (local.get $sub) (local.get $type)
       (local.get $data) (local.get $cb) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 20)))
 
   ;; KERNEL.225 RegQueryValueEx(hKey, lpValueName, lpReserved, lpType, lpData,
@@ -2246,8 +2246,8 @@
       (else (call $handle_RegQueryValueExA (local.get $key) (local.get $name)
               (local.get $reserved) (local.get $type) (local.get $data) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 24)))
 
   ;; ---- The local heap ----
@@ -2336,36 +2336,36 @@
     (call $gs8 (i32.add (local.get $dta) (i32.const 42)) (i32.const 0)))
 
   (func $dos_ptr (result i32)
-    (i32.add (global.get $seg_base_ds) (i32.and (global.get $edx) (i32.const 0xFFFF))))
+    (i32.add (global.get $seg_base_ds) (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF))))
 
   (func $dos_set_ax (param $v i32)
-    (global.set $eax (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF0000))
+    (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000))
                              (i32.and (local.get $v) (i32.const 0xFFFF)))))
 
   (func $win16_dos_int21
     (local $ah i32) (local $h i32) (local $n i32) (local $tmp i32)
-    (local.set $ah (i32.and (i32.shr_u (global.get $eax) (i32.const 8)) (i32.const 0xFF)))
+    (local.set $ah (i32.and (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 8)) (i32.const 0xFF)))
     ;; --trace-win16 covers the DOS side too: AH, and the three registers that
     ;; carry a handle, a count and a pointer for the calls that have them.
     (if (global.get $win16_trace)
       (then
         (call $host_log_i32 (i32.const 0xCA16D021))
         (call $host_log_i32 (local.get $ah))
-        (call $host_log_i32 (i32.and (global.get $ebx) (i32.const 0xFFFF)))
-        (call $host_log_i32 (i32.and (global.get $ecx) (i32.const 0xFFFF)))
-        (call $host_log_i32 (i32.and (global.get $edx) (i32.const 0xFFFF)))))
+        (call $host_log_i32 (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $host_log_i32 (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $host_log_i32 (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF)))))
 
     ;; 3Dh open, AL = access mode, DS:DX = path.
     (if (i32.eq (local.get $ah) (i32.const 0x3D))
       (then
         (call $win16_call32_begin (i32.const 2))
-        (call $handle__lopen (call $dos_ptr) (i32.and (global.get $eax) (i32.const 3))
+        (call $handle__lopen (call $dos_ptr) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 3))
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (i32.eq (global.get $eax) (i32.const -1))
+        (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
           (then (call $dos_set_ax (i32.const 2)) (call $dos_cf (i32.const 1)))  ;; file not found
           (else
-            (call $dos_set_ax (call $win16_fh16 (global.get $eax)))
+            (call $dos_set_ax (call $win16_fh16 (i32.load offset=0 (global.get $reg_base))))
             (call $dos_cf (i32.const 0))))
         (return)))
 
@@ -2375,25 +2375,25 @@
       (then
         (call $win16_call32_begin (i32.const 2))
         (call $handle__lcreat (call $dos_ptr)
-          (i32.and (global.get $ecx) (i32.const 0xFFFF))
+          (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF))
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (i32.eq (global.get $eax) (i32.const -1))
+        (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
           (then (call $dos_set_ax (i32.const 3)) (call $dos_cf (i32.const 1)))  ;; path not found
           (else
-            (call $dos_set_ax (call $win16_fh16 (global.get $eax)))
+            (call $dos_set_ax (call $win16_fh16 (i32.load offset=0 (global.get $reg_base))))
             (call $dos_cf (i32.const 0))))
         (return)))
 
     ;; 3Eh close, BX = handle.
     (if (i32.eq (local.get $ah) (i32.const 0x3E))
       (then
-        (local.set $h (call $win16_fh32 (i32.and (global.get $ebx) (i32.const 0xFFFF))))
+        (local.set $h (call $win16_fh32 (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF))))
         (call $win16_call32_begin (i32.const 1))
         (call $handle__lclose (local.get $h) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (call $win16_fh_forget (i32.and (global.get $ebx) (i32.const 0xFFFF)))
+        (call $win16_fh_forget (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_h16_forget (local.get $h))
         (call $dos_cf (i32.const 0))
         (return)))
@@ -2402,8 +2402,8 @@
     (if (i32.or (i32.eq (local.get $ah) (i32.const 0x3F))
                 (i32.eq (local.get $ah) (i32.const 0x40)))
       (then
-        (local.set $h (call $win16_fh32 (i32.and (global.get $ebx) (i32.const 0xFFFF))))
-        (local.set $n (i32.and (global.get $ecx) (i32.const 0xFFFF)))
+        (local.set $h (call $win16_fh32 (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF))))
+        (local.set $n (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_call32_begin (i32.const 3))
         (if (i32.eq (local.get $ah) (i32.const 0x3F))
           (then (call $handle__lread (local.get $h) (call $dos_ptr) (local.get $n)
@@ -2411,29 +2411,29 @@
           (else (call $handle__lwrite (local.get $h) (call $dos_ptr) (local.get $n)
                   (i32.const 0) (i32.const 0) (i32.const 0))))
         (call $win16_call32_end)
-        (if (i32.eq (global.get $eax) (i32.const -1))
+        (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
           (then (call $dos_set_ax (i32.const 5)) (call $dos_cf (i32.const 1)))  ;; access denied
           (else
-            (call $dos_set_ax (global.get $eax))
+            (call $dos_set_ax (i32.load offset=0 (global.get $reg_base)))
             (call $dos_cf (i32.const 0))))
         (return)))
 
     ;; 42h lseek, BX = handle, CX:DX = offset, AL = origin. DX:AX = new position.
     (if (i32.eq (local.get $ah) (i32.const 0x42))
       (then
-        (local.set $h (call $win16_fh32 (i32.and (global.get $ebx) (i32.const 0xFFFF))))
-        (local.set $tmp (i32.or (i32.and (global.get $edx) (i32.const 0xFFFF))
-          (i32.shl (i32.and (global.get $ecx) (i32.const 0xFFFF)) (i32.const 16))))
+        (local.set $h (call $win16_fh32 (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF))))
+        (local.set $tmp (i32.or (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF))
+          (i32.shl (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF)) (i32.const 16))))
         (call $win16_call32_begin (i32.const 3))
         (call $handle__llseek (local.get $h) (local.get $tmp)
-          (i32.and (global.get $eax) (i32.const 0xFF))
+          (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF))
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (i32.eq (global.get $eax) (i32.const -1))
+        (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
           (then (call $dos_set_ax (i32.const 6)) (call $dos_cf (i32.const 1)))  ;; bad handle
           (else
-            (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-            (call $dos_set_ax (global.get $eax))
+            (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+            (call $dos_set_ax (i32.load offset=0 (global.get $reg_base)))
             (call $dos_cf (i32.const 0))))
         (return)))
 
@@ -2444,23 +2444,23 @@
         (call $handle_DeleteFileA (call $dos_ptr) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (call $dos_cf (i32.eqz (global.get $eax)))
-        (if (i32.eqz (global.get $eax)) (then (call $dos_set_ax (i32.const 2))))
+        (call $dos_cf (i32.eqz (i32.load offset=0 (global.get $reg_base))))
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base))) (then (call $dos_set_ax (i32.const 2))))
         (return)))
 
     ;; 43h get/set file attributes, DS:DX = path. AL=0 reads into CX.
     (if (i32.eq (local.get $ah) (i32.const 0x43))
       (then
-        (if (i32.eqz (i32.and (global.get $eax) (i32.const 0xFF)))
+        (if (i32.eqz (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))
           (then
             (call $win16_call32_begin (i32.const 1))
             (call $handle_GetFileAttributesA (call $dos_ptr) (i32.const 0) (i32.const 0)
               (i32.const 0) (i32.const 0) (i32.const 0))
             (call $win16_call32_end)
-            (if (i32.eq (global.get $eax) (i32.const -1))
+            (if (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1))
               (then (call $dos_set_ax (i32.const 2)) (call $dos_cf (i32.const 1)))
               (else
-                (global.set $ecx (i32.and (global.get $eax) (i32.const 0x27)))
+                (i32.store offset=4 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0x27)))
                 (call $dos_cf (i32.const 0)))))
           ;; Setting attributes has nowhere to go — the VFS keeps none — and
           ;; saying so is better than reporting a change that did not happen.
@@ -2471,9 +2471,9 @@
     ;; a file on drive C, never a character device.
     (if (i32.eq (local.get $ah) (i32.const 0x44))
       (then
-        (if (i32.eqz (i32.and (global.get $eax) (i32.const 0xFF)))
+        (if (i32.eqz (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))
           (then
-            (global.set $edx (i32.const 2))
+            (i32.store offset=8 (global.get $reg_base) (i32.const 2))
             (call $dos_set_ax (i32.const 2))
             (call $dos_cf (i32.const 0)))
           (else (call $dos_set_ax (i32.const 1)) (call $dos_cf (i32.const 1))))
@@ -2490,18 +2490,18 @@
         (call $win16_call32_end)
         (if (i32.eq (local.get $ah) (i32.const 0x2A))
           (then
-            (global.set $ecx (call $gl16 (local.get $tmp)))                    ;; year
-            (global.set $edx (i32.or
+            (i32.store offset=4 (global.get $reg_base) (call $gl16 (local.get $tmp)))                    ;; year
+            (i32.store offset=8 (global.get $reg_base) (i32.or
               (i32.shl (call $gl16 (i32.add (local.get $tmp) (i32.const 2)))
                        (i32.const 8))                                          ;; month
               (call $gl16 (i32.add (local.get $tmp) (i32.const 6)))))           ;; day
             (call $dos_set_ax (call $gl16 (i32.add (local.get $tmp) (i32.const 4)))))
           (else
-            (global.set $ecx (i32.or
+            (i32.store offset=4 (global.get $reg_base) (i32.or
               (i32.shl (call $gl16 (i32.add (local.get $tmp) (i32.const 8)))
                        (i32.const 8))                                          ;; hour
               (call $gl16 (i32.add (local.get $tmp) (i32.const 10)))))          ;; minute
-            (global.set $edx (i32.or
+            (i32.store offset=8 (global.get $reg_base) (i32.or
               (i32.shl (call $gl16 (i32.add (local.get $tmp) (i32.const 12)))
                        (i32.const 8))                                          ;; second
               (i32.div_u (call $gl16 (i32.add (local.get $tmp) (i32.const 14)))
@@ -2517,13 +2517,13 @@
       (then
         (global.set $win16_dta (i32.or
           (i32.shl (global.get $sreg_ds) (i32.const 16))
-          (i32.and (global.get $edx) (i32.const 0xFFFF))))
+          (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF))))
         (call $dos_cf (i32.const 0))
         (return)))
     (if (i32.eq (local.get $ah) (i32.const 0x2F))
       (then
         (call $win16_dta_ensure)
-        (global.set $ebx (i32.and (global.get $win16_dta) (i32.const 0xFFFF)))
+        (i32.store offset=12 (global.get $reg_base) (i32.and (global.get $win16_dta) (i32.const 0xFFFF)))
         (call $win16_set_sreg (i32.const 0)
           (i32.shr_u (global.get $win16_dta) (i32.const 16)))
         (call $dos_cf (i32.const 0))
@@ -2543,7 +2543,7 @@
         ;; drive-list control asks for it with *.* and rejects the control's
         ;; initialization if DOS hands it an archive file instead.
         (if (i32.and (i32.eq (local.get $ah) (i32.const 0x4E))
-                     (i32.ne (i32.and (global.get $ecx) (i32.const 0x08))
+                     (i32.ne (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0x08))
                              (i32.const 0)))
           (then
             (memory.fill (call $g2w (local.get $h)) (i32.const 0) (i32.const 43))
@@ -2561,14 +2561,14 @@
           (else (call $handle_FindNextFileA (call $gl32 (local.get $h)) (local.get $tmp)
                   (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
         (call $win16_call32_end)
-        (if (i32.or (i32.eqz (global.get $eax))
-                    (i32.eq (global.get $eax) (i32.const -1)))
+        (if (i32.or (i32.eqz (i32.load offset=0 (global.get $reg_base)))
+                    (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1)))
           (then
             (call $dos_set_ax (i32.const 18))   ;; no more files
             (call $dos_cf (i32.const 1))
             (return)))
         (if (i32.eq (local.get $ah) (i32.const 0x4E))
-          (then (call $gs32 (local.get $h) (global.get $eax))))
+          (then (call $gs32 (local.get $h) (i32.load offset=0 (global.get $reg_base)))))
         (call $win16_dos_find_record (local.get $h) (local.get $tmp))
         (call $dos_set_ax (i32.const 0))
         (call $dos_cf (i32.const 0))
@@ -2580,7 +2580,7 @@
     (if (i32.eq (local.get $ah) (i32.const 0x47))
       (then
         (call $gs8 (i32.add (global.get $seg_base_ds)
-                            (i32.and (global.get $esi) (i32.const 0xFFFF)))
+                            (i32.and (i32.load offset=24 (global.get $reg_base)) (i32.const 0xFFFF)))
           (i32.const 0))
         (call $dos_set_ax (i32.const 0x0100))
         (call $dos_cf (i32.const 0))
@@ -2592,10 +2592,10 @@
     ;; accepted and forgotten. Klotski stamps its score file this way.
     (if (i32.eq (local.get $ah) (i32.const 0x57))
       (then
-        (if (i32.eqz (i32.and (global.get $eax) (i32.const 0xFF)))
+        (if (i32.eqz (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))
           (then
-            (global.set $ecx (i32.const 0))            ;; 00:00:00
-            (global.set $edx (i32.const 0x2421))))     ;; 1998-01-01
+            (i32.store offset=4 (global.get $reg_base) (i32.const 0))            ;; 00:00:00
+            (i32.store offset=8 (global.get $reg_base) (i32.const 0x2421))))     ;; 1998-01-01
         (call $dos_set_ax (i32.const 0))
         (call $dos_cf (i32.const 0))
         (return)))
@@ -2604,8 +2604,8 @@
     (if (i32.eq (local.get $ah) (i32.const 0x30))
       (then
         (call $dos_set_ax (i32.const 0x1606))
-        (global.set $ebx (i32.const 0))
-        (global.set $ecx (i32.const 0))
+        (i32.store offset=12 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=4 (global.get $reg_base) (i32.const 0))
         (call $dos_cf (i32.const 0))
         (return)))
 
@@ -2630,7 +2630,7 @@
           (i32.const 1))                                           ;; reserved sectors
         (call $gs8  (i32.add (local.get $tmp) (i32.const 8))
           (i32.const 1))                                           ;; FAT count
-        (global.set $ebx (i32.const 0x100))
+        (i32.store offset=12 (global.get $reg_base) (i32.const 0x100))
         (call $win16_set_sreg (i32.const 3) (global.get $win16_psp_sel))
         (call $dos_set_ax (i32.const 0))
         (call $dos_cf (i32.const 0))
@@ -2641,18 +2641,18 @@
     (if (i32.eq (local.get $ah) (i32.const 0x35))
       (then
         (local.set $tmp (i32.load (i32.add (call $win16_int_vectors)
-          (i32.shl (i32.and (global.get $eax) (i32.const 0xFF)) (i32.const 2)))))
-        (global.set $ebx (i32.and (local.get $tmp) (i32.const 0xFFFF)))
+          (i32.shl (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)) (i32.const 2)))))
+        (i32.store offset=12 (global.get $reg_base) (i32.and (local.get $tmp) (i32.const 0xFFFF)))
         (call $win16_set_sreg (i32.const 0) (i32.shr_u (local.get $tmp) (i32.const 16)))
         (call $dos_cf (i32.const 0))
         (return)))
     (if (i32.eq (local.get $ah) (i32.const 0x25))
       (then
         (i32.store (i32.add (call $win16_int_vectors)
-                            (i32.shl (i32.and (global.get $eax) (i32.const 0xFF))
+                            (i32.shl (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF))
                                      (i32.const 2)))
           (i32.or (i32.shl (global.get $sreg_ds) (i32.const 16))
-                  (i32.and (global.get $edx) (i32.const 0xFFFF))))
+                  (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF))))
         (call $dos_cf (i32.const 0))
         (return)))
 
@@ -2675,7 +2675,7 @@
         (call $handle_CreateDirectoryA (call $dos_ptr) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (global.get $eax)
+        (if (i32.load offset=0 (global.get $reg_base))
           (then (call $dos_set_ax (i32.const 0)) (call $dos_cf (i32.const 0)))
           (else (call $dos_set_ax (i32.const 3)) (call $dos_cf (i32.const 1))))
         (return)))
@@ -2684,12 +2684,12 @@
     (if (i32.eq (local.get $ah) (i32.const 0x56))
       (then
         (local.set $tmp (call $win16_far_to_guest (global.get $sreg_es)
-          (i32.and (global.get $edi) (i32.const 0xFFFF))))
+          (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF))))
         (call $win16_call32_begin (i32.const 3))
         (call $handle_MoveFileExA (call $dos_ptr) (local.get $tmp) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (global.get $eax)
+        (if (i32.load offset=0 (global.get $reg_base))
           (then (call $dos_set_ax (i32.const 0)) (call $dos_cf (i32.const 0)))
           (else (call $dos_set_ax (i32.const 2)) (call $dos_cf (i32.const 1))))
         (return)))
@@ -2710,7 +2710,7 @@
     ;; 4Ch terminate, AL = exit code.
     (if (i32.eq (local.get $ah) (i32.const 0x4C))
       (then
-        (call $host_exit (i32.and (global.get $eax) (i32.const 0xFF)))
+        (call $host_exit (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))
         (global.set $eip (i32.const 0))
         (global.set $steps (i32.const 0))
         (return)))
@@ -2725,9 +2725,9 @@
     (if (i32.eq (local.get $ah) (i32.const 0x36))
       (then
         (call $dos_set_ax (i32.const 8))
-        (global.set $ebx (i32.const 32768))
-        (global.set $ecx (i32.const 512))
-        (global.set $edx (i32.const 65535))
+        (i32.store offset=12 (global.get $reg_base) (i32.const 32768))
+        (i32.store offset=4 (global.get $reg_base) (i32.const 512))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 65535))
         (call $dos_cf (i32.const 0))
         (return)))
 
@@ -2859,7 +2859,7 @@
     (if (i32.or (i32.ge_u (local.get $start) (local.get $end))
                 (i32.eqz (local.get $base)))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 6))
         (return)))
     (call $zero_memory (call $g2w (i32.add (local.get $base) (local.get $start)))
@@ -2891,7 +2891,7 @@
         (i32.store16 (i32.add (local.get $slot) (i32.const 2)) (local.get $start))
         (i32.store16 (i32.add (local.get $slot) (i32.const 4)) (local.get $start))
         (i32.store16 (i32.add (local.get $slot) (i32.const 6)) (local.get $end))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; LocalAlloc(wFlags, wBytes). A moveable block answers with a *handle*, and
@@ -2947,7 +2947,7 @@
               (call $g2w (i32.add (global.get $seg_base_ds) (local.get $h)))
               (local.get $bytes))
             (call $win16_lmoveable (local.get $h) (local.get $moveable))
-            (global.set $eax (local.get $h))
+            (i32.store offset=0 (global.get $reg_base) (local.get $h))
             (call $win16_api_return (i32.const 4))
             (return)))
         (local.set $p (i32.add (i32.add (local.get $p) (i32.const 2)) (local.get $size)))
@@ -2968,7 +2968,7 @@
                      (i32.eq (global.get $sreg_ss) (global.get $sreg_ds)))
           (then
             (local.set $limit (i32.sub
-              (i32.and (i32.sub (global.get $esp) (global.get $seg_base_ss))
+              (i32.and (i32.sub (i32.load offset=16 (global.get $reg_base)) (global.get $seg_base_ss))
                        (i32.const 0xFFFF))
               (i32.const 512)))
             (if (i32.gt_u (local.get $limit) (global.get $win16_lheap_end))
@@ -2996,7 +2996,7 @@
         (if (i32.gt_u (i32.add (local.get $h) (local.get $bytes))
                       (call $win16_lheap_get (i32.const 2)))
           (then
-            (global.set $eax (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
             (call $win16_api_return (i32.const 4))
             (return)))))
     (call $win16_lblock_set (call $win16_lheap_get (i32.const 1))
@@ -3007,7 +3007,7 @@
     (call $zero_memory (call $g2w (i32.add (global.get $seg_base_ds) (local.get $h)))
       (local.get $bytes))
     (call $win16_lmoveable (local.get $h) (local.get $moveable))
-    (global.set $eax (local.get $h))
+    (i32.store offset=0 (global.get $reg_base) (local.get $h))
     (call $win16_api_return (i32.const 4)))
 
   ;; Turn a freshly allocated block into a moveable one: its first word points
@@ -3072,7 +3072,7 @@
 
   ;; LocalLock(hMem) -> the block the handle currently names.
   (func $win16_LocalLock
-    (global.set $eax (call $win16_lhandle_data (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_lhandle_data (call $win16_arg16 (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   ;; KERNEL.6 LocalReAlloc(hMem, wBytes, wFlags) -> the block, resized.
@@ -3096,7 +3096,7 @@
                 (i32.lt_u (local.get $h) (i32.add (call $win16_lheap_get (i32.const 0))
                                                   (i32.const 2))))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 6))
         (return)))
     (local.set $k (call $win16_lhandle_kind (local.get $h)))
@@ -3107,7 +3107,7 @@
     (local.set $dsize (call $win16_lhandle_size (local.get $h)))
     (if (i32.le_u (local.get $bytes) (local.get $dsize))
       (then
-        (global.set $eax (local.get $h))
+        (i32.store offset=0 (global.get $reg_base) (local.get $h))
         (call $win16_api_return (i32.const 6))
         (return)))
     ;; The block on top of the heap can simply take more of it, growing the
@@ -3123,7 +3123,7 @@
         (call $win16_lblock_set (local.get $dp)
           (i32.add (local.get $bytes) (local.get $extra)) (i32.const 0))
         (call $win16_lheap_set_ptr (i32.add (local.get $d) (local.get $bytes)))
-        (global.set $eax (local.get $h))
+        (i32.store offset=0 (global.get $reg_base) (local.get $h))
         (call $win16_api_return (i32.const 6))
         (return)))
     ;; Otherwise a fresh block at the top of the heap, copied into.
@@ -3131,7 +3131,7 @@
     (if (i32.eqz (call $win16_lheap_room
                    (i32.add (local.get $new) (local.get $bytes))))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 6))
         (return)))
     (call $win16_lblock_set (call $win16_lheap_get (i32.const 1))
@@ -3153,7 +3153,7 @@
     (if (i32.eqz (local.get $k))
       (then
         (call $win16_lfree_block (local.get $dp))
-        (global.set $eax (local.get $new))
+        (i32.store offset=0 (global.get $reg_base) (local.get $new))
         (call $win16_api_return (i32.const 6))
         (return)))
     ;; A moveable one keeps its offset. The first move leaves the handle's own
@@ -3172,7 +3172,7 @@
     (call $gs16 (i32.add (global.get $seg_base_ds) (local.get $h)) (local.get $new))
     (call $gs16 (i32.add (global.get $seg_base_ds) (i32.add (local.get $h) (i32.const 2)))
       (local.get $h))
-    (global.set $eax (local.get $h))
+    (i32.store offset=0 (global.get $reg_base) (local.get $h))
     (call $win16_api_return (i32.const 6)))
 
   ;; Mark the block free, absorb any free blocks that follow it, and give the
@@ -3204,7 +3204,7 @@
                 (i32.ge_u (i32.sub (local.get $h) (i32.const 2))
                           (call $win16_lheap_get (i32.const 1))))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 2))
         (return)))
     (if (i32.eq (call $win16_lhandle_kind (local.get $h)) (i32.const 2))
@@ -3215,17 +3215,17 @@
                              (i32.add (local.get $h) (i32.const 2))) (i32.const 0))
         (call $win16_lfree_block (i32.sub (local.get $d) (i32.const 2)))))
     (call $win16_lfree_block (i32.sub (local.get $h) (i32.const 2)))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_LocalSize
-    (global.set $eax (call $win16_lhandle_size (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_lhandle_size (call $win16_arg16 (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   ;; LocalLock, LocalUnlock and LocalCompact on a fixed block: the handle is
   ;; already the pointer and nothing moves.
   (func $win16_local_identity (param $argbytes i32) (param $result i32)
-    (global.set $eax (local.get $result))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
     (call $win16_api_return (local.get $argbytes)))
 
   ;; USER.433..436 IsCharAlpha/IsCharAlphaNumeric/IsCharUpper/IsCharLower.
@@ -3247,8 +3247,7 @@
     (local.set $digit (i32.and
       (i32.ge_u (local.get $c) (i32.const 0x30))
       (i32.le_u (local.get $c) (i32.const 0x39))))
-    (global.set $eax
-      (if (result i32) (i32.eq (local.get $ordinal) (i32.const 433))
+    (i32.store offset=0 (global.get $reg_base) (if (result i32) (i32.eq (local.get $ordinal) (i32.const 433))
         (then (local.get $alpha))
         (else (if (result i32) (i32.eq (local.get $ordinal) (i32.const 434))
           (then (i32.or (local.get $alpha) (local.get $digit)))
@@ -3261,7 +3260,7 @@
   ;; channel id of -1 is the documented invalid handle and returns -1; WordZap
   ;; probes exactly that disconnected path while entering a local game.
   (func $win16_WriteComm
-    (global.set $eax (i32.const 0xFFFF))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0xFFFF))
     (call $win16_api_return (i32.const 8)))
 
   ;; ---- The global heap ----
@@ -3451,7 +3450,7 @@
   (func $win16_GlobalAlloc
     (local $bytes i32)
     (local.set $bytes (call $win16_arg32 (i32.const 0)))
-    (global.set $eax (call $win16_global_alloc (local.get $bytes)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_global_alloc (local.get $bytes)))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_global_free (param $h i32)
@@ -3468,24 +3467,24 @@
   (func $win16_GlobalFree
     (call $win16_global_free (call $win16_arg16 (i32.const 0)))
     ;; GlobalFree answers with NULL on success.
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
   ;; GlobalLock(h) -> h:0000, the whole point of handles being selectors.
   (func $win16_GlobalLock
     (local $h i32)
     (local.set $h (call $win16_arg16 (i32.const 0)))
-    (global.set $edx (local.get $h))
-    (global.set $eax (i32.const 0))
-    (if (i32.eqz (local.get $h)) (then (global.set $edx (i32.const 0))))
+    (i32.store offset=8 (global.get $reg_base) (local.get $h))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+    (if (i32.eqz (local.get $h)) (then (i32.store offset=8 (global.get $reg_base) (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_GlobalSize
     (local $bytes i32)
     (local.set $bytes (call $win16_gseg_field
       (call $win16_sel_to_index (call $win16_arg16 (i32.const 0))) (i32.const 12)))
-    (global.set $edx (i32.shr_u (local.get $bytes) (i32.const 16)))
-    (global.set $eax (i32.and (local.get $bytes) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $bytes) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $bytes) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GlobalHandle(sel) -> the handle in AX and the selector in DX; here they
@@ -3493,8 +3492,8 @@
   (func $win16_GlobalHandle
     (local $h i32)
     (local.set $h (call $win16_arg16 (i32.const 0)))
-    (global.set $edx (local.get $h))
-    (global.set $eax (local.get $h))
+    (i32.store offset=8 (global.get $reg_base) (local.get $h))
+    (i32.store offset=0 (global.get $reg_base) (local.get $h))
     (call $win16_api_return (i32.const 2)))
 
   ;; GlobalReAlloc(h, dwBytes, wFlags). Growing inside the slots the block
@@ -3536,7 +3535,7 @@
         (if (i32.le_u (local.get $bytes) (call $win16_gseg_field (local.get $index) (i32.const 4)))
           (then
             (call $win16_gseg_store (local.get $index) (i32.const 12) (local.get $bytes))
-            (global.set $eax (local.get $h))
+            (i32.store offset=0 (global.get $reg_base) (local.get $h))
             (call $win16_api_return (i32.const 8))
             (return)))
         (local.set $new (call $win16_global_alloc (local.get $bytes)))
@@ -3547,7 +3546,7 @@
               (call $g2w (call $win16_far_to_guest (local.get $h) (i32.const 0)))
               (local.get $old))
             (call $win16_global_free (local.get $h))))
-        (global.set $eax (local.get $new))
+        (i32.store offset=0 (global.get $reg_base) (local.get $new))
         (call $win16_api_return (i32.const 8))
         (return)))
     (if (i32.le_u (call $win16_gseg_count (local.get $bytes))
@@ -3555,7 +3554,7 @@
       (then
         (call $win16_gseg_store (local.get $index) (i32.const 12) (local.get $bytes))
         (call $win16_gseg_grow (local.get $index) (local.get $bytes))
-        (global.set $eax (local.get $h))
+        (i32.store offset=0 (global.get $reg_base) (local.get $h))
         (call $win16_api_return (i32.const 8))
         (return)))
     ;; A block that already has a whole arena slot to itself grows inside it
@@ -3569,7 +3568,7 @@
       (then
         (call $win16_gseg_store (local.get $index) (i32.const 12) (local.get $bytes))
         (call $win16_gseg_grow (local.get $index) (local.get $bytes))
-        (global.set $eax (local.get $h))
+        (i32.store offset=0 (global.get $reg_base) (local.get $h))
         (call $win16_api_return (i32.const 8))
         (return)))
     (local.set $new (call $win16_global_alloc (local.get $bytes)))
@@ -3585,7 +3584,7 @@
           (br $copy)))
         (call $win16_gseg_store (local.get $index) (i32.const 8)
           (i32.or (global.get $WIN16_SEG_GLOBAL) (global.get $WIN16_SEG_GFREE)))))
-    (global.set $eax (local.get $new))
+    (i32.store offset=0 (global.get $reg_base) (local.get $new))
     (call $win16_api_return (i32.const 8)))
 
   ;; GlobalCompact(dwMinFree) -> the largest block that could still be had,
@@ -3595,8 +3594,8 @@
     (local.set $free (i32.mul
       (i32.sub (global.get $WIN16_SEG_MAX) (global.get $win16_next_seg))
       (i32.const 0x10000)))
-    (global.set $edx (i32.shr_u (local.get $free) (i32.const 16)))
-    (global.set $eax (i32.and (local.get $free) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $free) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $free) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; KERNEL.137 FatalAppExit(wAction, lpszMessageText) — the task has decided
@@ -3643,7 +3642,7 @@
     (call $win16_index_to_sel (local.get $di)))
 
   (func $win16_AllocAlias
-    (global.set $eax (call $win16_alias_of (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_alias_of (call $win16_arg16 (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_PrestoChangoSelector
@@ -3660,7 +3659,7 @@
               (call $win16_seg_limit (local.get $si))
               (i32.const 0) (i32.const 0)))
       (else (local.set $dst (i32.const 0))))
-    (global.set $eax (local.get $dst))
+    (i32.store offset=0 (global.get $reg_base) (local.get $dst))
     (call $win16_api_return (i32.const 4)))
 
   ;; KERNEL.169 GetFreeSpace(wFlags) -> bytes still available, which for this
@@ -3670,8 +3669,8 @@
     (local.set $free (i32.mul
       (i32.sub (global.get $WIN16_SEG_MAX) (global.get $win16_next_seg))
       (i32.const 0x10000)))
-    (global.set $edx (i32.shr_u (local.get $free) (i32.const 16)))
-    (global.set $eax (i32.and (local.get $free) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $free) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $free) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; ---- File handles ----
@@ -3751,7 +3750,7 @@
     ;; is 0xF0000001 and masking hands the task a 1, which is some other file's
     ;; handle — Rattler Race read its own image through it, found bytes that
     ;; were not its own, and put up "a virus has been detected".
-    (global.set $eax (call $win16_fh16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_fh16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_lclose
@@ -3765,7 +3764,7 @@
     ;; The file is gone, so its place in the map is free.
     (call $win16_fh_forget (local.get $h16))
     (call $win16_h16_forget (local.get $h))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_lread (param $write i32)
@@ -3786,7 +3785,7 @@
     ;; cannot cross $win16_call32_begin's scratch stack. Ask after restoring
     ;; the real Pascal frame and park it intact instead; the host fills the
     ;; range and re-enters this same thunk, where the retry takes the cache hit.
-    (if (i32.and (i32.eqz (global.get $eax)) (i32.eqz (local.get $write)))
+    (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base))) (i32.eqz (local.get $write)))
       (then
         (local.set $lazy (call $host_fs_read_pending))
         (if (i32.eq (local.get $lazy) (i32.const 1))
@@ -3794,7 +3793,7 @@
             (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
             (call $spin_park (i32.const 12)) ;; IO_WAIT
             (return)))))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; _hread(hFile, lpBuffer, lBytes) is the long-count form of _lread and
@@ -3810,7 +3809,7 @@
     (call $handle__hread (local.get $h) (local.get $buf) (local.get $n)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (if (i32.eqz (global.get $eax))
+    (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
       (then
         (local.set $lazy (call $host_fs_read_pending))
         (if (i32.eq (local.get $lazy) (i32.const 1))
@@ -3818,8 +3817,8 @@
             (call $win16_set_sreg (i32.const 1) (global.get $WIN16_THUNK_SEL))
             (call $spin_park (i32.const 12)) ;; IO_WAIT
             (return)))))
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; _llseek(hFile, lOffset, iOrigin) -> the new position, a LONG in DX:AX.
@@ -3832,8 +3831,8 @@
     (call $handle__llseek (local.get $h) (local.get $off) (local.get $origin)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; OpenFile(lpFileName, lpReOpenBuff, wStyle). The OFSTRUCT the second
@@ -3852,9 +3851,9 @@
     (call $win16_call32_end)
     ;; OF_EXIST and the other styles that only report answer 1 or -1 rather
     ;; than opening anything, and neither belongs in the file map.
-    (if (i32.gt_u (global.get $eax) (i32.const 1))
-      (then (global.set $eax (call $win16_fh16 (global.get $eax))))
-      (else (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))))
+    (if (i32.gt_u (i32.load offset=0 (global.get $reg_base)) (i32.const 1))
+      (then (i32.store offset=0 (global.get $reg_base) (call $win16_fh16 (i32.load offset=0 (global.get $reg_base)))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))))
     (call $win16_api_return (i32.const 10)))
 
   ;; KERNEL.134 GetWindowsDirectory / KERNEL.135 GetSystemDirectory
@@ -3875,7 +3874,7 @@
       (else (call $handle_GetWindowsDirectoryA (local.get $buf) (local.get $max)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; KERNEL.131 GetDOSEnvironment -> far pointer to the task's environment.
@@ -3900,8 +3899,8 @@
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $copy)))
         (global.set $win16_env_seg (local.get $seg))))
-    (global.set $edx (call $win16_index_to_sel (global.get $win16_env_seg)))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (call $win16_index_to_sel (global.get $win16_env_seg)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 0)))
 
   ;; KERNEL.136 GetDriveType(nDrive) -> UINT, by drive number rather than a
@@ -3925,7 +3924,7 @@
   ;; Reporting other letters as fixed makes InstallShield enumerate
   ;; nonexistent roots and conclude that no disk can hold its temporary files.
   (func $win16_GetDriveType
-    (global.set $eax (call $win16_win_drive_type (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_win_drive_type (call $win16_arg16 (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   ;; KERNEL.166 WinExec(lpCmdLine, uCmdShow) -> UINT. Use the shared shell
@@ -3939,11 +3938,11 @@
       (then (local.set $command (call $g2w (call $win16_far_to_guest
         (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1)))))))
     (i64.store (global.get $TEXT_SCRATCH) (i64.const 0x00636578456E6957)) ;; "WinExec\0"
-    (global.set $eax (call $host_shell_execute
+    (i32.store offset=0 (global.get $reg_base) (call $host_shell_execute
       (i32.const 0) (global.get $TEXT_SCRATCH) (local.get $command)
       (i32.const 0) (i32.const 0) (local.get $show)))
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; Generic thunking is how a 16-bit program calls a 32-bit DLL on Win9x.
@@ -3993,13 +3992,13 @@
     (local $path i32)
     (local.set $path (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
-    (global.set $eax (select (global.get $WIN16_W32INST_HANDLE) (i32.const 0)
+    (i32.store offset=0 (global.get $reg_base) (select (global.get $WIN16_W32INST_HANDLE) (i32.const 0)
       (i32.ne (call $gl8 (local.get $path)) (i32.const 0))))
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
     (call $win16_api_return (i32.const 12)))
 
   (func $win16_FreeLibrary32W
-    (global.set $edx (i32.const 0))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_local_identity (i32.const 4) (i32.const 1)))
 
   ;; GetProcAddress32W(DWORD hModule, LPCSTR) -> DWORD.
@@ -4011,16 +4010,16 @@
     (if (i32.eq (call $win16_arg32 (i32.const 2)) (global.get $WIN16_W32INST_HANDLE))
       (then (local.set $target
         (call $win16_w32inst_proc (call $g2w (call $win16_name_scratch))))))
-    (global.set $eax (local.get $target))
-    (global.set $edx (i32.shr_u (local.get $target) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $target))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $target) (i32.const 16)))
     (call $win16_api_return (i32.const 8)))
 
   ;; GetVDMPointer32W(LPVOID, UINT) -> linear DWORD. Protected-mode far
   ;; pointers map directly into the guest address space used by Win32 APIs.
   (func $win16_GetVDMPointer32W
-    (global.set $eax (call $win16_far_to_guest
+    (i32.store offset=0 (global.get $reg_base) (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
     (call $win16_api_return (i32.const 6)))
 
   ;; CallProc32W(arg..., proc, conversion-mask, count). WISE's W32INST
@@ -4034,8 +4033,8 @@
     (if (i32.eq (local.get $proc) (global.get $WIN16_W32INST_ISADMIN))
       (then (local.set $result (i32.const 1))))
     ;; ShellLink returns zero. DoService returns zero for success.
-    (global.set $eax (local.get $result))
-    (global.set $edx (i32.shr_u (local.get $result) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $result) (i32.const 16)))
     (call $win16_api_return
       (i32.shl (i32.add (local.get $count) (i32.const 3)) (i32.const 2))))
 
@@ -4156,11 +4155,11 @@
     (if (i32.or (i32.eq (local.get $ordinal) (i32.const 132))
                 (i32.eq (local.get $ordinal) (i32.const 178)))
       (then
-        (global.set $eax (i32.or (i32.const 0x0425)
+        (i32.store offset=0 (global.get $reg_base) (i32.or (i32.const 0x0425)
           (select (i32.const 0x4000) (i32.const 0)
             (i32.ge_u (i32.and (global.get $winver) (i32.const 0xFF))
                       (i32.const 4)))))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     ;; GetCurrentTask answers with the task's own DGROUP selector, which is
@@ -4173,8 +4172,8 @@
       (then (call $win16_GetCurrentPDB) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 51))
       (then
-        (global.set $edx (call $win16_arg16 (i32.const 2)))
-        (global.set $eax (call $win16_arg16 (i32.const 1)))
+        (i32.store offset=8 (global.get $reg_base) (call $win16_arg16 (i32.const 2)))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_arg16 (i32.const 1)))
         (call $win16_api_return (i32.const 6))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 52))   ;; FreeProcInstance
@@ -4214,7 +4213,7 @@
     (if (i32.eq (local.get $ordinal) (i32.const 226))
       (then (call $win16_reg_value_ex (i32.const 1)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 227))   ;; RegFlushKey
-      (then (global.set $edx (i32.const 0))
+      (then (i32.store offset=8 (global.get $reg_base) (i32.const 0))
             (call $win16_local_identity (i32.const 4) (i32.const 0))
             (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 60))
@@ -4415,32 +4414,32 @@
   (func $win16_dll_init_resume
     (local $handle i32) (local $id i32) (local $ds i32)
     (local $ip i32) (local $sel i32)
-    (local.set $handle (call $gl16 (global.get $esp)))
-    (local.set $id     (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
-    (local.set $ds     (call $gl16 (i32.add (global.get $esp) (i32.const 4))))
-    (local.set $ip     (call $gl16 (i32.add (global.get $esp) (i32.const 10))))
-    (local.set $sel    (call $gl16 (i32.add (global.get $esp) (i32.const 12))))
+    (local.set $handle (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $id     (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
+    (local.set $ds     (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+    (local.set $ip     (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 10))))
+    (local.set $sel    (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12))))
     ;; LibEntry is entered with DI=hInstance and is free to leave it (and SI)
     ;; there, but LoadLibrary is a Pascal API and preserves them for its
     ;; caller. Civilization II's static initializers walk their table in SI/DI
     ;; across LoadLibrary("TILES"); returning hInstance in DI made that walk
     ;; step past its end and loop forever.
-    (global.set $esi (i32.or (i32.and (global.get $esi) (i32.const 0xFFFF0000))
-      (call $gl16 (i32.add (global.get $esp) (i32.const 6)))))
-    (global.set $edi (i32.or (i32.and (global.get $edi) (i32.const 0xFFFF0000))
-      (call $gl16 (i32.add (global.get $esp) (i32.const 8)))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 14)))
+    (i32.store offset=24 (global.get $reg_base) (i32.or (i32.and (i32.load offset=24 (global.get $reg_base)) (i32.const 0xFFFF0000))
+      (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 6)))))
+    (i32.store offset=28 (global.get $reg_base) (i32.or (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF0000))
+      (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 8)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 14)))
     (call $win16_set_sreg (i32.const 3) (local.get $ds))
     ;; LibEntry/LibMain returns nonzero on success. A rejected dynamic module
     ;; must release its name slot just like a staging or NE-load failure.
-    (if (i32.eqz (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (if (i32.eqz (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
       (then
         (if (i32.ge_u (local.get $id) (global.get $WIN16_DYNAMIC_BASE))
           (then (call $win16_dll_unload (local.get $id))
                 (call $win16_dynamic_module_release (local.get $id))))
         (local.set $handle (i32.const 2))))
-    (global.set $eax (local.get $handle))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (local.get $handle))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_set_sreg (i32.const 1) (local.get $sel))
     (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $ip)))
     (global.set $steps (i32.const 0)))
@@ -4532,8 +4531,8 @@
             (local.set $ret (call $win16_take_return (i32.const 4)))
             (call $win16_push16 (i32.shr_u (local.get $ret) (i32.const 16)))
             (call $win16_push16 (local.get $ret))
-            (call $win16_push16 (global.get $edi))
-            (call $win16_push16 (global.get $esi))
+            (call $win16_push16 (i32.load offset=28 (global.get $reg_base)))
+            (call $win16_push16 (i32.load offset=24 (global.get $reg_base)))
             (call $win16_push16 (global.get $sreg_ds))
             (call $win16_push16 (local.get $id))
             (call $win16_push16 (local.get $handle))
@@ -4542,10 +4541,10 @@
             (local.set $data_sel (call $win16_dll_data_sel (local.get $id)))
             (call $win16_set_sreg (i32.const 3) (local.get $data_sel))
             (call $win16_set_sreg (i32.const 0) (i32.const 0))
-            (global.set $esi (i32.and (global.get $esi) (i32.const 0xFFFF0000)))
-            (global.set $edi (i32.or (i32.and (global.get $edi) (i32.const 0xFFFF0000))
+            (i32.store offset=24 (global.get $reg_base) (i32.and (i32.load offset=24 (global.get $reg_base)) (i32.const 0xFFFF0000)))
+            (i32.store offset=28 (global.get $reg_base) (i32.or (i32.and (i32.load offset=28 (global.get $reg_base)) (i32.const 0xFFFF0000))
                                      (local.get $handle)))
-            (global.set $ecx (i32.or (i32.and (global.get $ecx) (i32.const 0xFFFF0000))
+            (i32.store offset=4 (global.get $reg_base) (i32.or (i32.and (i32.load offset=4 (global.get $reg_base)) (i32.const 0xFFFF0000))
               (call $win16_dll_heap_size (local.get $id))))
             (call $win16_set_sreg (i32.const 1) (i32.shr_u (local.get $init) (i32.const 16)))
             (global.set $eip (i32.add (global.get $seg_base_cs)
@@ -4577,7 +4576,7 @@
           (then
             (call $win16_dll_unload (local.get $id))
             (call $win16_dynamic_module_release (local.get $id))))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 2)))
 
   ;; KERNEL.47 GetModuleHandle(lpModuleName) -> the module's handle.
@@ -4638,8 +4637,8 @@
     (local.get $hwnd))
 
   (func $win16_NDdeGetWindow
-    (global.set $eax (call $win16_h16 (call $win16_ndde_window)))
-    (global.set $edx (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (call $win16_ndde_window)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 0)))
 
   ;; KERNEL.50 GetProcAddress(hModule, lpszProcName) -> FARPROC in DX:AX.
@@ -4765,7 +4764,7 @@
         (call $host_log_i32 (i32.shl (local.get $id) (i32.const 16)))
         (call $host_log_i32 (i32.const 0))
         (call $host_log_i32 (call $g2w (call $win16_name_scratch)))))
-    (global.set $edx (i32.shr_u (local.get $target) (i32.const 16)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $target) (i32.const 16)))
     (call $win16_local_identity (i32.const 6)
       (i32.and (local.get $target) (i32.const 0xFFFF))))
 
@@ -4776,7 +4775,7 @@
   ;; queue the app allocated — so there is nothing to build, and success is
   ;; the truthful answer rather than a placeholder.
   (func $win16_InitApp
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.15 GetCurrentTime(). Milliseconds since Windows started — the same
@@ -4784,8 +4783,8 @@
   ;; back in DX:AX, the Win16 convention for a 32-bit result.
   (func $win16_GetCurrentTime
     (global.set $tick_count (call $host_get_ticks))
-    (global.set $eax (i32.and (global.get $tick_count) (i32.const 0xFFFF)))
-    (global.set $edx (i32.shr_u (global.get $tick_count) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (global.get $tick_count) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (global.get $tick_count) (i32.const 16)))
     (call $win16_api_return (i32.const 0)))
 
   ;; USER.176 LoadString(hInstance, id, lpBuffer, nBufferMax) -> length.
@@ -4886,7 +4885,7 @@
       (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
     (local.set $out (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
-    (global.set $eax (i32.and
+    (i32.store offset=0 (global.get $reg_base) (i32.and
       (call $wsprintf_impl (local.get $out) (local.get $fmt)
         (call $win16_va_widen (local.get $fmt) (local.get $args)))
       (i32.const 0xFFFF)))
@@ -4922,7 +4921,7 @@
           (then (call $class_extra_set_word
                   (call $wnd_get_class_slot (local.get $hwnd))
                   (local.get $index) (local.get $val))))
-        (global.set $eax (local.get $prev))
+        (i32.store offset=0 (global.get $reg_base) (local.get $prev))
         (call $win16_api_return (select (i32.const 6) (i32.const 4) (local.get $is_set)))
         (return)))
     ;; Flat rather than a chain of else-ifs on purpose: the nested form put the
@@ -4978,7 +4977,7 @@
         (call $host_log_i32 (local.get $index))
         (call $host_log_i32 (local.get $is_set))
         (unreachable)))
-    (global.set $eax (local.get $prev))
+    (i32.store offset=0 (global.get $reg_base) (local.get $prev))
     (call $win16_api_return (select (i32.const 6) (i32.const 4) (local.get $is_set))))
 
   ;; USER.131 GetClassLong / USER.132 SetClassLong(hWnd, nIndex[, dwNewLong]).
@@ -5035,8 +5034,8 @@
                 (call $host_log_i32 (local.get $index))
                 (call $host_log_i32 (local.get $is_set))
                 (unreachable)))))))
-    (global.set $edx (i32.shr_u (local.get $prev) (i32.const 16)))
-    (global.set $eax (i32.and (local.get $prev) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $prev) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $prev) (i32.const 0xFFFF)))
     (call $win16_api_return (select (i32.const 8) (i32.const 4) (local.get $is_set))))
 
   ;; USER.222 GetKeyboardState(lpKeyState) — 256 bytes, one per virtual key,
@@ -5049,7 +5048,7 @@
     (call $handle_GetKeyboardState (local.get $buf) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.223 SetKeyboardState(lpKeyState) — the same 256-byte array on the way
@@ -5066,7 +5065,7 @@
                  (i32.const 0x80)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $keys)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.243 GetDialogBaseUnits() -> the width in AX and the height in DX of
@@ -5077,8 +5076,8 @@
     (call $handle_GetDialogBaseUnits (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 0)))
 
   ;; USER.17 GetCursorPos(lpPoint) / USER.70 SetCursorPos(X, Y). A POINT is two
@@ -5095,7 +5094,7 @@
     (call $gs16 (local.get $pt) (call $gl32 (local.get $tmp)))
     (call $gs16 (i32.add (local.get $pt) (i32.const 2))
       (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_SetCursorPos
@@ -5106,7 +5105,7 @@
     (call $handle_SetCursorPos (local.get $x) (local.get $y)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.47 IsWindow(hWnd). A handle the task made up, or one it kept after
@@ -5116,14 +5115,14 @@
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
     (if (i32.eqz (local.get $hwnd))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 2))
         (return)))
     (call $win16_call32_begin (i32.const 1))
     (call $handle_IsWindow (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.48 IsChild(hWndParent, hWnd). Walk the real WND parent chain rather
@@ -5134,7 +5133,7 @@
     (local $parent i32) (local $child i32)
     (local.set $child (call $win16_h32 (call $win16_arg16 (i32.const 0))))
     (local.set $parent (call $win16_h32 (call $win16_arg16 (i32.const 1))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.and
           (i32.ne (local.get $parent) (i32.const 0))
           (i32.ne (local.get $child) (i32.const 0)))
@@ -5144,7 +5143,7 @@
           (br_if $done (i32.eqz (local.get $child)))
           (if (i32.eq (local.get $child) (local.get $parent))
             (then
-              (global.set $eax (i32.const 1))
+              (i32.store offset=0 (global.get $reg_base) (i32.const 1))
               (br $done)))
           (local.set $child (call $wnd_get_parent (local.get $child)))
           (br $ancestors)))))
@@ -5166,7 +5165,7 @@
     (call $handle_FindWindowA (local.get $cls) (local.get $title)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.431 AnsiUpper / .432 AnsiLower(lpsz) and USER.437 AnsiUpperBuff /
@@ -5201,8 +5200,8 @@
               (else (if (i32.and (i32.ge_u (local.get $ch) (i32.const 0x41))
                                  (i32.le_u (local.get $ch) (i32.const 0x5A)))
                       (then (local.set $ch (i32.add (local.get $ch) (i32.const 0x20)))))))
-            (global.set $edx (i32.const 0))
-            (global.set $eax (local.get $ch))
+            (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (local.get $ch))
             (call $win16_api_return (i32.const 4))
             (return)))
         (local.set $n (i32.const 0x10000))))
@@ -5225,12 +5224,12 @@
       (br $chars)))
     (if (local.get $buffered)
       (then
-        (global.set $eax (local.get $i))
+        (i32.store offset=0 (global.get $reg_base) (local.get $i))
         (call $win16_api_return (i32.const 6)))
       (else
         ;; Answers with the string it was given.
-        (global.set $edx (local.get $sel))
-        (global.set $eax (call $win16_arg16 (i32.const 0)))
+        (i32.store offset=8 (global.get $reg_base) (local.get $sel))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_arg16 (i32.const 0)))
         (call $win16_api_return (i32.const 4)))))
 
   ;; USER.472 AnsiNext(lpszCurrentChar) -> the next character. With a
@@ -5244,8 +5243,8 @@
     (if (call $gl8 (call $win16_far_to_guest (local.get $sel) (local.get $off)))
       (then (local.set $off (i32.and (i32.add (local.get $off) (i32.const 1))
                                      (i32.const 0xFFFF)))))
-    (global.set $edx (local.get $sel))
-    (global.set $eax (local.get $off))
+    (i32.store offset=8 (global.get $reg_base) (local.get $sel))
+    (i32.store offset=0 (global.get $reg_base) (local.get $off))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_LoadString
@@ -5263,7 +5262,7 @@
     (global.set $win16_res_module_id
       (call $win16_res_module (call $win16_arg16 (i32.const 4))))
 
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (local.set $p (call $win16_find_resource (i32.const 6)
       (i32.add (i32.shr_u (local.get $id) (i32.const 4)) (i32.const 1))))
     (if (local.get $p)
@@ -5285,7 +5284,7 @@
               (call $memcpy (call $g2w (local.get $dst))
                 (i32.add (local.get $p) (i32.const 1)) (local.get $n))
               (call $gs8 (i32.add (local.get $dst) (local.get $n)) (i32.const 0))
-              (global.set $eax (local.get $n))
+              (i32.store offset=0 (global.get $reg_base) (local.get $n))
               (br $found)))
           (local.set $p (i32.add (i32.add (local.get $p) (i32.const 1)) (local.get $len)))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
@@ -5309,7 +5308,7 @@
     (call $handle_SetScrollPos (local.get $hwnd) (local.get $bar)
       (local.get $pos) (local.get $redraw) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.63 GetScrollPos(hWnd, nBar) -> the position.
@@ -5321,7 +5320,7 @@
     (call $handle_GetScrollPos (local.get $hwnd) (local.get $bar)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.64 SetScrollRange(hWnd, nBar, nMinPos, nMaxPos, bRedraw).
@@ -5338,7 +5337,7 @@
     (call $handle_SetScrollRange (local.get $hwnd) (local.get $bar)
       (local.get $lo) (local.get $hi) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.65 GetScrollRange(hWnd, nBar, lpMinPos, lpMaxPos). The two answers
@@ -5366,7 +5365,7 @@
     (if (local.get $have_hi)
       (then (call $gs16 (local.get $hi)
               (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.61 ScrollWindow(hWnd, XAmount, YAmount, lpRect, lpClipRect). Either
@@ -5393,7 +5392,7 @@
     (call $handle_ScrollWindow (local.get $hwnd) (local.get $dx) (local.get $dy)
       (local.get $rc) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 14)))
 
   ;; USER.66 GetDC(hWnd) -> HDC, USER.68 ReleaseDC(hWnd, hDC).
@@ -5410,7 +5409,7 @@
         (local.set $hdc (call $host_alloc_window_dc (local.get $hwnd) (i32.const 0)))
         (call $dc_apply_client_clip (local.get $hdc) (local.get $hwnd)))
       (else (local.set $hdc (call $host_alloc_screen_dc))))
-    (global.set $eax (call $win16_h16 (local.get $hdc)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $hdc)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.68 ReleaseDC(hWnd, hDC) -> nonzero if it released one.
@@ -5427,14 +5426,14 @@
     (local.set $hdc (call $win16_h32 (call $win16_arg16 (i32.const 0))))
     (if (i32.eqz (call $gdi_dc_state_entry (local.get $hdc) (i32.const 0)))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 4))
         (return)))
     (drop (call $host_release_dc (local.get $hdc)))
     ;; The DC is gone, so its place in the handle map is free. A pump that gets
     ;; and releases a DC every iteration would otherwise fill the map.
     (call $win16_h16_forget (local.get $hdc))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.67 GetWindowDC(hWnd) — the whole window, frame included, which is
@@ -5442,7 +5441,7 @@
   (func $win16_GetWindowDC
     (local $hwnd i32)
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
-    (global.set $eax (call $win16_h16
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16
       (call $host_alloc_window_dc (local.get $hwnd) (i32.const 1))))
     (call $win16_api_return (i32.const 2)))
 
@@ -5491,7 +5490,7 @@
   ;; USER.179 GetSystemMetrics(nIndex). Same indices, same answers as Win32 —
   ;; see $system_metric in 09a-handlers.wat.
   (func $win16_GetSystemMetrics
-    (global.set $eax (call $system_metric (call $win16_arg16 (i32.const 0))))
+    (i32.store offset=0 (global.get $reg_base) (call $system_metric (call $win16_arg16 (i32.const 0))))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.175 LoadBitmap(hInstance, lpBitmapName) -> HBITMAP.
@@ -5501,10 +5500,10 @@
   ;; the walk that finds the bytes differs.
   (func $win16_LoadBitmap
     (local $data i32)
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (local.set $data (call $win16_res_lookup (i32.const 2) (i32.const 0)))
     (if (local.get $data)
-      (then (global.set $eax (call $win16_h16 (call $gdi_bitmap_create_resource
+      (then (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (call $gdi_bitmap_create_resource
               (local.get $data) (global.get $win16_res_len))))))
     (call $win16_api_return (i32.const 6)))
 
@@ -5524,7 +5523,7 @@
   (func $win16_LoadIcon
     (local $id i32) (local $name i32) (local $module i32) (local $found i32)
     (local.set $id (call $win16_res_arg (i32.const 0)))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (i32.ne (local.get $id) (i32.const -1))
       (then
         (local.set $module
@@ -5538,12 +5537,12 @@
         (global.set $win16_res_module_id (i32.const 0))
         (if (local.get $found)
           (then
-            (global.set $eax (call $win16_h16
+            (i32.store offset=0 (global.get $reg_base) (call $win16_h16
               (call $icon_intern
                 (i32.or (global.get $ICON_FROM_WIN16) (local.get $module))
                 (local.get $id)))))
           (else
-            (global.set $eax (call $win16_h16 (i32.const 0x60001)))))
+            (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.const 0x60001)))))
         (call $win16_api_return (i32.const 6))
         (return)))
     (local.set $name (call $win16_res_name_wa (i32.const 0)))
@@ -5552,7 +5551,7 @@
                     (i32.const 14) (i32.const 0) (local.get $name)) (i32.const 0))
           (i32.ne (call $win16_find_resource_ex
                     (i32.const 3) (i32.const 0) (local.get $name)) (i32.const 0)))
-      (then (global.set $eax (call $win16_h16 (i32.const 0x60001)))))
+      (then (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.const 0x60001)))))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.457 DestroyIcon(hIcon). Built and copied icons are private and lose
@@ -5580,16 +5579,16 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
     (if (i32.and
-          (i32.ne (global.get $eax) (i32.const 0))
+          (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0))
           (local.get $owned))
       (then (call $win16_h16_forget (local.get $h))))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.286 GetDesktopWindow(). The desktop is 0x10000 on the 32-bit side and
   ;; goes through the handle map like any other window.
   (func $win16_GetDesktopWindow
-    (global.set $eax (call $win16_h16 (i32.const 0x10000)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.const 0x10000)))
     (call $win16_api_return (i32.const 0)))
 
   ;; USER.1 MessageBox(hWnd, lpText, lpCaption, wType) -> the button pressed.
@@ -5724,7 +5723,7 @@
         (call $handle_GetSystemMenu (local.get $arg) (local.get $arg2)
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (call $win16_h16 (global.get $eax)))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
         (call $win16_api_return (i32.const 4))
         (return (i32.const 1))))
     ;; USER.236 GetCapture() -> the window holding the mouse, or NULL.
@@ -5740,7 +5739,7 @@
         (call $handle_IsWindowEnabled (local.get $arg) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 2))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 236))
@@ -5749,7 +5748,7 @@
         (call $handle_GetCapture (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (call $win16_h16 (global.get $eax)))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     ;; USER.58 GetClassName(hWnd, lpClassName, nMaxCount) -> its length. Tic
@@ -5766,7 +5765,7 @@
           (local.get $arg3)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     ;; USER.151 CreateMenu / USER.152 CreatePopupMenu — an empty menu the task
@@ -5780,7 +5779,7 @@
         (call $handle_CreatePopupMenu (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (call $win16_h16 (global.get $eax)))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 152))
@@ -5789,7 +5788,7 @@
         (call $handle_CreatePopupMenu (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (call $win16_h16 (global.get $eax)))
+        (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 407))
@@ -6123,8 +6122,8 @@
   ;; ---- Windows ----
 
   (func $win16_push16 (param $v i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 2)))
-    (call $gs16 (global.get $esp) (local.get $v)))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+    (call $gs16 (i32.load offset=16 (global.get $reg_base)) (local.get $v)))
 
   ;; USER owns these buffers, not the task's DGROUP/local heap. In particular
   ;; VB initializes private runtime data in its initially empty DGROUP;
@@ -6227,8 +6226,8 @@
           (then (local.set $wparam (call $win16_h32 (local.get $wparam)))))
         (local.set $proc (call $wat_wndproc_dispatch (call $win16_h32 (local.get $hwnd))
           (local.get $msg) (local.get $wparam) (local.get $lparam)))
-        (global.set $eax (i32.and (local.get $proc) (i32.const 0xFFFF)))
-        (global.set $edx (i32.shr_u (local.get $proc) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $proc) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $proc) (i32.const 16)))
         (call $win16_set_sreg (i32.const 1) (local.get $ret_sel))
         (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $ret_ip)))
         (return)))
@@ -6252,8 +6251,7 @@
     (local.set $data_sel (call $win16_proc_data_sel (local.get $proc)))
     (if (local.get $data_sel)
       (then
-        (global.set $eax
-          (i32.or (i32.and (global.get $eax) (i32.const 0xFFFF0000))
+        (i32.store offset=0 (global.get $reg_base) (i32.or (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF0000))
                   (local.get $data_sel)))))
     (call $win16_set_sreg (i32.const 1) (i32.shr_u (local.get $proc) (i32.const 16)))
     (local.set $entry (i32.add (global.get $seg_base_cs)
@@ -6285,16 +6283,16 @@
     (call $win16_push16 (local.get $result)))
 
   (func $win16_cont_result (result i32)
-    (call $gl16 (global.get $esp)))
+    (call $gl16 (i32.load offset=16 (global.get $reg_base))))
 
   (func $win16_cont_resume
     (local $result i32) (local $ip i32) (local $sel i32)
-    (local.set $result (call $gl16 (global.get $esp)))
-    (local.set $ip     (call $gl16 (i32.add (global.get $esp) (i32.const 2))))
-    (local.set $sel    (call $gl16 (i32.add (global.get $esp) (i32.const 4))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 6)))
-    (global.set $eax (local.get $result))
-    (global.set $edx (i32.const 0))
+    (local.set $result (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $ip     (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
+    (local.set $sel    (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 6)))
+    (i32.store offset=0 (global.get $reg_base) (local.get $result))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
     (call $win16_set_sreg (i32.const 1) (local.get $sel))
     (global.set $eip (i32.add (global.get $seg_base_cs) (local.get $ip))))
 
@@ -6304,16 +6302,16 @@
   (func $win16_take_return (param $argbytes i32) (result i32)
     (local $packed i32)
     (local.set $packed (i32.or
-      (call $gl16 (global.get $esp))
-      (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2))) (i32.const 16))))
-    (global.set $esp (i32.add (global.get $esp) (i32.add (i32.const 4) (local.get $argbytes))))
+      (call $gl16 (i32.load offset=16 (global.get $reg_base)))
+      (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))) (i32.const 16))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.add (i32.const 4) (local.get $argbytes))))
     (local.get $packed))
 
   ;; USER.173 LoadCursor(hInstance, lpCursorName). Opaque, like LoadIcon: it
   ;; identifies the cursor for a class registration, and the renderer draws the
   ;; host cursor regardless.
   (func $win16_LoadCursor
-    (global.set $eax (call $win16_h16 (i32.const 0x70001)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.const 0x70001)))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.57 RegisterClass(lpWndClass) -> ATOM.
@@ -6358,7 +6356,7 @@
     (call $handle_RegisterClassA (local.get $dst)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.403 UnregisterClass(lpszClassName, hInstance) -> BOOL. hInstance
@@ -6375,7 +6373,7 @@
     (call $handle_UnregisterClassA (local.get $name) (local.get $hinst)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.404 GetClassInfo(hInstance, lpszClassName, lpWndClass) -> BOOL.
@@ -6401,7 +6399,7 @@
     (call $handle_GetClassInfoA (local.get $inst)
       (local.get $name) (local.get $tmp) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then
         (call $gs16 (local.get $dst) (call $gl32 (local.get $tmp)))
         (local.set $proc (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
@@ -6426,7 +6424,7 @@
         (call $gs32 (i32.add (local.get $dst) (i32.const 22)) (i32.or
           (i32.shl (call $win16_arg16 (i32.const 3)) (i32.const 16))
           (call $win16_arg16 (i32.const 2))))))
-    (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 10)))
 
   ;; A 16-bit window coordinate is a signed word, and CW_USEDEFAULT is 0x8000
@@ -6476,13 +6474,13 @@
     ;; A window procedure this emulator supplies has no address a 16-bit task
     ;; could call, so it is reported as the thunk that stands for it.
     (if (i32.and (i32.eq (local.get $index) (i32.const -4))
-                 (i32.eqz (call $win16_is_far_proc (global.get $eax))))
-      (then (global.set $eax (call $win16_builtin_wndproc_for (local.get $hwnd)))))
+                 (i32.eqz (call $win16_is_far_proc (i32.load offset=0 (global.get $reg_base)))))
+      (then (i32.store offset=0 (global.get $reg_base) (call $win16_builtin_wndproc_for (local.get $hwnd)))))
     ;; A word answer is a word; a long one comes back in DX:AX like any other.
     (if (local.get $word)
-      (then (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF))))
-      (else (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-            (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF))))
+      (else (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))))
     (call $win16_api_return (local.get $argbytes)))
 
   (func $win16_builtin_wndproc (result i32)
@@ -6549,21 +6547,21 @@
                 (i32.eq (local.get $message) (i32.const 0x0001)))
       (then
         ;; WM_NCCREATE accepts creation; WM_CREATE reports success.
-        (global.set $eax (i32.eq (local.get $message) (i32.const 0x0081)))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.eq (local.get $message) (i32.const 0x0081)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 10))
         (return)))
     (local.set $lparam (call $win16_ctrl_lparam32
       (call $ctrl_table_get_class (local.get $hwnd)) (local.get $message) (local.get $lparam)))
     (call $win16_call32_begin (i32.const 4))
-    (global.set $eax (call $control_wndproc_dispatch
+    (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
       (local.get $hwnd)
       (call $win16_ctrl_msg32 (local.get $hwnd) (local.get $message))
       (call $win16_msg_wparam32 (local.get $message) (local.get $wparam))
       (local.get $lparam)))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; Is this window procedure one a 16-bit task can actually far-call? The
@@ -6684,21 +6682,21 @@
             ;; window table (which still names that subclass) and invoke the
             ;; native control directly. Going through wnd_send_message here
             ;; would post the translated message back to the same guest proc.
-            (global.set $eax (call $control_wndproc_dispatch
+            (i32.store offset=0 (global.get $reg_base) (call $control_wndproc_dispatch
               (local.get $hwnd32)
               (call $win16_ctrl_msg32 (local.get $hwnd32) (local.get $message))
               (call $win16_msg_wparam32 (local.get $message) (local.get $wparam))
               (local.get $lparam)))
             (call $win16_call32_end)
-            (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-            (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+            (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+            (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
             (call $win16_api_return (i32.const 14))
             (return)))
         (if (call $win16_defdlg_command (local.get $hwnd32)
                   (local.get $message) (local.get $wparam))
           (then
-            (global.set $eax (i32.const 0))
-            (global.set $edx (i32.const 0))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+            (i32.store offset=8 (global.get $reg_base) (i32.const 0))
             (call $win16_api_return (i32.const 14))
             (return)))
         (call $win16_call32_begin (i32.const 4))
@@ -6706,8 +6704,8 @@
           (local.get $message) (local.get $wparam) (local.get $lparam)
           (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 14))
         (return)))
     (local.set $ret (call $win16_take_return (i32.const 14)))
@@ -6731,8 +6729,8 @@
   (func $win16_hook_cwp_fire (param $hwnd16 i32) (param $msg i32) (param $wparam i32)
         (param $lparam i32) (param $cont_off i32)
     (local $base i32) (local $sel i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 10)))
-    (local.set $base (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 10)))
+    (local.set $base (i32.load offset=16 (global.get $reg_base)))
     (local.set $sel (global.get $sreg_ss))
     (call $gs32 (local.get $base) (local.get $lparam))
     (call $gs16 (i32.add (local.get $base) (i32.const 4)) (local.get $wparam))
@@ -6761,8 +6759,8 @@
         (param $style i32) (param $name i32) (param $class i32) (param $exstyle i32)
         (result i32)
     (local $base i32)
-    (global.set $esp (i32.sub (global.get $esp) (i32.const 34)))
-    (local.set $base (global.get $esp))
+    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 34)))
+    (local.set $base (i32.load offset=16 (global.get $reg_base)))
     (call $gs32 (local.get $base) (local.get $param))
     (call $gs16 (i32.add (local.get $base) (i32.const 4)) (local.get $inst))
     (call $gs16 (i32.add (local.get $base) (i32.const 6)) (local.get $menu))
@@ -6879,7 +6877,7 @@
     ;; WM_CREATE's lParam is zero rather than a CREATESTRUCT; a 16-bit app
     ;; reading one would need the narrow layout, and none of these do. The
     ;; WM_NCCREATE shown to the hook below does carry a real one.
-    (local.set $hwnd (global.get $eax))
+    (local.set $hwnd (i32.load offset=0 (global.get $reg_base)))
     (local.set $redirected (call $win16_call32_end_redirected))
     ;; VB1 registers every visual control with its own Thunder window
     ;; procedure, so CreateWindowEx cannot classify a ThunderCommandButton as
@@ -6957,7 +6955,7 @@
         ;; Reading +36 picked the zero pending-size word, so MFC's creation
         ;; hook attached its CWnd to HWND 0 and Hearts immediately called
         ;; through the resulting null object.
-        (call $win16_hook_cwp_fire (call $gl16 (i32.add (global.get $esp) (i32.const 40)))
+        (call $win16_hook_cwp_fire (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 40)))
           (i32.const 0x0081) (i32.const 0) (local.get $cs)
           (global.get $WIN16_CONT_CWP))
         (return)))
@@ -6970,9 +6968,9 @@
   ;; paths cannot drift apart.
   (func $win16_create_finish
     (local $redirected i32) (local $pending_size i32) (local $hwnd16 i32)
-    (local.set $redirected (call $gl16 (global.get $esp)))
-    (local.set $pending_size (call $gl32 (i32.add (global.get $esp) (i32.const 2))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 6)))
+    (local.set $redirected (call $gl16 (i32.load offset=16 (global.get $reg_base))))
+    (local.set $pending_size (call $gl32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 6)))
     (local.set $hwnd16 (call $win16_cont_result))
     (if (local.get $redirected)
       (then
@@ -7159,14 +7157,14 @@
             (return)))
         (drop (call $wnd_send_message (local.get $hwnd)
           (i32.const 0x0005) (i32.const 2) (local.get $client_size)))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.124 UpdateWindow(hWnd).
   (func $win16_UpdateWindow
     (call $invalidate_hwnd (call $win16_h32 (call $win16_arg16 (i32.const 0))))
     (global.set $paint_pending (i32.const 1))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.108 GetMessage(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax).
@@ -7195,10 +7193,10 @@
       (then
         (global.set $win16_dde_cb_msg (local.get $dst))
         (global.set $win16_dde_cb_ret
-          (i32.or (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2)))
+          (i32.or (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
                            (i32.const 16))
-                  (call $gl16 (global.get $esp))))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 14)))
+                  (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 14)))
         (call $win16_dde_ask_enter (local.get $ask))
         (return)))
     (local.set $tmp (global.get $GUEST_STACK))
@@ -7209,7 +7207,7 @@
     (if (local.get $waited)
       (then
         (call $zero_memory (call $g2w (local.get $tmp)) (i32.const 28))
-        (global.set $eax (i32.const 1))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))))
     (call $win16_call32_end)
     ;; Same shape as the modal pump's line below, with a zero dialog to mean
     ;; "the task's own loop". Seeing both is what tells one delivery of a
@@ -7246,7 +7244,7 @@
     (call $gs32 (i32.add (local.get $dst) (i32.const 10))
       (call $gl32 (i32.add (local.get $tmp) (i32.const 16))))
     (call $win16_msg_pt_narrow (local.get $dst) (local.get $tmp))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; MSG.pt, which is not decoration. It is the cursor in *screen* space at the
@@ -7388,7 +7386,7 @@
   ;; USER.113 TranslateMessage(lpMsg). Key translation happens where the host
   ;; input is decoded, so there is nothing left to do here.
   (func $win16_TranslateMessage
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.114 DispatchMessage(lpMsg) -> LONG. This is where a 16-bit task
@@ -7429,8 +7427,8 @@
     ;; WM_NULL is the idle message and has no window procedure to reach.
     (if (i32.or (i32.eqz (local.get $message)) (i32.eqz (local.get $proc)))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 4))
         (return)))
     ;; The message need not be for a window of the task's own. A 16-bit app
@@ -7442,11 +7440,11 @@
     (if (i32.eqz (call $win16_is_far_proc (local.get $proc)))
       (then
         (call $win16_call32_begin (i32.const 4))
-        (global.set $eax (call $wnd_send_message
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $hwnd) (local.get $message) (local.get $wparam) (local.get $lparam)))
         (call $win16_call32_end)
-        (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 4))
         (return)))
     (local.set $ret (call $win16_take_return (i32.const 4)))
@@ -7484,14 +7482,14 @@
         ;; but only here. A message going to the task's own window procedure
         ;; below keeps the number the task chose.
         (call $win16_call32_begin (i32.const 4))
-        (global.set $eax (call $wnd_send_message
+        (i32.store offset=0 (global.get $reg_base) (call $wnd_send_message
           (local.get $hwnd)
           (call $win16_ctrl_msg32 (local.get $hwnd) (local.get $msg))
           (call $win16_msg_wparam32 (local.get $msg) (local.get $wp))
           (local.get $lp)))
         (call $win16_call32_end)
-        (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 10))
         (return)))
     ;; Thunder controls keep their VB far procedure, while the renderer-facing
@@ -7529,8 +7527,8 @@
     (if (call $win16_defdlg_command (local.get $hwnd)
               (local.get $message) (local.get $wparam))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 10))
         (return)))
     ;; Widen what was narrowed on the way out: WM_ERASEBKGND carries a DC, and
@@ -7545,14 +7543,14 @@
       (call $win16_msg_wparam32 (local.get $message) (local.get $wparam))
       (local.get $lparam) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.6 PostQuitMessage(nExitCode).
   (func $win16_PostQuitMessage
     (global.set $quit_flag (i32.const 1))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 2)))
 
   ;; A RECT is four LONGs in Win32 and four ints in Win16, so it is copied
@@ -7592,7 +7590,7 @@
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
     (call $win16_rect_narrow (local.get $dst) (local.get $tmp))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.30 WindowFromPoint(POINT pt) and USER.191 ChildWindowFromPoint(hWnd,
@@ -7628,13 +7626,13 @@
         (call $handle_WindowFromPoint (local.get $x) (local.get $y)
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (local.set $parent (global.get $eax))))
+        (local.set $parent (i32.load offset=0 (global.get $reg_base)))))
     (local.set $hit (call $wnd_child_from_point_deep
       (local.get $parent) (local.get $x) (local.get $y)))
     ;; Neither call reports "nothing here" by way of the parent: Win16
     ;; ChildWindowFromPoint answers with the parent when no child owns the
     ;; point, and WindowFromPoint with the window it was already given.
-    (global.set $eax (call $win16_h16
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16
       (select (local.get $hit) (local.get $parent) (local.get $hit))))
     (call $win16_api_return (select (i32.const 6) (i32.const 4)
                                     (local.get $is_child))))
@@ -7670,7 +7668,7 @@
     (call $gs16 (local.get $dst) (call $gl32 (local.get $tmp)))
     (call $gs16 (i32.add (local.get $dst) (i32.const 2))
       (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.258 MapWindowPoints(hWndFrom, hWndTo, lpPoints, cPoints).
@@ -7687,8 +7685,8 @@
     (local.set $count (call $win16_arg16 (i32.const 0)))
     (if (i32.gt_u (local.get $count) (i32.const 0x10000))
       (then
-        (global.set $eax (i32.const 0))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 10))
         (return)))
     (local.set $tmp (global.get $GUEST_STACK))
@@ -7707,7 +7705,7 @@
     (call $win16_call32_begin (i32.const 4))
     (call $handle_MapWindowPoints (local.get $from) (local.get $to)
       (local.get $tmp) (local.get $count) (i32.const 0) (i32.const 0))
-    (local.set $result (global.get $eax))
+    (local.set $result (i32.load offset=0 (global.get $reg_base)))
     (call $win16_call32_end)
     (local.set $i (i32.const 0))
     (block $narrow_done (loop $narrow
@@ -7720,8 +7718,8 @@
                     (i32.add (i32.shl (local.get $i) (i32.const 3)) (i32.const 4)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $narrow)))
-    (global.set $eax (i32.and (local.get $result) (i32.const 0xFFFF)))
-    (global.set $edx (i32.shr_u (local.get $result) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $result) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $result) (i32.const 16)))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.39 BeginPaint(hWnd, lpPaint) -> HDC, USER.40 EndPaint(hWnd, lpPaint).
@@ -7741,8 +7739,8 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (global.set $win16_beginpaint_call32 (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
-    (call $gs16 (local.get $dst) (global.get $eax))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
+    (call $gs16 (local.get $dst) (i32.load offset=0 (global.get $reg_base)))
     (call $gs16 (i32.add (local.get $dst) (i32.const 2))
       (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
     (call $win16_rect_narrow (i32.add (local.get $dst) (i32.const 4))
@@ -7780,7 +7778,7 @@
     ;; DCs are gone after EndPaint, so their narrow slots must be reusable.
     (if (i32.eqz (local.get $private))
       (then (call $win16_h16_forget (local.get $hdc))))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.125 InvalidateRect(hWnd, lpRect, bErase) — lpRect may be NULL, which
@@ -7800,7 +7798,7 @@
     (call $handle_InvalidateRect (local.get $hwnd) (local.get $tmp) (local.get $erase)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.126 InvalidateRgn(hWnd, hRgn, bErase). Both handles are narrow;
@@ -7814,7 +7812,7 @@
     (call $handle_InvalidateRgn (local.get $hwnd) (local.get $hrgn) (local.get $erase)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.16 ClipCursor(lpRect). The Win16 RECT has four signed 16-bit fields;
@@ -7832,7 +7830,7 @@
     (call $handle_ClipCursor (local.get $tmp)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.127 ValidateRect(hWnd, lpRect) — the other half of InvalidateRect,
@@ -7850,7 +7848,7 @@
     (call $handle_ValidateRect (local.get $hwnd) (local.get $tmp)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.81 FillRect(hDC, lpRect, hBrush).
@@ -7866,7 +7864,7 @@
     (call $handle_FillRect (local.get $hdc) (local.get $tmp) (local.get $brush)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.83 FrameRect(hDC, lpRect, hBrush) — FillRect's outline. Solitaire's
@@ -7883,7 +7881,7 @@
     (call $handle_FrameRect (local.get $hdc) (local.get $tmp) (local.get $brush)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.420 wsprintf(lpOut, lpFmt, ...) -> length.
@@ -7906,7 +7904,7 @@
     (local.set $fmt (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
     ;; Word 4 is the first variable argument.
-    (local.set $src (i32.add (global.get $esp) (i32.const 12)))
+    (local.set $src (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 12)))
     (local.set $dst (region.addr $GUEST_STACK 0x800))
 
     (block $scanned (loop $scan
@@ -7965,7 +7963,7 @@
       (local.set $dst (i32.add (local.get $dst) (i32.const 4)))
       (br $scan)))
 
-    (global.set $eax (call $wsprintf_impl (local.get $out) (local.get $fmt)
+    (i32.store offset=0 (global.get $reg_base) (call $wsprintf_impl (local.get $out) (local.get $fmt)
       (region.addr $GUEST_STACK 0x800)))
     (call $win16_api_return (i32.const 0)))
 
@@ -7980,7 +7978,7 @@
     (call $handle_DrawIcon (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $icon) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.171 WinHelp(hWnd, lpszHelp, usCommand, ulData).
@@ -8002,7 +8000,7 @@
     (call $handle_WinHelpA (local.get $hwnd) (local.get $file) (local.get $cmd)
       (local.get $data) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))
 
   ;; The RECT helpers. These are pure arithmetic on a caller-owned rectangle
@@ -8031,7 +8029,7 @@
         (call $win16_arg16 (i32.sub (i32.const 3) (local.get $i))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $set)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   (func $win16_CopyRect
@@ -8046,7 +8044,7 @@
         (call $win16_rect_get (local.get $src) (local.get $i)))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $copy)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.76 PtInRect(lprc, pt) — and the POINT is one argument passed *by
@@ -8062,7 +8060,7 @@
       (call $win16_arg16 (i32.const 3)) (call $win16_arg16 (i32.const 2))))
     (local.set $x (call $win16_coord (call $win16_arg16 (i32.const 0))))
     (local.set $y (call $win16_coord (call $win16_arg16 (i32.const 1))))
-    (global.set $eax (i32.and
+    (i32.store offset=0 (global.get $reg_base) (i32.and
       (i32.and (i32.ge_s (local.get $x) (call $win16_rect_get (local.get $r) (i32.const 0)))
                (i32.lt_s (local.get $x) (call $win16_rect_get (local.get $r) (i32.const 2))))
       (i32.and (i32.ge_s (local.get $y) (call $win16_rect_get (local.get $r) (i32.const 1)))
@@ -8082,7 +8080,7 @@
     (call $handle_PtVisible (local.get $hdc) (local.get $x) (local.get $y)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.104 RectVisible(hDC, lpRect) -> is any part of it inside the clip? The
@@ -8105,7 +8103,7 @@
     (call $handle_RectVisible (local.get $hdc) (local.get $w)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_InflateRect
@@ -8122,7 +8120,7 @@
       (i32.add (call $win16_rect_get (local.get $r) (i32.const 2)) (local.get $x)))
     (call $win16_rect_set (local.get $r) (i32.const 3)
       (i32.add (call $win16_rect_get (local.get $r) (i32.const 3)) (local.get $y)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.77 OffsetRect(lpRect, X, Y) — slides the rectangle, same shape as
@@ -8141,7 +8139,7 @@
       (i32.add (call $win16_rect_get (local.get $r) (i32.const 2)) (local.get $x)))
     (call $win16_rect_set (local.get $r) (i32.const 3)
       (i32.add (call $win16_rect_get (local.get $r) (i32.const 3)) (local.get $y)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.73 SetRectEmpty(lpRect) and USER.75 IsRectEmpty(lpRect).
@@ -8154,14 +8152,14 @@
       (call $win16_rect_set (local.get $r) (local.get $i) (i32.const 0))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $edges)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_IsRectEmpty
     (local $r i32)
     (local.set $r (call $win16_far_to_guest
       (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
-    (global.set $eax (i32.or
+    (i32.store offset=0 (global.get $reg_base) (i32.or
       (i32.le_s (call $win16_rect_get (local.get $r) (i32.const 2))
                 (call $win16_rect_get (local.get $r) (i32.const 0)))
       (i32.le_s (call $win16_rect_get (local.get $r) (i32.const 3))
@@ -8197,7 +8195,7 @@
           (call $win16_rect_set (local.get $dst) (local.get $i) (i32.const 0))
           (local.set $i (i32.add (local.get $i) (i32.const 1)))
           (br $edges)))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 12))
         (return)))
     (if (local.get $ae) (then (local.set $a (local.get $b))))
@@ -8215,7 +8213,7 @@
                   (i32.lt_u (local.get $i) (i32.const 2)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $edges)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.79 IntersectRect(lpDestRect, lpSrc1Rect, lpSrc2Rect) -> non-empty?
@@ -8248,13 +8246,13 @@
         (call $win16_rect_set (local.get $dst) (i32.const 1) (local.get $t))
         (call $win16_rect_set (local.get $dst) (i32.const 2) (local.get $r))
         (call $win16_rect_set (local.get $dst) (i32.const 3) (local.get $bo))
-        (global.set $eax (i32.const 1)))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1)))
       (else
         (call $win16_rect_set (local.get $dst) (i32.const 0) (i32.const 0))
         (call $win16_rect_set (local.get $dst) (i32.const 1) (i32.const 0))
         (call $win16_rect_set (local.get $dst) (i32.const 2) (i32.const 0))
         (call $win16_rect_set (local.get $dst) (i32.const 3) (i32.const 0))
-        (global.set $eax (i32.const 0))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.180 GetSysColor(nIndex) -> COLORREF in DX:AX.
@@ -8265,8 +8263,8 @@
     (call $handle_GetSysColor (local.get $index)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.118 RegisterWindowMessage(lpString).
@@ -8278,7 +8276,7 @@
     (call $handle_RegisterWindowMessageA (local.get $s)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.150 LoadMenu(hInstance, lpMenuName) / USER.158 SetMenu(hWnd, hMenu).
@@ -8289,7 +8287,7 @@
     (call $handle_LoadMenuA (i32.const 0) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_SetMenu
@@ -8300,7 +8298,7 @@
     (call $handle_SetMenu (local.get $hwnd) (local.get $menu)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.10 SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc) /
@@ -8323,7 +8321,7 @@
     (call $handle_SetTimer (local.get $hwnd) (local.get $id) (local.get $elapse)
       (local.get $proc) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   (func $win16_KillTimer
@@ -8334,7 +8332,7 @@
     (call $handle_KillTimer (local.get $hwnd) (local.get $id)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.110 PostMessage(hWnd, wMsg, wParam, lParam).
@@ -8349,7 +8347,7 @@
     (call $handle_PostMessageA (local.get $hwnd) (local.get $msg)
       (local.get $wp) (local.get $lp) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.259 BeginDeferWindowPos(nNumWindows) -> HDWP,
@@ -8363,7 +8361,7 @@
   ;; WM_SIZE — Hearts does, positioning its status bar.
   (func $win16_BeginDeferWindowPos
     ;; The handle only has to be non-zero and survive to EndDeferWindowPos.
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_DeferWindowPos
@@ -8415,11 +8413,11 @@
           (i32.const 0x0005) (i32.const 0) (local.get $cs)
           (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
         (return)))
-    (global.set $eax (local.get $hdwp))
+    (i32.store offset=0 (global.get $reg_base) (local.get $hdwp))
     (call $win16_api_return (i32.const 16)))
 
   (func $win16_EndDeferWindowPos
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.232 SetWindowPos(hWnd, hWndInsertAfter, x, y, cx, cy, wFlags) — the
@@ -8475,7 +8473,7 @@
           (i32.const 0x0005) (i32.const 0) (local.get $cs)
           (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
         (return)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 14)))
 
   ;; SHELL.ShellAbout(hWnd, lpszApp, lpszOtherStuff, hIcon) — the About box the
@@ -8498,7 +8496,7 @@
     (call $handle_ShellAboutA (local.get $hwnd) (local.get $app)
       (local.get $other) (local.get $icon) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.229 GetTopWindow(hWnd) and USER.262 GetWindow(hWnd, wCmd) — the pair
@@ -8510,7 +8508,7 @@
     (call $handle_GetTopWindow (local.get $hwnd)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.277 GetDlgCtrlID(hWnd) — the id a child was created with. A frame
@@ -8522,7 +8520,7 @@
     (call $handle_GetDlgCtrlID (local.get $hwnd)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_GetWindow
@@ -8533,7 +8531,7 @@
     (call $handle_GetWindow (local.get $hwnd) (local.get $cmd)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.53 DestroyWindow(hWnd).
@@ -8544,7 +8542,7 @@
     (call $handle_DestroyWindow (local.get $hwnd)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.102 AdjustWindowRect(lpRect, dwStyle, bMenu) and USER.454
@@ -8570,7 +8568,7 @@
       (local.get $menu) (local.get $exstyle) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
     (call $win16_rect_narrow (local.get $r) (local.get $tmp))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (select (i32.const 14) (i32.const 10) (local.get $ex))))
 
   ;; USER.145 RegisterClipboardFormat(lpString).
@@ -8582,7 +8580,7 @@
     (call $handle_RegisterClipboardFormatA (local.get $s)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_OpenClipboard
@@ -8592,7 +8590,7 @@
     (call $handle_OpenClipboard (local.get $hwnd)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_CloseClipboard
@@ -8601,7 +8599,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 0)))
 
   (func $win16_EmptyClipboard
@@ -8610,7 +8608,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 0)))
 
   (func $win16_GetClipboardOwner
@@ -8619,7 +8617,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 0)))
 
   (func $win16_SetClipboardData
@@ -8630,7 +8628,7 @@
     (call $handle_SetClipboardData (local.get $format) (local.get $handle)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_GetClipboardData
@@ -8640,7 +8638,7 @@
     (call $handle_GetClipboardData (local.get $format)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_CountClipboardFormats
@@ -8649,7 +8647,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 0)))
 
   ;; USER.193 IsClipboardFormatAvailable(format). JigSawed checks CF_BITMAP
@@ -8661,7 +8659,7 @@
     (call $handle_IsClipboardFormatAvailable (local.get $format)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; A 16-bit accelerator table is not the 32-bit one with narrower fields, it
@@ -8728,7 +8726,7 @@
   (func $win16_LoadAccelerators
     (local $data i32) (local $count i32) (local $handle i32)
     (local.set $data (call $win16_res_lookup (i32.const 9) (i32.const 0)))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (local.get $data)
       (then
         (local.set $count
@@ -8741,7 +8739,7 @@
             ;; the Win16 handle table are shared even when the message pump is
             ;; resumed by another Wasm instance; mutable globals are not.
             (global.set $win16_accel_buf (i32.const 0))
-            (global.set $eax (call $win16_h16 (local.get $handle)))))))
+            (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $handle)))))))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.178 TranslateAccelerator(hWnd, hAccTable, lpMsg).
@@ -8768,7 +8766,7 @@
     (call $handle_TranslateAcceleratorA (local.get $hwnd) (local.get $acc) (local.get $tmp)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; USER.483 SystemParametersInfo(uAction, uParam, lpvParam, fuWinIni).
@@ -8802,7 +8800,7 @@
         (call $win16_call32_end)
         (if (i32.eq (local.get $action) (i32.const 0x30))
           (then (call $win16_rect_narrow (local.get $ptr) (local.get $tmp))))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 10))
         (return)))
     ;; An action that carries a structure this cannot narrow gets FALSE — the
@@ -8815,14 +8813,14 @@
       (then
         (call $host_log_i32 (i32.const 0xCA16A9F6))
         (call $host_log_i32 (local.get $action))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 10))
         (return)))
     (call $win16_call32_begin (i32.const 4))
     (call $handle_SystemParametersInfoA (local.get $action) (local.get $param)
       (i32.const 0) (local.get $ini) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; USER.22 SetFocus(hWnd) -> the window that had it.
@@ -8849,7 +8847,7 @@
         (if (local.get $hwnd)
           (then (drop (call $post_queue_push (local.get $hwnd)
                   (i32.const 0x0007) (local.get $prev) (i32.const 0)))))))
-    (global.set $eax (call $win16_h16 (local.get $prev)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $prev)))
     (call $win16_api_return (i32.const 2)))
 
   ;; The window calls that take one handle and answer with a word, and the two
@@ -8890,8 +8888,8 @@
                 (i32.or (i32.eq (local.get $which) (i32.const 1))
                         (i32.or (i32.eq (local.get $which) (i32.const 2))
                                 (i32.eq (local.get $which) (i32.const 5)))))
-      (then (global.set $eax (call $win16_h16 (global.get $eax))))
-      (else (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))))
+      (then (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base)))))
+      (else (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.60 GetActiveWindow() — the top-level window with the focus.
@@ -8900,7 +8898,7 @@
     (call $handle_GetActiveWindow (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 0)))
 
   (func $win16_GetFocus
@@ -8908,7 +8906,7 @@
     (call $handle_GetFocus (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 0)))
 
   ;; USER.159 GetSubMenu(hMenu, nPos).
@@ -8920,7 +8918,7 @@
     (call $handle_GetSubMenu (local.get $menu) (local.get $pos)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.263 GetMenuItemCount(hMenu) -> int, -1 for a bad handle.
@@ -8931,7 +8929,7 @@
     (call $handle_GetMenuItemCount (local.get $menu)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.264 GetMenuItemID(hMenu, nPos) -> UINT, 0xFFFF for a popup or a
@@ -8944,7 +8942,7 @@
     (call $handle_GetMenuItemID (local.get $menu) (local.get $pos)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.416 TrackPopupMenu(hMenu, wFlags, x, y, nReserved, hWnd, lpRect).
@@ -8967,7 +8965,7 @@
     (call $handle_TrackPopupMenu (local.get $menu) (local.get $flags)
       (local.get $x) (local.get $y) (local.get $reserved) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 16)))
 
   (func $win16_ReleaseCapture
@@ -8975,7 +8973,7 @@
     (call $handle_ReleaseCapture (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 0)))
 
   ;; USER.104 MessageBeep(wType), USER.106 GetKeyState(nVirtKey) and USER.249
@@ -8995,7 +8993,7 @@
       (else (call $handle_MessageBeep (local.get $v)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.34 EnableWindow(hWnd, bEnable).
@@ -9007,7 +9005,7 @@
     (call $handle_EnableWindow (local.get $hwnd) (local.get $enable)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.45 BringWindowToTop(hWnd) -> void. The movie window Civ2 raises
@@ -9034,7 +9032,7 @@
       (else (call $handle_CheckMenuItem (local.get $menu) (local.get $id) (local.get $flags)
               (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.410 InsertMenu / .411 AppendMenu / .414 ModifyMenu. The last argument
@@ -9078,7 +9076,7 @@
         (else (call $handle_ModifyMenuA (local.get $menu) (local.get $pos)
                 (local.get $flags) (local.get $id) (local.get $item) (i32.const 0))))))
     (call $win16_call32_end)
-    (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (select (i32.const 10) (i32.const 12) (local.get $append))))
 
   ;; USER.413 DeleteMenu(hMenu, nPosition, wFlags) — and USER.412 RemoveMenu,
@@ -9094,7 +9092,7 @@
     (call $handle_DeleteMenu (local.get $menu) (local.get $pos) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.36 GetWindowText(hWnd, lpString, nMaxCount) -> characters copied, and
@@ -9109,7 +9107,7 @@
     (call $handle_GetWindowTextA (local.get $hwnd) (local.get $buf) (local.get $max)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   (func $win16_GetWindowTextLength
@@ -9119,7 +9117,7 @@
     (call $handle_GetWindowTextLengthA (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; USER.37 SetWindowText(hWnd, lpString).
@@ -9162,7 +9160,7 @@
     (call $handle_SetWindowTextA (local.get $hwnd) (local.get $s)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; USER.56 MoveWindow(hWnd, x, y, nWidth, nHeight, bRepaint).
@@ -9211,7 +9209,7 @@
           (i32.const 0x0005) (i32.const 0) (local.get $cs)
           (global.get $WIN16_THUNK_SEL) (global.get $WIN16_CONT_OFFSET))
         (return)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; USER.85 DrawText(hDC, lpString, nCount, lpRect, wFormat).
@@ -9235,7 +9233,7 @@
     ;; DT_CALCRECT asks for the rectangle back rather than for any drawing.
     (if (i32.and (local.get $fmt) (i32.const 0x0400))
       (then (call $win16_rect_narrow (local.get $r) (local.get $tmp))))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 14)))
 
   ;; USER.109 PeekMessage(lpMsg, hWnd, wMsgFilterMin, wMsgFilterMax, wRemoveMsg).
@@ -9270,7 +9268,7 @@
     (call $handle_PeekMessageA (local.get $tmp) (local.get $hwnd) (local.get $min)
       (local.get $max) (local.get $remove) (i32.const 0))
     (drop (call $win16_call32_end_redirected))
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then
         (call $gs16 (local.get $dst) (call $win16_h16 (call $gl32 (local.get $tmp))))
         (call $gs16 (i32.add (local.get $dst) (i32.const 2))
@@ -9291,7 +9289,7 @@
         (call $gs32 (i32.add (local.get $dst) (i32.const 10))
           (call $gl32 (i32.add (local.get $tmp) (i32.const 16))))
         (call $win16_msg_pt_narrow (local.get $dst) (local.get $tmp))))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))
 
   ;; ---- GDI ----
@@ -9316,9 +9314,9 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
     (if (i32.and (i32.eq (local.get $index) (i32.const 24))
-          (i32.eq (global.get $eax) (i32.const -1)))
-      (then (global.set $eax (i32.const 256))))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+          (i32.eq (i32.load offset=0 (global.get $reg_base)) (i32.const -1)))
+      (then (i32.store offset=0 (global.get $reg_base) (i32.const 256))))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.82 GetObject(hObject, nCount, lpObject).
@@ -9346,7 +9344,7 @@
         (call $handle_GetObjectA (local.get $h) (i32.const 60) (local.get $tmp)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (if (global.get $eax)
+        (if (i32.load offset=0 (global.get $reg_base))
           (then
             (local.set $count (i32.const 0))
             (block $narrowed (loop $five
@@ -9364,7 +9362,7 @@
                                     (local.get $count))))
               (local.set $count (i32.add (local.get $count) (i32.const 1)))
               (br $rest)))
-            (global.set $eax (i32.const 50))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 50))))
         (call $win16_api_return (i32.const 8))
         (return)))
     ;; A LOGPEN is ten bytes here — a word of style, a POINT of two words, and
@@ -9384,7 +9382,7 @@
           (call $gl32 (i32.add (local.get $tmp) (i32.const 8))))
         (call $gs32 (i32.add (local.get $dst) (i32.const 6))
           (call $gl32 (i32.add (local.get $tmp) (i32.const 12))))
-        (global.set $eax (i32.const 10))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 10))
         (call $win16_api_return (i32.const 8))
         (return)))
     ;; A LOGBRUSH is eight bytes here — a word of style, a colour, and a word
@@ -9402,7 +9400,7 @@
           (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))
         (call $gs16 (i32.add (local.get $dst) (i32.const 6))
           (call $gl32 (i32.add (local.get $tmp) (i32.const 8))))
-        (global.set $eax (i32.const 8))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 8))
         (call $win16_api_return (i32.const 8))
         (return)))
     (if (i32.ne (local.get $count) (i32.const 14))
@@ -9418,7 +9416,7 @@
     (call $handle_GetObjectA (local.get $h) (i32.const 24) (local.get $tmp)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (if (global.get $eax)
+    (if (i32.load offset=0 (global.get $reg_base))
       (then
         (call $gs16 (local.get $dst)
           (call $gl32 (local.get $tmp)))
@@ -9433,7 +9431,7 @@
         (call $gs8 (i32.add (local.get $dst) (i32.const 9))
           (call $gl16 (i32.add (local.get $tmp) (i32.const 18))))
         (call $gs32 (i32.add (local.get $dst) (i32.const 10)) (i32.const 0))
-        (global.set $eax (i32.const 14))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 14))))
     (call $win16_api_return (i32.const 8)))
 
   ;; GDI.87 GetStockObject(nIndex).
@@ -9444,7 +9442,7 @@
     (call $handle_GetStockObject (local.get $index)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.91 GetTextExtent(hDC, lpString, nCount) -> DWORD packed cy:cx.
@@ -9461,8 +9459,8 @@
     (call $handle_GetTextExtentPointA (local.get $hdc) (local.get $str)
       (local.get $count) (local.get $tmp) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (call $gl32 (local.get $tmp)) (i32.const 0xFFFF)))
-    (global.set $edx (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (call $gl32 (local.get $tmp)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
@@ -9472,7 +9470,7 @@
   ;; first loaded it. Nothing here reclaims GDI objects when a task exits, so
   ;; every object already outlives its creator and there is no owner to move.
   (func $win16_SetObjectOwner
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.471 GetTextExtentPoint(hDC, lpString, nCount, lpSize) -> BOOL.
@@ -9492,7 +9490,7 @@
     (call $win16_call32_begin (i32.const 4))
     (call $handle_GetTextExtentPointA (local.get $hdc) (local.get $str)
       (local.get $count) (local.get $tmp) (i32.const 0) (i32.const 0))
-    (local.set $ok (global.get $eax))
+    (local.set $ok (i32.load offset=0 (global.get $reg_base)))
     (call $win16_call32_end)
     (if (i32.and (i32.ne (local.get $ok) (i32.const 0))
                  (i32.ne (local.get $dst) (i32.const 0)))
@@ -9500,7 +9498,7 @@
         (call $gs16 (local.get $dst) (call $gl32 (local.get $tmp)))
         (call $gs16 (i32.add (local.get $dst) (i32.const 2))
           (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))))
-    (global.set $eax (i32.and (local.get $ok) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $ok) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 12)))
 
   ;; The GDI calls that are the Win32 one with narrower arguments and nothing
@@ -9515,7 +9513,7 @@
     (call $handle_CreateSolidBrush (local.get $c)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.61 CreatePen(nPenStyle, nWidth, crColor) -> HPEN.
@@ -9550,7 +9548,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
     (call $win16_rect_narrow (local.get $dst) (local.get $tmp))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.62 CreatePenIndirect(lpLogPen) — the same pen from a structure. The
@@ -9568,7 +9566,7 @@
     (call $handle_CreatePen (local.get $style) (local.get $width) (local.get $c)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_CreatePen
@@ -9580,7 +9578,7 @@
     (call $handle_CreatePen (local.get $style) (local.get $width) (local.get $c)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 8)))
 
   ;; A plain signed word. Not $win16_coord: that one also translates
@@ -9600,7 +9598,7 @@
     (call $handle_CreateRectRgn (local.get $l) (local.get $t) (local.get $r)
       (local.get $b) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 8)))
 
   ;; GDI.44 SelectClipRgn(hDC, hRgn) -> the new region's complexity.
@@ -9612,7 +9610,7 @@
     (call $handle_SelectClipRgn (local.get $hdc) (local.get $rgn)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; USER.197 GetTabbedTextExtent(hDC, lpString, nCount, nTabPositions,
@@ -9632,8 +9630,8 @@
     (call $handle_GetTabbedTextExtentA (local.get $hdc) (local.get $str)
       (local.get $count) (local.get $ntabs) (local.get $tabs) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 14)))
 
   ;; USER.196 TabbedTextOut(hDC, X, Y, lpString, nCount, nTabPositions,
@@ -9662,8 +9660,8 @@
     (call $handle_TabbedTextOutA (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $str) (local.get $count) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 20)))
 
   ;; GDI.65 CreateRectRgnIndirect(lpRect) — the same region from a RECT.
@@ -9679,7 +9677,7 @@
       (call $win16_short (call $gl16 (i32.add (local.get $src) (i32.const 6))))
       (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.172 SetRectRgn(hrgn, left, top, right, bottom).
@@ -9698,7 +9696,7 @@
     (call $handle_SetRectRgn (local.get $rgn) (local.get $l) (local.get $t)
       (local.get $r) (local.get $b) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.161 PtInRegion(hrgn, x, y). JigSawed tests the piece-region at the
@@ -9712,7 +9710,7 @@
     (call $handle_PtInRegion (local.get $rgn) (local.get $x) (local.get $y)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.101 OffsetRgn(hrgn, x, y).
@@ -9725,7 +9723,7 @@
     (call $handle_OffsetRgn (local.get $rgn) (local.get $x) (local.get $y)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.41 FrameRgn(hdc, hrgn, hbrush, width, height). JigSawed uses this
@@ -9742,7 +9740,7 @@
     (call $handle_FrameRgn (local.get $hdc) (local.get $rgn) (local.get $brush)
       (local.get $width) (local.get $height) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.47 CombineRgn(hrgnDest, hrgnSrc1, hrgnSrc2, fnCombineMode).
@@ -9758,7 +9756,7 @@
     (call $handle_CombineRgn (local.get $dst) (local.get $a) (local.get $b)
       (local.get $mode) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 8)))
 
   ;; GDI.45 SelectObject(hDC, hObject) -> the object it replaced.
@@ -9770,7 +9768,7 @@
     (call $handle_SelectObject (local.get $hdc) (local.get $obj)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.69 DeleteObject(hObject), GDI.68 DeleteDC(hDC).
@@ -9801,7 +9799,7 @@
     (call $handle_DeleteObject (local.get $h)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (local.set $deleted (global.get $eax))
+    (local.set $deleted (i32.load offset=0 (global.get $reg_base)))
     ;; Deleting a stock object is a successful no-op. Keep its Win16 mapping
     ;; (and that of any object whose deletion failed) so a cached 16-bit handle
     ;; cannot be recycled for an unrelated dynamic object. VBRUN caches
@@ -9811,7 +9809,7 @@
     (if (i32.and (i32.ne (local.get $dib_bits) (i32.const 0))
           (i32.eqz (call $gdi_object_record (local.get $h))))
       (then (call $win16_dib_block_free (local.get $dib_bits))))
-    (global.set $eax (i32.and (local.get $deleted) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $deleted) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; Return a DIB section's pixel block (a WASM address) to the global arena,
@@ -9831,7 +9829,7 @@
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
     (call $win16_h16_forget (local.get $h))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.52 CreateCompatibleDC(hDC), GDI.153 CreateIC(driver, device, output,
@@ -9844,7 +9842,7 @@
     (call $handle_CreateCompatibleDC (local.get $h)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 2)))
 
   (func $win16_CreateIC
@@ -9852,7 +9850,7 @@
     (call $handle_CreateCompatibleDC (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 16)))
 
   ;; GDI.51 CreateCompatibleBitmap and GDI.156 CreateDiscardableBitmap share
@@ -9868,7 +9866,7 @@
     (call $handle_CreateCompatibleBitmap (local.get $hdc) (local.get $w) (local.get $h)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.1 SetBkColor, GDI.9 SetTextColor — DWORD in, DWORD out.
@@ -9883,8 +9881,8 @@
       (else (call $handle_SetBkColor (local.get $hdc) (local.get $c)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.2 SetBkMode, GDI.4 SetROP2 — word in, word out.
@@ -9899,7 +9897,7 @@
       (else (call $handle_SetBkMode (local.get $hdc) (local.get $mode)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.7 SetStretchBltMode(hDC, nStretchMode) — word in, word out.
@@ -9911,7 +9909,7 @@
     (call $handle_SetStretchBltMode (local.get $hdc) (local.get $mode)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.85 GetROP2(hDC) -> word. The mode SetROP2 last stored; JigSawed reads
@@ -9923,7 +9921,7 @@
     (call $handle_GetROP2 (local.get $hdc)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.56 CreateFont(nHeight, nWidth, nEscapement, nOrientation, nWeight,
@@ -9973,7 +9971,7 @@
     (call $handle_CreateFontIndirectA (local.get $dst) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_CreateFont
@@ -10020,7 +10018,7 @@
     (call $handle_CreateFontA (local.get $h)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 30)))
 
   ;; GDI.93 GetTextMetrics(hDC, lpMetrics).
@@ -10058,7 +10056,7 @@
     (call $memcpy (call $g2w (i32.add (local.get $dst) (i32.const 22)))
                   (call $g2w (i32.add (local.get $tmp) (i32.const 44)))
                   (i32.const 9))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 6)))
 
   ;; The drawing calls. Coordinates are signed words, ROP codes are DWORDs,
@@ -10079,7 +10077,7 @@
     (call $handle_TextOutA (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $s) (local.get $n) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 12)))
 
   ;; GDI.351 ExtTextOut(hDC, X, Y, wOptions, lpRect, lpString, nCount, lpDx).
@@ -10124,7 +10122,7 @@
     (call $handle_ExtTextOutA (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $opts) (local.get $r32) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 22)))
 
   ;; GDI.50 CreateBrushIndirect(lpLogBrush). A Win16 LOGBRUSH is eight bytes —
@@ -10157,7 +10155,7 @@
     (call $handle_CreateBrushIndirect (local.get $out) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.34 BitBlt(hDest, X, Y, nWidth, nHeight, hSrc, XSrc, YSrc, dwRop).
@@ -10216,7 +10214,7 @@
           (local.get $y) (i32.add (local.get $x) (local.get $w))
           (i32.add (local.get $y) (local.get $h)) (i32.const 0x30014)))
         (global.set $btn_about_logo_hdc (i32.const 0))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (call $win16_api_return (i32.const 20))
         (return)))
     (call $win16_call32_begin (i32.const 9))
@@ -10227,7 +10225,7 @@
     (call $handle_BitBlt (local.get $dst) (local.get $x) (local.get $y)
       (local.get $w) (local.get $h) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 20)))
 
   ;; USER.407 CreateIcon(hInstance, nWidth, nHeight, nPlanes, nBitsPixel,
@@ -10259,10 +10257,10 @@
     (call $handle_CreateBitmap (local.get $w) (local.get $h) (local.get $planes)
       (local.get $bpp) (local.get $xor) (i32.const 0))
     (call $win16_call32_end)
-    (local.set $bmp (global.get $eax))
-    (global.set $eax (i32.const 0))
+    (local.set $bmp (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (if (local.get $bmp)
-      (then (global.set $eax (call $win16_h16
+      (then (i32.store offset=0 (global.get $reg_base) (call $win16_h16
               (call $icon_intern (global.get $ICON_FROM_BITMAP) (local.get $bmp))))))
     (call $win16_api_return (i32.const 18)))
 
@@ -10282,8 +10280,8 @@
       (else (call $handle_GetBitmapBits (local.get $bmp) (local.get $count)
               (local.get $buf) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.439 StretchDIBits(hdc, XDest, YDest, cxDest, cyDest, XSrc, YSrc,
@@ -10324,7 +10322,7 @@
     (call $handle_StretchDIBits (local.get $dc) (local.get $x) (local.get $y)
       (local.get $w) (local.get $h) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 32)))
 
   ;; GDI.35 StretchBlt — BitBlt with a source size of its own.
@@ -10353,7 +10351,7 @@
     (call $handle_StretchBlt (local.get $dst) (local.get $x) (local.get $y)
       (local.get $w) (local.get $h) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 24)))
 
   ;; GDI.29 PatBlt(hDC, X, Y, nWidth, nHeight, dwRop).
@@ -10384,7 +10382,7 @@
     ;; Report what the fill actually did. Answering TRUE regardless hid a
     ;; PatBlt that drew nothing at all behind a call that looked like it had
     ;; worked, which is the hardest kind of paint bug to see from a trace.
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 14)))
 
   ;; GDI.24 Ellipse(hDC, X1, Y1, X2, Y2) — the bounding box, same as Win32.
@@ -10401,7 +10399,7 @@
     (call $handle_Ellipse (local.get $hdc) (local.get $x1) (local.get $y1)
       (local.get $x2) (local.get $y2) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; ---- Palettes ----
@@ -10419,7 +10417,7 @@
     (call $handle_CreatePalette (local.get $pal) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_SelectPalette
@@ -10431,7 +10429,7 @@
     (call $handle_SelectPalette (local.get $hdc) (local.get $pal) (local.get $bg)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_RealizePalette
@@ -10441,7 +10439,7 @@
     (call $handle_RealizePalette (local.get $hdc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GetPaletteEntries / SetPaletteEntries / AnimatePalette(hPal, wStart,
@@ -10465,7 +10463,7 @@
       (then (call $handle_AnimatePalette (local.get $pal) (local.get $start)
               (local.get $count) (local.get $entries) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   (func $win16_ResizePalette
@@ -10476,7 +10474,7 @@
     (call $handle_ResizePalette (local.get $pal) (local.get $n)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_GetNearestPaletteIndex
@@ -10487,7 +10485,7 @@
     (call $handle_GetNearestPaletteIndex (local.get $pal) (local.get $color)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   (func $win16_UpdateColors
@@ -10497,7 +10495,7 @@
     (call $handle_UpdateColors (local.get $hdc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.94 GetViewportExt / .95 GetViewportOrg / .96 GetWindowExt /
@@ -10522,8 +10520,8 @@
       (then (call $handle_GetWindowOrgEx (local.get $hdc) (local.get $pt)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (call $gl32 (local.get $pt)) (i32.const 0xFFFF)))
-    (global.set $edx (i32.and (call $gl32 (i32.add (local.get $pt) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (call $gl32 (local.get $pt)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.and (call $gl32 (i32.add (local.get $pt) (i32.const 4)))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
@@ -10542,7 +10540,7 @@
     (call $handle_SetMapMode (local.get $hdc) (local.get $mode)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.6 SetPolyFillMode(hDC, nMode) -> previous ALTERNATE/WINDING mode.
@@ -10554,7 +10552,7 @@
     (call $handle_SetPolyFillMode (local.get $hdc) (local.get $mode)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   (func $win16_GetMapMode
@@ -10564,7 +10562,7 @@
     (call $handle_GetMapMode (local.get $hdc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; which: 0 SetWindowOrg, 1 SetWindowExt, 2 SetViewportOrg, 3 SetViewportExt,
@@ -10616,8 +10614,8 @@
       (then (call $handle_ScaleViewportExtEx (local.get $hdc) (local.get $a) (local.get $b)
               (local.get $c) (local.get $d) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (call $gl32 (local.get $out)) (i32.const 0xFFFF)))
-    (global.set $edx (i32.and (call $gl32 (i32.add (local.get $out) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (call $gl32 (local.get $out)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.and (call $gl32 (i32.add (local.get $out) (i32.const 4)))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (select (i32.const 10) (i32.const 6) (local.get $scale))))
 
@@ -10629,7 +10627,7 @@
     (call $handle_GetTextAlign (local.get $hdc)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.346 SetTextAlign(hDC, wFlags) -> the previous alignment.
@@ -10641,7 +10639,7 @@
     (call $handle_SetTextAlign (local.get $hdc) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 4)))
 
   ;; GDI.128 MulDiv(nNumber, nNumerator, nDenominator) -> (a*b)/c rounded, with
@@ -10654,7 +10652,7 @@
     (local.set $a (call $win16_coord (call $win16_arg16 (i32.const 2))))
     (if (i32.eqz (local.get $c))
       (then
-        (global.set $eax (i32.const 0x8000))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0x8000))
         (call $win16_api_return (i32.const 6))
         (return)))
     (local.set $r (i32.mul (local.get $a) (local.get $b)))
@@ -10663,7 +10661,7 @@
                 (i32.lt_s (local.get $c) (i32.const 0)))
       (then (local.set $r (i32.add (local.get $r) (i32.div_s (local.get $c) (i32.const 2)))))
       (else (local.set $r (i32.sub (local.get $r) (i32.div_s (local.get $c) (i32.const 2))))))
-    (global.set $eax (i32.and (i32.div_s (local.get $r) (local.get $c))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.div_s (local.get $r) (local.get $c))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
@@ -10704,7 +10702,7 @@
         (call $gl32 (i32.add (local.get $dst) (i32.shl (local.get $i) (i32.const 2)))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $back)))
-    (global.set $eax (i32.const 1))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 1))
     (call $win16_api_return (i32.const 8)))
 
   ;; GDI.36 Polygon / GDI.37 Polyline(hDC, lpPoints, nCount). A Win16 POINT is
@@ -10742,7 +10740,7 @@
       (else (call $handle_Polyline (local.get $hdc) (local.get $dst) (local.get $n)
               (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+    (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
     (call $win16_api_return (i32.const 8)))
 
   ;; GDI.21 ExcludeClipRect(hDC, X1, Y1, X2, Y2) -> the new clip region's type.
@@ -10759,7 +10757,7 @@
     (call $handle_ExcludeClipRect (local.get $hdc) (local.get $x1) (local.get $y1)
       (local.get $x2) (local.get $y2) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.22 IntersectClipRect(hDC, X1, Y1, X2, Y2) -> the new clip region's
@@ -10778,7 +10776,7 @@
     (call $handle_IntersectClipRect (local.get $hdc) (local.get $x1) (local.get $y1)
       (local.get $x2) (local.get $y2) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.27 Rectangle(hDC, X1, Y1, X2, Y2).
@@ -10795,7 +10793,7 @@
     (call $handle_Rectangle (local.get $hdc) (local.get $x1) (local.get $y1)
       (local.get $x2) (local.get $y2) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.23 Arc(hDC, X1, Y1, X2, Y2, X3, Y3, X4, Y4) — bounding box, then the
@@ -10822,7 +10820,7 @@
     (call $handle_Arc (local.get $hdc) (local.get $x1) (local.get $y1)
       (local.get $x2) (local.get $y2) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 18)))
 
   ;; GDI.90 GetTextColor(hDC) -> COLORREF in DX:AX.
@@ -10833,8 +10831,8 @@
     (call $handle_GetTextColor (local.get $hdc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.75 GetBkColor(hDC) -> COLORREF in DX:AX, the other half of GDI.9.
@@ -10845,8 +10843,8 @@
     (call $handle_GetBkColor (local.get $hdc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
   ;; GDI.154 GetNearestColor(hDC, crColor) -> the colour the device can
@@ -10859,8 +10857,8 @@
     (call $handle_GetNearestColor (local.get $hdc) (local.get $color)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.20 MoveTo / GDI.19 LineTo / GDI.83 GetPixel(hDC, X, Y). MoveTo and
@@ -10885,12 +10883,12 @@
     (call $win16_call32_end)
     (if (i32.eq (local.get $which) (i32.const 0))
       (then
-        (global.set $eax (i32.and (call $gl32 (local.get $tmp)) (i32.const 0xFFFF)))
-        (global.set $edx (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (call $gl32 (local.get $tmp)) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
                                   (i32.const 0xFFFF))))
       (else
-        (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.483 MoveToEx(hDC, X, Y, lpPoint) -> BOOL. GDI.20 returns the old
@@ -10908,7 +10906,7 @@
     (call $win16_call32_begin (i32.const 4))
     (call $handle_MoveToEx (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $tmp) (i32.const 0) (i32.const 0))
-    (local.set $ok (global.get $eax))
+    (local.set $ok (i32.load offset=0 (global.get $reg_base)))
     (call $win16_call32_end)
     (if (i32.and (i32.ne (local.get $ok) (i32.const 0))
                  (i32.ne (local.get $dst) (i32.const 0)))
@@ -10916,7 +10914,7 @@
         (call $gs16 (local.get $dst) (call $gl32 (local.get $tmp)))
         (call $gs16 (i32.add (local.get $dst) (i32.const 2))
           (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))))
-    (global.set $eax (i32.and (local.get $ok) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $ok) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.468 GetBitmapDimensionEx(hBitmap, lpSize) -> BOOL. Bitmap dimensions
@@ -10930,7 +10928,7 @@
     (call $win16_call32_begin (i32.const 2))
     (call $handle_GetBitmapDimensionEx (local.get $bitmap) (local.get $tmp)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (local.set $ok (global.get $eax))
+    (local.set $ok (i32.load offset=0 (global.get $reg_base)))
     (call $win16_call32_end)
     (if (i32.and (i32.ne (local.get $ok) (i32.const 0))
                  (i32.ne (local.get $dst) (i32.const 0)))
@@ -10938,7 +10936,7 @@
         (call $gs16 (local.get $dst) (call $gl32 (local.get $tmp)))
         (call $gs16 (i32.add (local.get $dst) (i32.const 2))
           (call $gl32 (i32.add (local.get $tmp) (i32.const 4))))))
-    (global.set $eax (i32.and (local.get $ok) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (local.get $ok) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
   ;; GDI.31 SetPixel(hDC, X, Y, crColor).
@@ -10952,8 +10950,8 @@
     (call $handle_SetPixel (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $c) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.30 SaveDC(hDC) / GDI.39 RestoreDC(hDC, nSavedDC).
@@ -10970,7 +10968,7 @@
       (else (call $handle_SaveDC (local.get $hdc)
               (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (select (i32.const 4) (i32.const 2) (local.get $is_restore))))
 
   ;; GDI.48 CreateBitmap(nWidth, nHeight, cPlanes, cBitsPixel, lpvBits).
@@ -10996,7 +10994,7 @@
     (call $handle_CreateBitmap (local.get $w) (local.get $h) (local.get $planes)
       (local.get $bpp) (local.get $bits) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 12)))
 
   ;; GDI.442 CreateDIBitmap(hDC, lpbmih, fdwInit, lpbInit, lpbmi, fuUsage).
@@ -11019,7 +11017,7 @@
     (call $handle_CreateDIBitmap (local.get $hdc) (local.get $bmih) (local.get $init)
       (local.get $bits) (local.get $bmi) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (call $win16_h16 (global.get $eax)))
+    (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (i32.load offset=0 (global.get $reg_base))))
     (call $win16_api_return (i32.const 20)))
 
   ;; GDI.489 CreateDIBSection(hDC, lpbmi, iUsage, lplpvBits, hSection, dwOffset)
@@ -11080,11 +11078,11 @@
         (then (call $win16_global_free (local.get $sel)) (br $fail)))
       (if (local.get $ppv)
         (then (call $gs32 (local.get $ppv) (i32.shl (local.get $sel) (i32.const 16)))))
-      (global.set $eax (call $win16_h16 (local.get $handle)))
+      (i32.store offset=0 (global.get $reg_base) (call $win16_h16 (local.get $handle)))
       (call $win16_api_return (i32.const 20))
       (return))
     (if (local.get $ppv) (then (call $gs32 (local.get $ppv) (i32.const 0))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 20)))
 
   ;; GDI.603 GetDIBColorTable / GDI.602 SetDIBColorTable(hDC, uStart, cEntries,
@@ -11104,7 +11102,7 @@
       (else (call $handle_GetDIBColorTable (local.get $hdc) (local.get $start)
               (local.get $n) (local.get $colors) (i32.const 0) (i32.const 0))))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; GDI.148 SetBrushOrg(hDC, nXOrg, nYOrg) -> previous origin in DX:AX.
@@ -11118,8 +11116,8 @@
     (call $handle_SetBrushOrgEx (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $tmp) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (call $gl32 (local.get $tmp)) (i32.const 0xFFFF)))
-    (global.set $edx (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (call $gl32 (local.get $tmp)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.and (call $gl32 (i32.add (local.get $tmp) (i32.const 4)))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 6)))
 
@@ -11154,7 +11152,7 @@
     (call $handle_SetDIBitsToDevice (local.get $hdc) (local.get $x) (local.get $y)
       (local.get $dx) (local.get $dy) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 28)))
 
   ;; GDI.79 GetDCOrg(hDC) -> the DC's origin in screen coordinates, packed in
@@ -11167,8 +11165,8 @@
     (call $handle_GetDCOrgEx (local.get $hdc)
       (global.get $GUEST_STACK) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (call $gl32 (global.get $GUEST_STACK)) (i32.const 0xFFFF)))
-    (global.set $edx (i32.and (call $gl32 (region.addr $GUEST_STACK 4))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (call $gl32 (global.get $GUEST_STACK)) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.and (call $gl32 (region.addr $GUEST_STACK 4))
                               (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 2)))
 
@@ -11221,9 +11219,9 @@
       (call $win16_arg16 (i32.const 5)) (call $win16_arg16 (i32.const 4))))
     (if (i32.eqz (call $win16_arg16 (i32.const 5))) (then (local.set $want (i32.const 0))))
     (global.set $win16_ef_ret (i32.or
-      (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2))) (i32.const 16))
-      (call $gl16 (global.get $esp))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 18)))  ;; far return + 14
+      (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))) (i32.const 16))
+      (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 18)))  ;; far return + 14
     (global.set $win16_ef_count (i32.const 0))
     (global.set $win16_ef_one (i32.const 0))
     (global.set $win16_ef_face (global.get $WIN16_FONT_FACES))
@@ -11319,7 +11317,7 @@
 
   ;; The callback has answered. Zero means stop; anything else means go on.
   (func $win16_ef_step
-    (if (i32.eqz (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (if (i32.eqz (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
       (then (call $win16_ef_resume) (return)))
     (if (global.get $win16_ef_one)
       (then (call $win16_ef_resume) (return)))
@@ -11332,7 +11330,7 @@
   ;; of faces reported when it never asked to stop. Non-zero either way, which
   ;; is what a caller checks.
   (func $win16_ef_resume
-    (global.set $eax (global.get $win16_ef_count))
+    (i32.store offset=0 (global.get $reg_base) (global.get $win16_ef_count))
     (call $win16_set_sreg (i32.const 1)
       (i32.shr_u (global.get $win16_ef_ret) (i32.const 16)))
     (global.set $eip (i32.add (global.get $seg_base_cs)
@@ -11368,9 +11366,9 @@
     (global.set $win16_dda_proc (call $win16_arg32 (i32.const 2)))
     (global.set $win16_dda_data (call $win16_arg32 (i32.const 0)))
     (global.set $win16_dda_ret (i32.or
-      (i32.shl (call $gl16 (i32.add (global.get $esp) (i32.const 2))) (i32.const 16))
-      (call $gl16 (global.get $esp))))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 20)))  ;; far return + 16 argbytes
+      (i32.shl (call $gl16 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2))) (i32.const 16))
+      (call $gl16 (i32.load offset=16 (global.get $reg_base)))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 20)))  ;; far return + 16 argbytes
     (local.set $dx (i32.sub (local.get $x1) (local.get $x0)))
     (local.set $dy (i32.sub (local.get $y1) (local.get $y0)))
     (global.set $win16_dda_sx
@@ -11436,7 +11434,7 @@
   ;; defined zero. The frame went when the walk started; this is the splice back
   ;; to the instruction after the call.
   (func $win16_dda_resume
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_set_sreg (i32.const 1) (i32.shr_u (global.get $win16_dda_ret) (i32.const 16)))
     (global.set $eip (i32.add (global.get $seg_base_cs)
                               (i32.and (global.get $win16_dda_ret) (i32.const 0xFFFF))))
@@ -11681,19 +11679,19 @@
     (if (global.get $win16_trace)
       (then
         (call $host_log_i32 (i32.const 0xCA16A9EF))
-        (call $host_log_i32 (i32.and (global.get $eax) (i32.const 0xFFFF)))
-        (call $host_log_i32 (i32.and (global.get $edx) (i32.const 0xFFFF)))
+        (call $host_log_i32 (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
+        (call $host_log_i32 (i32.and (i32.load offset=8 (global.get $reg_base)) (i32.const 0xFFFF)))
         ;; Where the API is resuming and on what stack. Both are worth seeing:
         ;; a handler that left ESP somewhere unexpected, or an EIP that is not
         ;; the return address the call trace printed, is a frame bug, and those
         ;; are the bugs this layer actually has.
         (call $host_log_i32 (global.get $eip))
-        (call $host_log_i32 (global.get $esp))
+        (call $host_log_i32 (i32.load offset=16 (global.get $reg_base)))
         ;; How much the call actually took off the stack, counting the far
         ;; return address: 4 + the Pascal argument bytes. Compare it against
         ;; the API's real signature — a wrong count here is a frame bug that
         ;; only shows up much later, as a return into nothing.
-        (call $host_log_i32 (i32.sub (global.get $esp) (global.get $win16_entry_esp)))
+        (call $host_log_i32 (i32.sub (i32.load offset=16 (global.get $reg_base)) (global.get $win16_entry_esp)))
         ;; And the data selector the task is left holding. An API that returns
         ;; with the wrong DS is invisible until the task pushes it as half of
         ;; a far pointer: Pipe Dream handed CreateWindow a class name whose
@@ -11735,7 +11733,7 @@
         (local.set $prev (call $win16_arg32 (i32.const 2)))
         (if (i32.eq (call $win16_arg16 (i32.const 4)) (global.get $WIN16_WH_CALLWNDPROC))
           (then (global.set $win16_hook_cwp (local.get $prev))))
-        (global.set $edx (i32.shr_u (local.get $prev) (i32.const 16)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $prev) (i32.const 16)))
         (call $win16_local_identity (i32.const 10)
           (i32.and (local.get $prev) (i32.const 0xFFFF)))
         (return)))
@@ -11749,7 +11747,7 @@
         (return)))
     (if (i32.eq (local.get $which) (i32.const 2))       ;; CallNextHookEx
       (then
-        (global.set $edx (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_local_identity (i32.const 12) (i32.const 0))
         (return)))
     ;; SetWindowsHook(idHook, lpfn) -> the previous filter, as a far pointer in
@@ -11761,11 +11759,11 @@
           (then
             (local.set $prev (global.get $win16_hook_cwp))
             (global.set $win16_hook_cwp (call $win16_arg32 (i32.const 0)))
-            (global.set $edx (i32.shr_u (local.get $prev) (i32.const 16)))
+            (i32.store offset=8 (global.get $reg_base) (i32.shr_u (local.get $prev) (i32.const 16)))
             (call $win16_local_identity (i32.const 6)
               (i32.and (local.get $prev) (i32.const 0xFFFF)))
             (return)))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_local_identity (i32.const 6) (i32.const 0))
         (return)))
     (if (i32.eq (local.get $which) (i32.const 4))       ;; UnhookWindowsHook
@@ -11774,7 +11772,7 @@
           (then (global.set $win16_hook_cwp (i32.const 0))))
         (call $win16_local_identity (i32.const 6) (i32.const 1))
         (return)))
-    (global.set $edx (i32.const 0))                     ;; DefHookProc
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))                     ;; DefHookProc
     (call $win16_local_identity (i32.const 12) (i32.const 0)))
 
   ;; ---- COMMDLG ----
@@ -11792,7 +11790,7 @@
     (call $handle_GetFileTitleA (local.get $file) (local.get $title) (local.get $cb)
       (i32.const 0) (i32.const 0) (i32.const 0))
     (call $win16_call32_end)
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 10)))
 
   ;; ---- MMSYSTEM ----
@@ -11832,7 +11830,7 @@
         (if (i32.eq (i32.and (i32.shr_u (local.get $flags) (i32.const 16)) (i32.const 7))
                     (i32.const 3))
           (then
-            (global.set $eax (i32.const 8))      ;; MMSYSERR_NOTSUPPORTED
+            (i32.store offset=0 (global.get $reg_base) (i32.const 8))      ;; MMSYSERR_NOTSUPPORTED
             (call $win16_api_return (i32.const 22))
             (return (i32.const 1))))
         (if (i32.eq (i32.and (i32.shr_u (local.get $flags) (i32.const 16)) (i32.const 7))
@@ -11842,7 +11840,7 @@
               (i32.and (i32.ne (call $win16_arg16 (i32.const 8)) (i32.const 0))
                        (i32.ne (call $win16_arg16 (i32.const 8)) (i32.const 0xFFFF))))
           (then
-            (global.set $eax (select (i32.const 2) (i32.const 11)
+            (i32.store offset=0 (global.get $reg_base) (select (i32.const 2) (i32.const 11)
               (call $win16_arg16 (i32.const 7))))  ;; BADDEVICEID / INVALPARAM
             (call $win16_api_return (i32.const 22))
             (return (i32.const 1))))
@@ -11852,11 +11850,11 @@
         (call $handle_waveOutOpen (i32.const 0) (i32.const 0) (local.get $fmt)
           (local.get $cb) (local.get $p) (i32.const 0))
         (call $win16_call32_end)
-        (if (i32.and (i32.eqz (global.get $eax))
+        (if (i32.and (i32.eqz (i32.load offset=0 (global.get $reg_base)))
               (i32.and (i32.ne (local.get $ph) (i32.const 0))
                        (i32.eqz (i32.and (local.get $flags) (i32.const 1)))))
           (then (call $gs16 (local.get $ph) (call $win16_h16 (global.get $wave_out_handle)))))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 22))
         (return (i32.const 1))))
     ;; The rest take the HWAVEOUT first. Header-taking calls are
@@ -11886,7 +11884,7 @@
         (call $win16_call32_end)
         (if (i32.eq (local.get $ordinal) (i32.const 405))
           (then (call $win16_h16_forget (local.get $hwo))))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 2))
         (return (i32.const 1))))
     (local.set $hwo (call $win16_h32 (call $win16_arg16 (i32.const 3))))
@@ -11894,7 +11892,7 @@
     (if (i32.or (i32.eq (local.get $ordinal) (i32.const 406))
                 (i32.eq (local.get $ordinal) (i32.const 407)))
       (then
-        (global.set $eax (i32.const 11))         ;; MMSYSERR_INVALPARAM
+        (i32.store offset=0 (global.get $reg_base) (i32.const 11))         ;; MMSYSERR_INVALPARAM
         (if (call $win16_arg16 (i32.const 2))
           (then
             (call $win16_call32_begin (i32.const 3))
@@ -11904,13 +11902,13 @@
               (else (call $handle_waveOutUnprepareHeader (local.get $hwo) (local.get $hdr)
                       (i32.const 32) (i32.const 0) (i32.const 0) (i32.const 0))))
             (call $win16_call32_end)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     ;; 408 waveOutWrite(hWaveOut, lpWaveOutHdr, uSize)
     (if (i32.eq (local.get $ordinal) (i32.const 408))
       (then
-        (global.set $eax (i32.const 11))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 11))
         (if (call $win16_arg16 (i32.const 2))
           (then
             (local.set $wa (call $g2w (local.get $hdr)))
@@ -11929,20 +11927,20 @@
                   (local.get $len)))
                 (drop (call $host_wave_out_schedule_done (local.get $hwo)
                   (local.get $wa) (local.get $hdr_far) (local.get $len)))))
-            (global.set $eax (i32.const 0))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
         (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     ;; 412 waveOutGetPosition(hWaveOut, lpInfo, uSize): TIME_BYTES only.
     (if (i32.eq (local.get $ordinal) (i32.const 412))
       (then
-        (global.set $eax (i32.const 11))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 11))
         (if (i32.and (i32.ne (call $win16_arg16 (i32.const 2)) (i32.const 0))
                      (i32.ge_u (call $win16_arg16 (i32.const 0)) (i32.const 6)))
           (then
             (call $gs16 (local.get $hdr) (i32.const 4))
             (call $gs32 (i32.add (local.get $hdr) (i32.const 2))
               (call $host_wave_out_get_pos (local.get $hwo)))
-            (global.set $eax (i32.const 0))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
         (call $win16_api_return (i32.const 8))
         (return (i32.const 1))))
     ;; 415 waveOutGetVolume(uDeviceID, lpdwVolume) / 416 waveOutSetVolume(uDeviceID, dw)
@@ -11950,10 +11948,10 @@
       (then
         (local.set $p (call $win16_far_to_guest
           (call $win16_arg16 (i32.const 1)) (call $win16_arg16 (i32.const 0))))
-        (global.set $eax (i32.const 11))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 11))
         (if (call $win16_arg16 (i32.const 1))
           (then (call $gs32 (local.get $p) (global.get $wave_out_volume))
-                (global.set $eax (i32.const 0))))
+                (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
         (call $win16_api_return (i32.const 6))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 416))
@@ -11964,7 +11962,7 @@
         (call $handle_waveOutSetVolume (local.get $hwo)
           (local.get $p) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 6))
         (return (i32.const 1))))
     (i32.const 0))
@@ -12194,7 +12192,7 @@
           (call $handle__lopen (call $win16_far_linear (local.get $name)) (i32.const 0)
             (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
           (call $win16_call32_end)
-          (local.set $fh (global.get $eax))
+          (local.set $fh (i32.load offset=0 (global.get $reg_base)))
           (br_if $fail (i32.eq (local.get $fh) (i32.const -1)))
           (call $gs32 (i32.add (local.get $o) (i32.const 8)) (local.get $fh))
           (if (i32.and (local.get $flags) (i32.const 0x10000))
@@ -12223,7 +12221,7 @@
         (local.get $sel))
       (if (local.get $info)
         (then (call $gs16 (i32.add (local.get $info) (i32.const 0xC)) (i32.const 0))))
-      (global.set $eax (local.get $sel))
+      (i32.store offset=0 (global.get $reg_base) (local.get $sel))
       (call $win16_api_return (i32.const 12))
       (return (i32.const 1)))
     (if (local.get $bsel) (then (call $win16_global_free (local.get $bsel))))
@@ -12235,7 +12233,7 @@
             (call $win16_global_free (local.get $sel))))
     (if (local.get $info)
       (then (call $gs16 (i32.add (local.get $info) (i32.const 0xC)) (local.get $err))))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $win16_api_return (i32.const 12))
     (i32.const 1))
 
@@ -12244,7 +12242,7 @@
     (local $o i32) (local $h i32) (local $fh i32)
     (local.set $h (call $win16_arg16 (i32.const 1)))
     (local.set $o (call $win16_mmio_obj (local.get $h)))
-    (global.set $eax (i32.const 5)) ;; MMSYSERR_INVALHANDLE
+    (i32.store offset=0 (global.get $reg_base) (i32.const 5)) ;; MMSYSERR_INVALHANDLE
     (if (local.get $o)
       (then
         (local.set $fh (call $gl32 (i32.add (local.get $o) (i32.const 8))))
@@ -12254,7 +12252,7 @@
           (then (call $win16_global_free (call $gl32 (i32.add (local.get $o) (i32.const 0xC))))))
         (call $gs32 (local.get $o) (i32.const 0))
         (call $win16_global_free (local.get $h))
-        (global.set $eax (i32.const 0))))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (call $win16_api_return (i32.const 4)))
 
   ;; 1212 mmioRead(hmmio, HPSTR pch, LONG cch) -> LONG
@@ -12290,11 +12288,11 @@
     (local $info i32) (local $o i32)
     (local.set $info (call $win16_far_linear (call $win16_arg32 (i32.const 1))))
     (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
-    (global.set $eax (i32.const 5))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 5))
     (if (local.get $o)
       (then (call $guest_memmove (local.get $info)
               (i32.add (local.get $o) (global.get $MMIO_INFO)) (i32.const 66))
-            (global.set $eax (i32.const 0))))
+            (i32.store offset=0 (global.get $reg_base) (i32.const 0))))
     (call $win16_api_return (i32.const 8)))
 
   ;; 1219 mmioAdvance(hmmio, LPMMIOINFO lpmmioinfo, UINT wFlags). The app's
@@ -12307,10 +12305,10 @@
       (then (local.set $info (call $win16_far_linear (call $win16_arg32 (i32.const 1))))))
     (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
     (if (i32.and (local.get $flags) (i32.const 1)) (then (return (i32.const 0)))) ;; MMIO_WRITE
-    (global.set $eax (i32.const 5))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 5))
     (block $out
       (br_if $out (i32.eqz (local.get $o)))
-      (global.set $eax (i32.const 266)) ;; MMIOERR_UNBUFFERED
+      (i32.store offset=0 (global.get $reg_base) (i32.const 266)) ;; MMIOERR_UNBUFFERED
       (br_if $out (i32.eqz (call $win16_mmio_get (local.get $o) (i32.const 0x10))))
       (if (local.get $info)
         (then
@@ -12336,7 +12334,7 @@
         (then (call $guest_memmove (i32.add (local.get $info) (i32.const 0x18))
                 (i32.add (i32.add (local.get $o) (global.get $MMIO_INFO)) (i32.const 0x18))
                 (i32.const 0x14))))
-      (global.set $eax (i32.const 0)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
     (call $win16_api_return (i32.const 8))
     (i32.const 1))
 
@@ -12350,7 +12348,7 @@
       (then (local.set $parent (call $win16_far_linear (call $win16_arg32 (i32.const 1))))))
     (local.set $ck (call $win16_far_linear (call $win16_arg32 (i32.const 3))))
     (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 5))))
-    (global.set $eax (i32.const 5))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 5))
     (block $out
       (br_if $out (i32.eqz (local.get $o)))
       (local.set $start (call $win16_mmio_tell (local.get $o)))
@@ -12369,7 +12367,7 @@
               (local.set $type (call $gl32 (i32.add (local.get $ck) (i32.const 8))))))
       (local.set $tmp (region.addr $GUEST_STACK 0x180))
       (block $found (loop $scan
-        (global.set $eax (i32.const 265)) ;; MMIOERR_CHUNKNOTFOUND
+        (i32.store offset=0 (global.get $reg_base) (i32.const 265)) ;; MMIOERR_CHUNKNOTFOUND
         (if (i32.gt_s (i32.add (local.get $pos) (i32.const 8)) (local.get $end))
           (then (drop (call $win16_mmio_seek (local.get $o) (local.get $start) (i32.const 0)))
                 (br $out)))
@@ -12403,7 +12401,7 @@
           (call $gs32 (i32.add (local.get $ck) (i32.const 8)) (i32.const 0))
           (drop (call $win16_mmio_seek (local.get $o) (i32.add (local.get $pos) (i32.const 8))
                   (i32.const 0)))))
-      (global.set $eax (i32.const 0)))
+      (i32.store offset=0 (global.get $reg_base) (i32.const 0)))
     (call $win16_api_return (i32.const 12)))
 
   ;; 1224 mmioAscend(hmmio, LPMMCKINFO lpck, UINT wFlags): to the byte after
@@ -12412,17 +12410,17 @@
     (local $ck i32) (local $o i32)
     (local.set $ck (call $win16_far_linear (call $win16_arg32 (i32.const 1))))
     (local.set $o (call $win16_mmio_obj (call $win16_arg16 (i32.const 3))))
-    (global.set $eax (i32.const 5))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 5))
     (if (local.get $o)
       (then
-        (global.set $eax (i32.const 263)) ;; MMIOERR_CANNOTSEEK
+        (i32.store offset=0 (global.get $reg_base) (i32.const 263)) ;; MMIOERR_CANNOTSEEK
         (if (i32.ne (call $win16_mmio_seek (local.get $o)
                       (i32.add (call $gl32 (i32.add (local.get $ck) (i32.const 12)))
                         (i32.and (i32.add (call $gl32 (i32.add (local.get $ck) (i32.const 4)))
                                           (i32.const 1)) (i32.const -2)))
                       (i32.const 0))
                     (i32.const -1))
-          (then (global.set $eax (i32.const 0))))))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 0))))))
     (call $win16_api_return (i32.const 8)))
 
   (func $win16_mmio (param $ordinal i32) (result i32)
@@ -12448,7 +12446,7 @@
     (if (i32.or (i32.eq (local.get $ordinal) (i32.const 605))
                 (i32.eq (local.get $ordinal) (i32.const 606)))
       (then
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 2))
         (return (i32.const 1))))
     ;; 607 timeGetTime() uses the same host-backed guest clock as Win32.
@@ -12458,8 +12456,8 @@
         (call $handle_timeGetTime (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     ;; 201 midiOutGetNumDevs() — how many MIDI output devices there are. Chip's
@@ -12470,7 +12468,7 @@
         (call $handle_midiOutGetNumDevs (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     ;; 701 mciSendCommand(wDeviceID, wMessage, dwParam1, dwParam2). The two
@@ -12488,8 +12486,8 @@
         (call $handle_mciSendCommandA (local.get $dev) (local.get $msg)
           (local.get $p1) (local.get $p2) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $edx (i32.shr_u (global.get $eax) (i32.const 16)))
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.shr_u (i32.load offset=0 (global.get $reg_base)) (i32.const 16)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 12))
         (return (i32.const 1))))
     ;; 706 mciGetErrorString(dwError, lpstrBuffer, wLength). Nothing here fails
@@ -12502,7 +12500,7 @@
           (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
         (if (call $win16_arg16 (i32.const 2))
           (then (call $gs8 (local.get $p2) (i32.const 0))))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return (i32.const 10))
         (return (i32.const 1))))
     (if (i32.and (i32.ge_u (local.get $ordinal) (i32.const 404))
@@ -12520,13 +12518,13 @@
         (local.set $p1 (call $win16_far_to_guest
           (call $win16_arg16 (i32.const 2)) (call $win16_arg16 (i32.const 1))))
         (local.set $p2 (call $win16_arg16 (i32.const 0)))
-        (global.set $eax (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 0))
         (if (i32.and (i32.ne (local.get $dev) (i32.const 0))
                      (i32.ne (local.get $dev) (i32.const 0xFFFF)))
-          (then (global.set $eax (i32.const 2))))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 2))))
         (if (i32.eqz (call $win16_arg16 (i32.const 2)))
-          (then (global.set $eax (i32.const 11))))
-        (if (i32.eqz (global.get $eax))
+          (then (i32.store offset=0 (global.get $reg_base) (i32.const 11))))
+        (if (i32.eqz (i32.load offset=0 (global.get $reg_base)))
           (then
             (if (i32.gt_u (local.get $p2) (i32.const 48)) (then (local.set $p2 (i32.const 48))))
             (local.set $name (global.get $GUEST_STACK))
@@ -12549,7 +12547,7 @@
         (call $handle_waveOutGetNumDevs (i32.const 0) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $win16_api_return (i32.const 0))
         (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 2))
@@ -12562,7 +12560,7 @@
         (call $handle_sndPlaySoundA (local.get $name) (local.get $flags)
           (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
         (call $win16_call32_end)
-        (global.set $eax (i32.ne (global.get $eax) (i32.const 0)))
+        (i32.store offset=0 (global.get $reg_base) (i32.ne (i32.load offset=0 (global.get $reg_base)) (i32.const 0)))
         (call $win16_api_return (i32.const 6))
         (return (i32.const 1))))
     (i32.const 0))
@@ -12585,7 +12583,7 @@
       (local.set $src (i32.add (local.get $src) (i32.const 1)))
       (local.set $dst (i32.add (local.get $dst) (i32.const 1)))
       (br $copy)))
-    (global.set $eax (select (i32.const 1) (i32.const 0) (local.get $to_ansi)))
+    (i32.store offset=0 (global.get $reg_base) (select (i32.const 1) (i32.const 0) (local.get $to_ansi)))
     (call $win16_api_return (i32.const 8)))
 
   (func $win16_keyboard (param $ordinal i32) (result i32)
@@ -12647,7 +12645,7 @@
     (if (i32.eq (local.get $ordinal) (i32.const 13))
       (then (call $win16_local_identity (i32.const 2) (i32.const 0)) (return (i32.const 1))))
     (if (i32.eq (local.get $ordinal) (i32.const 14))
-      (then (global.set $edx (i32.const 0))
+      (then (i32.store offset=8 (global.get $reg_base) (i32.const 0))
             (call $win16_local_identity (i32.const 0) (i32.const 0)) (return (i32.const 1))))
     (i32.const 0))
 
@@ -12708,10 +12706,10 @@
       (then (local.set $op (call $g2w (call $win16_far_to_guest
         (call $win16_arg16 (i32.const 8)) (call $win16_arg16 (i32.const 7)))))))
     (local.set $hwnd (call $win16_h32 (call $win16_arg16 (i32.const 9))))
-    (global.set $eax (call $host_shell_execute (local.get $hwnd) (local.get $op)
+    (i32.store offset=0 (global.get $reg_base) (call $host_shell_execute (local.get $hwnd) (local.get $op)
       (local.get $file) (local.get $params) (local.get $dir) (local.get $show)))
-    (global.set $edx (i32.const 0))
-    (global.set $eax (i32.and (global.get $eax) (i32.const 0xFFFF)))
+    (i32.store offset=8 (global.get $reg_base) (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $win16_api_return (i32.const 20)))
 
   ;; SHELL.22 is ShellAbout, by ordinal here and by name in
@@ -12836,7 +12834,7 @@
     ;; underneath them are this side's to drop.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_CWP))
       (then
-        (global.set $esp (i32.add (global.get $esp) (global.get $WIN16_CWP_SCRATCH)))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (global.get $WIN16_CWP_SCRATCH)))
         (call $win16_create_finish)
         (return)))
     ;; A Win16 custom child's WM_CREATE has returned. Its initial size was
@@ -12845,8 +12843,8 @@
     ;; continuation remains for WM_SIZE to return through.
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_CONT_CREATE_SIZE))
       (then
-        (local.set $target (call $gl32 (global.get $esp)))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
+        (local.set $target (call $gl32 (i32.load offset=16 (global.get $reg_base))))
+        (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 4)))
         (call $defwndproc_do_nccalcsize
           (call $win16_h32 (call $win16_cont_result)))
         (if (call $wnd_is_effectively_visible
@@ -12902,9 +12900,9 @@
     (if (i32.eq (local.get $thunk_off) (global.get $WIN16_DDE_CB))
       (then
         (call $win16_dde_ask_finish
-          (i32.and (global.get $eax) (i32.const 0xFFFF)))
+          (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFFFF)))
         (call $zero_memory (call $g2w (global.get $win16_dde_cb_msg)) (i32.const 16))
-        (global.set $eax (i32.const 1))
+        (i32.store offset=0 (global.get $reg_base) (i32.const 1))
         (call $win16_set_sreg (i32.const 1)
           (i32.shr_u (global.get $win16_dde_cb_ret) (i32.const 16)))
         (global.set $eip (i32.add (global.get $seg_base_cs)
@@ -12931,8 +12929,8 @@
         (if (call $modal_pump_step
               (i32.add (global.get $seg_base_cs) (global.get $WIN16_MODAL_PUMP)))
           (then (return)))
-        (global.set $eax (i32.and (global.get $modal_result) (i32.const 0xFFFF)))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=0 (global.get $reg_base) (i32.and (global.get $modal_result) (i32.const 0xFFFF)))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (global.set $yield_reason (i32.const 0))
         (call $win16_set_sreg (i32.const 1)
           (i32.shr_u (global.get $win16_modal_ret) (i32.const 16)))
@@ -12954,7 +12952,7 @@
     ;; A Pascal callee must leave it exactly its own frame higher, and an API
     ;; that pops the wrong number of bytes is invisible until something returns
     ;; through the damage thousands of instructions later.
-    (global.set $win16_entry_esp (global.get $esp))
+    (global.set $win16_entry_esp (i32.load offset=16 (global.get $reg_base)))
     (if (global.get $win16_trace)
       (then
         (call $host_log_i32 (i32.const 0xCA16A9F0))
@@ -13046,9 +13044,9 @@
           (i32.ne (global.get $win16_w32inst_module_id) (i32.const 0))
           (i32.eq (local.get $module) (global.get $win16_w32inst_module_id)))
       (then
-        (global.set $eax (select (i32.const 1) (i32.const 0)
+        (i32.store offset=0 (global.get $reg_base) (select (i32.const 1) (i32.const 0)
           (i32.eq (local.get $ordinal) (i32.const 1))))
-        (global.set $edx (i32.const 0))
+        (i32.store offset=8 (global.get $reg_base) (i32.const 0))
         (call $win16_api_return
           (select (i32.const 0) (i32.const 4)
             (i32.eq (local.get $ordinal) (i32.const 1))))

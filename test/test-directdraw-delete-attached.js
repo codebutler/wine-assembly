@@ -10,19 +10,19 @@ const extraWat = String.raw`
     (call $dx_create_com_obj (i32.const 2) (i32.const 0x54000000)))
 
   (func (export "test_dd_add") (param $parent i32) (param $child i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawSurface_AddAttachedSurface
       (local.get $parent) (local.get $child) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dd_delete")
       (param $parent i32) (param $flags i32) (param $child i32) (result i32)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirectDrawSurface_DeleteAttachedSurface
       (local.get $parent) (local.get $flags) (local.get $child)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_dd_ref") (param $surface i32) (result i32)
     (load.field DxObject refcount (call $dx_from_this (local.get $surface))))

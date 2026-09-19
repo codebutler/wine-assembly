@@ -13,18 +13,18 @@ const extraWat = `
     (i32.store (call $g2w (local.get $name)) (i32.const 0x496d6d49)) ;; "ImmI"
     (i32.store offset=4 (call $g2w (local.get $name)) (i32.const 0x454d4973)) ;; "sIME"
     (i32.store8 offset=8 (call $g2w (local.get $name)) (i32.const 0))
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_GetProcAddress
       (global.get $image_base) (local.get $name) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_imm_is_ime") (param $stack i32) (param $hkl i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $handle_ImmIsIME
       (local.get $hkl) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 (async () => {

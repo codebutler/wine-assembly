@@ -49,34 +49,34 @@ const declarationBytes = (colorStream, colorOffset, positionStream = 0) => {
     extraHostOverrides: { gpu_gl_call: (op, p, a) => bridge.call(op, p, a) },
     extraWat: `
     (func (export "create_device") (param $pp i32) (param $out i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $pp))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (local.get $out))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $pp))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (local.get $out))
       (call $handle_IDirect3D9_CreateDevice (i32.const 0) (i32.const 0) (i32.const 1)
-        (i32.const 1) (i32.const 0) (i32.const 0)) (global.get $eax))
+        (i32.const 1) (i32.const 0) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "target_bits") (param $d i32) (result i32)
       (load.field DxObject misc1 (call $d3ddev_rt_entry (local.get $d))))
     (func (export "create_buffer") (param $d i32) (param $length i32) (param $out i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (local.get $out))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (local.get $out))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.const 0))
       (call $handle_IDirect3DDevice9_CreateVertexBuffer (local.get $d) (local.get $length)
-        (i32.const 0) (i32.const 0x42) (i32.const 1) (i32.const 0)) (global.get $eax))
+        (i32.const 0) (i32.const 0x42) (i32.const 1) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     (func (export "clear_target") (param $d i32) (param $color i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 0))
-      (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 0))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 0))
+      (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.const 0))
       (call $handle_IDirect3DDevice9_Clear (local.get $d) (i32.const 0) (i32.const 0)
-        (i32.const 1) (local.get $color) (i32.const 0)) (global.get $eax))
+        (i32.const 1) (local.get $color) (i32.const 0)) (i32.load offset=0 (global.get $reg_base)))
     ${[['Buffer9', 'Lock'], ['Buffer9', 'Unlock']].map(([type, n]) => `
       (func (export "${type}_${n}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
-        (global.set $esp (i32.const 0x00300000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
         (call $handle_IDirect3D${type}_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $f) (i32.const 0))
-        (global.get $eax))`).join('\n')}
+        (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
     ${DEVICE_CALLS.map(n => `(func (export "${n}") (param $a i32) (param $b i32) (param $c i32) (param $d i32) (param $f i32) (result i32)
-      (global.set $esp (i32.const 0x00300000))
+      (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
       (call $handle_IDirect3DDevice9_${n} (local.get $a) (local.get $b) (local.get $c) (local.get $d) (local.get $f) (i32.const 0))
-      (global.get $eax))`).join('\n')}
+      (i32.load offset=0 (global.get $reg_base)))`).join('\n')}
   ` });
   bridge = new Bridge({ backend: 'software', enableProgrammable: true,
     getExports: () => e, getMemory: () => memory.buffer,

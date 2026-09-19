@@ -20,35 +20,35 @@ const extraWat = String.raw`
   (func (export "test_call_GetMessageA")
     (param $msg i32) (result i32)
     (local $saved_esp i32) (local $saved_eip i32) (local $result i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (local.set $saved_eip (global.get $eip))
     (call $handle_GetMessageA
       (local.get $msg) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (local.set $result (global.get $eax))
-    (global.set $esp (local.get $saved_esp))
+    (local.set $result (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (global.set $eip (local.get $saved_eip))
     (local.get $result))
 
   (func (export "test_call_PostThreadMessageA")
     (param $tid i32) (param $msg i32) (result i32)
     (local $saved_esp i32) (local $result i32)
-    (local.set $saved_esp (global.get $esp))
-    (global.set $esp (i32.const 0x00300000))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_PostThreadMessageA
       (local.get $tid) (local.get $msg) (i32.const 0x1234)
       (i32.const 0x5678) (i32.const 0) (i32.const 0))
-    (local.set $result (global.get $eax))
-    (global.set $esp (local.get $saved_esp))
+    (local.set $result (i32.load offset=0 (global.get $reg_base)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
     (local.get $result))
 
   (func (export "test_call_WaitMessage") (result i32)
-    (global.set $esp (i32.const 0x00300000))
-    (global.set $eax (i32.const 0))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (call $handle_WaitMessage
       (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 (async () => {

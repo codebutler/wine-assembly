@@ -19,30 +19,30 @@ const extraWat = String.raw`
     (local.get $dev))
 
   (func (export "test_d3d9_get_swap_chain") (param $dev i32) (param $out i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirect3DDevice9_GetSwapChain
       (local.get $dev) (i32.const 0) (local.get $out)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (i64.or (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+    (i64.or (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_d3d9_get_present_parameters") (param $swap i32) (param $pp i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_IDirect3DSwapChain9_GetPresentParameters
       (local.get $swap) (local.get $pp) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (i64.or (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+    (i64.or (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_d3d9_dispatch_one")
       (param $api_id i32) (param $this i32) (result i64)
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $dispatch_api_table
       (local.get $api_id) (local.get $this)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
       (i32.const 0))
-    (i64.or (i64.extend_i32_u (global.get $eax))
-      (i64.shl (i64.extend_i32_u (global.get $esp)) (i64.const 32))))
+    (i64.or (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
+      (i64.shl (i64.extend_i32_u (i32.load offset=16 (global.get $reg_base))) (i64.const 32))))
 
   (func (export "test_d3d9_create_root") (result i32)
     (call $dx_create_com_obj (i32.const 34) (global.get $DX_VTBL_D3D9)))

@@ -15,11 +15,11 @@ assert.strictEqual(api.test_call, true);
 
 const extraWat = String.raw`
   (func (export "test_set_message_queue_esp") (param $size i32) (param $sp i32) (result i32)
-    (global.set $esp (local.get $sp))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
     (call $handle_SetMessageQueue
       (local.get $size) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $esp))
+    (i32.load offset=16 (global.get $reg_base)))
 `;
 
 const binary = compileSrcWasm((file, source) =>

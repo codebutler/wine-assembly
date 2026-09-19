@@ -44,12 +44,12 @@ const { bootRenderHarness } = require('./render-helper');
     extraWat: String.raw`
       (func (export "test_flush_file_buffers") (param $handle i32) (param $seed_error i32) (result i64)
         (global.set $last_error (local.get $seed_error))
-        (global.set $esp (i32.const 0x00300000))
+        (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
         (call $handle_FlushFileBuffers
           (local.get $handle) (i32.const 0) (i32.const 0)
           (i32.const 0) (i32.const 0) (i32.const 0))
         (i64.or
-          (i64.extend_i32_u (global.get $eax))
+          (i64.extend_i32_u (i32.load offset=0 (global.get $reg_base)))
           (i64.shl (i64.extend_i32_u (global.get $last_error)) (i64.const 32))))
     `,
     extraHostOverrides: {

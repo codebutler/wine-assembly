@@ -12,19 +12,19 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_call_LoadLibraryA") (param $name i32) (result i32)
     (local $sp i32)
-    (local.set $sp (global.get $esp))
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_LoadLibraryA (local.get $name)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $sp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_call_FreeLibrary") (param $module i32) (result i32)
     (local $sp i32)
-    (local.set $sp (global.get $esp))
+    (local.set $sp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_FreeLibrary (local.get $module)
       (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $sp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $sp))
+    (i32.load offset=0 (global.get $reg_base)))
 `;
 
 async function main() {

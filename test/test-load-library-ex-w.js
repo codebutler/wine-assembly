@@ -8,21 +8,21 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_load_library_ex_a") (param $name i32) (param $file i32) (param $flags i32) (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_LoadLibraryExA
       (local.get $name) (local.get $file) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "normalize_library_name") (param i32) (result i32)
     (call $loadlib_normalize_name (local.get 0)))
   (func (export "test_load_library_ex_w") (param $name i32) (param $file i32) (param $flags i32) (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_LoadLibraryExW
       (local.get $name) (local.get $file) (local.get $flags)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_wide_uxtheme_match") (param $name i32) (result i32)
     (global.set $image_base (i32.const 0x00400000))
     (call $wide_ascii_eq (call $g2w (local.get $name)) (i32.const 0x36D)))
@@ -32,11 +32,11 @@ const extraWat = String.raw`
       (call $wide_ascii_eq (call $g2w (local.get $name)) (i32.const 0x36D))))
   (func (export "test_co_load_library") (param $name i32) (param $auto_free i32) (result i32)
     (global.set $image_base (i32.const 0x00400000))
-    (global.set $esp (i32.const 0x00300000))
+    (i32.store offset=16 (global.get $reg_base) (i32.const 0x00300000))
     (call $handle_CoLoadLibrary
       (local.get $name) (local.get $auto_free) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.get $eax))
+    (i32.load offset=0 (global.get $reg_base)))
   (func (export "test_init_image_base")
     (global.set $image_base (i32.const 0x00400000)))
 `;

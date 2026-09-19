@@ -37,14 +37,14 @@ const WS_EX_TRANSPARENT = 0x20;
       (call $handle_ChildWindowFromPoint
         (local.get $parent) (local.get $x) (local.get $y)
         (i32.const 0) (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
     (func (export "test_child_from_point_ex")
         (param $parent i32) (param $x i32) (param $y i32) (param $flags i32)
         (result i32)
       (call $handle_ChildWindowFromPointEx
         (local.get $parent) (local.get $x) (local.get $y) (local.get $flags)
         (i32.const 0) (i32.const 0))
-      (global.get $eax))
+      (i32.load offset=0 (global.get $reg_base)))
   ` });
 
   const parent = 0x10001;

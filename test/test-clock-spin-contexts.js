@@ -4,7 +4,7 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = `
   (func (export "test_context_read")
       (param $stack i32) (param $ret i32) (param $value i32) (result i32)
-    (global.set $esp (local.get $stack))
+    (i32.store offset=16 (global.get $reg_base) (local.get $stack))
     (call $gs32 (local.get $stack) (local.get $ret))
     (global.set $current_thunk_eip (i32.const 0x07501000))
     (global.set $yield_reason (i32.const 0))

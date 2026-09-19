@@ -14,12 +14,12 @@ const { bootRenderHarness } = require('./render-helper');
 const extraWat = String.raw`
   (func (export "test_register_class") (param $wc i32) (result i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
     (call $handle_RegisterClassA
       (local.get $wc) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 0) (i32.const 0))
-    (global.set $esp (local.get $saved_esp))
-    (global.get $eax))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp))
+    (i32.load offset=0 (global.get $reg_base)))
 
   (func (export "test_load_dialog")
     (param $hwnd i32) (param $template i32) (result i32)
@@ -53,22 +53,22 @@ const extraWat = String.raw`
 
   (func (export "test_move_window") (param $hwnd i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 1))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 1))
     (call $handle_MoveWindow
       (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 160) (i32.const 100) (i32.const 0))
-    (global.set $esp (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 
   (func (export "test_set_window_pos") (param $hwnd i32)
     (local $saved_esp i32)
-    (local.set $saved_esp (global.get $esp))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 24)) (i32.const 100))
-    (call $gs32 (i32.add (global.get $esp) (i32.const 28)) (i32.const 0))
+    (local.set $saved_esp (i32.load offset=16 (global.get $reg_base)))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24)) (i32.const 100))
+    (call $gs32 (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28)) (i32.const 0))
     (call $handle_SetWindowPos
       (local.get $hwnd) (i32.const 0) (i32.const 0)
       (i32.const 0) (i32.const 160) (i32.const 0))
-    (global.set $esp (local.get $saved_esp)))
+    (i32.store offset=16 (global.get $reg_base) (local.get $saved_esp)))
 `;
 
 (async () => {

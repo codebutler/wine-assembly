@@ -94,17 +94,17 @@
       (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
     (local $out_size i32) (local $bytes_returned i32) (local $overlapped i32)
     (local.set $out_size (call $gl32
-      (i32.add (global.get $esp) (i32.const 24))))
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 24))))
     (local.set $bytes_returned (call $gl32
-      (i32.add (global.get $esp) (i32.const 28))))
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 28))))
     (local.set $overlapped (call $gl32
-      (i32.add (global.get $esp) (i32.const 32))))
+      (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 32))))
 
-    (global.set $eax (i32.const 0))
+    (i32.store offset=0 (global.get $reg_base) (i32.const 0))
     (global.set $last_error
       (call $device_io_error
         (local.get $arg0) (local.get $arg1)
         (local.get $arg2) (local.get $arg3)
         (local.get $arg4) (local.get $out_size)
         (local.get $bytes_returned) (local.get $overlapped)))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 36))))
+    (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 36))))
