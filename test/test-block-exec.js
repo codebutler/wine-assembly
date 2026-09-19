@@ -439,7 +439,7 @@ async function main() {
     [...aluRI(0, EAX, 0x80000000), ...aluRR(ADC, ECX, EDX),
      ...aluRR(XOR, EDI, ECX), ...incR(EAX)]);
   check('  ADC is native after the H454 merge', adc.on.fallbacks <= 1,
-    `fallbacks=${adc.on.fallbacks} (pushfd is the only one left)`);
+    `fallbacks=${adc.on.fallbacks} lastFallbackFn=${adc.on.lastFallbackFn} (pushfd is the only one left)`);
   equiv('SBB r,imm mid-block',
     [...aluRR(CMP, EAX, EDX), ...aluRI(3, ECX, 0x1000),
      ...aluRR(SUB, EDI, ECX), ...decR(EDX)]);

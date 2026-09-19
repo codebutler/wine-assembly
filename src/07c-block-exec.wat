@@ -1403,13 +1403,17 @@
         (if (call $bx_op_unsafe (local.get $fn)) (then (return (call $bx_rg_nofit (i32.const 6)))))
         (local.set $up (call $bx_rg_uop_at (i32.add (local.get $u0) (local.get $ui))))
         (local.set $k (i32.const -1))
-        ;; PUSH/POP r32 carry the register in the handler index, so the shared
-        ;; classifier has nothing to say about them.
-        (if (i32.and (i32.ge_u (local.get $fn) (i32.const 323))
-                     (i32.le_u (local.get $fn) (i32.const 330)))
+        ;; PUSH/POP r32 carry the register in the handler index (323..338) or,
+        ;; in the generic $th_push_r/$th_pop_r spelling the decoder emits since
+        ;; the register file moved to memory, in the operand word.
+        (if (i32.or (i32.eq (local.get $fn) (global.get $TH_PUSH_R))
+                    (i32.and (i32.ge_u (local.get $fn) (i32.const 323))
+                             (i32.le_u (local.get $fn) (i32.const 330))))
           (then
             (i32.store           (local.get $up) (global.get $TU_PUSH_R))
-            (i32.store offset=4  (local.get $up) (i32.sub (local.get $fn) (i32.const 323)))
+            (i32.store offset=4  (local.get $up)
+              (select (i32.load offset=4 (local.get $p)) (i32.sub (local.get $fn) (i32.const 323))
+                      (i32.eq (local.get $fn) (global.get $TH_PUSH_R))))
             (i32.store offset=8  (local.get $up) (i32.const 0))
             (i32.store offset=12 (local.get $up) (i32.const 0))
             (i32.store offset=16 (local.get $up) (local.get $fn))
@@ -1418,11 +1422,14 @@
             (local.set $nat (i32.add (local.get $nat) (i32.const 1)))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
             (br $scan)))
-        (if (i32.and (i32.ge_u (local.get $fn) (i32.const 331))
-                     (i32.le_u (local.get $fn) (i32.const 338)))
+        (if (i32.or (i32.eq (local.get $fn) (global.get $TH_POP_R))
+                    (i32.and (i32.ge_u (local.get $fn) (i32.const 331))
+                             (i32.le_u (local.get $fn) (i32.const 338))))
           (then
             (i32.store           (local.get $up) (global.get $TU_POP_R))
-            (i32.store offset=4  (local.get $up) (i32.sub (local.get $fn) (i32.const 331)))
+            (i32.store offset=4  (local.get $up)
+              (select (i32.load offset=4 (local.get $p)) (i32.sub (local.get $fn) (i32.const 331))
+                      (i32.eq (local.get $fn) (global.get $TH_POP_R))))
             (i32.store offset=8  (local.get $up) (i32.const 0))
             (i32.store offset=12 (local.get $up) (i32.const 0))
             (i32.store offset=16 (local.get $up) (local.get $fn))
@@ -4054,11 +4061,14 @@
         ;; PUSH/POP r32 carry the register in the HANDLER index (323..338), so
         ;; $tree_uop_classify has nothing to say about them and this file's own
         ;; three kinds are recognised here.
-        (if (i32.and (i32.ge_u (local.get $fn) (i32.const 323))
-                     (i32.le_u (local.get $fn) (i32.const 330)))
+        (if (i32.or (i32.eq (local.get $fn) (global.get $TH_PUSH_R))
+                    (i32.and (i32.ge_u (local.get $fn) (i32.const 323))
+                             (i32.le_u (local.get $fn) (i32.const 330))))
           (then
             (i32.store           (local.get $up) (global.get $TU_PUSH_R))
-            (i32.store offset=4  (local.get $up) (i32.sub (local.get $fn) (i32.const 323)))
+            (i32.store offset=4  (local.get $up)
+              (select (i32.load offset=4 (local.get $p)) (i32.sub (local.get $fn) (i32.const 323))
+                      (i32.eq (local.get $fn) (global.get $TH_PUSH_R))))
             (i32.store offset=8  (local.get $up) (i32.const 0))
             (i32.store offset=12 (local.get $up) (i32.const 0))
             (i32.store offset=16 (local.get $up) (local.get $fn))
@@ -4068,11 +4078,14 @@
             (local.set $nat (i32.add (local.get $nat) (i32.const 1)))
             (local.set $i (i32.add (local.get $i) (i32.const 1)))
             (br $scan)))
-        (if (i32.and (i32.ge_u (local.get $fn) (i32.const 331))
-                     (i32.le_u (local.get $fn) (i32.const 338)))
+        (if (i32.or (i32.eq (local.get $fn) (global.get $TH_POP_R))
+                    (i32.and (i32.ge_u (local.get $fn) (i32.const 331))
+                             (i32.le_u (local.get $fn) (i32.const 338))))
           (then
             (i32.store           (local.get $up) (global.get $TU_POP_R))
-            (i32.store offset=4  (local.get $up) (i32.sub (local.get $fn) (i32.const 331)))
+            (i32.store offset=4  (local.get $up)
+              (select (i32.load offset=4 (local.get $p)) (i32.sub (local.get $fn) (i32.const 331))
+                      (i32.eq (local.get $fn) (global.get $TH_POP_R))))
             (i32.store offset=8  (local.get $up) (i32.const 0))
             (i32.store offset=12 (local.get $up) (i32.const 0))
             (i32.store offset=16 (local.get $up) (local.get $fn))
