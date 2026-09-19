@@ -2,14 +2,14 @@
 
 'use strict';
 
-// InsertMenuItemA/W against a host-backed CreateMenu handle.
+// InsertMenuItemA/W against a CreateMenu handle.
 //
 // tetravex.exe builds its entire menu bar this way: CreateMenu for the bar and
-// for each popup, then repeated InsertMenuItemA(uItem = -1). CreateMenu handles
-// live in the host tree (unlike CreatePopupMenu's WAT-side MNUD records), so the
-// dynamic path declines them — and the handler used to answer TRUE and drop the
-// item on the floor. SetMenu then had nothing to serialize and the window came
-// up with no menu bar at all.
+// for each popup, then repeated InsertMenuItemA(uItem = -1). The handler used
+// to answer TRUE and drop the item on the floor, so SetMenu had nothing to
+// serialize and the window came up with no menu bar at all. CreateMenu now
+// makes the same WAT dynamic (MNUD) menu CreatePopupMenu does, and SetMenu
+// serializes the finished bar.
 
 const assert = require('assert');
 const { bootRenderHarness } = require('./render-helper');
@@ -30,6 +30,19 @@ const extraWat = `
     (call $handle_InsertMenuItemW
       (local.get $hmenu) (local.get $item) (local.get $bypos) (local.get $mii)
       (i32.const 0) (i32.const 0))
+    (global.get $eax))
+
+  (func (export "test_call_GetSubMenu") (param $hmenu i32) (param $pos i32) (result i32)
+    (call $handle_GetSubMenu (local.get $hmenu) (local.get $pos)
+      (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
+  (func (export "test_register_menu_window") (param $hwnd i32)
+    (call $wnd_table_set (local.get $hwnd) (global.get $WNDPROC_CTRL_NATIVE)))
+  (func (export "test_call_SetMenu_bridge")
+      (param $hwnd i32) (param $hmenu i32) (result i32)
+    (call $handle_SetMenu
+      (local.get $hwnd) (local.get $hmenu) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
     (global.get $eax))
 `;
 
@@ -69,43 +82,66 @@ const check = (label, fn) => { fn(); passed++; console.log(`  ok  ${label}`); };
     wat.guest_write32(p + 36, typeData);
     return p;
   };
-  const hostItems = h => harness.hostCtx._hostMenus.get(h >>> 0) || [];
+  const readA = p => {
+    let out = '';
+    for (let c; p && (c = wat.guest_read8(p)); p++) out += String.fromCharCode(c);
+    return out;
+  };
+  const count = h => wat.test_menu_item_count(h);
+  const id = (h, i) => wat.test_menu_item_field(h, i, 1);
+  const label = (h, i) => readA(wat.test_menu_item_field(h, i, 2) >>> 0);
+  const submenu = (h, i) => wat.test_menu_item_field(h, i, 3) >>> 0;
+  const MF_POPUP = 0x10;
 
   const bar = wat.test_call_CreateMenu() >>> 0;
   const game = wat.test_call_CreateMenu() >>> 0;
-  assert(bar && game && bar !== game, 'CreateMenu returns distinct host handles');
+  assert(bar && game && bar !== game, 'CreateMenu returns distinct handles');
+  assert.strictEqual(count(bar), 0, 'CreateMenu makes an empty dynamic menu');
 
-  check('a tail InsertMenuItemA lands in the host submenu', () => {
+  check('a tail InsertMenuItemA lands in the submenu', () => {
     assert.strictEqual(wat.test_call_InsertMenuItemA(game, -1, 1,
       menuItemInfo({ mask: MIIM_ID | MIIM_STRING, id: 42, typeData: strA('&New Game') })), 1);
-    assert.strictEqual(hostItems(game).length, 1);
-    assert.strictEqual(hostItems(game)[0].id, 42);
-    assert.strictEqual(hostItems(game)[0].text, '&New Game');
+    assert.strictEqual(count(game), 1);
+    assert.strictEqual(id(game, 0), 42);
+    assert.strictEqual(label(game, 0), '&New Game');
   });
 
   check('MIIM_SUBMENU attaches the popup to the bar', () => {
     assert.strictEqual(wat.test_call_InsertMenuItemA(bar, -1, 1,
       menuItemInfo({ mask: MIIM_SUBMENU | MIIM_STRING, subMenu: game,
                      typeData: strA('&Game') })), 1);
-    assert.strictEqual(hostItems(bar).length, 1);
-    assert.strictEqual(hostItems(bar)[0].text, '&Game');
-    assert.strictEqual(hostItems(bar)[0].submenu, game, 'the host entry must be a popup');
-    assert.strictEqual(hostItems(bar)[0].popup, true);
+    assert.strictEqual(count(bar), 1);
+    assert.strictEqual(label(bar, 0), '&Game');
+    assert(wat.test_menu_item_field(bar, 0, 0) & MF_POPUP, 'the entry must be a popup');
+    assert.strictEqual(submenu(bar, 0), game);
+    assert.strictEqual(wat.test_call_GetSubMenu(bar, 0) >>> 0, game,
+      'GetSubMenu answers before SetMenu');
   });
 
   check('the W twin reads its label as UTF-16', () => {
     assert.strictEqual(wat.test_call_InsertMenuItemW(game, -1, 1,
       menuItemInfo({ mask: MIIM_ID | MIIM_STRING, id: 43, typeData: strW('E&xit') })), 1);
-    assert.strictEqual(hostItems(game).length, 2);
-    assert.strictEqual(hostItems(game)[1].text, 'E&xit');
+    assert.strictEqual(count(game), 2);
+    assert.strictEqual(id(game, 1), 43);
   });
 
-  check('a non-tail insert into a host menu still reports success', () => {
-    // Mutating a host tree anywhere but the tail is not modelled; the historical
-    // no-op result stays, exactly as InsertMenuA already behaves.
+  check('a non-tail insert lands at its position', () => {
     assert.strictEqual(wat.test_call_InsertMenuItemA(bar, 0, 1,
       menuItemInfo({ mask: MIIM_ID | MIIM_STRING, id: 44, typeData: strA('&Help') })), 1);
-    assert.strictEqual(hostItems(bar).length, 1, 'and it must not append instead');
+    assert.strictEqual(count(bar), 2);
+    assert.strictEqual(id(bar, 0), 44);
+    assert.strictEqual(label(bar, 1), '&Game');
+  });
+
+  check('SetMenu serializes the bar into the window', () => {
+    const hwnd = 0x10002;
+    wat.test_register_menu_window(hwnd);
+    assert.strictEqual(wat.test_call_SetMenu_bridge(hwnd, bar), 1);
+    assert.strictEqual(wat.menu_bar_count(hwnd), 2);
+    assert.strictEqual(wat.menu_child_count(hwnd, 1), 2);
+    assert.strictEqual(wat.menu_child_id(hwnd, 1, 0), 42);
+    assert.strictEqual(wat.menu_child_id(hwnd, 1, 1), 43);
+    wat.menu_clear(hwnd);
   });
 
   console.log(`\ntest-insert-menu-item-host-bar: ${passed}/${passed} passed`);

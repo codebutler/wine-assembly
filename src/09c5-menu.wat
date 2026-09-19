@@ -5128,14 +5128,15 @@
     (global.set $eax (local.get $len))
   )
 
-  ;; 687: CreateMenu() — allocate opaque HMENU. No backing state: AppendMenu/InsertMenu
-  ;; are already no-ops, menu bars render from PE RT_MENU resources, and DestroyMenu is
-  ;; a return-TRUE no-op. The handle just needs to be non-zero and distinguishable so
-  ;; downstream APIs that validate it won't trip.
+  ;; 687: CreateMenu() — a WAT dynamic (MNUD) menu, the same object
+  ;; CreatePopupMenu makes; SetMenu serializes the finished bar with
+  ;; $menu_set_bar_from_dynamic. It used to be a host-side JS tree, which could
+  ;; not answer GetSubMenu until SetMenu: Civ II MGE appends its dropdowns to
+  ;; the bar and fills each one through GetSubMenu before attaching it, so every
+  ;; dropdown came up empty.
   (func $handle_CreateMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)
-    (global.set $eax (call $host_menu_create))
-    (global.set $esp (i32.add (global.get $esp) (i32.const 4)))
-  )
+    (call $handle_CreatePopupMenu (local.get $arg0) (local.get $arg1) (local.get $arg2)
+      (local.get $arg3) (local.get $arg4) (local.get $name_ptr)))
 
   ;; CreatePopupMenu() — WAT-owned dynamic popup menu state.
   (func $handle_CreatePopupMenu (param $arg0 i32) (param $arg1 i32) (param $arg2 i32) (param $arg3 i32) (param $arg4 i32) (param $name_ptr i32)

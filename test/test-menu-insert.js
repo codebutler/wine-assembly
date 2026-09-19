@@ -296,7 +296,7 @@ function check(label, fn) {
   check('CreateMenu + tail InsertMenuA reaches the attached WAT menu bar', () => {
     const root = wat.test_call_CreateMenu_bridge() >>> 0;
     const file = wat.test_call_CreateMenu_bridge() >>> 0;
-    assert(root && file, 'CreateMenu should return distinct host handles');
+    assert(root && file, 'CreateMenu should return distinct handles');
     assert.notStrictEqual(root, file);
     assert.strictEqual(
       wat.test_call_InsertMenuA(file, -1, MF_BYPOSITION | MF_STRING,
@@ -304,10 +304,10 @@ function check(label, fn) {
     assert.strictEqual(
       wat.test_call_InsertMenuA(root, -1, MF_BYPOSITION | MF_POPUP,
         file, strA('&Game')), 1);
-    assert.strictEqual(harness.hostCtx._hostMenus.get(root).length, 1,
-      'InsertMenuA should append the top-level popup to the host tree');
-    assert.strictEqual(harness.hostCtx._hostMenus.get(file).length, 1,
-      'InsertMenuA should append the command to the host submenu');
+    assert.strictEqual(wat.test_menu_item_count(root), 1,
+      'InsertMenuA should append the top-level popup to the bar');
+    assert.strictEqual(wat.test_menu_item_count(file), 1,
+      'InsertMenuA should append the command to the submenu');
 
     const hwnd = 0x10002;
     wat.test_register_menu_window(hwnd);
