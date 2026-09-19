@@ -41,12 +41,19 @@ function parseReplicatedDispatch() {
 }
 
 const OUT = path.resolve(ROOT, getArg('out', path.join('build', 'wine-assembly.wasm')));
-const COMPAT_OUT = path.resolve(ROOT, getArg('compat-out', path.join('build', 'wine-assembly.compat.wasm')));
+// A custom primary output defines the artifact family, including cleanup.
+// --out=/tmp/probe.wasm must never overwrite the shared compatibility build
+// or delete its named sibling. Explicit per-artifact overrides still win.
+const OUTPUT_STEM = OUT.replace(/\.wasm$/i, '');
+const COMPAT_OUT = path.resolve(ROOT, getArg('compat-out', `${OUTPUT_STEM}.compat.wasm`));
 
 // Opt-in third artifact carrying a wasm `name` section. Off unless asked for,
 // so the two canonical files above are byte-for-byte what they were.
 const WANT_NAMES = process.argv.includes('--names') || process.env.WINE_WAT_NAMES === '1';
-const NAMED_OUT = path.resolve(ROOT, getArg('named-out', path.join('build', 'wine-assembly.named.wasm')));
+const NAMED_OUT = path.resolve(ROOT, getArg('named-out', `${OUTPUT_STEM}.named.wasm`));
+if (new Set([OUT, COMPAT_OUT, NAMED_OUT]).size !== 3) {
+  throw new Error('build-compile-wat: primary, compatibility and named outputs must be distinct');
+}
 
 // Reports WHERE the choice came from as well as what it is: a build log that
 // only says "watx" cannot distinguish a deliberate flip from a stray exported
@@ -237,6 +244,7 @@ function compileWatx(replicatedDispatch) {
     // Validated like the other two, and for the same reason: a custom section
     // the decoder refuses would otherwise only surface wherever it is loaded.
     new WebAssembly.Module(namedBytes);
+    await fs.promises.mkdir(path.dirname(NAMED_OUT), { recursive: true });
     await fs.promises.writeFile(NAMED_OUT, Buffer.from(namedBytes));
     const namedSt = await fs.promises.stat(NAMED_OUT);
     console.log(`Build complete: ${path.relative(ROOT, NAMED_OUT)} (${namedSt.size} bytes, ` +
