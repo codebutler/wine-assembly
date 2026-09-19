@@ -1802,7 +1802,7 @@
   ;; ----------------------------------------------------------------------
   (func $chain_end (param $patch_at i32) (param $chain i32) (param $shift i32)
                    (param $tag i32)
-    (local $asel i32) (local $tsel i32) (local $off4 i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $asel i32) (local $tsel i32) (local $off4 i32)
     ;; The anchor's own chunk, which is also the ROUND-19 VALIDITY TEST for the
     ;; page registers this function is about to read a chunk base out of. A
     ;; chained transfer does not call $page_resolve, so $cur_page_* are not
@@ -1869,7 +1869,7 @@
                                 (global.get $cur_page_chunk)
                                 (local.get $tsel))
                         (local.get $off4)))
-                    (return_call $next)))))))))))
+                    (dispatch-next)))))))))))
     (global.set $chain_slow (i64.add (global.get $chain_slow) (i64.const 1)))
     (if (i32.gt_s (local.get $asel) (i32.const 0))
       (then (global.set $chain_slow_pool
@@ -1909,7 +1909,7 @@
           (else (call $bx_hot_bump (global.get $eip)))))))
 
   (func $branch_end_at (param $patch_at i32) (param $shift i32) (param $tag i32)
-    (local $t i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $t i32)
     (if (global.get $be_gate_on) (then (call $branch_end_diag)))
     ;; ROUND 19: how many desk trips came out of a block-executor tail. $ip is
     ;; still inside the stream the terminator was read from, so the descriptor
@@ -1962,7 +1962,7 @@
     ;; dispatch adds a frame that only unwinds when the chain ends, so letting
     ;; one refill of 1000 span a whole fast chain keeps the depth exactly where
     ;; it is today.
-    (return_call $next))
+    (dispatch-next))
 
   ;; Recycling the decoded-code arena means resetting $thread_alloc to the base
   ;; and invalidating every cached block. That is only safe between blocks.
@@ -2039,15 +2039,41 @@
     (global.set $thread_alloc (global.get $THREAD_BASE))
     (call $clear_cache))
 
-  (func $next
-    (local $fn i32) (local $op i32)
-    ;; $steps is a BLOCK quantum now, decremented where $block_budget is on
-    ;; the three transfer fast paths ($branch_end_at, $jcc_end fall-through,
-    ;; $chain_end), not here per op. The test stays: a handler that sets
-    ;; $steps to 0 after redirecting EIP (SendMessage, an API yield, SEH) is
-    ;; relying on the next dispatch returning to $run instead of running the
-    ;; op after it in the stream. The frame bound is unchanged in kind: only
-    ;; $jcc_end's fall-through nests a frame, and it is one of the three.
+  ;; The dispatch step. A MACRO, not only a function: every handler ends in
+  ;; `(dispatch-next)`, so each one carries its own copy of this body and its
+  ;; own `return_call_indirect`, and $next below is the same body under a
+  ;; name for the non-tail callers ($run's resume path, $th_call_step). One
+  ;; shared site was measured at -4.86% gameplay CPU on StarCraft against a
+  ;; 1.13% null band (quiet box, perf counters, 2026-09-19): not a branch
+  ;; prediction win -- the shared site missed 0.24% either way -- but the
+  ;; call, frame setup and stack check per dispatch are gone. See
+  ;; docs/repl-tailcall-main-emu.md. V8 does the same inlining when given
+  ;; --wasm-inlining-min-budget=600, which a browser cannot be asked for.
+  ;;
+  ;; The body is written on two locals, $nx_fn and $nx_op, that the
+  ;; expanding function must declare: a macro cannot add locals, and the
+  ;; compiler refuses an undeclared one, so a handler that forgets the pair
+  ;; is a build error and never a silently different dispatch. Do not write
+  ;; `(return_call $next)` in a handler again -- test/test-dispatch-macro.js
+  ;; refuses it, because a tree with both spellings has two dispatch paths
+  ;; that can drift apart (it happened: docs/next-source-inline.md).
+  ;;
+  ;; $steps is a BLOCK quantum, decremented where $block_budget is on the
+  ;; three transfer fast paths ($branch_end_at, $jcc_end fall-through,
+  ;; $chain_end), not here per op. The test stays: a handler that sets
+  ;; $steps to 0 after redirecting EIP (SendMessage, an API yield, SEH) is
+  ;; relying on the next dispatch returning to $run instead of running the
+  ;; op after it in the stream. The frame bound is unchanged in kind: only
+  ;; $jcc_end's fall-through nests a frame, and it is one of the three.
+  ;; Because the expansion sits in tail position, its `(return)` lands
+  ;; exactly where $next's would: in $run, which reads $resume_ip.
+  ;; One (block ...) around the body, deliberately: the macro expander splices
+  ;; a multi-form body only at module level, and inside a function it
+  ;; compiles to NOTHING, silently (probed 2026-09-19: a two-form macro in a
+  ;; function body yields a module that runs zero ops). A single form
+  ;; expands correctly, and a label-less block costs no machine code.
+  (defmacro (dispatch-next)
+   (block
     (if (i32.le_s (global.get $steps) (i32.const 0))
       (then
         ;; Hand $run the op we are declining to run, so it resumes the block
@@ -2058,20 +2084,20 @@
         (if (i32.eqz (global.get $eip_redirected))
           (then (global.set $resume_ip (global.get $ip))))
         (return)))
-    (local.set $fn (i32.load (global.get $ip)))
-    (local.set $op (i32.load offset=4 (global.get $ip)))
+    (local.set $nx_fn (i32.load (global.get $ip)))
+    (local.set $nx_op (i32.load offset=4 (global.get $ip)))
     (global.set $ip (i32.add (global.get $ip) (i32.const 8)))
     ;; Defensive: if cache is corrupted (bad handler index), drop the
     ;; whole cache and restart at $eip. The fresh decode will produce
     ;; valid threaded code. This recovers from rare corruption rather
     ;; than trapping with wasm "table index out of bounds".
-    (if (i32.ge_u (local.get $fn) (i32.const 469))
+    (if (i32.ge_u (local.get $nx_fn) (i32.const 469))
       (then
-        (return_call $dispatch_bad (local.get $fn))))
+        (return_call $dispatch_bad (local.get $nx_fn))))
     (if (global.get $handler_hist_enabled)
-      (then (call $handler_hist_record (local.get $fn))))
+      (then (call $handler_hist_record (local.get $nx_fn))))
     ;; A tail call, so the chain runs at constant stack depth. Nothing follows
-    ;; the dispatch in this function, which is what makes it legal.
+    ;; the dispatch, which is what makes it legal.
     ;;
     ;; This was measured at the fork point and rejected as worthless, for a
     ;; reason that was true there and is not true here: a chain used to be one
@@ -2081,7 +2107,11 @@
     ;; $jcc_end stopped unwinding at block terminators, $steps is no longer a
     ;; backstop: it *is* the chain length, and the same chain is now ~1000
     ;; frames instead of ~5. See docs/interpreter-dispatch-perf.md.
-    (return_call_indirect (type $handler_t) (local.get $op) (local.get $fn)))
+    (return_call_indirect (type $handler_t) (local.get $nx_op) (local.get $nx_fn))))
+
+  (func $next
+    (local $nx_fn i32) (local $nx_op i32)
+    (dispatch-next))
 
   ;; Read next thread i32 and advance $ip
   (func $read_thread_word (result i32)

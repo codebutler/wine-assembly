@@ -237,3 +237,23 @@ clauses point *into* `src/04-cache.wat`, so a block inserted anywhere above them
 shifts every one and fails `tools/check-region-decls.js --check-owners`.
 Appending at end-of-file costs no owner line, and `defmacro` is collected from
 the whole top-level form list before expansion, so placement is free.
+
+## 2026-09-19 — re-measured on a quiet box: it is faster, and it landed
+
+The arms above were built with a local-free body (two extra loads and two
+`i32.sub`s per dispatch) and timed on this Mac at load 3-6. A body that keeps
+`$next`'s two locals — every expanding function declares `$nx_fn`/`$nx_op` —
+measured on the idle Ryzen 9 9950X box with `perf stat` counters
+(`tools/gameplay-ab-flags.js --perf-events=…`, 3 reps, null arm alongside):
+
+| app, window | shared | null | replicated | null band |
+|---|---|---|---|---|
+| StarCraft, gameplay | 51.24s | 50.66s | 48.75s (**−4.86%**) | 1.13% |
+| Heroes II, gameplay | 2.29s | 2.36s | 2.19s (**−4.37%**) | 3.06% |
+
+Branches −8% / −5.5%, instructions −6% / −4.5%; the branch-miss rate did not
+move (0.24% → 0.26% on StarCraft). So the `+2.9%`/`+4.2%` above was this box's
+noise plus the re-read body, not the transform. It shipped as the
+`(dispatch-next)` macro in `src/04-cache.wat` with the locals at all 419 sites
+(`test/test-dispatch-macro.js` refuses a stray `(return_call $next)`, so the
+partial-landing state described above cannot recur).

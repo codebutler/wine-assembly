@@ -1,6 +1,6 @@
 {
   "comment": "Known exact duplicate members. --check allows groups/members to disappear, rejects a new member, and caps the group count.",
-  "maxExactGroups": 143,
+  "maxExactGroups": 144,
   "allowedMembers": [
     "01-header.wat:$host_create_window",
     "01-header.wat:$host_da_image_blit",
@@ -12,7 +12,9 @@
     "05-alu.wat:$th_lea",
     "05-alu.wat:$th_mov_r_i32",
     "05-alu.wat:$th_movsx8",
+    "05-alu.wat:$th_nop",
     "06b-core-handlers.wat:$th_load8s",
+    "06b-core-handlers.wat:$th_nop2",
     "09a-handlers.wat:$drop_read_char",
     "09a-handlers.wat:$handle_??1type_info@@UAE@XZ",
     "09a-handlers.wat:$handle_??2@YAPAXI@Z",

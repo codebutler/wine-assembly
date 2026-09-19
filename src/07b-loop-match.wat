@@ -844,8 +844,8 @@
   ;; $ip to the pool copy first, which is what the TU_FALLBACK arm already
   ;; does one line above it.
   (func $th_x87_pipeline4 (param $op i32)
-    (call $x87_pipeline4_body (local.get $op))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $x87_pipeline4_body (local.get $op))
+    (dispatch-next))
   (func $x87_pipeline4_body (param $op i32)
     (local $tp i32) (local $a0 i32) (local $a1 i32)
     (local $a2 i32) (local $a3 i32) (local $wa i32) (local $mode i32)
@@ -1039,8 +1039,8 @@
 
   ;; 450: balanced binary expression tree leaf.
   (func $th_x87_tree4 (param $op i32)
-    (call $x87_tree4_body (local.get $op))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $x87_tree4_body (local.get $op))
+    (dispatch-next))
   (func $x87_tree4_body (param $op i32)
     (local $tp i32) (local $a0 i32) (local $a1 i32) (local $a3 i32)
     (local $older f64) (local $top f64) (local $v f64) (local $wa i32)
@@ -1232,8 +1232,8 @@
   ;; local renaming. Materialize at each following memory boundary so faults
   ;; would observe the same architectural stack as the scalar sequence.
   (func $th_x87_affine_prepare (param $op i32)
-    (call $x87_affine_prepare_body (local.get $op))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $x87_affine_prepare_body (local.get $op))
+    (dispatch-next))
   (func $x87_affine_prepare_body (param $op i32)
     (local $tp i32) (local $a0 i32) (local $a1 i32) (local $a3 i32)
     (local $a6 i32) (local $a8 i32)
@@ -1273,8 +1273,8 @@
   ;; H452: direct semantic suffix. The pop remains architecturally visible;
   ;; FXCH is only a local permutation, materialized before the next load.
   (func $th_x87_affine_finish (param $op i32)
-    (call $x87_affine_finish_body (local.get $op))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $x87_affine_finish_body (local.get $op))
+    (dispatch-next))
   (func $x87_affine_finish_body (param $op i32)
     (local $tp i32) (local $a2 i32) (local $a4 i32)
     (local $top f64) (local $mid f64) (local $old f64)
@@ -1407,8 +1407,8 @@
   ;; Generic x87 micro-op inner loop. This eliminates threaded dispatch and
   ;; keeps the canonical stack/tag/status semantics in $fpu_exec_mem/reg.
   (func $th_x87_island (param $packed i32)
-    (call $x87_island_body (local.get $packed))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $x87_island_body (local.get $packed))
+    (dispatch-next))
   (func $x87_island_body (param $packed i32)
     (local $cursor i32) (local $fn i32) (local $op i32)
     (local $count i32) (local $i i32) (local $addr i32)
@@ -4473,7 +4473,7 @@
         (i32.ne (local.get $count) (i32.const 0)))))
 
   (func $th_copy_run (param $op i32)
-    (local $src_reg i32) (local $src_stride i32) (local $src_disp i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $src_reg i32) (local $src_stride i32) (local $src_disp i32)
     (local $dst_reg i32) (local $dst_stride i32) (local $dst_disp i32)
     (local $byte_reg i32) (local $ctr_kind i32) (local $ctr_loc i32)
     (local $ctr_disp i32) (local $ctr_step i32)
@@ -4774,7 +4774,7 @@
             (global.set $block_budget
               (i32.sub (global.get $block_budget)
                 (i32.sub (local.get $private_groups) (i32.const 1))))))
-        (return_call $next)))
+        (dispatch-next)))
     (if (i32.eq (local.get $ctr_step) (i32.const -1))
       (then (call $set_flags_dec (local.get $old) (local.get $ctr)))
       (else (call $set_flags_inc (local.get $old) (local.get $ctr))))
@@ -4817,7 +4817,7 @@
       (i32.shl (local.get $index) (local.get $scale))) (local.get $disp)))
 
   (func $th_packed_avg_run (param $mode i32)
-    (local $mask i32) (local $round_mask i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $mask i32) (local $round_mask i32)
     (local $a_base_reg i32) (local $a_index i32) (local $a_scale i32)
     (local $a_disp i32) (local $a_step i32) (local $a_base i32)
     (local $b_base_reg i32) (local $b_index i32) (local $b_scale i32)
@@ -4935,7 +4935,7 @@
         (i32.sub (i32.mul (local.get $n) (local.get $cost)) (i32.const 1))))
     (global.set $block_budget
       (i32.sub (global.get $block_budget) (local.get $n)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; ------------------------------------------------------------------
   ;; 436: MW3 bound-derived RGB565 alpha row

@@ -144,15 +144,15 @@
   ;; 363: compute a 16-bit segmented EA into ea_temp, then fall through to the
   ;; handler that consumes it — the same contract as $th_compute_ea_sib.
   (func $th_compute_ea16 (param $op i32)
-    (local $info i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $info i32)
     (local.set $info (call $read_thread_word))
     (global.set $ea_temp (call $ea16_compute (local.get $info) (call $read_thread_word)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 364: LEA r16, m — the offset only, with no segment base and wrapped to
   ;; the segment, because that is the number the guest is about to use as one.
   (func $th_lea16 (param $op i32)
-    (local $info i32) (local $off i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $info i32) (local $off i32)
     (local.set $info (call $read_thread_word))
     (if (i32.ne (i32.and (local.get $info) (i32.const 0xF)) (i32.const 0xF))
       (then (local.set $off (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $info) (i32.const 0xF)) (i32.const 2)))))))
@@ -161,7 +161,7 @@
         (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $info) (i32.const 4)) (i32.const 0xF)) (i32.const 2))))))))
     (call $set_reg16 (local.get $op)
       (i32.and (i32.add (local.get $off) (call $read_thread_word)) (i32.const 0xFFFF)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 442: LAR r16/32, r/m16. The NE loader's selector table is the protected-
   ;; mode descriptor table for a Win16 task, so report the same access-byte
@@ -174,7 +174,7 @@
   ;; its ordinary read_addr word after the handler. Outside Win16 there is no
   ;; modeled GDT, so accept any non-null user selector as a flat data segment.
   (func $th_lar (param $op i32)
-    (local $sel i32) (local $index i32) (local $entry i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sel i32) (local $index i32) (local $entry i32)
     (local $rights i32) (local $valid i32) (local $f i32)
     (if (i32.and (local.get $op) (i32.const 0x100))
       (then (local.set $sel (call $gl16 (call $read_addr))))
@@ -217,7 +217,7 @@
     (if (local.get $valid)
       (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
     (call $load_eflags (local.get $f))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 447: VERR r/m16. VBRUN100 uses the memory form while unwinding a VB
   ;; window: `0f 00 /4` asks whether a selector names a readable descriptor
@@ -229,7 +229,7 @@
   ;;
   ;; op = source register in bits 0-3, or bit 8 plus a read_addr word.
   (func $th_verr (param $op i32)
-    (local $sel i32) (local $valid i32) (local $f i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sel i32) (local $valid i32) (local $f i32)
     (if (i32.and (local.get $op) (i32.const 0x100))
       (then (local.set $sel (call $gl16 (call $read_addr))))
       (else (local.set $sel
@@ -247,7 +247,7 @@
     (if (local.get $valid)
       (then (local.set $f (i32.or (local.get $f) (i32.const 0x40)))))
     (call $load_eflags (local.get $f))
-    (return_call $next))
+    (dispatch-next))
 
   ;; ---- Near returns ----
   ;;
@@ -365,37 +365,37 @@
 
   ;; 372: MOV Sreg, r16 — op = sreg<<4 | reg
   (func $th_mov_sreg_r16 (param $op i32)
-    (call $win16_set_sreg (i32.shr_u (local.get $op) (i32.const 4))
+     (local $nx_fn i32) (local $nx_op i32) (call $win16_set_sreg (i32.shr_u (local.get $op) (i32.const 4))
       (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 373: MOV Sreg, m16 — op = sreg id, address in next word
   (func $th_mov_sreg_m16 (param $op i32)
-    (call $win16_set_sreg (local.get $op) (call $gl16 (call $read_addr)))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $win16_set_sreg (local.get $op) (call $gl16 (call $read_addr)))
+    (dispatch-next))
 
   ;; 374: PUSH Sreg (16-bit stack) — op = sreg id
   (func $th_push_sreg16 (param $op i32)
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+     (local $nx_fn i32) (local $nx_op i32) (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $gs16 (i32.load offset=16 (global.get $reg_base)) (call $seg16_value (local.get $op)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 375: POP Sreg (16-bit stack) — op = sreg id
   (func $th_pop_sreg16 (param $op i32)
-    (local $sel i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sel i32)
     (local.set $sel (call $gl16 (i32.load offset=16 (global.get $reg_base))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $win16_set_sreg (local.get $op) (local.get $sel))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 376: LES/LDS r16, m16:16 — op = sreg<<4 | reg, address in next word
   (func $th_load_far_ptr (param $op i32)
-    (local $addr i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $addr i32)
     (local.set $addr (call $read_addr))
     (call $set_reg16 (i32.and (local.get $op) (i32.const 0xF)) (call $gl16 (local.get $addr)))
     (call $win16_set_sreg (i32.shr_u (local.get $op) (i32.const 4))
       (call $gl16 (i32.add (local.get $addr) (i32.const 2))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 425: LES/LDS r32, m16:32 in a *flat* task — op = 16bit<<4 | reg, address
   ;; in the next word.
@@ -408,24 +408,24 @@
   ;; selector is what a flat task actually observes; touching $seg_base_es
   ;; instead would move every later ES-relative access off the flat mapping.
   (func $th_load_far_ptr32 (param $op i32)
-    (local $addr i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $addr i32)
     (local.set $addr (call $read_addr))
     (if (i32.and (local.get $op) (i32.const 0x10))
       (then (call $set_reg16 (i32.and (local.get $op) (i32.const 0xF))
               (call $gl16 (local.get $addr))))
       (else (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))) (call $gl32 (local.get $addr)))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 377: MOV r16, Sreg — op = sreg<<4 | reg
   (func $th_mov_r16_sreg (param $op i32)
-    (call $set_reg16 (i32.and (local.get $op) (i32.const 0xF))
+     (local $nx_fn i32) (local $nx_op i32) (call $set_reg16 (i32.and (local.get $op) (i32.const 0xF))
       (call $seg16_value (i32.shr_u (local.get $op) (i32.const 4))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 378: MOV m16, Sreg — op = sreg id, address in next word
   (func $th_mov_m16_sreg (param $op i32)
-    (call $gs16 (call $read_addr) (call $seg16_value (local.get $op)))
-    (return_call $next))
+     (local $nx_fn i32) (local $nx_op i32) (call $gs16 (call $read_addr) (call $seg16_value (local.get $op)))
+    (dispatch-next))
 
   ;; ---- Near indirect transfers ----
   ;;
@@ -474,20 +474,20 @@
   ;; 383: ENTER imm16, 0 — push BP, BP = SP, SP -= imm16. The nesting level is
   ;; checked at decode time, so this only ever sees level 0.
   (func $th_enter16 (param $op i32)
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+     (local $nx_fn i32) (local $nx_op i32) (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (i32.load offset=20 (global.get $reg_base)) (i32.const 0xFFFF)))
     (call $set_reg16 (i32.const 5) (i32.and (i32.load offset=16 (global.get $reg_base)) (i32.const 0xFFFF)))
     (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 384: LEAVE — SP = BP, then pop BP. SP comes back through the SS base
   ;; because BP holds an offset, not a linear address.
   (func $th_leave16 (param $op i32)
-    (i32.store offset=16 (global.get $reg_base) (i32.add (global.get $seg_base_ss)
+     (local $nx_fn i32) (local $nx_op i32) (i32.store offset=16 (global.get $reg_base) (i32.add (global.get $seg_base_ss)
                               (i32.and (i32.load offset=20 (global.get $reg_base)) (i32.const 0xFFFF))))
     (call $set_reg16 (i32.const 5) (call $gl16 (i32.load offset=16 (global.get $reg_base))))
     (i32.store offset=16 (global.get $reg_base) (i32.add (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 385: PUSH imm16 — the operand is the immediate, already fetched.
   ;;
@@ -499,9 +499,9 @@
   ;; id should be. Native 16-bit code reaches here through $code16; 32-bit code
   ;; reaches it through a real 0x66 prefix, where the same narrowing is right.
   (func $th_push_imm16 (param $op i32)
-    (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
+     (local $nx_fn i32) (local $nx_op i32) (i32.store offset=16 (global.get $reg_base) (i32.sub (i32.load offset=16 (global.get $reg_base)) (i32.const 2)))
     (call $gs16 (i32.load offset=16 (global.get $reg_base)) (i32.and (local.get $op) (i32.const 0xFFFF)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 386: 16-bit string operation.
   ;;
@@ -545,7 +545,7 @@
   ;; that walks off the end of a segment is a guest bug, and wrapping is what
   ;; the hardware does with it.
   (func $th_string16 (param $op i32)
-    (local $size i32) (local $kind i32) (local $rep i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $size i32) (local $kind i32) (local $rep i32)
     (local $src_base i32) (local $dst_base i32) (local $step i32)
     (local $si i32) (local $di i32) (local $a i32) (local $b i32)
     (local.set $size (i32.and (local.get $op) (i32.const 7)))
@@ -629,17 +629,17 @@
 
     (call $set_reg16 (i32.const 6) (local.get $si))
     (call $set_reg16 (i32.const 7) (local.get $di))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 387: XLAT — AL = DS:[BX + AL], with the same segment override the string
   ;; ops take. The operand carries the segment id.
   (func $th_xlat16 (param $op i32)
-    (call $set_reg8 (i32.const 0)
+     (local $nx_fn i32) (local $nx_op i32) (call $set_reg8 (i32.const 0)
       (call $gl8 (i32.add (call $seg16_base (local.get $op))
         (i32.and (i32.add (i32.and (i32.load offset=12 (global.get $reg_base)) (i32.const 0xFFFF))
                           (i32.and (i32.load offset=0 (global.get $reg_base)) (i32.const 0xFF)))
                  (i32.const 0xFFFF)))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; INT imm8. The operand is the interrupt number and the word after it is
   ;; where execution goes next — the instruction ends its block either way,

@@ -954,7 +954,7 @@
 
   ;; 188: FPU memory op — op=(group<<4)|reg, addr in next word
   (func $th_fpu_mem (param $op i32)
-    (local $addr i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $addr i32)
     (local.set $addr (call $read_thread_word))
     (if (i32.eq (local.get $addr) (global.get $SIB_SENTINEL))
       (then (local.set $addr (global.get $ea_temp))))
@@ -962,23 +962,23 @@
       (i32.shr_u (local.get $op) (i32.const 4))
       (i32.and (local.get $op) (i32.const 0xF))
       (local.get $addr))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 189: FPU register op — op=(group<<8)|(reg<<4)|rm
   (func $th_fpu_reg (param $op i32)
-    (call $fpu_exec_reg
+     (local $nx_fn i32) (local $nx_op i32) (call $fpu_exec_reg
       (i32.shr_u (local.get $op) (i32.const 8))
       (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF))
       (i32.and (local.get $op) (i32.const 0xF)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 190: FPU memory op with base+disp — op=(group<<8)|(reg<<4)|base, disp in next word
   (func $th_fpu_mem_ro (param $op i32)
-    (call $fpu_exec_mem
+     (local $nx_fn i32) (local $nx_op i32) (call $fpu_exec_mem
       (i32.shr_u (local.get $op) (i32.const 8))
       (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF))
       (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (call $read_thread_word)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; 439: canonical x87 compare branch tail:
   ;;   FNSTSW AX; TEST AH, imm8; Jcc
@@ -1014,4 +1014,4 @@
     (return_call $branch_end))
 
 (func $th_emms (param $op i32)
-            (global.set $fpu_tag (i32.const 0)) (return_call $next))
+             (local $nx_fn i32) (local $nx_op i32) (global.set $fpu_tag (i32.const 0)) (dispatch-next))

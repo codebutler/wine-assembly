@@ -275,7 +275,7 @@
   ;; sub=19..26 are the packed group in $sse_packed_extra and sub=27..29 the
   ;; scalar SQRTSS/RSQRTSS/RCPSS in $sse_scalar_arithmetic.
   (func $th_sse_rr (param $op i32)
-    (local $sub i32) (local $dst i32) (local $src i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $dst i32) (local $src i32)
     (local $d v128) (local $s v128) (local $v v128)
     (local.set $sub
       (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 0xFF)))
@@ -285,24 +285,24 @@
     (local.set $s (call $xmm_get (local.get $src)))
     (if (i32.eq (local.get $sub) (i32.const 32)) (then
       (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (i32x4.bitmask (local.get $s)))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 31)) (then
       (call $xmm_set (local.get $dst) (call $sse_cmpps
         (local.get $d) (local.get $s)
         (i32.and (i32.shr_u (local.get $op) (i32.const 16)) (i32.const 0xFF))))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 18)) (then
       (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32 (f32.nearest (f32x4.extract_lane 0 (local.get $s)))))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 17)) (then
       (call $xmm_set (local.get $dst) (f32x4.replace_lane 0 (local.get $d)
         (f32.convert_i32_s (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src) (i32.const 2)))))))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 12))
       (then
         (call $sse_compare_flags (f32x4.extract_lane 0 (local.get $d))
                           (f32x4.extract_lane 0 (local.get $s)))
-        (return_call $next)))
+        (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 5))
       (then
         (call $mmx_set (local.get $dst)
@@ -313,11 +313,11 @@
               (i64.extend_i32_u
                 (call $sse_cvtt_f32_i32 (f32x4.extract_lane 1 (local.get $s))))
               (i64.const 32))))
-        (return_call $next)))
+        (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 6))
       (then
         (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32 (f32x4.extract_lane 0 (local.get $s))))
-        (return_call $next)))
+        (dispatch-next)))
     (local.set $v (local.get $s))
     (if (i32.eq (local.get $sub) (i32.const 1))
       (then (local.set $v (v128.xor (local.get $d) (local.get $s)))))
@@ -357,10 +357,10 @@
             (i32x4.extract_lane 0 (local.get $s)))
           (i32x4.extract_lane 1 (local.get $s))))))
     (call $xmm_set (local.get $dst) (local.get $v))
-    (return_call $next))
+    (dispatch-next))
 
   (func $th_sse_rm (param $op i32)
-    (local $sub i32) (local $dst i32) (local $addr i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $dst i32) (local $addr i32)
     (local $d v128) (local $s v128) (local $v v128)
     (local.set $sub
       (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 0xFF)))
@@ -371,34 +371,34 @@
       (call $xmm_set (local.get $dst) (call $sse_cmpps
         (local.get $d) (call $xmm_load128 (local.get $addr))
         (i32.and (i32.shr_u (local.get $op) (i32.const 16)) (i32.const 0xFF))))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 30)) (then
       (call $xmm_set (local.get $dst)
         (i32x4.replace_lane 1
           (i32x4.replace_lane 0 (local.get $d) (call $gl32 (local.get $addr)))
           (call $gl32 (i32.add (local.get $addr) (i32.const 4)))))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 18)) (then
       (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32
         (f32.nearest (f32.reinterpret_i32 (call $gl32 (local.get $addr))))))
-      (return_call $next)))
+      (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 17)) (then
       (call $xmm_set (local.get $dst) (f32x4.replace_lane 0 (local.get $d)
         (f32.convert_i32_s (call $gl32 (local.get $addr)))))
-      (return_call $next)))
+      (dispatch-next)))
     ;; Scalar memory arithmetic must read only four bytes. In particular the
     ;; neighboring twelve bytes may live on an unmapped page.
     (if (i32.eq (local.get $sub) (i32.const 12))
       (then
         (call $sse_compare_flags (f32x4.extract_lane 0 (local.get $d))
           (f32.reinterpret_i32 (call $gl32 (local.get $addr))))
-        (return_call $next)))
+        (dispatch-next)))
     (if (call $sse_is_scalar_arithmetic (local.get $sub))
       (then
         (local.set $v (call $sse_scalar_arithmetic (local.get $sub) (local.get $d)
           (f32.reinterpret_i32 (call $gl32 (local.get $addr)))))
         (call $xmm_set (local.get $dst) (local.get $v))
-        (return_call $next)))
+        (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 5))
       (then
         (call $mmx_set (local.get $dst)
@@ -412,12 +412,12 @@
                   (f32.reinterpret_i32
                     (call $gl32 (i32.add (local.get $addr) (i32.const 4))))))
               (i64.const 32))))
-        (return_call $next)))
+        (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 6))
       (then
         (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (call $sse_cvtt_f32_i32
             (f32.reinterpret_i32 (call $gl32 (local.get $addr)))))
-        (return_call $next)))
+        (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 2))
       (then (local.set $v (i32x4.replace_lane 0
         (local.get $d) (call $gl32 (local.get $addr)))))
@@ -457,10 +457,10 @@
                 (i32x4.extract_lane 0 (local.get $s)))
               (i32x4.extract_lane 1 (local.get $s))))))))
     (call $xmm_set (local.get $dst) (local.get $v))
-    (return_call $next))
+    (dispatch-next))
 
   (func $th_sse_mr (param $op i32)
-    (local $sub i32) (local $src i32) (local $addr i32) (local $v v128)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $src i32) (local $addr i32) (local $v v128)
     (local.set $sub (i32.shr_u (local.get $op) (i32.const 8)))
     (local.set $src (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $v (call $xmm_get (local.get $src)))
@@ -479,7 +479,7 @@
             (call $gs32 (i32.add (local.get $addr) (i32.const 4))
               (i32x4.extract_lane 3 (local.get $v))))
           (else (call $xmm_store128 (local.get $addr) (local.get $v))))))))
-    (return_call $next))
+    (dispatch-next))
 
   ;; ---- Guest 64-bit access ----
   ;; Two 32-bit accesses rather than one i64.load on g2w: $gl32/$gs32 carry the
@@ -667,65 +667,65 @@
   ;; 410: mm, imm8    op = sub<<12 | dst<<8 | imm8
 
   (func $th_mmx_rr (param $op i32)
-    (local $sub i32) (local $dst i32) (local $src i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $dst i32) (local $src i32)
     (global.set $mmx_exec_count (i32.add (global.get $mmx_exec_count) (i32.const 1)))
     (local.set $sub (i32.shr_u (local.get $op) (i32.const 8)))
     (local.set $dst (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $src (i32.and (local.get $op) (i32.const 0xF)))
     ;; movq mm, mm
     (if (i32.eqz (local.get $sub))
-      (then (call $mmx_set (local.get $dst) (call $mmx_get (local.get $src))) (return_call $next)))
+      (then (call $mmx_set (local.get $dst) (call $mmx_get (local.get $src))) (dispatch-next)))
     ;; movd mm, r32 -- src names a general register, not an MMX one.
     (if (i32.eq (local.get $sub) (i32.const 1))
       (then (call $mmx_set (local.get $dst)
               (i64.extend_i32_u (i32.load (i32.add (global.get $reg_base) (i32.shl (local.get $src) (i32.const 2))))))
-            (return_call $next)))
+            (dispatch-next)))
     ;; movd r32, mm -- dst names a general register.
     (if (i32.eq (local.get $sub) (i32.const 2))
       (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (i32.wrap_i64 (call $mmx_get (local.get $src))))
-            (return_call $next)))
+            (dispatch-next)))
     ;; pmovmskb r32, mm -- the sign bits of the eight bytes.
     (if (i32.eq (local.get $sub) (i32.const 20))
       (then (i32.store (i32.add (global.get $reg_base) (i32.shl (local.get $dst) (i32.const 2))) (i32.and (i8x16.bitmask (i64x2.splat (call $mmx_get (local.get $src))))
                        (i32.const 0xFF)))
-            (return_call $next)))
+            (dispatch-next)))
     (call $mmx_set (local.get $dst)
       (call $mmx_binop (call $mmx_get (local.get $dst)) (call $mmx_get (local.get $src))
             (local.get $sub)))
-    (return_call $next))
+    (dispatch-next))
 
   (func $th_mmx_rm (param $op i32)
-    (local $sub i32) (local $dst i32) (local $addr i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $dst i32) (local $addr i32)
     (global.set $mmx_exec_count (i32.add (global.get $mmx_exec_count) (i32.const 1)))
     (local.set $sub (i32.shr_u (local.get $op) (i32.const 8)))
     (local.set $dst (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $addr (call $read_addr))
     (if (i32.eqz (local.get $sub))
       (then (call $mmx_set (local.get $dst) (call $mmx_load64 (local.get $addr)))
-            (return_call $next)))
+            (dispatch-next)))
     (if (i32.eq (local.get $sub) (i32.const 1))     ;; movd mm, m32
       (then (call $mmx_set (local.get $dst)
               (i64.extend_i32_u (call $gl32 (local.get $addr))))
-            (return_call $next)))
+            (dispatch-next)))
     (call $mmx_set (local.get $dst)
       (call $mmx_binop (call $mmx_get (local.get $dst)) (call $mmx_load64 (local.get $addr))
             (local.get $sub)))
-    (return_call $next))
+    (dispatch-next))
 
   (func $th_mmx_mr (param $op i32)
-    (local $sub i32) (local $src i32) (local $addr i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $src i32) (local $addr i32)
     (global.set $mmx_exec_count (i32.add (global.get $mmx_exec_count) (i32.const 1)))
     (local.set $sub (i32.shr_u (local.get $op) (i32.const 8)))
     (local.set $src (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)))
     (local.set $addr (call $read_addr))
     (if (i32.eq (local.get $sub) (i32.const 2))     ;; movd m32, mm
       (then (call $gs32 (local.get $addr) (i32.wrap_i64 (call $mmx_get (local.get $src))))
-            (return_call $next)))
+            (dispatch-next)))
     (call $mmx_store64 (local.get $addr) (call $mmx_get (local.get $src)))
-    (return_call $next))
+    (dispatch-next))
 
   (func $th_mmx_ri (param $op i32)
-    (local $sub i32) (local $dst i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $sub i32) (local $dst i32)
     (global.set $mmx_exec_count (i32.add (global.get $mmx_exec_count) (i32.const 1)))
     (local.set $sub (i32.shr_u (local.get $op) (i32.const 12)))
     (local.set $dst (i32.and (i32.shr_u (local.get $op) (i32.const 8)) (i32.const 0xF)))
@@ -733,7 +733,7 @@
       (call $mmx_binop (call $mmx_get (local.get $dst))
             (i64.extend_i32_u (i32.and (local.get $op) (i32.const 0xFF)))
             (local.get $sub)))
-    (return_call $next))
+    (dispatch-next))
 
   ;; ---- Decoder support ----
   ;; Map a second opcode byte to a subop, or -1 when it is not an MMX

@@ -4557,7 +4557,7 @@
   ;; branch decision through the ordinary helpers.
   ;; ----------------------------------------------------------------------
   (func $th_block_exec (param $op i32)
-    (local $tp i32) (local $up i32) (local $ub i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $tp i32) (local $up i32) (local $ub i32)
     (local $steps_in i32) (local $fb_used i32) (local $n_fb i32)
     (local $tail_ip i32) (local $fb_bytes i32) (local $fbp i32)
     (local $tail_exit i32)
@@ -5756,7 +5756,7 @@
       (then
         (call $bx_tail_note (local.get $tail_ip))
         (global.set $ip (local.get $tail_ip))
-        (return_call $next)))
+        (dispatch-next)))
 
     ;; A side exit resumes at the entry EIP of the block it was about to run:
     ;; the guest state is fully materialized, so the region is re-entered (or,
@@ -5800,7 +5800,7 @@
   ;; same 269 differential cases through both arms of `--block-exec-leaf`, so a
   ;; body that drifts is a failing test rather than a silent divergence.
   (func $th_block_exec_leaf (param $op i32)
-    (local $tp i32) (local $up i32) (local $ub i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $tp i32) (local $up i32) (local $ub i32)
     (local $nuops i32) (local $cost i32) (local $tail_ip i32) (local $brp i32)
     (local $r0 i32) (local $r1 i32) (local $r2 i32) (local $r3 i32)
     (local $r4 i32) (local $r5 i32) (local $r6 i32) (local $r7 i32)
@@ -6581,7 +6581,7 @@
     ;; here -- a real op boundary with every register published.
     (call $bx_tail_note (local.get $tail_ip))
     (global.set $ip (local.get $tail_ip))
-    (return_call $next))
+    (dispatch-next))
 
   ;; ======================================================================
   ;; H464 -- THE ONE-BLOCK LEAF THAT MAY FALL BACK (round 17, section 27)
@@ -6612,7 +6612,7 @@
   ;; It MAY carry TU_FALLBACK and TU_X87RUN micro-ops; those are the point.
   ;; Everything else is the pure leaf's contract, unchanged.
   (func $th_block_exec_leaf_fb (param $op i32)
-    (local $tp i32) (local $up i32) (local $ub i32)
+     (local $nx_fn i32) (local $nx_op i32) (local $tp i32) (local $up i32) (local $ub i32)
     ;; ROUND 17 additions over the pure leaf: the fallback pool base, the
     ;; count of fallback micro-ops this run retired, and the two words the
     ;; parked $steps counter needs.
@@ -7471,5 +7471,5 @@
     ;; here -- a real op boundary with every register published.
     (call $bx_tail_note (local.get $tail_ip))
     (global.set $ip (local.get $tail_ip))
-    (return_call $next))
+    (dispatch-next))
 

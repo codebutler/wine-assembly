@@ -32,18 +32,12 @@ function hasFlag(name) {
   return process.argv.includes(`--${name}`);
 }
 
-// Dispatch mode: --dispatch=replicated|shared (or --replicated-dispatch), then
-// WINE_DISPATCH, then the default 'replicated'. Resolved by
-// tools/watx-closure.js's dispatchMode so every consumer agrees; reported
-// with its source in the banner for the same reason the compiler is.
-function selectedDispatch() {
-  const { dispatchMode } = require(path.join(__dirname, 'watx-closure.js'));
-  if (hasFlag('replicated-dispatch')) return { name: 'replicated', source: '--replicated-dispatch' };
-  const fromArg = getArg('dispatch', null);
-  const source = fromArg !== null ? '--dispatch'
-    : process.env.WINE_DISPATCH ? 'WINE_DISPATCH'
-    : 'default';
-  return { name: dispatchMode(fromArg !== null ? fromArg : undefined), source };
+function parseReplicatedDispatch() {
+  if (hasFlag('replicated-dispatch')) return true;
+  const value = getArg('dispatch', 'shared');
+  if (value === 'shared' || value === 'none' || value === '0' || value === 'false') return false;
+  if (value === 'replicated' || value === 'all' || value === '1' || value === 'true') return true;
+  return value.split(',').map(s => s.trim()).filter(Boolean);
 }
 
 const OUT = path.resolve(ROOT, getArg('out', path.join('build', 'wine-assembly.wasm')));
@@ -143,14 +137,16 @@ function reportRegionLayout(layout, shake) {
     `. THIS ARTIFACT IS NOT CANONICAL.`);
 }
 
-function compileWatx(dispatch) {
+function compileWatx(replicatedDispatch) {
+  if (replicatedDispatch !== false) {
+    console.error('build-compile-wat: --dispatch/--replicated-dispatch was a lib/compile-wat.js transform ' +
+      'and does not exist in the WATX path (legacy is retired); drop it.');
+    process.exit(1);
+  }
   const { watxSourceClosure, compileClosure } = require(path.join(__dirname, 'watx-closure.js'));
-  const closure = watxSourceClosure({ dispatch: dispatch.name });
+  const closure = watxSourceClosure();
   const shake = selectedRegionShake();
   console.log(`WATX entry: ${closure.entry}`);
-  const rep = closure.replication;
-  console.log(`WATX dispatch: ${closure.dispatch} (from ${dispatch.source})` +
-    (rep ? ` — ${rep.sites} $next site(s) inlined in ${rep.funcs} function(s)` : ''));
   if (shake) console.log(`WATX region shake: ${shake.value} (from ${shake.source})`);
   const out = {};
   // Every artifact this function emits carries a fingerprint of the layout it
@@ -206,10 +202,10 @@ function compileWatx(dispatch) {
 }
 
 (async () => {
-  const dispatch = selectedDispatch();
+  const replicatedDispatch = parseReplicatedDispatch();
   const compiler = selectedCompiler();
   console.log(`Compiler: ${compiler.name} (from ${compiler.source})`);
-  const { bytes, compatBytes, namedBytes } = compileWatx(dispatch);
+  const { bytes, compatBytes, namedBytes } = compileWatx(replicatedDispatch);
   // compileWat emits bytes without validating operand stacks, so a WAT edit
   // that leaves a function's result value unproduced — one paren too few, and
   // an (if) that should yield i32 yields nothing — used to "build" fine and
