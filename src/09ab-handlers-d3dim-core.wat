@@ -287,6 +287,33 @@
     (global.set $d3dim_worker_pending (i32.const 1))
     (i32.const 1))
 
+  ;; DDBLT_DEPTHFILL on a Z surface attached to a render target: the GPU's
+  ;; depth buffer is its own, so the fill Blt writes into the Z DIB never
+  ;; reaches it. MW3 resets its reversed GREATEREQUAL buffer to 0 this way
+  ;; every frame; left alone, the GPU depth stays at its initial 1.0 and
+  ;; every later triangle fails the test. The caller still fills the DIB.
+  (func $d3dim_gpu_depth_fill
+    (param $z_entry i32) (param $fill i32)
+    (param $x i32) (param $y i32) (param $w i32) (param $h i32) (result i32)
+    (local $parent i32) (local $bits i32) (local $z f32)
+    (if (i32.eqz (global.get $d3dim_gpu_on)) (then (return (i32.const 0))))
+    (local.set $parent (i32.load offset=4 (call $dx_surf_meta_ptr (local.get $z_entry))))
+    (if (i32.or (i32.eqz (local.get $parent))
+                (i32.ge_u (local.get $parent) (i32.add (global.get $DX_MAX) (i32.const 1))))
+      (then (return (i32.const 0))))
+    (local.set $parent (i32.add (global.get $DX_OBJECTS)
+      (i32.mul (i32.sub (local.get $parent) (i32.const 1)) (global.get $DX_ENTRY_SIZE))))
+    (if (i32.ne (load.field DxObject type (local.get $parent)) (i32.const 2)) (then (return (i32.const 0))))
+    (local.set $bits (load.field DxObject bpp (local.get $z_entry)))
+    (if (i32.eq (local.get $bits) (i32.const 16))
+      (then (local.set $z (f32.div
+        (f32.convert_i32_u (i32.and (local.get $fill) (i32.const 0xFFFF)))
+        (f32.const 65535))))
+      (else (local.set $z (f32.div
+        (f32.convert_i32_u (local.get $fill)) (f32.const 4294967295)))))
+    (call $d3dim_gpu_try_clear (local.get $parent) (i32.const 2) (i32.const 0) (local.get $z)
+      (local.get $x) (local.get $y) (local.get $w) (local.get $h)))
+
   ;; The draw state of device $this, normalized the way
   ;; $d3dim_draw_tl_triangle_textured reads it, into dwords in the seam
   ;; buffer at +64. Result: that address, or 0 when there is no target or state.

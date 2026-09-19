@@ -9194,7 +9194,7 @@ if (VERBOSE) {
     const d = ctx.d3dCommands.snapshot();
     console.log(`[d3dim-gpu] draws=${d.draws} triangles=${d.triangles} clears=${d.clears} ` +
       `fallbacks=${d.fallbacks} errors=${d.errors} fences=${d.fences} syncs=${d.syncs} ` +
-      `uploads=${d.uploads} textureUploads=${d.textureUploads} drawMs=${d.drawMs.toFixed(1)} ` +
+      `uploads=${d.uploads} uploadRows=${d.uploadRows} textureUploads=${d.textureUploads} drawMs=${d.drawMs.toFixed(1)} ` +
       `syncMs=${d.syncMs.toFixed(1)} uploadMs=${d.uploadMs.toFixed(1)} textureMs=${d.textureMs.toFixed(1)}`);
     ctx.d3dCommands.stop();
     ctx.d3dCommands = null;

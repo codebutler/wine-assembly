@@ -3950,6 +3950,11 @@
                 (br $fill_col))))
             (local.set $sy (i32.add (local.get $sy) (i32.const 1)))
             (br $fill_row)))
+        (if (i32.and
+              (i32.ne (i32.and (local.get $drblt_flags) (i32.const 0x02000000)) (i32.const 0))
+              (i32.eqz (local.get $clip_entry)))
+          (then (drop (call $d3dim_gpu_depth_fill (local.get $dst_entry) (local.get $row)
+            (local.get $dx) (local.get $dy) (local.get $dw) (local.get $dh)))))
         ;; If dest is primary, present
         (if (i32.and (load.field DxObject flags (local.get $dst_entry)) (i32.const 1))
           (then (call $dx_present (local.get $dst_entry))))
