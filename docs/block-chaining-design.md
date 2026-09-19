@@ -755,3 +755,39 @@ per-block rates are normalised by.
 What this changes: nothing about the levers (all still OFF), and it removes
 the "caesar3 is a short-block outlier" reading of round 19. The chain word on
 ret-free terminators (§7, §10.11) is now the named next round on five windows.
+
+### 11.1 The clean-box number (2026-09-18)
+
+The laptop never resolved a wall-clock arm all week. The quiet ascii.dev box
+(Ryzen 9950X, 4 vCPU, Ubuntu, node 24, load 1.00 flat, x86_64 V8 TurboFan —
+not the arm64 SpiderMonkey the censuses report) did, using the two-point
+CPU-subtraction harness another session left there (`gameplay-ab.js`,
+extended with a per-arm flags field as `tools/gameplay-ab-flags.js`): user
+CPU at batch 1750 (boot + menus) subtracted from user CPU at 4250, so only
+the 2500 gameplay batches are priced. One build (267dd879), five arms by
+flag, three reps, arm order rotated per rep, StarCraft first mission via the
+PNG-verified click route.
+
+```
+ arm     median gameplay CPU   vs off      null band 1.34%
+ off        96.94 s
+ null       95.64 s            -1.3%      (the ruler)
+ chain      98.34 s            +1.4%      EXCEEDS band, slower
+ exec      102.84 s            +6.1%      EXCEEDS band, slower
+ both      103.75 s            +7.0%      EXCEEDS band, slower
+```
+
+So on this ISA and JIT, halving the desk trips (§11: 0.82 → 0.47 per
+retired block) buys nothing and costs 1.4%, and every executor arm costs
+6-7%. That is the same lesson `$next` dispatch already taught
+(docs/interpreter-dispatch-perf.md): a dispatch removed is not time saved
+when the replacement does a comparable amount of work per block. Rep 2 of
+chain/exec/both ran at load 1.7-2.1 (someone else on the box) and reads
+2-3 s high; the medians above are not those reps.
+
+What this does NOT say: anything about arm64 Chrome or the phone, where the
+block-transfer cost was measured (`tools/bench-loops.js`: ~9 ns per block
+transfer on top of ~8 ns per dispatch). It is the first clean number for
+these levers anywhere, and it is negative. The levers stay OFF; the "chain
+word on ret-free terminators" round should be priced on this box before it
+is built, not after.
