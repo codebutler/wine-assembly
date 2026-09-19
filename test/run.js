@@ -571,6 +571,9 @@ const HOT_BLOCK_DUMP = getArg('hot-block-dump', null);
 // --hist-json=FILE: the histogram window as the JSON tools/hot-loop-census.js
 // reads (the browser probe's shape), so a headless run feeds the same census.
 const HIST_JSON = getArg('hist-json', null);
+// --handler-hist-pairs=N: rows in the "top pairs" list (default 12). Raise it when summing
+// an idiom family (every cmp->jcc pair) across apps; the top 12 stops mid-family.
+const HANDLER_HIST_PAIRS = parseInt(getArg('handler-hist-pairs', '12'));
 // --cpu-prof-window=A:B:FILE: a V8 CPU profile of batches [A,B) only, written
 // as FILE (.cpuprofile, read with tools/cpuprof-top.js). `node --cpu-prof`
 // covers the whole process, so on an app whose load is minutes long the
@@ -5300,7 +5303,7 @@ async function main() {
       }
       pairs.sort((a, b) => b.hits - a.hits);
       console.log('  top pairs:');
-      for (const row of pairs.slice(0, 12)) {
+      for (const row of pairs.slice(0, HANDLER_HIST_PAIRS)) {
         const pct = pairTotal ? (row.hits * 100 / pairTotal).toFixed(2) : '0.00';
         console.log(`    H${row.prev}->H${row.cur} ${handlerNames[row.prev] || '$handler_' + row.prev} -> ${handlerNames[row.cur] || '$handler_' + row.cur} ${row.hits} (${pct}%)`);
       }
@@ -5342,7 +5345,7 @@ async function main() {
         // windows of one run are what the census needs to tell a scene from a
         // loop that is hot everywhere.
         const jsonPath = HANDLER_HIST_THREADS.length > 1
-          ? `${HIST_JSON}.T${handlerHistThread}` : HIST_JSON;
+          ? `${HIST_JSON}.T${handlerHistThread}.${handlerHistWindowStart}` : HIST_JSON;
         const mods = {};
         const exeLoad = moduleBases.exe ? moduleBases.exe.loadAddr >>> 0 : -1;
         for (const [name, m] of Object.entries(moduleBases)) {
