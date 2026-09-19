@@ -120,6 +120,55 @@ Dropping msvcrt.dll entirely is not an option. Morrowind imports C++ exception
 handling from it (`__CxxFrameHandler`, the `exception` class members), and
 quartz.dll and devenum.dll import it too.
 
+### The emulator heap (2026-09-19)
+
+With `_stricmp` gone, the next cost in any load (the startup load, and the
+cell load right after entering the world) was the emulator's own heap:
+`$heap_arena_find` 21% and `$heap_alloc` 20% of CPU over batches 150k-250k.
+`$heap_alloc` walks one first-fit free list and validates every link through
+`$heap_arena_find`, which scanned the whole arena table each time. The lookup
+now tries the arena that answered last before scanning. Same fixed work (boot
+to batch 250k, tick 2, GL up), user CPU:
+
+| arm | run 1 | run 2 |
+|---|---|---|
+| HEAD | 51.3 s | 51.2 s |
+| arena hint | 30.0 s | |
+
+About 41% less. Left afterwards: `$heap_alloc` 5.4%, `$heap_arena_find` 1.2%,
+so size-class free lists would not buy much more.
+
+### The GPU sync per draw
+
+Past the cell load, the world window (batches 560k-600k) is almost all native
+GL: 37-38% of CPU is one headless-gl native frame. `lib/d3d9-host.js` called
+`gl.finish()` after **every** command, so each draw stalled the pipeline. It
+now drains only where something observes the result (fence, readback,
+release, reset, a failed command) and flushes at Present. Same wasm, only
+`d3d9-host.js` differing, CPU profile of the fixed world window:
+
+| arm | sampled CPU, batches 560k-600k | in the GL sync frame |
+|---|---|---|
+| finish every command | 68.6 s | 26.6 s (38.8%) |
+| finish at observation points | 44.0 s | none |
+
+About 36% less in the world. What is left there is mostly JS: the command
+stream's payload copy (`d3d-command-stream.js` `copy`, 18%) and the
+driver's own `--trace-fs` log lines (`h.log`, 19%; the driver needs them).
+
+Every `MW_NO_TRACE` run, on every build, puts up a `Warning` box a few
+thousand batches into the world: `Model Load Error:
+Meshes\a\A_Imperial_UA_Pauldron.nif cannot load file`. The box draws with no
+message text. Neither is investigated yet.
+
+The profile tooling: the driver's `MW_ROOT` runs a worktree's `run.js`, and
+`MW_MAX_BATCHES` ends the run at a fixed batch (run.js takes the *first*
+`--max-batches`, so passing one through `MW_EXTRA` does nothing). Wake the
+display (`caffeinate -u -t 3`) before each run, or GLFW finds no monitor.
+`tools/cpuprof-top.js --names` resolves names from `build/combined.wat` beside
+it, so a profile of a pinned `WINE_ASSEMBLY_WASM` needs that build's
+`combined.wat`, or every name is wrong.
+
 ## Boot sequence (default 200 ms/batch, 1000-block batches)
 
 | batch | what |

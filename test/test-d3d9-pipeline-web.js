@@ -189,8 +189,11 @@ const { compileSrcWasm } = require('./compile-src');
         if(command.opcode===D3DCommandStream.OPCODES.DRAW && command.payload.vertexShader?.irVersion===1)nativeIRDraws++;
         if(command.opcode===D3DCommandStream.OPCODES.DRAW && command.payload.textures?.[0]?.format===62)bumpSnapshot=command.payload;
         if(command.opcode===D3DCommandStream.OPCODES.DRAW && command.payload.textures?.[0]?.baseLOD===1)mipSnapshot=command.payload.textures[0];
-        return originalExecute(command);
+        const finishesBefore=eventFinishes,result=originalExecute(command);
+        commandFinishes.push([command.opcode,eventFinishes>finishesBefore,!!result?.value?.error]);
+        return result;
       };
+      const commandFinishes=[];
       let eventFinishes=0;const originalFinish=eventGpu.finish.bind(eventGpu);
       eventGpu.finish=()=>{eventFinishes++;originalFinish();};
       calls.push(e.event_query(device,out));const eventComplete=e.guest_read32(out);
@@ -443,7 +446,7 @@ const { compileSrcWasm } = require('./compile-src');
         queryFinishes,eventComplete,beforePresent,presents,hasLayer:!!layer,lastError:invalidMessage,
         initialQueue,nativeIRDraws,bumpFormat,bumpPitch,bumpPixel,bumpCaptured,badBump,capturedMip,badMipBias,unsupportedMipState,clearSamples,clearDepthValue};
       bridge.call(0x30004,0,device);
-      result.queue=commandQueue.snapshot();result.queueOpcodes=queueOpcodes;result.gpuFinishes=eventFinishes;
+      result.queue=commandQueue.snapshot();result.queueOpcodes=queueOpcodes;result.gpuFinishes=eventFinishes;result.commandFinishes=commandFinishes;
       return result;
     },bytes.toString('base64'));
     assert.deepStrictEqual(result.calls,result.calls.map(()=>0),JSON.stringify(result));
@@ -463,7 +466,13 @@ const { compileSrcWasm } = require('./compile-src');
     assert.strictEqual(result.queueOpcodes.filter(op=>op===11).length,1,'EVENT uses neutral fence');
     assert.strictEqual(result.queueOpcodes.filter(op=>op===6).length,1,'explicit Clear uses neutral command');
     assert.strictEqual(result.queueOpcodes.at(-1),3,'device destruction is an ordered resource release');
-    assert.strictEqual(result.gpuFinishes,result.queueOpcodes.length,'correctness executor genuinely finishes every command');
+    // Only observation points drain the GPU: fences, readbacks, releases and
+    // a command that failed part way. A draw or a Present is issued, not
+    // waited for.
+    const observed=([op,,failed])=>failed||op===3||op===10||op===11;
+    assert.deepStrictEqual(result.commandFinishes.map(([op,finished])=>[op,finished]),
+      result.commandFinishes.map(entry=>[entry[0],observed(entry)]),'executor finishes only where completion is observed');
+    assert.ok(result.commandFinishes.some(([op,finished,failed])=>op===5&&!finished&&!failed),'draws were issued without a finish');
     assert.ok(result.nativeIRDraws>0,'queued draws retain the WAT-owned IR projection');
     assert.strictEqual(result.eventComplete,1);
     assert.strictEqual(result.presents,30); assert.ok(result.hasLayer);
