@@ -2707,8 +2707,10 @@ async function main() {
     // formatting via api_table.json) works against the real name.
     let comOrdRaw = false;
     if (t === '<ord>' && pendingComApiId >= 0) {
-      const entry = apiTable.find(e => e.id === pendingComApiId);
-      if (entry) t = entry.name;
+      // Ids are array positions (tools/check-api-table.js gates it). A
+      // linear find here was ~28% of CLI CPU in a COM-heavy D3D8 world.
+      const entry = apiTable[pendingComApiId];
+      if (entry && entry.id === pendingComApiId) t = entry.name;
       comOrdRaw = true;
       pendingComApiId = -1;
     }

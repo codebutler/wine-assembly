@@ -152,9 +152,13 @@ release, reset, a failed command) and flushes at Present. Same wasm, only
 | finish every command | 68.6 s | 26.6 s (38.8%) |
 | finish at observation points | 44.0 s | none |
 
-About 36% less in the world. What is left there is mostly JS: the command
-stream's payload copy (`d3d-command-stream.js` `copy`, 18%) and the
-driver's own `--trace-fs` log lines (`h.log`, 19%; the driver needs them).
+About 36% less in the world. What was left there was mostly JS: the
+command stream's payload copy (`d3d-command-stream.js` `copy`, 18%) and
+`run.js`'s `h.log` (19%, plus 8.6% in its callback). `h.log` is called by
+`$win32_dispatch` for every API call, and for a COM method it resolved the
+name with a linear `apiTable.find` over ~3700 entries. Nearly every call in
+the D3D8 world is COM. It is now an index lookup. This is CLI only; the
+browser has no such hook.
 
 Every `MW_NO_TRACE` run, on every build, puts up a `Warning` box a few
 thousand batches into the world: `Model Load Error:
