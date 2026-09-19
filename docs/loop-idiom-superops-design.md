@@ -1770,3 +1770,71 @@ executor's classifier is untouched.
 - No claim is made about folding the `CALL_GLUE` blocks themselves; §21.3 only
   establishes that they are the hot call-adjacent cost and that this proposal
   does not address them.
+
+## 22. SELFEXIT: the precondition, not the vocabulary (2026-09-19)
+
+`$loop_match_block` only ever runs on a block that branches to **itself**. That
+is a precondition on control-flow shape, and §19 already noted one way to fail
+it (a `cmp byte [esi],0xff / jnb skip` sentinel). The census in
+[diamond-loop-matcher-design.md](diamond-loop-matcher-design.md) measures how
+much that costs, and splits the loops nobody could see into two populations that
+had been conflated:
+
+```
+ SELF      one block, no early exit        -- the matcher CAN see it
+ SELFEXIT  one block + a conditional exit  -- it CANNOT: the decoder splits the
+                                              block at the branch, so the head
+                                              stops branching to itself
+ DIAMOND   an internal branch splits the body
+```
+
+`SELFEXIT` is the one that was being miscounted. A loop whose exit branch
+targets an address *past* the back edge has zero internal edges, so a structural
+classifier reads it as `SELF` — "already covered" — when the decoder splits it
+just the same. `tools/find-diamonds.js` is the classifier; `SELFEXIT` is 22,917
+of 114,969 classified loops across 1271 PEs in `test/binaries`.
+
+**What makes this different from every fold in §§16-20: no new body vocabulary
+is needed.** Caesar III `exe+0x49e9ca` is 27.96% of block entries in one
+profiled window and is an unoptimized indexed byte `memcpy` whose induction
+variable lives at `[ebp-0x4]`:
+
+```asm
+0049e9d6  cmp ecx,[ebp+0x10]
+0049e9d9  jge short 0x49e9ed    ; the exit that splits the block
+0049e9e7  mov cl,[eax]
+0049e9e9  mov [edx],cl
+0049e9eb  jmp short 0x49e9ca
+```
+
+`COPY_RUN` already knows how to lower that body. It never gets the chance,
+because the block it lives in is not a self-loop.
+
+### 22.1 What the runtime join says, and why it is not yet a mandate
+
+`tools/loop-class-share.js` places each hot block inside its containing cycle
+and reports the share of block entries per class. The share is a property of the
+**app**, and it swings by three orders of magnitude:
+
+| app / window | SELFEXIT + DIAMOND | `none` (not a loop) |
+|---|---|---|
+| Caesar III, batches 300-500 | ~59% | 4.2% |
+| Caesar III, batches 500-700 | ~88% | 10.8% |
+| Diablo, batches 600-800 | **0.06%** | 57.0% |
+
+And within Caesar the two windows disagree about *which* loops (the `0x49e9ca`
+memcpy is 28.0% in the first and absent from the second's top list). That is the
+H455/SimGolf spread, which is why the standing rule holds here too: **one window
+is not evidence.** `tools/hot-loop-census.js` across several windows is the gate
+before any change to the precondition.
+
+### 22.2 Left open
+
+- Whether `0x49e9ca` is hot in *every* Caesar window, or only during load.
+- Whether the CRT sentinel `strcpy` skeleton — the most common SELFEXIT shape in
+  the corpus, 378 of 1271 binaries — is ever hot anywhere. Static reach only.
+- What a SELFEXIT precondition costs at decode time for apps that never match
+  (Diablo would pay it for 0.06%). `--decode-stats` is the instrument.
+- Whether the exit edge can be preserved correctly by the fold at all: the fold
+  must re-check the exit condition per iteration, which `COPY_RUN`'s counted
+  form may or may not already express.

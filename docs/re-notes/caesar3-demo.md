@@ -42,3 +42,25 @@ button state from its frame loop. The test asserts that the live name buffer is
 exactly `Codex`, captures the name screen, then verifies the final 800x600 city
 by its terrain/control-panel regions. Set `CAESAR3_NAME_SCREENSHOT` and
 `CAESAR3_SCREENSHOT` to retain both PNGs.
+
+## Hot loops (handler-hist, 2026-09-19)
+
+`node test/run.js --app=caesar3_demo --no-build --quiet-api --max-batches=900
+--batch-size=100000 --handler-hist --handler-hist-thread=0,0,0
+--handler-hist-start=300 --handler-hist-stop=900 --hist-json=F --no-close`
+writes three windows; `tools/loop-class-share.js F --exe=...c3.exe` attributes
+each hot block to the loop containing it.
+
+| VA | window 300-500 | window 500-700 | what it is |
+|---|---|---|---|
+| `exe+0x49e9ca` | **27.96%** | not in top | indexed byte `memcpy`, `i` spilled to `[ebp-0x4]`, bound `[ebp+0x10]`, src `[ebp+0x8]`, dst `[ebp+0xc]` |
+| `exe+0x417204` | 7.86% | **45.98%** | per-frame logic, no load/store/advance shape |
+| `exe+0x4a3ebc` | 29.56% | — | |
+| `exe+0x40f407` | 6.15% | — | inside the `0x40f6d9` RLE sprite ladder already folded by `RLE_RUN` H424 |
+
+**The two windows disagree strongly about where the time goes**, so quote a VA
+with its window or not at all. Both windows are dominated by loops the current
+self-loop matcher cannot see (~59% and ~88% of block entries) — see §22 of
+[loop-idiom-superops-design.md](../loop-idiom-superops-design.md). Windows at
+batches 500 and 700 came back byte-identical, which is the determinism holding,
+not a sampling error.

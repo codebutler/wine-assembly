@@ -72,3 +72,34 @@ The art region changed from zero to 38238 chromatic pixels. Canonical and
 compat builds pass, as does the full COMI movement/inventory/verb-coin test
 against the new build. This verifies artwork presence, not exact LoadImage
 scaling fidelity or every launcher button.
+
+## Hot loop: the destination-blended LUT at `exe+0x40340e`
+
+The #1 hot block across three profiling windows, at **11.62 / 11.72 / 11.68%**
+of block entries (spread 0.11pp — flat, unlike most hot-loop measurements), and
+**35.12 / 35.24 / 35.14%** for the region within ±0x60.
+
+```asm
+0040340e  mov dl,[eax]          ; src index
+00403410  inc eax
+00403411  cmp dl,0xff
+00403414  jz short 0x40343a     ; transparent
+00403416  cmp dl,0x8
+00403419  jnb short 0x403438    ; opaque passthrough
+0040341e  mov bl,dl
+00403422  shl ebx,0x8
+00403425  mov dl,[ecx-0x1]      ; dst index
+00403429  mov dl,[ebx+edx+0x4d30d0]   ; 64KB blend table
+00403430  mov [ecx-0x1],dl
+00403433  jnz short 0x40340e
+```
+
+A destination-blended 2D lookup, `dst = tbl[(src<<8)|dst]`, table at
+`0x4d30d0`. Both branches target addresses *past* the back edge, so they are
+loop exits with no internal edge — which makes this a `SELFEXIT`, not a
+self-loop, and therefore invisible to `$loop_match_block`: the decoder splits
+the block at the first `jz`. See §22 of
+[loop-idiom-superops-design.md](../loop-idiom-superops-design.md).
+
+`tools/find-ck-lut-nests.js` classifies it `LUT8_NOKEY`. `tools/match-loops.js`
+on COMI: 956 loops, 58 matched (6.1%), 203 `multi-branch` declines.
