@@ -23,7 +23,8 @@ for (const file of required) {
   assert(fs.existsSync(path.join(__dirname, '..', file)), `local asset is missing: ${file}`);
 }
 const mpq = app.files.find(file => appFileUrl(file).endsWith('/spawn.mpq'));
-assert(mpq?.httpRange, 'the 48 MB MPQ must mount through HTTP byte ranges');
+assert(mpq && !mpq.httpRange,
+  'Diablo needs a resident MPQ before synchronous dialog art reads');
 assert(fs.statSync(path.join(__dirname, '..', appFileUrl(mpq))).size > SERVER_MAX_FILE_SIZE,
   'the release deployer must split the MPQ into parts');
 
