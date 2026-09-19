@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { PNG } = require('pngjs');
+const { diffPng } = require('../tools/png-diff');
 
 const ROOT = path.join(__dirname, '..');
 const RUN  = path.join(__dirname, 'run.js');
@@ -80,18 +81,8 @@ function statusTextPixels(pngPath) {
 
 function diffPixels(aPath, bPath) {
   if (!fs.existsSync(aPath) || !fs.existsSync(bPath)) return 0;
-  const a = PNG.sync.read(fs.readFileSync(aPath));
-  const b = PNG.sync.read(fs.readFileSync(bPath));
-  if (a.width !== b.width || a.height !== b.height) return 0;
-  let diff = 0;
-  for (let i = 0; i < a.data.length; i += 4) {
-    if (a.data[i] !== b.data[i] ||
-        a.data[i + 1] !== b.data[i + 1] ||
-        a.data[i + 2] !== b.data[i + 2]) {
-      diff++;
-    }
-  }
-  return diff;
+  const diff = diffPng(aPath, bPath, { includeAlpha: false });
+  return diff.sizeMismatch ? 0 : diff.changed;
 }
 
 const statusPixels = statusTextPixels(endPng);
