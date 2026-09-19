@@ -3232,10 +3232,59 @@
     (local.set $c11 (call $d3dim_texture_fetch_prepared
       (local.get $bpp) (local.get $pitch) (local.get $dib_wa) (local.get $fmt) (local.get $pal)
       (local.get $x1) (local.get $y1)))
-    (call $d3dim_color_lerp
-      (call $d3dim_color_lerp (local.get $c00) (local.get $c10) (local.get $fx))
-      (call $d3dim_color_lerp (local.get $c01) (local.get $c11) (local.get $fx))
-      (local.get $fy)))
+    (call $d3dim_bilerp (local.get $c00) (local.get $c10) (local.get $c01) (local.get $c11)
+      (local.get $fx) (local.get $fy)))
+
+  ;; Bilinear filter of four packed 0xAARRGGBB texels. Bit-identical to
+  ;;   color_lerp(color_lerp(c00,c10,fx), color_lerp(c01,c11,fx), fy)
+  ;; -- the same f32x4 arithmetic and the same trunc_sat after each horizontal
+  ;; lerp -- but the two row results stay in i32 lanes instead of being
+  ;; narrowed to bytes and widened straight back, and it is one call instead of
+  ;; three. The narrow/widen pair it drops is an identity: a lerp between two
+  ;; bytes with 0 <= t <= 1 is itself in 0..255. color_lerp was the single
+  ;; hottest function of the MCM race rasterized on the guest thread (13% of
+  ;; the run, box, 2026-09-19).
+  ;;
+  ;; A magnified texture repeats texels, and a lerp between equal values
+  ;; returns that value exactly, so four equal texels short-circuit.
+  (func $d3dim_bilerp
+    (param $c00 i32) (param $c10 i32) (param $c01 i32) (param $c11 i32)
+    (param $fx f32) (param $fy f32) (result i32)
+    (local $a v128) (local $top v128) (local $bot v128) (local $tx v128)
+    (if (i32.and (i32.eq (local.get $c00) (local.get $c10))
+          (i32.and (i32.eq (local.get $c00) (local.get $c01))
+                   (i32.eq (local.get $c00) (local.get $c11))))
+      (then (return (local.get $c00))))
+    (local.set $tx (f32x4.splat (local.get $fx)))
+    (local.set $a (f32x4.convert_i32x4_u (i32x4.extend_low_i16x8_u
+      (i16x8.extend_low_i8x16_u (i32x4.splat (local.get $c00))))))
+    (local.set $top (f32x4.convert_i32x4_u (i32x4.trunc_sat_f32x4_u
+      (f32x4.add (local.get $a)
+        (f32x4.mul
+          (f32x4.sub
+            (f32x4.convert_i32x4_u (i32x4.extend_low_i16x8_u
+              (i16x8.extend_low_i8x16_u (i32x4.splat (local.get $c10)))))
+            (local.get $a))
+          (local.get $tx))))))
+    (local.set $a (f32x4.convert_i32x4_u (i32x4.extend_low_i16x8_u
+      (i16x8.extend_low_i8x16_u (i32x4.splat (local.get $c01))))))
+    (local.set $bot (f32x4.convert_i32x4_u (i32x4.trunc_sat_f32x4_u
+      (f32x4.add (local.get $a)
+        (f32x4.mul
+          (f32x4.sub
+            (f32x4.convert_i32x4_u (i32x4.extend_low_i16x8_u
+              (i16x8.extend_low_i8x16_u (i32x4.splat (local.get $c11)))))
+            (local.get $a))
+          (local.get $tx))))))
+    (i32x4.extract_lane 0
+      (i8x16.narrow_i16x8_u
+        (i16x8.narrow_i32x4_u
+          (i32x4.trunc_sat_f32x4_u
+            (f32x4.add (local.get $top)
+              (f32x4.mul (f32x4.sub (local.get $bot) (local.get $top))
+                (f32x4.splat (local.get $fy)))))
+          (i32x4.splat (i32.const 0)))
+        (i16x8.splat (i32.const 0)))))
 
   ;; Fixed-function stage 0 defaults to MODULATE: texture RGB is multiplied by
   ;; the Gouraud-interpolated diffuse colour produced by lighting (or supplied
@@ -3303,7 +3352,11 @@
     (local $mod i32) (local $rgb i32) (local $alpha i32)
     (if (i32.eqz (local.get $colorop)) (then (local.set $colorop (i32.const 4))))
     (if (i32.eqz (local.get $alphaop)) (then (local.set $alphaop (i32.const 4))))
-    (local.set $mod (call $d3dim_modulate_rgb (local.get $tex) (local.get $diffuse)))
+    ;; Modulating by opaque white is exactly the identity: div255(x*255) == x
+    ;; for every byte x, so skip the four multiplies for unlit white geometry.
+    (local.set $mod (if (result i32) (i32.eq (local.get $diffuse) (i32.const -1))
+      (then (local.get $tex))
+      (else (call $d3dim_modulate_rgb (local.get $tex) (local.get $diffuse)))))
     (local.set $rgb (i32.and (local.get $mod) (i32.const 0x00ffffff)))
     (if (i32.eq (local.get $colorop) (i32.const 2))
       (then (local.set $rgb (i32.and (local.get $tex) (i32.const 0x00ffffff)))))
@@ -3618,7 +3671,11 @@
         (local.set $tu (f32.div (local.get $tu) (local.get $tq)))
         (local.set $tv (f32.div (local.get $tv) (local.get $tq)))))
       (local.set $tz (f32.add (local.get $z0) (f32.mul (f32.sub (local.get $z1) (local.get $z0)) (local.get $t))))
-      (local.set $diffuse (call $d3dim_color_lerp (local.get $c0) (local.get $c1) (local.get $t)))
+      ;; A lerp between equal colours is that colour exactly, so a span with
+      ;; one vertex colour (flat or unlit geometry) needs no per-pixel lerp.
+      (local.set $diffuse (if (result i32) (i32.eq (local.get $c0) (local.get $c1))
+        (then (local.get $c0))
+        (else (call $d3dim_color_lerp (local.get $c0) (local.get $c1) (local.get $t)))))
       (local.set $sample (call $d3dim_texture_sample_prepared
         (local.get $tw) (local.get $th) (local.get $tbpp) (local.get $tpitch)
         (local.get $tdib) (local.get $tfmt) (local.get $tpal)
