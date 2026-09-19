@@ -4169,50 +4169,47 @@
                       (i32.add (local.get $src_dib)
                         (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                  (i32.add (local.get $sx) (local.get $src_w))))))
-                    (if (i32.and
-                          (i32.ne (local.get $col) (local.get $ckey))
-                          (call $dx_clipper_contains
+                    (if (i32.ne (local.get $col) (local.get $ckey))
+                      (then (if (call $dx_clipper_contains
                             (local.get $clip_entry) (local.get $clip_data)
                             (i32.add (local.get $dx) (local.get $src_w))
-                            (i32.add (local.get $dy) (local.get $row))))
+                            (i32.add (local.get $dy) (local.get $row)))
                       (then (i32.store8
                         (i32.add (local.get $dst_dib)
                           (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
                                    (i32.add (local.get $dx) (local.get $src_w))))
-                        (local.get $col)))))
+                        (local.get $col)))))))
                   (else (if (i32.eq (local.get $bps) (i32.const 2))
                     (then
                       (local.set $col (i32.load16_u
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                    (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 2))))))
-                      (if (i32.and
-                            (i32.ne (local.get $col) (local.get $ckey))
-                            (call $dx_clipper_contains
+                      (if (i32.ne (local.get $col) (local.get $ckey))
+                        (then (if (call $dx_clipper_contains
                               (local.get $clip_entry) (local.get $clip_data)
                               (i32.add (local.get $dx) (local.get $src_w))
-                              (i32.add (local.get $dy) (local.get $row))))
+                              (i32.add (local.get $dy) (local.get $row)))
                         (then (i32.store16
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
                                      (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 2))))
-                          (local.get $col)))))
+                          (local.get $col)))))))
                     (else
                       (local.set $col (i32.load
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (i32.add (local.get $sy) (local.get $row)) (local.get $src_pitch))
                                    (i32.mul (i32.add (local.get $sx) (local.get $src_w)) (i32.const 4))))))
-                      (if (i32.and
-                            (i32.ne (local.get $col) (local.get $ckey))
-                            (call $dx_clipper_contains
+                      (if (i32.ne (local.get $col) (local.get $ckey))
+                        (then (if (call $dx_clipper_contains
                               (local.get $clip_entry) (local.get $clip_data)
                               (i32.add (local.get $dx) (local.get $src_w))
-                              (i32.add (local.get $dy) (local.get $row))))
+                              (i32.add (local.get $dy) (local.get $row)))
                         (then (i32.store
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
                                      (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 4))))
-                          (local.get $col))))))))
+                          (local.get $col))))))))))
                 (local.set $src_w (i32.add (local.get $src_w) (i32.const 1)))
                 (br $ckblit_col)))
               (local.set $row (i32.add (local.get $row) (i32.const 1)))
@@ -4326,53 +4323,50 @@
                       (i32.add (local.get $src_dib)
                         (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                  (local.get $bpp)))))
-                    (if (i32.and
-                          (call $dx_clipper_contains
+                    (if (i32.or (i32.eqz (local.get $src_keyed))
+                                  (i32.ne (local.get $col) (local.get $ckey)))
+                      (then (if (call $dx_clipper_contains
                             (local.get $clip_entry) (local.get $clip_data)
                             (i32.add (local.get $dx) (local.get $src_w))
                             (i32.add (local.get $dy) (local.get $row)))
-                          (i32.or (i32.eqz (local.get $src_keyed))
-                                  (i32.ne (local.get $col) (local.get $ckey))))
                       (then (i32.store8
                         (i32.add (local.get $dst_dib)
                           (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
                                    (i32.add (local.get $dx) (local.get $src_w))))
-                        (local.get $col)))))
+                        (local.get $col)))))))
                   (else (if (i32.eq (local.get $bps) (i32.const 2))
                     (then
                       (local.set $col (i32.load16_u
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                    (i32.mul (local.get $bpp) (i32.const 2))))))
-                      (if (i32.and
-                            (call $dx_clipper_contains
+                      (if (i32.or (i32.eqz (local.get $src_keyed))
+                                    (i32.ne (local.get $col) (local.get $ckey)))
+                        (then (if (call $dx_clipper_contains
                               (local.get $clip_entry) (local.get $clip_data)
                               (i32.add (local.get $dx) (local.get $src_w))
                               (i32.add (local.get $dy) (local.get $row)))
-                            (i32.or (i32.eqz (local.get $src_keyed))
-                                    (i32.ne (local.get $col) (local.get $ckey))))
                         (then (i32.store16
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
                                      (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 2))))
-                          (local.get $col)))))
+                          (local.get $col)))))))
                     (else
                       (local.set $col (i32.load
                         (i32.add (local.get $src_dib)
                           (i32.add (i32.mul (local.get $src_h) (local.get $src_pitch))
                                    (i32.mul (local.get $bpp) (i32.const 4))))))
-                      (if (i32.and
-                            (call $dx_clipper_contains
+                      (if (i32.or (i32.eqz (local.get $src_keyed))
+                                    (i32.ne (local.get $col) (local.get $ckey)))
+                        (then (if (call $dx_clipper_contains
                               (local.get $clip_entry) (local.get $clip_data)
                               (i32.add (local.get $dx) (local.get $src_w))
                               (i32.add (local.get $dy) (local.get $row)))
-                            (i32.or (i32.eqz (local.get $src_keyed))
-                                    (i32.ne (local.get $col) (local.get $ckey))))
                         (then (i32.store
                           (i32.add (local.get $dst_dib)
                             (i32.add (i32.mul (i32.add (local.get $dy) (local.get $row)) (local.get $dst_pitch))
                                      (i32.mul (i32.add (local.get $dx) (local.get $src_w)) (i32.const 4))))
-                          (local.get $col))))))))
+                          (local.get $col))))))))))
                 (local.set $src_w (i32.add (local.get $src_w) (i32.const 1)))
                 (br $str_col)))
               (local.set $row (i32.add (local.get $row) (i32.const 1)))

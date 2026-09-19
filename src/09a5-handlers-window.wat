@@ -2323,18 +2323,23 @@
     (global.set $esp (i32.add (global.get $esp) (i32.const 24))) (return)))))
     ;; No paint — deliver WM_TIMER if any timer is due
     ;; Pass PM_REMOVE flag (arg4 & 1) as consume param — PM_NOREMOVE peeks without resetting last_tick
-    (if (i32.and
+    ;; The range test gates the scan (nested if, not i32.and): WAT i32.and
+    ;; evaluates both operands, so $timer_check_due used to run -- and with
+    ;; PM_REMOVE reset a due timer's last_tick and retire a one-shot
+    ;; multimedia timer -- on a peek whose filter excluded WM_TIMER, while the
+    ;; caller was told there was no message. That swallowed the timer.
+    (if (i32.or
+          (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))
           (i32.or
-            (i32.and (i32.eqz (local.get $arg2)) (i32.eqz (local.get $arg3)))
-            (i32.or
-              (i32.and (i32.le_u (local.get $arg2) (i32.const 0x0113))
-                       (i32.ge_u (local.get $arg3) (i32.const 0x0113)))
-              (i32.and (i32.le_u (local.get $arg2) (i32.const 0x7FF0))
-                       (i32.ge_u (local.get $arg3) (i32.const 0x7FF0)))))
-          (call $timer_check_due (local.get $arg0) (i32.and (local.get $arg4) (i32.const 1))))
+            (i32.and (i32.le_u (local.get $arg2) (i32.const 0x0113))
+                     (i32.ge_u (local.get $arg3) (i32.const 0x0113)))
+            (i32.and (i32.le_u (local.get $arg2) (i32.const 0x7FF0))
+                     (i32.ge_u (local.get $arg3) (i32.const 0x7FF0)))))
       (then
-        (global.set $eax (i32.const 1))
-        (global.set $esp (i32.add (global.get $esp) (i32.const 24))) (return)))
+        (if (call $timer_check_due (local.get $arg0) (i32.and (local.get $arg4) (i32.const 1)))
+          (then
+            (global.set $eax (i32.const 1))
+            (global.set $esp (i32.add (global.get $esp) (i32.const 24))) (return)))))
     ;; Nothing to deliver. Undo the activity mark $win32_dispatch made for
     ;; PeekMessage: only this proven-empty path is neutral to the clock-spin
     ;; detector. Every successful Peek remains observable work and breaks it.

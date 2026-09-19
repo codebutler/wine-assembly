@@ -153,6 +153,16 @@ const extraWat = String.raw`
   assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0113, 0x0113, 1), 0,
     'the consumed timer is not returned forever at the same tick');
 
+  // A peek whose filter excludes WM_TIMER must not touch the timer table.
+  // The scan used to run as an i32.and operand beside the range test, so a
+  // keyboard-only PM_REMOVE peek reset the due timer's last_tick and reported
+  // "no message": the timer was swallowed and never delivered to anyone.
+  now = 121;
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0100, 0x0108, 1), 0,
+    'a keyboard-only PM_REMOVE peek does not see a due timer');
+  assert.strictEqual(e.test_call_PeekMessageA(0x3000, 0, 0x0113, 0x0113, 1), 1,
+    'a filtered-out due timer is not consumed by the peek that excluded it');
+
   e.test_input_window();
   for (const method of ['get', 'peek']) {
     e.test_input_owner(2);
