@@ -252,3 +252,67 @@ binkw32 starts two worker threads that sit in `WaitForSingleObject` at
 binkw32 `+0xd3c3` (runtime `0x8e13c3` when binkw32 loads at `0x8d4000`,
 origBase `0x30000000`). quartz threads appear and exit per graph; one reports
 `EIP=0 (likely call/jmp to NULL)` when its thread proc returns — harmless.
+
+## What is hot now, and whether "C++ opts" is the lever (2026-09-19)
+
+One window, `--handler-hist-thread=0 --handler-hist-start=150000
+--handler-hist-stop=250000` over the boot/load phase (tick 2, GL up,
+`--quiet-api`), with `--hist-json` + `--hot-block-dump`. Counts are
+load-immune, so the load-16 box is fine for this. 481.9M ops, 77.2M block
+entries, **6.24 ops/block**, 13455 distinct blocks. By module: exe 74.9%,
+msvcrt 14.0%, binkw32 0.3%.
+
+The single hottest block is **15.33% of every block entry in the window** —
+four times the next one — and it is a C++ container walk:
+
+```
+00479abb   test edx,edx / jz            ; __thiscall, ecx = this, eax = N
+00479abf   mov edx,[ecx+0x8]            ; cursor = this->head
+00479ac2   mov [ecx+0x10],edx
+...
+00479acd   dec eax                      ; <-- the hot block, self-looping
+00479ace   mov edx,[ecx+0x10]           ; cursor
+00479ad1   mov edx,[edx+0x4]            ; cursor = cursor->next
+00479ad4   mov [ecx+0x10],edx           ; write it back to the object
+00479ad7   jnz 0x479acd
+```
+
+Seek-to-index over a singly linked list, with the cursor spilled to
+`this+0x10` on every step. It has no static xrefs (`tools/xrefs.js`), so it
+is reached through a pointer — it is the walk behind the `0x4b47e0` O(n^2)
+name lookup already recorded above. Next after it: `0x6e2e8d` and
+`0x6f1bb4` at 4.07% each, the per-pixel texture conversion
+(byte loads, `shr`/`shl` by CL, `movzx`), then a flat tail of ~1.3% blocks.
+
+Handler ranking for the window: `$th_load32_rop` 12.0%, `$th_load8_ro`
+10.4%, `$th_inc_r` 5.3%, `$th_store32_rop` 5.3%, `$th_push_r` 5.2%.
+
+**So: yes to one C++ idiom, no to the obvious ones.** Folding vtable
+dispatch, `thiscall` prologues or `push`/`pop` runs is *control flow*, and
+this project has already measured that class at ~0 twice (`case_chain`,
+dispatch replication's arm H). `0x479acd` is the opposite: a **memory**
+idiom, which is the class that has paid here (`rect_run` +12%, `RLE_RUN`
++7%).
+
+It is also a true self-loop block, so `$loop_match_block` in
+`src/07b-loop-match.wat` already sees it and declines it.
+`tools/match-loops.js --why` on this exe: 5224 self-loops, 2.3% matched, and
+**29 `non-streamed-load`** declines — the existing COPY/FILL/LUT/SCAN
+predicates all require an *affine* address stream, and a pointer chase has
+none. The extension is a fifth predicate: a load whose address is fed by the
+value the previous iteration loaded, with one counter and one store back to
+a fixed slot.
+
+Arithmetic before building anything: 11.8M block entries and ~59M ops of the
+window collapse to ~11.8M handler iterations inside one block entry. At the
+`bench-loops.js` prices (~8 ns a dispatch, ~9 ns a block transfer) that is
+the largest single interpreter item Morrowind has. But the chase is
+serial dependent loads, so the real ceiling is memory latency, not dispatch,
+and the fold's win will be smaller than the op count suggests.
+
+**Not yet evidence: this is ONE window, and it is a loading window.** The
+`hot-loop-census.js` rule applies — a region at 15% in one window and absent
+in the next is a scene, not a fold target. Take the in-world window
+(560k-600k) and a menu window before writing any WAT, and remember the world
+window is already 37-38% native GL, so the same fold is worth much less
+there.
