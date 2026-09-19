@@ -19,6 +19,12 @@ const EXTRA_WAT = `
       (i64.shl (i64.extend_i32_u (global.get $edx)) (i64.const 32))))
   (func (export "test_ftol_cw") (result i32) (global.get $fpu_cw))
   (func (export "test_ftol_esp") (result i32) (global.get $esp))
+  (func (export "test_stricmp") (param $a i32) (param $b i32) (result i32)
+    (global.set $esp (i32.const 0x07600000))
+    (call $handle__stricmp
+      (local.get $a) (local.get $b) (i32.const 0)
+      (i32.const 0) (i32.const 0) (i32.const 0))
+    (global.get $eax))
 `;
 
 (async () => {
@@ -57,6 +63,33 @@ const EXTRA_WAT = `
     'cdecl helper removes only its return address');
 
   console.log('PASS  native MSVCRT _ftol preserves x87 and EDX:EAX semantics');
+
+  // Morrowind's load looks every object up by name through _stricmp; the
+  // authentic byte loop was ~30% of its startup blocks.
+  writeName('_stricmp');
+  const stricmpId = require('../src/api_table.json').findIndex(api => api.name === '_stricmp');
+  assert.ok(stricmpId >= 0, '_stricmp is in the API table');
+  assert.strictEqual(e.test_native_override(nameWasm), stricmpId,
+    'loaded MSVCRT _stricmp is bound to the native API thunk');
+  const a = e.guest_alloc(64) >>> 0, b = e.guest_alloc(64) >>> 0;
+  const put = (g, s) => {
+    const w = e.guest_to_wasm(g) >>> 0;
+    bytes.fill(0, w, w + 64);
+    bytes.set(Buffer.from(s, 'latin1'), w);
+  };
+  // MSVCRT C locale (__ascii_stricmp): fold A-Z only, compare as unsigned
+  // bytes, return the difference of the folded bytes.
+  const stricmp = (x, y) => { put(a, x); put(b, y); return e.test_stricmp(a, b); };
+  assert.strictEqual(stricmp('Jiub', 'JIUB'), 0, 'case folds');
+  assert.strictEqual(stricmp('', ''), 0, 'empty strings are equal');
+  assert.strictEqual(stricmp('abc', 'ABD'), -1, 'difference of folded bytes');
+  assert.strictEqual(stricmp('ab', 'a'), 0x62, 'longer string compares above its prefix');
+  assert.strictEqual(stricmp('[', 'a'), 0x5b - 0x61, 'punctuation is not folded');
+  assert.strictEqual(stricmp('\xe9', 'A'), 0xe9 - 0x61, 'high bytes compare unsigned and unfolded');
+  assert.strictEqual(e.test_ftol_esp() >>> 0, 0x07600004,
+    'cdecl _stricmp removes only its return address');
+
+  console.log('PASS  native MSVCRT _stricmp matches C-locale folding');
 })().catch(error => {
   console.error(error.stack || error);
   process.exit(1);

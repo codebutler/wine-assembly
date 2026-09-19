@@ -72,6 +72,54 @@ draws. What gets there, in one run of about
   - **Lit draws with no NORMAL.** `lib/d3d9-fixed.js` threw `missing vertex
     semantic 3:0`. The normal now reads as zero, as it does on D3D9.
 
+## What the startup load spends its time on
+
+The load is compute-bound: 79% of batches spend their whole block budget and
+only the main thread runs. From the block histogram at batches 100k-200k:
+
+- ~30% msvcrt `_stricmp` (runtime `0xbb37cb`), a byte-at-a-time loop, called from
+- ~20% `Morrowind.exe` `0x4b47e0`, a linear list walk that looks up objects by
+  name (`vtbl+0x20` GetID, then `_stricmp`, then next). Every lookup walks the
+  list, so the load is O(n^2) in the game's own code.
+- ~5% `0x6e2e60`, texture conversion one pixel at a time.
+
+`_stricmp` is now bound to the native handler even though the real msvcrt.dll
+is loaded (`$native_override_export_api_id` in `08b-dll-loader.wat`, like
+`_ftol`). The measurement is fixed work, boot to menu at tick 2, with GL up.
+The driver quits when it reaches the menu, and the CPU is `user` from
+`/usr/bin/time`:
+
+| arm | batches to menu | user CPU | load avg |
+|---|---|---|---|
+| without the override | 523k | 97.9 s | 6 |
+| with the override | 441k | 74.7 s | 5 |
+
+So the override is about 24% less CPU and 16% fewer batches. It makes ~9.8M
+native `_stricmp` calls before the menu (16.6M API calls in total against
+6.8M). Splash order is random, so a few thousand batches of it is noise.
+
+Timing on this box is only worth quoting at a low load average. At load 26-61
+the same two arms swapped places in wall-clock time from one run to the next.
+
+Two traps:
+
+- **A run whose log has `[gl] context creation FAILED ... No suitable
+  display` does not count.** GLFW found no monitor, nothing renders, and it
+  reaches the menu at 385k because it skips all drawing.
+- **Suppressing the per-call API log is not a lever.** Each API call crosses
+  into JS twice (`log`, `log_api_exit`). Gating both behind a wasm flag
+  measured 84.3 s against 80.7 s ungated with the same `_stricmp` build on a
+  quiet box, which is noise, so it was not kept.
+
+The driver's `MW_STOP_AT=menu MW_NO_TRACE=1` env switches do the fixed-work
+run. `MW_NO_TRACE` takes the `[FS] ReadFile` lines the driver keys on from
+`--trace-fs` instead of `--trace-api`. Without either, the driver sees no
+reads and sits in Bink forever.
+
+Dropping msvcrt.dll entirely is not an option. Morrowind imports C++ exception
+handling from it (`__CxxFrameHandler`, the `exception` class members), and
+quartz.dll and devenum.dll import it too.
+
 ## Boot sequence (default 200 ms/batch, 1000-block batches)
 
 | batch | what |

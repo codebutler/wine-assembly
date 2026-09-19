@@ -345,6 +345,12 @@
     ;; implements the same x87 pop, truncation and EDX:EAX result directly.
     (if (i32.eq (call $lookup_api_id (local.get $name_wa)) (i32.const 759))
       (then (return (i32.const 759)))) ;; _ftol
+    ;; Morrowind resolves every object by name with a linear list walk that
+    ;; calls _stricmp once per entry; the authentic byte-at-a-time loop was
+    ;; ~30% of all blocks retired during its startup load. The native handler
+    ;; compares with the same C-locale ASCII folding and keeps no CRT state.
+    (if (call $str_eq (local.get $name_wa) "_stricmp")
+      (then (return (call $lookup_api_id "_stricmp"))))
     (if (call $str_eq (local.get $name_wa) "ceil")
       (then (return (call $lookup_api_id "ceil"))))
     (if (call $str_eq (local.get $name_wa) "sqrt")
