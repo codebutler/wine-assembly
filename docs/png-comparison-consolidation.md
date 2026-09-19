@@ -15,6 +15,13 @@ Follow-up to the Pass-5 addendum in `fable-review.md`: tests should reuse
   Overlap results still expose `sizeMismatch`; output and dimension fields
   retain image A's dimensions. Empty compared areas report 0 pixels/share.
 
+Boundary follow-up: the old comparator clipped a negative region origin
+before adding its width/height, shifting the far edge and comparing extra
+pixels. A regression for `{-1,-1,2,2}` on a 2x2 image reproduced 4 compared
+pixels instead of 1. Endpoints now come from the original rectangle before
+intersection. Tests cover negative origins, fully outside/empty/inverted
+regions, and composition with the overlap policy.
+
 The sum metric is necessary: RGB differences of 10, 10, 11 exceed the
 installer's threshold of 30 in sum mode, but not in max mode. Unit tests pin
 that distinction, equality at 30 and 40, alpha inclusion/exclusion, region

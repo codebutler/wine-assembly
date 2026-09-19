@@ -86,4 +86,26 @@ assert.strictEqual(result.compared, 0, 'empty overlap must not report a fabricat
 assert.strictEqual(result.share, 0);
 assert.throws(() => diffPng(wide, narrow, { sizePolicy: 'typo' }), /unknown PNG size policy/);
 
+// Clip the original rectangle, not a rectangle shifted onto the image.
+result = diffPng(base, changed, { region: { x: -1, y: -1, w: 2, h: 2 } });
+assert.strictEqual(result.compared, 1, 'negative origin leaves only the top-left pixel');
+assert.strictEqual(result.changed, 1);
+assert.strictEqual(result.totalDelta, 1);
+assert.deepStrictEqual(result.box, { x: 0, y: 0, w: 1, h: 1 });
+for (const region of [
+  { x: -3, y: 0, w: 2, h: 2 }, { x: 0, y: -3, w: 2, h: 2 },
+  { x: 0, y: 0, w: 0, h: 2 }, { x: 1, y: 1, w: -1, h: -1 },
+]) {
+  result = diffPng(base, changed, { region });
+  assert.strictEqual(result.compared, 0);
+  assert.strictEqual(result.changed, 0);
+  assert.strictEqual(result.totalDelta, 0);
+  assert.strictEqual(result.share, 0);
+  assert.strictEqual(result.box, null);
+}
+result = diffPng(wide, narrow, { sizePolicy: 'overlap',
+  region: { x: -1, y: -1, w: 2, h: 2 } });
+assert.strictEqual(result.compared, 1);
+assert.strictEqual(result.changed, 0, 'overlap and negative-origin clipping compose');
+
 console.log('png-diff helper: PASS');

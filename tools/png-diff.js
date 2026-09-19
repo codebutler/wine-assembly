@@ -56,10 +56,11 @@ function diffPng(fileA, fileB, options) {
     };
   }
   const region = options.region || { x: 0, y: 0, w: a.width, h: a.height };
-  const x0 = Math.max(0, region.x | 0);
-  const y0 = Math.max(0, region.y | 0);
-  const x1 = Math.min(a.width, b.width, x0 + (region.w | 0));
-  const y1 = Math.min(a.height, b.height, y0 + (region.h | 0));
+  const rx = region.x | 0, ry = region.y | 0;
+  const x0 = Math.max(0, rx);
+  const y0 = Math.max(0, ry);
+  const x1 = Math.min(a.width, b.width, rx + (region.w | 0));
+  const y1 = Math.min(a.height, b.height, ry + (region.h | 0));
   let changed = 0;
   let maxDelta = 0;
   let totalDelta = 0;
