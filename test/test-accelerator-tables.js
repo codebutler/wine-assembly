@@ -268,6 +268,26 @@ function readAccel(wat, base, index) {
   assert.strictEqual(wat.test_accel_translate(hwnd, 0x7fffffff, msg), 0,
     'TranslateAccelerator rejects an unknown HACCEL');
 
+  // Alt on WM_SYSKEYDOWN is the message's own context bit (lParam bit 29),
+  // not the live key state: in a browser all four of Alt+L's events can be
+  // queued before the guest pumps, so Alt already reads up by then.
+  const altSource = wat.guest_alloc(6) >>> 0;
+  writeAccel(wat, altSource, 0, 0x11, 0x4c, 0x5555); // FVIRTKEY|FALT, Alt+L
+  const altTable = wat.test_accel_create(altSource, 1) >>> 0;
+  wat.guest_write32(msg, hwnd);
+  wat.guest_write32(msg + 4, 0x0104); // WM_SYSKEYDOWN
+  wat.guest_write32(msg + 8, 0x4c);
+  wat.guest_write32(msg + 12, 0x20000001);
+  assert.strictEqual(wat.test_accel_translate(hwnd, altTable, msg), 1,
+    'Alt+L matches from lParam bit 29 after Alt has been released');
+  wat.guest_write32(msg + 12, 0x00000001);
+  renderer.pokeKeyDownState(0x12, true);
+  assert.strictEqual(wat.test_accel_translate(hwnd, altTable, msg), 0,
+    'a WM_SYSKEYDOWN without the context bit (F10-style) is not an Alt key');
+  renderer.pokeKeyDownState(0x12, false);
+  wat.guest_write32(msg + 12, 0);
+  assert.strictEqual(wat.test_accel_destroy(altTable), 1);
+
   // An x86 wndproc gets WM_COMMAND as a real guest call, not a nested run:
   // a nested run cannot block, so a handler that waits on another thread
   // (StarCraft's F1 Help, reading rez\helpmenu.bin through Storm's reader

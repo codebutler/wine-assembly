@@ -2929,8 +2929,15 @@
       (i32.and (call $host_get_key_down_state (i32.const 0x10)) (i32.const 0x8000)))
     (local.set $ctrl
       (i32.and (call $host_get_key_down_state (i32.const 0x11)) (i32.const 0x8000)))
+    ;; Alt comes from the message itself on WM_SYSKEYDOWN: lParam bit 29 is
+    ;; the context code, set iff Alt was down when the key went down. The
+    ;; host key state is live, not as of this message, so when Alt+L's four
+    ;; events are all queued before the guest pumps, Alt already reads up
+    ;; and the accelerator is missed (StarCraft's Alt+L in Chrome).
     (local.set $alt
-      (i32.and (call $host_get_key_down_state (i32.const 0x12)) (i32.const 0x8000)))
+      (if (result i32) (i32.eq (local.get $message) (i32.const 0x0104))
+        (then (i32.and (i32.shr_u (i32.load offset=12 (local.get $msg_wa)) (i32.const 29)) (i32.const 1)))
+        (else (i32.and (call $host_get_key_down_state (i32.const 0x12)) (i32.const 0x8000)))))
     (local.set $match (call $accel_table_match
       (local.get $arg1) (i32.load offset=8 (local.get $msg_wa))
       (local.get $shift) (local.get $ctrl) (local.get $alt)))
