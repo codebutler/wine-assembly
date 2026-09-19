@@ -8,6 +8,7 @@
 // opens Menu, clicks Cancel, and opens Menu again.
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { createCanvas, loadImage } = require('../lib/canvas-compat');
@@ -214,16 +215,9 @@ function grassRatio(img, rect) {
 function diffRect(a, b, rect) {
   if (a.w !== b.w || a.h !== b.h) return -1;
   const r = clampRect(a, rect);
-  let diff = 0;
-  for (let y = r.y0; y < r.y1; y++) {
-    for (let x = r.x0; x < r.x1; x++) {
-      const i = (y * a.w + x) * 4;
-      if (a.data[i] !== b.data[i] || a.data[i + 1] !== b.data[i + 1] || a.data[i + 2] !== b.data[i + 2]) {
-        diff++;
-      }
-    }
-  }
-  return diff;
+  return diffPng({ width: a.w, height: a.h, data: a.data },
+    { width: b.w, height: b.h, data: b.data }, { includeAlpha: false,
+      region: { x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0 } }).changed;
 }
 
 (async () => {

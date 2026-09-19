@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('fs');
+const { diffPng } = require('../tools/png-diff');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { PNG } = require('pngjs');
@@ -47,17 +48,8 @@ function previewPixels(file) {
 
 function previewInteriorDifference(a, b) {
   if (!a || !b || a.image.width !== b.image.width || a.image.height !== b.image.height) return 0;
-  let changed = 0;
-  for (let y = 78; y < 252; y++) {
-    for (let x = 140; x < 267; x++) {
-      const i = (y * a.image.width + x) * 4;
-      const delta = Math.abs(a.image.data[i] - b.image.data[i]) +
-        Math.abs(a.image.data[i + 1] - b.image.data[i + 1]) +
-        Math.abs(a.image.data[i + 2] - b.image.data[i + 2]);
-      if (delta > 30) changed++;
-    }
-  }
-  return changed;
+  return diffPng(a.image, b.image, { includeAlpha: false, metric: 'sum', tolerance: 30,
+    region: { x: 140, y: 78, w: 127, h: 174 } }).changed;
 }
 
 const printPng = '/private/tmp/wordpad-print-dialog.png';

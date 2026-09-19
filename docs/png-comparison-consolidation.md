@@ -32,6 +32,8 @@ selection, invalid metric rejection, and existing max-mode behavior.
 | Find mouse-click | Summed RGB > 20 in the same button rectangle; mismatched dimensions rejected | 7/7; old/new helper agreement at 470 pixels |
 | Bricks drag/sound | Exact RGB in board/icon regions; mismatched dimensions rejected | 21/21; horizontal and vertical drag 1838 pixels each, sound icon 107 and board 0; old/new horizontal count agrees |
 | Win16 Minesweeper smiley | Exact RGB in the same grid rectangle; mismatched dimensions rejected | 3/3; play changes 194 pixels, reset differs from fresh by 0 |
+| AoE menu | Exact RGB in existing clamped regions; size mismatch remains -1 | Gameplay/menu route 18/18; synthetic old/new region and mismatch checks agree |
+| WordPad print preview | Summed RGB > 30 in the same page interior; missing/mismatched input remains 0 | Focused old/new helper checks agree; saved first/next images return 0 with both helpers. Full printing suite fails multiple print-completion/preview assertions; not a pass |
 
 The local-candidate suite is not fully green: CWordZap's `title initialized`
 assertion fails with both original and migrated tests. The Winamp suite is
@@ -84,8 +86,11 @@ Fresh serial verification after those corrections: dirty-document **11/11**,
 ## Remaining work
 
 This does not close the whole PNG-helper item. A broader name/body search
-still finds comparison loops in specialized probes such as the Pinball combo
-box, AoE menu, and WordPad print preview. The full-frame/subregion consumers
+still finds comparison loops in NetHack map, Pinball playable, Spider Show
+Available Move, Paint dock-toggle and Minesweeper smiley-reset probes.
+Pinball combo-box `rectDiff` measures **total RGB error magnitude**, not the
+number of changed pixels; replacing it with `changed` would alter its
+contract. Its metric remains unmerged. The full-frame/subregion consumers
 listed above now use the shared comparator; their small local wrappers only
 adapt result shapes or combine named regions.
 Some compare masked regions or return different statistics; inspect each
