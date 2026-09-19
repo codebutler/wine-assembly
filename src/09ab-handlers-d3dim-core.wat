@@ -3604,6 +3604,10 @@
     (local $tw i32) (local $th i32) (local $tbpp i32) (local $tpitch i32)
     (local $tdib i32) (local $tfmt i32) (local $tpal i32)
     (local $key_active i32) (local $key_rgb i32)
+    (local $fast16 i32) (local $wmask i32) (local $hmask i32) (local $twf f32) (local $thf f32)
+    (local $sx f32) (local $sy f32) (local $flx f32) (local $fly f32)
+    (local $wx i32) (local $wy i32) (local $ix0 i32) (local $ix1 i32) (local $iy0 i32) (local $iy1 i32)
+    (local $trow0 i32) (local $trow1 i32) (local $pv v128) (local $cv v128) (local $hv v128)
     (local.set $sw (i32.and (i32.load (i32.add (local.get $rt_entry) (i32.const 12))) (i32.const 0xFFFF)))
     (local.set $sh (i32.shr_u (i32.load (i32.add (local.get $rt_entry) (i32.const 12))) (i32.const 16)))
     (if (i32.or (i32.lt_s (local.get $y) (i32.const 0)) (i32.ge_s (local.get $y) (local.get $sh)))
@@ -3653,6 +3657,30 @@
     (if (local.get $key_active) (then
       (local.set $key_rgb (call $d3dim_decode_surface_pixel
         (local.get $tex_entry) (i32.load offset=24 (local.get $tex_entry)) (local.get $tbpp)))))
+    ;; Inline sampler for the common case: bilinear, a 16-bit 565/555/1555
+    ;; texture, WRAP on both axes and power-of-two sizes. Same arithmetic as
+    ;; $d3dim_texture_sample_prepared -> $d3dim_bilerp, so the same pixels,
+    ;; but the four texels are decoded together in one i32x4 and the pixel
+    ;; costs no calls. Everything else keeps the general sampler.
+    (local.set $wmask (i32.sub (local.get $tw) (i32.const 1)))
+    (local.set $hmask (i32.sub (local.get $th) (i32.const 1)))
+    (local.set $fast16
+      (i32.and
+        (i32.and (i32.ne (local.get $linear) (i32.const 0))
+                 (i32.eq (local.get $tbpp) (i32.const 16)))
+        (i32.and (i32.ge_u (local.get $tfmt) (i32.const 1))
+                 (i32.le_u (local.get $tfmt) (i32.const 3)))))
+    (local.set $fast16
+      (i32.and (local.get $fast16)
+        (i32.and
+          (i32.and (i32.ne (local.get $address_u) (i32.const 2)) (i32.ne (local.get $address_u) (i32.const 3)))
+          (i32.and (i32.ne (local.get $address_v) (i32.const 2)) (i32.ne (local.get $address_v) (i32.const 3))))))
+    (local.set $fast16
+      (i32.and (local.get $fast16)
+        (i32.and (i32.eqz (i32.and (local.get $tw) (local.get $wmask)))
+                 (i32.eqz (i32.and (local.get $th) (local.get $hmask))))))
+    (local.set $twf (f32.convert_i32_u (local.get $tw)))
+    (local.set $thf (f32.convert_i32_u (local.get $th)))
     (local.set $xs (local.get $x0))
     (local.set $xe (local.get $x1))
     ;; Raster coverage is right-exclusive.  Sampling the geometric endpoint
@@ -3699,11 +3727,95 @@
       (local.set $diffuse (if (result i32) (i32.eq (local.get $c0) (local.get $c1))
         (then (local.get $c0))
         (else (call $d3dim_color_lerp (local.get $c0) (local.get $c1) (local.get $t)))))
-      (local.set $sample (call $d3dim_texture_sample_prepared
-        (local.get $tw) (local.get $th) (local.get $tbpp) (local.get $tpitch)
-        (local.get $tdib) (local.get $tfmt) (local.get $tpal)
-        (local.get $tu) (local.get $tv)
-        (local.get $address_u) (local.get $address_v) (local.get $linear)))
+      (if (local.get $fast16)
+        (then
+          ;; Non-finite coordinates select texel zero, as in the general path.
+          (local.set $sx (local.get $tu))
+          (if (f32.ne (f32.mul (local.get $sx) (f32.const 0.0)) (f32.const 0.0))
+            (then (local.set $sx (f32.const 0.0))))
+          (local.set $sy (local.get $tv))
+          (if (f32.ne (f32.mul (local.get $sy) (f32.const 0.0)) (f32.const 0.0))
+            (then (local.set $sy (f32.const 0.0))))
+          (local.set $sx (f32.sub (f32.mul (local.get $sx) (local.get $twf)) (f32.const 0.5)))
+          (local.set $sy (f32.sub (f32.mul (local.get $sy) (local.get $thf)) (f32.const 0.5)))
+          (local.set $flx (f32.floor (local.get $sx)))
+          (local.set $fly (f32.floor (local.get $sy)))
+          (local.set $ix0 (i32.trunc_sat_f32_s (local.get $flx)))
+          (local.set $iy0 (i32.trunc_sat_f32_s (local.get $fly)))
+          (local.set $wx (i32.trunc_sat_f32_u
+            (f32.mul (f32.sub (local.get $sx) (local.get $flx)) (f32.const 256.0))))
+          (local.set $wy (i32.trunc_sat_f32_u
+            (f32.mul (f32.sub (local.get $sy) (local.get $fly)) (f32.const 256.0))))
+          (local.set $ix1 (i32.shl (i32.and (i32.add (local.get $ix0) (i32.const 1)) (local.get $wmask)) (i32.const 1)))
+          (local.set $ix0 (i32.shl (i32.and (local.get $ix0) (local.get $wmask)) (i32.const 1)))
+          (local.set $trow0 (i32.add (local.get $tdib)
+            (i32.mul (i32.and (local.get $iy0) (local.get $hmask)) (local.get $tpitch))))
+          (local.set $trow1 (i32.add (local.get $tdib)
+            (i32.mul (i32.and (i32.add (local.get $iy0) (i32.const 1)) (local.get $hmask)) (local.get $tpitch))))
+          ;; lanes: c00, c01, c10, c11 -- so extend_low is the c00|c01 half and
+          ;; extend_high the c10|c11 half $d3dim_bilerp pairs them as.
+          (local.set $pv
+            (i32x4.replace_lane 3
+              (i32x4.replace_lane 2
+                (i32x4.replace_lane 1
+                  (i32x4.splat (i32.load16_u (i32.add (local.get $trow0) (local.get $ix0))))
+                  (i32.load16_u (i32.add (local.get $trow1) (local.get $ix0))))
+                (i32.load16_u (i32.add (local.get $trow0) (local.get $ix1))))
+              (i32.load16_u (i32.add (local.get $trow1) (local.get $ix1)))))
+          (if (i32.eq (local.get $tfmt) (i32.const 1))
+            (then
+              ;; RGB565: the fetch path's expand5/expand6 bits, four lanes at once.
+              (local.set $cv (v128.and (local.get $pv) (i32x4.splat (i32.const 0xF800))))
+              (local.set $hv (v128.and (local.get $pv) (i32x4.splat (i32.const 0x07E0))))
+              (local.set $cv (v128.or
+                (v128.or
+                  (i32x4.shl (v128.or (i32x4.shr_u (local.get $cv) (i32.const 8))
+                                      (i32x4.shr_u (local.get $cv) (i32.const 13))) (i32.const 16))
+                  (i32x4.shl (v128.or (i32x4.shr_u (local.get $hv) (i32.const 3))
+                                      (i32x4.shr_u (local.get $hv) (i32.const 9))) (i32.const 8)))
+                (i32x4.splat (i32.const 0xFF000000)))))
+            (else
+              ;; X1R5G5B5 / A1R5G5B5.
+              (local.set $cv (v128.and (local.get $pv) (i32x4.splat (i32.const 0x7C00))))
+              (local.set $hv (v128.and (local.get $pv) (i32x4.splat (i32.const 0x03E0))))
+              (local.set $cv (v128.or
+                (v128.or
+                  (i32x4.shl (v128.or (i32x4.shr_u (local.get $cv) (i32.const 7))
+                                      (i32x4.shr_u (local.get $cv) (i32.const 12))) (i32.const 16))
+                  (i32x4.shl (v128.or (i32x4.shr_u (local.get $hv) (i32.const 2))
+                                      (i32x4.shr_u (local.get $hv) (i32.const 7))) (i32.const 8)))
+                (if (result v128) (i32.eq (local.get $tfmt) (i32.const 3))
+                  (then (v128.and (i32x4.shr_s (i32x4.shl (local.get $pv) (i32.const 16)) (i32.const 31))
+                                  (i32x4.splat (i32.const 0xFF000000))))
+                  (else (i32x4.splat (i32.const 0xFF000000))))))))
+          ;; Blue is the same five bits in both layouts.
+          (local.set $hv (v128.and (local.get $pv) (i32x4.splat (i32.const 31))))
+          (local.set $cv (v128.or (local.get $cv)
+            (v128.or (i32x4.shl (local.get $hv) (i32.const 3)) (i32x4.shr_u (local.get $hv) (i32.const 2)))))
+          ;; $d3dim_bilerp's fixed-point filter on the decoded quad.
+          (local.set $hv (i16x8.shr_u
+            (i16x8.add
+              (i16x8.mul (i16x8.extend_low_i8x16_u (local.get $cv))
+                         (i16x8.splat (i32.sub (i32.const 256) (local.get $wx))))
+              (i16x8.mul (i16x8.extend_high_i8x16_u (local.get $cv))
+                         (i16x8.splat (local.get $wx))))
+            (i32.const 8)))
+          (local.set $sample (i32x4.extract_lane 0
+            (i8x16.narrow_i16x8_u
+              (i16x8.shr_u
+                (i16x8.add
+                  (i16x8.mul (local.get $hv) (i16x8.splat (i32.sub (i32.const 256) (local.get $wy))))
+                  (i16x8.mul
+                    (i8x16.shuffle 8 9 10 11 12 13 14 15 8 9 10 11 12 13 14 15 (local.get $hv) (local.get $hv))
+                    (i16x8.splat (local.get $wy))))
+                (i32.const 8))
+              (i16x8.splat (i32.const 0))))))
+        (else
+          (local.set $sample (call $d3dim_texture_sample_prepared
+            (local.get $tw) (local.get $th) (local.get $tbpp) (local.get $tpitch)
+            (local.get $tdib) (local.get $tfmt) (local.get $tpal)
+            (local.get $tu) (local.get $tv)
+            (local.get $address_u) (local.get $address_v) (local.get $linear)))))
       (local.set $draw (i32.const 1))
       ;; D3DRENDERSTATE_COLORKEYENABLE discards a matching texture sample.
       ;; It must happen before depth testing/writes: transparent HUD texels
