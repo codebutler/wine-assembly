@@ -1059,19 +1059,27 @@
             (local.get $protect) (local.get $coalesce)))
           (return (select (local.get $guest) (i32.const 0)
             (i32.ne (local.get $extended) (i32.const 0))))))
+      ;; Growing onto the bump is only safe while the bump really is
+      ;; wilderness. If a live record already covers those bytes, fall
+      ;; through to the append path, which places this commit somewhere
+      ;; nothing else owns rather than aliasing two guest ranges.
+      ;;
+      ;; The conflict scan is a full walk of the record table, and it is
+      ;; nested under the cheap tests rather than AND-ed with them because
+      ;; `i32.and` evaluates every operand: as one expression it ran the
+      ;; whole-table scan once per record of this loop, records squared per
+      ;; commit. StarCraft's allocator commits 4 KB some 13,700 times in a
+      ;; mission with ~2,700 records live, and that put 40% of its gameplay
+      ;; CPU in $virtual_backing_conflicts (two-point profile on the quiet
+      ;; box, 2026-09-18) -- more than $next and every handler together.
       (if (i32.and (local.get $coalesce) (i32.and
             (i32.and (i32.eq (local.get $guest) (local.get $map_end))
               (i32.eq (local.get $backing_ptr) (local.get $backing_end)))
-            (i32.and
-              (i32.le_u (i32.add (local.get $backing_ptr) (local.get $size))
-                (region.end $VIRTUAL_BACKING_BASE))
-              ;; Growing onto the bump is only safe while the bump really is
-              ;; wilderness. If a live record already covers those bytes, fall
-              ;; through to the append path, which places this commit somewhere
-              ;; nothing else owns rather than aliasing two guest ranges.
-              (i32.eqz (call $virtual_backing_conflicts
-                (local.get $backing_ptr) (local.get $size) (local.get $count))))))
-        (then
+            (i32.le_u (i32.add (local.get $backing_ptr) (local.get $size))
+              (region.end $VIRTUAL_BACKING_BASE))))
+        (then (if (i32.eqz (call $virtual_backing_conflicts
+                (local.get $backing_ptr) (local.get $size) (local.get $count)))
+          (then
           (call $zero_memory (local.get $backing_ptr) (local.get $size))
           ;; Publish translations before the larger record size. A reader can
           ;; therefore never see a committed byte whose PTE names no backing.
@@ -1086,7 +1094,7 @@
             (i32.add (local.get $map_size) (local.get $size)))
           (i32.store (i32.add (global.get $VIRTUAL_MAP_STATE) (i32.const 4))
             (i32.add (local.get $backing_ptr) (local.get $size)))
-          (return (local.get $guest))))
+          (return (local.get $guest))))))
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $scan)))
 
