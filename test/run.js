@@ -4252,6 +4252,7 @@ async function main() {
   if (COPY_SUPEROPS) inheritWasm('set_loop_copy_emit', 1);
   if (NO_COPY_SUPEROPS) inheritWasm('set_loop_copy_emit', 0);
   if (BLOCK_CHAIN) inheritWasm('set_block_chain', 1);
+  if (BLOCK_CHAIN || VERBOSE) inheritWasm('set_branch_end_stats', 1);
   if (BLOCK_EXEC) inheritWasm('set_block_exec', 1);
   if (BLOCK_EXEC_MIN_UOPS) inheritWasm('set_block_exec_min_uops', BLOCK_EXEC_MIN_UOPS);
   if (BLOCK_EXEC_MAX_UOPS) inheritWasm('set_block_exec_max_uops', BLOCK_EXEC_MAX_UOPS);

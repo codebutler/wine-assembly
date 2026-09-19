@@ -406,6 +406,21 @@
     (call $gs32 (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (local.get $disp))
       (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 2)))))
     (return_call $next))
+  ;; --- Packed form of the two above: operand = disp<<8 | data<<4 | base, no
+  ;; second thread word. The decoder picks this whenever the displacement
+  ;; fits in signed 24 bits (every stack local, every struct field), which is
+  ;; the one $read_thread_word call the profile said was 10% of gameplay.
+  ;; $ip is already past the op, so nothing here touches it.
+  (func $th_load32_rop (param $op i32)
+    (i32.store (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)) (i32.const 2)))
+      (call $gl32 (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))))
+                           (i32.shr_s (local.get $op) (i32.const 8)))))
+    (return_call $next))
+  (func $th_store32_rop (param $op i32)
+    (call $gs32 (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2))))
+                         (i32.shr_s (local.get $op) (i32.const 8)))
+      (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (i32.shr_u (local.get $op) (i32.const 4)) (i32.const 0xF)) (i32.const 2)))))
+    (return_call $next))
   (func $th_load8_ro (param $op i32)
     (call $set_reg8 (i32.shr_u (local.get $op) (i32.const 4))
       (call $gl8 (i32.add (i32.load (i32.add (global.get $reg_base) (i32.shl (i32.and (local.get $op) (i32.const 0xF)) (i32.const 2)))) (call $read_thread_word))))

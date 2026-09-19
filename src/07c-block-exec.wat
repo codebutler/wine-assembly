@@ -429,9 +429,13 @@
     ;; executor exists for. Anything else new above 418 must be added here
     ;; deliberately, which is the right default for a range whose meaning is
     ;; "a fold unless stated otherwise".
+    ;; H467/H468 are the packed-displacement twins of H26/H27: one plain
+    ;; dword load or store each, disp in the operand word, no EIP.
     (if (i32.and (i32.ge_u (local.get $fn) (i32.const 418))
-                 (i32.eqz (i32.or (i32.eq (local.get $fn) (i32.const 420))
-                                  (i32.eq (local.get $fn) (i32.const 421)))))
+                 (i32.eqz (i32.or (i32.or (i32.eq (local.get $fn) (i32.const 420))
+                                          (i32.eq (local.get $fn) (i32.const 421)))
+                                  (i32.or (i32.eq (local.get $fn) (i32.const 467))
+                                          (i32.eq (local.get $fn) (i32.const 468))))))
       (then (return (i32.const 1))))
     ;; The three x87 handlers, 188..190. Not because they set $eip -- they do
     ;; not -- but because the x87 fusers ($x87_fuse_block and friends) run
@@ -2378,7 +2382,8 @@
   (func $bx_hot_gate_refresh
     (global.set $bx_hot_on
       (i32.and (i32.ne (global.get $block_exec_enabled) (i32.const 0))
-               (i32.ne (global.get $bx_region_enabled) (i32.const 0)))))
+               (i32.ne (global.get $bx_region_enabled) (i32.const 0))))
+    (call $be_gate_refresh))
 
   (func $bx_hot_slot (param $eip i32) (result i32)
     (call $bx_rg_word

@@ -3730,6 +3730,11 @@
               (then (return)))
             (if (call $try_emit_base_run (local.get $dst) (global.get $mr_disp))
               (then (return)))))
+        (if (i32.eq (i32.shr_s (i32.shl (global.get $mr_disp) (i32.const 8)) (i32.const 8)) (global.get $mr_disp))
+          (then
+            (call $te (i32.const 467) (i32.or (i32.shl (global.get $mr_disp) (i32.const 8))
+              (i32.or (i32.shl (local.get $dst) (i32.const 4)) (global.get $mr_base))))
+            (return)))
         (call $te (i32.const 26) (i32.or (i32.shl (local.get $dst) (i32.const 4)) (global.get $mr_base)))
         (call $te_raw (global.get $mr_disp))
         (return)))
@@ -3766,6 +3771,11 @@
             (if (call $try_emit_store32_span
                   (local.get $src) (global.get $mr_disp) (local.get $insn_start))
               (then (return)))
+            (if (i32.eq (i32.shr_s (i32.shl (global.get $mr_disp) (i32.const 8)) (i32.const 8)) (global.get $mr_disp))
+              (then
+                (call $te (i32.const 468) (i32.or (i32.shl (global.get $mr_disp) (i32.const 8))
+                  (i32.or (i32.shl (local.get $src) (i32.const 4)) (global.get $mr_base))))
+                (return)))
             (call $te (i32.const 27) (i32.or (i32.shl (local.get $src) (i32.const 4)) (global.get $mr_base)))
             (call $te_raw (global.get $mr_disp)) (return)))
     (if (call $mr_absolute)

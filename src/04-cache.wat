@@ -244,6 +244,19 @@
   ;; descriptor chunk -- i.e. block-executor tail exits that took the desk.
   ;; Only counted while the executor is armed.
   (global $branch_end_pool (mut i64) (i64.const 0))
+  ;; The one load $branch_end_at pays for all of its diagnostics and discovery
+  ;; hooks. OR of: the executor armed ($block_exec_enabled), its hotness gate
+  ;; ($bx_hot_on) and the branch-end statistics ($be_stats_on, armed by run.js
+  ;; for --block-chain / --verbose, the only readers of the counters). Every
+  ;; setter of one of those recomputes it through $be_gate_refresh; an off run
+  ;; reads one zero and skips the whole $branch_end_diag call.
+  (global $be_gate_on (mut i32) (i32.const 0))
+  (global $be_stats_on (mut i32) (i32.const 0))
+  (func $be_gate_refresh
+    (global.set $be_gate_on
+      (i32.or (i32.ne (global.get $block_exec_enabled) (i32.const 0))
+        (i32.or (i32.ne (global.get $bx_hot_on) (i32.const 0))
+                (i32.ne (global.get $be_stats_on) (i32.const 0))))))
 
   (func $chain_bump
     (global.set $chain_bumps (i32.add (global.get $chain_bumps) (i32.const 1)))
@@ -1874,10 +1887,29 @@
   (func $branch_end
     (return_call $branch_end_at (i32.const 0) (i32.const 0) (i32.const 0)))
 
+  ;; The counters and discovery hooks $branch_end_at used to run inline, now
+  ;; behind $be_gate_on. Same order as before: count, pool, hot bump.
+  (func $branch_end_diag
+    (if (global.get $be_stats_on)
+      (then
+        (global.set $branch_end_calls
+          (i64.add (global.get $branch_end_calls) (i64.const 1)))
+        (if (global.get $block_exec_enabled)
+          (then
+            (if (i32.gt_s (call $chain_chunk_of (global.get $ip)) (i32.const 0))
+              (then (global.set $branch_end_pool
+                      (i64.add (global.get $branch_end_pool) (i64.const 1)))))))))
+    (if (global.get $bx_hot_on)
+      (then
+        ;; ROUND 19: unless $chain_end already bumped this transfer on its way
+        ;; here, in which case the flag is spent and the bump is not repeated.
+        (if (global.get $chain_hot_bumped)
+          (then (global.set $chain_hot_bumped (i32.const 0)))
+          (else (call $bx_hot_bump (global.get $eip)))))))
+
   (func $branch_end_at (param $patch_at i32) (param $shift i32) (param $tag i32)
     (local $t i32)
-    (global.set $branch_end_calls
-      (i64.add (global.get $branch_end_calls) (i64.const 1)))
+    (if (global.get $be_gate_on) (then (call $branch_end_diag)))
     ;; ROUND 19: how many desk trips came out of a block-executor tail. $ip is
     ;; still inside the stream the terminator was read from, so the descriptor
     ;; chunk answers it -- and the only threaded ops that ever execute from
@@ -1886,11 +1918,6 @@
     ;; $chain_slow_pool: the tails whose terminator has no spare operand word
     ;; (ret, call, loop, $th_block_end) arrive here with $patch_at 0 and are
     ;; invisible to the chain counters by construction.
-    (if (global.get $block_exec_enabled)
-      (then
-        (if (i32.gt_s (call $chain_chunk_of (global.get $ip)) (i32.const 0))
-          (then (global.set $branch_end_pool
-                  (i64.add (global.get $branch_end_pool) (i64.const 1)))))))
     ;; The block-executor's discovery gate. $branch_end is every taken branch,
     ;; every jmp and every $th_block_end, so "this address was entered through
     ;; $branch_end" IS the "loop head or branch target" signal the multi-block
@@ -1902,13 +1929,6 @@
     ;; --break= or --watch= still forms the same regions a plain run does; the
     ;; walk itself decodes and never executes, which is safe at a block edge in
     ;; exactly the way $run's own miss path is.
-    (if (global.get $bx_hot_on)
-      (then
-        ;; ROUND 19: unless $chain_end already bumped this transfer on its way
-        ;; here, in which case the flag is spent and the bump is not repeated.
-        (if (global.get $chain_hot_bumped)
-          (then (global.set $chain_hot_bumped (i32.const 0)))
-          (else (call $bx_hot_bump (global.get $eip))))))
     (if (i32.or (global.get $dbg_any)
         (i32.or (global.get $code16)
         (i32.or (global.get $yield_flag) (global.get $yield_reason))))
@@ -2037,7 +2057,7 @@
     ;; whole cache and restart at $eip. The fresh decode will produce
     ;; valid threaded code. This recovers from rare corruption rather
     ;; than trapping with wasm "table index out of bounds".
-    (if (i32.ge_u (local.get $fn) (i32.const 467))
+    (if (i32.ge_u (local.get $fn) (i32.const 469))
       (then
         (return_call $dispatch_bad (local.get $fn))))
     (if (global.get $handler_hist_enabled)

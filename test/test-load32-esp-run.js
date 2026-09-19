@@ -58,7 +58,7 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.get_ecx() >>> 0, 0, 'no-displacement load');
   assert.strictEqual(e.get_edx() >>> 0, 0x55667788, 'disp32 load');
   assert.strictEqual(handlerCount(408), 1, 'three ESP loads execute as one H408 run');
-  assert.strictEqual(handlerCount(26), 0, 'ordinary base+disp load handler is replaced');
+  assert.strictEqual(handlerCount(26) + handlerCount(467), 0, 'ordinary base+disp load handler is replaced');
 
   // A write to ESP may be the final element: H408 snapshots the old base and
   // publishes the new stack pointer only after every address has been read.
@@ -93,7 +93,7 @@ const { bootRenderHarness } = require('./render-helper');
   assert.strictEqual(e.get_edx() >>> 0, 0x12345678, 'near-miss first load');
   assert.strictEqual(e.get_ecx() >>> 0, 0x89abcdef, 'indexed SIB retains ordinary semantics');
   assert.strictEqual(handlerCount(408), 0, 'indexed SIB near miss does not enter H408');
-  assert.strictEqual(handlerCount(26), 1, 'first canonical load remains ordinary after decline');
+  assert.strictEqual(handlerCount(26) + handlerCount(467), 1, 'first canonical load remains ordinary after decline');
 
   console.log('PASS H408 canonical ESP load runs: disp forms, final base write, indexed-SIB decline');
 })().catch(error => {

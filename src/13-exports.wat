@@ -2922,6 +2922,12 @@
     (global.set $block_chain_on (i32.ne (local.get $flag) (i32.const 0))))
   (func (export "get_block_chain") (result i32) (global.get $block_chain_on))
   (func (export "get_chain_hits") (result i64) (global.get $chain_hits))
+  ;; Arms the $branch_end_calls / $branch_end_pool counters. Off, the block
+  ;; transfer path pays no counter at all, so a reader that did not arm this
+  ;; sees zeros, not a stale total.
+  (func (export "set_branch_end_stats") (param $flag i32)
+    (global.set $be_stats_on (i32.ne (local.get $flag) (i32.const 0)))
+    (call $be_gate_refresh))
   (func (export "get_chain_slow") (result i64) (global.get $chain_slow))
   (func (export "get_chain_patches") (result i32) (global.get $chain_patches))
   (func (export "get_chain_bumps") (result i32) (global.get $chain_bumps))
