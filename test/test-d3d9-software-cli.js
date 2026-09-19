@@ -4,26 +4,22 @@
 // real COM thunks through x86 CALL, not test-only native handler exports.
 const assert=require('assert');
 const path=require('path');
-const {spawn}=require('child_process');
-const readline=require('readline');
+const {startControlSession}=require('./control-session');
 const root=path.join(__dirname,'..');
 (async()=>{
-  const child=spawn(process.execPath,['test/run.js','--exe=test/binaries/calc.exe',
-    '--d3d9-renderer=software','--d3d9-programmable','--control-stdin','--frozen',
+  // One reply parser for every --control-stdin test (test-control-stdin-cli
+  // checks that no test grows a private one): the helper owns framing, ids,
+  // reply routing, output capture and pending-request teardown, and this file
+  // keeps the schedule and the assertions.
+  const session=startControlSession(['test/run.js','--exe=test/binaries/calc.exe',
+    '--no-build','--d3d9-renderer=software','--d3d9-programmable','--control-stdin','--frozen',
     '--quiet-api','--max-seconds=45','--max-batches=1000000','--batch-size=100'],
-    {cwd:root,stdio:['pipe','pipe','pipe']});
-  let output='',seq=0;const pending=new Map();
-  const exited=new Promise(resolve=>child.on('exit',(code,signal)=>resolve({code,signal})));
-  child.stderr.on('data',data=>{output+=data;});
-  readline.createInterface({input:child.stdout}).on('line',line=>{
-    output+=line+'\n';if(!line.startsWith('[ctl] '))return;
-    const reply=JSON.parse(line.slice(6)),wait=pending.get(reply.id);if(!wait)return;
-    pending.delete(reply.id);reply.ok?wait.resolve(reply.value):wait.reject(new Error(reply.error));
-  });
-  const deadline=setTimeout(()=>{child.kill('SIGTERM');for(const wait of pending.values())wait.reject(new Error('CLI timeout\n'+output));},90000);
-  const command=(action,fields={})=>new Promise((resolve,reject)=>{
-    const id=++seq;pending.set(id,{resolve,reject});child.stdin.write(JSON.stringify({id,action,...fields})+'\n');
-  });
+    {cwd:root,idPrefix:'d3d'});
+  const {child,exited,send,output}=session;
+  // A pending request is rejected by the helper when the child exits, so the
+  // deadline only has to end the child.
+  const deadline=setTimeout(()=>{if(child.exitCode===null)child.kill('SIGTERM');},90000);
+  const command=(action,fields={})=>send({action,...fields});
   const evaluate=code=>command('eval',{code});
   try {
     await command('ping');
@@ -59,7 +55,7 @@ const root=path.join(__dirname,'..');
         const value=await evaluate('exports.guest_read32(ctx.d3dProbe.marker)>>>0');
         if(value!==0xdeadbeef){assert.strictEqual(value,0,name);return;}
       }
-      throw new Error(name+' did not resume\n'+output);
+      throw new Error(name+' did not resume\n'+output());
     };
     await call('IDirect3D9_CreateDevice','[0,0,1,1,0,ctx.d3dProbe.pp,ctx.d3dProbe.out]');
     await evaluate('ctx.d3dProbe.device=exports.guest_read32(ctx.d3dProbe.out)>>>0');
@@ -75,8 +71,8 @@ const root=path.join(__dirname,'..');
     assert.strictEqual(result.pixel,0xffff0000);assert(result.worker);assert.strictEqual(result.pending,0);
     assert.strictEqual(result.submitted,4);assert.strictEqual(result.completed,4);
     await call('IDirect3DDevice9_Release','[ctx.d3dProbe.device]');
-    await command('quit');const exit=await exited;assert.strictEqual(exit.code,0,output);
-    assert(!/retirement failed|RECLAIM|ORPHANED/.test(output),output);
+    await command('quit');const exitCode=await exited;assert.strictEqual(exitCode,0,output());
+    assert(!/retirement failed|RECLAIM|ORPHANED/.test(output()),output());
     console.log('PASS real CLI x86 COM -> render_wait -> production software Worker -> canonical red pixel -> graceful exit');
   } finally {clearTimeout(deadline);if(child.exitCode===null)child.kill('SIGTERM');}
 })().catch(error=>{console.error(error);process.exitCode=1;});

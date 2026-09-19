@@ -41,9 +41,16 @@ const privateClients = fs.readdirSync(__dirname)
 check('control tests share one reply parser', privateClients.length === 0,
   privateClients.join(', '));
 
+// --no-build on every spawn, the same as the rest of the CLI tests: this file
+// starts run.js twice, and the build gate costs about ten seconds of CPU
+// per invocation even when the wasm is already current. That is thirty times
+// the work the test itself does (one batch of notepad, 0.3s), and on a loaded
+// box it pushed the bounded run below past the 15s budget its check allows --
+// which reads as "run.js hung" when nothing hung at all.
 const session = startControlSession([
   RUN,
   `--exe=${EXE}`,
+  '--no-build',
   '--control-stdin',
   '--max-seconds=45',
   '--quiet-api',
@@ -112,6 +119,7 @@ async function waitFor(what, probe, ms = 45000) {
     '-r', preload,
     RUN,
     `--exe=${EXE}`,
+    '--no-build',
     '--control-stdin',
     '--max-seconds=0.05',
     '--max-batches=100000',
