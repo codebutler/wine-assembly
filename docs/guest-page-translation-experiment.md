@@ -327,3 +327,63 @@ Direct image/heap pages also remain permissive until PE-section and low-memory
 page metadata can describe them. That separation makes the new metadata
 observable and testable without putting a permission branch on the direct/DIB
 translation paths or changing existing game execution.
+
+## PAGE_* access-check performance prototype
+
+On 2026-09-19 an isolated worktree at commit `0e43eff2` tested scalar guest
+load/store enforcement before any change to main. The prototype routed
+`gl8/gl16/gl32` and `gs8/gs16/gs32` through a runtime-selectable helper. For
+sparse pages, that helper decoded presence, backing, and protection from one
+atomic packed-PTE load. For direct pages, it also loaded the PTE so a
+`VirtualProtect` override could be observed.
+
+The quiet-host benchmark instantiated three artifacts in one process and
+rotated their order across 21 repetitions:
+
+- **A:** the current translator;
+- **A2:** the new wrapper with access checking disabled at runtime;
+- **B:** the same wrapper with access checking enabled.
+
+Minimum-time and paired comparisons gave the following B-versus-A costs:
+
+| Shape | Checked B versus current A |
+| --- | ---: |
+| Sparse scatter, 32 MiB / 64 pages | 3.5% slower |
+| Direct LUT reads | 4.6% slower |
+| Direct stack traffic | 4.3% slower |
+| Mixed 8-bit memory block | 6.6% slower |
+| Direct streaming stores | neutral, about 0.2% faster |
+
+A2 was often slower than B. Consequently, a runtime option does not provide a
+free disabled state: merely routing every scalar access through the extra
+helper changes the hot path. These synthetic loops are upper bounds rather
+than whole-application percentages, but the repeated quiet-host result is
+large enough to reject this implementation shape.
+
+A focused semantics probe passed read-only, no-access, read/write, and
+cross-page no-partial-write cases. This was not complete Windows protection
+enforcement: it covered scalar CPU helpers only, deliberately did not add NX
+semantics (Win98 had no DEP), and did not implement `PAGE_GUARD`'s one-shot
+exception-and-clear behavior. Raw/FPU helpers, string/bulk paths, and host API
+buffer access still require a complete access census and exception design.
+
+A paired Diablo II gameplay attempt was not a useful timing oracle on the
+loaded local host. Both arms hit the approximately 300-second harness timeout;
+their CPU totals were nearly identical (155.07 seconds current, 155.56 seconds
+checked). Record this as inconclusive, not as either a game regression or a
+game-level performance pass.
+
+### Decision and next gate
+
+Do not integrate the runtime-wrapper prototype. The next candidate must leave
+the current direct/DIB fast path byte-for-byte or structurally equivalent and
+fuse access checks only into translation paths that already load packed PTE
+metadata. Direct-page `VirtualProtect` overrides need a separately measured
+rare-path design, such as a monotonic "overrides exist" gate, rather than an
+unconditional PTE load on every direct access.
+
+Before integration, compare that candidate with current main in the same
+process on a quiet host, repeat the focused protection probe, and run at least
+one deterministic game workload with load-immune work counters. Correct
+`PAGE_GUARD`/fault delivery and complete access-site coverage remain separate
+correctness gates; they must not be inferred from this performance prototype.
