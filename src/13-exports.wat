@@ -50,7 +50,7 @@
         (then
           (global.set $ip (global.get $resume_ip))
           (global.set $resume_ip (i32.const 0))
-          (global.set $steps (i32.const 1000))
+          (global.set $steps (i32.const 256))
           (call $next)
           (if (global.get $page_chunk_deferred)
             (then (call $page_chunk_reclaim_deferred)))
@@ -296,8 +296,10 @@
       (global.set $ip (local.get $thread))
       (if (global.get $handler_hist_enabled)
         (then (global.set $handler_hist_last (i32.const -1))))
-      ;; Set steps high enough to always complete a block
-      (global.set $steps (i32.const 1000))
+      ;; 256 BLOCKS per visit to this loop (see $next): the bound on nested
+      ;; $jcc_end fall-through frames and on how long the input-wake check
+      ;; above waits, both of which used to be 1000 ops.
+      (global.set $steps (i32.const 256))
       (call $next)
       (if (global.get $page_chunk_deferred)
         (then (call $page_chunk_reclaim_deferred)))

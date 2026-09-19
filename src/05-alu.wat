@@ -735,6 +735,7 @@
               (then
                 (global.set $block_budget
                   (i32.sub (global.get $block_budget) (i32.const 1)))
+                (global.set $steps (i32.sub (global.get $steps) (i32.const 1)))
                 (global.set $page_ft (i32.add (global.get $page_ft) (i32.const 1)))
                 (call $next)
                 (return)))

@@ -1855,6 +1855,7 @@
                     (then
                     (global.set $block_budget
                       (i32.sub (global.get $block_budget) (i32.const 1)))
+                    (global.set $steps (i32.sub (global.get $steps) (i32.const 1)))
                     (global.set $chain_hits
                       (i64.add (global.get $chain_hits) (i64.const 1)))
                     (if (local.get $asel)
@@ -1949,6 +1950,7 @@
       (then (call $chain_patch (local.get $patch_at) (local.get $t)
                                (local.get $shift) (local.get $tag))))
     (global.set $block_budget (i32.sub (global.get $block_budget) (i32.const 1)))
+    (global.set $steps (i32.sub (global.get $steps) (i32.const 1)))
     (global.set $page_fast (i32.add (global.get $page_fast) (i32.const 1)))
     ;; Kept even on the fast path: these two are what a crash log reads to say
     ;; which block produced a bad transfer, and a stale answer there is worse
@@ -2039,7 +2041,13 @@
 
   (func $next
     (local $fn i32) (local $op i32)
-    (global.set $steps (i32.sub (global.get $steps) (i32.const 1)))
+    ;; $steps is a BLOCK quantum now, decremented where $block_budget is on
+    ;; the three transfer fast paths ($branch_end_at, $jcc_end fall-through,
+    ;; $chain_end), not here per op. The test stays: a handler that sets
+    ;; $steps to 0 after redirecting EIP (SendMessage, an API yield, SEH) is
+    ;; relying on the next dispatch returning to $run instead of running the
+    ;; op after it in the stream. The frame bound is unchanged in kind: only
+    ;; $jcc_end's fall-through nests a frame, and it is one of the three.
     (if (i32.le_s (global.get $steps) (i32.const 0))
       (then
         ;; Hand $run the op we are declining to run, so it resumes the block
