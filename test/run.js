@@ -65,8 +65,15 @@ const SRC_DIR = path.join(ROOT, 'src');
 // last time-bounded upload left behind.
 let dxPresentHook = null;
 
-function canvasToPng(canvas) {
+// The batch loop does not composite unless --live-present asks it to (see
+// LIVE_PRESENT), so anything that reads pixels -- off renderer.canvas or off a
+// window's back-canvas -- must bring the screen up to date first.
+function presentForRead() {
   if (dxPresentHook) dxPresentHook();
+}
+
+function canvasToPng(canvas) {
+  presentForRead();
   return typeof canvas.toBufferSync === 'function'
     ? canvas.toBufferSync('png')
     : canvas.toBuffer('image/png');
@@ -416,6 +423,17 @@ const LATENCY_STATS = hasFlag('latency-stats'); // --latency-stats: measure inje
 // under a much larger, much flatter one. Pass the batch gameplay starts at.
 const FRAME_STATS_ARG = getArg('frame-stats', null);
 const FRAME_STATS = FRAME_STATS_ARG !== null || hasFlag('frame-stats');
+// Present and composite after every batch, the way the browser does. Off by
+// default: nobody looks at a headless canvas between captures, and it is work a
+// real player never pays, charged to every benchmark. Measured 2026-09-19 on
+// the quiet box, MCM --d3d-worker to batch 230000, ABBA: race window
+// 5.73/5.75s -> 4.58/4.54s wall, whole run 121s -> 41s, the batch-229990 PNG
+// pixel-identical in all four. Every pixel read goes through presentForRead()
+// instead, so captures are unchanged.
+// Implied by the flags that measure presentation itself, and by an explicit
+// --repaint-every/--dx-present-min-ms, which only mean anything when it is on.
+const LIVE_PRESENT = hasFlag('live-present') || FRAME_STATS || LATENCY_STATS
+  || args.some(a => a.startsWith('--repaint-every=') || a.startsWith('--dx-present-min-ms='));
 const FRAME_STATS_FROM = Math.max(0, parseInt(FRAME_STATS_ARG, 10) || 0);
 const AUTO_MOUSE = getArg('auto-mouse', null); // --auto-mouse=X0,Y0,X1,Y1[,PERIOD]: sweep the pointer every PERIOD batches
 const TRACE_CTRL = hasFlag('trace-ctrl'); // --trace-ctrl: log every WAT-native control paint + its screen rect
@@ -903,6 +921,19 @@ const EXE_GUEST_PATH = (() => {
 })();
 const EXE_PROCESS_NAME = EXE_GUEST_PATH
   ? EXE_GUEST_PATH.replace(/^[a-z]:\\/i, '') : path.basename(EXE_PATH);
+// Windows file names are case-insensitive and the guest asks for whatever case
+// its source code used (MCM: LoadLibraryA("lang.dll") for LANG.DLL). A plain
+// existsSync(path.join(dir, name)) only agrees with that on macOS, so a DLL
+// search on a Linux host scans the directory for a case-folded match instead.
+const findHostFileCi = (dir, name) => {
+  const exact = path.join(dir, name);
+  if (fs.existsSync(exact)) return exact;
+  let entries;
+  try { entries = fs.readdirSync(dir); } catch (_) { return null; }
+  const want = name.toLowerCase();
+  const hit = entries.find(e => e.toLowerCase() === want);
+  return hit ? path.join(dir, hit) : null;
+};
 const canonicalPath = p => {
   try { return fs.realpathSync(p); } catch (_) { return path.resolve(p); }
 };
@@ -1308,6 +1339,15 @@ async function main() {
   // for LoadLibrary.
   const findRuntimeDllBytes = (fileName, fullName) => {
     if (ctx.vfs) {
+      // Resolve the name the way the guest filesystem does first, as the
+      // browser's _findDllBytes does: a bare LoadLibraryA("lang.dll") is
+      // relative to the current directory, and VFS keys are case-folded. The
+      // host-path scan below is case-sensitive on Linux, so without this MCM's
+      // LANG.DLL was found on macOS only.
+      let resolved = '';
+      try { resolved = ctx.vfs._resolvePath(fullName); } catch (_) {}
+      const own = resolved && ctx.vfs.files.get(resolved);
+      if (own && own.data) return own.data;
       for (const p of [
         String(fullName).toLowerCase(),
         'c:\\' + fileName,
@@ -1318,13 +1358,14 @@ async function main() {
         if (entry && entry.data) return entry.data;
       }
     }
-    for (const sp of [
-      path.join(__dirname, 'binaries/dlls', fileName),
-      path.join(path.dirname(EXE_PATH), fileName),
-      path.join(path.dirname(EXE_PATH), 'dlls', fileName),
-      path.join(path.dirname(EXE_PATH), 'plugins', fileName),
+    for (const dir of [
+      path.join(__dirname, 'binaries/dlls'),
+      path.dirname(EXE_PATH),
+      path.join(path.dirname(EXE_PATH), 'dlls'),
+      path.join(path.dirname(EXE_PATH), 'plugins'),
     ]) {
-      if (fs.existsSync(sp)) return new Uint8Array(fs.readFileSync(sp));
+      const sp = findHostFileCi(dir, fileName);
+      if (sp) return new Uint8Array(fs.readFileSync(sp));
     }
     return null;
   };
@@ -3608,24 +3649,19 @@ async function main() {
       name += String.fromCharCode(ch);
     }
     const fileName = name.split('\\').pop().toLowerCase();
-    // Check VFS
+    // Check VFS. A bare name is relative to the current directory, as in
+    // lib/host-imports.js; without that step MCM's LoadLibraryA("lang.dll")
+    // missed C:\...\LANG.DLL and only a case-insensitive host disk found it.
     if (ctx.vfs) {
-      const tryPaths = [name.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName];
+      let resolved = '';
+      try { resolved = ctx.vfs._resolvePath(name); } catch (_) {}
+      const tryPaths = [resolved, name.toLowerCase(), 'c:\\' + fileName, 'c:\\plugins\\' + fileName];
       for (const p of tryPaths) {
-        if (ctx.vfs.files.has(p)) return 1;
+        if (p && ctx.vfs.files.has(p)) return 1;
       }
     }
-    // Check host filesystem
-    const searchPaths = [
-      path.join(path.dirname(EXE_PATH), fileName),
-      path.join(path.dirname(EXE_PATH), 'dlls', fileName),
-      path.join(path.dirname(EXE_PATH), 'plugins', fileName),
-      path.join(__dirname, 'binaries/dlls', fileName),
-    ];
-    for (const sp of searchPaths) {
-      if (fs.existsSync(sp)) return 1;
-    }
-    return 0;
+    // Same search, and the same bytes, the load itself will use.
+    return findRuntimeDllBytes(fileName, name) ? 1 : 0;
   };
 
   // A cursor an app builds for itself never touches a window surface, so no
@@ -4358,8 +4394,8 @@ async function main() {
     ];
     const findDllFile = name => {
       for (const dir of dllSearchDirs) {
-        const p = path.join(dir, name);
-        if (fs.existsSync(p)) return p;
+        const p = findHostFileCi(dir, name);
+        if (p) return p;
       }
       return null;
     };
@@ -5692,8 +5728,6 @@ async function main() {
   const controlPng = (filename) => {
     if (!renderer || !renderer.canvas) throw new Error('renderer is unavailable');
     if (!filename) throw new Error('png needs a path');
-    presentDxIfDirty(0);
-    if (typeof renderer.repaint === 'function') renderer.repaint();
     const buf = canvasToPng(renderer.canvas);
     fs.writeFileSync(filename, buf);
     return { batch: tickState.batch | 0, frozen: controlFrozen, path: filename, bytes: buf.length };
@@ -7789,6 +7823,7 @@ async function main() {
         }
       } else if (ev.action === 'hwnd-png-pixels' && renderer && PNG) {
         try {
+          presentForRead();
           const win = renderer.windows && renderer.windows[ev.hwnd];
           const canvas = win && win._backCanvas;
           if (!canvas) throw new Error(`no back-canvas for hwnd=0x${(ev.hwnd | 0).toString(16)}`);
@@ -7878,6 +7913,7 @@ async function main() {
             logs.push(`[input] window${label} hwnd=${hwndStr} pos=${win.x},${win.y} size=${win.w}x${win.h} client=${JSON.stringify(win.clientRect)} visible=${win.visible} dialog=${!!win.isDialog} hasBack=${!!win._backCanvas} title=${JSON.stringify(win.title)} at batch ${batch}`);
             if (win._backCanvas && PNG && ev.path) {
               try {
+                presentForRead();
                 const w = win._backCanvas.width | 0;
                 const h = win._backCanvas.height | 0;
                 const data = win._backCanvas.getContext('2d').getImageData(0, 0, w, h).data;
@@ -7979,6 +8015,7 @@ async function main() {
 
           if (ev.action === 'wait-title-snapshot' && renderer && renderer.canvas && PNG && ev.path) {
             try {
+              presentForRead();
               const w = renderer.canvas.width | 0;
               const h = renderer.canvas.height | 0;
               const data = renderer.canvas.getContext('2d').getImageData(0, 0, w, h).data;
@@ -8299,7 +8336,7 @@ async function main() {
           logs.push(`[input] wait-vfs-file TIMEOUT ${key} at batch ${batch}`);
         }
       } else if (ev.action === 'wait-canvas-dark-pixels' && renderer && renderer.canvas) {
-        if (typeof renderer.repaint === 'function') renderer.repaint();
+        presentForRead();
         const w = renderer.canvas.width | 0;
         const h = renderer.canvas.height | 0;
         const rgba = renderer.canvas.getContext('2d').getImageData(0, 0, w, h).data;
@@ -8355,7 +8392,7 @@ async function main() {
         }
       } else if (ev.action === 'pixel' && renderer && renderer.canvas) {
         try {
-          if (typeof renderer.repaint === 'function') renderer.repaint();
+          presentForRead();
           const data = renderer.canvas.getContext('2d').getImageData(ev.x, ev.y, 1, 1).data;
           logs.push(`[input] pixel${ev.label ? ':' + ev.label : ''}: ${ev.x},${ev.y} rgba=${data[0]},${data[1]},${data[2]},${data[3]} at batch ${batch}`);
         } catch (e) {
@@ -8363,6 +8400,7 @@ async function main() {
         }
       } else if (ev.action === 'png-pixels' && renderer && renderer.canvas && PNG) {
         try {
+          presentForRead();
           const w = renderer.canvas.width | 0;
           const h = renderer.canvas.height | 0;
           const data = renderer.canvas.getContext('2d').getImageData(0, 0, w, h).data;
@@ -8746,12 +8784,12 @@ async function main() {
     // clock. This replaced a '(batch & 0x7f) === 0' poll, which uploaded on the
     // harness's cadence rather than the game's and then discarded the upload
     // unless a 4-byte-per-row signature happened to change.
-    presentDxIfDirty(DX_PRESENT_MIN_MS);
+    if (LIVE_PRESENT) presentDxIfDirty(DX_PRESENT_MIN_MS);
 
     // Flush deferred repaint so back canvas composites after all GDI writes.
     // The scheduled-repaint flag survives a skipped flush, so coalescing here
     // delays a composite, never drops one.
-    if (renderer && renderer.flushRepaint
+    if (LIVE_PRESENT && renderer && renderer.flushRepaint
         && (REPAINT_EVERY === 1 || batch % REPAINT_EVERY === 0)) {
       renderer.flushRepaint();
     }
@@ -10781,7 +10819,7 @@ if (VERBOSE) {
       const bytes = writeRgbaPng(PNG_OUT, surface.w, surface.h, dxSurfaceToRgba(surface, mem));
       console.log(`Wrote ${PNG_OUT} (${bytes} bytes, dx slot ${surface.slot} ${surface.w}x${surface.h})`);
     } else {
-      renderer.repaint();
+      presentForRead();
       const w = renderer.canvas.width | 0;
       const h = renderer.canvas.height | 0;
       const img = renderer.canvas.getContext('2d').getImageData(0, 0, w, h);
